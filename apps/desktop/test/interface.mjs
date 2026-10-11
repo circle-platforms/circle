@@ -233,9 +233,16 @@ try {
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
-  // Three plain components and the circle-server interface, which is paired with a
-  // runtime extension the preview does not have and so stays off.
-  assert.equal(await page.getByRole('checkbox').count(), 4);
+  // Three plain components, and the circle-server interface with the four platform
+  // objects, all paired with a runtime extension the preview does not have, so off.
+  assert.equal(await page.getByRole('checkbox').count(), 8);
+  for (const id of ['knowledge', 'work', 'execution', 'methods'])
+    assert.equal(
+      await page
+        .getByRole('checkbox', { name: `enable ${id} interface`, exact: true })
+        .isChecked(),
+      false,
+    );
   assert.equal(
     await page
       .getByRole('checkbox', {

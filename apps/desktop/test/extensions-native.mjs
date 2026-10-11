@@ -123,11 +123,12 @@ try {
     exact: true,
   });
   assert.equal(await toggle.isChecked(), false);
-  await page
-    .getByText(
-      /paired with runtime extension circle-server · 0\.1\.0 · runtime extension circle-server is off/,
-    )
-    .waitFor();
+  const pairedNotes = page.getByText(
+    /paired with runtime extension circle-server · 0\.1\.0 · runtime extension circle-server is off/,
+  );
+  await pairedNotes.first().waitFor();
+  // circle-server and the four platform objects share one runtime extension.
+  assert.equal(await pairedNotes.count(), 5);
   // The switch follows the runtime: it flips once the extension is saved and reloaded.
   await toggle.click();
   await waitFor(
@@ -154,6 +155,15 @@ try {
   assert.equal(view.signedIn, false);
   assert.deepEqual(view.tasks, []);
   checks.push('the page shows the view the runtime extension published');
+  // The four platform objects come with it, and say they need a signed-in server.
+  for (const id of ['knowledge', 'work', 'execution', 'methods']) {
+    await page.getByRole('link', { name: id, exact: true }).click();
+    await page.getByRole('heading', { name: id, exact: true }).waitFor();
+    await page.getByText('not signed in', { exact: true }).waitFor();
+  }
+  checks.push(
+    'knowledge, work, execution and methods show with it and wait for a sign-in',
+  );
 
   const reply = await command('custom-command', { name: 'openlab' });
   assert.equal(reply.ok, true, JSON.stringify(reply));
@@ -197,6 +207,11 @@ try {
         .count()) === 0,
     'page hidden',
   );
+  for (const id of ['knowledge', 'work', 'execution', 'methods'])
+    assert.equal(
+      await page.getByRole('link', { name: id, exact: true }).count(),
+      0,
+    );
   checks.push(
     'turning it off turns the runtime extension off and hides the page',
   );

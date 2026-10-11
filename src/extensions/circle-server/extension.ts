@@ -52,6 +52,9 @@ const USAGE = [
   '/server task <id>                show a task and follow it until it ends',
   '/server respond <id> <answer>    answer what a task is waiting on (text, key=value or JSON)',
   '/server get <id>                 save a delivered task’s results again',
+  '/server refresh                  read work, execution, knowledge and methods from the server',
+  '/server approve <id> <approval>  approve an action a task waits on (reject: /server reject …)',
+  '/server reconcile <id>           ask the server to check an operation whose outcome is unknown',
 ].join('\n');
 
 const sha256 = (bytes: Buffer): string =>
@@ -131,9 +134,11 @@ export function register(api: ExtensionAPI): void {
   // What a paired page of the desktop application shows (api.setView): where you are
   // signed in, the tasks handed over from here and the last lines this extension wrote.
   const recent: string[] = [];
+  // The four platform objects as the server last reported them (/server refresh).
+  let objects: Record<string, unknown> | undefined;
   function publishView(signedIn: boolean): void {
     const config = readConfig();
-    api.setView({
+    const view = {
       url: config?.url ?? '',
       username: config?.username ?? '',
       scopeId: config?.scopeId ?? '',
@@ -143,7 +148,152 @@ export function register(api: ExtensionAPI): void {
         .slice(-20)
         .map(([taskId, item]) => ({ taskId, ...item })),
       recent: recent.slice(-30),
-    });
+      objects,
+    };
+    try {
+      api.setView(view);
+    } catch {
+      // Too much to show: keep the connection and tasks, drop the objects.
+      api.setView({ ...view, objects: undefined });
+    }
+  }
+  async function optional<T>(path: string, fallback: T): Promise<T> {
+    try {
+      const { data } = await request('GET', path);
+      return (data ?? fallback) as T;
+    } catch {
+      return fallback;
+    }
+  }
+  const pick = (value: unknown, keys: string[]): Record<string, unknown> =>
+    isRecord(value)
+      ? Object.fromEntries(
+          keys.filter((key) => key in value).map((key) => [key, value[key]]),
+        )
+      : {};
+  // C: work with its open questions and approvals; D: its operations; B: its source,
+  // artifacts, evidence and the server's own check; E: the capability packs. Read from the
+  // server for the most recent tasks you may read; the server decides what you may see.
+  async function collectObjects(): Promise<{ tasks: number; packs: number }> {
+    const listed = await optional<unknown>('/v1/tasks?limit=20', []);
+    let tasks = (Array.isArray(listed) ? listed : []).filter(isRecord);
+    if (!tasks.length)
+      for (const taskId of Object.keys(followed()).slice(-20))
+        try {
+          tasks.push(await status(taskId));
+        } catch {
+          /* A task this window remembers but may no longer read. */
+        }
+    tasks = tasks.slice(0, 20);
+    const work: unknown[] = [];
+    const execution: unknown[] = [];
+    const knowledge: unknown[] = [];
+    for (const task of tasks) {
+      const taskId = String(task.taskId);
+      const path = `/v1/tasks/${encodeURIComponent(taskId)}`;
+      const title = String(task.title ?? '');
+      const approvals = await optional<unknown>(`${path}/approvals`, []);
+      work.push({
+        ...pick(task, [
+          'taskId',
+          'title',
+          'phase',
+          'inputRevisionId',
+          'capabilityPackId',
+        ]),
+        pendingInputs: (Array.isArray(task.pendingInputs)
+          ? task.pendingInputs
+          : []
+        )
+          .filter(
+            (item) =>
+              isRecord(item) &&
+              item.status === 'open' &&
+              item.inputRevisionId === task.inputRevisionId,
+          )
+          .map((item) =>
+            pick(item, ['requestId', 'kind', 'question', 'expiresAt']),
+          ),
+        approvals: (Array.isArray(approvals) ? approvals : []).map((item) =>
+          pick(item, [
+            'approvalId',
+            'status',
+            'applicantId',
+            'approvedBy',
+            'inputRevisionId',
+            'targetIdentity',
+            'action',
+            'expiresAt',
+          ]),
+        ),
+      });
+      const operations = await optional<unknown>(`${path}/operations`, []);
+      execution.push({
+        taskId,
+        title,
+        operations: (Array.isArray(operations) ? operations : [])
+          .slice(-10)
+          .map((item) =>
+            pick(item, [
+              'operationId',
+              'name',
+              'kind',
+              'status',
+              'target',
+              'workerId',
+              'fencingToken',
+            ]),
+          ),
+      });
+      const input = isRecord(task.input) ? task.input : {};
+      const ended = TERMINAL.has(String(task.phase));
+      const result = ended
+        ? await optional<Record<string, unknown>>(`${path}/result`, {})
+        : {};
+      knowledge.push({
+        taskId,
+        title,
+        phase: task.phase,
+        status: result.status ?? task.phase,
+        source: pick(input, ['sourceRevisionId', 'sourceSha256']),
+        artifacts: (Array.isArray(result.artifacts)
+          ? result.artifacts
+          : []
+        ).map((item) =>
+          pick(item, ['artifactId', 'fileName', 'sha256', 'size']),
+        ),
+        evidence: (Array.isArray(result.evidence) ? result.evidence : []).map(
+          (item) => pick(item, ['evidenceId', 'kind', 'sha256', 'size']),
+        ),
+        verification: pick(result.verification, ['reader', 'rowCount']),
+        unmapped: (Array.isArray(result.unmapped) ? result.unmapped : []).slice(
+          0,
+          10,
+        ),
+      });
+    }
+    const packs = await optional<unknown>('/v1/packs', []);
+    const methods = (Array.isArray(packs) ? packs : []).map((item) =>
+      pick(item, [
+        'capabilityPackId',
+        'version',
+        'title',
+        'inputFormats',
+        'contractVersion',
+        'mappingRulesVersion',
+        'requiredOperations',
+        'conclusionScope',
+      ]),
+    );
+    objects = {
+      refreshedAt: new Date().toISOString(),
+      work,
+      execution,
+      knowledge,
+      methods,
+    };
+    void showStatus();
+    return { tasks: tasks.length, packs: methods.length };
   }
   // A context whose lines are also kept for the view.
   function recording(context: CommandContext): CommandContext {
@@ -446,16 +596,17 @@ export function register(api: ExtensionAPI): void {
     failure = '';
     void showStatus();
     let cursor = followed()[taskId]?.seq ?? 0;
+    let ended = false;
     try {
       while (!controller.signal.aborted) {
         // The task's state first: a task that has ended has only its missed events left,
         // so there is nothing to wait for.
         const current = await status(taskId);
         const phase = String(current.phase ?? '');
-        const ended = TERMINAL.has(phase);
+        const over = TERMINAL.has(phase);
         const { data } = await request(
           'GET',
-          `/v1/tasks/${encodeURIComponent(taskId)}/events?after=${cursor}&waitMs=${ended ? 0 : 20000}`,
+          `/v1/tasks/${encodeURIComponent(taskId)}/events?after=${cursor}&waitMs=${over ? 0 : 20000}`,
           { timeoutMs: 40_000 },
         );
         const events = (
@@ -466,7 +617,7 @@ export function register(api: ExtensionAPI): void {
           cursor = Math.max(cursor, event.seq);
         }
         if (events.length) remember(taskId, { seq: cursor });
-        if (ended) {
+        if (over) {
           if (phase === 'delivered') {
             if (followed()[taskId]?.saved)
               context.append(
@@ -478,6 +629,7 @@ export function register(api: ExtensionAPI): void {
               `✖ ${taskId}: the outcome is unknown and the server does not guess it · /server task ${taskId} later`,
             );
           else context.append(`✖ ${taskId} ${phase}`);
+          ended = true;
           return;
         }
         const open = (
@@ -503,6 +655,8 @@ export function register(api: ExtensionAPI): void {
     } finally {
       following.delete(taskId);
       void showStatus();
+      // Read the objects again once it has ended, after it stopped counting as followed.
+      if (ended) void collectObjects().catch(() => {});
     }
   }
 
@@ -619,6 +773,7 @@ export function register(api: ExtensionAPI): void {
         return;
       }
       const scopes = await signIn(url, username, password);
+      await collectObjects().catch(() => {});
       const { data: about } = await request('GET', '/v1/status');
       context.append(
         `● signed in to ${url} as ${username}${scopes.length ? ` · scope ${scopes[0]}` : ''}${
@@ -716,7 +871,62 @@ export function register(api: ExtensionAPI): void {
       if (!taskId) throw new ServerError('usage: /server get <id>');
       await deliver(taskId, context);
     },
+    async refresh(_rest, context) {
+      const counts = await collectObjects();
+      context.append(
+        `  read ${counts.tasks} tasks and ${counts.packs} capability packs from the server`,
+      );
+    },
+    async approve(rest, context) {
+      await decide(rest, true, context);
+    },
+    async reject(rest, context) {
+      await decide(rest, false, context);
+    },
+    async reconcile([taskId], context) {
+      if (!taskId) throw new ServerError('usage: /server reconcile <id>');
+      const { data } = await request(
+        'POST',
+        `/v1/tasks/${encodeURIComponent(taskId)}/reconcile`,
+        { json: {} },
+      );
+      context.append(
+        `  ${taskId} · reconcile · ${JSON.stringify(data).slice(0, 200)}`,
+      );
+      await collectObjects().catch(() => {});
+    },
   };
+  // A decision on an action a task waits on, bound to what the server says it is: the
+  // input revision, the target's identity and the action's digest.
+  async function decide(
+    [taskId, approvalId]: string[],
+    approve: boolean,
+    context: CommandContext,
+  ): Promise<void> {
+    if (!taskId || !approvalId)
+      throw new ServerError(
+        `usage: /server ${approve ? 'approve' : 'reject'} <id> <approval>`,
+      );
+    const path = `/v1/tasks/${encodeURIComponent(taskId)}/approvals`;
+    const { data } = await request('GET', path);
+    const found = (Array.isArray(data) ? data : []).find(
+      (item) => isRecord(item) && item.approvalId === approvalId,
+    );
+    if (!isRecord(found))
+      throw new ServerError(`${taskId} has no approval ${approvalId}`);
+    await request('POST', `${path}/${encodeURIComponent(approvalId)}`, {
+      json: {
+        inputRevisionId: found.inputRevisionId,
+        targetIdentity: found.targetIdentity,
+        actionDigest: found.actionDigest,
+        approve,
+      },
+    });
+    context.append(
+      `✓ ${approve ? 'approved' : 'rejected'} ${approvalId} for ${taskId} (input ${String(found.inputRevisionId)})`,
+    );
+    await collectObjects().catch(() => {});
+  }
 
   // The same work as tools, for a model that is told to hand work to the server.
   api.registerTool(

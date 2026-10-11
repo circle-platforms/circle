@@ -25,6 +25,7 @@ import {
 } from './platform/views';
 import type { WorkbenchPlugin } from './types';
 import { serverPlugin } from './server';
+import { livePlatformPlugins } from './platform/live';
 export const circlePlugins: WorkbenchPlugin[] = [
   {
     id: 'files',
@@ -80,8 +81,12 @@ export const circlePlugins: WorkbenchPlugin[] = [
     ],
   },
   serverPlugin,
+  // B, C, D and E as circle-server holds them, shown while its extension is on.
+  ...livePlatformPlugins,
 ];
-export const platformPlugins: WorkbenchPlugin[] = [
+// The earlier local previews of B, C, D and E, kept for the preview store's tests and as
+// reference. The application shows the live ones in circlePlugins.
+export const platformPreviewPlugins: WorkbenchPlugin[] = [
   {
     id: 'knowledge',
     apiVersion: 1,
@@ -152,4 +157,4 @@ export const platformPlugins: WorkbenchPlugin[] = [
     widgets: [{ id: 'session-methods', component: MethodsWidget }],
   },
 ];
-export const defaultPlugins = [...circlePlugins, ...platformPlugins];
+export const defaultPlugins = circlePlugins;

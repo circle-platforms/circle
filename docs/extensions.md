@@ -62,7 +62,17 @@ A folder may have an `extension.json` beside the entry file, `{ "version": "1.2.
 
 An extension shipped with Circle can have an interface half in the desktop application: a page or panel built into the application under the same name and version. The two are one plugin. The interface shows only while its extension is installed, loaded without error, of the same version and turned on; turning it on or off under **extensions → interface components** turns the extension on or off, saved in `settings.json`, and the card says why it is off. The extension feeds it with `api.setView(data)`, and the page acts by running the extension's own commands, whose lines go to the conversation.
 
-Interfaces are built into the application; an extension cannot add one by itself. The circle-server extension has one: a **circle-server** page with the connection, the tasks handed over and their latest lines, and buttons to follow a task or save its results again.
+Interfaces are built into the application; an extension cannot add one by itself. The circle-server extension has five, all paired with it:
+
+| Page | What it shows | What it does |
+|---|---|---|
+| **circle-server** | The connection, the tasks handed over from here and their latest lines. | Sign in, follow a task, save its results again. |
+| **work** | Tasks the server lets you read: their phase, questions they wait on, approvals bound to an input revision. | Answer a question, approve or reject an open approval. |
+| **execution** | Operations the server's workers ran: the worker and the fencing token that held the lease. | Reconcile an operation whose outcome is unknown. |
+| **knowledge** | Each task's source, artifacts and evidence by revision and SHA-256, and the server's own read-back check. | Save the results. |
+| **methods** | The server's capability packs, at the versions it runs. | Hand a pack a file of the workspace. |
+
+What these pages show is what the server last returned to `/server refresh`, which also runs after signing in, after a decision and when a followed task ends. The server decides what you may read; nothing on them is kept by Circle.
 
 ## Extensions shipped with Circle
 
@@ -81,6 +91,9 @@ Connects Circle to a [circle-server](https://github.com/qingshanfeihu/circle-ser
 | `/server tasks` | Your tasks. |
 | `/server respond <id> <answer>` | Answer the question a task is waiting on. |
 | `/server get <id>` | Save a delivered task's results again. A file never overwrites one already there: `cases.xlsx` becomes `cases-1.xlsx`. |
+| `/server refresh` | Read work, execution, knowledge and methods from the server for the pages above. |
+| `/server approve <id> <approval>` | Approve an action a task waits on, bound to the input revision, target identity and action digest the server states. `/server reject` declines it. |
+| `/server reconcile <id>` | Ask the server to check an operation whose outcome is unknown. It does not turn an unknown outcome into success. |
 
 The address can also be set in `settings.json` as `"extensions": { "circle-server": { "enabled": true, "url": "https://…" } }`. The lines the commands write are notices for you; the model does not see them.
 

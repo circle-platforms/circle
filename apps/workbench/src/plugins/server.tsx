@@ -97,10 +97,16 @@ export function ServerPage() {
                     {task.saved ? ' · results saved' : ''}
                   </p>
                 </div>
-                <Button onClick={() => run(`task ${task.taskId}`)}>
+                <Button
+                  aria-label={`follow ${task.taskId}`}
+                  onClick={() => run(`task ${task.taskId}`)}
+                >
                   follow
                 </Button>
-                <Button onClick={() => run(`get ${task.taskId}`)}>
+                <Button
+                  aria-label={`save results of ${task.taskId}`}
+                  onClick={() => run(`get ${task.taskId}`)}
+                >
                   save results
                 </Button>
               </div>

@@ -334,9 +334,16 @@ try {
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
-  assert.equal(await page.getByRole('checkbox').count(), 4);
-  // The circle-server interface is paired with its runtime extension, which the
-  // preview does not have, so it stays off whatever the chosen list says.
+  assert.equal(await page.getByRole('checkbox').count(), 8);
+  for (const id of ['knowledge', 'work', 'execution', 'methods'])
+    assert.equal(
+      await page
+        .getByRole('checkbox', { name: `enable ${id} interface`, exact: true })
+        .isChecked(),
+      false,
+    );
+  // The circle-server interface and the four platform objects are paired with its
+  // runtime extension, which the preview does not have, so they stay off.
   assert.equal(
     await page
       .getByRole('checkbox', {
@@ -346,11 +353,12 @@ try {
       .isChecked(),
     false,
   );
-  await page
-    .getByText(
-      /paired with runtime extension circle-server · 0\.1\.0 · runtime extension circle-server is not installed/,
-    )
-    .waitFor();
+  const pairedNotes = page.getByText(
+    /paired with runtime extension circle-server · 0\.1\.0 · runtime extension circle-server is not installed/,
+  );
+  await pairedNotes.first().waitFor();
+  // circle-server and the four platform objects share one runtime extension.
+  assert.equal(await pairedNotes.count(), 5);
   for (const id of ['knowledge', 'work', 'execution', 'methods'])
     assert.equal(
       await page.getByRole('link', { name: id, exact: true }).count(),

@@ -150,6 +150,77 @@ async function fakeServer(t: Parameters<typeof scratch>[0]) {
           verification: { reader: 'read-excel-file/9.3.12', rowCount: 8 },
         },
       });
+    if (url.pathname === '/v1/tasks' && url.searchParams.get('limit') === '20')
+      return send(200, {
+        data: [
+          {
+            taskId: 'task_one',
+            title: 'mindmap-compile: LBX-HA.xmind',
+            phase: delivered ? 'delivered' : 'running',
+            inputRevisionId: 'inrev_1',
+            capabilityPackId: 'mindmap-compile',
+            input: {
+              sourceRevisionId: 'src_abc',
+              sourceSha256: 'a'.repeat(64),
+            },
+            pendingInputs: [
+              {
+                requestId: 'pin_old',
+                inputRevisionId: 'inrev_0',
+                status: 'open',
+                question: 'stale',
+                kind: 'clarification',
+              },
+            ],
+          },
+        ],
+      });
+    if (
+      url.pathname === '/v1/tasks/task_one/approvals' &&
+      request.method === 'GET'
+    )
+      return send(200, {
+        data: [
+          {
+            approvalId: 'apr_1',
+            taskId: 'task_one',
+            inputRevisionId: 'inrev_1',
+            applicantId: 'tester',
+            targetIdentity: 'SHA256:target',
+            actionDigest: 'd'.repeat(64),
+            status: 'open',
+          },
+        ],
+      });
+    if (url.pathname === '/v1/tasks/task_one/approvals/apr_1')
+      return send(200, { data: { approvalId: 'apr_1', status: 'approved' } });
+    if (url.pathname === '/v1/tasks/task_one/operations')
+      return send(200, {
+        data: [
+          {
+            operationId: 'op_1',
+            name: 'mindmaps.compile',
+            status: 'succeeded',
+            workerId: 'lab-east-01',
+            fencingToken: 3,
+            result: { big: 'x'.repeat(100) },
+          },
+        ],
+      });
+    if (url.pathname === '/v1/packs')
+      return send(200, {
+        data: [
+          {
+            capabilityPackId: 'mindmap-compile',
+            version: '1.0.0',
+            title: 'mindmaps',
+            inputFormats: ['xmind-2020-content-json'],
+            inputSchema: { huge: true },
+          },
+        ],
+      });
+    if (url.pathname === '/v1/tasks/task_one/reconcile')
+      return send(200, { data: { operationId: 'op_1', status: 'reconciled' } });
     if (url.pathname === '/v1/artifacts/art_1/content') {
       response.writeHead(200, {
         'content-type': 'application/octet-stream',
@@ -364,5 +435,77 @@ test('the connector tools let a model list packs, hand over a file and get the c
   assert.equal(looked.result.verification.rowCount, 8);
   const everything = JSON.stringify([submitted, looked]);
   assert.ok(!everything.includes(TOKEN));
+  await delay(50);
+});
+
+test('the connector reads work, execution, knowledge and methods from the server and decides approvals as the server stated them', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = await fakeServer(t);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { 'circle-server': { enabled: true } },
+    secret: async (request) => submitAnswer(home, request.id, PASSWORD),
+  }).load();
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('server')!;
+  await command.handler(`login ${server.url} tester`, context);
+  await command.handler('refresh', context);
+  assert.match(lines.at(-1)!, /read 1 tasks and 1 capability packs/);
+  const objects = (host.view('circle-server') as Record<string, any>).objects;
+  assert.equal(objects.work[0].taskId, 'task_one');
+  // A question bound to an older input revision is not one the task waits on now.
+  assert.deepEqual(objects.work[0].pendingInputs, []);
+  assert.equal(objects.work[0].approvals[0].approvalId, 'apr_1');
+  assert.deepEqual(objects.execution[0].operations[0], {
+    operationId: 'op_1',
+    name: 'mindmaps.compile',
+    status: 'succeeded',
+    workerId: 'lab-east-01',
+    fencingToken: 3,
+  });
+  assert.equal(objects.knowledge[0].source.sourceRevisionId, 'src_abc');
+  assert.deepEqual(objects.methods, [
+    {
+      capabilityPackId: 'mindmap-compile',
+      version: '1.0.0',
+      title: 'mindmaps',
+      inputFormats: ['xmind-2020-content-json'],
+    },
+  ]);
+  await command.handler('approve task_one apr_1', context);
+  const decision = JSON.parse(
+    server.seen
+      .find((call) => call.path === '/v1/tasks/task_one/approvals/apr_1')!
+      .body.toString(),
+  );
+  assert.deepEqual(decision, {
+    inputRevisionId: 'inrev_1',
+    targetIdentity: 'SHA256:target',
+    actionDigest: 'd'.repeat(64),
+    approve: true,
+  });
+  assert.match(
+    lines.at(-1)!,
+    /✓ approved apr_1 for task_one \(input inrev_1\)/,
+  );
+  await assert.rejects(
+    async () => command.handler('approve task_one apr_missing', context),
+    /has no approval apr_missing/,
+  );
+  await command.handler('reconcile task_one', context);
+  assert.match(lines.at(-1)!, /task_one · reconcile · .*reconciled/);
+  assert.ok(!JSON.stringify(host.view('circle-server')).includes(TOKEN));
   await delay(50);
 });
