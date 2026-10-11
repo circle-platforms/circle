@@ -1,7 +1,7 @@
 import { matchingAction } from '../model/shortcuts';
 import { usePlugins } from '../plugins/context';
 import { PluginBoundary } from '../plugins/Boundary';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ArrowUp,
   ChevronDown,
@@ -186,24 +186,29 @@ export function Conversation({
   }, [session.draft]);
   // The transcript follows its end while you are there: as a reply streams in, as messages
   // arrive, as the window changes size. Scroll up and it stays where you are; scroll back
-  // down, or send a message, and it follows again.
-  const following = useRef(true);
-  const toEnd = () => {
+  // down, or send a message, and it follows again. Whether you are at the end is measured
+  // against the height of its last follow, so content that grows before a scroll event
+  // arrives does not count as scrolling away, and it does not wait for a frame to be drawn:
+  // a window behind others gets no frames.
+  const stuck = useRef(true);
+  const height = useRef(0);
+  const follow = (force = false) => {
     const box = scroller.current;
-    if (box) box.scrollTo({ top: box.scrollHeight, behavior: 'instant' });
+    if (!box) return;
+    if (force) stuck.current = true;
+    if (stuck.current)
+      box.scrollTo({ top: box.scrollHeight, behavior: 'instant' });
+    height.current = box.scrollHeight;
   };
   useEffect(() => {
     const box = scroller.current;
     const content = column.current;
     if (!box || !content) return;
     const scrolled = () => {
-      following.current =
-        box.scrollHeight - box.scrollTop - box.clientHeight < 48;
+      stuck.current = height.current - box.scrollTop - box.clientHeight < 48;
     };
     box.addEventListener('scroll', scrolled, { passive: true });
-    const resized = new ResizeObserver(() => {
-      if (following.current) toEnd();
-    });
+    const resized = new ResizeObserver(() => follow());
     resized.observe(content);
     resized.observe(box);
     return () => {
@@ -211,18 +216,18 @@ export function Conversation({
       resized.disconnect();
     };
   }, []);
-  const lastRole = messages.at(-1)?.role;
-  useEffect(() => {
-    following.current = true;
-    toEnd();
-  }, [session.id]);
-  useEffect(() => {
-    if (lastRole === 'user') {
-      following.current = true;
-      toEnd();
-    }
-    setFinding(false);
-  }, [session.id, messages.length, lastRole]);
+  const last = messages.at(-1);
+  const lastRole = last?.role;
+  const lastSize = (last?.text.length ?? 0) + (last?.thinking?.length ?? 0);
+  useLayoutEffect(() => follow(true), [session.id]);
+  // A message you just sent brings the end back into view
+  const count = useRef(messages.length);
+  useLayoutEffect(() => {
+    const sent = messages.length > count.current && lastRole === 'user';
+    count.current = messages.length;
+    follow(sent);
+  }, [messages.length, lastRole, lastSize, session.state]);
+  useEffect(() => setFinding(false), [session.id, messages.length]);
   useEffect(() => {
     if (find && matches.length) {
       const target = scroller.current?.querySelector(

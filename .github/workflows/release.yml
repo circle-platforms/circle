@@ -66,6 +66,7 @@ jobs:
   # The desktop application, built and run as a user gets it: a signed-ad-hoc .dmg on macOS,
   # a .zip on Windows, a .tar.gz on Linux, each started from the package before it is published.
   desktop:
+    name: desktop (${{ matrix.target }})
     timeout-minutes: 30
     strategy:
       fail-fast: false

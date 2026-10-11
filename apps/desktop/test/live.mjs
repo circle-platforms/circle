@@ -123,6 +123,7 @@ async function send(value) {
 }
 try {
   app = await electron.launch({
+    chromiumSandbox: true,
     executablePath:
       process.env.CIRCLE_DESKTOP_EXECUTABLE ?? require('electron'),
     args: [appPath],
@@ -317,6 +318,7 @@ try {
   await app.close();
   app = undefined;
   app = await electron.launch({
+    chromiumSandbox: true,
     executablePath:
       process.env.CIRCLE_DESKTOP_EXECUTABLE ?? require('electron'),
     args: [appPath],
@@ -397,6 +399,7 @@ try {
   };
   delete gatewayEnv.CIRCLE_DESKTOP_RUNTIME_FIXTURE;
   app = await electron.launch({
+    chromiumSandbox: true,
     executablePath:
       process.env.CIRCLE_DESKTOP_EXECUTABLE ?? require('electron'),
     args: [appPath],
@@ -444,7 +447,14 @@ try {
   checks.push(
     'normal native GatewayModel sends a real request to the isolated HTTP fixture with selected model and effort',
   );
-  // Times read as the local clock; the usage row has no empty part
+  // Times read as the local clock once the reply is stored; the usage row has no empty part
+  await waitFor(
+    async () =>
+      (await state()).sessions[0].state === 'idle' &&
+      (await page.locator('article.message time').last().innerText()) !==
+        'streaming',
+    'stored answer',
+  );
   const stamp = page.locator('article.message time').last();
   assert.match(await stamp.innerText(), /^\d{2}:\d{2}$/);
   assert.ok(await stamp.getAttribute('title'));
@@ -487,11 +497,17 @@ try {
     });
   await send('stream a long answer');
   await page.getByText('line 20', { exact: true }).waitFor();
-  assert.ok((await fromEnd()) < 48, 'follows while streaming');
+  await waitFor(async () => (await fromEnd()) < 48, 'follows while streaming');
+  assert.equal(
+    await page.getByText('line 60', { exact: true }).count(),
+    0,
+    'still streaming',
+  );
+  // Scrolled up as by hand, with the scroll event a window in the background may get late
   await page.evaluate(() => {
-    document
-      .querySelector('.transcript')
-      .scrollTo({ top: 0, behavior: 'instant' });
+    const box = document.querySelector('.transcript');
+    box.scrollTo({ top: 0, behavior: 'instant' });
+    box.dispatchEvent(new Event('scroll'));
   });
   await page.getByText('line 40', { exact: true }).waitFor();
   assert.equal(
@@ -501,6 +517,7 @@ try {
   await page.evaluate(() => {
     const box = document.querySelector('.transcript');
     box.scrollTo({ top: box.scrollHeight, behavior: 'instant' });
+    box.dispatchEvent(new Event('scroll'));
   });
   await page.getByText('line 60', { exact: true }).waitFor();
   await waitFor(

@@ -25,6 +25,7 @@ const env = {
 };
 delete env.ELECTRON_RUN_AS_NODE;
 const application = await electron.launch({
+  chromiumSandbox: true,
   executablePath: require('electron'),
   args: [root],
   cwd: root,

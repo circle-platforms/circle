@@ -55,6 +55,7 @@ const route = async (path) => {
 };
 try {
   app = await electron.launch({
+    chromiumSandbox: true,
     executablePath:
       process.env.CIRCLE_DESKTOP_EXECUTABLE ?? require('electron'),
     args: [process.env.CIRCLE_DESKTOP_APP_PATH ?? root],
@@ -369,6 +370,7 @@ try {
   await app.close();
   app = undefined;
   app = await electron.launch({
+    chromiumSandbox: true,
     executablePath:
       process.env.CIRCLE_DESKTOP_EXECUTABLE ?? require('electron'),
     args: [process.env.CIRCLE_DESKTOP_APP_PATH ?? root],
