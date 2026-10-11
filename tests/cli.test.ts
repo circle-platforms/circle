@@ -237,12 +237,27 @@ test('@file is read from the current folder, then the workspace, and inlined aft
     content.find((part) => part.type === 'image_url')?.image_url?.url,
     'data:image/png;base64,' + png.toString('base64'),
   );
+  // One outside the workspace goes too, mentioned by its full path
   const far = await circle(home, ['-p', 'look', '@far.png', workspace], {
     cwd: here,
   });
-  assert.equal(far.code, 2);
-  assert.match(far.stderr, /far\.png is not a text file/);
-  assert.equal(endpoint.bodies.length, 2);
+  assert.equal(far.code, 0, far.stderr);
+  const farContent = (
+    endpoint.bodies.at(-1)!.messages as { role: string; content: unknown }[]
+  ).at(-1)!.content as {
+    type: string;
+    text?: string;
+    image_url?: { url: string };
+  }[];
+  assert.equal(
+    farContent.find((part) => part.type === 'image_url')?.image_url?.url,
+    'data:image/png;base64,' + png.toString('base64'),
+  );
+  assert.ok(
+    farContent
+      .find((part) => part.type === 'text')
+      ?.text?.includes('@' + join(realpathSync(here), 'far.png')),
+  );
 });
 
 test('the full-screen interface shows @path while the model gets the file text', async (t) => {

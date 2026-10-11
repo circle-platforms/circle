@@ -656,6 +656,14 @@ export class ApprovalPolicy {
           : {},
       );
     }
+    if (tool === 'screenshot')
+      return review(
+        'ASK',
+        typeof args.app === 'string' && args.app.trim()
+          ? `shows the model the window of ${args.app.trim()}`
+          : 'shows the model the whole screen',
+        { pattern: '*', scope: 'every screenshot' },
+      );
     return review('ASK', `${tool} can change state`, {
       pattern: '*',
       scope: `every ${tool} call`,

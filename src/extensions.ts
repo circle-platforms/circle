@@ -363,6 +363,9 @@ export class ExtensionHost {
       get modelFacts() {
         return base.modelFacts;
       },
+      get imageInput() {
+        return base.imageInput;
+      },
       complete: async (request) => {
         let next = (request: ModelRequest) => base.complete(request);
         for (const item of middleware

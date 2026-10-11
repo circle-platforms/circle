@@ -1,3 +1,7 @@
+---
+nav_order: 4
+---
+
 # How Circle works
 
 Circle coordinates model requests, tool execution, approvals, context assembly and session storage. It is written in TypeScript and runs on Node.js; it talks to your endpoint through the OpenAI and Anthropic client libraries, and adds its own terminal interface, safety policy and reliability layers.
@@ -64,9 +68,11 @@ A session is a conversation with its own history and branches, saved in `circle.
 
 Circle protects a turn from the things that go wrong around a model:
 
-- Transient endpoint errors are retried with backoff, honouring `Retry-After`.
+- A request that times out is sent again, up to 10 times. A timeout is no answer within `CIRCLE_LLM_TIMEOUT` (45 seconds), a stream with no content for `CIRCLE_LLM_STALL_TIMEOUT` (3 minutes), or a gateway's 408, 504 or 524. Each try waits twice as long as the one before for the answer to start (up to 5 minutes) and for content in the stream (up to 8 times as long). The busy line says so while it happens: `Retrying… · timeout 3/10 · 4m 2s`. After the tenth retry the turn stops with the error and `(gave up after 10 retries)`.
+- Other transient endpoint errors are retried with backoff, honouring `Retry-After`: rate limits up to 5 times within 10 minutes, server errors and dropped connections up to 6 times within 5 minutes, errors the endpoint reports inside a stream 3 times. Certificate and TLS errors are not retried: they fail the same way every time.
+- A timeout or a dropped connection is retried even when part of the answer had come; that part is dropped, and the answer starts again.
 - A parameter your endpoint rejects is dropped for the rest of the session.
-- A stalled stream, a model stuck repeating itself, or a response with no finish signal is cut and sent again.
+- A model stuck repeating itself, or a response with no finish signal, is cut and sent again.
 - A model that keeps repeating the same tool call, or keeps finding nothing, is reminded to change course.
 - A tool that crashes returns an error to the model instead of ending the turn.
 - A tool call with the wrong name case, argument names or argument shape is repaired when the meaning is clear, and checked against the tool's schema before it runs.

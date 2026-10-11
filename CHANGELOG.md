@@ -4,11 +4,40 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Fixed
+
+- **`/login` shows its first question at once.** It opened on a bare `type to search` line, and the base URL with the saved one filled in appeared only after the first key.
+- **A large picture you paste, drop or mention tells the model both sizes**, as one read with `read_file` does: `[Scaled down to send: shot.png 3000×2000, sent as 1313×875]`. It was scaled down without a word, so the model could take positions on the smaller picture for the real ones.
+- **A scaled-down picture stays within 1.15 million pixels.** Its sides were rounded to the nearest pixel, so a 3000×2000 picture went as 1313×876, just over the limit.
+
+## 1.0.5 - 2026-10-11
+
+### Added
+
+- **Send a steering message at once.** While a steering message waits, `enter` on the empty input box has the model read it now: the step under way stops (the reply it was writing is dropped, a running command or subagent is stopped, finished tool results stay) and the same turn goes on, with no `✖ Interrupted`.
+- **Take back one waiting message with `↑`.** In an empty input box, `↑` takes back the last message the model has not read yet, to change it or drop it; `↑` again takes the one before. `alt+↑` still takes back all of them.
+- **Show the model a picture.** `ctrl+v` (or `alt+v`, for Windows Terminal) pastes the picture on the clipboard, or image files copied in Finder or Explorer, as `[Image #1]`. Files dropped on the terminal go in the same way, and `@` now takes a quoted path, a path with `\ ` before its spaces, a name with `@` in it, and images or PDFs from outside the workspace.
+- **A `screenshot` tool.** The model can take a picture of the main screen, or of one application's window, to see an app it is building or the problem you describe. It asks you first each time unless you allow it for the session, and it does not run in `read-only` mode or over `ssh`.
+- **`"images": true` or `false` for a model under `models` in `settings.json`**, where models.dev is wrong about whether it reads images.
+
 ### Changed
 
+- **A request that times out is sent again up to 10 times**, instead of ending the turn. A timeout is no answer within `CIRCLE_LLM_TIMEOUT`, a stream with no content for `CIRCLE_LLM_STALL_TIMEOUT`, or a gateway's 408, 504 or 524. Each try waits twice as long for the answer to start (up to 5 minutes) and for content (up to 8 times as long), and the busy line says which try it is: `Retrying… · timeout 3/10`. A timeout or a dropped connection is retried even when part of the answer had come; that part is dropped.
+- **Large PNG pictures are scaled down** to at most 1,568 pixels on the long side and 1.15 million pixels before they are sent, and the model is told both sizes. A conversation that collects more than 8 pictures or PDFs (or 16 MB of them) leaves the older ones out of its requests down to the newest 3; the conversation keeps them all.
+- **A model known not to read images gets the paths only**, and the screen says so. Whether a model reads images comes from models.dev.
+- **The prompts taken from OpenCode carry its MIT notice** in `THIRD_PARTY_NOTICES.md`.
+- **The documentation is published at <https://qingshanfeihu.github.io/circle/>.** The guides and reference in `docs/` are that site. Contributing, the security policy and this changelog stay in the repository.
 - **Circle is open source under the MIT License.** The release package carries `LICENSE` next to `README.md`.
 - **`/login` asks for the URL straight away.** Circle signs in only with an API URL and key, so the first list, where OAuth sign-in was marked `not available yet`, is gone. `esc` on the key goes back to the URL, and `esc` on the URL leaves. `/login anthropic` and `/login openai` open the same questions as `/login`.
 - **`settings.json` no longer has `auth.mode` or `auth.oauth_provider`.** Circle drops them the next time it saves the settings; the Python releases read a missing `mode` as `api_key`.
+
+### Fixed
+
+- **A request that timed out ended the turn without a single retry.** The SDKs' errors are all named `Error`, so their timeout errors were never recognised as such.
+- **A long tool call on the Anthropic protocol is no longer cut as stalled** after 3 minutes while its arguments are still streaming.
+- **Option+↑ takes back waiting messages in terminals that send option as esc** (Terminal.app's "Use Option as Meta key", iTerm2's Esc+). It used to arrive as `esc` and then `↑`, which stopped the turn.
+- **The model chosen in `/login` is used** even when Circle was started with `-m` or the project's settings name a model.
+- **Settings marked as set up but without a URL** (an older OAuth sign-in) open setup in the full-screen interface, as they already did in print mode.
 
 ## 1.0.4 - 2026-10-09
 

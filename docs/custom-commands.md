@@ -1,3 +1,7 @@
+---
+nav_order: 13
+---
+
 # Custom commands
 
 A custom command is a Markdown file that becomes a slash command. Use one for a prompt you send often.

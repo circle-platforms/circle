@@ -3,9 +3,12 @@ import { randomUUID } from 'node:crypto';
 import type { ModelRequest, ModelResponse, ModelNotice } from './types.js';
 import { RepetitionMonitor } from './text_repetition.js';
 import { isRecord } from './settings.js';
-export type RetryKind = 'rate_limit' | 'server' | 'network' | 'inband';
+import { isCertificateError } from './net.js';
+export type RetryKind =
+  'rate_limit' | 'server' | 'network' | 'timeout' | 'inband';
 export interface RetryBudget {
   maxRetries: number;
+  /** No retry starts this long after the first request; 0 for no such limit. */
   deadlineMs: number;
   initialMs: number;
   capMs: number;
@@ -33,6 +36,15 @@ export const BUDGETS: Record<RetryKind, RetryBudget> = {
     capMs: 30000,
     jitter: 0,
   },
+  // A slow endpoint, not a broken one: up to 10 tries however long each takes, and each
+  // waits longer for the answer to start and for content (TIMEOUT_GROWTH)
+  timeout: {
+    maxRetries: 10,
+    deadlineMs: 0,
+    initialMs: 2000,
+    capMs: 30000,
+    jitter: 0.1,
+  },
   inband: {
     maxRetries: 3,
     deadlineMs: 120000,
@@ -46,9 +58,24 @@ export function envFlag(name: string): boolean {
     (process.env[name] || '1').trim().toLowerCase(),
   );
 }
+/** The request and stall timeouts grow this many times at most over the timeout retries. */
+export const TIMEOUT_GROWTH = 8;
+/** A model request that ran out of retries: the last error, and how many were made. */
+export class RetriesExhausted extends Error {
+  constructor(
+    readonly last: unknown,
+    readonly retries: number,
+  ) {
+    super(
+      `${last instanceof Error ? last.message : String(last)} (gave up after ${retries} ${retries === 1 ? 'retry' : 'retries'})`,
+      { cause: last },
+    );
+    this.name = 'RetriesExhausted';
+  }
+}
 export class StreamStalled extends Error {
-  constructor() {
-    super('model stream stalled without content');
+  constructor(milliseconds: number) {
+    super(`no content from the model for ${Math.round(milliseconds / 1000)}s`);
     this.name = 'StreamStalled';
   }
 }
@@ -105,13 +132,43 @@ function bodies(error: unknown): Record<string, unknown>[] {
     }
   return result;
 }
+// The SDKs' errors keep the name `Error`: their class is in the constructor's name
+const TIMEOUT_NAMES =
+  /^(?:APIConnectionTimeoutError|APITimeoutError|TimeoutError|ConnectTimeout|ReadTimeout|WriteTimeout|PoolTimeout|TimeoutException|ConnectTimeoutError|HeadersTimeoutError|BodyTimeoutError)$/;
+const TIMEOUT_CODES = [
+  'ETIMEDOUT',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+];
+const NETWORK_CODES = [
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'EPIPE',
+  'EAI_AGAIN',
+  'UND_ERR_SOCKET',
+];
+function tlsFailure(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  for (
+    let current: unknown = error;
+    current && !seen.has(current);
+    current = record(current).cause
+  ) {
+    seen.add(current);
+    if (/^ERR_(?:SSL|TLS)_/.test(String(record(current).code ?? '')))
+      return true;
+  }
+  return false;
+}
 export function errorKind(error: unknown): RetryKind | undefined {
-  if (
-    error instanceof StreamStalled ||
-    error instanceof TextRepetitionLoop ||
-    error instanceof MissingFinish
-  )
+  if (error instanceof StreamStalled) return 'timeout';
+  if (error instanceof TextRepetitionLoop || error instanceof MissingFinish)
     return undefined;
+  // A certificate the system does not trust, or TLS spoken to a plain HTTP port, fails the
+  // same way every time
+  if (isCertificateError(error) || tlsFailure(error)) return undefined;
   const status = statusOf(error);
   const codes = bodies(error)
     .flatMap((item) => [item.code, item.type])
@@ -130,41 +187,52 @@ export function errorKind(error: unknown): RetryKind | undefined {
   )
     return undefined;
   if (status === 429) return 'rate_limit';
-  if (
-    status === 408 ||
-    status === 409 ||
-    (status !== undefined && status >= 500)
-  )
+  // 524 is Cloudflare's: the origin took too long
+  if (status === 408 || status === 504 || status === 524) return 'timeout';
+  if (status === 409 || (status !== undefined && status >= 500))
     return 'server';
   if (status === 400 && codes.includes('bad_response_status_code'))
     return 'server';
   if (status !== undefined && status !== 200) return undefined;
+  // The error and its causes: a timeout anywhere in them makes it one
+  const chain: { names: string[]; code: string }[] = [];
   const seen = new Set<unknown>();
-  let current: unknown = error;
-  while (current && !seen.has(current)) {
+  for (
+    let current: unknown = error;
+    current && !seen.has(current);
+    current = record(current).cause
+  ) {
     seen.add(current);
     const item = record(current);
-    const name = String(
-      item.name || (current as object).constructor?.name || '',
-    );
-    if (
-      /^(?:APIConnectionError|APIConnectionTimeoutError|APITimeoutError|TimeoutError|ConnectTimeout|ReadTimeout|WriteTimeout|PoolTimeout|TimeoutException)$/.test(
-        name,
-      ) ||
-      [
-        'ECONNRESET',
-        'ECONNREFUSED',
-        'ETIMEDOUT',
-        'ENOTFOUND',
-        'UND_ERR_SOCKET',
-        'UND_ERR_CONNECT_TIMEOUT',
-      ].includes(String(item.code))
-    )
-      return 'network';
-    if (name === 'APIError' && (status === undefined || status === 200))
-      return 'inband';
-    current = item.cause;
+    chain.push({
+      names: [
+        String(item.name ?? ''),
+        String((current as object).constructor?.name ?? ''),
+      ],
+      code: String(item.code ?? ''),
+    });
   }
+  if (
+    chain.some(
+      (item) =>
+        item.names.some((name) => TIMEOUT_NAMES.test(name)) ||
+        TIMEOUT_CODES.includes(item.code),
+    )
+  )
+    return 'timeout';
+  if (
+    chain.some(
+      (item) =>
+        item.names.includes('APIConnectionError') ||
+        NETWORK_CODES.includes(item.code),
+    )
+  )
+    return 'network';
+  if (
+    chain[0]?.names.includes('APIError') &&
+    (status === undefined || status === 200)
+  )
+    return 'inband';
   return undefined;
 }
 export function retryAfterMs(
@@ -289,7 +357,6 @@ export class ModelGuard {
     const budgets = this.options.budgets ?? BUDGETS;
     let drops = 0;
     let repeats = 0;
-    let resentStall = false;
     let resentFinish = false;
     let current = request;
     const notice = (event: ModelNotice): void => {
@@ -304,21 +371,24 @@ export class ModelGuard {
       const controller = new AbortController();
       const signal = AbortSignal.any([request.signal, controller.signal]);
       let yielded = false;
-      let substantive = false;
       let answered = false;
       const monitor = envFlag('CIRCLE_LLM_REPEAT_GUARD')
         ? new RepetitionMonitor()
         : undefined;
       const fromEnv =
         Number(process.env.CIRCLE_LLM_STALL_TIMEOUT || 180) * 1000;
+      // A stream silent after a timeout gets longer too: a model that thinks without
+      // streaming it, behind a gateway that sends keep-alives, may need it
       const stallMs =
-        this.options.stallMs ?? (Number.isFinite(fromEnv) ? fromEnv : 180000);
+        (this.options.stallMs ??
+          (Number.isFinite(fromEnv) ? fromEnv : 180000)) *
+        (current.timeoutScale ?? 1);
       let timer: NodeJS.Timeout | undefined;
       const arm = (): void => {
         if (timer) clearTimeout(timer);
         if (stallMs > 0)
           timer = setTimeout(
-            () => controller.abort(new StreamStalled()),
+            () => controller.abort(new StreamStalled(stallMs)),
             stallMs,
           );
       };
@@ -333,7 +403,6 @@ export class ModelGuard {
           }
           yielded = true;
           if (kind !== 'keepalive') {
-            substantive = true;
             if (kind === 'tool' || kind === 'text') answered = true;
             arm();
           }
@@ -342,7 +411,6 @@ export class ModelGuard {
         token: (text, thinking) => {
           yielded = true;
           if (text) {
-            substantive = true;
             answered ||= !thinking;
             arm();
           }
@@ -382,12 +450,6 @@ export class ModelGuard {
           });
           continue;
         }
-        if (error instanceof StreamStalled) {
-          if (substantive || resentStall) throw error;
-          resentStall = true;
-          notice({ event: 'stall_retry' });
-          continue;
-        }
         if (error instanceof MissingFinish) {
           if (!envFlag('CIRCLE_LLM_VERIFY_FINISH') || error.output) {
             notice({ event: 'missing_finish', truncated: error.output });
@@ -398,8 +460,11 @@ export class ModelGuard {
           notice({ event: 'missing_finish_retry' });
           continue;
         }
-        if (yielded) throw error;
-        if (drops < 4) {
+        const kind = errorKind(error);
+        // A timeout or a dropped connection is sent again even after part of the answer
+        // came (a proxy's own timeout drops it): nothing of that part is kept
+        if (yielded && kind !== 'timeout' && kind !== 'network') throw error;
+        if (!yielded && drops < 4) {
           let dropped = false;
           for (const parameter of rejectedParameters(error))
             if (this.dropParameter(parameter)) {
@@ -418,15 +483,14 @@ export class ModelGuard {
             }
           if (dropped) continue;
         }
-        const kind = errorKind(error);
         if (!kind) throw error;
         const attempts = counts.get(kind) ?? 0;
         const budget = budgets[kind];
         if (
           attempts >= budget.maxRetries ||
-          now() - started >= budget.deadlineMs
+          (budget.deadlineMs > 0 && now() - started >= budget.deadlineMs)
         )
-          throw error;
+          throw attempts ? new RetriesExhausted(error, attempts) : error;
         const waitMs = backoffMs(
           kind,
           attempts,
@@ -435,6 +499,12 @@ export class ModelGuard {
           budgets,
         );
         counts.set(kind, attempts + 1);
+        // Each timeout doubles how long the next request waits for the answer to start
+        if (kind === 'timeout')
+          current = {
+            ...current,
+            timeoutScale: Math.min(TIMEOUT_GROWTH, 2 ** (attempts + 1)),
+          };
         notice({
           event: 'retry',
           kind,

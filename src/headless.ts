@@ -75,6 +75,7 @@ const SHORT_NAMES: Record<string, string> = {
   list_jobs: 'Jobs',
   stop_job: 'StopJob',
   wait_jobs: 'WaitJobs',
+  screenshot: 'Screenshot',
 };
 type Style = 'path_tail' | 'first_line' | 'patch_target' | 'text';
 const ARG_SUMMARY: Record<string, [string, Style][]> = {
@@ -105,6 +106,7 @@ const ARG_SUMMARY: Record<string, [string, Style][]> = {
   ],
   webfetch: [['url', 'text']],
   websearch: [['query', 'text']],
+  screenshot: [['app', 'text']],
   question: [['questions', 'first_line']],
   skill: [
     ['name', 'text'],
@@ -270,6 +272,14 @@ export class HeadlessProgress {
       else if (notice.event === 'param_dropped')
         this.say(
           `  … the endpoint rejected ${String(notice.param)}; sent again without it`,
+        );
+      else if (notice.event === 'images_left_out')
+        this.say(
+          `  … ${String(notice.model)} does not read images; sent their paths only`,
+        );
+      else if (notice.event === 'files_left_out')
+        this.say(
+          `  … not attached: ${(notice.problems as string[]).join('; ')}`,
         );
     }
   }

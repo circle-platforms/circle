@@ -1,3 +1,7 @@
+---
+nav_order: 3
+---
+
 # Installation and updates
 
 A release of Circle carries everything it needs, including its own Node.js: nothing else has to be installed first. Releases are built for macOS, Linux and Windows, each on x64 and arm64, as `circle-<version>-<os>-<arch>.tar.gz` (`.zip` on Windows) with a `.sha256` file beside each.

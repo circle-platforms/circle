@@ -1,3 +1,7 @@
+---
+nav_order: 16
+---
+
 # CLI
 
 Circle has one command, `circle`, and one subcommand, `circle update`. Without options `circle` opens the full-screen interface in a folder you choose. With `-p` it runs a prompt and prints the answer.
@@ -14,7 +18,7 @@ The words after `circle` are a folder, files and messages, in any order of optio
 
 - **The folder** Circle works in comes first. It defaults to the current folder. `~` is expanded and symlinks are resolved. It does not have to be a git repository. A first word without spaces is always read as a folder, so a mistyped folder name is an error and not a message. A message of one word goes after the folder: `circle . refactor`.
 - **Messages** are sent when the session opens, one turn each, in order. A message with spaces needs quotes. `circle "fix the failing test"` works in the current folder; `circle "fix it" ~/code/app` works too. Without a terminal, messages run as [print mode](#print-mode).
-- **`@path`** adds a text file to the first message, as `<file path="…">` after it. The path is looked for in the current folder, then in the folder Circle works in. An image or a PDF inside that folder goes as an attachment instead. A file that is missing or not text is an error. The conversation on screen shows `@path`; the model gets the text.
+- **`@path`** adds a text file to the first message, as `<file path="…">` after it. The path is looked for in the current folder, then in the folder Circle works in. An image or a PDF goes as an attachment instead, from that folder or from anywhere else. A file that is missing or not text is an error. The conversation on screen shows `@path`; the model gets the text.
 - **`--`** ends the options, so a message can start with `-`.
 
 ```bash
@@ -107,7 +111,7 @@ Print mode, line mode and RPC mode need Circle set up and the folder trusted. Wh
 | `not_run` | `name`, `args`, `reason` (why the call would ask, such as `runs a shell command` or `destructive operation`) | A call that is not run because nobody can approve it. Its `tool_result` follows with the error. |
 | `job` | `event` (`started`, `updated`, `ended`), `job` (`id`, `kind`, `title`, `status`, `reason`, `exitCode`, `startedBy`, `elapsed` in seconds, `output`, `sessionId`) | A [background job](background-jobs.md) started, changed or ended. |
 | `compaction` | `phase`, `trigger`, and as the phase has them `tokens_before`, `tokens_after`, `summarized`, `kept`, `file`, `seconds`, `message` | A [compaction](sessions.md#compaction) started, moved on, ended or failed. |
-| `subagent_event` | `event`, the event's fields, `tags` (`subagent`, `name`, and `job_id` for a background one) | Something a subagent did. |
+| `subagent_event` | `event`, the event's fields, `tags` (`subagent`, `name`, and `job_id` for a background one) | Something a subagent did. After an `info` event whose `model_notice` is a `retry`, the text a subagent streams (`llm_token`) starts over. |
 | `turn_end` | `answer`, `usage` (this turn) | When a prompt's turn ends. |
 | `error` | `message` | The run stopped. |
 

@@ -3,8 +3,11 @@ import { createReadStream } from 'node:fs';
 import { basename, extname } from 'node:path';
 import type { MediaAttachment, Message } from './types.js';
 import { isRecord } from './settings.js';
+import { fitPng, MAX_EDGE, MAX_PIXELS } from './image_fit.js';
 
 export const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
+/** Images and PDFs one message can carry. */
+export const MAX_ATTACHMENTS = 16;
 const MIME: Record<string, MediaAttachment['mime_type']> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -57,7 +60,7 @@ export function makeAttachment(
 export function validateAttachments(
   value: unknown,
 ): asserts value is MediaAttachment[] {
-  if (!Array.isArray(value) || value.length > 16)
+  if (!Array.isArray(value) || value.length > MAX_ATTACHMENTS)
     throw new Error('invalid attachments');
   for (const item of value) {
     if (
@@ -143,22 +146,76 @@ export async function readAttachment(
   path: string,
   signal: AbortSignal,
 ): Promise<MediaAttachment> {
+  return (await readMedia(path, signal)).attachment;
+}
+// A PNG may be larger before it is scaled down: a 5K screenshot is
+const MAX_PNG_READ = 64 * 1024 * 1024;
+/**
+ * An image or PDF file as an attachment. A large PNG (a screenshot) is scaled down to what
+ * models read; `size` says how large the picture is (`2880×1800, sent as 1356×847`), or is
+ * empty when it is not a PNG, and `scaled` whether it was made smaller.
+ */
+export async function readMedia(
+  path: string,
+  signal: AbortSignal,
+): Promise<{ attachment: MediaAttachment; size: string; scaled: boolean }> {
   const mime = mediaType(path);
   if (!mime) throw new Error('unsupported attachment file type');
   signal.throwIfAborted();
+  const limit = mime === 'image/png' ? MAX_PNG_READ : MAX_MEDIA_BYTES;
   const input = createReadStream(path, { signal });
   const chunks: Buffer[] = [];
   let length = 0;
   try {
     for await (const chunk of input) {
       length += chunk.length;
-      if (length > MAX_MEDIA_BYTES)
-        throw new Error('attachment exceeds 20 MiB; use a smaller file');
+      if (length > limit)
+        throw new Error(
+          `attachment exceeds ${limit >> 20} MiB; use a smaller file`,
+        );
       chunks.push(chunk);
     }
   } finally {
     input.destroy();
   }
   signal.throwIfAborted();
-  return makeAttachment(Buffer.concat(chunks), mime, basename(path));
+  return fitMedia(Buffer.concat(chunks), mime, path);
+}
+/**
+ * A file's bytes as an attachment: a PNG larger than models read is scaled down, one that
+ * cannot be is refused. `size` and `scaled` as for `readMedia`.
+ */
+export function fitMedia(
+  bytes: Buffer,
+  mime: MediaAttachment['mime_type'],
+  filename: string,
+): { attachment: MediaAttachment; size: string; scaled: boolean } {
+  let size = '';
+  let scaled = false;
+  if (mime === 'image/png') {
+    const fitted = fitPng(bytes);
+    // Too large to decode, or broken: sent as it is, an endpoint would refuse it, and every
+    // request after it while it stays in the conversation
+    if (
+      !fitted.from &&
+      (Math.max(fitted.width, fitted.height) > MAX_EDGE ||
+        fitted.width * fitted.height > MAX_PIXELS)
+    )
+      throw new Error(
+        `the picture is ${fitted.width}×${fitted.height} and cannot be scaled down; crop it or use a smaller one`,
+      );
+    bytes = fitted.bytes;
+    scaled = Boolean(fitted.from);
+    if (fitted.width)
+      size = fitted.from
+        ? `${fitted.from.width}×${fitted.from.height}, sent as ${fitted.width}×${fitted.height}`
+        : `${fitted.width}×${fitted.height}`;
+  }
+  if (bytes.length > MAX_MEDIA_BYTES)
+    throw new Error('attachment exceeds 20 MiB; use a smaller file');
+  return {
+    attachment: makeAttachment(bytes, mime, basename(filename)),
+    size,
+    scaled,
+  };
 }

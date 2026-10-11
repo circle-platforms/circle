@@ -1,3 +1,7 @@
+---
+nav_order: 10
+---
+
 # Run Circle safely
 
 Circle can read your files, run commands as you, and change anything you can change. It asks before it does most of that, and it refuses a few things outright. **This is a safety net, not a sandbox.** A command you approve runs with your full user rights and network access.
@@ -12,6 +16,7 @@ Read this page before you point Circle at anything you cannot restore, and befor
 | Write, edit or patch a file | Asks. |
 | Delete a file (`delete`) or a patch that deletes | Always asks. |
 | Read, list, search, `webfetch`, `websearch`, `lsp` | Does not ask. |
+| Take a screenshot (`screenshot`) | Asks: the picture can show any window on the screen. "Allow for this session" covers every screenshot. |
 | Tools from MCP servers | Asks. |
 | Tools from extensions | Asks, unless the extension marks the tool read-only or turns approval off. |
 | Custom-command shell snippets | Do not ask. |
@@ -136,4 +141,4 @@ Circle makes two kinds of request of its own that have nothing to do with your m
 
 ## Report a vulnerability
 
-See [SECURITY.md](../SECURITY.md).
+See [SECURITY.md](https://github.com/qingshanfeihu/circle/blob/main/SECURITY.md).

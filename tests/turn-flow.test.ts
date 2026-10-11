@@ -19,6 +19,7 @@ import {
 } from '../src/settings.js';
 import { defaultRunOptions } from '../src/run_options.js';
 import { ScriptedModel } from '../src/testing.js';
+import { InputParser } from '../src/ink/parse_keypress.js';
 import { dialogRows } from '../src/ink/components/dialog_card.js';
 import { stripAnsi } from '../src/ink/string_width.js';
 import {
@@ -378,6 +379,260 @@ test('esc sends the messages the turn had not read as the next turns, one each, 
   });
 });
 
+test('enter on an empty box has the model read the steering now: the reply it was writing is dropped and the same turn goes on', async (t) => {
+  const model = new ScriptedModel([
+    (request) => {
+      request.token('half a rep');
+      return blocked(request);
+    },
+    answer('read it'),
+  ]);
+  const s = await session(t, model);
+  const runs: string[] = [];
+  s.runtime.bus.subscribe((event) => {
+    if (['run_start', 'run_end', 'run_error'].includes(event.kind))
+      runs.push(event.kind);
+  });
+  const first = s.app.submit('first');
+  await until(() => s.app.state.streaming === 'half a rep');
+  // with nothing waiting, enter on an empty box does nothing
+  s.key('enter');
+  await delay(50);
+  assert.equal(model.requests.length, 1);
+  assert.equal(s.app.state.streaming, 'half a rep');
+  s.type('look at b.ts instead');
+  s.key('enter');
+  assert.deepEqual(s.app.state.queue!.steering, ['look at b.ts instead']);
+  s.key('enter');
+  await first;
+  assert.deepEqual(runs, ['run_start', 'run_end']);
+  assert.equal(model.requests.length, 2);
+  assert.deepEqual(
+    model.requests[1]!.messages.map((message) => [
+      message.role,
+      message.content,
+    ]),
+    [
+      ['user', 'first'],
+      ['user', 'look at b.ts instead'],
+    ],
+  );
+  assert.deepEqual(
+    s.runtime.harness.messages.map((message) => message.content),
+    ['first', 'look at b.ts instead', 'read it'],
+  );
+  assert.equal(s.app.state.streaming, '');
+  assert.doesNotMatch(s.screen(), /half a rep|Interrupted/);
+});
+
+test('sending steering now stops the running command but keeps the results already in, and the model reads them with the message', async (t) => {
+  const root = scratch(t);
+  const pidFile = join(root, 'pid');
+  const hold = join(root, 'hold.cjs');
+  writeFileSync(
+    hold,
+    `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => {}, 30000);`,
+  );
+  writeFileSync(join(root, 'a.txt'), 'alpha\n');
+  const model = new ScriptedModel([
+    response('calls', '', [
+      { id: 'read', name: 'read_file', args: { file_path: 'a.txt' } },
+      {
+        id: 'hold',
+        name: 'execute',
+        args: { command: `"${process.execPath}" "${hold}"` },
+      },
+    ]),
+    answer('stopped and read'),
+  ]);
+  const s = await session(t, model, { workspace: root });
+  s.runtime.policy.setYolo(s.runtime.session.id, true);
+  const first = s.app.submit('go');
+  await until(
+    () => existsSync(pidFile) && readFileSync(pidFile, 'utf8') !== '',
+  );
+  const pid = Number(readFileSync(pidFile, 'utf8'));
+  s.type('skip the build');
+  s.key('enter');
+  const started = Date.now();
+  s.key('enter');
+  await first;
+  assert.ok(Date.now() - started < 10000, 'the command did not hold the turn');
+  await until(() => {
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch {
+      return true;
+    }
+  });
+  const results = resultsAfter(s.runtime.harness.messages, 'calls');
+  assert.deepEqual(
+    results.map((message) => [message.tool_call_id, message.status]),
+    [
+      ['read', 'success'],
+      ['hold', 'error'],
+    ],
+  );
+  assert.match(results[0]!.content, /alpha/);
+  assert.equal(results[1]!.content, 'Interrupted by the user');
+  const request = model.requests[1]!.messages;
+  assert.deepEqual(
+    request.slice(-3).map((message) => [message.role, message.status]),
+    [
+      ['tool', 'success'],
+      ['tool', 'error'],
+      ['user', undefined],
+    ],
+  );
+  assert.equal(request.at(-1)!.content, 'skip the build');
+});
+
+test('↑ in an empty box takes back the last waiting message as it was shown, and option+↑ sent as esc ↑ takes back all without stopping the turn', async (t) => {
+  const model = new ScriptedModel([blocked, answer('done')]);
+  const s = await session(t, model);
+  const parser = new InputParser();
+  const feed = (bytes: string) => {
+    for (const event of parser.feed(bytes)) s.ui.handle(event);
+  };
+  const first = s.app.submit('first');
+  await until(() => model.requests.length === 1);
+  s.type('one');
+  s.key('enter');
+  const long = Array.from({ length: 5 }, (_, at) => `line ${at}`).join('\n');
+  s.ui.handle({ type: 'paste', text: long });
+  s.key('enter');
+  s.type('later');
+  s.key('ctrl+q');
+  assert.match(s.screen(), /steering: \[Pasted text #1 \+4 lines\]/);
+  s.key('up');
+  assert.equal(s.app.state.draft, 'later');
+  s.key('ctrl+u');
+  s.key('up');
+  assert.equal(s.app.state.draft, '[Pasted text #1 +4 lines]');
+  assert.deepEqual(s.runtime.harness.queuedMessages, {
+    steering: ['one'],
+    followUp: [],
+  });
+  // changed and sent again, the model still reads the paste in full
+  s.type(' and more');
+  s.key('enter');
+  assert.deepEqual(s.runtime.harness.queuedMessages.steering, [
+    'one',
+    long + ' and more',
+  ]);
+  s.type('draft');
+  feed('\x1b\x1b[A');
+  assert.equal(s.runtime.busy, true);
+  assert.equal(
+    s.app.state.draft,
+    'one\n\n[Pasted text #1 +4 lines] and more\n\ndraft',
+  );
+  assert.equal(s.runtime.harness.pendingMessageCount, 0);
+  // taking messages back does not skip numbers: the next paste is #2
+  s.ui.handle({ type: 'paste', text: '\n' + long });
+  assert.match(s.app.state.draft, /draft\[Pasted text #2 \+5 lines\]$/);
+  s.key('enter');
+  s.key('enter');
+  await first;
+  assert.equal(
+    model.requests[1]!.messages.at(-1)!.content,
+    `one\n\n${long} and more\n\ndraft\n${long}`,
+  );
+});
+
+test('while a model request is tried again the busy line says which try and why, and the part it had written is gone', async (t) => {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const model = new ScriptedModel([
+    async (request) => {
+      request.token('half a rep');
+      // what the guard says when the request timed out and is sent again
+      request.notice?.({
+        event: 'retry',
+        kind: 'timeout',
+        attempt: 3,
+        max: 10,
+        wait_ms: 8000,
+      });
+      await released;
+      request.token('the whole answer');
+      return response('answer', 'the whole answer');
+    },
+  ]);
+  const s = await session(t, model);
+  // a failed check must not leave the turn waiting
+  cleanup(t, () => release());
+  const first = s.app.submit('go');
+  await until(() => s.app.state.flash === 'Retry 3/10 in 8.0s');
+  const waiting = s.screen();
+  assert.match(waiting, /Retrying… · timeout 3\/10 · [\d.]+s · ↓ 0/);
+  assert.doesNotMatch(waiting, /half a rep/);
+  release();
+  await first;
+  const done = s.screen();
+  assert.doesNotMatch(done, /Retrying/);
+  assert.match(done, /the whole answer/);
+});
+
+test('send-now pressed while earlier steering is being read still stops the step, so the next request has the new message', async (t) => {
+  const model = new ScriptedModel([
+    response('look', '', [{ id: 'list', name: 'ls', args: { path: '.' } }]),
+    answer('read both'),
+  ]);
+  const s = await session(t, model);
+  const options = s.runtime.harness.options;
+  const before = options.beforeStep;
+  let pressed = false;
+  // The moment the step's waiting messages are in: B arrives and enter is pressed again
+  options.beforeStep = () => {
+    before?.();
+    if (pressed || !s.runtime.harness.messages.some((m) => m.content === 'A'))
+      return;
+    pressed = true;
+    s.runtime.harness.queue('B');
+    assert.equal(s.runtime.harness.steerNow(), true);
+  };
+  s.runtime.harness.queue('A');
+  await s.runtime.harness.run('go');
+  // the very first request already has B: the step that was about to start without it stopped
+  const first = model.requests[0]!.messages.filter((m) => m.role === 'user');
+  assert.deepEqual(
+    first.map((m) => m.content),
+    ['go', 'A', 'B'],
+  );
+  assert.equal(model.requests.length, 2);
+});
+
+test('a steering message whose file cannot go still reaches the model, without it, and the messages after it are not lost', async (t) => {
+  const workspace = scratch(t);
+  writeFileSync(join(workspace, 'empty.png'), '');
+  const model = new ScriptedModel([blocked, answer('read them')]);
+  const s = await session(t, model, { workspace });
+  const first = s.app.submit('first');
+  await until(() => model.requests.length === 1);
+  s.type('see @empty.png');
+  s.key('enter');
+  s.type('and this');
+  s.key('enter');
+  s.key('enter');
+  await first;
+  const users = model.requests[1]!.messages.filter(
+    (m) => m.role === 'user',
+  ).map((m) => m.content);
+  assert.deepEqual(users, [
+    'first',
+    'see @empty.png\n\n[Not attached: empty.png (attachment must contain 1 byte to 20 MiB)]',
+    'and this',
+  ]);
+  assert.match(
+    s.screen(),
+    /✖ Not attached: empty\.png \(attachment must contain 1 byte to 20 MiB\)/,
+  );
+});
+
 test('esc with nothing waiting starts no turn', async (t) => {
   const model = new ScriptedModel([blocked, answer('never')]);
   const s = await session(t, model);
@@ -565,6 +820,29 @@ test('setup in the full-screen interface saves the URL that answered, and reques
   });
   assert.equal(reply.message.content, 'pong');
   assert.equal(seen.at(-1), 'POST /v1/chat/completions');
+});
+
+test('settings marked as set up but without a URL (an older OAuth sign-in) open setup, as print mode does', async (t) => {
+  const home = scratch(t);
+  writeFileSync(
+    join(home, 'settings.json'),
+    JSON.stringify({
+      initialized: true,
+      auth: { mode: 'oauth', oauth_provider: 'openai', model: 'gpt-x' },
+    }),
+  );
+  const app = new SessionApp(scratch(t), home, loadSettings(home));
+  const ui = app as any;
+  ui.screen.render = () => {};
+  cleanup(t, () => {
+    ui.interactions.close();
+    if (ui.flashTimer) clearTimeout(ui.flashTimer);
+    ui.input.close();
+  });
+  const done = app.initialize();
+  await until(() => app.state.dialog?.title === "What is the API's base URL?");
+  ui.handle({ type: 'key', key: 'escape', char: '' });
+  assert.equal(await done, false);
 });
 
 test('a key the endpoint turns down (401, 403) ends the red line with where to change it; other failures do not', async (t) => {

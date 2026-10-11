@@ -1,3 +1,7 @@
+---
+nav_order: 9
+---
+
 # Background jobs
 
 A command or a subagent can keep running while you and the model go on: a dev server, a file watcher, a long build, a test run, a subagent doing research. Circle keeps each as a job: it shows it below the input box, keeps its output in a file, and tells the model when it ends, starting a turn for that if nothing else is running. The model does not have to poll or `sleep`.

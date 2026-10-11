@@ -1,3 +1,7 @@
+---
+nav_order: 23
+---
+
 # Known issues
 
 This page lists what does not work as you might expect in the current version, with a way around each where there is one. It is written from the code and from running it, and it is updated as things are fixed.
@@ -14,7 +18,7 @@ This page lists what does not work as you might expect in the current version, w
 - **Going back with `/tree` does not undo file changes.** It changes what the model remembers, not your files.
 - **`/undo` does not make the model forget, and does not revert files.**
 - **`/yolo` turns itself off** on `/new`, `/fork`, `/clone`, `/import` and restart.
-- **`projects/` in the data folder is mostly not cleaned up.** It keeps the messages that summaries replaced and very long tool results, for every project; only command and job output is removed, a day after its run ended. Delete old folders by hand.
+- **`projects/` in the data folder is mostly not cleaned up.** It keeps the messages that summaries replaced, very long tool results, pasted pictures and screenshots, for every project; only command and job output is removed, a day after its run ended. Delete old folders by hand.
 - **Circle 0.5.0 cannot import the JSONL exports of this version.** This version imports 0.5.0's.
 
 ## Safety
@@ -31,6 +35,16 @@ These are gaps to know about before you trust Circle with a repository or a mach
 - **Tool calls other than `task` in one reply run one after another.** 0.5.0 asked every approval first and then ran all the calls of a reply at the same time; here only `task` calls next to each other run together. To run subagents side by side, the model can start them with `background: true`.
 - **`grep` searches for literal text, not regular expressions.** Its description says so and points the model to `rg` in the shell for a regular expression, which asks for approval like any command.
 
+## Images and screenshots
+
+- **Pasting a picture and `screenshot` have not been tried on a real Windows or Linux machine.** They use PowerShell on Windows, and `wl-paste`, `xclip` and the screenshot programs on Linux; the tests run them against stand-ins. On macOS, pasting a picture from the clipboard has been checked by tests only.
+- **On macOS a missing Screen Recording permission is guessed** from whether other applications' window titles can be read. When the guess is wrong the picture shows only the desktop. The model is told why that may be when the other windows' titles are hidden, but not when only the terminal's windows are on screen.
+- **Without `app`, `screenshot` takes the main display only on macOS and Windows**; other displays are left out. On Linux the screenshot programs take every display.
+- **On Windows a minimized window cannot be taken.** The model is told to ask you to restore it.
+- **Only PNG files are scaled down.** JPEG, GIF and WebP pictures, and pictures an MCP server returns, are sent at the size they are; an endpoint may refuse one that is very large.
+- **After upgrading from 1.0.4, which models read images is known once models.dev is fetched again**, within a day unless `CIRCLE_NO_MODELS_REFRESH` is set. Until then pictures go to every model, as in 1.0.4.
+- **A model models.dev does not list is assumed to read images.** If its endpoint refuses them, the request fails; set `"images": false` for the model under `models` in the settings.
+
 ## Background jobs
 
 - **A process that leaves its process group is not tracked.** `setsid`, a daemon that detaches, or a program that starts a service elsewhere is not part of the job: stopping the job, or leaving Circle, does not stop it.
@@ -45,7 +59,7 @@ Any file whose name is `plan.md` or `plan` can be written, edited or deleted in 
 
 ## Slow failures
 
-If your endpoint is unreachable, a turn can take minutes to give up. Circle retries up to six times within about five minutes, and each try waits up to 45 seconds.
+If your endpoint is slow or never answers, a turn can take a long time to give up. A timeout is retried 10 times, and each try waits longer for the answer, up to 5 minutes, so an endpoint that accepts the connection and then sends nothing takes about 50 minutes. Press `esc` to stop sooner. An endpoint that refuses the connection gives up within about five minutes.
 
 ## Desktop frontend preview
 

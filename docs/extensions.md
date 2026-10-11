@@ -1,3 +1,7 @@
+---
+nav_order: 15
+---
+
 # Build extensions
 
 An extension is a JavaScript or TypeScript module that adds to Circle without changing Circle itself. It can register tools, slash commands, middleware, subagents, and renderers for tool results, and it can react to events.

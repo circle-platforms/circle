@@ -64,6 +64,32 @@ test('input parser buffers fragmented bracketed paste and terminal reports never
     { type: 'key', key: 'shift+enter', char: '\r' },
   ]);
 });
+test('an esc in front of an arrow or page key is that key with alt, not esc and then the key', () => {
+  const parser = new InputParser();
+  const keys = (bytes: string) =>
+    parser.feed(bytes).map((event) => (event.type === 'key' ? event.key : ''));
+  // Terminal.app with "Use Option as Meta key", iTerm2 with option as Esc+
+  assert.deepEqual(keys('\x1b\x1b[A'), ['alt+up']);
+  assert.deepEqual(keys('\x1b\x1bOB'), ['alt+down']);
+  assert.deepEqual(keys('\x1b\x1b[5~'), ['alt+pageup']);
+  assert.deepEqual(keys('\x1b\x1b[1;2C'), ['alt+shift+right']);
+  // xterm's own form stays as it was
+  assert.deepEqual(keys('\x1b[1;3A'), ['alt+up']);
+  // split between two reads
+  assert.deepEqual(keys('\x1b\x1b['), []);
+  assert.deepEqual(keys('A'), ['alt+up']);
+  // esc then something that is not a key is still esc first
+  assert.deepEqual(parser.feed('\x1b\x1b[200~x\x1b[201~'), [
+    { type: 'key', key: 'escape', char: '' },
+    { type: 'paste', text: 'x' },
+  ]);
+  assert.deepEqual(keys('\x1b\x1bx'), ['escape', 'alt+x']);
+  // esc and then ↑ typed quickly come in two reads: still esc, then ↑
+  assert.deepEqual(keys('\x1b'), []);
+  assert.deepEqual(keys('\x1b[A'), ['escape', 'up']);
+  // a CSI-u key after esc is not taken for an F key
+  assert.deepEqual(keys('\x1b\x1b[13;2u'), ['escape', 'shift+enter']);
+});
 test('Chinese and graphemes occupy terminal cells, and truncation preserves filename tails', () => {
   assert.equal(stringWidth('中文'), 4);
   assert.deepEqual(wrap('中文abc', 4), ['中文', 'abc']);

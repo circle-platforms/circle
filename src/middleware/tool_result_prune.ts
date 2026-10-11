@@ -63,6 +63,8 @@ export function nextPruneState(
       message.role !== 'tool' ||
       old.has(message.id) ||
       Boolean(message.attachments?.length) ||
+      // its images were left out: its text says so and where they were
+      state.droppedMedia?.includes(message.id) ||
       ['question', 'skill'].includes(name) ||
       message === latestTodos ||
       completeJson(message.content)

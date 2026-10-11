@@ -1,3 +1,8 @@
+---
+nav_order: 24
+has_toc: false
+---
+
 # Development
 
 Install Node.js 24 or newer, then run `npm ci`. The compiler and every tool are installed into the checkout: `npx tsc --version` reports the TypeScript version in use.
@@ -21,6 +26,8 @@ Use a scratch `CIRCLE_HOME` for every test and every interactive run. The tests 
 Every change in behaviour needs a test that shows it: the next model request, the stored history, files and processes. Text on screen alone does not show that the runtime is right. Do not weaken a failing test to get green.
 
 CI runs `npm run check` and the format check on Linux, macOS and Windows (`.github/workflows/check.yml`), and builds and smoke-tests the release packages (`.github/workflows/release.yml`). A job that is configured is not a result: look at the run.
+
+The guides and reference in this folder are published at <https://qingshanfeihu.github.io/circle/>. `.github/workflows/pages.yml` builds the site. Contributing, the security policy and the changelog stay in the repository.
 
 More:
 

@@ -838,3 +838,51 @@ test('MCP configuration saves preserve private fields and show pending reload ho
   );
   assert.equal(f.controller.snapshot().mcp[0]!.status, 'reload required');
 });
+
+test('attached pictures go as mentioned ones do: a large PNG is scaled down and both sizes named, and a text-only model gets none', async (t) => {
+  const { PNG } = await import('pngjs');
+  const picture = (width: number, height: number) => {
+    const image = new PNG({ width, height });
+    image.data.fill(180);
+    return PNG.sync.write(image).toString('base64');
+  };
+  const f = await setup(t, [
+    { message: assistant('seen') },
+    { message: assistant('seen as text') },
+  ]);
+  await f.call('prompt', {
+    text: 'look at these',
+    attachments: [
+      { content: picture(3000, 2000), mime: 'image/png', name: 'wide.png' },
+      { content: picture(40, 30), mime: 'image/png', name: 'small.png' },
+    ],
+  });
+  await wait(
+    () =>
+      f.model.requests.length === 1 &&
+      f.controller.snapshot().sessions[0]!.state === 'idle',
+    'first answer',
+  );
+  const user = f.model.requests[0]!.messages.find((m) => m.role === 'user')!;
+  const sizes = user.attachments!.map((item) => {
+    const image = PNG.sync.read(Buffer.from(item.data, 'base64'));
+    return `${image.width}×${image.height}`;
+  });
+  assert.deepEqual(sizes, ['1313×875', '40×30']);
+  assert.equal(
+    user.content,
+    'look at these\n\n[Scaled down to send: wide.png 3000×2000, sent as 1313×875]',
+  );
+  // A model known not to read images gets the text only
+  Object.assign(f.model, { imageInput: false });
+  await f.call('prompt', {
+    text: 'and this',
+    attachments: [
+      { content: picture(40, 30), mime: 'image/png', name: 'small.png' },
+    ],
+  });
+  await wait(() => f.model.requests.length === 2, 'second request');
+  const second = f.model.requests[1]!.messages.at(-1)!;
+  assert.equal(second.content, 'and this');
+  assert.equal(second.attachments, undefined);
+});

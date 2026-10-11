@@ -5,14 +5,42 @@ import {
   realpathSync,
   statSync,
 } from 'node:fs';
-import { join, relative, resolve, sep } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { MediaAttachment } from './types.js';
-import { mediaType, readAttachment, validateAttachments } from './media.js';
+import {
+  MAX_ATTACHMENTS,
+  fitMedia,
+  mediaType,
+  readMedia,
+  validateAttachments,
+} from './media.js';
+import { expandUser } from './paths.js';
 const SKIP = new Set(
   '.git node_modules .venv venv __pycache__ .mypy_cache .pytest_cache .tox dist build .next .cache'.split(
     ' ',
   ),
 );
+/**
+ * The paths a message mentions: `@path`, `@"a path with spaces"`, or `@a\ path` with its
+ * spaces escaped as a dropped file is pasted. Punctuation after a bare path is not part of it.
+ * No-break spaces belong to the path (macOS names screenshots `… 10.15.32\u202fAM.png`), and
+ * so does `@` (`icon@2x.png`).
+ */
+export function mentions(text: string): string[] {
+  return Array.from(
+    text.matchAll(/(?<!\S)@(?:"([^"\n]+)"|((?:\\ |[\u00a0\u202f]|\S)+))/g),
+    (match) =>
+      match[1] ??
+      match[2]!.replace(/[.,;:!?)\u00a0\u202f]+$/, '').replace(/\\ /g, ' '),
+  );
+}
+/** `@path` for a path, quoted when it has a space in it. */
+export function mention(path: string): string {
+  return /[\s"]/.test(path) && !path.includes('"')
+    ? `@"${path}"`
+    : '@' + path.replace(/ /g, '\\ ');
+}
 export function attachFiles(
   text: string,
   root: string,
@@ -21,15 +49,16 @@ export function attachFiles(
   root = realpathSync(root);
   const seen = new Set<string>();
   const blocks: string[] = [];
-  for (const match of text.matchAll(/(?<!\S)@([^\s@]+)/g)) {
-    const raw = match[1]!.replace(/[.,;:!?)]+$/, '');
-    const path = resolve(root, raw);
+  for (const raw of mentions(text)) {
+    const path = resolve(root, expandUser(raw));
     try {
       const full = realpathSync(path);
       const rel = relative(root, full);
       if (
         rel === '..' ||
         rel.startsWith('..' + sep) ||
+        // another drive on Windows
+        isAbsolute(rel) ||
         seen.has(full) ||
         !allowed(full) ||
         !statSync(full).isFile() ||
@@ -48,46 +77,154 @@ export function attachFiles(
   }
   return blocks.length ? text + '\n\n' + blocks.join('\n\n') : text;
 }
+/**
+ * A prompt as the model gets it: the text files it mentions in the workspace added after it,
+ * and the images and PDFs it mentions, in the workspace or anywhere else (`@~/Desktop/a.png`),
+ * as attachments. With `images` false (a model that does not read them) images are left out
+ * and counted in `leftOut`; their `@path` stays in the text. A file that cannot go (too large,
+ * empty, one too many) is left out and named in `problems`, so the message itself still goes.
+ * A PNG scaled down to send is named with both sizes, as `read_file` names one. `given` are
+ * files sent with the prompt rather than named in it (the desktop's), taken the same way.
+ */
 export async function attachPrompt(
   text: string,
   root: string,
   signal: AbortSignal,
   allowed: (path: string) => boolean,
-): Promise<{ content: string; attachments?: MediaAttachment[] }> {
+  images = true,
+  given: MediaAttachment[] = [],
+): Promise<{
+  message: { content: string; attachments?: MediaAttachment[] };
+  leftOut: number;
+  problems: string[];
+}> {
   root = realpathSync(root);
   const attachments: MediaAttachment[] = [];
+  const problems: string[] = [];
+  const scaled: string[] = [];
   const seen = new Set<string>();
-  for (const match of text.matchAll(/(?<!\S)@([^\s@]+)/g)) {
-    const raw = match[1]!.replace(/[.,;:!?)]+$/, '');
+  let leftOut = 0;
+  for (const raw of mentions(text)) {
     let full: string;
     try {
-      full = realpathSync(resolve(root, raw));
+      full = realpathSync(resolve(root, expandUser(raw)));
+      if (
+        seen.has(full) ||
+        !allowed(full) ||
+        !mediaType(full) ||
+        !statSync(full).isFile()
+      )
+        continue;
     } catch {
       continue;
     }
-    const rel = relative(root, full);
-    if (
-      rel === '..' ||
-      rel.startsWith('..' + sep) ||
-      seen.has(full) ||
-      !allowed(full) ||
-      !statSync(full).isFile() ||
-      !mediaType(full)
-    )
-      continue;
     seen.add(full);
-    attachments.push(await readAttachment(full, signal));
+    if (!images && mediaType(full) !== 'application/pdf') leftOut++;
+    else if (attachments.length >= MAX_ATTACHMENTS)
+      problems.push(
+        `${basename(full)} (only ${MAX_ATTACHMENTS} images or PDFs go with one message)`,
+      );
+    else
+      try {
+        const media = await readMedia(full, signal);
+        attachments.push(media.attachment);
+        if (media.scaled) scaled.push(`${basename(full)} ${media.size}`);
+      } catch (error) {
+        signal.throwIfAborted();
+        problems.push(
+          `${basename(full)} (${error instanceof Error ? error.message : String(error)})`,
+        );
+      }
+  }
+  for (const item of given) {
+    if (!images && item.kind === 'image') leftOut++;
+    else if (attachments.length >= MAX_ATTACHMENTS)
+      problems.push(
+        `${item.filename} (only ${MAX_ATTACHMENTS} images or PDFs go with one message)`,
+      );
+    else
+      try {
+        const media = fitMedia(
+          Buffer.from(item.data, 'base64'),
+          item.mime_type,
+          item.filename,
+        );
+        attachments.push(media.attachment);
+        if (media.scaled) scaled.push(`${item.filename} ${media.size}`);
+      } catch (error) {
+        problems.push(
+          `${item.filename} (${error instanceof Error ? error.message : String(error)})`,
+        );
+      }
   }
   signal.throwIfAborted();
   validateAttachments(attachments);
+  const content = attachFiles(
+    text,
+    root,
+    (path) => allowed(path) && !mediaType(path),
+  );
   return {
-    content: attachFiles(
-      text,
-      root,
-      (path) => allowed(path) && !mediaType(path),
-    ),
-    ...(attachments.length ? { attachments } : {}),
+    message: {
+      content: scaled.length
+        ? `${content}\n\n[Scaled down to send: ${scaled.join('; ')}]`
+        : content,
+      ...(attachments.length ? { attachments } : {}),
+    },
+    leftOut,
+    problems,
   };
+}
+/**
+ * The image and PDF files a paste names, when it names nothing else: what a terminal pastes
+ * for files dragged onto it (absolute paths, quoted or with `\ ` before spaces, or
+ * `file://` addresses). Undefined for any other text.
+ */
+export function pastedFiles(
+  text: string,
+  platform: NodeJS.Platform = process.platform,
+): string[] | undefined {
+  const words: string[] = [];
+  let word: string | undefined;
+  let quote = '';
+  const chars = Array.from(text.trim());
+  for (let at = 0; at < chars.length; at++) {
+    const char = chars[at]!;
+    if (quote) {
+      if (char === quote) quote = '';
+      else word += char;
+    } else if (char === '"' || (char === "'" && platform !== 'win32')) {
+      quote = char;
+      word ??= '';
+    } else if (char === '\\' && platform !== 'win32' && at + 1 < chars.length)
+      word = (word ?? '') + chars[++at];
+    else if (/[ \t\r\n]/.test(char)) {
+      if (word !== undefined) words.push(word);
+      word = undefined;
+    } else word = (word ?? '') + char;
+  }
+  if (quote) return undefined;
+  if (word !== undefined) words.push(word);
+  if (!words.length || words.length > 16) return undefined;
+  const paths: string[] = [];
+  for (const raw of words) {
+    let path = raw;
+    if (/^file:\/\//i.test(path))
+      try {
+        path = fileURLToPath(path);
+      } catch {
+        return undefined;
+      }
+    path = expandUser(path);
+    try {
+      if (!isAbsolute(path) || !mediaType(path) || !statSync(path).isFile())
+        return undefined;
+    } catch {
+      return undefined;
+    }
+    paths.push(path);
+  }
+  return paths;
 }
 export function complete(partial: string, root: string, limit = 20): string[] {
   const slash = partial.lastIndexOf('/');

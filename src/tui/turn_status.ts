@@ -8,9 +8,20 @@ import type { Message } from '../types.js';
 import { pickBusyVerb, type TurnUsage } from './status_rows.js';
 import type { ScreenState } from './render.js';
 
+// What a retry follows, by the kind of error (`model_guard.ts`)
+const RETRY_CAUSE: Record<string, string> = {
+  timeout: 'timeout',
+  network: 'network error',
+  server: 'server error',
+  rate_limit: 'rate limited',
+  inband: 'endpoint error',
+};
+
 export class TurnStatus {
   verb = 'Brewing';
   tokens = 0;
+  // The model request being tried again (`timeout 3/10`), until it answers or the turn ends
+  retry?: string;
   readonly usage: Record<string, TurnUsage> = {};
   readonly thinking: Record<string, number> = {};
   private live?: number;
@@ -55,6 +66,24 @@ export class TurnStatus {
       this.agentThought(String(event.tags.subagent), event, now);
       return;
     }
+    const notice = event.payload.model_notice as
+      Record<string, unknown> | undefined;
+    if (event.kind === 'info' && notice?.event === 'retry') {
+      this.retry = `${RETRY_CAUSE[String(notice.kind)] ?? 'error'} ${notice.attempt}/${notice.max}`;
+      // The failed try's thinking is gone with it
+      this.thinkingFrom = this.live = undefined;
+    } else if (
+      [
+        'llm_start',
+        'llm_token',
+        'llm_end',
+        'steer',
+        'run_start',
+        'run_end',
+        'run_error',
+      ].includes(event.kind)
+    )
+      this.retry = undefined;
     if (event.kind === 'run_start') {
       this.verb = pickBusyVerb(this.random);
       this.tokens = 0;
@@ -115,6 +144,7 @@ export class TurnStatus {
   fill(state: ScreenState): void {
     state.busyVerb = this.verb;
     state.busyTokens = this.tokens;
+    state.busyRetry = this.retry;
     state.turnUsage = this.usage;
     state.thinkingSeconds = this.thinking;
     state.liveThinkingSeconds = this.live;

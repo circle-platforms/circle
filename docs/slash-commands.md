@@ -1,3 +1,7 @@
+---
+nav_order: 18
+---
+
 # Slash commands
 
 Type `/` at the start of the input box to run a command. The commands it can become are listed above the box as you type: built-in, custom, extension, and `skill:<name>`, each with its description. `↑` `↓` move, `tab` takes the marked command, `enter` takes it and runs it, `esc` closes the list. With the list closed, `tab` completes what the matches share and lists them in the footer. `/help` lists the built-in, [custom](custom-commands.md) and [extension](extensions.md) commands.

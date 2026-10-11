@@ -1,3 +1,7 @@
+---
+nav_order: 14
+---
+
 # MCP servers
 
 Circle can load tools from [Model Context Protocol](https://modelcontextprotocol.io) servers and offer them to the model next to its own. Read [what MCP tools are allowed to do](#security) before you rely on them.
@@ -42,6 +46,19 @@ A program started for a server gets your environment without the variables whose
 Each tool is offered to the model as `<name>_<tool>`, for example `memory_create_entities`. Circle connects when the full-screen interface starts, and again on `/reload`, `/mcp reload` and `/extensions reload`. It waits up to 30 seconds for each server. A server that fails is listed by `/mcp` with the reason, and the other servers' tools still load.
 
 A tool call has no time limit, so a tool that waits for a login or a long job can take as long as it needs. `esc` sends the server a cancellation; what the server does with it is up to the server. Images and PDFs a tool returns go to the model as attachments.
+
+## Drive a browser
+
+Circle's own `screenshot` tool only looks at the screen. To let the model open a web app you are building, click and type in it, and read its console and network, add a browser server. Two that run with `npx`:
+
+```json
+"mcp_servers": [
+  { "name": "browser", "command": "npx", "args": ["-y", "@playwright/mcp@latest"] },
+  { "name": "devtools", "command": "npx", "args": ["-y", "chrome-devtools-mcp@latest"] }
+]
+```
+
+[Playwright MCP](https://github.com/microsoft/playwright-mcp) gives the model the page's elements to click and type into, and screenshots of the page. [Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp) adds the console, network requests and performance traces of a Chrome it starts. Each call asks for approval like any MCP tool, and the pictures they return go to the model as attachments.
 
 ## Commands
 

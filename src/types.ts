@@ -49,6 +49,8 @@ export interface ToolContext {
   signal: AbortSignal;
   sessionId: string;
   emitAttachments?: (attachments: MediaAttachment[]) => void;
+  /** Whether the model in use reads images: false when it is known not to. */
+  imageInput?: boolean;
 }
 export interface MediaAttachment {
   kind: 'image' | 'document';
@@ -68,6 +70,8 @@ export interface ModelRequest {
     kind: 'connected' | 'keepalive' | 'text' | 'thinking' | 'tool' | 'usage',
   ) => void;
   notice?: (event: ModelNotice) => void;
+  /** Wait this many times the configured request timeout for the answer to start. */
+  timeoutScale?: number;
 }
 export interface ModelNotice {
   event: string;
@@ -82,6 +86,8 @@ export interface ChatModel {
   contextWindow?: number;
   outputBudget?: number;
   modelFacts?: import('./model_catalog.js').ModelFacts;
+  /** Whether the model reads images: false when it is known not to, undefined when unknown. */
+  imageInput?: boolean;
   complete(request: ModelRequest): Promise<ModelResponse>;
 }
 export const emptyUsage = (): Usage => ({

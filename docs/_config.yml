@@ -1,0 +1,76 @@
+title: Circle
+description: A terminal coding agent for your own model endpoint
+lang: en-US
+url: https://qingshanfeihu.github.io
+baseurl: /circle
+repository: qingshanfeihu/circle
+
+theme: just-the-docs
+permalink: pretty
+
+plugins:
+  - jekyll-seo-tag
+  - jekyll-include-cache
+  - jekyll-sitemap
+  - jekyll-optional-front-matter
+  - jekyll-titles-from-headings
+  - jekyll-relative-links
+
+optional_front_matter:
+  remove_originals: false
+titles_from_headings:
+  enabled: true
+  strip_title: false
+relative_links:
+  enabled: true
+  collections: false
+
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+
+exclude:
+  - vendor
+  - .bundle
+  - development/baseline.json
+  - development/model-data.json
+  - development/port-inventory.json
+  - development/upstream-updates.json
+  - development/design-history
+
+aux_links:
+  GitHub:
+    - https://github.com/qingshanfeihu/circle
+  Releases:
+    - https://github.com/qingshanfeihu/circle/releases
+aux_links_new_tab: true
+
+nav_external_links:
+  - title: Contributing
+    url: https://github.com/qingshanfeihu/circle/blob/main/CONTRIBUTING.md
+  - title: Security policy
+    url: https://github.com/qingshanfeihu/circle/blob/main/SECURITY.md
+  - title: Changelog
+    url: https://github.com/qingshanfeihu/circle/blob/main/CHANGELOG.md
+nav_external_links_new_tab: true
+
+back_to_top: true
+back_to_top_text: Back to top
+
+gh_edit_link: true
+gh_edit_link_text: Edit this page on GitHub
+gh_edit_repository: https://github.com/qingshanfeihu/circle
+gh_edit_branch: main
+gh_edit_source: docs
+gh_edit_view_mode: blob
+
+search_enabled: true
+heading_anchors: true
+nav_enabled: true
+
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+  auto_ids: true

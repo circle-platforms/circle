@@ -16,6 +16,8 @@ export interface CatalogEntry {
   context?: number;
   output?: number;
   cost?: Rates;
+  /** models.dev lists image among the model's inputs; absent when it lists no inputs. */
+  image?: boolean;
 }
 export interface CatalogData {
   schema: typeof CATALOG_SCHEMA;
@@ -33,6 +35,8 @@ export interface ModelFacts {
   rates?: Rates;
   provider: string;
   priceProvider: string;
+  /** Whether models.dev says the model reads images. */
+  imageInput?: boolean;
 }
 const SDK_HOSTS: Record<string, string> = {
   'api.anthropic.com': 'anthropic',
@@ -85,6 +89,10 @@ export function slimCatalog(raw: unknown): CatalogData {
       if (whole(limit.output)) entry.output = limit.output;
       const cost = rates(model.cost);
       if (cost) entry.cost = cost;
+      const inputs = isRecord(model.modalities)
+        ? model.modalities.input
+        : undefined;
+      if (Array.isArray(inputs)) entry.image = inputs.includes('image');
       if (Object.keys(entry).length) models[name] = entry;
     }
     if (Object.keys(models).length)
@@ -113,7 +121,10 @@ export function validCatalog(raw: unknown): raw is CatalogData {
     for (const model of Object.values(provider.models)) {
       if (
         !isRecord(model) ||
-        ['context', 'output'].some((key) => key in model && !whole(model[key]))
+        ['context', 'output'].some(
+          (key) => key in model && !whole(model[key]),
+        ) ||
+        ('image' in model && typeof model.image !== 'boolean')
       )
         return false;
       if ('cost' in model) {
@@ -329,6 +340,25 @@ export class ModelCatalog {
       provider: windowItem?.[0] ?? '',
       priceProvider: priceItem?.[0] ?? '',
     };
+    // Whether it reads images: `"models": {"name": {"images": true}}` in the settings where
+    // models.dev is wrong; else what this endpoint's own entries say; else yes when any
+    // provider says so, since a reseller that lists only text must not hide a vendor's
+    // vision model behind a gateway models.dev does not know
+    const said = settings.models[model]?.images;
+    const known = (entries: CatalogEntry[]): boolean[] =>
+      entries.flatMap((entry) =>
+        entry.image === undefined ? [] : [entry.image],
+      );
+    let reads = known(found.map(([, entry]) => entry));
+    if (!reads.length)
+      reads = known(
+        Object.values(providers).flatMap((provider) => {
+          const entry = find(provider.models, model);
+          return entry ? [entry] : [];
+        }),
+      );
+    if (typeof said === 'boolean') result.imageInput = said;
+    else if (reads.length) result.imageInput = reads.includes(true);
     this.factsCache.set(key, result);
     return structuredClone(result);
   }

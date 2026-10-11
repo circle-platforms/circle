@@ -48,6 +48,8 @@ export class GatewayModel implements ChatModel {
   readonly model: string;
   private openai?: OpenAI;
   private anthropic?: Anthropic;
+  // How long a request waits for the answer to start (`CIRCLE_LLM_TIMEOUT`)
+  private readonly timeout: number;
   effort: string;
   private readonly dropped = new Set<string>();
   private sentParameters = new Set<string>();
@@ -68,14 +70,15 @@ export class GatewayModel implements ChatModel {
     const apiKey =
       credentials[settings.auth.api_key_ref] || credentials.api_key;
     if (!apiKey) throw new Error('missing API key; re-run circle --init');
-    const timeout = Math.max(
+    // Whole milliseconds: the SDKs refuse a fractional per-request timeout
+    this.timeout = Math.max(
       5000,
-      (Number(process.env.CIRCLE_LLM_TIMEOUT) || 45) * 1000,
+      Math.round((Number(process.env.CIRCLE_LLM_TIMEOUT) || 45) * 1000),
     );
     const options = {
       apiKey,
       baseURL: settings.auth.base_url,
-      timeout,
+      timeout: this.timeout,
       maxRetries: 0,
     };
     if (settings.auth.protocol === 'anthropic')
@@ -121,6 +124,20 @@ export class GatewayModel implements ChatModel {
   }
   get contextWindow(): number {
     return this.modelFacts.contextWindow;
+  }
+  // How long this try waits for the answer to start: longer after a timeout, but no more
+  // than the 5 minutes Node.js's fetch waits for an answer anyway
+  private requestTimeout(request: ModelRequest): number {
+    return Math.min(
+      Math.max(this.timeout, 300_000),
+      this.timeout * (request.timeoutScale ?? 1),
+    );
+  }
+  get imageInput(): boolean | undefined {
+    return (
+      this.modelFacts.imageInput ??
+      modelProfile(this.settings.auth.protocol, this.model)?.image_inputs
+    );
   }
   get outputBudget(): number | undefined {
     if (!this.anthropic) return undefined;
@@ -247,6 +264,7 @@ export class GatewayModel implements ChatModel {
     this.configureBody(body as unknown as Record<string, unknown>);
     const stream = await this.openai!.chat.completions.create(body, {
       signal: request.signal,
+      timeout: this.requestTimeout(request),
     });
     request.progress?.('connected');
     let content = '';
@@ -448,6 +466,7 @@ export class GatewayModel implements ChatModel {
     this.configureBody(body as unknown as Record<string, unknown>);
     const stream = this.anthropic!.messages.stream(body, {
       signal: request.signal,
+      timeout: this.requestTimeout(request),
     });
     stream.on('connect', () => request.progress?.('connected'));
     let snapshot: Anthropic.Message | undefined;
@@ -466,9 +485,12 @@ export class GatewayModel implements ChatModel {
         )
           request.token(event.delta.thinking, true);
         else
+          // A tool call's arguments are content as they stream, and keep the stream alive
           request.progress?.(
-            event.type === 'content_block_start' &&
-              event.content_block.type === 'tool_use'
+            (event.type === 'content_block_start' &&
+              event.content_block.type === 'tool_use') ||
+              (event.type === 'content_block_delta' &&
+                event.delta.type === 'input_json_delta')
               ? 'tool'
               : event.type === 'message_start' || event.type === 'message_delta'
                 ? 'usage'

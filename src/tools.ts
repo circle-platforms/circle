@@ -8,6 +8,7 @@ import {
   rmSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { glob } from 'glob';
 import type { Tool, ToolContext } from './types.js';
 import { Sandbox } from './sandbox.js';
@@ -16,8 +17,9 @@ import { applyPatch } from './apply_patch.js';
 import { QUESTION_SCHEMA } from './questions.js';
 import { JobRegistry, jobLine, jobNotice } from './jobs.js';
 import { readTextWindow } from './file_read.js';
-import { mediaType, readAttachment } from './media.js';
+import { mediaType, readMedia } from './media.js';
 import { GREP_SCHEMA, grepSearch } from './grep_tool.js';
+import { takeScreenshot, type ScreenshotOptions } from './screenshot.js';
 export interface Todo {
   content: string;
   status: 'pending' | 'in_progress' | 'completed';
@@ -37,6 +39,8 @@ export interface ToolHooks {
   ) => Promise<string>;
   skill?: (name: string) => Promise<string>;
   compact?: (hint: string, context: ToolContext) => Promise<string>;
+  /** Offer `screenshot`; tests give it their own runner. */
+  screenshot?: Omit<ScreenshotOptions, 'app' | 'target'>;
 }
 const string = (args: Record<string, unknown>, ...keys: string[]): string => {
   for (const key of keys)
@@ -107,10 +111,10 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       if (mediaType(path)) {
         if (!context.emitAttachments)
           throw new Error('this caller does not accept media attachments');
-        const attachment = await readAttachment(path, context.signal);
+        const { attachment, size } = await readMedia(path, context.signal);
         context.emitAttachments([attachment]);
         read.add(path);
-        return `Read ${attachment.filename} (${attachment.mime_type}) as an attachment.`;
+        return `Read ${attachment.filename} (${attachment.mime_type}${size ? ', ' + size : ''}) as an attachment.`;
       }
       const offset = Math.max(0, Math.trunc(Number(args.offset ?? 0)));
       const limit = Math.max(0, Math.trunc(Number(args.limit ?? 2000)));
@@ -449,6 +453,45 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         Number(args.num_results) || 5,
       ),
   );
+  if (hooks.screenshot)
+    add(
+      'screenshot',
+      'execute',
+      schema({
+        app: text(
+          'Name of the application whose front window to take, such as "Safari"; leave out for the whole main screen',
+        ),
+      }),
+      async (args, context) => {
+        const app =
+          typeof args.app === 'string' && args.app.trim()
+            ? args.app.trim()
+            : undefined;
+        if (!context.emitAttachments)
+          throw new Error('this caller does not accept media attachments');
+        const folder = join(sandbox.offloadRoot ?? tmpdir(), 'screenshots');
+        mkdirSync(folder, { recursive: true, mode: 0o700 });
+        const target = join(
+          folder,
+          new Date().toISOString().replace(/[:.]/g, '-') + '.png',
+        );
+        // Nothing is taken for a model that could not look at it
+        if (context.imageInput === false)
+          throw new Error('the model in use does not read images');
+        const hint = await takeScreenshot({
+          ...hooks.screenshot,
+          app,
+          target,
+          signal: context.signal,
+        });
+        const { attachment, size } = await readMedia(target, context.signal);
+        context.emitAttachments([attachment]);
+        return (
+          `Screenshot of ${app ? `the front window of ${app}` : 'the main screen'} (${size}), saved as ${target}.` +
+          (hint ? `\n${hint}` : '')
+        );
+      },
+    );
   add(
     'delete',
     'write',

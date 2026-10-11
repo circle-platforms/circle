@@ -13,9 +13,11 @@ import {
 import { execFile, spawn } from 'node:child_process';
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -35,6 +37,7 @@ import {
   loadCredentials,
   trustFolder,
   isFolderTrusted,
+  isReady,
   withConnection,
 } from '../settings.js';
 import { resolveEndpoint } from '../probe.js';
@@ -92,7 +95,9 @@ import { UndoHistory, type ScreenSnapshot } from './undo_history.js';
 import { editorCommand } from './external_editor.js';
 import { GatewayModel } from '../model.js';
 import { discoverCustomCommands } from '../commands.js';
-import { complete } from '../mentions.js';
+import { complete, pastedFiles } from '../mentions.js';
+import { mediaType } from '../media.js';
+import { projectDataDir } from '../paths.js';
 import { VERSION } from '../version.js';
 import {
   availableUpdate,
@@ -345,7 +350,7 @@ export class SessionApp {
       this.state.todos = this.runtime.todos;
       this.plan.update(this.state.todos);
       this.state.planStart = this.plan.start;
-      this.state.queue = this.runtime.harness.queuedMessages;
+      this.state.queue = this.runtime.harness.queuedShown;
       this.state.model = this.runtime.harness.model.model;
       this.state.planMode = this.runtime.harness.planMode;
       this.state.autoMode = this.runtime.policy.yoloEnabled(
@@ -578,7 +583,9 @@ export class SessionApp {
     this.state.completion = undefined;
   }
   async initialize(force = false): Promise<boolean> {
-    if (force || !this.settings.initialized) {
+    // Set up, but with no URL or model (an older release's OAuth sign-in): ask again, as
+    // print mode does and 0.5.0 did
+    if (force || !isReady(this.settings)) {
       this.settingUp = !this.runtime;
       // One card, a step at a time; it says what Circle is doing while the endpoint lists
       // its models, and is drawn again when it has answered.
@@ -727,7 +734,8 @@ export class SessionApp {
         this.state.notices = kept.map(([note]) => note);
         this.state.noticeAnchors = kept.map(([, anchor]) => anchor);
         this.state.scroll = 0;
-      } else if (event.kind === 'llm_start') {
+      } else if (event.kind === 'llm_start' || event.kind === 'steer') {
+        // A step stopped to read a message drops the reply it was writing
         this.state.streaming = '';
         this.state.thinking = '';
       } else if (event.kind === 'llm_token') {
@@ -756,18 +764,27 @@ export class SessionApp {
           event: string;
           [key: string]: unknown;
         };
-        if (notice.event === 'retry')
+        if (notice.event === 'retry') {
+          // What the failed request had written is not kept: it starts again
+          this.state.streaming = '';
+          this.state.thinking = '';
           this.flash(
             `Retry ${notice.attempt}/${notice.max} in ${(Number(notice.wait_ms) / 1000).toFixed(1)}s`,
           );
-        else if (notice.event === 'param_dropped')
+        } else if (notice.event === 'param_dropped')
           this.notice(
             `Endpoint does not support ${notice.param}; continuing without it`,
           );
+        else if (notice.event === 'images_left_out')
+          this.notice(
+            `${notice.model} does not read images; sent their paths only`,
+          );
+        else if (notice.event === 'files_left_out')
+          this.notice(
+            `✖ Not attached: ${(notice.problems as string[]).join('; ')}`,
+          );
         else if (
-          ['repeat_retry', 'stall_retry', 'missing_finish_retry'].includes(
-            notice.event,
-          )
+          ['repeat_retry', 'missing_finish_retry'].includes(notice.event)
         ) {
           this.state.streaming = '';
           this.state.thinking = '';
@@ -1096,8 +1113,16 @@ export class SessionApp {
         // where typing goes: the search, or the line the list asks for (a key, as dots)
         this.state.picker.paste(event.text);
       else if (!this.state.dialog) {
-        this.composer.paste(event.text);
-        this.composer.update();
+        // Files dragged onto the terminal arrive as their paths. An empty paste reads the
+        // clipboard's picture, as ctrl+v does.
+        const files = pastedFiles(event.text);
+        if (files) this.attachFiles(files);
+        else if (!event.text)
+          void this.pasteImage().catch((error) => this.fail(error));
+        else {
+          this.composer.paste(event.text);
+          this.composer.update();
+        }
       }
       this.repaint();
       return;
@@ -1397,21 +1422,75 @@ export class SessionApp {
         this.fail(error);
       }
     } else if (key === 'alt+up' && this.runtime) {
-      const queue = this.runtime.harness.clearQueue();
-      const messages = [...queue.steering, ...queue.followUp];
-      if (messages.length) {
-        this.setDraft(
-          [...messages, ...(this.state.draft ? [this.state.draft] : [])].join(
-            '\n\n',
-          ),
+      const taken = this.runtime.harness.takeBack(true);
+      if (taken.length) {
+        this.composer.putBack(
+          [
+            ...taken.map((item) => item.display),
+            ...(this.state.draft ? [this.state.draft] : []),
+          ].join('\n\n'),
+          Object.assign({}, ...taken.map((item) => item.pastes ?? {})),
         );
         this.flash(
-          `${messages.length} queued message${messages.length === 1 ? '' : 's'} back in the box`,
+          `${taken.length} queued message${taken.length === 1 ? '' : 's'} back in the box`,
         );
       }
-    } else if (['ctrl+q', 'alt+enter', 'alt+return'].includes(key)) {
+    } else if (
+      key === 'up' &&
+      !this.state.draft &&
+      this.runtime?.harness.pendingMessageCount
+    ) {
+      // ↑ in an empty box takes back the last message waiting, to change or drop
+      const [taken] = this.runtime.harness.takeBack();
+      this.composer.putBack(taken!.display, taken!.pastes);
+    } else if (
+      key === 'enter' &&
+      !this.state.draft.trim() &&
+      this.runtime?.harness.steerNow()
+    )
+      this.flash('Sending steering now');
+    else if (['ctrl+q', 'alt+enter', 'alt+return'].includes(key)) {
       if (this.state.draft.trim()) this.send('followUp');
-    } else this.composer.key(key, char);
+    } else if (key === 'ctrl+v' || key === 'alt+v')
+      // alt+v where the terminal keeps ctrl+v for its own paste (Windows Terminal)
+      void this.pasteImage().catch((error) => this.fail(error));
+    else this.composer.key(key, char);
+    this.repaint();
+  }
+  // ctrl+v: a picture on the clipboard goes in the box as `[Image #N]`, kept as a PNG with the
+  // project's data; image files copied in the file manager go in as they are.
+  private async pasteImage(): Promise<void> {
+    const folder = join(
+      projectDataDir(this.workspace, this.home),
+      'pasted_images',
+    );
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    const target = join(
+      folder,
+      new Date().toISOString().replace(/[:.]/g, '-') + '.png',
+    );
+    const found = await this.clipboard.readImage(target);
+    // Only files that are there and not empty: a write that failed must not become a token
+    const files = (
+      !found ? [] : 'png' in found ? [found.png] : found.files
+    ).filter(
+      (file) => mediaType(file) && existsSync(file) && statSync(file).size > 0,
+    );
+    if (files.length) this.attachFiles(files);
+    else {
+      this.flash('No image on the clipboard');
+      this.repaint();
+    }
+  }
+  private attachFiles(files: string[]): void {
+    for (const file of files) this.composer.attach(file);
+    this.composer.update();
+    const model = this.runtime?.harness.model;
+    if (
+      model?.imageInput === false &&
+      files.some((file) => mediaType(file) !== 'application/pdf')
+    )
+      this.flash(`${model.model} does not read images`);
     this.repaint();
   }
   // ctrl+c with nothing typed, as in 0.5.0: it stops a running turn; otherwise the first press
@@ -1516,7 +1595,7 @@ export class SessionApp {
     this.composer.take();
     const message = this.composer.modelText(shown);
     const pastes = this.composer.pastesOf(shown);
-    this.history.add(shown);
+    this.history.add(this.composer.historyText(shown));
     if (kind === 'followUp' && this.runtime?.busy) {
       if (message !== shown)
         this.runtime.harness.shown.set(message, { display: shown, pastes });
@@ -1973,6 +2052,8 @@ export class SessionApp {
         leave,
       );
       askUrl(list, flow.savedUrl);
+      // picker() painted the list before the question was put on it
+      this.repaint();
     };
     // The list for the step the answers have reached; at the end, sign in with them.
     const next = (): void => {
@@ -1980,7 +2061,11 @@ export class SessionApp {
       if (flow.step === 'done') {
         this.loginFlow = undefined;
         this.saveConnection(flow);
-        this.applyRunSettings(runtime.options.modelOverride);
+        // The model chosen here wins over `--model` and the project's, as in 0.5.0
+        const chosen = this.settings.auth.model;
+        runtime.options.modelOverride = undefined;
+        this.applyRunSettings();
+        this.settings.auth.model = this.state.model = chosen;
         runtime.options.settings = this.settings;
         runtime.setModel(this.settings.auth.model);
         this.notice(

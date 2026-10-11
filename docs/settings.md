@@ -1,3 +1,7 @@
+---
+nav_order: 21
+---
+
 # Settings
 
 Circle keeps its settings in `settings.json` inside the data folder (`~/.circle` unless you set `CIRCLE_HOME`). Setup creates it. You can edit it by hand.
@@ -42,7 +46,7 @@ Read [Before you edit by hand](#before-you-edit-by-hand) first.
 | `mcp_servers` | list of objects | `[]` | MCP servers to connect. See [MCP](mcp.md). |
 | `extensions` | object | `{}` | `{"name": {"enabled": false}}` turns an extension off. See [Extensions](extensions.md). |
 | `credential_files` | list of strings | `[]` | More file name patterns the model may not touch, on top of Circle's own list. See [Security](security.md#credential-files). |
-| `models` | object | `{}` | Per model: `{"glm-5.3": {"context_window": 1000000}}` sets the context window the footer shows and the automatic compaction uses, in place of the one from models.dev. On the Anthropic protocol the answer limit is at most a quarter of it; [Models](models.md#cost-and-context-in-the-footer) says where compaction starts. `CIRCLE_MODEL_CTX` sets one window for every model. |
+| `models` | object | `{}` | Per model: `{"glm-5.3": {"context_window": 1000000}}` sets the context window the footer shows and the automatic compaction uses, in place of the one from models.dev. On the Anthropic protocol the answer limit is at most a quarter of it; [Models](models.md#cost-and-context-in-the-footer) says where compaction starts. `CIRCLE_MODEL_CTX` sets one window for every model. `{"my-model": {"images": true}}` says whether the model reads images, where models.dev does not know it or is wrong; see [Images and screenshots](usage.md#images-and-screenshots). |
 | `update_check` | boolean | `true` | Once a day, when the full-screen interface starts, ask GitHub whether a newer release exists and say so in one line. `false` turns it off. See [Updating](cli.md#updating). |
 
 ## Project settings
@@ -69,7 +73,7 @@ The API key is not in `settings.json`. It is in `credentials.json` next to it, a
 
 ## Before you edit by hand
 
-- **Circle changes one key at a time.** When you change something in a session (`ctrl+s` in `/models` or `/effort`, `/themes`, `/settings`, `/trust`, `/login`, `/logout`), Circle reads the file from disk, changes that key and writes it back, so your hand edits and keys Circle does not know stay. The running session goes on with what it read at start until you run `/reload`.
+- **Circle changes one key at a time.** When you change something in a session (`ctrl+s` in `/models` or `/effort`, `/themes`, `/settings`, `/trust`, `/login`, `/logout`), Circle reads the file from disk, changes that key and writes it back, so your hand edits and keys Circle does not know stay. The exception is `auth`: Circle writes back only `protocol`, `base_url`, `model` and `api_key_ref`, so the `mode` and `oauth_provider` an older release wrote are dropped. The running session goes on with what it read at start until you run `/reload`.
 - **A malformed file stops Circle** at start with `settings could not be read` and exit code `2`, also for `circle --init`. Keep a copy before you edit.
 - **`circle --init` replaces only the connection**: `auth` (endpoint, protocol, model). It also clears `enabled_models` when the endpoint changes. See [CLI](cli.md#setting-up-again).
 

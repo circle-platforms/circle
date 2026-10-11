@@ -1,3 +1,8 @@
+---
+nav_order: 1
+permalink: /
+---
+
 # Circle documentation
 
 Circle is a terminal coding agent. You describe a task, and Circle reads your code, runs commands and edits files in your project, asking before it does anything that changes something.
@@ -23,7 +28,7 @@ New here? Start with the [Quickstart](quickstart.md). Coming from Circle 0.5.0? 
 | Save a prompt as a command | [Custom commands](custom-commands.md) |
 | Add tools from other programs | [MCP servers](mcp.md) |
 | Add tools, commands or checks in JavaScript or TypeScript | [Build extensions](extensions.md) |
-| Work on Circle itself | [Contributing](../CONTRIBUTING.md) and [Architecture](development/architecture.md) |
+| Work on Circle itself | [Contributing](https://github.com/qingshanfeihu/circle/blob/main/CONTRIBUTING.md) and [Architecture](development/architecture.md) |
 | See what does not work yet | [Known issues](known-issues.md) |
 
 ## Upgrading from 0.5.0
@@ -71,17 +76,17 @@ What you may notice afterwards:
 
 ## Development
 
-- [Contributing](../CONTRIBUTING.md)
+- [Contributing](https://github.com/qingshanfeihu/circle/blob/main/CONTRIBUTING.md)
 - [Architecture](development/architecture.md)
 - [Releasing](development/releasing.md)
 - [The TUI contract](development/tui-contract.md)
 - [Registering Circle in skills.sh](development/skills-registry.md)
-- [Security policy](../SECURITY.md)
-- [Changelog](../CHANGELOG.md)
+- [Security policy](https://github.com/qingshanfeihu/circle/blob/main/SECURITY.md)
+- [Changelog](https://github.com/qingshanfeihu/circle/blob/main/CHANGELOG.md)
 
 ## Desktop frontend
 
-- [Run and package the native workbench](../apps/desktop/README.md)
+- [Run and package the native workbench](https://github.com/qingshanfeihu/circle/blob/main/apps/desktop/README.md)
 - [Frontend coverage and runtime limits](workbench/coverage.md)
 - [Application and plugin architecture](workbench/architecture.md)
 - [Native checks and application receipts](workbench/validation.md)

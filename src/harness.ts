@@ -50,6 +50,12 @@ export interface HarnessOptions {
   parentPlanMode?: () => boolean;
   planFileMutation?: (call: ToolCall) => boolean;
 }
+/** A message that waits for the model, as the input box showed it. */
+export interface QueuedMessage {
+  message: string;
+  display: string;
+  pastes?: Record<string, string>;
+}
 export class Harness {
   private promptFileAllowed(path: string): boolean {
     const name = path.replaceAll('\\', '/').split('/').at(-1)!;
@@ -64,6 +70,8 @@ export class Harness {
   system: string;
   planMode = false;
   private controller?: AbortController;
+  // The step under way: `steerNow` stops it without ending the turn.
+  private step?: AbortController;
   private steering: string[] = [];
   private followUps: string[] = [];
   /** How the input box showed a prompt the model reads in full: long pastes stay folded on screen. */
@@ -126,6 +134,46 @@ export class Harness {
       this.shown.delete(message!);
     return message!;
   }
+  /** The waiting messages as the input box showed them (long pastes and images folded). */
+  get queuedShown(): { steering: string[]; followUp: string[] } {
+    const shown = (message: string) =>
+      this.shown.get(message)?.display ?? message;
+    return {
+      steering: this.steering.map(shown),
+      followUp: this.followUps.map(shown),
+    };
+  }
+  /**
+   * Take back messages the model has not read, as the box showed them: the last one listed
+   * (the last follow-up, else the last steering message), or `all` of them in list order.
+   */
+  takeBack(all = false): QueuedMessage[] {
+    const taken = all
+      ? [...this.steering.splice(0), ...this.followUps.splice(0)]
+      : this.followUps.length
+        ? this.followUps.splice(-1)
+        : this.steering.splice(-1);
+    return taken.map((message) => {
+      const shown = this.shown.get(message);
+      this.shown.delete(message);
+      return {
+        message,
+        display: shown?.display ?? message,
+        ...(shown?.pastes ? { pastes: shown.pastes } : {}),
+      };
+    });
+  }
+  /**
+   * Have the model read the waiting steering messages now: the step under way stops (the
+   * model's reply in progress is dropped, running tools are stopped, finished tool results
+   * stay) and the turn goes on with the messages. False when none waits or no turn runs.
+   */
+  steerNow(): boolean {
+    if (!this.active || !this.steering.length) return false;
+    // Said plainly: the message may still be taken back before it is read
+    this.step?.abort(new Error('Interrupted by the user'));
+    return true;
+  }
   clearQueue(): { steering: string[]; followUp: string[] } {
     const result = {
       steering: this.steering.splice(0),
@@ -151,15 +199,53 @@ export class Harness {
       /* run_error and persisted results record the stop. */
     }
   }
+  // A prompt with the files it mentions and the ones given with it (the desktop's). A model
+  // known not to read images gets their paths only, and the screen says so. A file that
+  // cannot go is left out: the model and the screen are told which and why.
+  private async attach(
+    prompt: string,
+    workspace: string,
+    signal: AbortSignal,
+    given?: MediaAttachment[],
+  ): Promise<Pick<Message, 'content' | 'attachments'>> {
+    const { message, leftOut, problems } = await attachPrompt(
+      prompt,
+      workspace,
+      signal,
+      (path) => this.promptFileAllowed(path),
+      this.model.imageInput !== false,
+      given,
+    );
+    if (leftOut)
+      this.bus.emit('info', {
+        payload: {
+          model_notice: {
+            event: 'images_left_out',
+            model: this.model.model,
+            count: leftOut,
+          },
+        },
+      });
+    if (!problems.length) return message;
+    this.bus.emit('info', {
+      payload: { model_notice: { event: 'files_left_out', problems } },
+    });
+    return {
+      ...message,
+      content: `${message.content}\n\n[Not attached: ${problems.join('; ')}]`,
+    };
+  }
   private save(message: Message): void {
     this.options.store.append(this.sessionId, [message]);
   }
-  private shownAs(
-    prompt: string,
-  ): Pick<Message, 'display' | 'pastes' | 'attachments'> {
+  private shownAs(prompt: string): Pick<Message, 'display' | 'pastes'> {
     const shown = this.shown.get(prompt);
     this.shown.delete(prompt);
-    return shown ?? { display: prompt };
+    if (!shown) return { display: prompt };
+    return {
+      display: shown.display,
+      ...(shown.pastes ? { pastes: shown.pastes } : {}),
+    };
   }
   // `display` is what the conversation shows for the prompt when it differs from the text
   // the model gets (`circle "question" @file`).
@@ -213,27 +299,21 @@ export class Harness {
     const start = Date.now();
     const usage = emptyUsage();
     let answer = '';
+    const given =
+      prompt === undefined ? undefined : this.shown.get(prompt)?.attachments;
     const shown = prompt === undefined ? undefined : this.shownAs(prompt);
-    if (prompt !== undefined) {
-      const attached = await attachPrompt(
-        prompt,
-        this.options.session.workspace,
-        signal,
-        (path) => this.promptFileAllowed(path),
-      );
-      const attachments = [
-        ...(attached.attachments ?? []),
-        ...(shown?.attachments ?? []),
-      ];
-      if (attachments.length) validateAttachments(attachments);
+    if (prompt !== undefined)
       this.save({
         id: randomUUID(),
         role: 'user',
-        ...attached,
+        ...(await this.attach(
+          prompt,
+          this.options.session.workspace,
+          signal,
+          given,
+        )),
         ...shown,
-        ...(attachments.length ? { attachments } : {}),
       });
-    }
     const session = this.options.store.get(this.sessionId)!;
     if (!session.title && shown?.display !== undefined)
       this.options.store.rename(
@@ -244,90 +324,113 @@ export class Harness {
     try {
       for (let step = 0; step < (this.options.maxSteps ?? 9999); step++) {
         signal.throwIfAborted();
-        for (const message of this.steering.splice(0)) {
+        // The step starts here: a steerNow while the messages before are read stops it
+        const stepControl = new AbortController();
+        this.step = stepControl;
+        const stepSignal = AbortSignal.any([signal, stepControl.signal]);
+        // One at a time, each left waiting until it is stored: one that fails, or is taken
+        // back while its files are read, does not take the others with it
+        while (this.steering.length) {
+          const message = this.steering[0]!;
+          const content = await this.attach(
+            message,
+            session.workspace,
+            signal,
+            this.shown.get(message)?.attachments,
+          );
+          const at = this.steering.indexOf(message);
+          if (at < 0) continue;
+          this.steering.splice(at, 1);
           this.save({
             id: randomUUID(),
             role: 'user',
-            ...(await attachPrompt(message, session.workspace, signal, (path) =>
-              this.promptFileAllowed(path),
-            )),
+            ...content,
             ...this.shownAs(message),
           });
           this.bus.emit('steer', { payload: { message } });
         }
         this.options.beforeStep?.();
-        this.bus.emit('llm_start');
-        const response = await this.model.complete({
-          system:
-            this.system +
-            (this.readOnly
-              ? this.options.planFileMutation
-                ? '\nRead-only mode: inspect and plan; only plan.md or plan files may be changed, subject to approval. Do not run shell commands.'
-                : '\nRead-only mode: inspect and plan; do not change files or run commands.'
-              : ''),
-          messages: this.options.prepareMessages
-            ? await this.options.prepareMessages(signal)
-            : this.options.store.projectedMessages(this.sessionId),
-          tools: this.tools,
-          signal,
-          notice: (event) =>
-            this.bus.emit('info', { payload: { model_notice: event } }),
-          token: (text, thinking) =>
-            this.bus.emit('llm_token', {
-              payload: { text, thinking: Boolean(thinking) },
-            }),
-        });
-        signal.throwIfAborted();
-        const message = {
-          ...response.message,
-          request_model: this.model.model,
-          usage: response.usage,
-          cost:
-            response.message.cost ??
-            this.options.priceUsage?.(
-              response.message.model || this.model.model,
-              response.usage,
-            ),
-        };
-        this.save(message);
-        addUsage(usage, response.usage);
-        this.bus.emit('llm_end', {
-          payload: { message },
-          usage: { ...response.usage },
-        });
-        const calls = response.message.tool_calls ?? [];
-        if (!calls.length) {
-          answer = response.message.content;
-          if (!answer.trim()) throw new Error('model ended without an answer');
-          if (this.steering.length) continue;
-          this.bus.emit('run_end', {
-            payload: { answer },
-            usage: { ...usage },
-            elapsed_ms: Date.now() - start,
+        try {
+          stepSignal.throwIfAborted();
+          this.bus.emit('llm_start');
+          const response = await this.model.complete({
+            system:
+              this.system +
+              (this.readOnly
+                ? this.options.planFileMutation
+                  ? '\nRead-only mode: inspect and plan; only plan.md or plan files may be changed, subject to approval. Do not run shell commands.'
+                  : '\nRead-only mode: inspect and plan; do not change files or run commands.'
+                : ''),
+            messages: this.options.prepareMessages
+              ? await this.options.prepareMessages(signal)
+              : this.options.store.projectedMessages(this.sessionId),
+            tools: this.tools,
+            signal: stepSignal,
+            notice: (event) =>
+              this.bus.emit('info', { payload: { model_notice: event } }),
+            token: (text, thinking) =>
+              this.bus.emit('llm_token', {
+                payload: { text, thinking: Boolean(thinking) },
+              }),
           });
-          return { answer, usage };
+          stepSignal.throwIfAborted();
+          const message = {
+            ...response.message,
+            request_model: this.model.model,
+            usage: response.usage,
+            cost:
+              response.message.cost ??
+              this.options.priceUsage?.(
+                response.message.model || this.model.model,
+                response.usage,
+              ),
+          };
+          this.save(message);
+          addUsage(usage, response.usage);
+          this.bus.emit('llm_end', {
+            payload: { message },
+            usage: { ...response.usage },
+          });
+          const calls = response.message.tool_calls ?? [];
+          if (!calls.length) {
+            answer = response.message.content;
+            if (!answer.trim())
+              throw new Error('model ended without an answer');
+            if (this.steering.length) continue;
+            this.bus.emit('run_end', {
+              payload: { answer },
+              usage: { ...usage },
+              elapsed_ms: Date.now() - start,
+            });
+            return { answer, usage };
+          }
+          // As in 0.5.0, the subagents of task calls next to each other run at the same time;
+          // every other call runs on its own, in order. Results are stored in the order of the
+          // calls, each once those before it are in.
+          for (let index = 0; index < calls.length;) {
+            let end = index + 1;
+            if (this.parallel(calls[index]!))
+              while (end < calls.length && this.parallel(calls[end]!)) end++;
+            const batch = calls.slice(index, end);
+            const results: (Message | undefined)[] = [];
+            let stored = 0;
+            const settled = await Promise.allSettled(
+              batch.map(async (call, at) => {
+                results[at] = await this.runCall(call, stepSignal);
+                while (results[stored]) this.finishCall(results[stored++]!);
+              }),
+            );
+            for (const outcome of settled)
+              if (outcome.status === 'rejected') throw outcome.reason;
+            index = end;
+          }
+          stepSignal.throwIfAborted();
+        } catch (error) {
+          // Stopped by `steerNow`: the next step reads the messages; the turn goes on
+          if (signal.aborted || !stepControl.signal.aborted) throw error;
+        } finally {
+          if (this.step === stepControl) this.step = undefined;
         }
-        // As in 0.5.0, the subagents of task calls next to each other run at the same time;
-        // every other call runs on its own, in order. Results are stored in the order of the
-        // calls, each once those before it are in.
-        for (let index = 0; index < calls.length;) {
-          let end = index + 1;
-          if (this.parallel(calls[index]!))
-            while (end < calls.length && this.parallel(calls[end]!)) end++;
-          const batch = calls.slice(index, end);
-          const results: (Message | undefined)[] = [];
-          let stored = 0;
-          const settled = await Promise.allSettled(
-            batch.map(async (call, at) => {
-              results[at] = await this.runCall(call, signal);
-              while (results[stored]) this.finishCall(results[stored++]!);
-            }),
-          );
-          for (const outcome of settled)
-            if (outcome.status === 'rejected') throw outcome.reason;
-          index = end;
-        }
-        signal.throwIfAborted();
       }
       throw new Error('maximum model steps reached');
     } catch (error) {
@@ -429,11 +532,17 @@ export class Harness {
       const context = {
         signal,
         sessionId: this.sessionId,
+        imageInput: this.model.imageInput,
         emitAttachments: (items: MediaAttachment[]) => {
           if (!acceptingAttachments)
             throw new Error('tool attachment channel is closed');
           signal.throwIfAborted();
           validateAttachments(items);
+          if (
+            this.model.imageInput === false &&
+            items.some((item) => item.kind === 'image')
+          )
+            throw new Error(`${this.model.model} does not read images`);
           attachments.push(...structuredClone(items));
           validateAttachments(attachments);
         },
