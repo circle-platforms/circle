@@ -507,7 +507,8 @@ test('an Anthropic tool call whose arguments stream for longer than the stall ti
         input: {},
       },
     });
-    // the arguments come a piece every 50 ms for 600 ms, twelve times the stall timeout
+    // the arguments come a piece every 50 ms for 600 ms, twice the stall timeout; each gap is
+    // a sixth of it, so a slow runner's late timer is not a stall
     const pieces = [
       '{"file_path": "a.txt", "content": "',
       ...Array(10).fill('x'),
@@ -539,7 +540,7 @@ test('an Anthropic tool call whose arguments stream for longer than the stall ti
   saveCredentials({ api_key: 'fake-key' }, home);
   const result = await new GatewayModel(settings, home, undefined, {
     wait: async () => {},
-    stallMs: 120,
+    stallMs: 300,
   }).complete(request());
   assert.deepEqual(result.message.tool_calls, [
     {
