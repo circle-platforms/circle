@@ -35,6 +35,7 @@ async function fakeServer(t: Parameters<typeof scratch>[0]) {
     [];
   const keys = new Map<string, string>();
   let delivered = false;
+  let looks = 0;
   let tokens: string[] = [];
   let logins = 0;
   // The first token is turned down once it has been used five times, as an expired one is.
@@ -117,6 +118,9 @@ async function fakeServer(t: Parameters<typeof scratch>[0]) {
         data: { events, after: events.at(-1)?.seq ?? after },
       });
     }
+    // The task finishes on its own after a few looks, whether or not its events were read.
+    if (url.pathname === '/v1/tasks/task_one/status' && ++looks > 2)
+      delivered = true;
     if (url.pathname === '/v1/tasks/task_one/status')
       return send(200, {
         data: {
@@ -293,4 +297,63 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
     async () => command.handler('packs', context),
     /not signed in/,
   );
+});
+
+test('the connector tools let a model list packs, hand over a file and get the checked result', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  writeFileSync(join(workspace, 'map.xmind'), Buffer.from('another mindmap'));
+  const server = await fakeServer(t);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { 'circle-server': { enabled: true } },
+    secret: async (request) => submitAnswer(home, request.id, PASSWORD),
+  }).load();
+  const lines: string[] = [];
+  await host
+    .commands()
+    .get('server')!
+    .handler(`login ${server.url} tester`, {
+      workspace,
+      toast: (text) => lines.push(text),
+      append: (text) => lines.push(text),
+      sendUserMessage: () => {},
+    });
+  const tool = (name: string) =>
+    host.tools().find((item) => item.name === name)!;
+  assert.equal(tool('circle_server_submit').approval, true);
+  assert.equal(tool('circle_server_packs').effect, 'read');
+  const context = {
+    signal: new AbortController().signal,
+    sessionId: 'model',
+  } as never;
+  // Without a job list the watch is waited for, as an embedding would.
+  const submitted = JSON.parse(
+    await tool('circle_server_submit').run(
+      { pack: 'mindmap-compile', file: 'map.xmind' },
+      context,
+    ),
+  );
+  assert.equal(submitted.taskId, 'task_one');
+  assert.equal(submitted.phase, 'delivered');
+  assert.ok(
+    submitted.lines.some((line: string) => /✓ saved .*cases\.xlsx/.test(line)),
+  );
+  assert.deepEqual(
+    readFileSync(join(workspace, 'cases.xlsx')),
+    server.workbook,
+  );
+  const looked = JSON.parse(
+    await tool('circle_server_task').run({ task_id: 'task_one' }, context),
+  );
+  assert.equal(looked.result.status, 'succeeded');
+  assert.equal(looked.result.verification.rowCount, 8);
+  const everything = JSON.stringify([submitted, looked]);
+  assert.ok(!everything.includes(TOKEN));
+  await delay(50);
 });

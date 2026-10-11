@@ -106,6 +106,8 @@ export interface Extension {
 // value without it passing through the conversation.
 export interface ExtensionServices {
   home: string;
+  /** The folder Circle works in. */
+  workspace?: string;
   secret?: (request: SecretRequest, signal: AbortSignal) => Promise<void>;
   secretTimeoutMs?: number;
   /** The extension's own entry under `extensions` in settings.json. */
@@ -136,6 +138,10 @@ export class ExtensionAPI {
   }
   get name(): string {
     return this.ext.name;
+  }
+  /** The folder Circle works in, where a tool would read or save the user's files. */
+  get workspace(): string {
+    return this.services?.workspace ?? '';
   }
   /** A folder of the extension's own for what it keeps that is not secret; made on first use. */
   get dataDir(): string {
@@ -499,6 +505,7 @@ export class ExtensionHost {
             this.options.jobOwner,
             {
               home: this.options.home,
+              workspace: this.options.workspace,
               secret: this.options.secret,
               secretTimeoutMs: this.options.secretTimeoutMs,
               settings: this.options.settings?.[discovered.name],

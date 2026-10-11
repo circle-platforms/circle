@@ -76,7 +76,9 @@ Connects Circle to a [circle-server](https://github.com/qingshanfeihu/circle-ser
 | `/server respond <id> <answer>` | Answer the question a task is waiting on. |
 | `/server get <id>` | Save a delivered task's results again. A file never overwrites one already there: `cases.xlsx` becomes `cases-1.xlsx`. |
 
-The address can also be set in `settings.json` as `"extensions": { "circle-server": { "enabled": true, "url": "https://…" } }`. The lines it writes are notices for you; the model does not see them.
+The address can also be set in `settings.json` as `"extensions": { "circle-server": { "enabled": true, "url": "https://…" } }`. The lines the commands write are notices for you; the model does not see them.
+
+It also gives the model three tools, so you can ask in words: `circle_server_packs` and `circle_server_task` only read, and `circle_server_submit` (a pack and a file in the workspace) asks first, since it sends the file and writes the results. `circle_server_submit` returns at once and waits as a [background job](background-jobs.md); when the task is delivered, the results are saved in the workspace after their SHA-256 is checked, as `/server submit` does. Sign in with `/server login` first: the tools never ask for a password themselves, except when the server has signed you out.
 
 ## Coming from 0.5.0
 
@@ -100,6 +102,7 @@ Circle 0.5.0 and older loaded `extension.py`. This version does not run Python, 
 | `api.Watch` | `new api.Watch(title, poll, options)`: return it from a tool to have Circle wait for something slow. See [Waiting for something slow](#waiting-for-something-slow). |
 | `api.setStatus(text, lamp)` | One line at the right of the footer while it holds, such as what the extension is connected to. `lamp` is `running` (yellow), `ok` (green), `error` (red), `wait` (cyan) or `none`. The text is one line of up to 60 characters, with [secrets](#secrets) masked; `null` removes it. The terminal shows it at the right of the footer; the desktop application, above the footer of its sidebar. |
 | `api.openUrl(url)` | Open an `http` or `https` address in the system's browser, from the terminal or the desktop application. An address with a user name or password, or of another kind, is refused. It is passed to the system's opener as one argument, never through a shell. |
+| `api.workspace` | The folder Circle works in, for a tool that reads or saves the user's files there. |
 | `api.settings` | A copy of the extension's own entry under `extensions` in `settings.json`, as it was when the extension loaded, such as `{ "enabled": true, "url": "…" }`. Changing the copy saves nothing. |
 | `api.dataDir` | A folder of the extension's own, `~/.circle/extension_data/<name>/` (`0700`), made the first time it is read. For what the extension keeps that is not secret. |
 | `api.secrets` | Values the extension keeps between runs, such as a token. See [Secrets](#secrets). |

@@ -492,6 +492,78 @@ export function register(api: ExtensionAPI): void {
     return { id, sha256: sha256(bytes), name: basename(path) };
   }
 
+  // Upload one file of the workspace and hand the server a task on it. The same pack and
+  // file give the same idempotency key, so sending twice finds the same task.
+  async function handOver(
+    pack: string,
+    file: string,
+    again: boolean,
+    context: CommandContext,
+  ): Promise<{
+    taskId: string;
+    phase: string;
+    inputRevisionId: string;
+    deduplicated: boolean;
+  }> {
+    const config = readConfig();
+    if (!config?.scopeId)
+      throw new ServerError(
+        'no project: sign in again with /server login <url> <user>',
+      );
+    const path = resolve(context.workspace, file);
+    if (!existsSync(path)) throw new ServerError(`no such file: ${path}`);
+    const source = await upload(path, config.scopeId);
+    context.append(
+      `  uploaded ${source.name} · sha256 ${short(source.sha256)} → ${source.id}`,
+    );
+    const title = `${pack}: ${source.name}`;
+    const idempotencyKey =
+      'circle-' +
+      sha256(
+        Buffer.from(
+          JSON.stringify([
+            config.scopeId,
+            pack,
+            source.sha256,
+            again ? Date.now() : 0,
+          ]),
+        ),
+      ).slice(0, 40);
+    const { data } = await request('POST', '/v1/tasks/submit', {
+      json: {
+        scopeId: config.scopeId,
+        title,
+        capabilityPackId: pack,
+        idempotencyKey,
+        input: { sourceRevisionId: source.id, sourceSha256: source.sha256 },
+      },
+    });
+    const task = isRecord(data) ? data : {};
+    const taskId = String(task.taskId ?? '');
+    if (!taskId) throw new ServerError('the server accepted no task');
+    if (!followed()[taskId]) remember(taskId, { title, seq: 0 });
+    return {
+      taskId,
+      phase: String(task.phase ?? ''),
+      inputRevisionId: String(task.inputRevisionId ?? ''),
+      deduplicated: task.deduplicated === true,
+    };
+  }
+
+  // A context for code that writes lines, when the lines go back to the model instead.
+  function collecting(): { lines: string[]; context: CommandContext } {
+    const lines: string[] = [];
+    return {
+      lines,
+      context: {
+        workspace: api.workspace,
+        toast: (line) => lines.push(line),
+        append: (line) => lines.push(line),
+        sendUserMessage: () => {},
+      },
+    };
+  }
+
   const commands: Record<
     string,
     (rest: string[], context: CommandContext) => Promise<void>
@@ -541,48 +613,11 @@ export function register(api: ExtensionAPI): void {
       const [pack, ...files] = rest.filter((word) => word !== '--again');
       if (!pack || files.length !== 1)
         throw new ServerError('usage: /server submit <pack> <file> [--again]');
-      const config = readConfig();
-      if (!config?.scopeId)
-        throw new ServerError(
-          'no project: sign in again with /server login <url> <user>',
-        );
-      const path = resolve(context.workspace, files[0]!);
-      if (!existsSync(path)) throw new ServerError(`no such file: ${path}`);
-      const source = await upload(path, config.scopeId);
+      const task = await handOver(pack, files[0]!, again, context);
       context.append(
-        `  uploaded ${source.name} · sha256 ${short(source.sha256)} → ${source.id}`,
+        `✓ accepted ${task.taskId} · ${task.phase} · input ${task.inputRevisionId}${task.deduplicated ? ' · the same request as before, no new task' : ''} · following it; closing Circle does not stop it`,
       );
-      const title = `${pack}: ${source.name}`;
-      // The same pack and file give the same key, so sending twice finds the same task.
-      const idempotencyKey =
-        'circle-' +
-        sha256(
-          Buffer.from(
-            JSON.stringify([
-              config.scopeId,
-              pack,
-              source.sha256,
-              again ? Date.now() : 0,
-            ]),
-          ),
-        ).slice(0, 40);
-      const { data } = await request('POST', '/v1/tasks/submit', {
-        json: {
-          scopeId: config.scopeId,
-          title,
-          capabilityPackId: pack,
-          idempotencyKey,
-          input: { sourceRevisionId: source.id, sourceSha256: source.sha256 },
-        },
-      });
-      const task = isRecord(data) ? data : {};
-      const taskId = String(task.taskId ?? '');
-      if (!taskId) throw new ServerError('the server accepted no task');
-      if (!followed()[taskId]) remember(taskId, { title, seq: 0 });
-      context.append(
-        `✓ accepted ${taskId} · ${String(task.phase ?? '')} · input ${String(task.inputRevisionId ?? '')}${task.deduplicated ? ' · the same request as before, no new task' : ''} · following it; closing Circle does not stop it`,
-      );
-      void follow(taskId, context);
+      void follow(task.taskId, context);
     },
     async tasks(_rest, context) {
       const known = Object.entries(followed());
@@ -644,6 +679,82 @@ export function register(api: ExtensionAPI): void {
     },
   };
 
+  // The same work as tools, for a model that is told to hand work to the server.
+  api.registerTool(
+    'circle_server_packs',
+    'List what the connected circle-server can do: its capability packs, their input formats and versions. Read-only.',
+    { type: 'object', properties: {} },
+    async () => (await request('GET', '/v1/packs')).data,
+    { readOnly: true },
+  );
+  api.registerTool(
+    'circle_server_task',
+    'Look up a circle-server task by id: its phase and, once it has ended, its result (status, artifacts with their SHA-256, the independent check, unmapped items). Read-only; saves nothing.',
+    {
+      type: 'object',
+      properties: { task_id: { type: 'string' } },
+      required: ['task_id'],
+    },
+    async (args) => {
+      const taskId = String(args.task_id ?? '');
+      if (!taskId) throw new api.ToolError('task_id is required');
+      const task = await status(taskId);
+      const ended = TERMINAL.has(String(task.phase));
+      return {
+        task,
+        result: ended
+          ? (
+              await request(
+                'GET',
+                `/v1/tasks/${encodeURIComponent(taskId)}/result`,
+              )
+            ).data
+          : null,
+      };
+    },
+    { readOnly: true },
+  );
+  api.registerTool(
+    'circle_server_submit',
+    'Hand circle-server a task on one file of the workspace with a capability pack, for example mindmap-compile on an .xmind. The server keeps the task; this waits in the background and, once it is delivered, saves the results in the workspace after checking their SHA-256. It sends the file to the server and writes files, so it asks first.',
+    {
+      type: 'object',
+      properties: {
+        pack: { type: 'string', description: 'capability pack id' },
+        file: { type: 'string', description: 'path in the workspace' },
+      },
+      required: ['pack', 'file'],
+    },
+    async (args) => {
+      const pack = String(args.pack ?? '');
+      const file = String(args.file ?? '');
+      if (!pack || !file) throw new api.ToolError('pack and file are required');
+      const accepted = collecting();
+      let task;
+      try {
+        task = await handOver(pack, file, false, accepted.context);
+      } catch (error) {
+        throw new api.ToolError(reason(error));
+      }
+      const taskId = task.taskId;
+      return new api.Watch(
+        `circle-server ${taskId}`,
+        async () => {
+          const current = await status(taskId);
+          const phase = String(current.phase ?? '');
+          if (!TERMINAL.has(phase)) return null;
+          const done = collecting();
+          if (phase === 'delivered') await deliver(taskId, done.context);
+          return { taskId, phase, lines: done.lines };
+        },
+        {
+          interval_s: 3,
+          deadline_s: 3600,
+          result: { ...task, lines: accepted.lines },
+        },
+      );
+    },
+  );
   void showStatus();
   api.registerCommand(
     'server',
