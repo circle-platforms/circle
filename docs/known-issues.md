@@ -49,6 +49,7 @@ If your endpoint is unreachable, a turn can take minutes to give up. Circle retr
 
 ## Desktop frontend preview
 
+- **The desktop app refuses to start with `--no-sandbox`.** The app enables Chromium's sandbox for every child process; the switch contradicts that and crashed the main process with an access violation when the first child process started. The app now exits with an explanation instead. See [electron#54838](https://github.com/electron/electron/issues/54838).
 - **The desktop model runtime is not connected yet.** The app currently uses isolated preview sessions and platform data. Model/tool, MCP, extension and remote-operation actions have local request records; they do not run those operations.
 - **UI components are not paired with live runtime plugin packages yet.** B/C/D/E share the workbench component API, but their service calls and Circle runtime entries are not installed by that API. The [integration audit](workbench/integration-audit.md) identifies the existing core interfaces and the remaining acceptance gates.
 - **Workspace grants expire with the host process.** Reopen a selected folder after restarting the app to refresh its native read handles. Conversations and pinned input remain in the app's own data folder.

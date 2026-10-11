@@ -37,6 +37,15 @@ const dataPath =
     ? join(app.getPath('appData'), 'Circle Workbench')
     : join(app.getPath('appData'), 'Circle'));
 app.setPath('userData', dataPath);
+// --no-sandbox contradicts enableSandbox(): the main process then crashes
+// with an access violation when the first child process starts
+// (https://github.com/electron/electron/issues/54838).
+if (app.commandLine.hasSwitch('no-sandbox')) {
+  process.stderr.write(
+    'circle: cannot start with --no-sandbox because the sandbox is required\n',
+  );
+  process.exit(1);
+}
 app.enableSandbox();
 protocol.registerSchemesAsPrivileged([
   {
