@@ -4,7 +4,7 @@ nav_order: 3
 
 # Installation and updates
 
-A release of Circle carries everything it needs, including its own Node.js: nothing else has to be installed first. Releases are built for macOS, Linux and Windows, each on x64 and arm64, as `circle-<version>-<os>-<arch>.tar.gz` (`.zip` on Windows) with a `.sha256` file beside each.
+A release of Circle carries everything it needs, including its own Node.js: nothing else has to be installed first. Releases are built for macOS, Linux and Windows, each on x64 and arm64, as `circle-<version>-<os>-<arch>.tar.gz` (`.zip` on Windows) with a `.sha256` file beside each. The same release has [the desktop application](#the-desktop-application).
 
 The commands below install the newest release on the [Releases page](https://github.com/qingshanfeihu/circle/releases). They need a release of 1.0.0 or later; until one is published there, they stop with an error and change nothing.
 
@@ -66,6 +66,36 @@ The installer first downloads and checks the new release, so a failed download l
 The data folder is shared and not touched. Settings, keys, MCP servers, skills, custom commands, prompt history and trusted folders carry over; saved sessions are imported on the first start (see [Sessions from 0.5.0](sessions.md#sessions-from-050)). Python extensions do not load in this version and have to be rewritten; see [Coming from 0.5.0](extensions.md#coming-from-050).
 
 `circle update` in a Python version cannot install 1.0.0 or later: it stops with `release v1.0.0 has no circle-<os>-<arch>.tar.gz` (`.zip` on Windows), because release files now carry the version in their names. Run the one-command installer instead.
+
+## The desktop application
+
+Each release also has the Circle desktop application: a window of its own around the same Circle. Take the file for your system from the [Releases page](https://github.com/qingshanfeihu/circle/releases):
+
+| System | File |
+|---|---|
+| macOS, Apple silicon | `circle-desktop-<version>-darwin-arm64.dmg` |
+| macOS, Intel | `circle-desktop-<version>-darwin-x64.dmg` |
+| Windows x64 | `circle-desktop-<version>-windows-x64.zip` |
+| Linux x64 | `circle-desktop-<version>-linux-x64.tar.gz` |
+
+Each has a `.sha256` file beside it, and the release's `SHA256SUMS` lists them all. The application carries everything it needs; it does not use the `circle` command.
+
+- **macOS:** open the `.dmg` and drag Circle to Applications. Circle is signed ad hoc, not by an Apple developer, so the first time macOS says it cannot check it. Open System Settings → Privacy & Security, click Open Anyway beside the line about Circle, and confirm. In a terminal, `xattr -dr com.apple.quarantine /Applications/Circle.app` does the same.
+- **Windows:** unpack the `.zip`, for example into `%LOCALAPPDATA%\Programs`, and start `Circle-win32-x64\Circle.exe`. If SmartScreen says it protected your PC, click More info, then Run anyway.
+- **Linux:** unpack the `.tar.gz` and, once, give Chromium's sandbox helper to root, which Ubuntu 24.04 and later need; without it Circle stops at once with `The SUID sandbox helper binary was found, but is not configured correctly`. Then start `Circle`:
+
+  ```sh
+  tar -xzf circle-desktop-<version>-linux-x64.tar.gz
+  sudo chown root:root Circle-linux-x64/chrome-sandbox
+  sudo chmod 4755 Circle-linux-x64/chrome-sandbox
+  ./Circle-linux-x64/Circle
+  ```
+
+  Move the folder with `mv` afterwards, not `cp`, which drops the setting. Circle refuses `--no-sandbox`.
+
+The application does not update itself, and `circle update` updates only the command line: to update the application, take the new release's file and replace it.
+
+It keeps its settings, key and sessions in a data folder of its own, apart from `~/.circle`: `~/Library/Application Support/Circle` on macOS, `%APPDATA%\Circle` on Windows, `~/.config/Circle` on Linux. The first time, it asks for the API URL, the key and the model. Open a folder and trust it before Circle reads it or runs anything in it.
 
 ## From source
 

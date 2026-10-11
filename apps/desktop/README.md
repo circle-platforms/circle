@@ -23,7 +23,7 @@ The default desktop data folder is `Circle` under the operating system's applica
 npm --prefix apps/desktop run package
 ```
 
-The current host platform is packaged under `apps/desktop/out/`. On macOS this produces `Circle.app` and a `.dmg` containing the application and an Applications-folder link. These are development artifacts; this command does not publish a release or install into Applications.
+The current host platform is packaged under `apps/desktop/out/` as `circle-desktop-<version>-<os>-<arch>` with a `.sha256` beside it: on macOS `Circle.app`, signed again ad hoc, and a `.dmg` holding it and an Applications-folder link; on Windows a `.zip`; on Linux a `.tar.gz`. The version is Circle's, from the root `package.json`. The `release` workflow builds the same files on four targets, runs each, and publishes them with every release; this command does not publish anything or install into Applications.
 
 The desktop package includes the renderer, Circle runtime/dependencies, prompts, model metadata, icon, license and third-party notices. It needs no globally installed Node or Circle executable. Build dependencies are pinned in the repository and application lockfiles.
 

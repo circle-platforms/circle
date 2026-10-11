@@ -61,10 +61,13 @@ Any file whose name is `plan.md` or `plan` can be written, edited or deleted in 
 
 If your endpoint is slow or never answers, a turn can take a long time to give up. A timeout is retried 10 times, and each try waits longer for the answer, up to 5 minutes, so an endpoint that accepts the connection and then sends nothing takes about 50 minutes. Press `esc` to stop sooner. An endpoint that refuses the connection gives up within about five minutes.
 
-## Desktop frontend preview
+## Desktop application
 
-- **The desktop app refuses to start with `--no-sandbox`.** The app enables Chromium's sandbox for every child process; the switch contradicts that and crashed the main process with an access violation when the first child process started. The app now exits with an explanation instead. See [electron#54838](https://github.com/electron/electron/issues/54838).
-- **The desktop model runtime is not connected yet.** The app currently uses isolated preview sessions and platform data. Model/tool, MCP, extension and remote-operation actions have local request records; they do not run those operations.
-- **UI components are not paired with live runtime plugin packages yet.** B/C/D/E share the workbench component API, but their service calls and Circle runtime entries are not installed by that API. The [integration audit](workbench/integration-audit.md) identifies the existing core interfaces and the remaining acceptance gates.
-- **Workspace grants expire with the host process.** Reopen a selected folder after restarting the app to refresh its native read handles. Conversations and pinned input remain in the app's own data folder.
-- **The desktop development package is not a signed public release.** macOS native behavior is checked locally and in its native workflow; other-platform packaging has separate CI jobs. Do not treat a build as full native behavior validation on every operating system.
+- **It is not signed by Apple or Microsoft.** macOS asks once whether to open it (System Settings → Privacy & Security → Open Anyway), and Windows SmartScreen may stop it the first time (More info → Run anyway). See [Installation](installation.md#the-desktop-application).
+- **On Linux, its sandbox helper needs root once.** Where unprivileged user namespaces are restricted, as on Ubuntu 24.04 and later, Chromium's sandbox needs `chrome-sandbox` owned by root with the setuid bit; until then the application stops at start. [Installation](installation.md#the-desktop-application) has the two commands.
+- **It does not update itself.** `circle update` updates only the command line; take the new release's file to update the application.
+- **A waiting steering message cannot be sent at once yet.** The terminal's `enter` on an empty box has no counterpart in the application: the message is read before the model's next step. Waiting messages can be removed one by one, or all put back in the box.
+- **It refuses to start with `--no-sandbox`.** The application enables Chromium's sandbox for every child process; the switch contradicts that and crashed the main process with an access violation when the first child process started. It now exits with an explanation instead. See [electron#54838](https://github.com/electron/electron/issues/54838).
+- **Workspace grants expire with the application.** Reopen a selected folder after restarting it to refresh its read handles. Conversations and pinned input stay in the application's own data folder.
+- **A failed turn's line lasts only while the application runs.** It is shown in the conversation, but not saved with it.
+- **UI components are not paired with live runtime plugin packages yet.** The other platform objects share the workbench component API, but their service calls and Circle runtime entries are not installed by it, and the application does not show them. The [integration audit](workbench/integration-audit.md) names the remaining work.

@@ -4,10 +4,15 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Added
+
+- **The Circle desktop application.** A window of its own around the same Circle that runs in the terminal: conversations and their history, approvals, questions and secrets as cards, files and diffs, background jobs, subagents, models, MCP servers, extensions and skills. Pictures and PDFs go with a message by the attach button, by pasting or by dropping them on the box. It keeps its own data folder, apart from `~/.circle`, and asks for the API URL and key the first time. Each release has it for macOS (Apple silicon and Intel, as a `.dmg`), Windows x64 (`.zip`) and Linux x64 (`.tar.gz`), as `circle-desktop-<version>-<os>-<arch>`. It is not signed by Apple or Microsoft; see [Installation](docs/installation.md#the-desktop-application) for the first start.
+
 ### Fixed
 
 - **`/login` shows its first question at once.** It opened on a bare `type to search` line, and the base URL with the saved one filled in appeared only after the first key.
 - **A large picture you paste, drop or mention tells the model both sizes**, as one read with `read_file` does: `[Scaled down to send: shot.png 3000×2000, sent as 1313×875]`. It was scaled down without a word, so the model could take positions on the smaller picture for the real ones.
+- **On Windows, an `AGENTS.md` or memory file is no longer skipped as a copy of another.** Files were told apart by their file id as a number, and Windows file ids are too large for that: two files made one after the other could round to the same id, and the second was left out of the model's instructions.
 - **A scaled-down picture stays within 1.15 million pixels.** Its sides were rounded to the nearest pixel, so a 3000×2000 picture went as 1313×876, just over the limit.
 
 ## 1.0.5 - 2026-10-11

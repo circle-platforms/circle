@@ -47,6 +47,17 @@ When all six pass, the `publish` job checks that every archive and checksum is t
 | `windows-2025` | `circle-<version>-windows-x64.zip` |
 | `windows-11-arm` | `circle-<version>-windows-arm64.zip` |
 
+The `desktop` job packages the desktop application on four more runners (`npm --prefix apps/desktop run package`) and starts each package with `test:desktop` and `test:live` before it is published (under `xvfb-run` on Linux). On macOS the application is signed again, ad hoc, after packaging, because packaging breaks the signature Electron's own files came with, and a copy with a broken signature is reported as damaged once downloaded.
+
+| Runner | Desktop asset |
+|---|---|
+| `macos-15` | `circle-desktop-<version>-darwin-arm64.dmg` |
+| `macos-15-intel` | `circle-desktop-<version>-darwin-x64.dmg` |
+| `windows-2025` | `circle-desktop-<version>-windows-x64.zip` |
+| `ubuntu-24.04` | `circle-desktop-<version>-linux-x64.tar.gz` |
+
+Each has its `.sha256`, so a release has 20 files before `install.sh`, `install.ps1` and `SHA256SUMS` are added. The application takes its version from the root `package.json`.
+
 A target that fails blocks the release. Do not publish a release by hand with fewer files.
 
 Asset names carry the version so that no asset matches what `circle update` in the Python releases (0.5.0 and older) downloads, `circle-<os>-<arch>.tar.gz`. Those users get a "has no circle-… file" error that points at the release page, whose notes tell them to run the installer.
@@ -69,6 +80,7 @@ Do not reuse a version number. People who installed it are "up to date" and will
 | `scripts/release.ts` | Sets and checks the version and the changelog. `--notes` prints one version's section for the release page. |
 | `scripts/build-release.ts` | Builds the package and its checksum for the current target. |
 | `scripts/smoke-release.ts` | Runs the package before it is published. |
+| `apps/desktop/scripts/package.mjs` | Packages the desktop application for the current platform, signs it ad hoc on macOS, and writes its archive and checksum. |
 | `install.sh`, `install.ps1` | Verify the checksum, unpack, and hand the package to `install_manager`. |
 | `src/install_manager.ts`, `src/install_layout.ts`, `src/legacy_install.ts` | Check and run the new version once, remove a Python circle, write `versions/<version>`, the launcher, `installation.json` and `current.ref`. |
 | `src/update.ts` | `circle update` and the daily check. `circle update` runs the installer that came with the running version. |

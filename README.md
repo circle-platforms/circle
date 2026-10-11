@@ -96,7 +96,7 @@ Circle is released under the [MIT License](LICENSE). The model catalogs in `src/
 
 ## Circle desktop application
 
-Circle also has a native desktop frontend under [apps/desktop](apps/desktop/README.md). It combines the conversation interface, session history, files and diffs, approvals, jobs, models and extensions in one application. The current application focuses on Circle.
+Circle also comes as a desktop application: the conversation, session history, files and diffs, approvals, jobs, models and extensions in one window. Each release has it for macOS, Windows and Linux as `circle-desktop-<version>-<os>-<arch>`; [Installation](docs/installation.md#the-desktop-application) says how to open it the first time. To run it from a checkout, see [apps/desktop](apps/desktop/README.md):
 
 ```bash
 npm ci
