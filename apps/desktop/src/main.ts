@@ -223,8 +223,14 @@ app
   .whenReady()
   .then(async () => {
     await mkdir(dataPath, { recursive: true, mode: 0o700 });
+    // The packaged app's icon is in its bundle; this one is for running from a build. A
+    // missing picture must not keep the app from starting.
     if (process.platform === 'darwin')
-      app.dock?.setIcon(join(__dirname, 'assets/circle-macos.png'));
+      try {
+        app.dock?.setIcon(join(__dirname, 'assets/circle-macos.png'));
+      } catch (error) {
+        process.stderr.write('circle: no dock icon: ' + String(error) + '\n');
+      }
     protocol.handle('circle', async (request) => {
       try {
         const path = assetPath(rendererRoot, request.url);
@@ -431,9 +437,11 @@ app
       if (!BrowserWindow.getAllWindows().length) void createWindow();
     });
   })
-  .catch((error) => {
+  .catch(async (error) => {
     process.stderr.write('desktop startup failed: ' + String(error) + '\n');
-    app.quit();
+    // A failed start exits with an error, after the runtime it may have started has stopped
+    await runtime?.close().catch(() => {});
+    app.exit(1);
   });
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

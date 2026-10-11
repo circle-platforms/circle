@@ -46,7 +46,7 @@ function launch(appDir: string, dataDir: string, args: string[]) {
   return { child, stderr: () => stderr };
 }
 test(
-  'main process refuses a contradictory --no-sandbox switch',
+  'main process refuses a contradictory --no-sandbox switch, runs without it, and exits with an error when its start fails',
   { timeout: 120000 },
   async () => {
     const temp = await mkdtemp(join(tmpdir(), 'circle-sandbox-guard-'));
@@ -68,12 +68,35 @@ test(
       assert.equal(exitCode, 1);
       assert.match(refused.stderr(), /--no-sandbox/);
       const accepted = launch(appDir, join(temp, 'data-b'), []);
+      const exited = new Promise((resolve) =>
+        accepted.child.once('exit', resolve),
+      );
       const alive = await new Promise((resolve) =>
         setTimeout(() => resolve(accepted.child.exitCode === null), 15000),
       );
+      // Waits on the exit seen from the start: one that came already does not come again
       accepted.child.kill();
-      await new Promise((resolve) => accepted.child.once('exit', resolve));
-      assert.equal(alive, true, 'app should keep running without the switch');
+      await exited;
+      assert.equal(
+        alive,
+        true,
+        'app should keep running without the switch: ' + accepted.stderr(),
+      );
+      // A start that fails exits with an error: its data folder cannot be made under a file
+      await writeFile(join(temp, 'a-file'), '');
+      const failed = launch(appDir, join(temp, 'a-file', 'data'), []);
+      const failedCode = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          failed.child.kill();
+          reject(Error('app did not exit after a failed start'));
+        }, 60000);
+        failed.child.on('exit', (code) => {
+          clearTimeout(timer);
+          resolve(code);
+        });
+      });
+      assert.equal(failedCode, 1);
+      assert.match(failed.stderr(), /desktop startup failed/);
     } finally {
       await rm(temp, {
         recursive: true,
