@@ -8,6 +8,10 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const outputRoot = process.env.CIRCLE_DESKTOP_OUTPUT_DIR ?? join(root, 'out');
 const stage = join(root, '.stage');
 const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+// The application carries Circle's version, as the command line does
+const { version } = JSON.parse(
+  await readFile(join(root, '../../package.json'), 'utf8'),
+);
 await rm(stage, { recursive: true, force: true });
 await mkdir(stage, { recursive: true });
 await cp(join(root, 'dist'), join(stage, 'dist'), { recursive: true });
@@ -21,7 +25,7 @@ await writeFile(
   JSON.stringify(
     {
       name: 'circle',
-      version: manifest.version,
+      version,
       main: 'dist/main.cjs',
       description: manifest.description,
       license: 'MIT',
@@ -52,18 +56,32 @@ const paths = await packager({
   prune: false,
 });
 for (const path of paths) console.log(path);
+// circle-desktop-<version>-<os>-<arch>: never a name `circle update` looks for
+const target = `${platform === 'win32' ? 'windows' : platform}-${arch}`;
+const asset = join(outputRoot, `circle-desktop-${version}-${target}`);
 const artifactPaths = paths.map((path) =>
   platform === 'darwin'
     ? join(path, 'Circle.app/Contents/Resources/app.asar')
     : join(path, 'resources/app.asar'),
 );
+const archives = [];
 if (platform === 'darwin' && process.platform === 'darwin') {
-  const image = join(outputRoot, `Circle-${manifest.version}-${arch}.dmg`);
+  // Packaging changes the bundle Electron's own ad-hoc signature covered; a copy with a broken
+  // signature is "damaged" once downloaded. Sign the whole application again, ad hoc.
+  const bundle = join(paths[0], 'Circle.app');
+  execFileSync('codesign', ['--force', '--deep', '--sign', '-', bundle], {
+    stdio: 'inherit',
+  });
+  execFileSync('codesign', ['--verify', '--deep', '--strict', bundle], {
+    stdio: 'inherit',
+  });
+  const image = `${asset}.dmg`;
   const content = join(root, '.stage-dmg');
   await rm(content, { recursive: true, force: true });
   await mkdir(content);
-  await cp(join(paths[0], 'Circle.app'), join(content, 'Circle.app'), {
+  await cp(bundle, join(content, 'Circle.app'), {
     recursive: true,
+    verbatimSymlinks: true,
   });
   await symlink('/Applications', join(content, 'Applications'));
   await rm(image, { force: true });
@@ -83,15 +101,44 @@ if (platform === 'darwin' && process.platform === 'darwin') {
     { stdio: 'inherit' },
   );
   await rm(content, { recursive: true, force: true });
-  artifactPaths.push(image);
-  console.log(image);
+  archives.push(image);
+} else if (platform === 'win32') {
+  const archive = `${asset}.zip`;
+  await rm(archive, { force: true });
+  execFileSync(
+    process.platform === 'win32' ? 'tar' : 'zip',
+    process.platform === 'win32'
+      ? ['-a', '-c', '-f', archive, relative(outputRoot, paths[0])]
+      : ['-qry', archive, relative(outputRoot, paths[0])],
+    { cwd: outputRoot, stdio: 'inherit' },
+  );
+  archives.push(archive);
+} else if (platform === 'linux') {
+  const archive = `${asset}.tar.gz`;
+  execFileSync(
+    'tar',
+    ['-czf', archive, '-C', outputRoot, relative(outputRoot, paths[0])],
+    { stdio: 'inherit' },
+  );
+  archives.push(archive);
+}
+for (const archive of archives) {
+  const sha256 = createHash('sha256')
+    .update(await readFile(archive))
+    .digest('hex');
+  await writeFile(
+    `${archive}.sha256`,
+    `${sha256}  ${relative(outputRoot, archive)}\n`,
+  );
+  artifactPaths.push(archive);
+  console.log(archive);
 }
 await writeFile(
   join(outputRoot, 'artifact-receipt.json'),
   JSON.stringify(
     {
       builtAt: new Date().toISOString(),
-      version: manifest.version,
+      version,
       electron: manifest.devDependencies.electron,
       platform,
       arch,
