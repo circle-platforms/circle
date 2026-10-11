@@ -116,11 +116,26 @@ export function DialogHost({
   const selectedMessage = current.messages.find(
     (message) => message.id === selectedNode,
   );
+  const cancelSecret = () =>
+    perform(async () => {
+      setSecret('');
+      if (runtime.mode === 'live' && selectedSecret?.status === 'pending')
+        await runtime.request('cancel-interaction', {
+          id: selectedSecret.id,
+          revision: selectedSecret.revision,
+          cancel: true,
+        });
+      onClose();
+    });
   return (
     <Modal
       open={!!dialog}
       onOpenChange={(open) => {
         if (!open) {
+          if (dialog === 'secret') {
+            cancelSecret();
+            return;
+          }
           setSecret('');
           onClose();
         }
@@ -174,8 +189,8 @@ export function DialogHost({
             <Button
               className="danger"
               onClick={() =>
-                perform(() => {
-                  runtime.deleteSession(target.id);
+                perform(async () => {
+                  await runtime.deleteSession(target.id);
                   onClose();
                 })
               }
@@ -268,8 +283,8 @@ export function DialogHost({
                 className="primary"
                 disabled={dialog === 'fork' && current.state === 'waiting'}
                 onClick={() =>
-                  perform(() => {
-                    runtime.branch(
+                  perform(async () => {
+                    await runtime.branch(
                       selectedNode,
                       dialog === 'fork' ? 'fork' : 'tree',
                     );
@@ -318,14 +333,16 @@ export function DialogHost({
             onChange={(event) => setEditor(event.target.value)}
           />
           <div className="dialog-actions">
-            <Button
-              onClick={() => {
-                runtime.request('external-editor', { draft: editor });
-                notify('external editor requires a native host');
-              }}
-            >
-              external editor
-            </Button>
+            {runtime.mode === 'preview' && (
+              <Button
+                onClick={() => {
+                  runtime.request('external-editor', { draft: editor });
+                  notify('external editor requires a native host');
+                }}
+              >
+                external editor
+              </Button>
+            )}
             <Button
               className="primary"
               onClick={() =>
@@ -342,7 +359,30 @@ export function DialogHost({
           </div>
         </>
       )}
-      {dialog === 'export' && (
+      {dialog === 'export' && runtime.mode === 'live' && (
+        <div className="form-stack">
+          <p className="dialog-paragraph">
+            Export the saved Circle conversation. JSONL includes its native
+            checkpoint graph and receipts.
+          </p>
+          {(['jsonl', 'html', 'md'] as const).map((kind) => (
+            <Button
+              key={kind}
+              onClick={() =>
+                perform(async () => {
+                  const saved = await runtime.request('export-session', {
+                    format: kind,
+                  });
+                  notify(saved ? 'session exported' : 'export cancelled');
+                })
+              }
+            >
+              export {kind}
+            </Button>
+          ))}
+        </div>
+      )}
+      {dialog === 'export' && runtime.mode === 'preview' && (
         <>
           <div className="list-toolbar">
             <label>
@@ -435,7 +475,7 @@ export function DialogHost({
           className="form-stack"
           onSubmit={(event) => {
             event.preventDefault();
-            perform(() => {
+            perform(async () => {
               const url = new URL(endpoint);
               if (
                 !['http:', 'https:'].includes(url.protocol) ||
@@ -445,6 +485,18 @@ export function DialogHost({
                 throw Error(
                   'use an http or https endpoint without credentials in the URL',
                 );
+              if (runtime.mode === 'live') {
+                await runtime.request('configure-connection', {
+                  endpoint,
+                  protocol,
+                  model,
+                  apiKey: secret,
+                });
+                setSecret('');
+                notify('connection saved');
+                onClose();
+                return;
+              }
               runtime.change((state) => {
                 state.settings.endpoint = endpoint;
                 state.settings.protocol = protocol;
@@ -465,7 +517,13 @@ export function DialogHost({
           }}
         >
           <div className="connection-banner">
-            <Status value="not connected" />
+            <Status
+              value={
+                runtime.mode === 'live' && snapshot.runtime?.configured
+                  ? 'connected'
+                  : 'not connected'
+              }
+            />
             <span>API URL + key</span>
           </div>
           <label>
@@ -499,7 +557,11 @@ export function DialogHost({
               aria-label="api key"
               value={secret}
               onChange={(event) => setSecret(event.target.value)}
-              placeholder="not saved or sent by this preview"
+              placeholder={
+                runtime.mode === 'live'
+                  ? 'saved in Circle desktop credentials'
+                  : 'not saved or sent by this preview'
+              }
             />
           </label>
           <label>
@@ -518,8 +580,9 @@ export function DialogHost({
             </datalist>
           </label>
           <p className="panel-note">
-            Credentials stay in this form and are discarded when it closes. The
-            desktop host will own the actual connection.
+            {runtime.mode === 'live'
+              ? 'The key is saved privately by Circle. It is excluded from conversations and frontend storage.'
+              : 'Credentials stay in this form and are discarded when it closes. The desktop host will own the actual connection.'}
           </p>
           <div className="dialog-actions">
             <Button
@@ -532,7 +595,7 @@ export function DialogHost({
               cancel
             </Button>
             <Button type="submit" className="primary">
-              save connection draft
+              {runtime.mode === 'live' ? 'connect' : 'save connection draft'}
             </Button>
           </div>
         </form>
@@ -561,7 +624,13 @@ export function DialogHost({
             <Button
               className="primary"
               onClick={() =>
-                perform(() => {
+                perform(async () => {
+                  if (runtime.mode === 'live') {
+                    await runtime.request('trust-workspace', { enabled: true });
+                    onClose();
+                    notify('workspace trusted');
+                    return;
+                  }
                   runtime.change((state) => {
                     state.workspaces.find(
                       (item) => item.id === workspace.id,
@@ -572,7 +641,7 @@ export function DialogHost({
                 })
               }
             >
-              trust in preview
+              {runtime.mode === 'live' ? 'trust workspace' : 'trust in preview'}
             </Button>
           </div>
         </>
@@ -669,16 +738,20 @@ export function DialogHost({
               return;
             }
             if (selectedSecret)
-              perform(() =>
-                runtime.answer(
+              perform(async () => {
+                await runtime.answer(
                   selectedSecret.id,
                   selectedSecret.revision,
                   secret,
-                ),
-              );
-            setSecret('');
-            onClose();
-            notify('secret discarded by preview; nothing was sent');
+                );
+                setSecret('');
+                onClose();
+                notify(
+                  runtime.mode === 'live'
+                    ? 'secret sent privately'
+                    : 'secret discarded by preview; nothing was sent',
+                );
+              });
           }}
         >
           <Facts
@@ -700,20 +773,18 @@ export function DialogHost({
             />
           </label>
           <p className="panel-note">
-            This preview does not retain or transmit the value.
+            {runtime.mode === 'live'
+              ? 'The value goes directly to the pending secret request. It is excluded from the conversation.'
+              : 'This preview does not retain or transmit the value.'}
           </p>
           <div className="dialog-actions">
-            <Button
-              type="button"
-              onClick={() => {
-                setSecret('');
-                onClose();
-              }}
-            >
+            <Button type="button" onClick={cancelSecret}>
               cancel
             </Button>
             <Button type="submit" disabled={!selectedSecret}>
-              record preview response
+              {runtime.mode === 'live'
+                ? 'submit secret'
+                : 'record preview response'}
             </Button>
           </div>
         </form>
@@ -781,10 +852,14 @@ export function InteractionDialog({
   }, [item?.id]);
   const finish = (answer: string) => {
     if (!item) return;
-    perform(() => {
-      runtime.answer(item.id, item.revision, answer);
+    perform(async () => {
+      await runtime.answer(item.id, item.revision, answer);
       onClose();
-      notify('response recorded locally; runtime not connected');
+      notify(
+        runtime.mode === 'live'
+          ? 'response sent to Circle'
+          : 'response recorded locally; runtime not connected',
+      );
     });
   };
   const close = () => {
@@ -821,12 +896,17 @@ export function InteractionDialog({
             <code>
               {item.id} · revision {item.revision}
             </code>
-            <span>sample request</span>
+            <span>
+              {runtime.mode === 'live'
+                ? (item.origin?.name ?? 'Circle request')
+                : 'sample request'}
+            </span>
           </div>
           {item.target && <p className="file-path">{item.target}</p>}
           {item.command && (
             <pre className="approval-command">{item.command}</pre>
           )}
+          {item.input && <DataBlock title="tool input" value={item.input} />}
           {item.before !== undefined && (
             <div className="approval-diff">
               <DataBlock title="before" value={item.before} />
@@ -905,13 +985,28 @@ export function InteractionDialog({
                 <Button
                   className="primary"
                   onClick={() => finish('allow once')}
+                  disabled={
+                    runtime.mode === 'live' &&
+                    !item.choices?.includes('approve')
+                  }
                 >
                   allow once
                 </Button>
-                <Button onClick={() => finish('allow for this session')}>
+                <Button
+                  disabled={
+                    runtime.mode === 'live' && !item.choices?.includes('always')
+                  }
+                  onClick={() => finish('allow for this session')}
+                >
                   allow for this session
                 </Button>
                 <Button onClick={() => finish('reject')}>reject</Button>
+                {runtime.mode === 'live' &&
+                  item.choices?.includes('prefix') && (
+                    <Button onClick={() => finish('prefix')}>
+                      allow command prefix
+                    </Button>
+                  )}
               </div>
               <label className="field-label" htmlFor="reject-reason">
                 reject and explain

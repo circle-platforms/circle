@@ -134,7 +134,7 @@ export function App() {
       : undefined;
     if (id && id !== session.id) {
       if (snapshot.sessions.some((item) => item.id === id))
-        runtime.selectSession(id);
+        perform(() => runtime.selectSession(id));
       else navigate(`/session/${session.id}`, { replace: true });
     }
   }, [location.pathname]);
@@ -166,6 +166,13 @@ export function App() {
         );
         for (const item of files) {
           if (importing) {
+            if (runtime.mode === 'live') {
+              await runtime.request('import-native-session', {
+                content: item.content,
+              });
+              onSession();
+              continue;
+            }
             if (item.name.endsWith('.json')) {
               const value = JSON.parse(item.content);
               if (value.schema === 'circle-workbench-preview/v1') {
@@ -173,7 +180,7 @@ export function App() {
                   item.content,
                   currentSession(runtime.getSnapshot()),
                 );
-                const id = runtime.newSession();
+                const id = await runtime.newSession();
                 runtime.change((state) => {
                   const index = state.sessions.findIndex(
                     (session) => session.id === id,
@@ -184,7 +191,7 @@ export function App() {
                 continue;
               }
             }
-            const id = runtime.newSession();
+            const id = await runtime.newSession();
             runtime.change((state) => {
               const target = currentSession(state);
               target.title = item.name;
@@ -230,6 +237,11 @@ export function App() {
           }
           if (importing) {
             const text = await item.text();
+            if (runtime.mode === 'live') {
+              await runtime.request('import-native-session', { content: text });
+              onSession();
+              continue;
+            }
             if (item.name.endsWith('.json')) {
               const value = JSON.parse(text);
               if (
@@ -242,7 +254,7 @@ export function App() {
                   text,
                   currentSession(runtime.getSnapshot()),
                 );
-                const id = runtime.newSession();
+                const id = await runtime.newSession();
                 runtime.change((state) => {
                   const index = state.sessions.findIndex(
                     (value) => value.id === id,
@@ -253,7 +265,7 @@ export function App() {
                 continue;
               }
             }
-            const id = runtime.newSession();
+            const id = await runtime.newSession();
             runtime.change((state) => {
               const target = currentSession(state);
               target.title = item.name;
@@ -542,7 +554,11 @@ export function App() {
                 onClick={() => onDialog('preview')}
               >
                 <i />
-                preview
+                {runtime.mode === 'live'
+                  ? snapshot.runtime?.connected
+                    ? 'connected'
+                    : 'disconnected'
+                  : 'preview'}
               </button>
               <IconButton
                 label="toggle theme"

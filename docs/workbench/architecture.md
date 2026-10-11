@@ -9,7 +9,7 @@ The user requested a Circle application, with its complete frontend and four pla
 | Electron main | Native window lifecycle, local application protocol, native dialogs, granted file handles, clipboard/export and native browser instances |
 | Preload | A small, typed, origin-checked capability bridge |
 | Shared workbench | Session presentation, drafts, selection, layout, transcript and user interaction |
-| Circle runtime adapter | Future connection to Circle's conversations, model/tool events, approval and question responses, cancellation and recovery |
+| Circle runtime adapter | A bundled utility process hosting the interactive AgentRuntime; actual events/history, awaited approvals/questions/secrets, cancellation and checkpoint recovery |
 | Knowledge plugin B | Sources, revisions, evidence and artifacts |
 | Long-running work plugin C | Goals, waiting items, handoffs and work requests |
 | Execution plugin D | Resource and operation observations, control and stop requests |
@@ -39,4 +39,4 @@ The source baseline is Circle 1.0.4, commit `9b532727e4433f2d0fa6a0d222a4509daf7
 
 The desktop/workspace organization was studied from [ZCode](https://github.com/zai-org/ZCode) at `aac4755666d09fdcd70272fcf063c077a639015f`: native main/preload/renderer, a conversation-first workspace and file/diff/terminal/browser inspectors. This implementation does not copy ZCode code or its account, subscription, update or backend services.
 
-Circle's current RPC is headless, does not load MCP/extensions and has no interactive approval-response channel. The future GUI runtime connection needs to address those gaps. The frontend does not use `--yolo` to hide them and does not claim model or tool execution from a local request record.
+Circle's headless RPC remains unchanged. The native connection embeds the interactive `AgentRuntime` directly; approvals, questions and secrets resolve its awaited callbacks. It does not substitute `--yolo` for those callbacks. The renderer receives core-owned checkpoint identities, sequenced snapshots and original event identities. [The native runtime record](native-runtime.md) describes verification and remaining boundaries.

@@ -51,6 +51,27 @@ export async function openNativeWorkspace(
   if (!host) return null;
   const selected = await host.chooseWorkspace();
   if (!selected) return null;
+  if (runtime.mode === 'live') {
+    const result = (await runtime.request('open-workspace', {
+      workspaceGrant: selected.id,
+    })) as { workspaceId: string };
+    runtime.change((state) => {
+      state.files = state.files.filter(
+        (file) => file.workspaceId !== result.workspaceId,
+      );
+      state.files.push(
+        ...selected.files.map((file) => ({
+          id: file.id,
+          workspaceId: result.workspaceId,
+          path: file.path,
+          content: '',
+          language: file.language,
+          nativeGrant: { workspaceId: selected.id, fileId: file.id },
+        })),
+      );
+    });
+    return selected;
+  }
   const existing = runtime
     .getSnapshot()
     .workspaces.find((item) => item.path === selected.path);
@@ -81,8 +102,8 @@ export async function openNativeWorkspace(
   const session = runtime
     .getSnapshot()
     .sessions.find((session) => session.workspaceId === id);
-  if (session) runtime.selectSession(session.id);
-  else runtime.newSession(id);
+  if (session) await runtime.selectSession(session.id);
+  else await runtime.newSession(id);
   return selected;
 }
 export async function readNativeFile(runtime: RuntimePort, path: string) {

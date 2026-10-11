@@ -11,7 +11,8 @@ export async function sourceEvidence() {
     })) {
       const path = join(folder, entry.name);
       if (entry.isDirectory()) await walk(path);
-      else if (/\.(ts|tsx|mjs|css|json|html)$/.test(path)) files.push(path);
+      else if (/\.(ts|tsx|mjs|css|json|html|md|gz)$/.test(path))
+        files.push(path);
     }
   }
   for (const folder of [
@@ -20,6 +21,7 @@ export async function sourceEvidence() {
     'apps/desktop/src',
     'apps/desktop/test',
     'apps/desktop/scripts',
+    'src',
   ])
     await walk(folder);
   for (const path of [
@@ -31,14 +33,14 @@ export async function sourceEvidence() {
     'apps/desktop/package.json',
     'apps/desktop/package-lock.json',
     'apps/desktop/tsconfig.json',
-    'src/tui/slash_commands.ts',
-    'src/ink/theme.ts',
+    'package.json',
+    'package-lock.json',
     'docs/tools.md',
     'docs/keybindings.md',
   ])
     files.push(path);
   return Promise.all(
-    files.sort().map(async (path) => ({
+    [...new Set(files)].sort().map(async (path) => ({
       path,
       sha256: createHash('sha256')
         .update(await readFile(join(root, path)))

@@ -87,6 +87,9 @@ export interface InteractionContext {
 export interface RuntimeOptions {
   workspace: string;
   home: string;
+  // Embedders can isolate global context without changing the process HOME.
+  userHome?: string;
+  localContext?: boolean;
   settings: CircleSettings;
   run?: RunOptions;
   session?: string;
@@ -480,7 +483,7 @@ export class AgentRuntime {
               ? jobTools.find((jobTool) => jobTool.name === tool.name)!
               : tool,
         );
-        const child = new Harness({
+        const child: Harness = new Harness({
           model: childModel,
           tools: ownedChildTools,
           store: this.store,
@@ -512,7 +515,7 @@ export class AgentRuntime {
           parentPlanMode: () => this.harness.planMode,
           toolBoundary: (tool, args, context) =>
             this.extensionToolBoundary(tool, args, context),
-          prepareMessages: (signal) =>
+          prepareMessages: (signal): Promise<Message[]> =>
             this.context.prepare(
               session.id,
               child.model,
@@ -624,10 +627,14 @@ export class AgentRuntime {
     return harness;
   }
   private extensionHost(reservedTools: Set<string>): ExtensionHost {
-    const commands = discoverCustomCommands(
-      this.options.workspace,
-      this.options.home,
-    );
+    const commands =
+      this.options.localContext === false
+        ? []
+        : discoverCustomCommands(
+            this.options.workspace,
+            this.options.home,
+            this.options.userHome,
+          );
     return new ExtensionHost({
       jobs: this.jobs,
       jobOwner: (context) =>
@@ -654,14 +661,26 @@ export class AgentRuntime {
    * of thinking depth. Skills are read again each time, as 0.5.0 read them whenever it
    * rebuilt its agent, so the list and the `skill` tool see the same skills. */
   private systemPrompt(model: string): string {
-    this.skills = discoverSkills(this.options.workspace, this.options.home);
+    this.skills =
+      this.options.localContext === false
+        ? []
+        : discoverSkills(
+            this.options.workspace,
+            this.options.home,
+            this.options.userHome,
+          );
     return buildSystemPrompt(
       this.options.workspace,
       model,
       this.options.settings.auth.protocol,
       this.runOptions,
       this.options.home,
-      { skills: this.skills, extensionTools: this.extensions.tools() },
+      {
+        skills: this.skills,
+        extensionTools: this.extensions.tools(),
+        userHome: this.options.userHome,
+        localContext: this.options.localContext,
+      },
     );
   }
   private refreshSystemPrompt(): void {

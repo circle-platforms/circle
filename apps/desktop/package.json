@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Circle desktop workbench with isolated frontend preview services",
+  "description": "Circle native workbench with its bundled agent runtime",
   "main": "dist/main.cjs",
   "scripts": {
     "build": "npm run typecheck && npm --prefix ../workbench run build && node scripts/build.mjs",
@@ -11,6 +11,8 @@
     "dev": "npm run build && npm start",
     "package": "npm run build && node scripts/package.mjs",
     "test": "node --test test/policy.test.ts test/capture.test.ts",
+    "test:runtime": "node ../../node_modules/tsx/dist/cli.mjs --test test/runtime.test.ts",
+    "test:live": "node test/live.mjs",
     "test:desktop": "node test/desktop.mjs",
     "format:check": "prettier --check src test scripts package.json tsconfig.json",
     "typecheck": "tsc --noEmit",

@@ -1,4 +1,6 @@
 import { BrowserSessions } from './browser';
+import { RuntimeSupervisor } from './runtime-supervisor';
+import { validateRuntimeCommand } from './runtime-protocol';
 import {
   app,
   BrowserWindow,
@@ -48,6 +50,9 @@ protocol.registerSchemesAsPrivileged([
 const grants = new WorkspaceGrants();
 let window: BrowserWindow | null = null;
 let browsers: BrowserSessions | null = null;
+let runtime: RuntimeSupervisor | undefined;
+const workspaceSelections = new Map<string, string>();
+const previewMode = process.env.CIRCLE_WORKBENCH_MODE === 'preview';
 const rendererRoot = join(__dirname, 'renderer');
 const fixtureProfile = process.env.CIRCLE_WORKBENCH_TEST_PROFILE
   ? JSON.parse(process.env.CIRCLE_WORKBENCH_TEST_PROFILE)
@@ -166,7 +171,12 @@ async function createWindow() {
     minWidth: 760,
     minHeight: 560,
     title: app.name,
-    icon: join(__dirname, 'assets/circle.png'),
+    icon: join(
+      __dirname,
+      process.platform === 'darwin'
+        ? 'assets/circle-macos.png'
+        : 'assets/circle.png',
+    ),
     show: false,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     trafficLightPosition:
@@ -201,6 +211,8 @@ app
   .whenReady()
   .then(async () => {
     await mkdir(dataPath, { recursive: true, mode: 0o700 });
+    if (process.platform === 'darwin')
+      app.dock?.setIcon(join(__dirname, 'assets/circle-macos.png'));
     protocol.handle('circle', async (request) => {
       try {
         const path = assetPath(rendererRoot, request.url);
@@ -231,9 +243,38 @@ app
       platform: process.platform,
       packaged: app.isPackaged,
       dataPath,
-      runtimeConnected: false,
-      frontendOnly: true,
+      runtimeConnected: runtime?.connected ?? false,
+      frontendOnly: previewMode,
     }));
+    if (!previewMode) {
+      runtime = new RuntimeSupervisor(
+        join(dataPath, 'runtime-home'),
+        __dirname,
+      );
+      runtime.subscribe((update) =>
+        window?.webContents.send('circle:runtime-update', update),
+      );
+      await runtime.start();
+    }
+    handle('circle:runtime-state', () => {
+      if (!runtime) throw Error('runtime not enabled');
+      return runtime.state();
+    });
+    handle('circle:runtime-command', (value) => {
+      if (!runtime) throw Error('runtime not enabled');
+      const command = validateRuntimeCommand(value);
+      if (command.name === 'open-workspace') {
+        const path = workspaceSelections.get(
+          String(command.payload.workspaceGrant),
+        );
+        if (!path)
+          throw Error('workspace was not selected through the native dialog');
+        command.payload = { path };
+      }
+      if (command.name === 'close')
+        throw Error('use the application quit action');
+      return runtime.command(command);
+    });
     handle('circle:choose-files', async (purpose) => {
       if (!['attach', 'import', 'source'].includes(String(purpose)))
         throw Error('invalid file selection purpose');
@@ -305,7 +346,9 @@ app
               properties: ['openDirectory'],
             })
           ).filePaths;
-      return paths[0] ? grants.open(paths[0]) : null;
+      const selected = paths[0] ? await grants.open(paths[0]) : null;
+      if (selected) workspaceSelections.set(selected.id, selected.path);
+      return selected;
     });
     handle('circle:read-workspace-file', async (workspaceId, fileId) => {
       if (typeof workspaceId !== 'string' || typeof fileId !== 'string')
@@ -321,7 +364,7 @@ app
       const result = fixtureProfile?.exportPath
         ? { canceled: false, filePath: fixtureProfile.exportPath }
         : await dialog.showSaveDialog(window!, {
-            title: 'export preview',
+            title: 'export session',
             defaultPath: name,
           });
       if (result.canceled || !result.filePath) return { saved: false };
@@ -382,4 +425,22 @@ app
   });
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+let quitting = false;
+app.on('before-quit', (event) => {
+  if (quitting || !runtime) return;
+  event.preventDefault();
+  void runtime
+    .close()
+    .then(() => {
+      quitting = true;
+      app.quit();
+    })
+    .catch((error) => {
+      void dialog.showMessageBox({
+        type: 'error',
+        message: 'Circle could not stop its runtime',
+        detail: String(error),
+      });
+    });
 });

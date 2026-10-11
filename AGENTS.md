@@ -67,7 +67,7 @@ Several agents and people may work in this checkout at once.
 
 The graphical application lives in `apps/desktop`; `apps/workbench` is its shared renderer. Start the native app with `npm --prefix apps/desktop run dev`. The browser layout server is development tooling, not the application deliverable.
 
-This phase implements the desktop frontend and first-party B/C/D/E component plugins. The Circle model runtime and production platform services remain separate integration work. Native menus, user-selected files, clipboard, export and browser views are actual host operations; local preview requests do not prove model/tool execution or remote effects.
+The user has now authorized completing Circle's desktop frontend/backend integration first. Reuse the existing interactive AgentRuntime, connect its actual commands/events/interactions and verify isolated development and packaged execution. B/C/D/E production service integration remains a later phase. Use scripted models and isolated Circle home/workspaces; do not access real Circle data, production equipment or paid model endpoints for development verification.
 
 Use `CIRCLE_WORKBENCH_DATA_DIR` and synthetic resources for native checks. Do not open real Circle user data. Keep the renderer sandboxed and the preload bridge restricted; workspace file access uses granted handles. Validate both the development app and the packaged app.
 

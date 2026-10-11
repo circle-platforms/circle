@@ -49,8 +49,8 @@ export function Sidebar({
   )!;
   const [workspacesOpen, setWorkspacesOpen] = useState(false);
   const [newPath, setNewPath] = useState('');
-  const goSession = (id: string) => {
-    runtime.selectSession(id);
+  const goSession = async (id: string) => {
+    await runtime.selectSession(id);
     navigate(`/session/${id}`);
     onNavigate?.();
   };
@@ -77,11 +77,13 @@ export function Sidebar({
       <div className="sidebar-actions">
         <Button
           className="new-session"
-          onClick={() => {
-            const id = runtime.newSession();
-            navigate(`/session/${id}`);
-            onNavigate?.();
-          }}
+          onClick={() =>
+            perform(async () => {
+              const id = await runtime.newSession();
+              navigate(`/session/${id}`);
+              onNavigate?.();
+            })
+          }
         >
           <Plus size={15} />
           new session
@@ -113,9 +115,11 @@ export function Sidebar({
                 isActive ? 'session-link active' : 'session-link'
               }
               to={`/session/${session.id}`}
-              onClick={() => {
-                runtime.selectSession(session.id);
-                onNavigate?.();
+              onClick={(event) => {
+                event.preventDefault();
+                perform(async () => {
+                  await goSession(session.id);
+                });
               }}
             >
               <MessagesSquare size={13} />
@@ -152,7 +156,7 @@ export function Sidebar({
       <footer className="sidebar-footer">
         <span>
           <i />
-          frontend preview
+          {runtime.mode === 'live' ? 'Circle runtime' : 'frontend preview'}
         </span>
         <button
           aria-label="help"
@@ -173,14 +177,16 @@ export function Sidebar({
           <button
             className="workspace-choice"
             key={item.id}
-            onClick={() => {
-              const session = snapshot.sessions.find(
-                (candidate) => candidate.workspaceId === item.id,
-              );
-              const id = session?.id ?? runtime.newSession(item.id);
-              goSession(id);
-              setWorkspacesOpen(false);
-            }}
+            onClick={() =>
+              perform(async () => {
+                const session = snapshot.sessions.find(
+                  (candidate) => candidate.workspaceId === item.id,
+                );
+                const id = session?.id ?? (await runtime.newSession(item.id));
+                await goSession(id);
+                setWorkspacesOpen(false);
+              })
+            }
           >
             <Folder size={18} />
             <span>
@@ -213,44 +219,46 @@ export function Sidebar({
             open folder
           </Button>
         )}
-        <form
-          className="form-stack"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!newPath.trim()) return;
-            perform(() => {
-              const id = crypto.randomUUID();
-              runtime.change((state) =>
-                state.workspaces.push({
-                  id,
-                  name: newPath.split('/').filter(Boolean).at(-1) ?? newPath,
-                  path: newPath,
-                  branch: 'not connected',
-                  trusted: false,
-                  instructions: [],
-                }),
-              );
-              const sessionId = runtime.newSession(id);
-              navigate(`/session/${sessionId}`);
-              setWorkspacesOpen(false);
-              setNewPath('');
-            });
-          }}
-        >
-          <label>
-            workspace path
-            <input
-              aria-label="workspace path"
-              value={newPath}
-              onChange={(event) => setNewPath(event.target.value)}
-              placeholder="/path/to/project"
-            />
-          </label>
-          <p className="panel-note">
-            Adds a local preview entry. No directory is read.
-          </p>
-          <Button type="submit">add workspace preview</Button>
-        </form>
+        {runtime.mode === 'preview' && (
+          <form
+            className="form-stack"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!newPath.trim()) return;
+              perform(async () => {
+                const id = crypto.randomUUID();
+                runtime.change((state) =>
+                  state.workspaces.push({
+                    id,
+                    name: newPath.split('/').filter(Boolean).at(-1) ?? newPath,
+                    path: newPath,
+                    branch: 'not connected',
+                    trusted: false,
+                    instructions: [],
+                  }),
+                );
+                const sessionId = await runtime.newSession(id);
+                navigate(`/session/${sessionId}`);
+                setWorkspacesOpen(false);
+                setNewPath('');
+              });
+            }}
+          >
+            <label>
+              workspace path
+              <input
+                aria-label="workspace path"
+                value={newPath}
+                onChange={(event) => setNewPath(event.target.value)}
+                placeholder="/path/to/project"
+              />
+            </label>
+            <p className="panel-note">
+              Adds a local preview entry. No directory is read.
+            </p>
+            <Button type="submit">add workspace preview</Button>
+          </form>
+        )}
       </Modal>
     </aside>
   );

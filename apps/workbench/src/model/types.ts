@@ -1,5 +1,6 @@
 export type Theme = 'auto' | 'light' | 'dark';
-export type Effort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type Effort =
+  'default' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type PanelId = string;
 export type PageId =
   | 'sessions'
@@ -80,6 +81,7 @@ export interface Session {
   draft: string;
   messages: Message[];
   leafId: string | null;
+  branchIds?: string[];
   hiddenIds: string[];
   undoStack: string[][];
   attachments: Attachment[];
@@ -139,6 +141,9 @@ export interface Job {
   agentId?: string;
 }
 export interface Interaction {
+  callId?: string;
+  input?: Record<string, unknown>;
+  origin?: { jobId?: string; name?: string; agent?: string };
   id: string;
   sessionId: string;
   kind: 'approval' | 'question' | 'secret' | 'plan-exit';
@@ -191,7 +196,8 @@ export interface McpServer {
   args: string;
   url: string;
   enabled: boolean;
-  status: 'sample' | 'not connected';
+  status:
+    'sample' | 'not connected' | 'connected' | 'error' | 'reload required';
   tools: { name: string; description: string; schema: unknown }[];
   error?: string;
 }
@@ -230,6 +236,21 @@ export interface Settings {
   keybindings: Record<string, string | string[]>;
 }
 export interface WorkbenchSnapshot {
+  tools?: {
+    name: string;
+    description: string;
+    kind: string;
+    detail: string;
+    schema: unknown;
+  }[];
+  runtime?: {
+    connected: boolean;
+    configured: boolean;
+    error?: string;
+    processId?: number;
+    observedAt?: string;
+    coreVersion?: string;
+  };
   version: 1;
   activeSessionId: string;
   previousSessionId: string | null;
@@ -259,17 +280,29 @@ export interface CommandResult {
   effect?: 'copy' | 'import' | 'download';
 }
 export interface RuntimePort {
-  readonly mode: 'preview';
+  readonly mode: 'preview' | 'live';
   getSnapshot: () => WorkbenchSnapshot;
   subscribe: (listener: () => void) => () => void;
   change: (update: (draft: WorkbenchSnapshot) => void) => void;
-  send: (kind?: 'steering' | 'follow-up') => CommandResult;
-  command: (name: string, args?: string) => CommandResult;
-  request: (kind: string, payload?: Record<string, unknown>) => string;
-  newSession: (workspaceId?: string) => string;
-  selectSession: (id: string) => void;
-  deleteSession: (id: string) => void;
-  branch: (messageId: string, kind: 'tree' | 'fork') => void;
-  answer: (id: string, revision: number, answer: string) => void;
+  send: (
+    kind?: 'steering' | 'follow-up',
+  ) => CommandResult | Promise<CommandResult>;
+  command: (
+    name: string,
+    args?: string,
+  ) => CommandResult | Promise<CommandResult>;
+  request: (
+    kind: string,
+    payload?: Record<string, unknown>,
+  ) => string | Promise<unknown>;
+  newSession: (workspaceId?: string) => string | Promise<string>;
+  selectSession: (id: string) => void | Promise<void>;
+  deleteSession: (id: string) => void | Promise<void>;
+  branch: (messageId: string, kind: 'tree' | 'fork') => void | Promise<void>;
+  answer: (
+    id: string,
+    revision: number,
+    answer: string,
+  ) => void | Promise<void>;
   reset: () => void;
 }

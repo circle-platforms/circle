@@ -1,6 +1,7 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useState,
   useSyncExternalStore,
 } from 'react';
@@ -15,8 +16,8 @@ interface ContextValue {
   snapshot: WorkbenchSnapshot;
   notice: string;
   notify: (message: string) => void;
-  perform: (action: () => void) => void;
-  act: (action: () => CommandResult) => void;
+  perform: (action: () => void | Promise<unknown>) => void;
+  act: (action: () => CommandResult | Promise<CommandResult>) => void;
   setRouter: (handler: (result: CommandResult) => void) => void;
 }
 const Context = createContext<ContextValue | null>(null);
@@ -39,16 +40,23 @@ export function RuntimeProvider({
       4200,
     );
   };
-  const perform = (action: () => void) => {
+  useEffect(() => {
+    if (snapshot.runtime?.error) notify(snapshot.runtime.error);
+  }, [snapshot.runtime?.error]);
+  const perform = (action: () => void | Promise<unknown>) => {
     try {
-      action();
+      const result = action();
+      if (result instanceof Promise)
+        void result.catch((error) =>
+          notify(error instanceof Error ? error.message : 'action failed'),
+        );
     } catch (error) {
       notify(error instanceof Error ? error.message : 'action failed');
     }
   };
-  const act = (action: () => CommandResult) =>
-    perform(() => {
-      const result = action();
+  const act = (action: () => CommandResult | Promise<CommandResult>) =>
+    perform(async () => {
+      const result = await action();
       if (result.notice) notify(result.notice);
       router.handler(result);
     });

@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Circle">
   <title>Circle</title>
   <!-- The composer frame's rainbow, closed into a ring: blue, purple, red, orange, back to blue.
-       Colours are the stops in circle/ink/components/dialog_frame.py. -->
+       Colours match Circle's TypeScript palette. The Windows/Linux icon is transparent. -->
   <defs>
     <linearGradient id="a" gradientUnits="userSpaceOnUse" x1="64" y1="20" x2="108" y2="64">
       <stop offset="0" stop-color="#0894ff"/><stop offset="1" stop-color="#c959dd"/>

@@ -320,7 +320,11 @@ export function Conversation({
           <span>
             {workspace.name}
             <i />
-            sample session
+            {runtime.mode === 'live'
+              ? snapshot.runtime?.connected
+                ? 'connected'
+                : 'disconnected'
+              : 'sample session'}
           </span>
         </div>
         <div className="heading-actions">
@@ -508,11 +512,17 @@ export function Conversation({
           {session.state === 'waiting' && (
             <div className="pending-message">
               <i />
-              waiting for runtime connection
-              <button onClick={() => onDialog('connect')}>
-                connection settings
-                <ArrowRight size={12} />
-              </button>
+              {runtime.mode === 'live'
+                ? pending.length
+                  ? 'waiting for your response'
+                  : 'working'
+                : 'waiting for runtime connection'}
+              {runtime.mode === 'preview' && (
+                <button onClick={() => onDialog('connect')}>
+                  connection settings
+                  <ArrowRight size={12} />
+                </button>
+              )}
             </div>
           )}
           {session.state === 'paused' && (
@@ -570,7 +580,12 @@ export function Conversation({
             onClick={() => onPanel('activity', pending[0]!.id)}
           >
             <Status value="waiting" />
-            <span>{pending.length} sample requests to review</span>
+            <span>
+              {pending.length}{' '}
+              {runtime.mode === 'live'
+                ? 'requests to review'
+                : 'sample requests to review'}
+            </span>
             <ArrowRight size={13} />
           </button>
         )}
@@ -897,7 +912,13 @@ export function Conversation({
                 ) + '%'
               : 'N/A'}
           </span>
-          <button onClick={() => onDialog('preview')}>frontend preview</button>
+          <button
+            onClick={() =>
+              onDialog(runtime.mode === 'live' ? 'session' : 'preview')
+            }
+          >
+            {runtime.mode === 'live' ? 'session details' : 'frontend preview'}
+          </button>
         </div>
         {(jobs.length > 0 || agents.length > 0) && (
           <div className="running-strip">

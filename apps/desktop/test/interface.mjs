@@ -17,6 +17,7 @@ await writeFile(note, '# imported by native host\nno execution');
 const env = {
   ...process.env,
   CIRCLE_WORKBENCH_DATA_DIR: join(temp, 'data'),
+  CIRCLE_WORKBENCH_MODE: 'preview',
   CIRCLE_WORKBENCH_TEST_PROFILE: JSON.stringify({
     files: [note],
     exportPath: join(temp, 'export.md'),

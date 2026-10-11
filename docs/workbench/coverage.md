@@ -1,6 +1,6 @@
 # Frontend coverage and limits
 
-The desktop workbench is implemented under `apps/desktop` and `apps/workbench`. The current scope is a native application frontend with Circle and platform component interactions. Model execution and production platform services remain separate integration work.
+This table records the frontend phase before the user authorized Circle runtime integration. The historical preview checks remain useful for layout and component behavior. The current live Circle implementation and verification are documented in [native-runtime.md](native-runtime.md); production B/C/D/E service integration remains separate work.
 
 | Requirement | Frontend evidence | Runtime boundary |
 |---|---|---|

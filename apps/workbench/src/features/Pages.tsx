@@ -96,10 +96,12 @@ function SessionsPage({ onSession, onDialog }: Props) {
       description="Reopen a conversation or continue from an earlier point."
       action={
         <Button
-          onClick={() => {
-            runtime.newSession();
-            onSession();
-          }}
+          onClick={() =>
+            perform(async () => {
+              await runtime.newSession();
+              onSession();
+            })
+          }
         >
           <Plus size={14} />
           new session
@@ -119,10 +121,12 @@ function SessionsPage({ onSession, onDialog }: Props) {
           <div className="record-row" key={session.id}>
             <button
               className="record-main"
-              onClick={() => {
-                runtime.selectSession(session.id);
-                onSession();
-              }}
+              onClick={() =>
+                perform(async () => {
+                  await runtime.selectSession(session.id);
+                  onSession();
+                })
+              }
             >
               <MessageSquare size={17} />
               <span>
@@ -182,9 +186,14 @@ function ModelsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
     (model.id + ' ' + model.provider).includes(query),
   );
   const choose = (id: string) =>
-    perform(() => {
+    perform(async () => {
       if (session.state === 'waiting')
         throw Error('pause the current conversation before switching models');
+      if (runtime.mode === 'live') {
+        await runtime.request('set-model', { modelId: id, saveDefault });
+        notify('model selected');
+        return;
+      }
       runtime.change((state) => {
         currentSession(state).model = id;
         if (saveDefault) state.settings.defaultModel = id;
@@ -197,16 +206,32 @@ function ModelsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
       title="models"
       description="Choose the model and thinking depth for this session."
       action={
-        <Button onClick={() => onDialog('connect')}>
-          <Plug size={14} />
-          connection
-        </Button>
+        <div className="inline-actions">
+          {runtime.mode === 'live' && (
+            <Button
+              onClick={() =>
+                perform(async () => {
+                  await runtime.request('discover-models');
+                  notify('models refreshed');
+                })
+              }
+            >
+              refresh models
+            </Button>
+          )}
+          <Button onClick={() => onDialog('connect')}>
+            <Plug size={14} />
+            connection
+          </Button>
+        </div>
       }
     >
       <div className="connection-banner">
         <span>
           <i />
-          not connected
+          {runtime.mode === 'live' && snapshot.runtime?.configured
+            ? 'configured'
+            : 'not connected'}
         </span>
         <code>{snapshot.settings.endpoint || 'no endpoint configured'}</code>
       </div>
@@ -398,7 +423,10 @@ function CommandsPage() {
             runtime.change((state) =>
               state.commands.push({
                 name,
-                description: 'a local preview command',
+                description:
+                  runtime.mode === 'live'
+                    ? 'a reusable prompt'
+                    : 'a local preview command',
                 arguments: '[args]',
                 scope: 'project',
                 template: '$ARGUMENTS',
@@ -478,7 +506,11 @@ function CommandsPage() {
                           )!.template = selectedTemplate;
                         });
                         setEditing(false);
-                        notify('template saved to local preview');
+                        notify(
+                          runtime.mode === 'live'
+                            ? 'saving command template'
+                            : 'template saved to local preview',
+                        );
                       })
                     }
                   >
@@ -524,7 +556,11 @@ function McpPage() {
           <Button
             onClick={() => {
               runtime.request('mcp.reload');
-              notify('reload requested; no server was started');
+              notify(
+                runtime.mode === 'live'
+                  ? 'reloading MCP servers'
+                  : 'reload requested; no server was started',
+              );
             }}
           >
             <RotateCcw size={13} />
@@ -626,7 +662,11 @@ function McpPage() {
           if (!open) setEditing(null);
         }}
         title="server configuration"
-        description="Saved only in this browser. No process or connection is started."
+        description={
+          runtime.mode === 'live'
+            ? 'Save in Circle settings. Reload to connect the server.'
+            : 'Saved only in this browser. No process or connection is started.'
+        }
       >
         {editing && (
           <form
@@ -841,6 +881,7 @@ function ExtensionsPage() {
 }
 function ToolsPage() {
   const [query, setQuery] = useState('');
+  const { runtime, snapshot } = useRuntime();
   return (
     <Page
       title="tools"
@@ -848,23 +889,26 @@ function ToolsPage() {
     >
       <SearchInput value={query} onChange={setQuery} label="search tools" />
       <div className="tool-catalog">
-        {BUILTIN_TOOL_INFO.filter((tool) =>
-          (tool.name + ' ' + tool.description).includes(query),
-        ).map((tool) => (
-          <details className="tool-definition" key={tool.name}>
-            <summary>
-              <Code size={15} />
-              <code>{tool.name}</code>
-              <span>{tool.description}</span>
-              <Badge>{tool.kind}</Badge>
-            </summary>
-            <p>{tool.detail}</p>
-            <p className="muted small">
-              Raw inputs and outputs use the same expandable transcript
-              renderer. Actual execution requires Circle.
-            </p>
-          </details>
-        ))}
+        {(runtime.mode === 'live' ? (snapshot.tools ?? []) : BUILTIN_TOOL_INFO)
+          .filter((tool) =>
+            (tool.name + ' ' + tool.description).includes(query),
+          )
+          .map((tool) => (
+            <details className="tool-definition" key={tool.name}>
+              <summary>
+                <Code size={15} />
+                <code>{tool.name}</code>
+                <span>{tool.description}</span>
+                <Badge>{tool.kind}</Badge>
+              </summary>
+              <p>{tool.detail}</p>
+              <p className="muted small">
+                {runtime.mode === 'live'
+                  ? 'Inputs and results are recorded by Circle and shown in the conversation.'
+                  : 'Raw inputs and outputs use the same expandable transcript renderer. Actual execution requires Circle.'}
+              </p>
+            </details>
+          ))}
       </div>
     </Page>
   );
@@ -955,7 +999,11 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
   return (
     <Page
       title="settings"
-      description="Preferences here apply to this frontend preview."
+      description={
+        runtime.mode === 'live'
+          ? 'Circle preferences and workbench display settings.'
+          : 'Preferences here apply to this frontend preview.'
+      }
     >
       <section className="settings-block first">
         <h2>appearance</h2>
@@ -1055,7 +1103,7 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
               })
             }
           >
-            {EFFORTS.map((value) => (
+            {['default', ...EFFORTS].map((value) => (
               <option key={value}>{value}</option>
             ))}
           </select>
@@ -1121,33 +1169,40 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
           save key preferences
         </Button>
       </section>
-      <section className="settings-block">
-        <h2>launch options</h2>
-        <textarea
-          aria-label="launch arguments"
-          className="input short"
-          value={launch}
-          onChange={(event) => setLaunch(event.target.value)}
-        />
-        <Button
-          onClick={() => {
-            runtime.request('launch-options', { arguments: launch });
-            notify('launch draft saved; no process started');
-          }}
-        >
-          save launch draft
-        </Button>
-      </section>
+      {runtime.mode === 'preview' && (
+        <section className="settings-block">
+          <h2>launch options</h2>
+          <textarea
+            aria-label="launch arguments"
+            className="input short"
+            value={launch}
+            onChange={(event) => setLaunch(event.target.value)}
+          />
+          <Button
+            onClick={() => {
+              runtime.request('launch-options', { arguments: launch });
+              notify('launch draft saved; no process started');
+            }}
+          >
+            save launch draft
+          </Button>
+        </section>
+      )}
       <section className="settings-block">
         <h2>about</h2>
         <Facts
           values={{
             version: VERSION,
-            runtime: 'not connected',
+            runtime: snapshot.runtime?.connected
+              ? 'connected'
+              : 'not connected',
             host: desktopHost()
               ? 'desktop application'
               : 'browser layout preview',
-            data: 'this browser only',
+            data:
+              runtime.mode === 'live'
+                ? 'Circle desktop data folder'
+                : 'this browser only',
           }}
         />
         <Switch
@@ -1167,7 +1222,13 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
         >
           check now
         </Button>
-        <Button onClick={() => onDialog('preview')}>preview data</Button>
+        <Button
+          onClick={() =>
+            onDialog(runtime.mode === 'live' ? 'session' : 'preview')
+          }
+        >
+          {runtime.mode === 'live' ? 'session details' : 'preview data'}
+        </Button>
       </section>
     </Page>
   );

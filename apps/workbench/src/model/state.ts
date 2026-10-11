@@ -86,6 +86,12 @@ export function branchMessages(session: Session): Message[] {
   return result;
 }
 export function visibleMessages(session: Session) {
+  if (session.branchIds)
+    return session.messages.filter(
+      (message) =>
+        session.branchIds!.includes(message.id) &&
+        !session.hiddenIds.includes(message.id),
+    );
   return branchMessages(session).filter(
     (message) => !session.hiddenIds.includes(message.id),
   );

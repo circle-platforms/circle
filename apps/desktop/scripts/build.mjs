@@ -9,6 +9,22 @@ const dist = join(root, 'dist');
 await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });
 await build({
+  entryPoints: [join(root, 'src/runtime-worker.ts')],
+  outfile: join(dist, 'runtime-worker.mjs'),
+  bundle: true,
+  platform: 'node',
+  target: 'node24',
+  format: 'esm',
+  banner: {
+    js: "import { createRequire as circleCreateRequire } from 'node:module'; const require = circleCreateRequire(import.meta.url);",
+  },
+  sourcemap: true,
+});
+await cp(join(root, '../../src/prompts'), join(dist, 'prompts'), {
+  recursive: true,
+});
+await cp(join(root, '../../src/data'), join(dist, 'data'), { recursive: true });
+await build({
   entryPoints: [join(root, 'src/main.ts')],
   outfile: join(dist, 'main.cjs'),
   bundle: true,
@@ -33,6 +49,20 @@ await cp(join(root, '../workbench/dist'), join(dist, 'renderer'), {
 });
 await cp(join(root, 'assets'), join(dist, 'assets'), { recursive: true });
 const svg = await readFile(join(root, 'assets/circle.svg'), 'utf8');
+const macSvg = svg
+  .replace(
+    '</defs>',
+    '</defs><rect x="8" y="8" width="112" height="112" rx="25" fill="#ffffff"/>',
+  )
+  .replace(
+    '<g fill="none" stroke-width="14">',
+    '<g transform="translate(12 12) scale(0.8125)" fill="none" stroke-width="14">',
+  );
+await writeFile(join(dist, 'assets/circle-macos.svg'), macSvg);
+await writeFile(
+  join(dist, 'assets/circle-macos.png'),
+  new Resvg(macSvg, { fitTo: { mode: 'width', value: 1024 } }).render().asPng(),
+);
 const png = new Resvg(svg, { fitTo: { mode: 'width', value: 1024 } })
   .render()
   .asPng();
@@ -55,7 +85,7 @@ if (process.platform === 'darwin') {
     for (const scale of [1, 2])
       await writeFile(
         join(icons, `icon_${size}x${size}${scale === 2 ? '@2x' : ''}.png`),
-        new Resvg(svg, { fitTo: { mode: 'width', value: size * scale } })
+        new Resvg(macSvg, { fitTo: { mode: 'width', value: size * scale } })
           .render()
           .asPng(),
       );

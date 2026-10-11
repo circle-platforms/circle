@@ -2,6 +2,8 @@
 
 Inspected on 2026-10-11 against Circle 1.0.4 and workbench commit `738ba94ddaf3d53a431b9d5ae06797c9d88127e0`. This page audits the complete application/plugin goal. It does not change the current frontend phase into a completed runtime integration.
 
+Subsequent scope change: the user authorized completing Circle's frontend/backend integration first. [The native runtime record](native-runtime.md) documents the implemented connection and its checks. The findings below remain the historical audit at the stated source; B/C/D/E production services and paired runtime plugins are still outstanding.
+
 ## What current evidence proves
 
 The native application, named host capabilities and bundled UI components are implemented. The inspected revision passed the CLI Check workflow, native macOS checks, Windows/Linux desktop packaging and all six existing CLI distribution builds. The distribution publish step was skipped. PR #24 remains a draft and has not merged.

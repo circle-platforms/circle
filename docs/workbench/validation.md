@@ -1,5 +1,7 @@
 # Native frontend validation
 
+This page preserves the frontend-phase receipts. After the user authorized Circle runtime integration, new checks and package receipts are described in [native-runtime.md](native-runtime.md). The totals and unchanged-core statement below apply to the earlier inspected build, not to the current native runtime changes.
+
 Checked on 2026-10-11 (Asia/Tokyo), macOS arm64, Node.js 24 and Electron 44.7.0. The source baseline is Circle 1.0.4 at `9b532727e4433f2d0fa6a0d222a4509daf7f15e4`; the receipts bind the application sources and bundled bytes independently of a Git commit.
 
 | Check | Result | Evidence |

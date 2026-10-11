@@ -69,7 +69,11 @@ export class Harness {
   /** How the input box showed a prompt the model reads in full: long pastes stay folded on screen. */
   readonly shown = new Map<
     string,
-    { display: string; pastes?: Record<string, string> }
+    {
+      display: string;
+      pastes?: Record<string, string>;
+      attachments?: MediaAttachment[];
+    }
   >();
   private active?: Promise<{ answer: string; usage: Usage }>;
   constructor(readonly options: HarnessOptions) {
@@ -92,11 +96,35 @@ export class Harness {
   private get readOnly(): boolean {
     return this.planMode || this.options.parentPlanMode?.() === true;
   }
-  queue(message: string, mode: 'steer' | 'followUp' = 'steer'): void {
+  queue(
+    message: string,
+    mode: 'steer' | 'followUp' = 'steer',
+    attachments?: MediaAttachment[],
+  ): void {
+    if (attachments?.length) {
+      validateAttachments(attachments);
+      this.shown.set(message, {
+        display: message,
+        attachments: structuredClone(attachments),
+      });
+    }
     (mode === 'steer' ? this.steering : this.followUps).push(message);
   }
   get queuedMessages(): { steering: string[]; followUp: string[] } {
     return { steering: [...this.steering], followUp: [...this.followUps] };
+  }
+  removeQueued(
+    mode: 'steer' | 'followUp',
+    index: number,
+    expected: string,
+  ): string {
+    const queue = mode === 'steer' ? this.steering : this.followUps;
+    if (!Number.isSafeInteger(index) || index < 0 || queue[index] !== expected)
+      throw Error('queued message changed');
+    const [message] = queue.splice(index, 1);
+    if (![...this.steering, ...this.followUps].includes(message!))
+      this.shown.delete(message!);
+    return message!;
   }
   clearQueue(): { steering: string[]; followUp: string[] } {
     const result = {
@@ -126,7 +154,9 @@ export class Harness {
   private save(message: Message): void {
     this.options.store.append(this.sessionId, [message]);
   }
-  private shownAs(prompt: string): Pick<Message, 'display' | 'pastes'> {
+  private shownAs(
+    prompt: string,
+  ): Pick<Message, 'display' | 'pastes' | 'attachments'> {
     const shown = this.shown.get(prompt);
     this.shown.delete(prompt);
     return shown ?? { display: prompt };
@@ -136,10 +166,19 @@ export class Harness {
   async run(
     prompt?: string,
     display?: string,
+    attachments?: MediaAttachment[],
   ): Promise<{ answer: string; usage: Usage }> {
     if (this.active) throw new Error('a turn is already running');
     if (prompt !== undefined && display !== undefined && display !== prompt)
       this.shown.set(prompt, { display });
+    if (attachments?.length) {
+      validateAttachments(attachments);
+      if (prompt === undefined) throw Error('attachments require a prompt');
+      this.shown.set(prompt, {
+        ...(this.shown.get(prompt) ?? { display: prompt }),
+        attachments: structuredClone(attachments),
+      });
+    }
     this.controller = new AbortController();
     this.active = this.runQueued(prompt, this.controller.signal);
     try {
@@ -175,18 +214,26 @@ export class Harness {
     const usage = emptyUsage();
     let answer = '';
     const shown = prompt === undefined ? undefined : this.shownAs(prompt);
-    if (prompt !== undefined)
+    if (prompt !== undefined) {
+      const attached = await attachPrompt(
+        prompt,
+        this.options.session.workspace,
+        signal,
+        (path) => this.promptFileAllowed(path),
+      );
+      const attachments = [
+        ...(attached.attachments ?? []),
+        ...(shown?.attachments ?? []),
+      ];
+      if (attachments.length) validateAttachments(attachments);
       this.save({
         id: randomUUID(),
         role: 'user',
-        ...(await attachPrompt(
-          prompt,
-          this.options.session.workspace,
-          signal,
-          (path) => this.promptFileAllowed(path),
-        )),
+        ...attached,
         ...shown,
+        ...(attachments.length ? { attachments } : {}),
       });
+    }
     const session = this.options.store.get(this.sessionId)!;
     if (!session.title && shown?.display !== undefined)
       this.options.store.rename(

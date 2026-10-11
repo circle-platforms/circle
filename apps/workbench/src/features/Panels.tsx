@@ -265,7 +265,9 @@ export function ContextPanel({ onDialog }: Pick<Props, 'onDialog'>) {
           model: session.model,
           effort: session.effort,
           mode: session.readOnly ? 'read-only' : session.auto ? 'auto' : 'ask',
-          connection: 'not connected',
+          connection: snapshot.runtime?.configured
+            ? 'configured'
+            : 'not connected',
         }}
       />
       <div className="panel-section">
@@ -499,8 +501,12 @@ export function ActivityPanel({
               <small>
                 {item.kind} ·{' '}
                 {item.status === 'pending'
-                  ? 'sample request'
-                  : 'response saved locally'}
+                  ? runtime.mode === 'live'
+                    ? 'waiting for your response'
+                    : 'sample request'
+                  : runtime.mode === 'live'
+                    ? 'response sent to Circle'
+                    : 'response saved locally'}
               </small>
             </span>
             <ChevronRight size={13} />
@@ -560,18 +566,22 @@ function BrowserPlaceholder() {
   );
 }
 export function TerminalPanel({ onClose }: { onClose: () => void }) {
-  const { runtime, snapshot } = useRuntime();
+  const { runtime, snapshot, perform } = useRuntime();
   const session = currentSession(snapshot);
   const [input, setInput] = useState('');
   const [output, setOutput] = useState<string[]>([
-    'terminal not connected',
-    'commands stay in the preview request log',
+    runtime.mode === 'live' ? 'Circle shell' : 'terminal not connected',
+    runtime.mode === 'live'
+      ? 'Commands run in this session workspace.'
+      : 'commands stay in the preview request log',
   ]);
   useEffect(() => {
     setInput('');
     setOutput([
-      'terminal not connected',
-      'commands stay in the preview request log',
+      runtime.mode === 'live' ? 'Circle shell' : 'terminal not connected',
+      runtime.mode === 'live'
+        ? 'Commands run in this session workspace.'
+        : 'commands stay in the preview request log',
     ]);
   }, [session.id]);
   return (
@@ -589,7 +599,9 @@ export function TerminalPanel({ onClose }: { onClose: () => void }) {
           </small>
         </span>
         <div>
-          <span className="muted small">not connected</span>
+          <span className="muted small">
+            {runtime.mode === 'live' ? 'connected' : 'not connected'}
+          </span>
           <IconButton label="close terminal" onClick={onClose}>
             <X size={13} />
           </IconButton>
@@ -600,6 +612,28 @@ export function TerminalPanel({ onClose }: { onClose: () => void }) {
         onSubmit={(event) => {
           event.preventDefault();
           if (input.trim()) {
+            if (runtime.mode === 'live') {
+              const command = input;
+              setInput('');
+              setOutput((lines) => [...lines, '$ ' + command]);
+              perform(async () => {
+                const result = (await runtime.request('execute', {
+                  command,
+                })) as {
+                  output: string;
+                  exit_code?: number;
+                  job?: { id: string };
+                };
+                setOutput((lines) => [
+                  ...lines,
+                  result.output,
+                  result.job
+                    ? `background job ${result.job.id}`
+                    : `exit ${result.exit_code ?? 'unknown'}`,
+                ]);
+              });
+              return;
+            }
             runtime.request('execute', { command: input });
             setOutput((lines) => [
               ...lines,

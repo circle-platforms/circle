@@ -349,7 +349,8 @@ export class LspManager {
         const operation = String(args.operation || '');
         if (operation !== 'workspaceSymbol' && !existsSync(path))
           throw new Error(`file not found: ${path}`);
-        let server = this.servers[extname(path).toLowerCase()];
+        let server: LspServer | undefined =
+          this.servers[extname(path).toLowerCase()];
         if (!server && operation === 'workspaceSymbol')
           server = Object.values(this.servers).find((server) =>
             findExecutable(server.command),

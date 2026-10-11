@@ -21,14 +21,17 @@ export interface DesktopInfo {
   platform: string;
   packaged: boolean;
   dataPath: string;
-  runtimeConnected: false;
-  frontendOnly: true;
+  runtimeConnected: boolean;
+  frontendOnly: boolean;
 }
 export type DesktopAction =
   'new' | 'tree' | 'import' | 'export' | 'settings' | 'open-folder' | 'help';
 export interface DesktopBridge {
   apiVersion: 1;
   info: () => Promise<DesktopInfo>;
+  runtimeState: () => Promise<RuntimeUpdate>;
+  runtimeCommand: (command: RuntimeCommand) => Promise<RuntimeReply>;
+  onRuntime: (listener: (update: RuntimeUpdate) => void) => () => void;
   chooseFiles: (
     purpose: 'attach' | 'import' | 'source',
   ) => Promise<NativeFile[]>;
@@ -79,3 +82,8 @@ export interface BrowserCapture extends BrowserState {
   attempts: number;
   retryErrors: string[];
 }
+import type {
+  RuntimeCommand,
+  RuntimeReply,
+  RuntimeUpdate,
+} from './runtime-protocol';

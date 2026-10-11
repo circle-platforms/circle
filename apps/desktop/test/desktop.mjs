@@ -30,6 +30,7 @@ const profile = { files: [attachment], workspace, exportPath };
 const env = {
   ...process.env,
   CIRCLE_WORKBENCH_DATA_DIR: join(temp, 'data'),
+  CIRCLE_WORKBENCH_MODE: 'preview',
   CIRCLE_WORKBENCH_TEST_PROFILE: JSON.stringify(profile),
 };
 delete env.ELECTRON_RUN_AS_NODE;

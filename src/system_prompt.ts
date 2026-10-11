@@ -124,6 +124,8 @@ export function promptOverrides(
   };
 }
 export interface PromptCatalog {
+  userHome?: string;
+  localContext?: boolean;
   skills?: { name: string; description: string }[];
   extensionTools?: { name: string; description: string }[];
 }
@@ -135,7 +137,10 @@ export function buildSystemPrompt(
   home?: string,
   catalog: PromptCatalog = {},
 ): string {
-  const { base, append } = promptOverrides(workspace, home, options);
+  const { base, append } =
+    catalog.localContext === false
+      ? { base: undefined, append: [] }
+      : promptOverrides(workspace, home, options);
   const sections = base
     ? [base]
     : [
@@ -143,7 +148,10 @@ export function buildSystemPrompt(
         readPrompt('circle_guidelines.md'),
         readPrompt('circle_paths.md'),
       ];
-  const files = options.no_context_files ? [] : discoverContextFiles(workspace);
+  const files =
+    options.no_context_files || catalog.localContext === false
+      ? []
+      : discoverContextFiles(workspace);
   if (!options.no_context_files) {
     if (files.length)
       sections.push(
@@ -157,12 +165,16 @@ export function buildSystemPrompt(
           '\n</project_context>',
       );
   }
-  const memory = formatMemorySources(
-    workspace,
-    home,
-    files.map(([path]) => path),
-    options.no_context_files,
-  );
+  const memory =
+    catalog.localContext === false
+      ? ''
+      : formatMemorySources(
+          workspace,
+          home,
+          files.map(([path]) => path),
+          options.no_context_files,
+          catalog.userHome,
+        );
   if (memory) sections.push(memory);
   sections.push(
     `<env>\n  Working directory: ${workspace}\n  Platform: ${platform()}\n  Today's date: ${new Date().toISOString().slice(0, 10)}\n  Is directory a git repo: ${currentBranch(workspace) ? 'yes' : 'no'}\n  Model: ${model}\n  Protocol: ${protocol}\n</env>`,

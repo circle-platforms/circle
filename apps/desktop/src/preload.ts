@@ -12,6 +12,15 @@ const actions = new Set<DesktopAction>([
 const bridge: DesktopBridge = {
   apiVersion: 1,
   info: () => ipcRenderer.invoke('circle:info'),
+  runtimeState: () => ipcRenderer.invoke('circle:runtime-state'),
+  runtimeCommand: (command) =>
+    ipcRenderer.invoke('circle:runtime-command', command),
+  onRuntime: (listener) => {
+    const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
+      listener(value);
+    ipcRenderer.on('circle:runtime-update', handler);
+    return () => ipcRenderer.removeListener('circle:runtime-update', handler);
+  },
   chooseFiles: (purpose) => ipcRenderer.invoke('circle:choose-files', purpose),
   chooseWorkspace: () => ipcRenderer.invoke('circle:choose-workspace'),
   readWorkspaceFile: (workspaceId, fileId) =>

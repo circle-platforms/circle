@@ -133,12 +133,24 @@ export function FileViewer({
             session.readOnly &&
             !['plan', 'plan.md'].includes(file.path.split('/').at(-1)!)
           }
-          onClick={() => {
-            runtime.request('write-file', { path: file.path, content: value });
-            notify('write request recorded; disk is unchanged');
-          }}
+          onClick={() =>
+            perform(async () => {
+              await runtime.request('write-file', {
+                path: file.path,
+                content: value,
+              });
+              if (runtime.mode === 'live') {
+                runtime.change((state) => {
+                  const item = state.files.find((item) => item.id === file.id)!;
+                  item.content = value;
+                  item.draft = undefined;
+                });
+                notify('file saved');
+              } else notify('write request recorded; disk is unchanged');
+            })
+          }
         >
-          request file save
+          {runtime.mode === 'live' ? 'save to disk' : 'request file save'}
         </Button>
       </footer>
     </section>

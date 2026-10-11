@@ -10,7 +10,7 @@ B/C/D/E are installed as first-party component plugins: knowledge, long-running 
 
 `CircleWorkbench` receives a session `RuntimePort`, bundled `WorkbenchPlugin` modules and a `ServiceRegistry`. Plugins register pages, inspector panels, context widgets and composer actions. A native host is supplied through the isolated preload bridge.
 
-`PreviewRuntime` and `PlatformPreviewService` are development implementations, not the Circle model runtime or production B/C/D/E services. Their native application state lives in the application's own data directory.
+`LiveRuntime` connects native commands and authoritative snapshots to the Circle core. Local storage holds presentation preferences and drafts; it cannot replace core-owned history or execution state. `PreviewRuntime` remains browser/layout tooling. `PlatformPreviewService` still supplies the four B/C/D/E component previews, independently of the live Circle runtime.
 
 ## Development
 
