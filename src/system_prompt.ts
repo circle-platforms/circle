@@ -46,7 +46,8 @@ export function discoverContextFiles(workspace: string): [string, string][] {
     ]) {
       const path = join(directory, name);
       try {
-        const stat = statSync(path);
+        // bigint: see fileIdentity in memory_sources.ts
+        const stat = statSync(path, { bigint: true });
         const identity = `${stat.dev}:${stat.ino}`;
         if (!stat.isFile() || seen.has(identity)) continue;
         seen.add(identity);

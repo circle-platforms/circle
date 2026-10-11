@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdirSync, writeFileSync, realpathSync } from 'node:fs';
+import { mkdirSync, writeFileSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  fileIdentity,
   memorySourcePaths,
   formatMemorySources,
 } from '../src/memory_sources.js';
@@ -76,4 +77,14 @@ test('real prompt assembly includes account memory once and no-context leaves ME
   );
   assert.ok(!second.includes('unique project instruction marker'));
   assert.match(second, /unique account memory marker/);
+});
+
+test('a file is known by its full 64-bit id, which a number would round on Windows', (t) => {
+  const path = join(scratch(t), 'AGENTS.md');
+  writeFileSync(path, 'instructions');
+  const stat = statSync(path, { bigint: true });
+  assert.equal(fileIdentity(path), `${stat.dev}:${stat.ino}`);
+  // Two neighbouring Windows file ids, as numbers, are one value
+  assert.equal(Number(0x0021000000001234n), Number(0x0021000000001235n));
+  assert.notEqual(`${0x0021000000001234n}`, `${0x0021000000001235n}`);
 });

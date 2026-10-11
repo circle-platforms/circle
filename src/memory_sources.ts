@@ -1,9 +1,11 @@
 import { existsSync, statSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+// As bigints: a Windows file id is 64 bits, and as a number neighbouring files' ids can round
+// to the same value, so one would be taken for a copy of the other
 export function fileIdentity(path: string): string | undefined {
   try {
-    const stat = statSync(path);
+    const stat = statSync(path, { bigint: true });
     return stat.isFile() ? `${stat.dev}:${stat.ino}` : undefined;
   } catch {
     return undefined;
