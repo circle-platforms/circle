@@ -16,6 +16,7 @@ export const ACTIONS: Record<string, string> = {
   'message.copy': 'ctrl+x',
   'message.dequeue': 'alt+up',
   'message.followup': 'ctrl+q',
+  'image.paste': 'ctrl+v',
   find: 'ctrl+f',
   'history.search': 'ctrl+r',
   'secret.enter': 'ctrl+s',

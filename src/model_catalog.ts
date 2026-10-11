@@ -16,6 +16,8 @@ export interface CatalogEntry {
   context?: number;
   output?: number;
   cost?: Rates;
+  /** models.dev lists image among the model's inputs; absent when it lists no inputs. */
+  image?: boolean;
 }
 export interface CatalogData {
   schema: typeof CATALOG_SCHEMA;
@@ -33,6 +35,8 @@ export interface ModelFacts {
   rates?: Rates;
   provider: string;
   priceProvider: string;
+  /** Whether models.dev says the model reads images. */
+  imageInput?: boolean;
 }
 const SDK_HOSTS: Record<string, string> = {
   'api.anthropic.com': 'anthropic',
@@ -85,6 +89,10 @@ export function slimCatalog(raw: unknown): CatalogData {
       if (whole(limit.output)) entry.output = limit.output;
       const cost = rates(model.cost);
       if (cost) entry.cost = cost;
+      const inputs = isRecord(model.modalities)
+        ? model.modalities.input
+        : undefined;
+      if (Array.isArray(inputs)) entry.image = inputs.includes('image');
       if (Object.keys(entry).length) models[name] = entry;
     }
     if (Object.keys(models).length)
@@ -113,7 +121,10 @@ export function validCatalog(raw: unknown): raw is CatalogData {
     for (const model of Object.values(provider.models)) {
       if (
         !isRecord(model) ||
-        ['context', 'output'].some((key) => key in model && !whole(model[key]))
+        ['context', 'output'].some(
+          (key) => key in model && !whole(model[key]),
+        ) ||
+        ('image' in model && typeof model.image !== 'boolean')
       )
         return false;
       if ('cost' in model) {
@@ -329,6 +340,13 @@ export class ModelCatalog {
       provider: windowItem?.[0] ?? '',
       priceProvider: priceItem?.[0] ?? '',
     };
+    // `"models": {"name": {"images": true}}` in the settings, where models.dev is wrong
+    const said = settings.models[model]?.images;
+    const image =
+      typeof said === 'boolean'
+        ? said
+        : (windowItem?.[1].image ?? priceItem?.[1].image);
+    if (image !== undefined) result.imageInput = image;
     this.factsCache.set(key, result);
     return structuredClone(result);
   }

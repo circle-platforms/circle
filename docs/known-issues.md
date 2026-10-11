@@ -31,6 +31,13 @@ These are gaps to know about before you trust Circle with a repository or a mach
 - **Tool calls other than `task` in one reply run one after another.** 0.5.0 asked every approval first and then ran all the calls of a reply at the same time; here only `task` calls next to each other run together. To run subagents side by side, the model can start them with `background: true`.
 - **`grep` searches for literal text, not regular expressions.** Its description says so and points the model to `rg` in the shell for a regular expression, which asks for approval like any command.
 
+## Images and screenshots
+
+- **Pasting a picture and `screenshot` have not been tried on a real Windows or Linux machine.** They use PowerShell on Windows, and `wl-paste`, `xclip` and the screenshot programs on Linux; the tests run them against stand-ins. On macOS, pasting a picture from the clipboard has been checked by tests only.
+- **On macOS a missing Screen Recording permission is guessed** from whether other applications' window titles can be read. When the guess is wrong the picture shows only the desktop, and the model is told why that may be.
+- **Without `app`, `screenshot` takes the main display only**; other displays are left out.
+- **A model models.dev does not list is assumed to read images.** If its endpoint refuses them, the request fails; set `"images": false` for the model under `models` in the settings.
+
 ## Background jobs
 
 - **A process that leaves its process group is not tracked.** `setsid`, a daemon that detaches, or a program that starts a service elsewhere is not part of the job: stopping the job, or leaving Circle, does not stop it.

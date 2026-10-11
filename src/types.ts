@@ -82,6 +82,8 @@ export interface ChatModel {
   contextWindow?: number;
   outputBudget?: number;
   modelFacts?: import('./model_catalog.js').ModelFacts;
+  /** Whether the model reads images: false when it is known not to, undefined when unknown. */
+  imageInput?: boolean;
   complete(request: ModelRequest): Promise<ModelResponse>;
 }
 export const emptyUsage = (): Usage => ({

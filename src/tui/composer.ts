@@ -1,11 +1,15 @@
 import { stringWidth } from '../ink/string_width.js';
 import { popupRows } from '../ink/components/popup.js';
 import type { InputHistory } from './input_history.js';
+import { mediaType } from '../media.js';
+import { mention } from '../mentions.js';
 
 /** A paste longer than this, or with more line breaks than PASTE_MAX_LINES, is folded. */
 const PASTE_THRESHOLD = 800;
 const PASTE_MAX_LINES = 2;
-const PASTE_REF = /\[Pasted text #(\d+)(?: \+\d+ lines)?\]/g;
+// A folded paste, or an image or PDF put in the box: the model reads what it stands for
+const PASTE_REF = /\[(?:Pasted text|Image|PDF) #(\d+)(?: \+\d+ lines)?\]/g;
+const FILE_REF = /\[(?:Image|PDF) #(\d+)\]/g;
 // Word-wise keys, as in readline and pi. macOS terminals send option+arrow as alt+b/f.
 const WORD_LEFT = new Set(['alt+left', 'ctrl+left', 'alt+b']);
 const WORD_RIGHT = new Set(['alt+right', 'ctrl+right', 'alt+f']);
@@ -301,6 +305,24 @@ export class Composer {
       );
     } else this.insert(normalized);
   }
+  /** An image or PDF for the model: `[Image #N]` in the box, its `@path` in what the model reads. */
+  attach(path: string): void {
+    const id = this.nextPaste++;
+    this.pastes.set(id, mention(path));
+    const before = this.chars[this.cursor - 1];
+    this.insert(
+      (before && !/\s/.test(before) ? ' ' : '') +
+        `[${mediaType(path) === 'application/pdf' ? 'PDF' : 'Image'} #${id}] `,
+    );
+  }
+  /** A draft for the input history: images and PDFs as their `@path`, which a recall can send again. */
+  historyText(text: string): string {
+    const pastes = new Map([...this.submitted, ...this.pastes]);
+    return text.replace(
+      FILE_REF,
+      (match, id: string) => pastes.get(Number(id)) ?? match,
+    );
+  }
   /** Empty the box for a send and return what was in it. Its pastes stay readable by `modelText` until the next send. */
   take(): string {
     const text = this.state.draft;
@@ -333,6 +355,17 @@ export class Composer {
       Object.entries(pastes).map(([id, content]) => [Number(id), content]),
     );
     this.nextPaste = Math.max(this.nextPaste - 1, ...this.pastes.keys()) + 1;
+    this.state.completion = undefined;
+  }
+  /** Text taken back into the box with the pastes its placeholders stand for; the box's own pastes stay. */
+  putBack(text: string, pastes: Record<string, string> = {}): void {
+    for (const [id, content] of Object.entries(pastes))
+      this.pastes.set(Number(id), content);
+    this.nextPaste = Math.max(
+      this.nextPaste,
+      ...[...this.pastes.keys()].map((id) => id + 1),
+    );
+    this.set(text);
     this.state.completion = undefined;
   }
   /**

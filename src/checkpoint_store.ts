@@ -47,6 +47,8 @@ export interface ContextState {
   prunedIds: string[];
   stripThinkingIds: string[];
   offloaded: Record<string, string>;
+  /** Messages whose images and PDFs requests leave out, to make room for newer ones. */
+  droppedMedia?: string[];
 }
 export const emptyContextState = (): ContextState => ({
   prunedIds: [],

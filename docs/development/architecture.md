@@ -25,7 +25,7 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 | `memory_sources.ts` | Finds the instruction files (`AGENTS.md`, `CLAUDE.md` and the like) for a folder. |
 | `skills.ts` | Finds skills in the user, project and `.agents/skills` folders and loads their text. |
 | `commands.ts` | Custom commands: finds them and expands their templates. |
-| `mentions.ts` | `@file` in a message: attaches the file, and completes paths for the input box. |
+| `mentions.ts` | `@file` in a message (bare, quoted or with escaped spaces): attaches the file, completes paths for the input box, and reads a paste of dropped image files. |
 | `events.ts` | The event bus. A subscriber that throws cannot stop the agent. |
 | `types.ts` | Messages, tool calls, usage and the tool contract. |
 | `testing.ts` | `ScriptedModel`, the model the tests drive. |
@@ -39,13 +39,15 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 | `text_repetition.ts` | Notices output that repeats itself, for `model_guard.ts`. |
 | `tool_call_compat.ts` | Repairs tool names and arguments when the repair is unambiguous, and validates arguments before anything runs. |
 | `model_media.ts`, `media.ts` | Images and PDFs: reading them, checking them and putting them into a request in each protocol's form. |
+| `image_fit.ts` | Scaling a large PNG down (pngjs, area averaging) before it is sent. |
+| `screenshot.ts` | The `screenshot` tool's capture: `screencapture` and a JXA window list on macOS, PowerShell on Windows, the first screenshot program that works on Linux. |
 | `probe.ts` | Asks an endpoint for its models and works out its protocol and base URL, for setup and `/models`. |
-| `model_catalog.ts` | Context windows and prices from models.dev: the snapshot in `data/models_dev.json.gz`, refreshed into the data folder once a day. |
+| `model_catalog.ts` | Context windows, prices and whether a model reads images, from models.dev: the snapshot in `data/models_dev.json.gz`, refreshed into the data folder once a day. |
 | `model_profiles.ts` | Thinking depths and other capabilities per model, from `data/provider_profiles.json.gz`. |
 | `model_scope.ts` | Which models `ctrl+p` goes through. |
 | `pricing.ts` | The cost of each call and the totals the footer shows. |
 | `compaction.ts` | The progress of a compaction and the line it leaves. |
-| `context_middleware.ts` | What the model sees of a long session: large results kept in files, older messages summarized, and the originals read back when needed. |
+| `context_middleware.ts` | What the model sees of a long session: large results kept in files, older messages summarized, older images left out, and the originals read back when needed. |
 | `middleware/` | Reminders added to a request: running and polled jobs (`job_notice.ts`), repeated tool calls (`loop_guard.ts`), the plan (`plan_tail.ts`), and pruning of old tool results (`tool_result_prune.ts`). |
 
 ## Tools and safety
@@ -100,7 +102,7 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 | `ink/screen.ts` | Writes only the rows that changed. |
 | `ink/string_width.ts` | Display width, wrapping and cutting of text with colour codes. |
 | `ink/selection.ts` | What a mouse selection covers on the painted screen. |
-| `ink/clipboard.ts` | Copying: OSC 52, the system's clipboard tool and tmux's buffer. |
+| `ink/clipboard.ts` | Copying: OSC 52, the system's clipboard tool and tmux's buffer. Pasting: a picture or copied image files from the system clipboard (`ctrl+v`). |
 | `ink/components/dialog_card.ts` | The card in the input box's frame: title with its lamp, body, options, input row. |
 | `ink/components/approval_card.ts`, `question_card.ts`, `secret_card.ts` | The approval, question and secret cards and their keys. |
 | `ink/components/loop_frame.ts` | The input box's frame: rainbow, busy label and mode word. |
@@ -145,5 +147,5 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 
 - `src/prompts/`: the system prompts per model family, the tool descriptions, the subagent and summary prompts, and the `/init` template.
 - `src/data/`: the models.dev snapshot and the provider profiles, compressed.
-- `scripts/`: building and smoke-testing release packages, the release script, copying assets into `dist/`, and `port-status.ts` (see [The TypeScript port](migration.md)).
+- `scripts/`: building and smoke-testing release packages, the release script, copying assets into `dist/`, `update-models-dev.ts` (refreshes `src/data/models_dev.json.gz`; run it before a release), and `port-status.ts` (see [The TypeScript port](migration.md)).
 - `tests/`: one `*.test.ts` file per area, run with Node's test runner through `tsx`. They drive `ScriptedModel` or a local HTTP gateway and need no network.

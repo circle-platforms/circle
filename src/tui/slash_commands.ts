@@ -211,8 +211,11 @@ export function hotkeysText(): string {
   return [
     'Keyboard shortcuts:',
     '  enter           send; while busy, the model reads it after its current step',
+    '                  enter on an empty prompt: the model reads it now',
+    '  up              on an empty prompt, take back the last message not read yet',
     '  ctrl+q          queue a follow-up: sent when the turn ends (also alt+enter)',
     '  alt+up          take back messages the model has not read yet',
+    '  ctrl+v          paste the picture on the clipboard (also alt+v)',
     '  esc             cancel turn / clear prompt',
     '  esc esc         the session tree (/tree), with an empty prompt',
     '  ctrl+c          abort turn; clear the prompt; on an empty prompt twice to exit',

@@ -12,6 +12,22 @@ Type `/` and the commands it can become are listed above the input box, each wit
 
 To point at a file, write `@` and part of its path. The files it can mean are listed above the input box: `@src/st` lists what is in `src/` starting with `st`, and `@stats` finds `stats.py` anywhere in the workspace (skipping `.git`, `node_modules`, build output and virtual environments). `tab` or `enter` takes the marked file; a folder lists what is in it. After `esc` closes the list, `tab` completes as far as the matches agree and lists them in the footer. When you send, each mentioned text file in the workspace of up to 64 KB is attached for the model, so it does not have to read it first, and a mentioned image or PDF goes as an attachment. [Credential files](security.md#credential-files) are left out. Your message on screen keeps the `@path`.
 
+## Images and screenshots
+
+To show the model a picture, put it in your message:
+
+- **Paste it.** `ctrl+v` puts the picture on the clipboard in the box as `[Image #1]`, for example a screenshot taken with `cmd+ctrl+shift+4` on macOS or `win+shift+s` on Windows. Image files copied in Finder or Explorer go in the same way. Use `alt+v` where the terminal keeps `ctrl+v` for its own paste, as Windows Terminal does. Circle reads the clipboard with `osascript` on macOS, PowerShell on Windows, and `wl-paste` or `xclip` on Linux. A pasted picture is kept as a PNG in `pasted_images/` in the project's folder in the data folder.
+- **Drop the file** on the terminal. Its path arrives as a paste; when a paste is nothing but image or PDF paths, each becomes `[Image #N]` (or `[PDF #N]`).
+- **Mention it** with `@`. An image or PDF can be anywhere, not only in the workspace: `@~/Desktop/shot.png`. Put a path with spaces in quotes, `@"~/Desktop/Screenshot 2026-10-11 at 10.15.32.png"`, or write each space as `\ `.
+
+The model gets each picture with its path, so it can look at it again with `read_file`. The conversation and the input history keep what you saw. A PNG larger than about 1,568 pixels on its long side is scaled down before it is sent (models scale larger ones down anyway), and the model is told both sizes.
+
+The model can also take a screenshot itself with the `screenshot` tool: of the main screen, or of the front window of one application, to see how an app it is building looks or the problem you describe. It asks you first each time, unless you allow screenshots for the session, and it does not run in `read-only` mode or over `ssh`. On macOS the terminal needs the Screen Recording permission (System Settings → Privacy & Security → Screen Recording); without it the picture shows only the desktop. On Linux it takes the whole screen with `grim`, `gnome-screenshot`, `spectacle`, ImageMagick's `import` or `scrot`. Screenshots are kept in `screenshots/` in the project's folder in the data folder. The tool only looks: it cannot click or type. To let the model use a web page, add a browser [MCP server](mcp.md#drive-a-browser).
+
+Not every model reads images. When models.dev says the model in use does not, the footer says so as you paste, the model gets the paths only, and a tool that returns a picture tells it so. If models.dev is wrong about your model, set `"images": true` (or `false`) for it under `models` in the [settings](settings.md).
+
+A conversation can collect many pictures. Once a request would carry more than 8 images or PDFs, or more than 16 MB of them, the older ones are left out of the requests until only the newest 3 remain, and the model is told which were left out. The conversation keeps them all.
+
 ## Run a command yourself
 
 Start a message with `!` to run a shell command yourself, without a card: `!git diff`, `!pytest -q`. It is drawn like Circle's own Bash calls, `esc` stops it, and its output becomes part of the conversation, so the model sees it with your next message. No turn starts. `!!command` runs it and shows the output to you only. `ctrl+b` moves it to the background (`/jobs` lists it); its output joins the conversation when it ends.
@@ -39,9 +55,13 @@ Press `esc` to stop a turn. Circle marks it `✖ Interrupted` until the next tur
 
 You can type while Circle works. Press `enter` and the turn goes on; the model reads your message after its current step, before it decides what to do next. The message is listed above the input box as `steering: …` until the model reads it. It then appears in the conversation at the point where the model read it. If the model was about to finish, it reads the message first and goes on.
 
-If you stop the turn with `esc` or `ctrl+c`, the messages still waiting are sent next, one turn each, steering first. Take them back with `alt+↑` before you stop it if you would rather change them.
+To have the model read it at once, press `enter` again on the empty input box. The step under way stops: the reply the model was writing is dropped, and a command or subagent that is running is stopped and reported to the model as interrupted. Tool results that were already in stay. The model then reads your message and the turn goes on; nothing is marked `✖ Interrupted`.
 
-`ctrl+q` instead of `enter` queues a follow-up: the model does not see it during the turn, and it is sent as a new turn when the turn ends. Waiting messages are listed above the input box as `steering: …` or `follow-up: …`. `alt+↑` takes back every message that has not been read yet and puts them in the input box, so you can change them or drop them.
+If you stop the turn with `esc` or `ctrl+c`, the messages still waiting are sent next, one turn each, steering first. Take them back first if you would rather change them.
+
+`ctrl+q` instead of `enter` queues a follow-up: the model does not see it during the turn, and it is sent as a new turn when the turn ends. Waiting messages are listed above the input box as `steering: …` or `follow-up: …`.
+
+To change or drop a waiting message, take it back into the input box. `↑` in an empty box takes back the last one listed; send it again with `enter`, or clear the box with `ctrl+u` to drop it, and `↑` takes back the one before. `alt+↑` takes back all of them at once, ahead of what you were typing. Long pastes stay folded when they come back.
 
 ## Modes
 
