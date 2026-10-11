@@ -92,4 +92,4 @@ CIRCLE_HOME=$(mktemp -d) npm run dev -- ~/code/my-project
 
 ## 许可
 
-Circle 以 [MIT 许可证](LICENSE)发布。`src/data/` 里的模型目录含有来自 models.dev 的元数据，适用它自己的 MIT 许可，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+Circle 以 [MIT 许可证](LICENSE)发布。`src/data/` 里的模型目录含有来自 models.dev 的元数据，`src/prompts/` 里的许多提示词来自 OpenCode，各自适用自己的 MIT 许可，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
