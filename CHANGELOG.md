@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.0.5 - 2026-10-11
+
 ### Added
 
 - **Send a steering message at once.** While a steering message waits, `enter` on the empty input box has the model read it now: the step under way stops (the reply it was writing is dropped, a running command or subagent is stopped, finished tool results stay) and the same turn goes on, with no `✖ Interrupted`.
