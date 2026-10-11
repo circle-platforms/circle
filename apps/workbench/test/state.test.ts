@@ -7,6 +7,7 @@ import {
   visibleMessages,
 } from '../src/model/state.ts';
 import { parsePreviewBundle } from '../src/model/transfer.ts';
+import { shownTime } from '../src/model/time.ts';
 import { validateKeybindings, matchingAction } from '../src/model/shortcuts.ts';
 import { PlatformPreviewService } from '../src/plugins/platform/store.ts';
 import { PluginRegistry } from '../src/plugins/registry.ts';
@@ -321,4 +322,17 @@ test('resume without an argument opens the session picker; explicit selection op
   assert.equal(runtime.getSnapshot().activeSessionId, 'session2');
   assert.equal(runtime.command('new').openSession, true);
   assert.equal(runtime.command('redo').notice, 'nothing to redo');
+});
+
+test('core times show as local clock times, with the day when it is not today', () => {
+  const now = new Date(2026, 9, 11, 18, 30);
+  const iso = (...parts: [number, number, number, number, number]) =>
+    new Date(...parts).toISOString();
+  assert.equal(shownTime(iso(2026, 9, 11, 9, 5), now), '09:05');
+  assert.equal(shownTime(iso(2026, 9, 10, 14, 5), now), '10 Oct 14:05');
+  assert.equal(shownTime(iso(2025, 11, 31, 23, 59), now), '31 Dec 2025 23:59');
+  // The preview's own words stay as they are
+  assert.equal(shownTime('10:24', now), '10:24');
+  assert.equal(shownTime('yesterday', now), 'yesterday');
+  assert.equal(shownTime('streaming', now), 'streaming');
 });

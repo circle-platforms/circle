@@ -32,6 +32,7 @@ import { BUILTIN_SLASH } from '../../../../src/tui/slash_commands';
 import { VERSION } from '../../../../src/version';
 import { useRuntime } from '../app/context';
 import { currentSession, EFFORTS } from '../model/state';
+import { shownTime } from '../model/time';
 import type { DialogId, PageId, PanelId, McpServer } from '../model/types';
 import {
   Page,
@@ -137,7 +138,7 @@ function SessionsPage({ onSession, onDialog }: Props) {
                       (workspace) => workspace.id === session.workspaceId,
                     )?.name
                   }{' '}
-                  · {session.updatedAt}
+                  · {shownTime(session.updatedAt)}
                 </small>
               </span>
               {session.id === current.id && <Badge>open</Badge>}

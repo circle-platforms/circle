@@ -24,6 +24,7 @@ import { DropdownMenu } from 'radix-ui';
 import { BUILTIN_SLASH } from '../../../../src/tui/slash_commands';
 import { useRuntime } from '../app/context';
 import { currentSession, visibleMessages, EFFORTS } from '../model/state';
+import { fullTime, shownTime } from '../model/time';
 import type { Attachment, DialogId, PanelId } from '../model/types';
 import { Button, IconButton, FileChip, Status } from '../components/common';
 import { Markdown } from '../components/Markdown';
@@ -36,6 +37,16 @@ interface Props {
   onAttach: () => void;
   onCommand: () => void;
 }
+const MEDIA_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'application/pdf',
+]);
+const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
+const mediaFiles = (files: FileList): File[] =>
+  Array.from(files).filter((file) => MEDIA_TYPES.has(file.type));
 export function Conversation({
   onDialog,
   onPanel,
@@ -54,7 +65,7 @@ export function Conversation({
   const messages = visibleMessages(session);
   const input = useRef<HTMLTextAreaElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
-  const end = useRef<HTMLDivElement>(null);
+  const column = useRef<HTMLDivElement>(null);
   const [find, setFind] = useState('');
   const [finding, setFinding] = useState(false);
   const [findIndex, setFindIndex] = useState(0);
@@ -63,6 +74,41 @@ export function Conversation({
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [planCollapsed, setPlanCollapsed] = useState(false);
   useEffect(() => setPlanCollapsed(false), [session.id]);
+  // Pictures and PDFs pasted or dropped on the box go with the message, as attached ones do
+  const addMedia = async (files: File[]) => {
+    for (const file of files) {
+      if (file.size > MAX_MEDIA_BYTES) {
+        notify(`${file.name || 'picture'} is over 20 MB`);
+        continue;
+      }
+      const content = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+      perform(() =>
+        runtime.change((state) => {
+          const target = currentSession(state);
+          const count =
+            target.attachments.filter((item) => item.kind === 'image').length +
+            1;
+          target.attachments.push({
+            id: crypto.randomUUID(),
+            name:
+              file.name && file.name !== 'image.png'
+                ? file.name
+                : `pasted image ${count}.png`,
+            kind: file.type === 'application/pdf' ? 'document' : 'image',
+            content,
+            mime: file.type,
+            size: file.size,
+          });
+        }),
+      );
+    }
+    input.current?.focus();
+  };
   const lastEscape = useRef(0);
   const savedDraft = useRef('');
   const latestView = useRef({ session, onDialog, onPanel });
@@ -138,10 +184,45 @@ export function Conversation({
     setDismissed(false);
     setCompletionIndex(0);
   }, [session.draft]);
+  // The transcript follows its end while you are there: as a reply streams in, as messages
+  // arrive, as the window changes size. Scroll up and it stays where you are; scroll back
+  // down, or send a message, and it follows again.
+  const following = useRef(true);
+  const toEnd = () => {
+    const box = scroller.current;
+    if (box) box.scrollTo({ top: box.scrollHeight, behavior: 'instant' });
+  };
   useEffect(() => {
-    end.current?.scrollIntoView({ block: 'end' });
+    const box = scroller.current;
+    const content = column.current;
+    if (!box || !content) return;
+    const scrolled = () => {
+      following.current =
+        box.scrollHeight - box.scrollTop - box.clientHeight < 48;
+    };
+    box.addEventListener('scroll', scrolled, { passive: true });
+    const resized = new ResizeObserver(() => {
+      if (following.current) toEnd();
+    });
+    resized.observe(content);
+    resized.observe(box);
+    return () => {
+      box.removeEventListener('scroll', scrolled);
+      resized.disconnect();
+    };
+  }, []);
+  const lastRole = messages.at(-1)?.role;
+  useEffect(() => {
+    following.current = true;
+    toEnd();
+  }, [session.id]);
+  useEffect(() => {
+    if (lastRole === 'user') {
+      following.current = true;
+      toEnd();
+    }
     setFinding(false);
-  }, [session.id, messages.length]);
+  }, [session.id, messages.length, lastRole]);
   useEffect(() => {
     if (find && matches.length) {
       const target = scroller.current?.querySelector(
@@ -407,7 +488,7 @@ export function Conversation({
         </div>
       )}
       <div className="transcript" ref={scroller}>
-        <div className="transcript-column">
+        <div className="transcript-column" ref={column}>
           {messages.length === 0 ? (
             <div className="welcome">
               <span className="circle-logo large" />
@@ -468,7 +549,12 @@ export function Conversation({
                       <strong>
                         {message.role === 'user' ? 'you' : 'circle'}
                       </strong>
-                      <time>{message.at}</time>
+                      <time
+                        dateTime={fullTime(message.at) && message.at}
+                        title={fullTime(message.at)}
+                      >
+                        {shownTime(message.at)}
+                      </time>
                       {message.label && (
                         <span className="label">{message.label}</span>
                       )}
@@ -496,12 +582,16 @@ export function Conversation({
                     ) : null}
                     {message.usage && (
                       <footer>
-                        {message.usage.elapsed} · ↑{' '}
-                        {message.usage.input.toLocaleString()} · ↓{' '}
-                        {message.usage.output.toLocaleString()} ·{' '}
-                        {message.usage.cost === null
-                          ? 'cost N/A'
-                          : '$' + message.usage.cost.toFixed(4)}
+                        {[
+                          message.usage.elapsed,
+                          `↑ ${message.usage.input.toLocaleString()}`,
+                          `↓ ${message.usage.output.toLocaleString()}`,
+                          message.usage.cost === null
+                            ? 'cost N/A'
+                            : '$' + message.usage.cost.toFixed(4),
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
                       </footer>
                     )}
                   </article>
@@ -530,7 +620,6 @@ export function Conversation({
               local conversation paused · remote state unverified
             </div>
           )}
-          <div ref={end} />
         </div>
       </div>
       <div className="composer-area">
@@ -630,7 +719,20 @@ export function Conversation({
             </button>
           </div>
         )}
-        <div className="composer" data-state={session.state}>
+        <div
+          className="composer"
+          data-state={session.state}
+          onDragOver={(event) => {
+            if (Array.from(event.dataTransfer.types).includes('Files'))
+              event.preventDefault();
+          }}
+          onDrop={(event) => {
+            const files = mediaFiles(event.dataTransfer.files);
+            if (!files.length) return;
+            event.preventDefault();
+            void addMedia(files);
+          }}
+        >
           {!dismissed && completions.length > 0 && (
             <div
               className="completion-list"
@@ -659,6 +761,12 @@ export function Conversation({
             value={session.draft}
             onChange={(event) => setDraft(event.target.value)}
             onPaste={(event) => {
+              const files = mediaFiles(event.clipboardData.files);
+              if (files.length) {
+                event.preventDefault();
+                void addMedia(files);
+                return;
+              }
               const text = event.clipboardData.getData('text');
               if (text.length > 800 || text.split('\n').length > 3) {
                 event.preventDefault();

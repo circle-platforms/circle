@@ -886,3 +886,45 @@ test('attached pictures go as mentioned ones do: a large PNG is scaled down and 
   assert.equal(second.content, 'and this');
   assert.equal(second.attachments, undefined);
 });
+
+test('a failed turn stays in the conversation after the message it followed, and a later turn goes below it', async (t) => {
+  const f = await setup(t, [
+    async () => {
+      throw new Error('the gateway answered 500');
+    },
+    { message: assistant('second time lucky') },
+  ]);
+  await f.call('prompt', { text: 'first try' });
+  await wait(
+    () =>
+      f.model.requests.length === 1 &&
+      f.controller.snapshot().sessions[0]!.state === 'idle',
+    'failed turn',
+  );
+  const rows = () => {
+    const session = f.controller.snapshot().sessions[0]!;
+    return visibleMessages(session).map((m) => `${m.role}: ${m.text}`);
+  };
+  assert.deepEqual(rows(), [
+    'user: first try',
+    'notice: ✖ the gateway answered 500',
+  ]);
+  await f.call('prompt', { text: 'again' });
+  await wait(
+    () =>
+      f.model.requests.length === 2 &&
+      f.controller.snapshot().sessions[0]!.state === 'idle',
+    'second turn',
+  );
+  assert.deepEqual(rows(), [
+    'user: first try',
+    'notice: ✖ the gateway answered 500',
+    'user: again',
+    'assistant: second time lucky',
+  ]);
+  // The model never reads the notice
+  assert.equal(
+    JSON.stringify(f.model.requests[1]!.messages).includes('✖'),
+    false,
+  );
+});

@@ -356,6 +356,31 @@ try {
     const data = JSON.parse(body);
     gatewayRequests.push(data);
     assert.equal(req.headers.authorization, 'Bearer native-local-key');
+    const last = data.messages.at(-1);
+    const said = Array.isArray(last.content)
+      ? last.content.find((part) => part.type === 'text')?.text
+      : last.content;
+    if (said === 'refuse this') {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({ error: { message: 'bad request from fixture' } }),
+      );
+      return;
+    }
+    if (said === 'stream a long answer') {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      for (let line = 1; line <= 60; line++) {
+        res.write(
+          `data: ${JSON.stringify({ id: 'native-gateway', object: 'chat.completion.chunk', model: data.model, choices: [{ index: 0, delta: { content: `line ${line}\n\n` }, finish_reason: null }] })}\n\n`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      }
+      res.write(
+        `data: ${JSON.stringify({ id: 'native-gateway', object: 'chat.completion.chunk', model: data.model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`,
+      );
+      res.end('data: [DONE]\n\n');
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     res.write(
       `data: ${JSON.stringify({ id: 'native-gateway', object: 'chat.completion.chunk', model: data.model, choices: [{ index: 0, delta: { role: 'assistant', content: 'native gateway response' }, finish_reason: null }] })}\n\n`,
@@ -419,6 +444,79 @@ try {
   checks.push(
     'normal native GatewayModel sends a real request to the isolated HTTP fixture with selected model and effort',
   );
+  // Times read as the local clock; the usage row has no empty part
+  const stamp = page.locator('article.message time').last();
+  assert.match(await stamp.innerText(), /^\d{2}:\d{2}$/);
+  assert.ok(await stamp.getAttribute('title'));
+  const usage = await page.locator('article.message footer').last().innerText();
+  assert.match(usage, /^↑ \d/);
+  checks.push(
+    'message times show as the local clock and usage rows have no empty part',
+  );
+  // A picture pasted in the box goes to the model as an image
+  await page.evaluate((base64) => {
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([bytes], 'image.png', { type: 'image/png' }));
+    document.querySelector('textarea[aria-label="message"]').dispatchEvent(
+      new ClipboardEvent('paste', {
+        clipboardData: transfer,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  }, 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==');
+  await page.getByText('pasted image 1.png').waitFor();
+  await send('what is in the picture');
+  await page.getByText('native gateway response').nth(1).waitFor();
+  const pictured = gatewayRequests.at(-1).messages.at(-1);
+  assert(Array.isArray(pictured.content));
+  assert(
+    pictured.content.some(
+      (part) =>
+        part.type === 'image_url' &&
+        part.image_url.url.startsWith('data:image/png;base64,'),
+    ),
+  );
+  checks.push('a pasted picture reaches the next model request as an image');
+  // A long answer is followed while it streams; scrolled up, the view stays put
+  const fromEnd = () =>
+    page.evaluate(() => {
+      const box = document.querySelector('.transcript');
+      return box.scrollHeight - box.scrollTop - box.clientHeight;
+    });
+  await send('stream a long answer');
+  await page.getByText('line 20', { exact: true }).waitFor();
+  assert.ok((await fromEnd()) < 48, 'follows while streaming');
+  await page.evaluate(() => {
+    document
+      .querySelector('.transcript')
+      .scrollTo({ top: 0, behavior: 'instant' });
+  });
+  await page.getByText('line 40', { exact: true }).waitFor();
+  assert.equal(
+    await page.evaluate(() => document.querySelector('.transcript').scrollTop),
+    0,
+  );
+  await page.evaluate(() => {
+    const box = document.querySelector('.transcript');
+    box.scrollTo({ top: box.scrollHeight, behavior: 'instant' });
+  });
+  await page.getByText('line 60', { exact: true }).waitFor();
+  await waitFor(
+    async () => (await state()).sessions[0].state === 'idle',
+    'long answer',
+  );
+  await waitFor(async () => (await fromEnd()) < 48, 'follows the end again');
+  checks.push('the conversation follows a streaming answer unless scrolled up');
+  // A request the endpoint refuses stays in the conversation
+  await send('refuse this');
+  await page.locator('.transcript-notice').filter({ hasText: '✖' }).waitFor();
+  assert.match(
+    await page.locator('.transcript-notice').last().innerText(),
+    /400/,
+  );
+  checks.push('a failed turn leaves its error in the conversation');
   await writeFile(
     join(
       output,

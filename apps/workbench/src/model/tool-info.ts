@@ -77,6 +77,14 @@ export const BUILTIN_TOOL_INFO = [
     kind: 'write',
   },
   {
+    name: 'screenshot',
+    description:
+      'Take a screenshot of the main screen, or of the front window of one application',
+    detail:
+      'Take a screenshot of the main screen, or of the front window of the application named in `app`, and send it to the model as an image. It asks each time unless allowed for the session, and is refused in read-only mode.',
+    kind: 'read',
+  },
+  {
     name: 'execute',
     description: 'Run a shell command in the workspace',
     detail:

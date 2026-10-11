@@ -114,6 +114,12 @@ export class RuntimeController {
   private history: Interaction[] = [];
   private streams = new Map<string, Streaming>();
   private activeRuns = new Set<string>();
+  // Turns that failed, per session: shown in the conversation after the message they
+  // followed, as the terminal shows its red line. They live as long as the app runs.
+  private failures = new Map<
+    string,
+    { id: string; after: string | null; text: string; at: string }[]
+  >();
   private toolStates = new Map<
     string,
     { status: 'running' | 'waiting' | 'error' | 'success'; output?: string }
@@ -250,7 +256,9 @@ export class RuntimeController {
           ? {
               input: raw.usage.input_tokens,
               output: raw.usage.output_tokens,
-              cost: null,
+              // The workbench shows dollars; another currency is not converted
+              cost:
+                raw.cost?.currency === 'USD' ? (raw.cost.amount ?? null) : null,
               elapsed: '',
             }
           : undefined,
@@ -283,6 +291,22 @@ export class RuntimeController {
         calls.set(call.id, row);
         result.push(row);
       }
+    }
+    for (const failure of this.failures.get(id) ?? []) {
+      // After the message it followed and that message's tool rows
+      const at = result.findLastIndex(
+        (row) =>
+          row.id === failure.after || row.id.startsWith(`${failure.after}:`),
+      );
+      const index =
+        failure.after === null ? 0 : at < 0 ? result.length : at + 1;
+      result.splice(index, 0, {
+        id: failure.id,
+        parentId: failure.after,
+        role: 'notice',
+        text: failure.text,
+        at: failure.at,
+      });
     }
     const stream = this.streams.get(id);
     if (stream && (stream.text || stream.thinking))
@@ -325,6 +349,9 @@ export class RuntimeController {
             (call) => `${node.id}:${call.id}`,
           ),
         ]);
+      for (const failure of this.failures.get(row.id) ?? [])
+        if (failure.after === null || branchIds.includes(failure.after))
+          branchIds.push(failure.id);
       const stream = this.streams.get(row.id);
       if (stream) branchIds.push(stream.id);
       return {
@@ -600,6 +627,16 @@ export class RuntimeController {
     if (event.kind === 'run_start') this.activeRuns.add(id);
     if (['run_end', 'run_error'].includes(event.kind))
       this.activeRuns.delete(id);
+    if (event.kind === 'run_error' && !event.payload.interrupted) {
+      const rows = this.failures.get(id) ?? [];
+      rows.push({
+        id: `failure-${randomUUID()}`,
+        after: runtime.store.get(id)?.head ?? null,
+        text: `✖ ${String(event.payload.message ?? 'the turn failed')}`,
+        at: event.ts,
+      });
+      this.failures.set(id, rows);
+    }
     if (event.kind === 'llm_start')
       this.streams.set(id, {
         id: `stream-${randomUUID()}`,
