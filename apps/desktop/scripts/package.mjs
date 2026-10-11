@@ -85,21 +85,33 @@ if (platform === 'darwin' && process.platform === 'darwin') {
   });
   await symlink('/Applications', join(content, 'Applications'));
   await rm(image, { force: true });
-  execFileSync(
-    'hdiutil',
-    [
-      'create',
-      '-volname',
-      'Circle',
-      '-srcfolder',
-      content,
-      '-ov',
-      '-format',
-      'UDZO',
-      image,
-    ],
-    { stdio: 'inherit' },
-  );
+  // hdiutil now and then fails with "Resource busy" while the system looks at the new image;
+  // a later try goes through
+  for (let attempt = 1; ; attempt++) {
+    try {
+      execFileSync(
+        'hdiutil',
+        [
+          'create',
+          '-volname',
+          'Circle',
+          '-srcfolder',
+          content,
+          '-ov',
+          '-format',
+          'UDZO',
+          image,
+        ],
+        { stdio: 'inherit' },
+      );
+      break;
+    } catch (error) {
+      if (attempt === 5) throw error;
+      console.log(`hdiutil failed (try ${attempt} of 5); trying again`);
+      await rm(image, { force: true });
+      await new Promise((resolve) => setTimeout(resolve, attempt * 3000));
+    }
+  }
   await rm(content, { recursive: true, force: true });
   archives.push(image);
 } else if (platform === 'win32') {
