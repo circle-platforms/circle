@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.1.1 - 2026-10-11
+
 ### Fixed
 
 - **`esc` and a letter typed quickly after it are two keys.** Within a quarter of a second they were read together as `alt` and the letter: the turn went on, the letter was lost, and `esc` then `v` pasted the clipboard picture.
