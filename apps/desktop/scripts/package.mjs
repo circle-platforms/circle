@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { join, relative } from 'node:path';
 import { execFileSync } from 'node:child_process';
 const root = fileURLToPath(new URL('..', import.meta.url));
+const outputRoot = process.env.CIRCLE_DESKTOP_OUTPUT_DIR ?? join(root, 'out');
 const stage = join(root, '.stage');
 const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 await rm(stage, { recursive: true, force: true });
@@ -33,7 +34,7 @@ const platform = process.env.CIRCLE_DESKTOP_PLATFORM ?? process.platform;
 const arch = process.env.CIRCLE_DESKTOP_ARCH ?? process.arch;
 const paths = await packager({
   dir: stage,
-  out: join(root, 'out'),
+  out: outputRoot,
   name: 'Circle Workbench',
   platform,
   arch,
@@ -58,8 +59,7 @@ const artifactPaths = paths.map((path) =>
 );
 if (platform === 'darwin' && process.platform === 'darwin') {
   const image = join(
-    root,
-    'out',
+    outputRoot,
     `Circle-Workbench-${manifest.version}-${arch}.dmg`,
   );
   const content = join(root, '.stage-dmg');
@@ -92,7 +92,7 @@ if (platform === 'darwin' && process.platform === 'darwin') {
   console.log(image);
 }
 await writeFile(
-  join(root, 'out/artifact-receipt.json'),
+  join(outputRoot, 'artifact-receipt.json'),
   JSON.stringify(
     {
       builtAt: new Date().toISOString(),
@@ -102,7 +102,7 @@ await writeFile(
       arch,
       artifacts: await Promise.all(
         artifactPaths.map(async (path) => ({
-          path: relative(join(root, 'out'), path).split('\\').join('/'),
+          path: relative(outputRoot, path).split('\\').join('/'),
           sha256: createHash('sha256')
             .update(await readFile(path))
             .digest('hex'),

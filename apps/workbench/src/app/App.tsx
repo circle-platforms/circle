@@ -688,7 +688,10 @@ export function App() {
                 ) ?? null)
               : null
           }
-          onClose={() => setInteraction(null)}
+          onClose={() => {
+            setInteraction(null);
+            if (narrow) setInspectorOpen(false);
+          }}
         />
         {notice && (
           <div className="toast" role="status">

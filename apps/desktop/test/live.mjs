@@ -133,6 +133,17 @@ try {
   page = await app.firstWindow();
   page.on('pageerror', (error) => errors.push(String(error)));
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
+  if (process.env.CIRCLE_DESKTOP_TEST_WIDTH) {
+    await app.evaluate(({ BrowserWindow }, width) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      window.show();
+      window.setContentSize(width, 768);
+    }, Number(process.env.CIRCLE_DESKTOP_TEST_WIDTH));
+    await page.waitForFunction(
+      (width) => innerWidth === width,
+      Number(process.env.CIRCLE_DESKTOP_TEST_WIDTH),
+    );
+  }
   const info = await page.evaluate(() => window.circleDesktop.info());
   assert.equal(info.frontendOnly, false);
   assert.equal(info.runtimeConnected, true);
@@ -160,6 +171,18 @@ try {
   await page.locator('.activity-row').filter({ hasText: 'write_file' }).click();
   await page.getByRole('button', { name: 'allow once', exact: true }).click();
   await page.getByText('native answer completed', { exact: true }).waitFor();
+  if (
+    process.env.CIRCLE_DESKTOP_TEST_WIDTH &&
+    Number(process.env.CIRCLE_DESKTOP_TEST_WIDTH) <= 1050
+  ) {
+    assert.equal(
+      await page.evaluate(() => innerWidth),
+      Number(process.env.CIRCLE_DESKTOP_TEST_WIDTH),
+    );
+    await page
+      .getByRole('dialog', { name: 'inspector', exact: true })
+      .waitFor({ state: 'hidden', timeout: 1500 });
+  }
   assert.equal(
     await readFile(join(workspace, 'native.txt'), 'utf8'),
     'native runtime bytes\n',
