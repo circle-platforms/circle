@@ -234,7 +234,7 @@ export async function updateInstalled(
     typeof metadata.binDir !== 'string'
   )
     throw new Error('invalid installation receipt');
-  let target = versions[0]?.replace(/^v/, '');
+  let target: string | undefined = versions[0]?.replace(/^v/, '');
   if (!target) {
     const response = await request(
       `https://api.github.com/repos/${metadata.repo}/releases/latest`,

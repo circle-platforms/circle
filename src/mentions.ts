@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import type { MediaAttachment } from './types.js';
 import {
   MAX_ATTACHMENTS,
+  fitMedia,
   mediaType,
   readMedia,
   validateAttachments,
@@ -82,7 +83,8 @@ export function attachFiles(
  * as attachments. With `images` false (a model that does not read them) images are left out
  * and counted in `leftOut`; their `@path` stays in the text. A file that cannot go (too large,
  * empty, one too many) is left out and named in `problems`, so the message itself still goes.
- * A PNG scaled down to send is named with both sizes, as `read_file` names one.
+ * A PNG scaled down to send is named with both sizes, as `read_file` names one. `given` are
+ * files sent with the prompt rather than named in it (the desktop's), taken the same way.
  */
 export async function attachPrompt(
   text: string,
@@ -90,6 +92,7 @@ export async function attachPrompt(
   signal: AbortSignal,
   allowed: (path: string) => boolean,
   images = true,
+  given: MediaAttachment[] = [],
 ): Promise<{
   message: { content: string; attachments?: MediaAttachment[] };
   leftOut: number;
@@ -130,6 +133,27 @@ export async function attachPrompt(
         signal.throwIfAborted();
         problems.push(
           `${basename(full)} (${error instanceof Error ? error.message : String(error)})`,
+        );
+      }
+  }
+  for (const item of given) {
+    if (!images && item.kind === 'image') leftOut++;
+    else if (attachments.length >= MAX_ATTACHMENTS)
+      problems.push(
+        `${item.filename} (only ${MAX_ATTACHMENTS} images or PDFs go with one message)`,
+      );
+    else
+      try {
+        const media = fitMedia(
+          Buffer.from(item.data, 'base64'),
+          item.mime_type,
+          item.filename,
+        );
+        attachments.push(media.attachment);
+        if (media.scaled) scaled.push(`${item.filename} ${media.size}`);
+      } catch (error) {
+        problems.push(
+          `${item.filename} (${error instanceof Error ? error.message : String(error)})`,
         );
       }
   }

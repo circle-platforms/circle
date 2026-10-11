@@ -179,7 +179,17 @@ export async function readMedia(
     input.destroy();
   }
   signal.throwIfAborted();
-  let bytes: Buffer = Buffer.concat(chunks);
+  return fitMedia(Buffer.concat(chunks), mime, path);
+}
+/**
+ * A file's bytes as an attachment: a PNG larger than models read is scaled down, one that
+ * cannot be is refused. `size` and `scaled` as for `readMedia`.
+ */
+export function fitMedia(
+  bytes: Buffer,
+  mime: MediaAttachment['mime_type'],
+  filename: string,
+): { attachment: MediaAttachment; size: string; scaled: boolean } {
   let size = '';
   let scaled = false;
   if (mime === 'image/png') {
@@ -204,7 +214,7 @@ export async function readMedia(
   if (bytes.length > MAX_MEDIA_BYTES)
     throw new Error('attachment exceeds 20 MiB; use a smaller file');
   return {
-    attachment: makeAttachment(bytes, mime, basename(path)),
+    attachment: makeAttachment(bytes, mime, basename(filename)),
     size,
     scaled,
   };

@@ -93,3 +93,16 @@ See [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md) for coding agents
 ## License
 
 Circle is released under the [MIT License](LICENSE). The model catalogs in `src/data/` carry metadata from models.dev, and many prompts in `src/prompts/` come from OpenCode, each under its own MIT license; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Circle desktop application
+
+Circle also comes as a desktop application: the conversation, session history, files and diffs, approvals, jobs, models and extensions in one window. Each release has it for macOS, Windows and Linux as `circle-desktop-<version>-<os>-<arch>`; [Installation](docs/installation.md#the-desktop-application) says how to open it the first time. To run it from a checkout, see [apps/desktop](apps/desktop/README.md):
+
+```bash
+npm ci
+npm --prefix apps/workbench ci
+npm --prefix apps/desktop ci
+npm --prefix apps/desktop run dev
+```
+
+The application bundles Circle's interactive runtime in its own native process. Conversations, tools, approvals, questions, native sessions and shell commands use the existing Circle core. Connect your API URL, key and model in the application. Its data folder is separate from `~/.circle`. Deferred platform components are not loaded in the application. See [native runtime and verification](docs/workbench/native-runtime.md) and [desktop architecture](docs/workbench/architecture.md).

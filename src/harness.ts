@@ -77,7 +77,11 @@ export class Harness {
   /** How the input box showed a prompt the model reads in full: long pastes stay folded on screen. */
   readonly shown = new Map<
     string,
-    { display: string; pastes?: Record<string, string> }
+    {
+      display: string;
+      pastes?: Record<string, string>;
+      attachments?: MediaAttachment[];
+    }
   >();
   private active?: Promise<{ answer: string; usage: Usage }>;
   constructor(readonly options: HarnessOptions) {
@@ -100,11 +104,35 @@ export class Harness {
   private get readOnly(): boolean {
     return this.planMode || this.options.parentPlanMode?.() === true;
   }
-  queue(message: string, mode: 'steer' | 'followUp' = 'steer'): void {
+  queue(
+    message: string,
+    mode: 'steer' | 'followUp' = 'steer',
+    attachments?: MediaAttachment[],
+  ): void {
+    if (attachments?.length) {
+      validateAttachments(attachments);
+      this.shown.set(message, {
+        display: message,
+        attachments: structuredClone(attachments),
+      });
+    }
     (mode === 'steer' ? this.steering : this.followUps).push(message);
   }
   get queuedMessages(): { steering: string[]; followUp: string[] } {
     return { steering: [...this.steering], followUp: [...this.followUps] };
+  }
+  removeQueued(
+    mode: 'steer' | 'followUp',
+    index: number,
+    expected: string,
+  ): string {
+    const queue = mode === 'steer' ? this.steering : this.followUps;
+    if (!Number.isSafeInteger(index) || index < 0 || queue[index] !== expected)
+      throw Error('queued message changed');
+    const [message] = queue.splice(index, 1);
+    if (![...this.steering, ...this.followUps].includes(message!))
+      this.shown.delete(message!);
+    return message!;
   }
   /** The waiting messages as the input box showed them (long pastes and images folded). */
   get queuedShown(): { steering: string[]; followUp: string[] } {
@@ -171,13 +199,14 @@ export class Harness {
       /* run_error and persisted results record the stop. */
     }
   }
-  // A prompt with the files it mentions. A model known not to read images gets their paths
-  // only, and the screen says so. A file that cannot go is left out: the model and the
-  // screen are told which and why.
+  // A prompt with the files it mentions and the ones given with it (the desktop's). A model
+  // known not to read images gets their paths only, and the screen says so. A file that
+  // cannot go is left out: the model and the screen are told which and why.
   private async attach(
     prompt: string,
     workspace: string,
     signal: AbortSignal,
+    given?: MediaAttachment[],
   ): Promise<Pick<Message, 'content' | 'attachments'>> {
     const { message, leftOut, problems } = await attachPrompt(
       prompt,
@@ -185,6 +214,7 @@ export class Harness {
       signal,
       (path) => this.promptFileAllowed(path),
       this.model.imageInput !== false,
+      given,
     );
     if (leftOut)
       this.bus.emit('info', {
@@ -211,17 +241,30 @@ export class Harness {
   private shownAs(prompt: string): Pick<Message, 'display' | 'pastes'> {
     const shown = this.shown.get(prompt);
     this.shown.delete(prompt);
-    return shown ?? { display: prompt };
+    if (!shown) return { display: prompt };
+    return {
+      display: shown.display,
+      ...(shown.pastes ? { pastes: shown.pastes } : {}),
+    };
   }
   // `display` is what the conversation shows for the prompt when it differs from the text
   // the model gets (`circle "question" @file`).
   async run(
     prompt?: string,
     display?: string,
+    attachments?: MediaAttachment[],
   ): Promise<{ answer: string; usage: Usage }> {
     if (this.active) throw new Error('a turn is already running');
     if (prompt !== undefined && display !== undefined && display !== prompt)
       this.shown.set(prompt, { display });
+    if (attachments?.length) {
+      validateAttachments(attachments);
+      if (prompt === undefined) throw Error('attachments require a prompt');
+      this.shown.set(prompt, {
+        ...(this.shown.get(prompt) ?? { display: prompt }),
+        attachments: structuredClone(attachments),
+      });
+    }
     this.controller = new AbortController();
     this.active = this.runQueued(prompt, this.controller.signal);
     try {
@@ -256,12 +299,19 @@ export class Harness {
     const start = Date.now();
     const usage = emptyUsage();
     let answer = '';
+    const given =
+      prompt === undefined ? undefined : this.shown.get(prompt)?.attachments;
     const shown = prompt === undefined ? undefined : this.shownAs(prompt);
     if (prompt !== undefined)
       this.save({
         id: randomUUID(),
         role: 'user',
-        ...(await this.attach(prompt, this.options.session.workspace, signal)),
+        ...(await this.attach(
+          prompt,
+          this.options.session.workspace,
+          signal,
+          given,
+        )),
         ...shown,
       });
     const session = this.options.store.get(this.sessionId)!;
@@ -282,7 +332,12 @@ export class Harness {
         // back while its files are read, does not take the others with it
         while (this.steering.length) {
           const message = this.steering[0]!;
-          const content = await this.attach(message, session.workspace, signal);
+          const content = await this.attach(
+            message,
+            session.workspace,
+            signal,
+            this.shown.get(message)?.attachments,
+          );
           const at = this.steering.indexOf(message);
           if (at < 0) continue;
           this.steering.splice(at, 1);
