@@ -878,6 +878,11 @@ test("/login asks for the URL and the key on its list, lists the endpoint's mode
     settings: structuredClone(settings),
     modelOverride: 'flag-model',
   });
+  // What reached the screen, not only what the list holds
+  let painted: string[] = [];
+  ui.screen.render = (rows: string[]) => {
+    painted = rows.map((text) => stripAnsi(text));
+  };
   const typed = async (text: string): Promise<void> => {
     for (const char of text) await key(char, char);
   };
@@ -895,6 +900,14 @@ test("/login asks for the URL and the key on its list, lists the endpoint's mode
     'base url: https://gateway.example/v1/▏  enter continues · esc closes',
   );
   assert.equal(row(2), 'now gateway.example/v1 · saved-model');
+  // The first frame already asks for the URL, before any key
+  assert.ok(
+    painted.some((text) =>
+      text.includes('base url: https://gateway.example/v1/▏'),
+    ),
+    painted.join('\n'),
+  );
+  assert.ok(!painted.some((text) => text.includes('type to search')));
   await key('escape');
   assert.equal(open(), undefined);
   await app.submit('/login');

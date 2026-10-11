@@ -2052,6 +2052,8 @@ export class SessionApp {
         leave,
       );
       askUrl(list, flow.savedUrl);
+      // picker() painted the list before the question was put on it
+      this.repaint();
     };
     // The list for the step the answers have reached; at the end, sign in with them.
     const next = (): void => {

@@ -11,7 +11,7 @@ import type { MediaAttachment } from './types.js';
 import {
   MAX_ATTACHMENTS,
   mediaType,
-  readAttachment,
+  readMedia,
   validateAttachments,
 } from './media.js';
 import { expandUser } from './paths.js';
@@ -82,6 +82,7 @@ export function attachFiles(
  * as attachments. With `images` false (a model that does not read them) images are left out
  * and counted in `leftOut`; their `@path` stays in the text. A file that cannot go (too large,
  * empty, one too many) is left out and named in `problems`, so the message itself still goes.
+ * A PNG scaled down to send is named with both sizes, as `read_file` names one.
  */
 export async function attachPrompt(
   text: string,
@@ -97,6 +98,7 @@ export async function attachPrompt(
   root = realpathSync(root);
   const attachments: MediaAttachment[] = [];
   const problems: string[] = [];
+  const scaled: string[] = [];
   const seen = new Set<string>();
   let leftOut = 0;
   for (const raw of mentions(text)) {
@@ -121,7 +123,9 @@ export async function attachPrompt(
       );
     else
       try {
-        attachments.push(await readAttachment(full, signal));
+        const media = await readMedia(full, signal);
+        attachments.push(media.attachment);
+        if (media.scaled) scaled.push(`${basename(full)} ${media.size}`);
       } catch (error) {
         signal.throwIfAborted();
         problems.push(
@@ -131,13 +135,16 @@ export async function attachPrompt(
   }
   signal.throwIfAborted();
   validateAttachments(attachments);
+  const content = attachFiles(
+    text,
+    root,
+    (path) => allowed(path) && !mediaType(path),
+  );
   return {
     message: {
-      content: attachFiles(
-        text,
-        root,
-        (path) => allowed(path) && !mediaType(path),
-      ),
+      content: scaled.length
+        ? `${content}\n\n[Scaled down to send: ${scaled.join('; ')}]`
+        : content,
       ...(attachments.length ? { attachments } : {}),
     },
     leftOut,
