@@ -1,3 +1,7 @@
+---
+nav_order: 5
+---
+
 # Use Circle in the terminal
 
 This page covers working in a session: sending messages, answering questions, stopping work, and getting output out. For what the screen shows, see [The interface](interface.md).

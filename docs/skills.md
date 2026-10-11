@@ -1,3 +1,7 @@
+---
+nav_order: 12
+---
+
 # Skills
 
 A skill is a folder with a `SKILL.md` file: instructions Circle loads only when a task needs them. Skills keep the system prompt small while giving Circle specialised knowledge, such as how to use a tool or how your team writes a changelog.

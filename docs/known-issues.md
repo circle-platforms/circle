@@ -1,3 +1,7 @@
+---
+nav_order: 23
+---
+
 # Known issues
 
 This page lists what does not work as you might expect in the current version, with a way around each where there is one. It is written from the code and from running it, and it is updated as things are fixed.

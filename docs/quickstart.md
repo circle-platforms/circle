@@ -1,3 +1,7 @@
+---
+nav_order: 2
+---
+
 # Quickstart
 
 Circle runs in your terminal and works on the files in a folder you choose. To use it you need a model endpoint: a base URL and an API key for a service or gateway that speaks the OpenAI or Anthropic API.

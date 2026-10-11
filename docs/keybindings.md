@@ -1,3 +1,7 @@
+---
+nav_order: 19
+---
+
 # Keyboard and mouse
 
 Press `?` in an empty input box, or run `/hotkeys`, to see the shortcuts in the terminal. That list leaves out a few keys, so this page is the complete one.

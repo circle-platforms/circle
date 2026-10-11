@@ -1,3 +1,7 @@
+---
+nav_order: 4
+---
+
 # How Circle works
 
 Circle coordinates model requests, tool execution, approvals, context assembly and session storage. It is written in TypeScript and runs on Node.js; it talks to your endpoint through the OpenAI and Anthropic client libraries, and adds its own terminal interface, safety policy and reliability layers.

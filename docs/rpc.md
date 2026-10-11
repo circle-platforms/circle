@@ -1,3 +1,7 @@
+---
+nav_order: 17
+---
+
 # RPC mode
 
 `circle --mode rpc [folder]` runs Circle as a child process for another program, such as an editor. It reads one JSON command per line on standard input and writes JSON lines to standard output until its input closes. The commands follow pi's RPC mode where Circle has the same thing.

@@ -1,3 +1,8 @@
+---
+parent: Development
+nav_order: 2
+---
+
 # Releasing
 
 A release is a git tag `vX.Y.Z`. Pushing the tag starts the `release` workflow, which builds the runtime-inclusive package on six targets, smoke-tests each one, and publishes one GitHub Release. Users then get it from the installers and from `circle update`, and Circle tells them once a day when there is one they do not have.

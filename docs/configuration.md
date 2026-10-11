@@ -1,3 +1,7 @@
+---
+nav_order: 11
+---
+
 # Configuration
 
 Circle is configured by files: a data folder for your account-level settings and resources, and folders inside each project for things that belong to that project.

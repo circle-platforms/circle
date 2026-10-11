@@ -1,3 +1,7 @@
+---
+nav_order: 21
+---
+
 # Settings
 
 Circle keeps its settings in `settings.json` inside the data folder (`~/.circle` unless you set `CIRCLE_HOME`). Setup creates it. You can edit it by hand.
