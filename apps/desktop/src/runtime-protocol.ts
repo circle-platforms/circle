@@ -116,6 +116,10 @@ export const runtimeCommands = new Set<RuntimeCommandName>([
   'save-command',
 ]);
 
+// A message carries its pictures and PDFs as base64, up to 20 MiB each in the core: room for
+// a few full-size ones together. Every other command is small.
+export const MAX_PROMPT_PAYLOAD = 64_000_000;
+export const MAX_COMMAND_PAYLOAD = 5_000_000;
 export function validateRuntimeCommand(value: unknown): RuntimeCommand {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw Error('invalid runtime command');
@@ -135,8 +139,13 @@ export function validateRuntimeCommand(value: unknown): RuntimeCommand {
     !command.payload ||
     typeof command.payload !== 'object' ||
     Array.isArray(command.payload) ||
-    JSON.stringify(command.payload).length > 5_000_000
+    JSON.stringify(command.payload).length >
+      (command.name === 'prompt' ? MAX_PROMPT_PAYLOAD : MAX_COMMAND_PAYLOAD)
   )
-    throw Error('invalid runtime payload');
+    throw Error(
+      command.name === 'prompt'
+        ? 'the message and its files are over 64 MB; remove some pictures or PDFs'
+        : 'invalid runtime payload',
+    );
   return command;
 }

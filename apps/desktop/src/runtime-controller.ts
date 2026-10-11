@@ -36,7 +36,7 @@ import {
   splitArguments,
 } from '../../../src/commands.js';
 import { loadSkillBody } from '../../../src/skills.js';
-import { attachmentFromBase64 } from '../../../src/media.js';
+import { attachmentFromBase64, MAX_MEDIA_BYTES } from '../../../src/media.js';
 import { readPrompt } from '../../../src/system_prompt.js';
 import { toMarkdown, toHtml } from '../../../src/session_export.js';
 import { normalizeBaseUrl, resolveEndpoint } from '../../../src/probe.js';
@@ -925,7 +925,12 @@ export class RuntimeController {
           }[]
         ).map((item) =>
           attachmentFromBase64(
-            text(item.content, 'attachment').replace(/^data:[^;]+;base64,/, ''),
+            // up to the core's 20 MiB, as base64 behind a data: prefix
+            text(
+              item.content,
+              'attachment',
+              Math.ceil(MAX_MEDIA_BYTES / 3) * 4 + 100,
+            ).replace(/^data:[^;]+;base64,/, ''),
             item.mime,
             text(item.name, 'filename', 500),
           ),

@@ -1,6 +1,8 @@
 import { resolve, relative, isAbsolute } from 'node:path';
 export const APP_ORIGIN = 'circle://workbench';
 export const MAX_FILE_BYTES = 4_000_000;
+// Pictures and PDFs go to the model whole, as the core takes them
+export const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
 export const MAX_EXPORT_BYTES = 8_000_000;
 export const MAX_TEXT_PREVIEW = 256_000;
 export function trustedAppUrl(value: string) {

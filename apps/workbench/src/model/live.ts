@@ -16,6 +16,7 @@ import {
   commandWord,
 } from '../../../../src/tui/slash_commands';
 import { saveExport } from '../host';
+import { MAX_PROMPT_PAYLOAD } from '../../../desktop/src/runtime-protocol';
 
 const LOCAL_SESSION = [
   'draft',
@@ -437,12 +438,19 @@ export class LiveRuntime implements RuntimePort {
     const media = session.attachments.filter((a) =>
       ['image', 'document'].includes(a.kind),
     );
-    await this.native('prompt', {
+    const payload = {
       text: prompt || 'See the attached files.',
       display: raw,
       kind,
       attachments: media,
-    });
+    };
+    // Said here, with the message left in the box, rather than as a refused command
+    if (JSON.stringify(payload).length > MAX_PROMPT_PAYLOAD)
+      return {
+        notice:
+          'the message and its files are over 64 MB; remove some pictures or PDFs',
+      };
+    await this.native('prompt', payload);
     this.change((state) => {
       const item = state.sessions.find((item) => item.id === session.id);
       if (!item) return;

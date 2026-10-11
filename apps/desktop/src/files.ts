@@ -2,7 +2,7 @@ import { readFile, stat, lstat, readdir, realpath } from 'node:fs/promises';
 import { basename, extname, join, relative, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { NativeFile, NativeWorkspace } from './contracts';
-import { MAX_FILE_BYTES, MAX_TEXT_PREVIEW } from './policy.ts';
+import { MAX_FILE_BYTES, MAX_MEDIA_BYTES, MAX_TEXT_PREVIEW } from './policy.ts';
 const imageTypes: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -15,9 +15,15 @@ export async function nativeFile(
   maxTextBytes = MAX_TEXT_PREVIEW,
 ): Promise<NativeFile> {
   const info = await stat(path);
-  if (!info.isFile() || info.size > MAX_FILE_BYTES)
-    throw Error('file exceeds the 4 MB limit or is not a regular file');
   const extension = extname(path).toLowerCase();
+  const media = Boolean(imageTypes[extension]) || extension === '.pdf';
+  if (!info.isFile()) throw Error('not a regular file');
+  if (info.size > (media ? MAX_MEDIA_BYTES : MAX_FILE_BYTES))
+    throw Error(
+      media
+        ? `${basename(path)} is over 20 MB`
+        : `${basename(path)} is over 4 MB`,
+    );
   const bytes = await readFile(path);
   const mime =
     imageTypes[extension] ??
@@ -32,14 +38,14 @@ export async function nativeFile(
       kind: 'image',
       truncated: false,
     };
+  // The core sends a PDF to the model whole, as it does a mentioned one
   if (extension === '.pdf')
     return {
       id: randomUUID(),
       name: basename(path),
       mime,
       size: bytes.length,
-      content:
-        'PDF metadata retained; binary delivery needs the Circle runtime.',
+      content: `data:${mime};base64,${bytes.toString('base64')}`,
       kind: 'document',
       truncated: false,
     };

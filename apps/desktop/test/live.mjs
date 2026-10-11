@@ -489,6 +489,52 @@ try {
     ),
   );
   checks.push('a pasted picture reaches the next model request as an image');
+  // A screenshot-sized picture of several megabytes goes too, scaled down by the core
+  const pastedBytes = await page.evaluate(async () => {
+    const canvas = new OffscreenCanvas(2000, 1500);
+    const context = canvas.getContext('2d');
+    const pixels = context.createImageData(2000, 1500);
+    // xorshift noise, which PNG cannot compress
+    let seed = 2463534242;
+    for (let at = 0; at < pixels.data.length; at++) {
+      seed ^= seed << 13;
+      seed ^= seed >>> 17;
+      seed ^= seed << 5;
+      pixels.data[at] = at % 4 === 3 ? 255 : seed & 255;
+    }
+    context.putImageData(pixels, 0, 0);
+    const blob = await canvas.convertToBlob({ type: 'image/png' });
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([blob], 'screen.png', { type: 'image/png' }));
+    document.querySelector('textarea[aria-label="message"]').dispatchEvent(
+      new ClipboardEvent('paste', {
+        clipboardData: transfer,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    return blob.size;
+  });
+  assert.ok(pastedBytes > 5_000_000, `pasted ${pastedBytes} bytes`);
+  await page.getByText('screen.png', { exact: true }).waitFor();
+  const before = gatewayRequests.length;
+  await send('and this screenshot');
+  await waitFor(
+    async () =>
+      gatewayRequests.length > before &&
+      (await state()).sessions[0].state === 'idle',
+    'large picture sent',
+  );
+  const large = gatewayRequests.at(-1).messages.at(-1);
+  const largeText = large.content.find((part) => part.type === 'text').text;
+  assert.match(
+    largeText,
+    /\[Scaled down to send: screen\.png 2000×1500, sent as \d+×\d+\]$/,
+  );
+  assert(large.content.some((part) => part.type === 'image_url'));
+  checks.push(
+    'a pasted picture of several megabytes is sent, scaled down by the core with both sizes named',
+  );
   // A long answer is followed while it streams; scrolled up, the view stays put
   const fromEnd = () =>
     page.evaluate(() => {
