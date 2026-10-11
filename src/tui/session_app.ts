@@ -12,6 +12,7 @@ import {
   type SecretRequest,
 } from '../secret_prompt.js';
 import { execFile, spawn } from 'node:child_process';
+import { openInBrowser } from '../open_url.js';
 import {
   existsSync,
   mkdirSync,
@@ -665,6 +666,10 @@ export class SessionApp {
       settings: this.settings,
       ...this.cardHooks(),
       onExtensionStatus: () => this.requestRender(),
+      openUrl: async (url) => {
+        await openInBrowser(url);
+        this.flash('Opened in the browser');
+      },
     });
     this.offSignals?.();
     this.offSignals = installExitGuard(this.runtime, (code) => {

@@ -36,8 +36,20 @@ A server reached over the network:
 | `name` | Prefix for the server's tools. Any name works: characters other than letters, digits, `_` and `-` become `_` in tool names, and a tool name over 64 characters is shortened with a short hash. Falls back to `id`, then `mcp0`, `mcp1`, … When two servers have the same name the later one is used, and `/mcp` lists the earlier one with the reason. |
 | `command`, `args`, `env` | Start the server as a program (stdio), in the workspace. |
 | `url`, `transport` | Connect to a server. `transport` is `sse` (the default), `streamable_http` or `websocket`; anything else is treated as `sse`. |
+| `headers` | Headers sent with every request to a `url` server over `sse` or `streamable_http`, such as `{ "Authorization": "Bearer ${env:DOCS_TOKEN}" }`. `${env:NAME}` is replaced, when Circle connects, by that variable of the environment Circle was started in, so a token need not be written in `settings.json`. A variable that is not set, a header name that is not a valid token, or a value with a line break stops that server, and `/mcp` says which header; values are never shown. A `websocket` server cannot be sent headers. |
 
-An entry with neither `command` nor `url` is skipped. There is no way to send authentication headers from settings, and a URL may not carry a user name or password.
+An entry with neither `command` nor `url` is skipped. A URL may not carry a user name or password; use `headers` instead.
+
+```json
+"mcp_servers": [
+  {
+    "name": "docs",
+    "url": "https://example.com/mcp",
+    "transport": "streamable_http",
+    "headers": { "Authorization": "Bearer ${env:DOCS_TOKEN}" }
+  }
+]
+```
 
 A program started for a server gets your environment without the variables whose names look secret (`KEY`, `TOKEN`, `SECRET`, `PASSWORD` and the like; see [The shell environment](security.md#the-shell-environment)), plus the `env` you give it. Put a key the server needs in `env`.
 

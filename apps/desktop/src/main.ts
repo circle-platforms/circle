@@ -268,6 +268,11 @@ app
       runtime = new RuntimeSupervisor(
         join(dataPath, 'runtime-home'),
         __dirname,
+        (url) => {
+          // The same check as links the window opens: http(s) only, never in a fixture run.
+          const allowed = safeExternalUrl(url);
+          if (allowed && !fixtureProfile) void shell.openExternal(allowed);
+        },
       );
       runtime.subscribe((update) =>
         window?.webContents.send('circle:runtime-update', update),

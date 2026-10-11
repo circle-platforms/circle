@@ -74,6 +74,7 @@ const controller = new RuntimeController({
         new ModelCatalog(path, { env: { CIRCLE_NO_MODELS_REFRESH: '1' } })
     : undefined,
   emit: (update) => port.postMessage({ type: 'update', update }),
+  openUrl: (url) => port.postMessage({ type: 'open-url', url }),
 });
 port.on('message', ({ data }) => {
   void controller

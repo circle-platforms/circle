@@ -303,6 +303,27 @@ pre {
   color: var(--muted);
   font-size: var(--ui-tiny);
 }
+.extension-status {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.extension-status .status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.extension-lamp-running i,
+.extension-lamp-wait i {
+  background: var(--accent);
+}
+.extension-lamp-ok i {
+  background: var(--secondary);
+}
+.extension-lamp-error i {
+  background: var(--negative);
+}
 .sidebar-footer span {
   display: flex;
   gap: 6px;

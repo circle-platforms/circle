@@ -970,3 +970,55 @@ test('a message may carry pictures of several megabytes, scaled down by the core
   assert.equal(huge.ok, false);
   assert.match(String(huge.error), /over 64 MB; remove some pictures or PDFs/);
 });
+
+test('an extension status reaches the snapshot and its links go to the main process opener', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-core-desktop-'));
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  await mkdir(join(workspace, '.circle/extensions/live'), { recursive: true });
+  await mkdir(join(workspace, '.git'));
+  saveSettings(trustFolder(defaultSettings(), workspace), home);
+  await writeFile(
+    join(workspace, '.circle/extensions/live/extension.mjs'),
+    `export function register(api){api.registerTool('show','show',{type:'object',properties:{}},async()=>{api.setStatus('lab · 1 running','running');await api.openUrl('https://lab.example.test/live');return 'shown'},{readOnly:true})}`,
+  );
+  const opened: string[] = [];
+  const updates: RuntimeUpdate[] = [];
+  const model = new ScriptedModel([
+    { message: assistant('', [{ id: 'show', name: 'show', args: {} }]) },
+    { message: assistant('done') },
+  ]);
+  const controller = new RuntimeController({
+    home,
+    workspace,
+    userHome: home,
+    model,
+    emit: (update) => updates.push(update),
+    openUrl: (url) => opened.push(url),
+  });
+  t.after(async () => {
+    await controller.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  await controller.dispatch({
+    id: randomUUID(),
+    name: 'prompt',
+    payload: { text: 'show it' },
+    sessionId: controller.snapshot().activeSessionId,
+  });
+  await wait(() => opened.length > 0, 'link opened');
+  assert.deepEqual(opened, ['https://lab.example.test/live']);
+  await wait(
+    () =>
+      updates.some((update) =>
+        update.snapshot.extensions.some(
+          (item) => item.status?.text === 'lab · 1 running',
+        ),
+      ),
+    'status in a snapshot',
+  );
+  const row = updates
+    .at(-1)!
+    .snapshot.extensions.find((item) => item.name === 'live')!;
+  assert.deepEqual(row.status, { text: 'lab · 1 running', lamp: 'running' });
+});

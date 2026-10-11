@@ -25,6 +25,8 @@ export class RuntimeSupervisor {
   constructor(
     readonly home: string,
     readonly directory: string,
+    // A link an extension asked to open; the caller checks it before opening anything.
+    private readonly openUrl: (url: string) => void = () => {},
   ) {}
   get connected() {
     return !!this.child && !!this.latest?.connected;
@@ -54,7 +56,10 @@ export class RuntimeSupervisor {
           type: string;
           update?: RuntimeUpdate;
           reply?: RuntimeReply;
+          url?: unknown;
         }) => {
+          if (message.type === 'open-url' && typeof message.url === 'string')
+            this.openUrl(message.url);
           if (message.type === 'update' && message.update) {
             if (this.latest && message.update.seq <= this.latest.seq) return;
             this.latest = message.update;

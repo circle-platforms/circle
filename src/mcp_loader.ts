@@ -17,6 +17,8 @@ export interface McpConnection {
   args?: string[];
   env?: Record<string, string>;
   url?: string;
+  /** Sent with every request to a server reached by URL; `${env:NAME}` is filled in on connect. */
+  headers?: Record<string, string>;
 }
 export interface McpStatus {
   name: string;
@@ -81,6 +83,13 @@ export function buildMcpConnections(
         ? (raw as McpConnection['transport'])
         : 'sse';
       connection = { name, transport, url: String(item.url) };
+      if (isRecord(item.headers))
+        connection.headers = Object.fromEntries(
+          Object.entries(item.headers).map(([key, value]) => [
+            key,
+            String(value),
+          ]),
+        );
     }
     if (!connection) continue;
     // As in 0.5.0 the later of two servers with one name is used; the earlier is reported.
@@ -97,6 +106,34 @@ export function buildMcpConnections(
     connections.set(name, connection);
   }
   return { connections: [...connections.values()], skipped };
+}
+// Header values as sent: each `${env:NAME}` replaced by that variable of Circle's own
+// environment, so a token need not be written into settings.json. An error names the header
+// and the variable, never a value.
+export function resolveHeaders(
+  headers: Record<string, string> = {},
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const resolved: Record<string, string> = {};
+  for (const [name, template] of Object.entries(headers)) {
+    if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name))
+      throw new Error(`invalid header name '${name}'`);
+    const value = template.replace(
+      /\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g,
+      (_, variable: string) => {
+        const found = env[variable];
+        if (!found)
+          throw new Error(
+            `header ${name} needs the environment variable ${variable}, which is not set`,
+          );
+        return found;
+      },
+    );
+    if (/[\r\n\0]/.test(value))
+      throw new Error(`header ${name} has a line break or NUL in its value`);
+    resolved[name] = value;
+  }
+  return resolved;
 }
 function transportFor(connection: McpConnection, workspace: string): Transport {
   if (connection.transport === 'stdio')
@@ -117,11 +154,16 @@ function transportFor(connection: McpConnection, workspace: string): Transport {
       : ['http:', 'https:'];
   if (!protocols.includes(url.protocol) || url.username || url.password)
     throw new Error('invalid MCP server URL');
+  const headers = resolveHeaders(connection.headers);
+  const requestInit = Object.keys(headers).length ? { headers } : undefined;
   if (connection.transport === 'streamable_http')
-    return new StreamableHTTPClientTransport(url);
-  if (connection.transport === 'websocket')
+    return new StreamableHTTPClientTransport(url, { requestInit });
+  if (connection.transport === 'websocket') {
+    if (requestInit)
+      throw new Error('a websocket server cannot be sent headers');
     return new WebSocketClientTransport(url);
-  return new SSEClientTransport(url);
+  }
+  return new SSEClientTransport(url, { requestInit });
 }
 // The longest a timer can wait; the MCP SDK stops a request after 60 seconds unless told.
 const NO_LIMIT = 2_147_483_647;

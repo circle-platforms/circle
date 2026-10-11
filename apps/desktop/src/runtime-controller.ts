@@ -101,6 +101,8 @@ export interface ControllerOptions {
   model?: ChatModel;
   catalog?: (home: string) => ModelCatalog;
   emit: (update: RuntimeUpdate) => void;
+  /** Opens a link an extension asked for; the main process opens it in the system browser. */
+  openUrl?: (url: string) => void;
 }
 
 /** The IPC adapter delegates execution and persistence to the existing Circle core. */
@@ -185,6 +187,12 @@ export class RuntimeController {
           this.question(runtime, args, signal, origin),
         secret: (request, signal, origin) =>
           this.secret(runtime, request, signal, origin),
+        onExtensionStatus: () => this.publish(),
+        openUrl: async (url) => {
+          if (!this.options.openUrl)
+            throw Error('this application cannot open links');
+          this.options.openUrl(url);
+        },
       });
     // A missing/deleted session is not a reason to discard other sessions.
     let runtime: AgentRuntime;
@@ -575,6 +583,8 @@ export class RuntimeController {
         version: extension.version,
         scope: extension.source,
         enabled: extension.enabled,
+        status:
+          extension.enabled && !extension.error ? extension.status : undefined,
         tools: extension.tools.map((tool) => tool.name),
         commands: extension.commands.map((command) => command.name),
         events: [...extension.handlers.keys()],

@@ -207,6 +207,8 @@ export interface RuntimeExtension {
   version: string;
   scope: 'project' | 'user' | 'bundled';
   enabled: boolean;
+  /** The line it set with api.setStatus, shown above the sidebar footer. */
+  status?: { text: string; lamp: 'running' | 'ok' | 'error' | 'wait' | 'none' };
   tools: string[];
   commands: string[];
   events: string[];

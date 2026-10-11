@@ -152,6 +152,22 @@ export function Sidebar({
           </NavLink>
         ))}
       </nav>
+      {snapshot.extensions.some((item) => item.status) && (
+        <div className="extension-status" aria-label="extension status">
+          {snapshot.extensions.map((item) =>
+            item.status ? (
+              <span
+                key={item.id}
+                className={`status extension-lamp-${item.status.lamp}`}
+                title={item.name}
+              >
+                <i />
+                {item.status.text}
+              </span>
+            ) : null,
+          )}
+        </div>
+      )}
       <footer className="sidebar-footer">
         <span>
           <i />

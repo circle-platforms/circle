@@ -13,6 +13,7 @@ import { isRecord } from './settings.js';
 import { Watch, waitWatch } from './watch.js';
 import { JobRegistry, jobLine, type JobOwner } from './jobs.js';
 import { ExtensionSecrets, SecretMask } from './extension_secrets.js';
+import { checkedUrl } from './open_url.js';
 import {
   SecretPromptError,
   cancelRequest,
@@ -111,6 +112,8 @@ export interface ExtensionServices {
   settings?: Record<string, unknown>;
   /** Called when a status changes, so the interface can redraw. */
   onStatus?: () => void;
+  /** Opens a checked http(s) link where this interface opens links. */
+  openUrl?: (url: string) => Promise<void>;
 }
 export class ExtensionAPI {
   readonly ToolError = ToolError;
@@ -163,6 +166,12 @@ export class ExtensionAPI {
       return;
     this.ext.status = next;
     this.services?.onStatus?.();
+  }
+  /** Open a web address in the browser: the system's, from the terminal or the application. */
+  async openUrl(url: string): Promise<void> {
+    const open = this.services?.openUrl;
+    if (!open) throw new ExtensionError('this interface cannot open links');
+    await open(checkedUrl(url));
   }
   /** Its entry under `extensions` in settings.json, read when it loaded. Changing it saves nothing. */
   get settings(): Record<string, unknown> {
@@ -394,6 +403,8 @@ export interface ExtensionHostOptions {
   bundledRoot?: string | false;
   /** Called when an extension's status changes. */
   onStatus?: () => void;
+  /** Where api.openUrl opens a link; without it openUrl fails. */
+  openUrl?: (url: string) => Promise<void>;
   /** Shows a masked card for api.askSecret; without it askSecret fails. */
   secret?: ExtensionServices['secret'];
   secretTimeoutMs?: number;
@@ -492,6 +503,7 @@ export class ExtensionHost {
               secretTimeoutMs: this.options.secretTimeoutMs,
               settings: this.options.settings?.[discovered.name],
               onStatus: this.options.onStatus,
+              openUrl: this.options.openUrl,
             },
           ),
         );

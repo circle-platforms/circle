@@ -106,6 +106,8 @@ export interface RuntimeOptions {
   bundledExtensions?: string | false;
   /** An extension's status line changed. */
   onExtensionStatus?: () => void;
+  /** Opens a link an extension asked for (api.openUrl); the URL is already checked. */
+  openUrl?: (url: string) => Promise<void>;
   /** How `screenshot` takes the screen: tests give their own runner; false leaves it out.
    * By default it is offered where there is a desktop on this machine. */
   screenshot?: Omit<ScreenshotOptions, 'app' | 'target'> | false;
@@ -662,6 +664,7 @@ export class AgentRuntime {
         : undefined,
       bundledRoot: this.options.bundledExtensions,
       onStatus: () => this.options.onExtensionStatus?.(),
+      openUrl: this.options.openUrl,
       settings: this.options.settings.extensions,
       reservedTools: new Set([...BUILTIN_TOOL_NAMES, ...reservedTools]),
       reservedCommands: new Set([
