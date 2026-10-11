@@ -59,7 +59,6 @@ export function Sidebar({
       <header className="brand">
         <span className="circle-logo" />
         <strong>circle</strong>
-        <span>workbench</span>
       </header>
       <button
         className="workspace-switch"
@@ -88,7 +87,7 @@ export function Sidebar({
           <Plus size={15} />
           new session
         </Button>
-        <IconButton label="search workbench" onClick={onSearch}>
+        <IconButton label="search Circle" onClick={onSearch}>
           <Search size={16} />
         </IconButton>
       </div>

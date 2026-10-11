@@ -20,7 +20,7 @@ await writeFile(
   join(stage, 'package.json'),
   JSON.stringify(
     {
-      name: 'circle-workbench',
+      name: 'circle',
       version: manifest.version,
       main: 'dist/main.cjs',
       description: manifest.description,
@@ -35,11 +35,11 @@ const arch = process.env.CIRCLE_DESKTOP_ARCH ?? process.arch;
 const paths = await packager({
   dir: stage,
   out: outputRoot,
-  name: 'Circle Workbench',
+  name: 'Circle',
   platform,
   arch,
   electronVersion: manifest.devDependencies.electron,
-  appBundleId: 'com.qingshanfeihu.circle.workbench',
+  appBundleId: 'com.qingshanfeihu.circle',
   appCategoryType: 'public.app-category.developer-tools',
   icon:
     platform === 'darwin'
@@ -54,22 +54,17 @@ const paths = await packager({
 for (const path of paths) console.log(path);
 const artifactPaths = paths.map((path) =>
   platform === 'darwin'
-    ? join(path, 'Circle Workbench.app/Contents/Resources/app.asar')
+    ? join(path, 'Circle.app/Contents/Resources/app.asar')
     : join(path, 'resources/app.asar'),
 );
 if (platform === 'darwin' && process.platform === 'darwin') {
-  const image = join(
-    outputRoot,
-    `Circle-Workbench-${manifest.version}-${arch}.dmg`,
-  );
+  const image = join(outputRoot, `Circle-${manifest.version}-${arch}.dmg`);
   const content = join(root, '.stage-dmg');
   await rm(content, { recursive: true, force: true });
   await mkdir(content);
-  await cp(
-    join(paths[0], 'Circle Workbench.app'),
-    join(content, 'Circle Workbench.app'),
-    { recursive: true },
-  );
+  await cp(join(paths[0], 'Circle.app'), join(content, 'Circle.app'), {
+    recursive: true,
+  });
   await symlink('/Applications', join(content, 'Applications'));
   await rm(image, { force: true });
   execFileSync(
@@ -77,7 +72,7 @@ if (platform === 'darwin' && process.platform === 'darwin') {
     [
       'create',
       '-volname',
-      'Circle Workbench',
+      'Circle',
       '-srcfolder',
       content,
       '-ov',

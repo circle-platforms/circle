@@ -224,59 +224,23 @@ try {
   assert.equal(decision.jobs[0].state, 'running');
   checks.push('approval records do not fabricate execution success');
   await reset();
-  await route('/page/knowledge');
-  await page
-    .getByRole('button', { name: /connection lifecycle Product behavior/ })
-    .click();
-  await page
-    .getByRole('button', { name: 'attach revision', exact: true })
-    .click();
-  const before = await state();
-  await page
-    .getByRole('combobox', { name: 'source revision' })
-    .selectOption('3');
-  assert.deepEqual(
-    (await state()).sessions[0].attachments,
-    before.sessions[0].attachments,
-  );
-  await page.keyboard.press('Escape');
-  checks.push('viewing older knowledge keeps pinned context');
-  await route('/page/methods');
-  await page
-    .getByRole('checkbox', { name: 'load network investigation', exact: true })
-    .check();
-  const platformBefore = await page.evaluate(() =>
-    localStorage.getItem('circle.workbench.platform-preview.v1'),
+  assert.equal(
+    await page.getByRole('link', { name: 'knowledge', exact: true }).count(),
+    0,
   );
   await route('/page/extensions');
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
-  for (const id of ['knowledge', 'work', 'execution', 'methods'])
-    await page
-      .getByRole('checkbox', {
-        name: 'enable ' + id + ' interface',
-        exact: true,
-      })
-      .uncheck();
-  assert.equal(
-    await page.getByRole('link', { name: 'knowledge', exact: true }).count(),
-    0,
-  );
+  assert.equal(await page.getByRole('checkbox').count(), 3);
   assert.equal(
     await page.evaluate(() =>
       localStorage.getItem('circle.workbench.platform-preview.v1'),
     ),
-    platformBefore,
+    null,
   );
-  await route('/session/session1');
-  assert.equal(
-    await page.getByRole('button', { name: 'knowledge', exact: true }).count(),
-    0,
-  );
-  assert.ok((await state()).sessions[0].attachments.length > 0);
   checks.push(
-    'platform plugins can be removed from the UI while retaining data',
+    'the Circle interface excludes the four deferred platform objects',
   );
   await reset();
   await route('/page/settings');

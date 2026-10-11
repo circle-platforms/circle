@@ -16,6 +16,7 @@ import {
 } from 'electron';
 import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { WorkspaceGrants, nativeFile } from './files';
@@ -29,10 +30,12 @@ import {
   validSaveName,
 } from './policy';
 import type { DesktopAction, DesktopInfo } from './contracts';
-app.setName('Circle Workbench');
+app.setName('Circle');
 const dataPath =
   process.env.CIRCLE_WORKBENCH_DATA_DIR ??
-  join(app.getPath('appData'), 'Circle Workbench');
+  (existsSync(join(app.getPath('appData'), 'Circle Workbench'))
+    ? join(app.getPath('appData'), 'Circle Workbench')
+    : join(app.getPath('appData'), 'Circle'));
 app.setPath('userData', dataPath);
 app.enableSandbox();
 protocol.registerSchemesAsPrivileged([

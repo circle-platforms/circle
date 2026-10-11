@@ -1,16 +1,14 @@
-# Circle workbench renderer
+# Circle renderer
 
 The shared React/TypeScript interface for the Circle desktop application. Start the app through [the desktop package](../desktop/README.md).
 
 The renderer covers conversations, tool inputs and outputs, thinking, session trees, branches, on-screen undo/redo, plans, approvals, jobs and subagents, model selection, skills, custom commands, MCP, runtime extensions and settings. It reads Circle's current slash-command definitions and palette directly, so changes can be checked against the core source.
 
-B/C/D/E are installed as first-party component plugins: knowledge, long-running work, execution resources and methods. They share the plugin registration and lifecycle API, while keeping their records in a separate service. Enabling a UI plugin grants no business permission; disabling it deletes no data and stops no execution.
-
 ## Composition
 
 `CircleWorkbench` receives a session `RuntimePort`, bundled `WorkbenchPlugin` modules and a `ServiceRegistry`. Plugins register pages, inspector panels, context widgets and composer actions. A native host is supplied through the isolated preload bridge.
 
-`LiveRuntime` connects native commands and authoritative snapshots to the Circle core. Local storage holds presentation preferences and drafts; it cannot replace core-owned history or execution state. `PreviewRuntime` remains browser/layout tooling. `PlatformPreviewService` still supplies the four B/C/D/E component previews, independently of the live Circle runtime.
+`LiveRuntime` connects native commands and authoritative snapshots to the Circle core. Local storage holds presentation preferences and drafts; it cannot replace core-owned history or execution state. `PreviewRuntime` remains browser/layout tooling. The application registers Circle components only. Deferred platform previews are not initialized or exposed.
 
 ## Development
 

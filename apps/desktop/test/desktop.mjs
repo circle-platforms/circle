@@ -333,74 +333,27 @@ try {
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
-  assert.equal(await page.getByRole('checkbox').count(), 7);
+  assert.equal(await page.getByRole('checkbox').count(), 3);
+  for (const id of ['knowledge', 'work', 'execution', 'methods'])
+    assert.equal(
+      await page.getByRole('link', { name: id, exact: true }).count(),
+      0,
+    );
   await page
-    .getByRole('checkbox', { name: 'enable knowledge interface', exact: true })
+    .getByRole('checkbox', { name: 'enable files interface', exact: true })
     .uncheck();
-  await route('/page/knowledge');
   await page
-    .getByRole('heading', { name: 'plugin disabled', exact: true })
-    .waitFor();
-  await route('/page/extensions');
-  await page
-    .getByRole('button', { name: 'interface components', exact: true })
-    .click();
-  await page
-    .getByRole('checkbox', { name: 'enable knowledge interface', exact: true })
+    .getByRole('checkbox', { name: 'enable files interface', exact: true })
     .check();
-  await route('/page/knowledge');
-  await page.getByRole('heading', { name: 'knowledge', exact: true }).waitFor();
-  checks.push('all four platform plugins installed and independently toggled');
-  await route('/page/work');
-  await page
-    .getByRole('button', { name: /Investigate reconnect behavior/ })
-    .click();
-  await page
-    .getByRole('button', { name: 'request pause', exact: true })
-    .click();
-  const platform = await page.evaluate(() =>
-    JSON.parse(localStorage.getItem('circle.workbench.platform-preview.v1')),
-  );
-  assert.equal(platform.work[0].request, 'pause');
-  assert.equal(platform.work[0].status, 'running');
   assert.equal(
-    platform.resources.find((item) => item.id === 'resource3').status,
-    'running',
+    await page.evaluate(() =>
+      localStorage.getItem('circle.workbench.platform-preview.v1'),
+    ),
+    null,
   );
-  await page.keyboard.press('Escape');
-  checks.push('platform pause intent does not fabricate remote stop');
-  await route('/page/knowledge');
-  await page
-    .getByRole('button', { name: /connection lifecycle Product behavior/ })
-    .click();
-  await page
-    .getByRole('combobox', { name: 'source revision' })
-    .selectOption('3');
-  await page
-    .getByRole('button', { name: 'attach revision', exact: true })
-    .click();
-  const snapshot = await page.evaluate(() =>
-    JSON.parse(localStorage.getItem('circle.workbench.preview.v1')),
+  checks.push(
+    'Circle-only components are shown without starting platform previews',
   );
-  assert.ok(
-    snapshot.sessions
-      .find((item) => item.id === snapshot.activeSessionId)
-      .attachments.some((item) => item.id === 'knowledge:source1@3'),
-  );
-  await page.keyboard.press('Escape');
-  checks.push('knowledge revision attaches to the selected Circle session');
-  await route('/page/methods');
-  await page
-    .getByRole('checkbox', { name: 'load network investigation', exact: true })
-    .check();
-  const methods = await page.evaluate(() =>
-    JSON.parse(localStorage.getItem('circle.workbench.platform-preview.v1')),
-  );
-  assert.equal(
-    methods.methods.find((item) => item.id === 'method3').status,
-    'candidate',
-  );
-  checks.push('method loading leaves publication state unchanged');
   assert.deepEqual(errors, []);
   if (originalClipboard !== undefined) {
     await app.evaluate(
@@ -409,7 +362,10 @@ try {
     );
     originalClipboard = undefined;
   }
-  await page.screenshot({ path: join(output, 'desktop-methods.png') });
+  await page.screenshot({ path: join(output, 'desktop-circle.png') });
+  const beforeRestart = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('circle.workbench.preview.v1')),
+  );
   await app.close();
   app = undefined;
   app = await electron.launch({
@@ -427,13 +383,16 @@ try {
   const reopened = await page.evaluate(() =>
     JSON.parse(localStorage.getItem('circle.workbench.preview.v1')),
   );
-  assert.ok(
-    reopened.sessions
-      .find((item) => item.id === reopened.activeSessionId)
-      .attachments.some((item) => item.id === 'knowledge:source1@3'),
+  assert.equal(reopened.activeSessionId, beforeRestart.activeSessionId);
+  assert.deepEqual(
+    reopened.sessions.find((item) => item.id === reopened.activeSessionId)
+      .messages,
+    beforeRestart.sessions.find(
+      (item) => item.id === beforeRestart.activeSessionId,
+    ).messages,
   );
   checks.push(
-    'application restart preserves the conversation and pinned input',
+    'application restart preserves the Circle conversation and selected input',
   );
   await writeFile(
     join(output, 'receipt.json'),

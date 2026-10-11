@@ -1001,7 +1001,7 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
       title="settings"
       description={
         runtime.mode === 'live'
-          ? 'Circle preferences and workbench display settings.'
+          ? 'Circle preferences and display settings.'
           : 'Preferences here apply to this frontend preview.'
       }
     >

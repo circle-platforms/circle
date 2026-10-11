@@ -56,9 +56,9 @@ jobs:
       - name: Check the packaged application
         shell: bash
         run: |
-          app_path="$(find apps/desktop/out -maxdepth 2 -name 'Circle Workbench.app' -print -quit)"
+          app_path="$(find apps/desktop/out -maxdepth 2 -name 'Circle.app' -print -quit)"
           export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/$app_path"
-          export CIRCLE_DESKTOP_EXECUTABLE="$CIRCLE_DESKTOP_APP_PATH/Contents/MacOS/Circle Workbench"
+          export CIRCLE_DESKTOP_EXECUTABLE="$CIRCLE_DESKTOP_APP_PATH/Contents/MacOS/Circle"
           npm --prefix apps/desktop run test:desktop
           cp apps/desktop/artifacts/desktop/receipt.json apps/desktop/artifacts/desktop/packaged-receipt.json
           npm --prefix apps/desktop run test:live

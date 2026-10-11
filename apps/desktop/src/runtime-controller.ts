@@ -564,15 +564,7 @@ export class RuntimeController {
             : 'Approval is enforced by the Circle core.',
         schema: tool.parameters,
       })),
-      uiPlugins: [
-        'files',
-        'activity',
-        'browser',
-        'knowledge',
-        'work',
-        'execution',
-        'methods',
-      ],
+      uiPlugins: ['files', 'activity', 'browser'],
       settings: {
         theme: settings.theme,
         hideThinking: settings.hide_thinking,

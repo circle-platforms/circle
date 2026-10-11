@@ -5,10 +5,8 @@ import { CircleWorkbench } from './workbench';
 import { PreviewRuntime } from './model/state';
 import { LiveRuntime } from './model/live';
 import type { RuntimePort } from './model/types';
-import { PlatformPreviewService } from './plugins/platform/store';
-import { defaultPlugins } from './plugins/builtins';
+import { circlePlugins } from './plugins/builtins';
 import { applyTheme } from './theme';
-const services = { platform: new PlatformPreviewService(localStorage) };
 async function start() {
   const host = desktopHost();
   let runtime: RuntimePort;
@@ -31,11 +29,7 @@ async function start() {
   applyTheme(runtime.getSnapshot().settings.theme);
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
-      <CircleWorkbench
-        runtime={runtime}
-        plugins={defaultPlugins}
-        services={services}
-      />
+      <CircleWorkbench runtime={runtime} plugins={circlePlugins} />
     </React.StrictMode>,
   );
 }

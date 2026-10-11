@@ -26,16 +26,25 @@ export function PluginProvider({
 }) {
   const { snapshot, runtime, perform } = useRuntime();
   const registry = useMemo(() => new PluginRegistry(plugins), [plugins]);
+  const enabled = snapshot.uiPlugins.filter((id) =>
+    registry.plugins.some((plugin) => plugin.id === id),
+  );
   return (
     <Context.Provider
       value={{
         registry,
         services,
-        enabled: snapshot.uiPlugins,
+        enabled,
         toggle: (id, enabled) =>
           perform(() =>
             runtime.change((state) => {
-              state.uiPlugins = registry.change(state.uiPlugins, id, enabled);
+              state.uiPlugins = registry.change(
+                state.uiPlugins.filter((id) =>
+                  registry.plugins.some((plugin) => plugin.id === id),
+                ),
+                id,
+                enabled,
+              );
             }),
           ),
       }}

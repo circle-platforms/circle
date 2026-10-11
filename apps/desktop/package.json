@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Circle native workbench with its bundled agent runtime",
+  "description": "Circle desktop application with its bundled agent runtime",
   "main": "dist/main.cjs",
   "scripts": {
     "build": "npm run typecheck && npm --prefix ../workbench run build && node scripts/build.mjs",

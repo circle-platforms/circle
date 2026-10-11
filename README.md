@@ -94,9 +94,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md) for coding agents
 
 Circle is released under the [MIT License](LICENSE). The model catalogs in `src/data/` carry metadata from models.dev under its own MIT license; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-## Desktop workbench
+## Circle desktop application
 
-Circle also has a native desktop frontend under [apps/desktop](apps/desktop/README.md). It combines the conversation interface, session history, files and diffs, approvals, jobs, models and extensions in one application. Knowledge, long-running work, execution resources and methods are available as independently enabled component plugins.
+Circle also has a native desktop frontend under [apps/desktop](apps/desktop/README.md). It combines the conversation interface, session history, files and diffs, approvals, jobs, models and extensions in one application. The current application focuses on Circle.
 
 ```bash
 npm ci
@@ -105,4 +105,4 @@ npm --prefix apps/desktop ci
 npm --prefix apps/desktop run dev
 ```
 
-The application bundles Circle's interactive runtime in its own native process. Conversations, tools, approvals, questions, native sessions and shell commands use the existing Circle core. Connect your API URL, key and model in the application. Its data folder is separate from `~/.circle`. The four platform components still use preview services. See [native runtime and verification](docs/workbench/native-runtime.md) and [desktop architecture](docs/workbench/architecture.md).
+The application bundles Circle's interactive runtime in its own native process. Conversations, tools, approvals, questions, native sessions and shell commands use the existing Circle core. Connect your API URL, key and model in the application. Its data folder is separate from `~/.circle`. Deferred platform components are not loaded in the application. See [native runtime and verification](docs/workbench/native-runtime.md) and [desktop architecture](docs/workbench/architecture.md).
