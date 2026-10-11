@@ -43,8 +43,11 @@ function png(width = 4, height = 3): Buffer {
 const answer = (content: string): Partial<ModelResponse> => ({
   message: { id: crypto.randomUUID(), role: 'assistant', content },
 });
-// A path as Terminal.app and iTerm2 paste a file dropped on them
+// A path as a terminal pastes a file dropped on it: with `\` before spaces on macOS and
+// Linux (Terminal.app, iTerm2), in quotes on Windows
 const escaped = (path: string) => path.replace(/([ '"\\])/g, '\\$1');
+const dropped = (path: string) =>
+  process.platform === 'win32' ? `"${path}"` : escaped(path);
 async function until(predicate: () => boolean, timeout = 5000): Promise<void> {
   const deadline = Date.now() + timeout;
   while (!predicate()) {
@@ -139,19 +142,27 @@ test('a paste of dropped image files is read as those files, whatever quoting th
   writeFileSync(quoted, 'x');
   const notes = join(root, 'notes.txt');
   writeFileSync(notes, 'x');
-  assert.deepEqual(pastedFiles(escaped(shot)), [shot]);
-  assert.deepEqual(pastedFiles(`'${shot}' ${escaped(quoted)}`), [shot, quoted]);
+  assert.deepEqual(pastedFiles(dropped(shot)), [shot]);
+  // read as macOS and Linux paste them, on any machine
+  assert.deepEqual(pastedFiles(escaped(shot), 'darwin'), [shot]);
+  assert.deepEqual(pastedFiles(`'${shot}' ${escaped(quoted)}`, 'darwin'), [
+    shot,
+    quoted,
+  ]);
   assert.deepEqual(pastedFiles(`"${shot}"\n`), [shot]);
   assert.deepEqual(pastedFiles(pathToFileURL(shot).href), [shot]);
   assert.equal(pastedFiles(notes), undefined);
-  assert.equal(pastedFiles(`${escaped(shot)} and more`), undefined);
+  assert.equal(pastedFiles(`${dropped(shot)} and more`), undefined);
   assert.equal(pastedFiles('shot.png'), undefined);
   assert.equal(pastedFiles(''), undefined);
-  // On Windows a backslash is part of the path
-  const slashed = join(root, 'a\\b.png');
-  writeFileSync(slashed, 'x');
-  assert.deepEqual(pastedFiles(`"${slashed}"`, 'win32'), [slashed]);
-  assert.equal(pastedFiles(slashed, 'darwin'), undefined);
+  // A backslash is part of a path on Windows (`dropped` above), and escapes the next
+  // character elsewhere; only macOS and Linux can name a file with one
+  if (process.platform !== 'win32') {
+    const slashed = join(root, 'a\\b.png');
+    writeFileSync(slashed, 'x');
+    assert.deepEqual(pastedFiles(`"${slashed}"`, 'win32'), [slashed]);
+    assert.equal(pastedFiles(slashed, 'darwin'), undefined);
+  }
 });
 
 test('a dropped image goes in the box as [Image #N]; the model gets the file with its path, the conversation shows the box, the history keeps the path', async (t) => {
@@ -163,7 +174,7 @@ test('a dropped image goes in the box as [Image #N]; the model gets the file wit
   const image = png();
   writeFileSync(shot, image);
   s.type('see');
-  s.ui.handle({ type: 'paste', text: escaped(shot) });
+  s.ui.handle({ type: 'paste', text: dropped(shot) });
   assert.equal(s.app.state.draft, 'see [Image #1] ');
   s.type('what is wrong');
   s.key('enter');
