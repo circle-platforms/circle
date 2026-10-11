@@ -519,6 +519,37 @@ async function mcp(host: CommandHost, args: string): Promise<void> {
 
 async function extensions(host: CommandHost, args: string): Promise<void> {
   const runtime = host.runtime;
+  const [verb = '', name = ''] = args.trim().split(/\s+/);
+  if (['enable', 'disable'].includes(verb.toLowerCase())) {
+    const enable = verb.toLowerCase() === 'enable';
+    if (!name) {
+      host.fail(`Usage: /extensions ${enable ? 'enable' : 'disable'} <name>`);
+      return;
+    }
+    // The list is complete once integrations have loaded at start.
+    await runtime.initialize().catch(() => {});
+    if (!runtime.extensions.extensions.some((ext) => ext.name === name)) {
+      host.fail(`No extension named ${name}`);
+      return;
+    }
+    // Saved, so it stays on (or off) in the next session too.
+    saveSettingsChange(host.home, (saved) => {
+      saved.extensions[name] = { ...saved.extensions[name], enabled: enable };
+    });
+    host.settings.extensions[name] = {
+      ...host.settings.extensions[name],
+      enabled: enable,
+    };
+    try {
+      await runtime.reloadIntegrations();
+    } catch (error) {
+      host.fail(`Extension reload failed: ${reason(error)}`);
+      return;
+    }
+    host.notice(`${name} ${enable ? 'enabled' : 'disabled'}`);
+    host.notice(runtime.extensions.describe());
+    return;
+  }
   if (['reload', 'refresh'].includes(args.trim().toLowerCase())) {
     try {
       await runtime.reloadIntegrations();

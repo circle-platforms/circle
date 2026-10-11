@@ -3,7 +3,7 @@
 // each time a row is drawn (ported from session_app.py, footer.py and agent_strip.py).
 import { homedir } from 'node:os';
 import { basename, sep } from 'node:path';
-import { palette } from '../ink/theme.js';
+import { palette, statusLight, type LampState } from '../ink/theme.js';
 import { stringWidth, truncate } from '../ink/string_width.js';
 import { EFFORT_LEVELS } from '../model.js';
 import type { Usage } from '../types.js';
@@ -171,11 +171,13 @@ function meterParts(meters: Meters): {
   };
 }
 // The footer: the meters, and a flash at the right for a second or two. While a flash shows,
-// the meters' tail gives way and they are not coloured.
+// the meters' tail gives way and they are not coloured. Without a flash, extensions' status
+// lines sit at the right; when they do not all fit beside the meters, none is shown.
 export function footerRow(
   meters: Meters,
   flash: string,
   width: number,
+  status: { text: string; lamp: LampState }[] = [],
 ): string {
   const p = palette();
   const { head, context, percent } = meterParts(meters);
@@ -195,16 +197,41 @@ export function footerRow(
   }
   if (stringWidth(plain) + 1 > width)
     return p.faint + ' ' + truncate(plain, Math.max(1, width - 1)) + p.reset;
-  if (!context || percent < 70) return p.faint + ' ' + plain + p.reset;
+  const left =
+    !context || percent < 70
+      ? p.faint + ' ' + plain + p.reset
+      : p.faint +
+        ' ' +
+        head +
+        ' · ' +
+        p.reset +
+        (percent >= 90 ? p.red : p.yellow) +
+        context +
+        p.reset;
+  if (!status.length) return left;
+  const lit = (lamp: LampState): boolean => lamp !== 'none';
+  const rightWidth =
+    status.reduce(
+      (sum, item) => sum + (lit(item.lamp) ? 2 : 0) + stringWidth(item.text),
+      0,
+    ) +
+    2 * (status.length - 1);
+  // The right edge stops at the second-to-last column, as the flash does.
+  const gap = width - 2 - stringWidth(plain) - rightWidth;
+  if (gap < 3) return left;
   return (
-    p.faint +
-    ' ' +
-    head +
-    ' · ' +
-    p.reset +
-    (percent >= 90 ? p.red : p.yellow) +
-    context +
-    p.reset
+    left +
+    ' '.repeat(gap) +
+    status
+      .map(
+        (item) =>
+          (lit(item.lamp) ? statusLight(item.lamp) + ' ' : '') +
+          p.faint +
+          item.text +
+          p.reset,
+      )
+      .join('  ') +
+    ' '
   );
 }
 

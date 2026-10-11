@@ -205,7 +205,7 @@ export interface RuntimeExtension {
   id: string;
   name: string;
   version: string;
-  scope: 'project' | 'user';
+  scope: 'project' | 'user' | 'bundled';
   enabled: boolean;
   tools: string[];
   commands: string[];

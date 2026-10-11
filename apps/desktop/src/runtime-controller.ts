@@ -572,7 +572,7 @@ export class RuntimeController {
       extensions: runtime.extensions.extensions.map((extension) => ({
         id: extension.name,
         name: extension.name,
-        version: '',
+        version: extension.version,
         scope: extension.source,
         enabled: extension.enabled,
         tools: extension.tools.map((tool) => tool.name),
@@ -803,7 +803,13 @@ export class RuntimeController {
   ): Promise<void> {
     await this.wait(
       runtime,
-      { kind: 'secret', title: request.question, target: request.target_file },
+      {
+        kind: 'secret',
+        title: request.question,
+        target: request.extension
+          ? `extension ${request.extension}`
+          : request.target_file,
+      },
       signal,
       origin,
       request,

@@ -102,6 +102,10 @@ export interface RuntimeOptions {
   model?: ChatModel;
   catalog?: ModelCatalog;
   extraTools?: Tool[];
+  /** Where the extensions that ship with Circle are; false for none (tests). */
+  bundledExtensions?: string | false;
+  /** An extension's status line changed. */
+  onExtensionStatus?: () => void;
   /** How `screenshot` takes the screen: tests give their own runner; false leaves it out.
    * By default it is offered where there is a desktop on this machine. */
   screenshot?: Omit<ScreenshotOptions, 'app' | 'target'> | false;
@@ -653,6 +657,11 @@ export class AgentRuntime {
       home: this.options.home,
       workspace: this.options.workspace,
       trusted: isFolderTrusted(this.options.settings, this.options.workspace),
+      secret: this.options.secret
+        ? (request, signal) => this.options.secret!(request, signal)
+        : undefined,
+      bundledRoot: this.options.bundledExtensions,
+      onStatus: () => this.options.onExtensionStatus?.(),
       settings: this.options.settings.extensions,
       reservedTools: new Set([...BUILTIN_TOOL_NAMES, ...reservedTools]),
       reservedCommands: new Set([

@@ -24,9 +24,20 @@ export interface SecretRequest {
   id: string;
   created_at: number;
   question: string;
+  /** Empty when an extension asked. */
   key: string;
+  /** Empty when an extension asked. */
   target_file: string;
   mask: boolean;
+  /** The extension that asked: the value goes back to it and is written to no file. */
+  extension?: string;
+}
+const EXTENSION_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+// Where an entered value goes, as a card says it: `KEY → path` or `→ extension name`.
+export function secretDestination(request: SecretRequest): string {
+  return request.extension
+    ? `→ extension ${request.extension}`
+    : `${request.key} → ${request.target_file}`;
 }
 export class SecretPromptError extends Error {}
 export class SecretPromptTimeout extends SecretPromptError {}
@@ -87,8 +98,7 @@ export function createRequest(
     throw new SecretPromptError('the question is empty');
   if (!input.target_file.trim())
     throw new SecretPromptError('the request names no target_file to write to');
-  mkdirSync(requestsDir(home), { recursive: true, mode: 0o700 });
-  const request: SecretRequest = {
+  return writeRequest(home, {
     schema: SCHEMA,
     id: randomUUID().replaceAll('-', ''),
     created_at: Date.now() / 1000,
@@ -96,7 +106,30 @@ export function createRequest(
     key,
     target_file: input.target_file,
     mask: input.mask !== false,
-  };
+  });
+}
+// A request from an extension: the value is handed back to it, not written to a file.
+export function createExtensionRequest(
+  home: string,
+  input: { question: string; extension: string; mask?: boolean },
+): SecretRequest {
+  if (!EXTENSION_NAME.test(input.extension))
+    throw new SecretPromptError('invalid extension name');
+  if (!input.question.trim())
+    throw new SecretPromptError('the question is empty');
+  return writeRequest(home, {
+    schema: SCHEMA,
+    id: randomUUID().replaceAll('-', ''),
+    created_at: Date.now() / 1000,
+    question: input.question.trim().slice(0, 200),
+    key: '',
+    target_file: '',
+    mask: input.mask !== false,
+    extension: input.extension,
+  });
+}
+function writeRequest(home: string, request: SecretRequest): SecretRequest {
+  mkdirSync(requestsDir(home), { recursive: true, mode: 0o700 });
   const path = requestPath(home, request.id);
   writeFileSync(path, JSON.stringify(request), { mode: 0o600, flag: 'wx' });
   privateMode(path);
@@ -120,8 +153,13 @@ export function listPending(home: string): SecretRequest[] {
         name === value.id + '.request.json' &&
         typeof value.question === 'string' &&
         typeof value.key === 'string' &&
-        /^[A-Z][A-Z0-9_]*$/.test(value.key) &&
-        typeof value.target_file === 'string'
+        typeof value.target_file === 'string' &&
+        (value.extension === undefined
+          ? /^[A-Z][A-Z0-9_]*$/.test(value.key)
+          : typeof value.extension === 'string' &&
+            EXTENSION_NAME.test(value.extension) &&
+            value.key === '' &&
+            value.target_file === '')
       )
         requests.push(value as unknown as SecretRequest);
     } catch {

@@ -1,4 +1,5 @@
 import { palette, sgrJoin, statusLight } from '../ink/theme.js';
+import type { LampState } from '../ink/theme.js';
 import { wrap, pad, truncate, truncateStyled } from '../ink/string_width.js';
 import type { Message, Usage } from '../types.js';
 import type { Todo } from '../tools.js';
@@ -85,6 +86,8 @@ export interface ScreenState {
   thinking: string;
   usage: Usage;
   flash: string;
+  // Extensions' status lines, at the right of the footer.
+  extensionStatus?: { text: string; lamp: LampState }[];
   started: number;
   scroll: number;
   /** Set by renderScreen: the transcript's screen rows and its first row shown. */
@@ -634,6 +637,7 @@ export function renderScreen(
         },
         state.flash,
         width,
+        state.extensionStatus,
       ),
     );
   bottom.push(...strip);

@@ -8,6 +8,7 @@ import {
   submitAnswer,
   cancelRequest,
   listPending,
+  secretDestination,
   type SecretRequest,
 } from '../secret_prompt.js';
 import { execFile, spawn } from 'node:child_process';
@@ -518,6 +519,7 @@ export class SessionApp {
     this.state.connected = Boolean(this.runtime) && !this.connecting;
     this.state.branch = this.welcomeState.branch();
     this.state.thinkingDepth = this.runtime?.thinkingLevel;
+    this.state.extensionStatus = this.runtime?.extensions.statuses() ?? [];
     this.turns.fill(this.state);
     this.state.welcome = welcomeRows(
       process.stdout.columns || 80,
@@ -662,6 +664,7 @@ export class SessionApp {
       ...options,
       settings: this.settings,
       ...this.cardHooks(),
+      onExtensionStatus: () => this.requestRender(),
     });
     this.offSignals?.();
     this.offSignals = installExitGuard(this.runtime, (code) => {
@@ -914,7 +917,7 @@ export class SessionApp {
     try {
       const choice = await this.askChoice(
         'secret',
-        `${request.question}\n${request.key} → ${request.target_file}\nctrl+s enters a masked value`,
+        `${request.question}\n${secretDestination(request)}\nctrl+s enters a masked value`,
         ['enter secret', 'cancel'],
         signal,
       );
@@ -924,7 +927,7 @@ export class SessionApp {
       }
       const value = await this.showCard(
         new SecretCard(
-          `${request.question}\n${request.key} → ${request.target_file}`,
+          `${request.question}\n${secretDestination(request)}`,
           request.mask !== false,
         ),
         signal,

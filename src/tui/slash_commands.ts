@@ -22,7 +22,8 @@ export const BUILTIN_SLASH: SlashCommand[] = [
   { name: 'mcp', description: 'List / reload MCP servers and tools' },
   {
     name: 'extensions',
-    description: 'List extensions: /extensions [reload]',
+    description:
+      'List extensions: /extensions [reload | enable <name> | disable <name>]',
     aliases: ['ext'],
   },
   {

@@ -1,6 +1,6 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import type {
   ChatModel,
@@ -12,6 +12,14 @@ import type {
 import { isRecord } from './settings.js';
 import { Watch, waitWatch } from './watch.js';
 import { JobRegistry, jobLine, type JobOwner } from './jobs.js';
+import { ExtensionSecrets, SecretMask } from './extension_secrets.js';
+import {
+  SecretPromptError,
+  cancelRequest,
+  createExtensionRequest,
+  pollAnswer,
+  type SecretRequest,
+} from './secret_prompt.js';
 
 export class ToolError extends Error {}
 export class ExtensionError extends Error {}
@@ -55,10 +63,27 @@ export type ExtensionMiddleware =
   | { slot: 'after_model'; handler: AfterModelMiddleware };
 type ExtensionEvent =
   'session_start' | 'turn_start' | 'turn_end' | 'tool_result';
+/** The lamps of the interface: running (yellow), ok (green), error (red), wait (cyan), none. */
+export type ExtensionLamp = 'running' | 'ok' | 'error' | 'wait' | 'none';
+export interface ExtensionStatus {
+  extension: string;
+  text: string;
+  lamp: ExtensionLamp;
+}
+/** bundled: shipped with Circle and off until enabled; user and project: on until disabled. */
+export type ExtensionSource = 'bundled' | 'user' | 'project';
+// The folder of extensions that ship with Circle: src/extensions in a checkout, dist/extensions
+// in a release, beside the bundled runtime in the desktop application.
+export function bundledExtensionsRoot(): string {
+  return fileURLToPath(new URL('./extensions/', import.meta.url));
+}
 export interface Extension {
   name: string;
-  source: 'user' | 'project';
+  source: ExtensionSource;
   path: string;
+  /** From an optional extension.json beside the entry file. */
+  version: string;
+  description: string;
   enabled: boolean;
   error: string;
   warnings: string[];
@@ -71,19 +96,129 @@ export interface Extension {
     ExtensionEvent,
     ((event: Record<string, unknown>) => void | Promise<void>)[]
   >;
+  /** Values from api.secrets and api.askSecret, masked in what the extension shows or returns. */
+  mask: SecretMask;
+  /** What it last set with api.setStatus. */
+  status?: { text: string; lamp: ExtensionLamp };
+}
+// What the interface lends an extension: the Circle home, and a way to ask the user for a
+// value without it passing through the conversation.
+export interface ExtensionServices {
+  home: string;
+  secret?: (request: SecretRequest, signal: AbortSignal) => Promise<void>;
+  secretTimeoutMs?: number;
+  /** The extension's own entry under `extensions` in settings.json. */
+  settings?: Record<string, unknown>;
+  /** Called when a status changes, so the interface can redraw. */
+  onStatus?: () => void;
 }
 export class ExtensionAPI {
   readonly ToolError = ToolError;
   readonly Watch = Watch;
+  /** Values this extension keeps between runs, in a private file of its own. */
+  readonly secrets: ExtensionSecrets;
   constructor(
     private ext: Extension,
     private reservedTools: Set<string>,
     private reservedCommands: Set<string>,
     private jobs?: JobRegistry,
     private owner?: (context: ToolContext) => JobOwner,
-  ) {}
+    private services?: ExtensionServices,
+  ) {
+    this.secrets = new ExtensionSecrets(
+      services?.home ?? '',
+      ext.name,
+      (value) => ext.mask.remember(value),
+    );
+  }
   get name(): string {
     return this.ext.name;
+  }
+  /** A folder of the extension's own for what it keeps that is not secret; made on first use. */
+  get dataDir(): string {
+    if (!this.services?.home)
+      throw new ExtensionError('this interface has no data folder');
+    const path = join(this.services.home, 'extension_data', this.ext.name);
+    mkdirSync(path, { recursive: true, mode: 0o700 });
+    return path;
+  }
+  /**
+   * One short line that stays at the right of the footer while it holds, with a lamp: what
+   * the extension is connected to, or what it is doing. null (or '') removes it.
+   */
+  setStatus(text: string | null, lamp: ExtensionLamp = 'none'): void {
+    if (!['running', 'ok', 'error', 'wait', 'none'].includes(lamp))
+      throw new ExtensionError(`unknown lamp '${String(lamp)}'`);
+    const line = this.ext.mask
+      .text(String(text ?? ''))
+      .replace(/[\x00-\x1f\x7f]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 60);
+    const next = line ? { text: line, lamp } : undefined;
+    if (
+      next?.text === this.ext.status?.text &&
+      next?.lamp === this.ext.status?.lamp
+    )
+      return;
+    this.ext.status = next;
+    this.services?.onStatus?.();
+  }
+  /** Its entry under `extensions` in settings.json, read when it loaded. Changing it saves nothing. */
+  get settings(): Record<string, unknown> {
+    return structuredClone(this.services?.settings ?? {});
+  }
+  /**
+   * Ask the user for a value on a masked card. It goes back to the extension only: not into
+   * the conversation, the session or a file. null when the user cancels or does not answer.
+   */
+  async askSecret(
+    question: string,
+    options: { mask?: boolean; signal?: AbortSignal } = {},
+  ): Promise<string | null> {
+    if (typeof question !== 'string' || !question.trim())
+      throw new ExtensionError('askSecret needs a question');
+    const present = this.services?.secret;
+    if (!present || !this.services?.home)
+      throw new ExtensionError('this interface cannot ask for a secret');
+    const home = this.services.home;
+    const request = createExtensionRequest(home, {
+      question,
+      extension: this.ext.name,
+      mask: options.mask,
+    });
+    const controller = new AbortController();
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, controller.signal])
+      : controller.signal;
+    const answering = pollAnswer(
+      home,
+      request.id,
+      signal,
+      this.services.secretTimeoutMs,
+    );
+    const presenting = present(request, signal).catch((error: unknown) => {
+      controller.abort(error);
+      throw error;
+    });
+    try {
+      const [value] = await Promise.all([answering, presenting]);
+      this.ext.mask.remember(value);
+      return value;
+    } catch (error) {
+      options.signal?.throwIfAborted();
+      if (error instanceof SecretPromptError) return null;
+      throw error;
+    } finally {
+      controller.abort();
+      await Promise.allSettled([answering, presenting]);
+      await cancelRequest(home, request.id);
+    }
+  }
+  private masked(error: unknown): unknown {
+    if (error instanceof Error && this.ext.mask.size)
+      error.message = this.ext.mask.text(error.message);
+    return error;
   }
   registerTool(
     name: string,
@@ -115,7 +250,14 @@ export class ExtensionAPI {
       effect: options.readOnly ? 'read' : 'unknown',
       approval: options.approval ?? !options.readOnly,
       run: async (args, context) => {
-        const result = await execute(args, context);
+        let result: unknown;
+        try {
+          result = await execute(args, context);
+        } catch (error) {
+          throw this.masked(error);
+        }
+        if (result instanceof Watch) result = this.maskWatch(result);
+        else result = this.ext.mask.value(result);
         if (result instanceof Watch) {
           if (!this.jobs) {
             const complete = await waitWatch(result, context.signal);
@@ -162,7 +304,33 @@ export class ExtensionAPI {
       throw new ExtensionError(`command /${name} already exists`);
     if (typeof handler !== 'function')
       throw new ExtensionError('command handler must be callable');
-    this.ext.commands.push({ name, description, handler });
+    const mask = this.ext.mask;
+    this.ext.commands.push({
+      name,
+      description,
+      handler: async (args, context) => {
+        try {
+          await handler(args, {
+            workspace: context.workspace,
+            toast: (message) => context.toast(mask.text(String(message))),
+            append: (message) => context.append(mask.text(String(message))),
+            sendUserMessage: (message) =>
+              context.sendUserMessage(mask.text(String(message))),
+          });
+        } catch (error) {
+          throw this.masked(error);
+        }
+      },
+    });
+  }
+  // A watch whose results pass through the mask, read when each one arrives.
+  private maskWatch(watch: Watch): Watch {
+    const mask = this.ext.mask;
+    return new Watch(
+      mask.text(watch.title),
+      async (signal) => mask.value(await watch.poll(signal)),
+      { ...watch.options, result: mask.value(watch.options.result) },
+    );
   }
   registerMiddleware(
     handler: ModelMiddleware | ToolMiddleware | AfterModelMiddleware,
@@ -222,6 +390,13 @@ export interface ExtensionHostOptions {
   home: string;
   workspace: string;
   trusted: boolean;
+  /** Where bundled extensions are; false for none. Defaults to bundledExtensionsRoot(). */
+  bundledRoot?: string | false;
+  /** Called when an extension's status changes. */
+  onStatus?: () => void;
+  /** Shows a masked card for api.askSecret; without it askSecret fails. */
+  secret?: ExtensionServices['secret'];
+  secretTimeoutMs?: number;
   settings?: Record<string, Record<string, unknown>>;
   reservedTools?: Set<string>;
   reservedCommands?: Set<string>;
@@ -231,14 +406,20 @@ export interface ExtensionHostOptions {
 export class ExtensionHost {
   extensions: Extension[] = [];
   constructor(readonly options: ExtensionHostOptions) {}
-  discover(): Pick<Extension, 'name' | 'source' | 'path'>[] {
+  discover(): Pick<
+    Extension,
+    'name' | 'source' | 'path' | 'version' | 'description'
+  >[] {
     const found = new Map<
       string,
-      Pick<Extension, 'name' | 'source' | 'path'>
+      Pick<Extension, 'name' | 'source' | 'path' | 'version' | 'description'>
     >();
-    const roots: ['user' | 'project', string][] = [
-      ['user', join(this.options.home, 'extensions')],
-    ];
+    // Later roots replace earlier ones of the same name: yours over Circle's, the project's
+    // over yours.
+    const roots: [ExtensionSource, string][] = [];
+    const bundled = this.options.bundledRoot ?? bundledExtensionsRoot();
+    if (bundled) roots.push(['bundled', bundled]);
+    roots.push(['user', join(this.options.home, 'extensions')]);
     if (this.options.trusted)
       roots.push([
         'project',
@@ -262,6 +443,7 @@ export class ExtensionHost {
             name: directory.name,
             source,
             path: entry,
+            ...manifest(join(root, directory.name, 'extension.json')),
           });
       }
     }
@@ -272,9 +454,13 @@ export class ExtensionHost {
     const tools = new Set(this.options.reservedTools);
     const commands = new Set(this.options.reservedCommands);
     for (const discovered of this.discover()) {
+      const setting = this.options.settings?.[discovered.name]?.enabled;
       const ext: Extension = {
         ...discovered,
-        enabled: this.options.settings?.[discovered.name]?.enabled !== false,
+        enabled:
+          discovered.source === 'bundled'
+            ? setting === true
+            : setting !== false,
         error: '',
         warnings: [],
         tools: [],
@@ -283,6 +469,7 @@ export class ExtensionHost {
         subagents: [],
         renderers: new Map(),
         handlers: new Map(),
+        mask: new SecretMask(),
       };
       loaded.push(ext);
       if (!ext.enabled) continue;
@@ -299,6 +486,13 @@ export class ExtensionHost {
             commands,
             this.options.jobs,
             this.options.jobOwner,
+            {
+              home: this.options.home,
+              secret: this.options.secret,
+              secretTimeoutMs: this.options.secretTimeoutMs,
+              settings: this.options.settings?.[discovered.name],
+              onStatus: this.options.onStatus,
+            },
           ),
         );
         for (const tool of ext.tools) tools.add(tool.name);
@@ -324,6 +518,12 @@ export class ExtensionHost {
   }
   tools(): Tool[] {
     return this.loaded().flatMap((ext) => ext.tools);
+  }
+  /** The status lines set by loaded extensions, in load order. */
+  statuses(): ExtensionStatus[] {
+    return this.loaded().flatMap((ext) =>
+      ext.status ? [{ extension: ext.name, ...ext.status }] : [],
+    );
   }
   commands(): Map<string, ExtensionCommand> {
     return new Map(
@@ -425,8 +625,26 @@ export class ExtensionHost {
     return this.extensions
       .map(
         (ext) =>
-          `${ext.name} (${ext.source}) · ${!ext.enabled ? 'off' : ext.error ? 'failed to load: ' + ext.error : `${ext.tools.length} tools · ${ext.commands.length} commands`}${ext.warnings.length ? '\n  ' + ext.warnings.join('\n  ') : ''}`,
+          `${ext.name}${ext.version ? ' ' + ext.version : ''} (${ext.source}) · ${!ext.enabled ? (ext.source === 'bundled' ? `off · /extensions enable ${ext.name}` : 'off') : ext.error ? 'failed to load: ' + ext.error : `${ext.tools.length} tools · ${ext.commands.length} commands`}${ext.description ? '\n  ' + ext.description : ''}${ext.warnings.length ? '\n  ' + ext.warnings.join('\n  ') : ''}`,
       )
       .join('\n');
   }
+}
+// extension.json is optional: { "version": "1.2.0", "description": "..." }, shown in /extensions.
+function manifest(path: string): { version: string; description: string } {
+  try {
+    const value: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    if (isRecord(value))
+      return {
+        version:
+          typeof value.version === 'string' ? value.version.slice(0, 40) : '',
+        description:
+          typeof value.description === 'string'
+            ? value.description.slice(0, 200)
+            : '',
+      };
+  } catch {
+    /* No manifest, or one that cannot be read: the extension still loads. */
+  }
+  return { version: '', description: '' };
 }

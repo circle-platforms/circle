@@ -40,18 +40,43 @@ Start Circle and run `/extensions`. You should see the extension with its tool a
 
 | Folder | When it loads |
 |---|---|
+| Shipped with Circle (`dist/extensions/` in a release) | Only once you turn it on with `/extensions enable <name>` |
 | `~/.circle/extensions/<name>/` | Always |
 | `<project>/.circle/extensions/<name>/` | When the project is [trusted](security.md#workspace-trust), which it must be for Circle to work in it |
 
-A project extension replaces one of yours with the same name. Folder names use letters, digits, `_` and `-` (up to 64 characters, starting with a letter or digit); other folders, and folders without one of the three files, are skipped without a message.
+A project extension replaces one of yours with the same name, and yours replaces one shipped with Circle. Folder names use letters, digits, `_` and `-` (up to 64 characters, starting with a letter or digit); other folders, and folders without one of the three files, are skipped without a message.
 
 Extensions are loaded at start, on `/reload` and on `/extensions reload`. Each load reads `extension.*` again, so an edit takes effect; a file it imports itself is not read again until Circle restarts. Extensions are not loaded in print mode, line mode or RPC mode.
 
-To turn one off, set it in `settings.json`:
+To turn one off, set it in `settings.json`, or run `/extensions disable sample`:
 
 ```json
 "extensions": { "sample": { "enabled": false } }
 ```
+
+An extension shipped with Circle is off until `"enabled": true`, which `/extensions enable <name>` saves for you. `/extensions` lists it with `off · /extensions enable <name>`.
+
+A folder may have an `extension.json` beside the entry file, `{ "version": "1.2.0", "description": "..." }`. `/extensions` and the desktop application show both. It is optional, and an unreadable one is ignored.
+
+## Extensions shipped with Circle
+
+### circle-server
+
+Connects Circle to a [circle-server](https://github.com/qingshanfeihu/circle-server), which keeps work for a team: it takes a task with your files, runs it on its own, and delivers results. Turn it on with `/extensions enable circle-server`.
+
+| Command | What it does |
+|---|---|
+| `/server` | Where you are signed in, and the commands. |
+| `/server login <url> <user>` | Sign in. The password is asked on a masked card and is not kept; the token the server issues is kept with [`api.secrets`](#secrets). |
+| `/server logout` | Forget the token. |
+| `/server packs` | What the server can do, as capability packs. |
+| `/server submit <pack> <file>…` | Upload the files, hand the server the work, and follow it: each event is a line in the conversation, and what it delivers is saved in the workspace once its SHA-256 matches the server's. Sending the same pack and files again finds the same task; add `--again` for a new one. |
+| `/server task <id>` | Show a task and follow it until it ends. Closing Circle does not stop a task; this picks it up again. |
+| `/server tasks` | Your tasks. |
+| `/server respond <id> <answer>` | Answer the question a task is waiting on. |
+| `/server get <id>` | Save a delivered task's results again. A file never overwrites one already there: `cases.xlsx` becomes `cases-1.xlsx`. |
+
+The address can also be set in `settings.json` as `"extensions": { "circle-server": { "enabled": true, "url": "https://…" } }`. The lines it writes are notices for you; the model does not see them.
 
 ## Coming from 0.5.0
 
@@ -73,6 +98,11 @@ Circle 0.5.0 and older loaded `extension.py`. This version does not run Python, 
 | `api.name` | The extension's folder name. |
 | `api.ToolError` | Throw it from a tool to report a failed call to the model. |
 | `api.Watch` | `new api.Watch(title, poll, options)`: return it from a tool to have Circle wait for something slow. See [Waiting for something slow](#waiting-for-something-slow). |
+| `api.setStatus(text, lamp)` | One line at the right of the footer while it holds, such as what the extension is connected to. `lamp` is `running` (yellow), `ok` (green), `error` (red), `wait` (cyan) or `none`. The text is one line of up to 60 characters, with [secrets](#secrets) masked; `null` removes it. Shown in the terminal; the desktop application does not show it yet. |
+| `api.settings` | A copy of the extension's own entry under `extensions` in `settings.json`, as it was when the extension loaded, such as `{ "enabled": true, "url": "…" }`. Changing the copy saves nothing. |
+| `api.dataDir` | A folder of the extension's own, `~/.circle/extension_data/<name>/` (`0700`), made the first time it is read. For what the extension keeps that is not secret. |
+| `api.secrets` | Values the extension keeps between runs, such as a token. See [Secrets](#secrets). |
+| `api.askSecret(question, options)` | Ask you for a value on a masked card; it goes back to the extension only. See [Secrets](#secrets). |
 | `registerTool(name, description, parameters, execute, options)` | Add a tool. |
 | `registerCommand(name, description, handler)` | Add a slash command. |
 | `registerMiddleware(handler, slot)` | Wrap model calls or tool calls. `slot` defaults to `tool_boundary`. |
@@ -111,6 +141,15 @@ api.registerTool('submit_run', 'Start a run and wait for it.', schema, async (ar
 - `on_stop()` runs once if the job is stopped: by the model's `stop_job`, by `/jobs`, or because Circle is leaving, which waits up to two seconds for it.
 - `poll` runs without asking again: the tool call that returned the watch was approved, or needed no approval.
 - Watches count toward the 16 jobs that may run at once. A watch started by a subagent belongs to the conversation the subagent works for. Without a job list (an embedding that builds the agent itself), the tool call waits for the result instead.
+
+### Secrets
+
+An extension that signs in somewhere needs to keep a token, and sometimes to ask you for one.
+
+- `await api.secrets.set(name, value)` keeps a value, `await api.secrets.get(name)` returns it (or `undefined`), `await api.secrets.delete(name)` removes it and says whether there was one, and `await api.secrets.names()` lists the names. A name uses letters, digits, `_`, `.` and `-`, up to 64 characters; a value is a non-empty string of up to 4096 bytes without NUL.
+- Each extension's values are in `~/.circle/extension_secrets/<extension>.secrets.json`, readable only by you (`0600`, in a `0700` folder). They are not in `settings.json` or `credentials.json`, another extension's `api.secrets` does not see them, and `*.secrets.json` is a [credential file](security.md#credential-files) name, so the model's file tools and commands refuse it.
+- `await api.askSecret(question, { mask, signal })` shows the card a secret question from the model shows (`ctrl+s` in the terminal, a card in the desktop application), saying the value goes to your extension. The value is returned to the extension and goes nowhere else: not into the conversation, the session or a file. It returns `null` when you cancel or enter nothing within ten minutes. `signal` stops it; `mask: false` shows what you type. It throws where no card can be shown.
+- Values that passed through `api.secrets` or `api.askSecret` are replaced with `***` in what the extension hands Circle: tool results and errors, watch results, and the text of `ctx.toast`, `ctx.append` and `ctx.sendUserMessage`. Values shorter than four characters are left. This guards against accidents only: an extension runs with your rights and can still send a value anywhere.
 
 ### Commands
 
@@ -155,3 +194,4 @@ Subagents' turns and tool results fire the same events. Handlers may be `async`.
 |---|---|
 | `/extensions` (`/ext`) | List extensions with their tool and command counts, load errors and handler errors. |
 | `/extensions reload` | Re-read settings, reconnect MCP servers and reload every extension. Not while a turn runs. |
+| `/extensions enable <name>`, `/extensions disable <name>` | Save `enabled` for that extension in `settings.json` and reload, so the choice holds in later sessions too. Not while a turn runs. |

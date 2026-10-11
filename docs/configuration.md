@@ -22,6 +22,8 @@ The data folder is `~/.circle`. Set `CIRCLE_HOME` to use another location, and r
 | `cache/models-dev.json` | The copy of models.dev that context windows and prices come from. See [Models](models.md#cost-and-context-in-the-footer). |
 | `update-check.json` | The answer of the daily [update check](cli.md#the-reminder). |
 | `secret_requests/` | Requests for secrets waiting to be typed; each is removed once collected. |
+| `extension_secrets/` | Values extensions keep with `api.secrets`, one `<extension>.secrets.json` each, readable only by you. |
+| `extension_data/` | A folder for each extension that asked for one (`api.dataDir`). |
 | `exports/`, `shares/` | Output of `/export`, `/copy` (fallback) and `/share`. |
 | `skills/` | Your [skills](skills.md). |
 | `commands/`, `prompts/` | Your [custom commands](custom-commands.md). |

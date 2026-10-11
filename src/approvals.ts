@@ -38,6 +38,7 @@ export const DEFAULT_CREDENTIAL_FILES = [
   '.pgpass',
   '.git-credentials',
   'credentials.json',
+  '*.secrets.json',
   'token.json',
   'id_rsa',
   'id_dsa',
