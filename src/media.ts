@@ -3,6 +3,7 @@ import { createReadStream } from 'node:fs';
 import { basename, extname } from 'node:path';
 import type { MediaAttachment, Message } from './types.js';
 import { isRecord } from './settings.js';
+import { fitPng } from './image_fit.js';
 
 export const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
 const MIME: Record<string, MediaAttachment['mime_type']> = {
@@ -143,22 +144,50 @@ export async function readAttachment(
   path: string,
   signal: AbortSignal,
 ): Promise<MediaAttachment> {
+  return (await readMedia(path, signal)).attachment;
+}
+// A PNG may be larger before it is scaled down: a 5K screenshot is
+const MAX_PNG_READ = 64 * 1024 * 1024;
+/**
+ * An image or PDF file as an attachment. A large PNG (a screenshot) is scaled down to what
+ * models read; `size` says how large the picture is (`2880×1800, sent as 1357×848`), or is
+ * empty when it is not a PNG.
+ */
+export async function readMedia(
+  path: string,
+  signal: AbortSignal,
+): Promise<{ attachment: MediaAttachment; size: string }> {
   const mime = mediaType(path);
   if (!mime) throw new Error('unsupported attachment file type');
   signal.throwIfAborted();
+  const limit = mime === 'image/png' ? MAX_PNG_READ : MAX_MEDIA_BYTES;
   const input = createReadStream(path, { signal });
   const chunks: Buffer[] = [];
   let length = 0;
   try {
     for await (const chunk of input) {
       length += chunk.length;
-      if (length > MAX_MEDIA_BYTES)
-        throw new Error('attachment exceeds 20 MiB; use a smaller file');
+      if (length > limit)
+        throw new Error(
+          `attachment exceeds ${limit >> 20} MiB; use a smaller file`,
+        );
       chunks.push(chunk);
     }
   } finally {
     input.destroy();
   }
   signal.throwIfAborted();
-  return makeAttachment(Buffer.concat(chunks), mime, basename(path));
+  let bytes: Buffer = Buffer.concat(chunks);
+  let size = '';
+  if (mime === 'image/png') {
+    const fitted = fitPng(bytes);
+    bytes = fitted.bytes;
+    if (fitted.width)
+      size = fitted.from
+        ? `${fitted.from.width}×${fitted.from.height}, sent as ${fitted.width}×${fitted.height}`
+        : `${fitted.width}×${fitted.height}`;
+  }
+  if (bytes.length > MAX_MEDIA_BYTES)
+    throw new Error('attachment exceeds 20 MiB; use a smaller file');
+  return { attachment: makeAttachment(bytes, mime, basename(path)), size };
 }

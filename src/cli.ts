@@ -25,6 +25,7 @@ import {
 } from './run_options.js';
 import { resolveEndpoint } from './probe.js';
 import { mediaType } from './media.js';
+import { mention } from './mentions.js';
 import { EFFORT_LEVELS } from './model.js';
 import { installExitGuard } from './exit_guard.js';
 import { configureNetwork } from './net.js';
@@ -345,12 +346,17 @@ export function fileBlocks(
       if (existsSync(inside)) path = inside;
     }
     if (mediaType(path) && existsSync(path)) {
-      // An image goes as an attachment, which the harness adds for a mention inside the
-      // folder Circle works in.
-      const rel = relative(realpathSync(workspace), realpathSync(path));
-      if (rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel))
-        throw new UsageError(`${name} is not a text file`);
-      blocks.push('@' + rel.split(sep).join('/'));
+      // An image goes as an attachment, which the harness adds for its mention: a path
+      // inside the folder Circle works in, the full path for one elsewhere.
+      const full = realpathSync(path);
+      const rel = relative(realpathSync(workspace), full);
+      blocks.push(
+        mention(
+          rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)
+            ? full
+            : rel.split(sep).join('/'),
+        ),
+      );
       continue;
     }
     let body: string;

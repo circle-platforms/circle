@@ -42,6 +42,7 @@ import {
 import { addUsage, emptyUsage } from './types.js';
 import { UserShells } from './user_shell.js';
 import { toolCallLine } from './headless.js';
+import { canScreenshot, type ScreenshotOptions } from './screenshot.js';
 const BUILTIN_TOOL_NAMES = new Set([
   'ls',
   'read_file',
@@ -98,6 +99,9 @@ export interface RuntimeOptions {
   model?: ChatModel;
   catalog?: ModelCatalog;
   extraTools?: Tool[];
+  /** How `screenshot` takes the screen: tests give their own runner; false leaves it out.
+   * By default it is offered where there is a desktop on this machine. */
+  screenshot?: Omit<ScreenshotOptions, 'app' | 'target'> | false;
   headless?: boolean;
   approve?: (
     call: ToolCall,
@@ -277,6 +281,10 @@ export class AgentRuntime {
     const system = this.systemPrompt(model.model);
     let tools = buildTools(this.sandbox, {
       jobs: this.jobs,
+      screenshot:
+        this.options.screenshot === false
+          ? undefined
+          : (this.options.screenshot ?? (canScreenshot() ? {} : undefined)),
       todos: (todos) => {
         this.todos = todos;
         this.bus.emit('todo_list', { payload: { todos } });

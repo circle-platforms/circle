@@ -14,7 +14,7 @@ The words after `circle` are a folder, files and messages, in any order of optio
 
 - **The folder** Circle works in comes first. It defaults to the current folder. `~` is expanded and symlinks are resolved. It does not have to be a git repository. A first word without spaces is always read as a folder, so a mistyped folder name is an error and not a message. A message of one word goes after the folder: `circle . refactor`.
 - **Messages** are sent when the session opens, one turn each, in order. A message with spaces needs quotes. `circle "fix the failing test"` works in the current folder; `circle "fix it" ~/code/app` works too. Without a terminal, messages run as [print mode](#print-mode).
-- **`@path`** adds a text file to the first message, as `<file path="…">` after it. The path is looked for in the current folder, then in the folder Circle works in. An image or a PDF inside that folder goes as an attachment instead. A file that is missing or not text is an error. The conversation on screen shows `@path`; the model gets the text.
+- **`@path`** adds a text file to the first message, as `<file path="…">` after it. The path is looked for in the current folder, then in the folder Circle works in. An image or a PDF goes as an attachment instead, from that folder or from anywhere else. A file that is missing or not text is an error. The conversation on screen shows `@path`; the model gets the text.
 - **`--`** ends the options, so a message can start with `-`.
 
 ```bash

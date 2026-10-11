@@ -45,6 +45,22 @@ const key = (name: string, char = ''): InputEvent => ({
   key: name,
   char,
 });
+const SS3: Record<string, string> = { P: 'f1', Q: 'f2', R: 'f3', S: 'f4' };
+// The key a CSI body (`A`, `1;5A`, `5~`) or an SS3 letter names, with alt added: what an
+// esc in front of it means. Undefined for what is not a key (a paste, a mouse report).
+function altKey(body: string): string | undefined {
+  const modified = body.match(/^(\d+);(\d+)([A-Za-z~])$/);
+  let name =
+    (modified
+      ? CSI[modified[3]!] || CSI[modified[1] + '~']
+      : CSI[body] || (body.length === 1 ? SS3[body] : undefined)) ?? '';
+  if (!name) return undefined;
+  const modifier = modified ? Number(modified[2]) - 1 : 0;
+  if (modifier & 1 && !name.startsWith('shift+')) name = 'shift+' + name;
+  name = 'alt+' + name;
+  if (modifier & 4) name = 'ctrl+' + name;
+  return name;
+}
 export class InputParser {
   private buffer = '';
   private paste: string | null = null;
@@ -115,6 +131,18 @@ export class InputParser {
         continue;
       }
       if (this.buffer.length === 1) break;
+      // option+arrow where the terminal sends option as esc (Terminal.app's "Use Option as
+      // Meta key", iTerm2's Esc+): esc, then the arrow's own sequence. One key, not esc then ↑.
+      if (/^\x1b\x1b(?:\[[0-9;]*|O)$/.test(this.buffer)) break;
+      const prefixed = this.buffer.match(
+        /^\x1b\x1b(?:\[((?:\d+;\d+)?[A-Za-z]|\d+(?:;\d+)?~)|O([A-DHFPQRS]))/,
+      );
+      const inner = prefixed && altKey(prefixed[1] ?? prefixed[2]!);
+      if (inner) {
+        events.push(key(inner));
+        this.buffer = this.buffer.slice(prefixed[0].length);
+        continue;
+      }
       if (this.buffer.startsWith('\x1b\x1b')) {
         events.push(key('escape'));
         this.buffer = this.buffer.slice(1);
@@ -200,11 +228,7 @@ export class InputParser {
       if (this.buffer.startsWith('\x1bO')) {
         if (this.buffer.length < 3) break;
         const char = this.buffer[2]!;
-        const name =
-          CSI[char] ||
-          ({ P: 'f1', Q: 'f2', R: 'f3', S: 'f4' } as Record<string, string>)[
-            char
-          ];
+        const name = CSI[char] || SS3[char];
         if (name) events.push(key(name));
         this.buffer = this.buffer.slice(3);
         continue;

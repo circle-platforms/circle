@@ -90,7 +90,7 @@ The footer shows how full the context is: `ctx 12.5k/1.0M (1%)`.
 Circle also trims what it sends, without touching the stored conversation:
 
 - A tool result over 80,000 characters is saved in the data folder (`large_tool_results/`), and the model gets its first 1,600 characters and a path to read the rest with `read_file`.
-- Once the tool output older than the most recent 40,000 tokens adds up to at least 20,000 tokens, it is shortened to its first 160 characters and a note, in one batch. Answers to questions, loaded skills, results that are a whole JSON document, attachments and the latest plan are kept. `CIRCLE_PRUNE_TOOL_OUTPUTS=0` stops new batches; `CIRCLE_PRUNE_PROTECT_TOKENS` changes the 40,000.
+- Once the tool output older than the most recent 40,000 tokens adds up to at least 20,000 tokens, it is shortened to its first 160 characters and a note, in one batch. Answers to questions, loaded skills, results that are a whole JSON document, attachments and the latest plan are kept. Images and PDFs are left out of requests by their own rule: see [Images and screenshots](usage.md#images-and-screenshots). `CIRCLE_PRUNE_TOOL_OUTPUTS=0` stops new batches; `CIRCLE_PRUNE_PROTECT_TOKENS` changes the 40,000.
 
 Reminders Circle adds for the model (about the plan, a loop, waiting jobs) are kept apart from your messages and are not shown in the conversation or in Markdown and HTML exports.
 

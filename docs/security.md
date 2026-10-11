@@ -12,6 +12,7 @@ Read this page before you point Circle at anything you cannot restore, and befor
 | Write, edit or patch a file | Asks. |
 | Delete a file (`delete`) or a patch that deletes | Always asks. |
 | Read, list, search, `webfetch`, `websearch`, `lsp` | Does not ask. |
+| Take a screenshot (`screenshot`) | Asks: the picture can show any window on the screen. "Allow for this session" covers every screenshot. |
 | Tools from MCP servers | Asks. |
 | Tools from extensions | Asks, unless the extension marks the tool read-only or turns approval off. |
 | Custom-command shell snippets | Do not ask. |

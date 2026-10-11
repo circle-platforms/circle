@@ -6,9 +6,10 @@ Press `?` in an empty input box, or run `/hotkeys`, to see the shortcuts in the 
 
 | Key | Action |
 |---|---|
-| `enter` | Send. While Circle works, the model reads the message after its current step, without stopping. See [Steer a running turn](usage.md#steer-a-running-turn). |
+| `enter` | Send. While Circle works, the model reads the message after its current step, without stopping. On an empty box while a steering message waits: the model reads it now; the step under way stops and the turn goes on. See [Steer a running turn](usage.md#steer-a-running-turn). |
 | `ctrl+q` | Queue the message as a follow-up: it is sent when the running turn ends, as a new turn. When Circle is idle it is sent at once. |
-| `alt+↑` | Take back the messages the model has not read yet, steering and follow-ups. They return to the input box, ahead of what you were typing. |
+| `alt+↑` | Take back the messages the model has not read yet, steering and follow-ups. They return to the input box, ahead of what you were typing. Also works where option+↑ arrives as `esc` and `↑` (Terminal.app's "Use Option as Meta key", iTerm2's Esc+). |
+| `ctrl+v`, `alt+v` | Paste the picture on the clipboard, or image files copied in the file manager, as `[Image #N]`. See [Images and screenshots](usage.md#images-and-screenshots). `alt+v` is for terminals that keep `ctrl+v` for their own paste, such as Windows Terminal. |
 | `shift+enter`, `ctrl+j` | Insert a line break. |
 | `\` then `enter` | Also a line break, for terminals that send `shift+enter` as `enter`. |
 | `ctrl+g` | Edit the draft in `$VISUAL` or `$EDITOR`, the same as `/editor`. |
@@ -27,7 +28,7 @@ Press `?` in an empty input box, or run `/hotkeys`, to see the shortcuts in the 
 | `home` or `ctrl+a`, `end` or `ctrl+e` | Go to the start or end of the draft. With an empty input box, `home` and `end` scroll the conversation instead. |
 | `backspace`, `delete` | Delete. |
 | `ctrl+u` | Clear the input box. |
-| `↑` `↓` | Walk through earlier messages. With an empty input box and no more history, they scroll the conversation by 3 rows. |
+| `↑` `↓` | Walk through earlier messages. With an empty input box and no more history, they scroll the conversation by 3 rows. While messages wait for the model, `↑` in an empty box takes back the last one instead. |
 | `tab` | Take the marked entry of the completion list, or, with the list closed, complete a `/command` name or the `@path` before the cursor. |
 | `?` | With an empty input box: show the shortcuts. |
 | `ctrl+r` | Search earlier messages. See [Search](#search). |
@@ -221,6 +222,7 @@ A key named there does that action everywhere, in a card or a list too, and no l
 | `message.copy` | `ctrl+x` |
 | `message.dequeue` | `alt+up` |
 | `message.followup` | `ctrl+q` |
+| `image.paste` | `ctrl+v` |
 | `find` | `ctrl+f` |
 | `history.search` | `ctrl+r` |
 | `secret.enter` | `ctrl+s` |

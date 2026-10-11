@@ -21,6 +21,44 @@ import {
   pollingJobReminder,
 } from './middleware/job_notice.js';
 import type { Job } from './jobs.js';
+// When a request would carry more images and PDFs than MEDIA_LIMIT, the older ones are left
+// out down to the newest that fit MEDIA_KEEP, all in one go, so the requests after stay the
+// same (and cached) until they fill up again. The newest message keeps its own whatever size.
+export const MEDIA_LIMIT = { count: 8, bytes: 16 * 1024 * 1024 };
+export const MEDIA_KEEP = { count: 3, bytes: 8 * 1024 * 1024 };
+export function nextMediaState(
+  messages: Message[],
+  state: ContextState,
+): ContextState {
+  const dropped = new Set(state.droppedMedia ?? []);
+  const carrying = messages.filter(
+    (message) => message.attachments?.length && !dropped.has(message.id),
+  );
+  const bytesOf = (message: Message) =>
+    message.attachments!.reduce((sum, item) => sum + item.data.length, 0);
+  const count = carrying.reduce(
+    (sum, message) => sum + message.attachments!.length,
+    0,
+  );
+  const bytes = carrying.reduce((sum, message) => sum + bytesOf(message), 0);
+  if (count <= MEDIA_LIMIT.count && bytes <= MEDIA_LIMIT.bytes) return state;
+  let keptCount = 0;
+  let keptBytes = 0;
+  let full = false;
+  for (const message of [...carrying].reverse()) {
+    const size = bytesOf(message);
+    full ||=
+      keptCount > 0 &&
+      (keptCount + message.attachments!.length > MEDIA_KEEP.count ||
+        keptBytes + size > MEDIA_KEEP.bytes);
+    if (full) dropped.add(message.id);
+    else {
+      keptCount += message.attachments!.length;
+      keptBytes += size;
+    }
+  }
+  return { ...state, droppedMedia: [...dropped] };
+}
 export interface ContextOptions {
   runningJobs?: (sessionId: string) => Job[];
   contextWindow?: number;
@@ -192,8 +230,15 @@ export class ContextManager {
     return this.projectWith(this.store.projectedMessages(sessionId), state);
   }
   private projectWith(messages: Message[], state: ContextState): Message[] {
+    const droppedMedia = new Set(state.droppedMedia ?? []);
     return pruneMessages(
       messages.map((message) => {
+        if (droppedMedia.has(message.id) && message.attachments?.length)
+          message = {
+            ...message,
+            attachments: undefined,
+            content: `${message.content}\n\n[${message.attachments.map((item) => item.filename).join(', ')} left out of this request to make room for newer images. Read the file again if you need to see it.]`,
+          };
         const path = state.offloaded[message.id];
         if (message.role !== 'tool' || !path) return message;
         return {
@@ -227,11 +272,12 @@ export class ContextManager {
     const messages = this.store.projectedMessages(sessionId);
     this.recoverArtifacts(this.store.messages(sessionId), state);
     const offloaded = this.offload(messages, state, sessionId);
-    const next = nextPruneState(
+    const pruned = nextPruneState(
       this.projectWith(messages, offloaded),
       offloaded,
       this.options.prune,
     );
+    const next = nextMediaState(this.projectWith(messages, pruned), pruned);
     if (next !== state) {
       this.store.setContextState(sessionId, next);
       state = next;

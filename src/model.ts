@@ -122,6 +122,12 @@ export class GatewayModel implements ChatModel {
   get contextWindow(): number {
     return this.modelFacts.contextWindow;
   }
+  get imageInput(): boolean | undefined {
+    return (
+      this.modelFacts.imageInput ??
+      modelProfile(this.settings.auth.protocol, this.model)?.image_inputs
+    );
+  }
   get outputBudget(): number | undefined {
     if (!this.anthropic) return undefined;
     const profile = modelProfile('anthropic', this.model);
