@@ -1,3 +1,8 @@
+---
+parent: Development
+nav_order: 5
+---
+
 # The TypeScript port
 
 Up to 0.5.0 Circle was a Python program built on deepagents and LangGraph; that code is at the tag `v0.5.0`. 1.0 is a rewrite in TypeScript for Node.js 24 with its own agent loop. This page is a record of how the port was done and where its evidence is. For the code as it is now, read [Architecture](architecture.md).

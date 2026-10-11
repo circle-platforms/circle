@@ -1,3 +1,7 @@
+---
+nav_order: 16
+---
+
 # CLI
 
 Circle has one command, `circle`, and one subcommand, `circle update`. Without options `circle` opens the full-screen interface in a folder you choose. With `-p` it runs a prompt and prints the answer.

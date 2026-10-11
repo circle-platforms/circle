@@ -1,3 +1,7 @@
+---
+nav_order: 8
+---
+
 # Sessions and context
 
 A session is one conversation: its messages, tool calls and results. Circle keeps every session in `circle.sqlite` in the data folder, saved after every message, so the model's memory of a conversation survives a crash and a restart. The same file lists each folder's sessions with their titles, so they can be reopened.

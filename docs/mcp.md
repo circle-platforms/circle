@@ -1,3 +1,7 @@
+---
+nav_order: 14
+---
+
 # MCP servers
 
 Circle can load tools from [Model Context Protocol](https://modelcontextprotocol.io) servers and offer them to the model next to its own. Read [what MCP tools are allowed to do](#security) before you rely on them.

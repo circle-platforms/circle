@@ -1,3 +1,8 @@
+---
+parent: Development
+nav_order: 4
+---
+
 # Register Circle in skills.sh / `npx skills`
 
 Circle already **consumes** the universal Agent Skills layout (`.agents/skills` in

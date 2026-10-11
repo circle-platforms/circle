@@ -1,3 +1,7 @@
+---
+nav_order: 7
+---
+
 # Choose a model
 
 Circle talks to a model endpoint that you provide. It does not include one. You need a base URL and an API key for any service or gateway that speaks the OpenAI chat completions API or the Anthropic messages API.

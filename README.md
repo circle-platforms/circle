@@ -7,9 +7,9 @@
 <p align="center">A terminal coding agent for your own model endpoint.</p>
 
 <p align="center">
-  <a href="docs/index.md">Docs</a> ·
-  <a href="docs/quickstart.md">Quickstart</a> ·
-  <a href="docs/known-issues.md">Known issues</a> ·
+  <a href="https://qingshanfeihu.github.io/circle/">Docs</a> ·
+  <a href="https://qingshanfeihu.github.io/circle/quickstart/">Quickstart</a> ·
+  <a href="https://qingshanfeihu.github.io/circle/known-issues/">Known issues</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
   <a href="README.zh-CN.md">中文</a>
 </p>
@@ -18,7 +18,7 @@
 
 Circle reads and edits the code in a folder you choose, and runs commands there. It works with any service or gateway that speaks the OpenAI or Anthropic API. It asks before it runs a command or changes a file, and the screen shows at a glance whether it is working or waiting for you.
 
-**Circle is early software.** There is no operating-system sandbox. Read [Known issues](docs/known-issues.md) and [Run Circle safely](docs/security.md) before you point it at anything you care about.
+**Circle is early software.** There is no operating-system sandbox. Read [Known issues](https://qingshanfeihu.github.io/circle/known-issues/) and [Run Circle safely](https://qingshanfeihu.github.io/circle/security/) before you point it at anything you care about.
 
 ## Install
 
@@ -38,9 +38,9 @@ irm https://raw.githubusercontent.com/qingshanfeihu/circle/main/install.ps1 | ie
 
 The installers download the latest release for your platform, verify its SHA-256, start it once, and put `circle` on your PATH. macOS and Linux need `bash`, `curl`, `tar`, and `sha256sum` or `shasum`. Windows needs PowerShell 5.1 or newer.
 
-Restart your terminal after installing, then run `circle`. Upgrade with `circle update`. See [Installation and updates](docs/installation.md) and [Releases](https://github.com/qingshanfeihu/circle/releases).
+Restart your terminal after installing, then run `circle`. Upgrade with `circle update`. See [Installation and updates](https://qingshanfeihu.github.io/circle/installation/) and [Releases](https://github.com/qingshanfeihu/circle/releases).
 
-**Coming from Circle 0.5.0 or older?** Those were written in Python. Run the install command above: it removes the Python version, keeps your settings, keys, skills and sessions, and installs 1.0 in its place. The old `circle update` cannot do this step. Python extensions have to be rewritten; see [Extensions](docs/extensions.md).
+**Coming from Circle 0.5.0 or older?** Those were written in Python. Run the install command above: it removes the Python version, keeps your settings, keys, skills and sessions, and installs 1.0 in its place. The old `circle update` cannot do this step. Python extensions have to be rewritten; see [Extensions](https://qingshanfeihu.github.io/circle/extensions/).
 
 ## Run
 
@@ -59,20 +59,20 @@ circle -p "summarize README.md"          # one prompt, answer on stdout
 git diff | circle -p "review this change"
 ```
 
-While Circle works you can keep typing: `enter` steers the running turn. `esc` twice goes back to an earlier point of the conversation, `ctrl+l` switches models and `ctrl+f` finds text. The [CLI](docs/cli.md) also has a JSON event stream and an RPC mode for scripts and editors.
+While Circle works you can keep typing: `enter` steers the running turn. `esc` twice goes back to an earlier point of the conversation, `ctrl+l` switches models and `ctrl+f` finds text. The [CLI](https://qingshanfeihu.github.io/circle/cli/) also has a JSON event stream and an RPC mode for scripts and editors.
 
-The terminal interface uses conversation cards, status lamps and an `auto` theme that follows terminal colours. Use `/themes dark` or `/themes light` when your terminal cannot report its colours. See [The interface](docs/interface.md) for the signals and limits.
+The terminal interface uses conversation cards, status lamps and an `auto` theme that follows terminal colours. Use `/themes dark` or `/themes light` when your terminal cannot report its colours. See [The interface](https://qingshanfeihu.github.io/circle/interface/) for the signals and limits.
 
 ## Learn more
 
 | | |
 |---|---|
-| [Quickstart](docs/quickstart.md) | Install, connect a model, run a first task. |
-| [The interface](docs/interface.md) | What the lamps, tints and frame mean. |
-| [Run Circle safely](docs/security.md) | What is asked, what is refused, what is not protected. |
-| [Choose a model](docs/models.md) | Endpoints, switching, thinking depth. |
-| [Skills](docs/skills.md), [Commands](docs/custom-commands.md), [MCP](docs/mcp.md), [Extensions](docs/extensions.md) | Make Circle yours. |
-| [All documentation](docs/index.md) | Guides and reference. |
+| [Quickstart](https://qingshanfeihu.github.io/circle/quickstart/) | Install, connect a model, run a first task. |
+| [The interface](https://qingshanfeihu.github.io/circle/interface/) | What the lamps, tints and frame mean. |
+| [Run Circle safely](https://qingshanfeihu.github.io/circle/security/) | What is asked, what is refused, what is not protected. |
+| [Choose a model](https://qingshanfeihu.github.io/circle/models/) | Endpoints, switching, thinking depth. |
+| [Skills](https://qingshanfeihu.github.io/circle/skills/), [Commands](https://qingshanfeihu.github.io/circle/custom-commands/), [MCP](https://qingshanfeihu.github.io/circle/mcp/), [Extensions](https://qingshanfeihu.github.io/circle/extensions/) | Make Circle yours. |
+| [All documentation](https://qingshanfeihu.github.io/circle/) | Guides and reference. |
 
 ## Development
 
@@ -86,9 +86,9 @@ npm run check                                    # type check, tests, build
 CIRCLE_HOME=$(mktemp -d) npm run dev -- ~/code/my-project
 ```
 
-Code pushes do not publish a new version: the release workflow publishes when a `v*` tag is pushed. See [Releasing](docs/development/releasing.md).
+Code pushes do not publish a new version: the release workflow publishes when a `v*` tag is pushed. See [Releasing](https://qingshanfeihu.github.io/circle/development/releasing/).
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md) for coding agents, and the [architecture](docs/development/architecture.md). Report security problems as described in [SECURITY.md](SECURITY.md). Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md) for coding agents, and the [architecture](https://qingshanfeihu.github.io/circle/development/architecture/). Report security problems as described in [SECURITY.md](SECURITY.md). Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 

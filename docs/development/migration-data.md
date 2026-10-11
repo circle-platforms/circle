@@ -1,3 +1,8 @@
+---
+parent: Development
+nav_order: 6
+---
+
 # Session data migration
 
 Circle 0.5.0 and older, the Python releases, kept sessions in two SQLite files in the data folder: `sessions.sqlite` describes workspace, title, model, timestamps and selected leaf; `checkpoints.sqlite` stores serialized checkpoints and pending writes. Every start of Circle (except with `--no-session`) imports the sessions it has not imported yet into `circle.sqlite` (`src/migration.ts`, `src/legacy_sessions.ts`, `src/legacy_codec.ts`, `src/legacy_message.ts`). The originals are opened read-only and stay as they are. No historical tool is replayed.

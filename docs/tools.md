@@ -1,3 +1,7 @@
+---
+nav_order: 20
+---
+
 # Built-in tools
 
 The main agent has these twenty-one tools. MCP servers and [extensions](extensions.md) add more.

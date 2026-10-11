@@ -29,3 +29,10 @@ compile_outputs/
 
 # 界面设计草稿与竞品调研，仅本地留存
 docs/development/design-history/
+
+# Jekyll build of the documentation site
+docs/_site/
+docs/.jekyll-cache/
+docs/.jekyll-metadata
+docs/.bundle/
+docs/vendor/

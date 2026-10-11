@@ -1,3 +1,7 @@
+---
+nav_order: 6
+---
+
 # The interface
 
 Circle's screen has a few parts, and each kind of information always goes to the same part. Once you know the parts and the three signals (lamps, tints, and the colour of the frame), you can read any screen at a glance.

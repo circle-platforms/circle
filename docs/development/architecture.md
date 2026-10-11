@@ -1,3 +1,8 @@
+---
+parent: Development
+nav_order: 1
+---
+
 # Architecture
 
 A map of the code for people who want to change it. For what Circle does, read [How Circle works](../how-circle-works.md) first.
