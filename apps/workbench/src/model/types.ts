@@ -209,6 +209,8 @@ export interface RuntimeExtension {
   enabled: boolean;
   /** The line it set with api.setStatus, shown above the sidebar footer. */
   status?: { text: string; lamp: 'running' | 'ok' | 'error' | 'wait' | 'none' };
+  /** What it published with api.setView, for a UI plugin paired with it. */
+  view?: unknown;
   tools: string[];
   commands: string[];
   events: string[];
@@ -271,6 +273,8 @@ export interface WorkbenchSnapshot {
   requests: PendingRequest[];
   settings: Settings;
   uiPlugins: string[];
+  /** The last link an extension asked to open; the window opens each id once. */
+  openUrl?: { id: string; url: string; sessionId: string };
 }
 export interface CommandResult {
   openSession?: boolean;

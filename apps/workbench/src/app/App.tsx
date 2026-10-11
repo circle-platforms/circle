@@ -8,7 +8,7 @@ import {
 import { parsePreviewBundle } from '../model/transfer';
 import { usePlugins } from '../plugins/context';
 import { PluginBoundary } from '../plugins/Boundary';
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Group, Panel, Separator } from 'react-resizable-panels';
 import { Tooltip } from 'radix-ui';
@@ -126,6 +126,21 @@ export function App() {
   };
   const onSessionRoute = () =>
     navigate(`/session/${runtime.getSnapshot().activeSessionId}`);
+  // A link an extension asked to open (api.openUrl): the browser panel opens it, once.
+  const openedLink = useRef(snapshot.openUrl?.id);
+  useEffect(() => {
+    const request = snapshot.openUrl;
+    if (!request || request.id === openedLink.current) return;
+    openedLink.current = request.id;
+    if (desktopHost() && enabled.includes('browser')) {
+      // The browser panel sits beside the session: show the session, then the panel.
+      onSessionRoute();
+      onPanel('browser', request.url);
+    }
+    // Without the panel, the window's own handler hands it to the system browser.
+    else window.open(request.url, '_blank', 'noopener');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot.openUrl?.id]);
   useEffect(() => {
     if (location.pathname === '/')
       navigate(`/session/${session.id}`, { replace: true });

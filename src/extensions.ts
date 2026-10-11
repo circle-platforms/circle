@@ -101,6 +101,8 @@ export interface Extension {
   mask: SecretMask;
   /** What it last set with api.setStatus. */
   status?: { text: string; lamp: ExtensionLamp };
+  /** What it last published with api.setView, for an interface of its own to show. */
+  view?: unknown;
 }
 // What the interface lends an extension: the Circle home, and a way to ask the user for a
 // value without it passing through the conversation.
@@ -171,6 +173,32 @@ export class ExtensionAPI {
     )
       return;
     this.ext.status = next;
+    this.services?.onStatus?.();
+  }
+  /**
+   * Publish data for the extension's own part of an interface, such as a page of the desktop
+   * application paired with it. JSON only, at most 64 KB, with secrets masked; null removes it.
+   */
+  setView(data: unknown): void {
+    if (data === null || data === undefined) {
+      if (this.ext.view === undefined) return;
+      this.ext.view = undefined;
+      this.services?.onStatus?.();
+      return;
+    }
+    let json: string | undefined;
+    try {
+      json = JSON.stringify(data);
+    } catch {
+      json = undefined;
+    }
+    if (json === undefined)
+      throw new ExtensionError('a view must be data that JSON can hold');
+    if (Buffer.byteLength(json) > 65536)
+      throw new ExtensionError('a view may be at most 64 KB');
+    const masked = this.ext.mask.value(JSON.parse(json));
+    if (JSON.stringify(masked) === JSON.stringify(this.ext.view)) return;
+    this.ext.view = masked;
     this.services?.onStatus?.();
   }
   /** Open a web address in the browser: the system's, from the terminal or the application. */
@@ -537,6 +565,10 @@ export class ExtensionHost {
   }
   tools(): Tool[] {
     return this.loaded().flatMap((ext) => ext.tools);
+  }
+  /** What a loaded extension last published with api.setView. */
+  view(name: string): unknown {
+    return this.loaded().find((ext) => ext.name === name)?.view;
   }
   /** The status lines set by loaded extensions, in load order. */
   statuses(): ExtensionStatus[] {

@@ -275,6 +275,15 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
     server.workbook,
   );
 
+  // The view a paired desktop page reads: the connection, the tasks and recent lines.
+  const view = host.view('circle-server') as Record<string, any>;
+  assert.equal(view.username, 'tester');
+  assert.equal(view.scopeId, 'scp_lab');
+  assert.equal(view.signedIn, true);
+  assert.equal(view.tasks[0].taskId, 'task_one');
+  assert.equal(view.tasks[0].saved, true);
+  assert.ok(view.recent.some((line: string) => /✓ saved/.test(line)));
+  assert.ok(!JSON.stringify(view).includes(TOKEN));
   await command.handler('tasks', context);
   assert.match(
     lines.at(-1)!,

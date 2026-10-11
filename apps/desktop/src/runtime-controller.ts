@@ -101,7 +101,8 @@ export interface ControllerOptions {
   model?: ChatModel;
   catalog?: (home: string) => ModelCatalog;
   emit: (update: RuntimeUpdate) => void;
-  /** Opens a link an extension asked for; the main process opens it in the system browser. */
+  /** A link an extension asked for: the window opens it in its browser panel; with no
+   * window the main process opens it in the system browser. */
   openUrl?: (url: string) => void;
 }
 
@@ -109,6 +110,8 @@ export interface ControllerOptions {
 export class RuntimeController {
   readonly home: string;
   private runtimes = new Map<string, AgentRuntime>();
+  // The last link an extension asked to open; the window opens each id once.
+  private openRequest?: { id: string; url: string; sessionId: string };
   private active!: AgentRuntime;
   private previous: string | null = null;
   private sequence = 0;
@@ -189,9 +192,13 @@ export class RuntimeController {
           this.secret(runtime, request, signal, origin),
         onExtensionStatus: () => this.publish(),
         openUrl: async (url) => {
-          if (!this.options.openUrl)
-            throw Error('this application cannot open links');
-          this.options.openUrl(url);
+          this.openRequest = {
+            id: randomUUID(),
+            url,
+            sessionId: runtime.session.id,
+          };
+          this.publish();
+          this.options.openUrl?.(url);
         },
       });
     // A missing/deleted session is not a reason to discard other sessions.
@@ -585,6 +592,8 @@ export class RuntimeController {
         enabled: extension.enabled,
         status:
           extension.enabled && !extension.error ? extension.status : undefined,
+        view:
+          extension.enabled && !extension.error ? extension.view : undefined,
         tools: extension.tools.map((tool) => tool.name),
         commands: extension.commands.map((command) => command.name),
         events: [...extension.handlers.keys()],
@@ -602,6 +611,7 @@ export class RuntimeController {
         schema: tool.parameters,
       })),
       uiPlugins: ['files', 'activity', 'browser'],
+      openUrl: this.openRequest,
       settings: {
         theme: settings.theme,
         hideThinking: settings.hide_thinking,

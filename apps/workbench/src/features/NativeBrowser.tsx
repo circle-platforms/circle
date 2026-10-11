@@ -8,7 +8,8 @@ import type {
   BrowserCapture,
 } from '../../../desktop/src/contracts';
 import { Button, IconButton, Status } from '../components/common';
-export function NativeBrowser() {
+/** `target`: a link to open as soon as it changes, such as one an extension asked for. */
+export function NativeBrowser({ target }: { target?: string } = {}) {
   const { snapshot, notify } = useRuntime();
   const id = currentSession(snapshot).id;
   const [url, setUrl] = useState('');
@@ -59,10 +60,17 @@ export function NativeBrowser() {
       void host.browserHide(id);
     };
   }, [id]);
-  const navigate = async () => {
+  useEffect(() => {
+    if (!target || !/^https?:\/\//i.test(target)) return;
+    setUrl(target);
+    void navigate(target);
+    // Only a new target opens a page; typing in the address bar does not.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, id]);
+  const navigate = async (address = url) => {
     try {
       active.current = true;
-      const result = await host.browserNavigate(id, url);
+      const result = await host.browserNavigate(id, address);
       setState(result);
       const rect = viewport.current!.getBoundingClientRect();
       await host.browserBounds(

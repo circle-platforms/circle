@@ -269,7 +269,9 @@ app
         join(dataPath, 'runtime-home'),
         __dirname,
         (url) => {
-          // The same check as links the window opens: http(s) only, never in a fixture run.
+          // The window opens the link in its browser panel. Without a window, the system
+          // browser does, after the same check as links the window opens.
+          if (window && !window.isDestroyed()) return;
           const allowed = safeExternalUrl(url);
           if (allowed && !fixtureProfile) void shell.openExternal(allowed);
         },

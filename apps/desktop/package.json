@@ -16,7 +16,8 @@
     "test:desktop": "node test/desktop.mjs",
     "format:check": "prettier --check src test scripts package.json tsconfig.json",
     "typecheck": "tsc --noEmit",
-    "test:interface": "node test/interface.mjs"
+    "test:interface": "node test/interface.mjs",
+    "test:extensions": "node test/extensions-native.mjs"
   },
   "engines": {
     "node": ">=24"

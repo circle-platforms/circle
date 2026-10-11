@@ -58,6 +58,12 @@ An extension shipped with Circle is off until `"enabled": true`, which `/extensi
 
 A folder may have an `extension.json` beside the entry file, `{ "version": "1.2.0", "description": "..." }`. `/extensions` and the desktop application show both. It is optional, and an unreadable one is ignored.
 
+## An interface in the desktop application
+
+An extension shipped with Circle can have an interface half in the desktop application: a page or panel built into the application under the same name and version. The two are one plugin. The interface shows only while its extension is installed, loaded without error, of the same version and turned on; turning it on or off under **extensions → interface components** turns the extension on or off, saved in `settings.json`, and the card says why it is off. The extension feeds it with `api.setView(data)`, and the page acts by running the extension's own commands, whose lines go to the conversation.
+
+Interfaces are built into the application; an extension cannot add one by itself. The circle-server extension has one: a **circle-server** page with the connection, the tasks handed over and their latest lines, and buttons to follow a task or save its results again.
+
 ## Extensions shipped with Circle
 
 ### circle-server
@@ -101,7 +107,8 @@ Circle 0.5.0 and older loaded `extension.py`. This version does not run Python, 
 | `api.ToolError` | Throw it from a tool to report a failed call to the model. |
 | `api.Watch` | `new api.Watch(title, poll, options)`: return it from a tool to have Circle wait for something slow. See [Waiting for something slow](#waiting-for-something-slow). |
 | `api.setStatus(text, lamp)` | One line at the right of the footer while it holds, such as what the extension is connected to. `lamp` is `running` (yellow), `ok` (green), `error` (red), `wait` (cyan) or `none`. The text is one line of up to 60 characters, with [secrets](#secrets) masked; `null` removes it. The terminal shows it at the right of the footer; the desktop application, above the footer of its sidebar. |
-| `api.openUrl(url)` | Open an `http` or `https` address in the system's browser, from the terminal or the desktop application. An address with a user name or password, or of another kind, is refused. It is passed to the system's opener as one argument, never through a shell. |
+| `api.openUrl(url)` | Open an `http` or `https` address. The terminal opens it in the system's browser, passed to the system's opener as one argument and never through a shell. The desktop application opens it in its own browser panel, beside the session; with that panel turned off, or no window, the system's browser opens it. An address with a user name or password, or of another kind, is refused. |
+| `api.setView(data)` | Publish data for the extension's own [interface in the desktop application](#an-interface-in-the-desktop-application): JSON only, up to 64 KB, with [secrets](#secrets) masked. `null` removes it. |
 | `api.workspace` | The folder Circle works in, for a tool that reads or saves the user's files there. |
 | `api.settings` | A copy of the extension's own entry under `extensions` in `settings.json`, as it was when the extension loaded, such as `{ "enabled": true, "url": "…" }`. Changing the copy saves nothing. |
 | `api.dataDir` | A folder of the extension's own, `~/.circle/extension_data/<name>/` (`0700`), made the first time it is read. For what the extension keeps that is not secret. |

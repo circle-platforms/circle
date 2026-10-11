@@ -128,6 +128,44 @@ export function register(api: ExtensionAPI): void {
     writeJson('tasks.json', all);
   }
 
+  // What a paired page of the desktop application shows (api.setView): where you are
+  // signed in, the tasks handed over from here and the last lines this extension wrote.
+  const recent: string[] = [];
+  function publishView(signedIn: boolean): void {
+    const config = readConfig();
+    api.setView({
+      url: config?.url ?? '',
+      username: config?.username ?? '',
+      scopeId: config?.scopeId ?? '',
+      signedIn,
+      following: [...following.keys()],
+      tasks: Object.entries(followed())
+        .slice(-20)
+        .map(([taskId, item]) => ({ taskId, ...item })),
+      recent: recent.slice(-30),
+    });
+  }
+  // A context whose lines are also kept for the view.
+  function recording(context: CommandContext): CommandContext {
+    const keep = (line: string): void => {
+      recent.push(...String(line).split('\n'));
+      recent.splice(0, Math.max(0, recent.length - 30));
+      void showStatus();
+    };
+    return {
+      workspace: context.workspace,
+      toast: (line) => {
+        keep(line);
+        context.toast(line);
+      },
+      append: (line) => {
+        keep(line);
+        context.append(line);
+      },
+      sendUserMessage: (line) => context.sendUserMessage(line),
+    };
+  }
+
   // The footer line: where you are signed in, and how many tasks this window follows.
   let statusRun = 0;
   async function showStatus(): Promise<void> {
@@ -136,6 +174,7 @@ export function register(api: ExtensionAPI): void {
     const config = readConfig();
     const signedIn = Boolean(await api.secrets.get('token'));
     if (run !== statusRun) return;
+    publishView(signedIn);
     if (!config || !signedIn) {
       api.setStatus(config ? 'circle-server · signed out' : null);
       return;
@@ -773,7 +812,7 @@ export function register(api: ExtensionAPI): void {
       }
       const command = commands[verb];
       if (!command) throw new ServerError(`unknown: /server ${verb}\n${USAGE}`);
-      await command(rest, context);
+      await command(rest, recording(context));
     },
   );
 }

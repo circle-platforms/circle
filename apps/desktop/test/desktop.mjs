@@ -334,7 +334,23 @@ try {
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
-  assert.equal(await page.getByRole('checkbox').count(), 3);
+  assert.equal(await page.getByRole('checkbox').count(), 4);
+  // The circle-server interface is paired with its runtime extension, which the
+  // preview does not have, so it stays off whatever the chosen list says.
+  assert.equal(
+    await page
+      .getByRole('checkbox', {
+        name: 'enable circle-server interface',
+        exact: true,
+      })
+      .isChecked(),
+    false,
+  );
+  await page
+    .getByText(
+      /paired with runtime extension circle-server · 0\.1\.0 · runtime extension circle-server is not installed/,
+    )
+    .waitFor();
   for (const id of ['knowledge', 'work', 'execution', 'methods'])
     assert.equal(
       await page.getByRole('link', { name: id, exact: true }).count(),

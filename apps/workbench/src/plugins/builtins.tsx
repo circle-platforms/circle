@@ -24,6 +24,7 @@ import {
   KnowledgeAction,
 } from './platform/views';
 import type { WorkbenchPlugin } from './types';
+import { serverPlugin } from './server';
 export const circlePlugins: WorkbenchPlugin[] = [
   {
     id: 'files',
@@ -78,6 +79,7 @@ export const circlePlugins: WorkbenchPlugin[] = [
       { id: 'browser', title: 'browser', icon: Globe, component: BrowserPanel },
     ],
   },
+  serverPlugin,
 ];
 export const platformPlugins: WorkbenchPlugin[] = [
   {

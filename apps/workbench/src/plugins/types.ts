@@ -36,6 +36,12 @@ export interface WorkbenchPlugin {
   description: string;
   icon: LucideIcon;
   requires?: string[];
+  /**
+   * The runtime extension that is this plugin's other half, by name. A paired plugin shows
+   * only while that extension is installed, loaded, enabled and of the same version, and
+   * turning it on or off turns the extension on or off.
+   */
+  runtimeExtension?: string;
   pages?: PluginPage[];
   widgets?: PluginWidget[];
   composerActions?: PluginWidget[];

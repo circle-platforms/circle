@@ -971,7 +971,7 @@ test('a message may carry pictures of several megabytes, scaled down by the core
   assert.match(String(huge.error), /over 64 MB; remove some pictures or PDFs/);
 });
 
-test('an extension status reaches the snapshot and its links go to the main process opener', async (t) => {
+test('an extension status and view reach the snapshot, and its links reach the window and the main process', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'circle-core-desktop-'));
   const home = join(root, 'home');
   const workspace = join(root, 'workspace');
@@ -980,7 +980,7 @@ test('an extension status reaches the snapshot and its links go to the main proc
   saveSettings(trustFolder(defaultSettings(), workspace), home);
   await writeFile(
     join(workspace, '.circle/extensions/live/extension.mjs'),
-    `export function register(api){api.registerTool('show','show',{type:'object',properties:{}},async()=>{api.setStatus('lab · 1 running','running');await api.openUrl('https://lab.example.test/live');return 'shown'},{readOnly:true})}`,
+    `export function register(api){api.registerTool('show','show',{type:'object',properties:{}},async()=>{api.setStatus('lab · 1 running','running');api.setView({tasks:['task_1']});await api.openUrl('https://lab.example.test/live');return 'shown'},{readOnly:true})}`,
   );
   const opened: string[] = [];
   const updates: RuntimeUpdate[] = [];
@@ -1021,4 +1021,10 @@ test('an extension status reaches the snapshot and its links go to the main proc
     .at(-1)!
     .snapshot.extensions.find((item) => item.name === 'live')!;
   assert.deepEqual(row.status, { text: 'lab · 1 running', lamp: 'running' });
+  // Its view reaches a paired interface, and the link reaches the window's browser panel.
+  assert.deepEqual(row.view, { tasks: ['task_1'] });
+  const request = updates.at(-1)!.snapshot.openUrl!;
+  assert.equal(request.url, 'https://lab.example.test/live');
+  assert.equal(request.sessionId, controller.snapshot().activeSessionId);
+  assert.match(request.id, /^[0-9a-f-]{36}$/);
 });

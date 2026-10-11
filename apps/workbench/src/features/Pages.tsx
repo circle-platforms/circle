@@ -1,6 +1,7 @@
 import { desktopHost } from '../host';
 import { validateKeybindings } from '../model/shortcuts';
 import { usePlugins } from '../plugins/context';
+import { pairing } from '../plugins/registry';
 import { useState } from 'react';
 import {
   Plus,
@@ -871,7 +872,13 @@ function ExtensionsPage() {
                 />
               </div>
               <p className="panel-note">
-                bundled first-party component · 0.1.0
+                {plugin.runtimeExtension
+                  ? `paired with runtime extension ${plugin.runtimeExtension} · ${plugin.version}${
+                      pairing(plugin, snapshot.extensions).reason
+                        ? ' · ' + pairing(plugin, snapshot.extensions).reason
+                        : ''
+                    }`
+                  : `bundled first-party component · ${plugin.version}`}
               </p>
             </article>
           ))}

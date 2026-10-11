@@ -84,3 +84,52 @@ test('setStatus keeps one line per extension, masks secrets, redraws on change a
     /unknown lamp/,
   );
 });
+
+test('setView publishes data for an interface of the extension, masked, bounded and redrawn on change', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  await new ExtensionSecrets(home, 'viewer').set('token', 'tok-77aa88bb99');
+  const path = join(home, 'extensions', 'viewer');
+  mkdirSync(path, { recursive: true });
+  writeFileSync(
+    join(path, 'extension.mjs'),
+    `export function register(api){
+      api.registerTool('publish','publish',${schema},async(args)=>{
+        const token = await api.secrets.get('token');
+        if (args.big) { api.setView({ text: 'x'.repeat(70000) }); return 'too big'; }
+        if (args.clear) { api.setView(null); return 'cleared'; }
+        api.setView({ tasks: [{ id: 'task_1', phase: 'running' }], note: 'with ' + token });
+        api.setView({ tasks: [{ id: 'task_1', phase: 'running' }], note: 'with ' + token });
+        return 'ok';
+      },{readOnly:true});
+    }`,
+  );
+  let redraws = 0;
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: false,
+    onStatus: () => redraws++,
+  }).load();
+  const context = {
+    signal: new AbortController().signal,
+    sessionId: 't',
+  } as never;
+  const tool = host.tools()[0]!;
+  await tool.run({}, context);
+  assert.deepEqual(host.view('viewer'), {
+    tasks: [{ id: 'task_1', phase: 'running' }],
+    note: 'with ***',
+  });
+  assert.equal(redraws, 1);
+  await assert.rejects(
+    async () => tool.run({ big: true }, context),
+    /at most 64 KB/,
+  );
+  await tool.run({ clear: true }, context);
+  assert.equal(host.view('viewer'), undefined);
+  assert.equal(redraws, 2);
+});

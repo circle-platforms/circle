@@ -1,4 +1,50 @@
 import type { WorkbenchPlugin } from './types.ts';
+export interface PairedExtension {
+  name: string;
+  version: string;
+  enabled: boolean;
+  error?: string;
+}
+/** Whether a plugin paired with a runtime extension may show, and if not, why. */
+export function pairing(
+  plugin: WorkbenchPlugin,
+  extensions: readonly PairedExtension[],
+): { live: boolean; reason: string } {
+  if (!plugin.runtimeExtension) return { live: true, reason: '' };
+  const row = extensions.find((item) => item.name === plugin.runtimeExtension);
+  if (!row)
+    return {
+      live: false,
+      reason: `runtime extension ${plugin.runtimeExtension} is not installed`,
+    };
+  if (row.error)
+    return {
+      live: false,
+      reason: `runtime extension ${row.name} failed to load`,
+    };
+  if (row.version !== plugin.version)
+    return {
+      live: false,
+      reason: `runtime extension ${row.name} is ${row.version || 'unversioned'}, this interface is ${plugin.version}`,
+    };
+  if (!row.enabled)
+    return { live: false, reason: `runtime extension ${row.name} is off` };
+  return { live: true, reason: '' };
+}
+/** The plugins that show: the chosen ones, and paired ones whose extension is live. */
+export function effectivePlugins(
+  plugins: readonly WorkbenchPlugin[],
+  chosen: readonly string[],
+  extensions: readonly PairedExtension[],
+): string[] {
+  return plugins
+    .filter((plugin) =>
+      plugin.runtimeExtension
+        ? pairing(plugin, extensions).live
+        : chosen.includes(plugin.id),
+    )
+    .map((plugin) => plugin.id);
+}
 const reservedPages = new Set([
   'sessions',
   'models',
