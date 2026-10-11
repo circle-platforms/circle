@@ -340,13 +340,25 @@ export class ModelCatalog {
       provider: windowItem?.[0] ?? '',
       priceProvider: priceItem?.[0] ?? '',
     };
-    // `"models": {"name": {"images": true}}` in the settings, where models.dev is wrong
+    // Whether it reads images: `"models": {"name": {"images": true}}` in the settings where
+    // models.dev is wrong; else what this endpoint's own entries say; else yes when any
+    // provider says so, since a reseller that lists only text must not hide a vendor's
+    // vision model behind a gateway models.dev does not know
     const said = settings.models[model]?.images;
-    const image =
-      typeof said === 'boolean'
-        ? said
-        : (windowItem?.[1].image ?? priceItem?.[1].image);
-    if (image !== undefined) result.imageInput = image;
+    const known = (entries: CatalogEntry[]): boolean[] =>
+      entries.flatMap((entry) =>
+        entry.image === undefined ? [] : [entry.image],
+      );
+    let reads = known(found.map(([, entry]) => entry));
+    if (!reads.length)
+      reads = known(
+        Object.values(providers).flatMap((provider) => {
+          const entry = find(provider.models, model);
+          return entry ? [entry] : [];
+        }),
+      );
+    if (typeof said === 'boolean') result.imageInput = said;
+    else if (reads.length) result.imageInput = reads.includes(true);
     this.factsCache.set(key, result);
     return structuredClone(result);
   }

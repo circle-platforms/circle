@@ -134,7 +134,9 @@ function validateContext(
     !state.prunedIds.every(string) ||
     !Array.isArray(state.stripThinkingIds) ||
     !state.stripThinkingIds.every(string) ||
-    !isRecord(state.offloaded)
+    !isRecord(state.offloaded) ||
+    (state.droppedMedia !== undefined &&
+      (!Array.isArray(state.droppedMedia) || !state.droppedMedia.every(string)))
   )
     throw new Error('invalid context state');
   if (

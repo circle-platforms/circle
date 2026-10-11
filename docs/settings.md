@@ -73,7 +73,7 @@ The API key is not in `settings.json`. It is in `credentials.json` next to it, a
 
 ## Before you edit by hand
 
-- **Circle changes one key at a time.** When you change something in a session (`ctrl+s` in `/models` or `/effort`, `/themes`, `/settings`, `/trust`, `/login`, `/logout`), Circle reads the file from disk, changes that key and writes it back, so your hand edits and keys Circle does not know stay. The running session goes on with what it read at start until you run `/reload`.
+- **Circle changes one key at a time.** When you change something in a session (`ctrl+s` in `/models` or `/effort`, `/themes`, `/settings`, `/trust`, `/login`, `/logout`), Circle reads the file from disk, changes that key and writes it back, so your hand edits and keys Circle does not know stay. The exception is `auth`: Circle writes back only `protocol`, `base_url`, `model` and `api_key_ref`, so the `mode` and `oauth_provider` an older release wrote are dropped. The running session goes on with what it read at start until you run `/reload`.
 - **A malformed file stops Circle** at start with `settings could not be read` and exit code `2`, also for `circle --init`. Keep a copy before you edit.
 - **`circle --init` replaces only the connection**: `auth` (endpoint, protocol, model). It also clears `enabled_models` when the endpoint changes. See [CLI](cli.md#setting-up-again).
 

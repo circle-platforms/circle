@@ -142,9 +142,8 @@ export class Harness {
    */
   steerNow(): boolean {
     if (!this.active || !this.steering.length) return false;
-    this.step?.abort(
-      new Error('Interrupted: the user sent a message to read first'),
-    );
+    // Said plainly: the message may still be taken back before it is read
+    this.step?.abort(new Error('Interrupted by the user'));
     return true;
   }
   clearQueue(): { steering: string[]; followUp: string[] } {
@@ -173,13 +172,14 @@ export class Harness {
     }
   }
   // A prompt with the files it mentions. A model known not to read images gets their paths
-  // only, and the screen says so.
+  // only, and the screen says so. A file that cannot go is left out: the model and the
+  // screen are told which and why.
   private async attach(
     prompt: string,
     workspace: string,
     signal: AbortSignal,
   ): Promise<Pick<Message, 'content' | 'attachments'>> {
-    const { message, leftOut } = await attachPrompt(
+    const { message, leftOut, problems } = await attachPrompt(
       prompt,
       workspace,
       signal,
@@ -196,7 +196,14 @@ export class Harness {
           },
         },
       });
-    return message;
+    if (!problems.length) return message;
+    this.bus.emit('info', {
+      payload: { model_notice: { event: 'files_left_out', problems } },
+    });
+    return {
+      ...message,
+      content: `${message.content}\n\n[Not attached: ${problems.join('; ')}]`,
+    };
   }
   private save(message: Message): void {
     this.options.store.append(this.sessionId, [message]);
@@ -267,20 +274,29 @@ export class Harness {
     try {
       for (let step = 0; step < (this.options.maxSteps ?? 9999); step++) {
         signal.throwIfAborted();
-        for (const message of this.steering.splice(0)) {
+        // The step starts here: a steerNow while the messages before are read stops it
+        const stepControl = new AbortController();
+        this.step = stepControl;
+        const stepSignal = AbortSignal.any([signal, stepControl.signal]);
+        // One at a time, each left waiting until it is stored: one that fails, or is taken
+        // back while its files are read, does not take the others with it
+        while (this.steering.length) {
+          const message = this.steering[0]!;
+          const content = await this.attach(message, session.workspace, signal);
+          const at = this.steering.indexOf(message);
+          if (at < 0) continue;
+          this.steering.splice(at, 1);
           this.save({
             id: randomUUID(),
             role: 'user',
-            ...(await this.attach(message, session.workspace, signal)),
+            ...content,
             ...this.shownAs(message),
           });
           this.bus.emit('steer', { payload: { message } });
         }
         this.options.beforeStep?.();
-        const stepControl = new AbortController();
-        this.step = stepControl;
-        const stepSignal = AbortSignal.any([signal, stepControl.signal]);
         try {
+          stepSignal.throwIfAborted();
           this.bus.emit('llm_start');
           const response = await this.model.complete({
             system:
@@ -461,6 +477,7 @@ export class Harness {
       const context = {
         signal,
         sessionId: this.sessionId,
+        imageInput: this.model.imageInput,
         emitAttachments: (items: MediaAttachment[]) => {
           if (!acceptingAttachments)
             throw new Error('tool attachment channel is closed');

@@ -68,12 +68,20 @@ export class TurnStatus {
     }
     const notice = event.payload.model_notice as
       Record<string, unknown> | undefined;
-    if (event.kind === 'info' && notice?.event === 'retry')
+    if (event.kind === 'info' && notice?.event === 'retry') {
       this.retry = `${RETRY_CAUSE[String(notice.kind)] ?? 'error'} ${notice.attempt}/${notice.max}`;
-    else if (
-      ['llm_token', 'llm_end', 'run_start', 'run_end', 'run_error'].includes(
-        event.kind,
-      )
+      // The failed try's thinking is gone with it
+      this.thinkingFrom = this.live = undefined;
+    } else if (
+      [
+        'llm_start',
+        'llm_token',
+        'llm_end',
+        'steer',
+        'run_start',
+        'run_end',
+        'run_error',
+      ].includes(event.kind)
     )
       this.retry = undefined;
     if (event.kind === 'run_start') {

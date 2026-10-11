@@ -475,7 +475,7 @@ test('sending steering now stops the running command but keeps the results alrea
     ],
   );
   assert.match(results[0]!.content, /alpha/);
-  assert.match(results[1]!.content, /user sent a message to read first/);
+  assert.equal(results[1]!.content, 'Interrupted by the user');
   const request = model.requests[1]!.messages;
   assert.deepEqual(
     request.slice(-3).map((message) => [message.role, message.status]),
@@ -575,6 +575,62 @@ test('while a model request is tried again the busy line says which try and why,
   const done = s.screen();
   assert.doesNotMatch(done, /Retrying/);
   assert.match(done, /the whole answer/);
+});
+
+test('send-now pressed while earlier steering is being read still stops the step, so the next request has the new message', async (t) => {
+  const model = new ScriptedModel([
+    response('look', '', [{ id: 'list', name: 'ls', args: { path: '.' } }]),
+    answer('read both'),
+  ]);
+  const s = await session(t, model);
+  const options = s.runtime.harness.options;
+  const before = options.beforeStep;
+  let pressed = false;
+  // The moment the step's waiting messages are in: B arrives and enter is pressed again
+  options.beforeStep = () => {
+    before?.();
+    if (pressed || !s.runtime.harness.messages.some((m) => m.content === 'A'))
+      return;
+    pressed = true;
+    s.runtime.harness.queue('B');
+    assert.equal(s.runtime.harness.steerNow(), true);
+  };
+  s.runtime.harness.queue('A');
+  await s.runtime.harness.run('go');
+  // the very first request already has B: the step that was about to start without it stopped
+  const first = model.requests[0]!.messages.filter((m) => m.role === 'user');
+  assert.deepEqual(
+    first.map((m) => m.content),
+    ['go', 'A', 'B'],
+  );
+  assert.equal(model.requests.length, 2);
+});
+
+test('a steering message whose file cannot go still reaches the model, without it, and the messages after it are not lost', async (t) => {
+  const workspace = scratch(t);
+  writeFileSync(join(workspace, 'empty.png'), '');
+  const model = new ScriptedModel([blocked, answer('read them')]);
+  const s = await session(t, model, { workspace });
+  const first = s.app.submit('first');
+  await until(() => model.requests.length === 1);
+  s.type('see @empty.png');
+  s.key('enter');
+  s.type('and this');
+  s.key('enter');
+  s.key('enter');
+  await first;
+  const users = model.requests[1]!.messages.filter(
+    (m) => m.role === 'user',
+  ).map((m) => m.content);
+  assert.deepEqual(users, [
+    'first',
+    'see @empty.png\n\n[Not attached: empty.png (attachment must contain 1 byte to 20 MiB)]',
+    'and this',
+  ]);
+  assert.match(
+    s.screen(),
+    /✖ Not attached: empty\.png \(attachment must contain 1 byte to 20 MiB\)/,
+  );
 });
 
 test('esc with nothing waiting starts no turn', async (t) => {
@@ -764,6 +820,29 @@ test('setup in the full-screen interface saves the URL that answered, and reques
   });
   assert.equal(reply.message.content, 'pong');
   assert.equal(seen.at(-1), 'POST /v1/chat/completions');
+});
+
+test('settings marked as set up but without a URL (an older OAuth sign-in) open setup, as print mode does', async (t) => {
+  const home = scratch(t);
+  writeFileSync(
+    join(home, 'settings.json'),
+    JSON.stringify({
+      initialized: true,
+      auth: { mode: 'oauth', oauth_provider: 'openai', model: 'gpt-x' },
+    }),
+  );
+  const app = new SessionApp(scratch(t), home, loadSettings(home));
+  const ui = app as any;
+  ui.screen.render = () => {};
+  cleanup(t, () => {
+    ui.interactions.close();
+    if (ui.flashTimer) clearTimeout(ui.flashTimer);
+    ui.input.close();
+  });
+  const done = app.initialize();
+  await until(() => app.state.dialog?.title === "What is the API's base URL?");
+  ui.handle({ type: 'key', key: 'escape', char: '' });
+  assert.equal(await done, false);
 });
 
 test('a key the endpoint turns down (401, 403) ends the red line with where to change it; other failures do not', async (t) => {

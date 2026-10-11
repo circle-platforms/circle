@@ -1,4 +1,4 @@
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, rmSync, statSync } from 'node:fs';
 import { runOutput, type OutputRunner } from './ink/clipboard.js';
 
 export interface ScreenshotOptions {
@@ -9,6 +9,8 @@ export interface ScreenshotOptions {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
   run?: OutputRunner;
+  /** esc: the capture stops and leaves no file. */
+  signal?: AbortSignal;
 }
 
 /** Whether a screenshot can be taken here: a desktop on this machine, not one over ssh. */
@@ -46,16 +48,16 @@ const MAC_WINDOWS = `function run(argv) {
 }`;
 
 // One line, as Circle's other PowerShell commands: run with -Command, not as a script file
+// One line, as Circle's other PowerShell commands: run with -Command, not as a script file.
+// A named window draws itself into the picture (PrintWindow), so a window over it is not in
+// it; the main screen is copied as it shows.
 const WINDOWS_SHOT = [
+  "$ErrorActionPreference = 'Stop'",
   'Add-Type -AssemblyName System.Windows.Forms, System.Drawing',
-  'Add-Type -TypeDefinition \'using System; using System.Runtime.InteropServices; public static class CircleWindow { [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out Rect rect); public struct Rect { public int Left, Top, Right, Bottom; } }\'',
+  'Add-Type -TypeDefinition \'using System; using System.Runtime.InteropServices; public static class CircleWindow { [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out Rect rect); [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window); [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags); public struct Rect { public int Left, Top, Right, Bottom; } }\'',
   '[CircleWindow]::SetProcessDPIAware() | Out-Null',
   '$app = $env:CIRCLE_SCREENSHOT_APP',
-  '$bounds = [Windows.Forms.Screen]::PrimaryScreen.Bounds',
-  'if ($app) { $windows = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 }; $found = $windows | Where-Object { $_.ProcessName -like "*$app*" -or $_.MainWindowTitle -like "*$app*" } | Select-Object -First 1; if (-not $found) { \'apps:\' + (($windows | ForEach-Object { $_.ProcessName } | Sort-Object -Unique) -join \', \'); exit }; $rect = New-Object CircleWindow+Rect; [CircleWindow]::GetWindowRect($found.MainWindowHandle, [ref]$rect) | Out-Null; $bounds = [Drawing.Rectangle]::FromLTRB($rect.Left, $rect.Top, $rect.Right, $rect.Bottom) }',
-  '$bitmap = New-Object Drawing.Bitmap $bounds.Width, $bounds.Height',
-  '$graphics = [Drawing.Graphics]::FromImage($bitmap)',
-  '$graphics.CopyFromScreen($bounds.Location, [Drawing.Point]::Empty, $bounds.Size)',
+  "if ($app) { $windows = @(Get-Process | Where-Object { $_.MainWindowHandle -ne 0 }); $found = (@($windows | Where-Object { $_.ProcessName -eq $app }) + @($windows | Where-Object { $_.ProcessName -like \"*$app*\" }) + @($windows | Where-Object { $_.MainWindowTitle -like \"*$app*\" })) | Select-Object -First 1; if (-not $found) { 'apps:' + (($windows | ForEach-Object { $_.ProcessName } | Sort-Object -Unique) -join ', '); exit }; if ([CircleWindow]::IsIconic($found.MainWindowHandle)) { 'minimized'; exit }; $rect = New-Object CircleWindow+Rect; [CircleWindow]::GetWindowRect($found.MainWindowHandle, [ref]$rect) | Out-Null; $bitmap = New-Object Drawing.Bitmap ($rect.Right - $rect.Left), ($rect.Bottom - $rect.Top); $graphics = [Drawing.Graphics]::FromImage($bitmap); $dc = $graphics.GetHdc(); $drawn = [CircleWindow]::PrintWindow($found.MainWindowHandle, $dc, 2); $graphics.ReleaseHdc($dc); if (-not $drawn) { throw 'the window did not draw itself' } } else { $bounds = [Windows.Forms.Screen]::PrimaryScreen.Bounds; $bitmap = New-Object Drawing.Bitmap $bounds.Width, $bounds.Height; $graphics = [Drawing.Graphics]::FromImage($bitmap); $graphics.CopyFromScreen($bounds.Location, [Drawing.Point]::Empty, $bounds.Size) }",
   '$bitmap.Save($env:CIRCLE_SCREENSHOT, [Drawing.Imaging.ImageFormat]::Png)',
   "'png'",
 ].join('; ');
@@ -70,7 +72,7 @@ const LINUX_TOOLS = (wayland: boolean, target: string): [string, string[]][] =>
       ]
     : [
         ['import', ['-window', 'root', target]],
-        ['scrot', ['-o', target]],
+        ['scrot', [target]],
         ['gnome-screenshot', ['-f', target]],
         ['spectacle', ['-b', '-n', '-f', '-o', target]],
       ];
@@ -82,15 +84,32 @@ const MAC_PERMISSION =
   'If the picture shows only the desktop, the terminal may not record the screen: allow it in System Settings → Privacy & Security → Screen Recording, then quit and reopen the terminal.';
 
 /**
- * Take a screenshot as a PNG at `target`; throws with what to do when it cannot. Resolves to
- * a hint for the model when the picture may not show what was asked.
+ * Take a screenshot as a PNG at `target`; throws with what to do when it cannot, and leaves
+ * no file then. Resolves to a hint for the model when the picture may not show what was asked.
  */
 export async function takeScreenshot(
   options: ScreenshotOptions,
 ): Promise<string> {
+  try {
+    const hint = await capture(options);
+    options.signal?.throwIfAborted();
+    return hint;
+  } catch (error) {
+    rmSync(options.target, { force: true });
+    options.signal?.throwIfAborted();
+    throw error;
+  }
+}
+async function capture(options: ScreenshotOptions): Promise<string> {
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
-  const run = options.run ?? runOutput;
+  const run: OutputRunner = (command, args, settings) => {
+    options.signal?.throwIfAborted();
+    return (options.run ?? runOutput)(command, args, {
+      ...settings,
+      signal: options.signal,
+    });
+  };
   const app = options.app?.trim() ?? '';
   const { target } = options;
   if (platform === 'darwin') {
@@ -113,6 +132,8 @@ export async function takeScreenshot(
       'screencapture',
       [
         '-x',
+        '-t',
+        'png',
         ...(windows.window === null
           ? []
           : ['-o', '-l', String(windows.window)]),
@@ -143,6 +164,10 @@ export async function takeScreenshot(
     if (said.startsWith('apps:'))
       throw new Error(
         `no window of "${app}" is open. Apps with windows: ${said.slice(5).trim()}`,
+      );
+    if (said === 'minimized')
+      throw new Error(
+        `the window of "${app}" is minimized; ask the user to restore it`,
       );
     if (shot.code !== 0 || !wrote(target))
       throw new Error('PowerShell did not take the screenshot');

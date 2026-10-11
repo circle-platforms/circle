@@ -49,6 +49,8 @@ export interface ToolContext {
   signal: AbortSignal;
   sessionId: string;
   emitAttachments?: (attachments: MediaAttachment[]) => void;
+  /** Whether the model in use reads images: false when it is known not to. */
+  imageInput?: boolean;
 }
 export interface MediaAttachment {
   kind: 'image' | 'document';

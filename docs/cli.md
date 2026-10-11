@@ -111,7 +111,7 @@ Print mode, line mode and RPC mode need Circle set up and the folder trusted. Wh
 | `not_run` | `name`, `args`, `reason` (why the call would ask, such as `runs a shell command` or `destructive operation`) | A call that is not run because nobody can approve it. Its `tool_result` follows with the error. |
 | `job` | `event` (`started`, `updated`, `ended`), `job` (`id`, `kind`, `title`, `status`, `reason`, `exitCode`, `startedBy`, `elapsed` in seconds, `output`, `sessionId`) | A [background job](background-jobs.md) started, changed or ended. |
 | `compaction` | `phase`, `trigger`, and as the phase has them `tokens_before`, `tokens_after`, `summarized`, `kept`, `file`, `seconds`, `message` | A [compaction](sessions.md#compaction) started, moved on, ended or failed. |
-| `subagent_event` | `event`, the event's fields, `tags` (`subagent`, `name`, and `job_id` for a background one) | Something a subagent did. |
+| `subagent_event` | `event`, the event's fields, `tags` (`subagent`, `name`, and `job_id` for a background one) | Something a subagent did. After an `info` event whose `model_notice` is a `retry`, the text a subagent streams (`llm_token`) starts over. |
 | `turn_end` | `answer`, `usage` (this turn) | When a prompt's turn ends. |
 | `error` | `message` | The run stopped. |
 

@@ -48,6 +48,7 @@ async function session(
     home?: string;
     workspace?: string;
     headless?: boolean;
+    modelOverride?: string;
   } = {},
 ) {
   const home = options.home ?? scratch(t);
@@ -68,6 +69,7 @@ async function session(
     settings,
     model,
     headless: options.headless ?? true,
+    modelOverride: options.modelOverride,
   });
   const runtime = app.runtime!;
   cleanup(t, async () => {
@@ -870,9 +872,11 @@ test("/login asks for the URL and the key on its list, lists the endpoint's mode
   saveSettings(settings, home);
   saveCredentials({ api_key: 'old-key' }, home);
   const before = readFileSync(join(home, 'settings.json'), 'utf8');
+  // started with `-m`: the model chosen in /login still wins, as in 0.5.0
   const { app, ui, runtime, key } = await session(t, [], {
     home,
     settings: structuredClone(settings),
+    modelOverride: 'flag-model',
   });
   const typed = async (text: string): Promise<void> => {
     for (const char of text) await key(char, char);
@@ -961,4 +965,5 @@ test("/login asks for the URL and the key on its list, lists the endpoint's mode
     seen.join('\n'),
   );
   assert.equal(runtime.harness.model.model, 'gamma');
+  assert.equal(app.state.model, 'gamma');
 });

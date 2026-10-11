@@ -537,3 +537,21 @@ test('subagent detail navigation uses empty-prompt Down, Enter, arrows and Escap
   assert.equal(navigation.detail, undefined);
   assert.equal(navigation.selected, undefined);
 });
+
+test('an imported context state with images left out must list message ids', (t) => {
+  const root = scratch(t);
+  const store = new CheckpointStore(root);
+  cleanup(t, () => store.close());
+  const session = store.create(root, 'test');
+  store.append(session.id, [user('start')]);
+  store.setContextState(session.id, {
+    ...emptyContextState(),
+    droppedMedia: ['start'],
+  });
+  const graph = store.exportGraph(session.id);
+  validateSessionGraph(graph);
+  const contexts = graph.sessions[0]!.contexts;
+  (contexts.at(-1)!.state as unknown as Record<string, unknown>).droppedMedia =
+    5;
+  assert.throws(() => validateSessionGraph(graph), /invalid context state/);
+});

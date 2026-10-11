@@ -17,6 +17,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -36,6 +37,7 @@ import {
   loadCredentials,
   trustFolder,
   isFolderTrusted,
+  isReady,
   withConnection,
 } from '../settings.js';
 import { resolveEndpoint } from '../probe.js';
@@ -581,7 +583,9 @@ export class SessionApp {
     this.state.completion = undefined;
   }
   async initialize(force = false): Promise<boolean> {
-    if (force || !this.settings.initialized) {
+    // Set up, but with no URL or model (an older release's OAuth sign-in): ask again, as
+    // print mode does and 0.5.0 did
+    if (force || !isReady(this.settings)) {
       this.settingUp = !this.runtime;
       // One card, a step at a time; it says what Circle is doing while the endpoint lists
       // its models, and is drawn again when it has answered.
@@ -774,6 +778,10 @@ export class SessionApp {
         else if (notice.event === 'images_left_out')
           this.notice(
             `${notice.model} does not read images; sent their paths only`,
+          );
+        else if (notice.event === 'files_left_out')
+          this.notice(
+            `✖ Not attached: ${(notice.problems as string[]).join('; ')}`,
           );
         else if (
           ['repeat_retry', 'missing_finish_retry'].includes(notice.event)
@@ -1462,11 +1470,12 @@ export class SessionApp {
       new Date().toISOString().replace(/[:.]/g, '-') + '.png',
     );
     const found = await this.clipboard.readImage(target);
-    const files = !found
-      ? []
-      : 'png' in found
-        ? [found.png]
-        : found.files.filter((file) => mediaType(file) && existsSync(file));
+    // Only files that are there and not empty: a write that failed must not become a token
+    const files = (
+      !found ? [] : 'png' in found ? [found.png] : found.files
+    ).filter(
+      (file) => mediaType(file) && existsSync(file) && statSync(file).size > 0,
+    );
     if (files.length) this.attachFiles(files);
     else {
       this.flash('No image on the clipboard');
@@ -2050,7 +2059,11 @@ export class SessionApp {
       if (flow.step === 'done') {
         this.loginFlow = undefined;
         this.saveConnection(flow);
-        this.applyRunSettings(runtime.options.modelOverride);
+        // The model chosen here wins over `--model` and the project's, as in 0.5.0
+        const chosen = this.settings.auth.model;
+        runtime.options.modelOverride = undefined;
+        this.applyRunSettings();
+        this.settings.auth.model = this.state.model = chosen;
         runtime.options.settings = this.settings;
         runtime.setModel(this.settings.auth.model);
         this.notice(

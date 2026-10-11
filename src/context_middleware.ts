@@ -45,6 +45,7 @@ export function nextMediaState(
   let keptCount = 0;
   let keptBytes = 0;
   let full = false;
+  const before = dropped.size;
   for (const message of [...carrying].reverse()) {
     const size = bytesOf(message);
     full ||=
@@ -57,6 +58,8 @@ export function nextMediaState(
       keptBytes += size;
     }
   }
+  // Over the limit with the newest message alone: nothing to leave out, nothing to store
+  if (dropped.size === before) return state;
   return { ...state, droppedMedia: [...dropped] };
 }
 export interface ContextOptions {
@@ -237,7 +240,7 @@ export class ContextManager {
           message = {
             ...message,
             attachments: undefined,
-            content: `${message.content}\n\n[${message.attachments.map((item) => item.filename).join(', ')} left out of this request to make room for newer images. Read the file again if you need to see it.]`,
+            content: `${message.content}\n\n[${message.attachments.map((item) => item.filename).join(', ')} left out of this request to make room for newer images. Read the file or call the tool again if you need to see it.]`,
           };
         const path = state.offloaded[message.id];
         if (message.role !== 'tool' || !path) return message;

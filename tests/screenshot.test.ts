@@ -6,6 +6,10 @@ import { PNG } from 'pngjs';
 import type { OutputRunner } from '../src/ink/clipboard.js';
 import { fitPng, MAX_EDGE, MAX_PIXELS, pngSize } from '../src/image_fit.js';
 import { readMedia } from '../src/media.js';
+import { nextMediaState } from '../src/context_middleware.js';
+import { nextPruneState } from '../src/middleware/tool_result_prune.js';
+import { emptyContextState } from '../src/checkpoint_store.js';
+import { makeAttachment } from '../src/media.js';
 import { projectDataDir } from '../src/paths.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { canScreenshot, takeScreenshot } from '../src/screenshot.js';
@@ -148,7 +152,7 @@ test('once a request would carry more than 8 images, the older ones are left out
   );
   assert.match(
     ninth[0]!.content,
-    /shot0\.png left out of this request to make room for newer images\. Read the file again/,
+    /shot0\.png left out of this request to make room for newer images\. Read the file or call the tool again/,
   );
   assert.deepEqual(
     ninth.slice(-3).map((message) => message.attachments?.[0]?.filename),
@@ -231,9 +235,11 @@ test('the screenshot tool asks first, takes the front window of the app it names
   await runtime.harness.run('and now');
   assert.deepEqual(calls[0]!.slice(0, 3), ['osascript', '-l', 'JavaScript']);
   assert.deepEqual(calls[0]!.slice(-2), ['Safari', 'otty']);
-  assert.deepEqual(calls[1]!.slice(0, 5), [
+  assert.deepEqual(calls[1]!.slice(0, 7), [
     'screencapture',
     '-x',
+    '-t',
+    'png',
     '-o',
     '-l',
     '42',
@@ -382,3 +388,104 @@ test(
     assert.equal(existsSync(target), false);
   },
 );
+
+test('esc stops a screenshot under way and leaves no file; a minimized Windows window is named as such', async (t) => {
+  const root = realpathSync(scratch(t));
+  const target = join(root, 'shot.png');
+  const controller = new AbortController();
+  const capturing = takeScreenshot({
+    target,
+    platform: 'linux',
+    env: { DISPLAY: ':0' },
+    signal: controller.signal,
+    run: (_command, args, options) =>
+      new Promise((resolve) => {
+        // a tool that writes part of a picture and then hangs
+        writeFileSync(args.at(-1)!, 'partial');
+        options.signal?.addEventListener('abort', () =>
+          resolve({ code: -1, stdout: Buffer.alloc(0) }),
+        );
+      }),
+  });
+  setTimeout(() => controller.abort(new Error('Interrupted')), 50);
+  await assert.rejects(capturing, /Interrupted/);
+  assert.equal(existsSync(target), false);
+  await assert.rejects(
+    takeScreenshot({
+      app: 'code',
+      target,
+      platform: 'win32',
+      env: {},
+      run: async () => ({ code: 0, stdout: Buffer.from('minimized\r\n') }),
+    }),
+    /the window of "code" is minimized; ask the user to restore it/,
+  );
+});
+
+test('a model that does not read images is not given a screenshot: nothing is taken', async (t) => {
+  const root = realpathSync(scratch(t));
+  const calls: string[][] = [];
+  const model = Object.assign(
+    new ScriptedModel([
+      reply('shoot', [{ id: 'shot', name: 'screenshot', args: {} }]),
+      reply('done', [], 'ok'),
+    ]),
+    { imageInput: false },
+  );
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: defaultSettings(),
+    model,
+    headless: true,
+    screenshot: { platform: 'darwin', env: {}, run: desktop({}, calls) },
+  });
+  cleanup(t, () => runtime.close());
+  runtime.policy.setYolo(runtime.session.id, true);
+  await runtime.harness.run('look');
+  assert.match(
+    model.requests[1]!.messages.at(-1)!.content,
+    /the model in use does not read images/,
+  );
+  assert.equal(calls.length, 0);
+});
+
+test('a PNG too large to scale down is refused rather than sent whole', async (t) => {
+  const root = realpathSync(scratch(t));
+  // a header that says 9000×9000 over data that cannot be decoded
+  const header = png(2, 2);
+  header.writeUInt32BE(9000, 16);
+  header.writeUInt32BE(9000, 20);
+  writeFileSync(join(root, 'huge.png'), header);
+  await assert.rejects(
+    readMedia(join(root, 'huge.png'), new AbortController().signal),
+    /the picture is 9000×9000 and cannot be scaled down/,
+  );
+});
+
+test('leaving out older images changes the stored state only when something more is left out, and pruning keeps their note', () => {
+  const picture = makeAttachment(png(4, 4), 'image/png', 'a.png');
+  const many = {
+    id: 'many',
+    role: 'user' as const,
+    content: 'nine pictures',
+    attachments: Array.from({ length: 9 }, () => picture),
+  };
+  const state = emptyContextState();
+  // the newest message alone is over the limit: nothing to leave out
+  assert.equal(nextMediaState([many], state), state);
+  const dropped = { ...emptyContextState(), droppedMedia: ['old'] };
+  const old = {
+    id: 'old',
+    role: 'tool' as const,
+    tool_call_id: 'call',
+    name: 'read_file',
+    content: 'x'.repeat(200000),
+  };
+  const pruned = nextPruneState([old], dropped, {
+    enabled: true,
+    protectTokens: 0,
+    minimumTokens: 0,
+  });
+  assert.deepEqual(pruned.prunedIds, []);
+});

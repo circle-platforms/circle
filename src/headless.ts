@@ -277,6 +277,10 @@ export class HeadlessProgress {
         this.say(
           `  … ${String(notice.model)} does not read images; sent their paths only`,
         );
+      else if (notice.event === 'files_left_out')
+        this.say(
+          `  … not attached: ${(notice.problems as string[]).join('; ')}`,
+        );
     }
   }
   summary(): string {
