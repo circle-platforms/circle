@@ -68,6 +68,8 @@ export interface ModelRequest {
     kind: 'connected' | 'keepalive' | 'text' | 'thinking' | 'tool' | 'usage',
   ) => void;
   notice?: (event: ModelNotice) => void;
+  /** Wait this many times the configured request timeout for the answer to start. */
+  timeoutScale?: number;
 }
 export interface ModelNotice {
   event: string;

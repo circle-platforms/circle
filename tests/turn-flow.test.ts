@@ -541,6 +541,42 @@ test('↑ in an empty box takes back the last waiting message as it was shown, a
   );
 });
 
+test('while a model request is tried again the busy line says which try and why, and the part it had written is gone', async (t) => {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const model = new ScriptedModel([
+    async (request) => {
+      request.token('half a rep');
+      // what the guard says when the request timed out and is sent again
+      request.notice?.({
+        event: 'retry',
+        kind: 'timeout',
+        attempt: 3,
+        max: 10,
+        wait_ms: 8000,
+      });
+      await released;
+      request.token('the whole answer');
+      return response('answer', 'the whole answer');
+    },
+  ]);
+  const s = await session(t, model);
+  // a failed check must not leave the turn waiting
+  cleanup(t, () => release());
+  const first = s.app.submit('go');
+  await until(() => s.app.state.flash === 'Retry 3/10 in 8.0s');
+  const waiting = s.screen();
+  assert.match(waiting, /Retrying… · timeout 3\/10 · [\d.]+s · ↓ 0/);
+  assert.doesNotMatch(waiting, /half a rep/);
+  release();
+  await first;
+  const done = s.screen();
+  assert.doesNotMatch(done, /Retrying/);
+  assert.match(done, /the whole answer/);
+});
+
 test('esc with nothing waiting starts no turn', async (t) => {
   const model = new ScriptedModel([blocked, answer('never')]);
   const s = await session(t, model);

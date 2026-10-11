@@ -26,8 +26,8 @@ The endpoint key is **not** read from the environment. Circle reads it only from
 | Variable | Effect | Default |
 |---|---|---|
 | `CIRCLE_REASONING_EFFORT` | Thinking depth: `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Wins over `default_thinking`; `--thinking` sets it for one run. | Anthropic protocol: `xhigh`; OpenAI protocol: nothing sent |
-| `CIRCLE_LLM_TIMEOUT` | Request timeout in seconds. Minimum 5. | `45` |
-| `CIRCLE_LLM_STALL_TIMEOUT` | Cut a stream that has sent nothing but keep-alives for this many seconds. `0` turns it off. | `180` |
+| `CIRCLE_LLM_TIMEOUT` | How many seconds a model request waits for the answer to start. Minimum 5. After a timeout the request is sent again and waits twice as long, up to 8 times as long. See [Reliability](how-circle-works.md#reliability). | `45` |
+| `CIRCLE_LLM_STALL_TIMEOUT` | Cut a stream that has sent no content for this many seconds (keep-alives do not count), and send the request again as after a timeout. `0` turns it off. | `180` |
 | `CIRCLE_LLM_REPEAT_GUARD` | `0`, `false`, `off` or `no` turns off the repetition guard. | on |
 | `CIRCLE_LLM_VERIFY_FINISH` | Same values. Turns off the check for a response that ends without a finish reason. | on |
 | `CIRCLE_MODEL_CTX` | The context window in tokens for every model (`1000000` or `1_000_000`): the footer's `ctx` and where the automatic compaction starts. `models` in `settings.json` sets one model's and wins. | from models.dev |

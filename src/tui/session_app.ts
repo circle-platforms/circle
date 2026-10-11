@@ -760,11 +760,14 @@ export class SessionApp {
           event: string;
           [key: string]: unknown;
         };
-        if (notice.event === 'retry')
+        if (notice.event === 'retry') {
+          // What the failed request had written is not kept: it starts again
+          this.state.streaming = '';
+          this.state.thinking = '';
           this.flash(
             `Retry ${notice.attempt}/${notice.max} in ${(Number(notice.wait_ms) / 1000).toFixed(1)}s`,
           );
-        else if (notice.event === 'param_dropped')
+        } else if (notice.event === 'param_dropped')
           this.notice(
             `Endpoint does not support ${notice.param}; continuing without it`,
           );
@@ -773,9 +776,7 @@ export class SessionApp {
             `${notice.model} does not read images; sent their paths only`,
           );
         else if (
-          ['repeat_retry', 'stall_retry', 'missing_finish_retry'].includes(
-            notice.event,
-          )
+          ['repeat_retry', 'missing_finish_retry'].includes(notice.event)
         ) {
           this.state.streaming = '';
           this.state.thinking = '';
