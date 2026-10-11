@@ -239,6 +239,42 @@ test('a dropped image goes in the box as [Image #N]; the model gets the file wit
   assert.equal(s.ui.history.items.at(-1), `see ${mention(shot)} what is wrong`);
 });
 
+test('a large dropped or mentioned PNG is scaled down to send, and the model is told both sizes; a small one is sent as it is', async (t) => {
+  const model = new ScriptedModel([answer('seen'), answer('seen too')]);
+  const s = session(t, model);
+  const folder = realpathSync(scratch(t));
+  const large = join(folder, 'large shot.png');
+  writeFileSync(large, png(3000, 2000));
+  writeFileSync(join(s.workspace, 'small.png'), png(40, 30));
+  s.ui.handle({ type: 'paste', text: dropped(large) });
+  s.type('and @small.png');
+  s.key('enter');
+  await until(() => model.requests.length === 1 && !s.runtime.busy);
+  const user = s.lastUser();
+  const sizes = user.attachments!.map((item) => {
+    const image = PNG.sync.read(Buffer.from(item.data, 'base64'));
+    return `${image.width}×${image.height}`;
+  });
+  assert.equal(sizes.length, 2);
+  const [width, height] = sizes[0]!.split('×').map(Number);
+  assert.ok(Math.max(width!, height!) <= 1568 && width! * height! <= 1_150_000);
+  assert.equal(sizes[1], '40×30');
+  assert.equal(
+    user.content,
+    `${mention(large)} and @small.png\n\n[Scaled down to send: large shot.png 3000×2000, sent as ${sizes[0]}]`,
+  );
+  // The conversation shows the box, without the note
+  assert.equal(
+    s.runtime.harness.messages[0]!.display,
+    '[Image #1] and @small.png',
+  );
+  // Nothing scaled, nothing said
+  s.type('again @small.png');
+  s.key('enter');
+  await until(() => model.requests.length === 2 && !s.runtime.busy);
+  assert.equal(s.lastUser().content, 'again @small.png');
+});
+
 test('ctrl+v puts the clipboard picture in the box, kept with the project data, and alt+v does the same; an empty clipboard says so', async (t) => {
   const model = new ScriptedModel([answer('seen')]);
   const s = session(t, model);

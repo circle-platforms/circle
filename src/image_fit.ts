@@ -50,8 +50,10 @@ export function fitPng(bytes: Buffer): Fitted {
   } catch {
     return { bytes, width, height };
   }
-  const outWidth = Math.max(1, Math.round(width * scale));
-  const outHeight = Math.max(1, Math.round(height * scale));
+  // Rounded down, so the result stays within both limits (3000×2000 rounded would be
+  // 1313×876, over MAX_PIXELS)
+  const outWidth = Math.max(1, Math.floor(width * scale + 1e-9));
+  const outHeight = Math.max(1, Math.floor(height * scale + 1e-9));
   const pixels = shrink(image.data, width, height, outWidth, outHeight);
   let opaque = true;
   for (let at = 3; at < pixels.length && opaque; at += 4)

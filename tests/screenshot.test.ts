@@ -73,6 +73,10 @@ test('a large PNG is scaled down by averaging what each pixel covers; a small or
     height: scaled.height,
   });
   assert.equal(Math.round((scaled.width / scaled.height) * 100), 160);
+  // Rounding never takes it over the limits
+  const wide = fitPng(png(3000, 2000));
+  assert.deepEqual([wide.width, wide.height], [1313, 875]);
+  assert.ok(wide.width * wide.height <= MAX_PIXELS);
   const small = png(800, 600);
   assert.equal(fitPng(small).bytes, small);
   const broken = Buffer.from('89504e470d0a1a0a30303030', 'hex');

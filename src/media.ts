@@ -152,13 +152,13 @@ export async function readAttachment(
 const MAX_PNG_READ = 64 * 1024 * 1024;
 /**
  * An image or PDF file as an attachment. A large PNG (a screenshot) is scaled down to what
- * models read; `size` says how large the picture is (`2880×1800, sent as 1357×848`), or is
- * empty when it is not a PNG.
+ * models read; `size` says how large the picture is (`2880×1800, sent as 1356×847`), or is
+ * empty when it is not a PNG, and `scaled` whether it was made smaller.
  */
 export async function readMedia(
   path: string,
   signal: AbortSignal,
-): Promise<{ attachment: MediaAttachment; size: string }> {
+): Promise<{ attachment: MediaAttachment; size: string; scaled: boolean }> {
   const mime = mediaType(path);
   if (!mime) throw new Error('unsupported attachment file type');
   signal.throwIfAborted();
@@ -181,6 +181,7 @@ export async function readMedia(
   signal.throwIfAborted();
   let bytes: Buffer = Buffer.concat(chunks);
   let size = '';
+  let scaled = false;
   if (mime === 'image/png') {
     const fitted = fitPng(bytes);
     // Too large to decode, or broken: sent as it is, an endpoint would refuse it, and every
@@ -194,6 +195,7 @@ export async function readMedia(
         `the picture is ${fitted.width}×${fitted.height} and cannot be scaled down; crop it or use a smaller one`,
       );
     bytes = fitted.bytes;
+    scaled = Boolean(fitted.from);
     if (fitted.width)
       size = fitted.from
         ? `${fitted.from.width}×${fitted.from.height}, sent as ${fitted.width}×${fitted.height}`
@@ -201,5 +203,9 @@ export async function readMedia(
   }
   if (bytes.length > MAX_MEDIA_BYTES)
     throw new Error('attachment exceeds 20 MiB; use a smaller file');
-  return { attachment: makeAttachment(bytes, mime, basename(path)), size };
+  return {
+    attachment: makeAttachment(bytes, mime, basename(path)),
+    size,
+    scaled,
+  };
 }

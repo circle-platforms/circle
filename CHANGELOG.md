@@ -4,6 +4,12 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Fixed
+
+- **`/login` shows its first question at once.** It opened on a bare `type to search` line, and the base URL with the saved one filled in appeared only after the first key.
+- **A large picture you paste, drop or mention tells the model both sizes**, as one read with `read_file` does: `[Scaled down to send: shot.png 3000×2000, sent as 1313×875]`. It was scaled down without a word, so the model could take positions on the smaller picture for the real ones.
+- **A scaled-down picture stays within 1.15 million pixels.** Its sides were rounded to the nearest pixel, so a 3000×2000 picture went as 1313×876, just over the limit.
+
 ## 1.0.5 - 2026-10-11
 
 ### Added
