@@ -90,10 +90,11 @@ export class InputParser {
     )
       data = '\x1b' + data;
     this.stray = 0;
-    // An esc that came in an earlier read is a key of its own: option+arrow arrives in one
-    // read, so only esc then ↑ typed quickly gets here with an escape sequence after it
+    // An esc that came in an earlier read is a key of its own: option+arrow and option+letter
+    // arrive in one read, so only esc and then ↑ or a letter typed quickly gets here with
+    // something after it. Taken together they were alt+q, and the esc that stops a turn was lost.
     const events: InputEvent[] = [];
-    if (this.buffer === '\x1b' && data.startsWith('\x1b')) {
+    if (this.buffer === '\x1b' && this.paste === null) {
       events.push(key('escape'));
       this.buffer = '';
     }

@@ -928,3 +928,45 @@ test('a failed turn stays in the conversation after the message it followed, and
     false,
   );
 });
+
+test('a message may carry pictures of several megabytes, scaled down by the core; other commands stay small', async (t) => {
+  const { PNG } = await import('pngjs');
+  // Noise does not compress: about 10 MB, over the 5 MB other commands may carry
+  const image = new PNG({ width: 2000, height: 1500 });
+  let seed = 7;
+  for (let at = 0; at < image.data.length; at++)
+    image.data[at] =
+      at % 4 === 3 ? 255 : (seed = (seed * 1103515245 + 12345) >>> 0) >>> 24;
+  const content = PNG.sync.write(image).toString('base64');
+  assert.ok(content.length > 5_000_000);
+  const f = await setup(t, [{ message: assistant('a big one') }]);
+  const sent = await f.call('prompt', {
+    text: 'look at the big one',
+    attachments: [{ content, mime: 'image/png', name: 'screen.png' }],
+  });
+  assert.equal(sent.ok, true, sent.error);
+  await wait(
+    () =>
+      f.model.requests.length === 1 &&
+      f.controller.snapshot().sessions[0]!.state === 'idle',
+    'answer',
+  );
+  const user = f.model.requests[0]!.messages.find((m) => m.role === 'user')!;
+  const sentImage = PNG.sync.read(
+    Buffer.from(user.attachments![0]!.data, 'base64'),
+  );
+  assert.ok(sentImage.width * sentImage.height <= 1_150_000);
+  assert.match(
+    user.content,
+    /\[Scaled down to send: screen\.png 2000×1500, sent as \d+×\d+\]$/,
+  );
+  const renamed = await f.call('rename-session', {
+    id: f.controller.snapshot().activeSessionId,
+    title: 'x'.repeat(6_000_000),
+  });
+  assert.equal(renamed.ok, false);
+  assert.match(String(renamed.error), /invalid runtime payload/);
+  const huge = await f.call('prompt', { text: 'x'.repeat(65_000_000) });
+  assert.equal(huge.ok, false);
+  assert.match(String(huge.error), /over 64 MB; remove some pictures or PDFs/);
+});

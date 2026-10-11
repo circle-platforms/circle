@@ -89,6 +89,11 @@ test('an esc in front of an arrow or page key is that key with alt, not esc and 
   assert.deepEqual(keys('\x1b[A'), ['escape', 'up']);
   // a CSI-u key after esc is not taken for an F key
   assert.deepEqual(keys('\x1b\x1b[13;2u'), ['escape', 'shift+enter']);
+  // esc and then a letter typed quickly: esc, then the letter, not alt+q
+  assert.deepEqual(keys('\x1b'), []);
+  assert.deepEqual(keys('quick'), ['escape', 'q', 'u', 'i', 'c', 'k']);
+  // option+letter sent as esc and the letter in one read stays alt+letter
+  assert.deepEqual(keys('\x1bv'), ['alt+v']);
 });
 test('Chinese and graphemes occupy terminal cells, and truncation preserves filename tails', () => {
   assert.equal(stringWidth('中文'), 4);

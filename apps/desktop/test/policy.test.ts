@@ -105,3 +105,31 @@ test('native text preview discloses truncation and supports full import text', a
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('chosen pictures and PDFs go whole up to 20 MB, other files up to 4 MB', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-native-files-'));
+  try {
+    const picture = join(root, 'screen.png');
+    await writeFile(picture, Buffer.alloc(6_000_000, 1));
+    const chosen = await nativeFile(picture);
+    assert.equal(chosen.kind, 'image');
+    assert.equal(chosen.size, 6_000_000);
+    const pdf = join(root, 'paper.pdf');
+    await writeFile(pdf, '%PDF-1.7 a small paper');
+    const document = await nativeFile(pdf);
+    assert.equal(document.kind, 'document');
+    assert.equal(
+      document.content,
+      'data:application/pdf;base64,' +
+        Buffer.from('%PDF-1.7 a small paper').toString('base64'),
+    );
+    const large = join(root, 'large.png');
+    await writeFile(large, Buffer.alloc(21 * 1024 * 1024, 1));
+    await assert.rejects(nativeFile(large), /large\.png is over 20 MB/);
+    const notes = join(root, 'notes.txt');
+    await writeFile(notes, Buffer.alloc(4_100_000, 97));
+    await assert.rejects(nativeFile(notes), /notes\.txt is over 4 MB/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

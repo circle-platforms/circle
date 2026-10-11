@@ -4,6 +4,12 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Fixed
+
+- **`esc` and a letter typed quickly after it are two keys.** Within a quarter of a second they were read together as `alt` and the letter: the turn went on, the letter was lost, and `esc` then `v` pasted the clipboard picture.
+- **The desktop application sends pictures larger than about 750 KB**, which is most screenshots. It refused them as an invalid attachment, and a message of more than 5 MB as an invalid payload; the picture stayed in the box and every later message failed with it. A message may now carry pictures and PDFs of up to 20 MB each and 64 MB together, and the core scales large pictures down as in the terminal.
+- **The desktop's attach button takes pictures and PDFs up to 20 MB**, not 4 MB, and **a chosen PDF goes to the model**. A placeholder text was sent in its place, and the message failed.
+
 ## 1.1.0 - 2026-10-11
 
 ### Added
