@@ -48,6 +48,8 @@ export class GatewayModel implements ChatModel {
   readonly model: string;
   private openai?: OpenAI;
   private anthropic?: Anthropic;
+  // How long a request waits for the answer to start (`CIRCLE_LLM_TIMEOUT`)
+  private readonly timeout: number;
   effort: string;
   private readonly dropped = new Set<string>();
   private sentParameters = new Set<string>();
@@ -68,14 +70,14 @@ export class GatewayModel implements ChatModel {
     const apiKey =
       credentials[settings.auth.api_key_ref] || credentials.api_key;
     if (!apiKey) throw new Error('missing API key; re-run circle --init');
-    const timeout = Math.max(
+    this.timeout = Math.max(
       5000,
       (Number(process.env.CIRCLE_LLM_TIMEOUT) || 45) * 1000,
     );
     const options = {
       apiKey,
       baseURL: settings.auth.base_url,
-      timeout,
+      timeout: this.timeout,
       maxRetries: 0,
     };
     if (settings.auth.protocol === 'anthropic')
@@ -253,6 +255,7 @@ export class GatewayModel implements ChatModel {
     this.configureBody(body as unknown as Record<string, unknown>);
     const stream = await this.openai!.chat.completions.create(body, {
       signal: request.signal,
+      timeout: this.timeout * (request.timeoutScale ?? 1),
     });
     request.progress?.('connected');
     let content = '';
@@ -454,6 +457,7 @@ export class GatewayModel implements ChatModel {
     this.configureBody(body as unknown as Record<string, unknown>);
     const stream = this.anthropic!.messages.stream(body, {
       signal: request.signal,
+      timeout: this.timeout * (request.timeoutScale ?? 1),
     });
     stream.on('connect', () => request.progress?.('connected'));
     let snapshot: Anthropic.Message | undefined;

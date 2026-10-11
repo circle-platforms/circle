@@ -130,6 +130,8 @@ export interface ScreenState {
   // The busy word for this turn and the tokens the turn has written so far.
   busyVerb?: string;
   busyTokens?: number;
+  // While a model request is being tried again, why and which try: `timeout 3/10`.
+  busyRetry?: string;
   // The header: thinking depth, the folder's git branch, and whether setup or trust is
   // asking (`gate`) or the session is up (`connected`).
   thinkingDepth?: string;
@@ -582,7 +584,12 @@ export function renderScreen(
     // The frame says whose turn it is: the rainbow runs while the model works.
     const seconds = (Date.now() - state.started) / 1000;
     const label = state.busy
-      ? busyLabel(state.busyVerb ?? 'Brewing', seconds, state.busyTokens ?? 0)
+      ? busyLabel(
+          state.busyRetry ? 'Retrying' : (state.busyVerb ?? 'Brewing'),
+          seconds,
+          state.busyTokens ?? 0,
+          state.busyRetry,
+        )
       : '';
     if (state.completion && !state.picker)
       bottom.push(...completionRows(state.completion, width));

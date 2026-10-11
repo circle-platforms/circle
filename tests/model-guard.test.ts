@@ -14,6 +14,8 @@ import {
   backoffMs,
 } from '../src/model_guard.js';
 import { GatewayModel } from '../src/model.js';
+import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 import { defaultSettings, saveCredentials } from '../src/settings.js';
 import { RepetitionMonitor } from '../src/text_repetition.js';
 import type { ModelRequest, ModelResponse, ModelNotice } from '../src/types.js';
@@ -241,35 +243,171 @@ test('cancellation interrupts an actual Retry-After wait and never sends the que
   await delay(20);
   assert.equal(calls, 1);
 });
-test('keepalive-only stream is terminated at a real deadline and resent once, while partial text prevents a resend', async (t) => {
+test('a stalled stream is a timeout: sent again up to 10 times, also after part of the answer came, which is not kept', async (t) => {
   let calls = 0;
   const base = await gateway(t, (request, response) => {
     calls++;
     response.writeHead(200, { 'Content-Type': 'text/event-stream' });
-    if (calls === 2) {
+    if (calls === 3) {
       chunk(response, { content: 'recovered' }, 'stop');
       response.end('data: [DONE]\n\n');
       return;
     }
-    chunk(response, {});
+    // the first stream sends only keep-alives, the second some text, then each goes quiet
+    chunk(response, calls === 2 ? { content: 'already output' } : {});
     const interval = setInterval(() => chunk(response, {}), 10);
     response.on('close', () => clearInterval(interval));
   });
-  const instance = model(t, base, undefined, 50);
-  assert.equal(
-    (await instance.complete(request())).message.content,
-    'recovered',
+  const waits: number[] = [];
+  const notices: ModelNotice[] = [];
+  const input = request();
+  input.notice = (event) => notices.push(event);
+  const instance = model(
+    t,
+    base,
+    async (ms) => {
+      waits.push(ms);
+    },
+    50,
   );
-  assert.equal(calls, 2);
-  let partialCalls = 0;
-  const partialBase = await gateway(t, (_request, response) => {
-    partialCalls++;
+  const result = await instance.complete(input);
+  assert.equal(result.message.content, 'recovered');
+  assert.equal(calls, 3);
+  assert.deepEqual(
+    notices.map((event) => [event.event, event.kind, event.attempt, event.max]),
+    [
+      ['retry', 'timeout', 1, 10],
+      ['retry', 'timeout', 2, 10],
+    ],
+  );
+  assert.equal(waits.length, 2);
+  let stalls = 0;
+  const silent = await gateway(t, (_request, response) => {
+    stalls++;
     response.writeHead(200, { 'Content-Type': 'text/event-stream' });
-    chunk(response, { content: 'already output' });
+    chunk(response, { content: 'part' });
   });
-  const partial = model(t, partialBase, undefined, 50);
-  await assert.rejects(partial.complete(request()), /stalled/);
-  assert.equal(partialCalls, 1);
+  await assert.rejects(
+    model(t, silent, async () => {}, 50).complete(request()),
+    /^RetriesExhausted: no content from the model for 0s \(gave up after 10 retries\)$/,
+  );
+  assert.equal(stalls, 11);
+});
+test('timeouts are told apart from other failures, also through the SDKs, whose errors are all named Error', () => {
+  for (const timedOut of [
+    new OpenAI.APIConnectionTimeoutError(),
+    new Anthropic.APIConnectionTimeoutError(),
+    error(504, 'upstream timed out'),
+    error(524, 'origin timed out'),
+    error(408, 'request timeout'),
+    Object.assign(new Error('connect'), { code: 'ETIMEDOUT' }),
+    new TypeError('terminated', {
+      cause: Object.assign(new Error('body'), { code: 'UND_ERR_BODY_TIMEOUT' }),
+    }),
+    new OpenAI.APIConnectionError({
+      cause: Object.assign(new Error('fetch failed'), {
+        cause: Object.assign(new Error('connect'), {
+          code: 'UND_ERR_CONNECT_TIMEOUT',
+        }),
+      }),
+    }),
+  ])
+    assert.equal(errorKind(timedOut), 'timeout', String(timedOut));
+  assert.equal(errorKind(new OpenAI.APIConnectionError({})), 'network');
+  assert.equal(
+    errorKind(
+      new TypeError('terminated', {
+        cause: Object.assign(new Error('other side closed'), {
+          code: 'UND_ERR_SOCKET',
+        }),
+      }),
+    ),
+    'network',
+  );
+  assert.equal(
+    errorKind(
+      new OpenAI.APIError(
+        undefined,
+        { message: 'overloaded' },
+        'x',
+        new Headers(),
+      ),
+    ),
+    'inband',
+  );
+  assert.equal(errorKind(error(503, 'busy')), 'server');
+  assert.equal(BUDGETS.timeout.maxRetries, 10);
+});
+test('each timeout doubles how long the next request waits for the answer to start, up to 8 times; a dropped connection is sent again after output too', async () => {
+  const scales: (number | undefined)[] = [];
+  const notices: ModelNotice[] = [];
+  const guard = new ModelGuard(() => false, { wait: async () => {} });
+  const input = request();
+  input.notice = (event) => notices.push(event);
+  await assert.rejects(
+    guard.execute(input, async (current) => {
+      scales.push(current.timeoutScale);
+      throw new OpenAI.APIConnectionTimeoutError();
+    }),
+    /Request timed out\. \(gave up after 10 retries\)/,
+  );
+  assert.deepEqual(scales, [undefined, 2, 4, 8, 8, 8, 8, 8, 8, 8, 8]);
+  assert.deepEqual(
+    notices.map((event) => `${event.attempt}/${event.max}`),
+    [
+      '1/10',
+      '2/10',
+      '3/10',
+      '4/10',
+      '5/10',
+      '6/10',
+      '7/10',
+      '8/10',
+      '9/10',
+      '10/10',
+    ],
+  );
+  let attempts = 0;
+  const result = await guard.execute(request(), async (current) => {
+    if (attempts++) return answer('whole');
+    current.token('half an ans');
+    throw new TypeError('terminated', {
+      cause: Object.assign(new Error('other side closed'), {
+        code: 'UND_ERR_SOCKET',
+      }),
+    });
+  });
+  assert.equal(result.message.content, 'whole');
+  assert.equal(attempts, 2);
+});
+test('a request that times out waits longer the next time, so a slow endpoint answers in the end', async (t) => {
+  const before = process.env.CIRCLE_LLM_TIMEOUT;
+  process.env.CIRCLE_LLM_TIMEOUT = '5';
+  cleanup(t, () => {
+    if (before === undefined) delete process.env.CIRCLE_LLM_TIMEOUT;
+    else process.env.CIRCLE_LLM_TIMEOUT = before;
+  });
+  let calls = 0;
+  // takes 6 s to start answering: more than 5 s, less than 10 s
+  const base = await gateway(t, (_request, response) => {
+    calls++;
+    const timer = setTimeout(() => {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      chunk(response, { content: 'slow but here' }, 'stop');
+      response.end('data: [DONE]\n\n');
+    }, 6000);
+    response.on('close', () => clearTimeout(timer));
+  });
+  const notices: ModelNotice[] = [];
+  const input = request();
+  input.notice = (event) => notices.push(event);
+  const result = await model(t, base, async () => {}).complete(input);
+  assert.equal(result.message.content, 'slow but here');
+  assert.equal(calls, 2);
+  assert.deepEqual(
+    notices.map((event) => [event.kind, event.attempt]),
+    [['timeout', 1]],
+  );
 });
 test('empty missing-finish stream is retried once; partial output is retained and marked truncated', async (t) => {
   let calls = 0;

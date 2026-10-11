@@ -62,8 +62,9 @@ export function busyLabel(
   verb: string,
   seconds: number,
   tokens: number,
+  detail?: string,
 ): string {
-  return `${verb}… · ${formatBusyElapsed(seconds)} · ↓ ${formatTokens(tokens)}`;
+  return `${verb}… · ${detail ? detail + ' · ' : ''}${formatBusyElapsed(seconds)} · ↓ ${formatTokens(tokens)}`;
 }
 
 // A folder as people write it: the home folder is `~`.
