@@ -476,3 +476,138 @@ test('stream stall deadline starts after connection and does not replay a slow s
   assert.equal(result.message.content, 'one response');
   assert.equal(calls, 1);
 });
+
+test('an Anthropic tool call whose arguments stream for longer than the stall timeout is not taken for a stall', async (t) => {
+  let calls = 0;
+  const base = await gateway(t, (_request, response) => {
+    calls++;
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    const event = (type: string, body: Record<string, unknown>) =>
+      response.write(
+        `event: ${type}\ndata: ${JSON.stringify({ type, ...body })}\n\n`,
+      );
+    event('message_start', {
+      message: {
+        id: 'msg',
+        type: 'message',
+        role: 'assistant',
+        model: 'claude-test',
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 0 },
+      },
+    });
+    event('content_block_start', {
+      index: 0,
+      content_block: {
+        type: 'tool_use',
+        id: 'call',
+        name: 'write_file',
+        input: {},
+      },
+    });
+    // the arguments come a piece every 50 ms for 600 ms, twelve times the stall timeout
+    const pieces = [
+      '{"file_path": "a.txt", "content": "',
+      ...Array(10).fill('x'),
+      '"}',
+    ];
+    let at = 0;
+    const timer = setInterval(() => {
+      event('content_block_delta', {
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: pieces[at++] },
+      });
+      if (at < pieces.length) return;
+      clearInterval(timer);
+      event('content_block_stop', { index: 0 });
+      event('message_delta', {
+        delta: { stop_reason: 'tool_use', stop_sequence: null },
+        usage: { output_tokens: 20 },
+      });
+      event('message_stop', {});
+      response.end();
+    }, 50);
+    response.on('close', () => clearInterval(timer));
+  });
+  const home = scratch(t);
+  const settings = defaultSettings();
+  settings.auth.protocol = 'anthropic';
+  settings.auth.base_url = base.replace(/\/v1$/, '');
+  settings.auth.model = 'claude-test';
+  saveCredentials({ api_key: 'fake-key' }, home);
+  const result = await new GatewayModel(settings, home, undefined, {
+    wait: async () => {},
+    stallMs: 120,
+  }).complete(request());
+  assert.deepEqual(result.message.tool_calls, [
+    {
+      id: 'call',
+      name: 'write_file',
+      args: { file_path: 'a.txt', content: 'xxxxxxxxxx' },
+    },
+  ]);
+  assert.equal(calls, 1);
+});
+test('after a stall the next try waits twice as long for content', async () => {
+  const waited: number[] = [];
+  const guard = new ModelGuard(() => false, {
+    wait: async () => {},
+    stallMs: 100,
+  });
+  const result = await guard.execute(request(), async (current) => {
+    if (waited.length === 2) return answer('done');
+    current.progress?.('connected');
+    const started = Date.now();
+    await new Promise<void>((resolve) =>
+      current.signal.addEventListener('abort', () => resolve()),
+    );
+    waited.push(Date.now() - started);
+    throw current.signal.reason;
+  });
+  assert.equal(result.message.content, 'done');
+  assert.ok(waited[0]! >= 90 && waited[0]! < 180, String(waited));
+  assert.ok(waited[1]! >= 190, String(waited));
+});
+test('the wait for the answer to start grows up to the 5 minutes fetch allows, and a fractional CIRCLE_LLM_TIMEOUT is used as whole milliseconds', async (t) => {
+  const before = process.env.CIRCLE_LLM_TIMEOUT;
+  process.env.CIRCLE_LLM_TIMEOUT = '45.05';
+  cleanup(t, () => {
+    if (before === undefined) delete process.env.CIRCLE_LLM_TIMEOUT;
+    else process.env.CIRCLE_LLM_TIMEOUT = before;
+  });
+  const instance = model(t, 'http://127.0.0.1:9/v1', async () => {});
+  const timeouts: unknown[] = [];
+  (instance as any).openai.chat.completions.create = async (
+    _body: unknown,
+    options: { timeout: unknown },
+  ) => {
+    timeouts.push(options.timeout);
+    throw new Error('stop here');
+  };
+  for (const timeoutScale of [undefined, 2, 8]) {
+    const input = request();
+    input.timeoutScale = timeoutScale;
+    await assert.rejects(instance.complete(input), /stop here/);
+  }
+  assert.deepEqual(timeouts, [45050, 90100, 300000]);
+});
+test('certificate and TLS failures are not retried: they fail the same way every time', () => {
+  for (const code of [
+    'DEPTH_ZERO_SELF_SIGNED_CERT',
+    'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+    'ERR_SSL_WRONG_VERSION_NUMBER',
+  ])
+    assert.equal(
+      errorKind(
+        new OpenAI.APIConnectionError({
+          cause: Object.assign(new Error('fetch failed'), {
+            cause: Object.assign(new Error('tls'), { code }),
+          }),
+        }),
+      ),
+      undefined,
+      code,
+    );
+});

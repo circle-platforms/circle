@@ -16,6 +16,7 @@ export const TOOL_SHORT_NAMES: Record<string, string> = {
   write_todos: 'TodoWrite',
   webfetch: 'Fetch',
   websearch: 'Search',
+  screenshot: 'Screenshot',
   question: 'Question',
   skill: 'Skill',
   lsp: 'Lsp',
@@ -55,6 +56,7 @@ const TOOL_ARG_SUMMARY: Record<string, [string, Style][]> = {
   ],
   webfetch: [['url', 'text']],
   websearch: [['query', 'text']],
+  screenshot: [['app', 'text']],
   question: [['questions', 'first_line']],
   skill: [
     ['name', 'text'],

@@ -92,4 +92,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md) for coding agents
 
 ## License
 
-Circle is released under the [MIT License](LICENSE). The model catalogs in `src/data/` carry metadata from models.dev under its own MIT license; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Circle is released under the [MIT License](LICENSE). The model catalogs in `src/data/` carry metadata from models.dev, and many prompts in `src/prompts/` come from OpenCode, each under its own MIT license; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

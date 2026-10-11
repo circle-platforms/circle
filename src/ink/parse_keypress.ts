@@ -52,7 +52,9 @@ function altKey(body: string): string | undefined {
   const modified = body.match(/^(\d+);(\d+)([A-Za-z~])$/);
   let name =
     (modified
-      ? CSI[modified[3]!] || CSI[modified[1] + '~']
+      ? modified[3] === '~'
+        ? CSI[modified[1] + '~']
+        : CSI[modified[3]!]
       : CSI[body] || (body.length === 1 ? SS3[body] : undefined)) ?? '';
   if (!name) return undefined;
   const modifier = modified ? Number(modified[2]) - 1 : 0;
@@ -88,8 +90,14 @@ export class InputParser {
     )
       data = '\x1b' + data;
     this.stray = 0;
-    this.buffer += data;
+    // An esc that came in an earlier read is a key of its own: option+arrow arrives in one
+    // read, so only esc then ↑ typed quickly gets here with an escape sequence after it
     const events: InputEvent[] = [];
+    if (this.buffer === '\x1b' && data.startsWith('\x1b')) {
+      events.push(key('escape'));
+      this.buffer = '';
+    }
+    this.buffer += data;
     while (this.buffer) {
       if (this.paste !== null) {
         const end = this.buffer.indexOf('\x1b[201~');

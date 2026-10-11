@@ -47,11 +47,17 @@ export const runCommand: CommandRunner = (command, args, input, timeout) =>
   });
 
 /** Runs a program and collects what it prints, up to `limit` bytes. `code` is null when it
- * could not be started and -1 when it was stopped, ran past `timeout` or printed too much. */
+ * could not be started and -1 when it was stopped (also by `signal`), ran past `timeout` or
+ * printed too much. */
 export type OutputRunner = (
   command: string,
   args: string[],
-  options: { timeout: number; env?: NodeJS.ProcessEnv; limit?: number },
+  options: {
+    timeout: number;
+    env?: NodeJS.ProcessEnv;
+    limit?: number;
+    signal?: AbortSignal;
+  },
 ) => Promise<{ code: number | null; stdout: Buffer }>;
 
 export const runOutput: OutputRunner = (command, args, options) =>
@@ -77,10 +83,16 @@ export const runOutput: OutputRunner = (command, args, options) =>
       finish(null);
       return;
     }
-    timer = setTimeout(() => {
+    const stop = (): void => {
       child.kill();
       finish(-1);
-    }, options.timeout);
+    };
+    timer = setTimeout(stop, options.timeout);
+    if (options.signal?.aborted) stop();
+    options.signal?.addEventListener('abort', stop, { once: true });
+    child.once('close', () =>
+      options.signal?.removeEventListener('abort', stop),
+    );
     child.stdout?.on('data', (chunk: Buffer) => {
       size += chunk.length;
       if (size > (options.limit ?? 1 << 20)) {
@@ -113,12 +125,17 @@ const MAC_IMAGE = [
   'try',
   'set eof target to 0',
   'write png to target',
+  'on error',
+  'close access target',
+  'return "none"',
   'end try',
   'close access target',
   'return "png"',
   'end run',
 ];
 const WINDOWS_IMAGE = [
+  // A failed step ends the script (exit 1) instead of going on to say 'png'
+  "$ErrorActionPreference = 'Stop'",
   '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
   'Add-Type -AssemblyName System.Windows.Forms, System.Drawing',
   '$files = [Windows.Forms.Clipboard]::GetFileDropList()',

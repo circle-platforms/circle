@@ -102,6 +102,11 @@ test('a mention may be quoted, have its spaces escaped, or hold the no-break spa
     ['~/Desktop/Screenshot 2026-10-11 at 10.15.32\u202fAM.png'],
   );
   assert.deepEqual(mentions('mail me@example.com'), []);
+  // `@` inside a name (Retina assets), and a no-break space after a mention (French) ends it
+  assert.deepEqual(mentions('see @assets/logo@2x.png and @a.png\u00a0:'), [
+    'assets/logo@2x.png',
+    'a.png',
+  ]);
   assert.equal(mention('/tmp/a b.png'), '@"/tmp/a b.png"');
   assert.equal(mention('src/a.png'), '@src/a.png');
   for (const path of [
@@ -109,6 +114,7 @@ test('a mention may be quoted, have its spaces escaped, or hold the no-break spa
     'x/y.png',
     '/tmp/a\u202fb.png',
     '/tmp/say "hi" now.png',
+    '/x/icon@2x.png',
   ])
     assert.deepEqual(mentions(`look ${mention(path)} now`), [path]);
 });
@@ -132,7 +138,46 @@ test('a prompt attaches an image mentioned anywhere but a text file only from th
   const blind = await attachPrompt(text, workspace, signal, () => true, false);
   assert.equal(blind.leftOut, 1);
   assert.equal(blind.message.attachments, undefined);
+  // A file that cannot go is left out and named; the message still goes with the others
+  writeFileSync(join(elsewhere, 'empty.png'), '');
+  for (let at = 0; at < 17; at++)
+    writeFileSync(join(elsewhere, `${at}.png`), png());
+  const many = await attachPrompt(
+    [mention(join(elsewhere, 'empty.png'))]
+      .concat(
+        Array.from({ length: 17 }, (_, at) =>
+          mention(join(elsewhere, `${at}.png`)),
+        ),
+      )
+      .join(' '),
+    workspace,
+    signal,
+    () => true,
+  );
+  assert.equal(many.message.attachments?.length, 16);
+  assert.deepEqual(many.problems, [
+    'empty.png (attachment must contain 1 byte to 20 MiB)',
+    '16.png (only 16 images or PDFs go with one message)',
+  ]);
 });
+
+test(
+  'on Windows a text file on another drive is not added to the message',
+  { skip: process.platform !== 'win32' },
+  async (t) => {
+    // The scratch folder is on the temporary files' drive, the checkout on CI's other one
+    const workspace = realpathSync(scratch(t));
+    const elsewhere = join(process.cwd(), 'package.json');
+    if (elsewhere[0]!.toLowerCase() === workspace[0]!.toLowerCase()) return;
+    const { message } = await attachPrompt(
+      `read @${elsewhere}`,
+      workspace,
+      new AbortController().signal,
+      () => true,
+    );
+    assert.equal(message.content, `read @${elsewhere}`);
+  },
+);
 
 test('a paste of dropped image files is read as those files, whatever quoting the terminal used', (t) => {
   const root = realpathSync(scratch(t));
@@ -157,6 +202,10 @@ test('a paste of dropped image files is read as those files, whatever quoting th
   assert.equal(pastedFiles(''), undefined);
   // A backslash is part of a path on Windows (`dropped` above), and escapes the next
   // character elsewhere; only macOS and Linux can name a file with one
+  // A Windows terminal quotes a path only for its spaces: an apostrophe is just a letter
+  const named = join(root, "O'Neil.png");
+  writeFileSync(named, png());
+  assert.deepEqual(pastedFiles(named, 'win32'), [named]);
   if (process.platform !== 'win32') {
     const slashed = join(root, 'a\\b.png');
     writeFileSync(slashed, 'x');
@@ -215,6 +264,19 @@ test('ctrl+v puts the clipboard picture in the box, kept with the project data, 
   reply = 'none\n';
   s.key('alt+v');
   await until(() => calls.length === 2 && s.app.state.flash !== '');
+  assert.equal(s.app.state.flash, 'No image on the clipboard');
+  // a picture that was said to be written but is not there never becomes a token
+  s.ui.state.flash = '';
+  reply = 'png-but-nothing-written';
+  s.ui.clipboard = new Clipboard({
+    platform: 'darwin',
+    output: async (command, args) => {
+      calls.push([command, ...args]);
+      return { code: 0, stdout: Buffer.from('png\n') };
+    },
+  });
+  s.key('ctrl+v');
+  await until(() => s.app.state.flash !== '');
   assert.equal(s.app.state.flash, 'No image on the clipboard');
   assert.equal(s.app.state.draft, '[Image #1] ');
   s.key('enter');
@@ -378,6 +440,37 @@ test('models.dev says which models read images; the provider profile answers for
   assert.equal(reads('seeing'), true);
   assert.equal(reads('blind'), false);
   assert.equal(reads('unknown'), undefined);
+  // behind a gateway models.dev does not know, one reseller listing a vision model as
+  // text-only does not hide it; the endpoint's own entries decide when it has them
+  const shared = slimCatalog({
+    reseller: {
+      api: 'https://reseller.example/v1',
+      models: {
+        'vision-x': {
+          limit: { context: 1000 },
+          modalities: { input: ['text'] },
+        },
+      },
+    },
+    vendor: {
+      api: 'https://vendor.example/v1',
+      models: {
+        'vision-x': {
+          limit: { context: 1000 },
+          modalities: { input: ['text', 'image'] },
+        },
+      },
+    },
+  });
+  const sharedCatalog = new ModelCatalog(home, { data: shared, env: {} });
+  const at = (url: string) => {
+    const where = defaultSettings();
+    where.auth.base_url = url;
+    return new GatewayModel(where, home, 'vision-x', {}, sharedCatalog)
+      .imageInput;
+  };
+  assert.equal(at('https://lab-gateway.example/v1'), true);
+  assert.equal(at('https://reseller.example/v1'), false);
   // not in models.dev for this endpoint: the bundled OpenAI profile knows it
   assert.equal(reads('gpt-3.5-turbo'), false);
   // the settings say better where models.dev is wrong

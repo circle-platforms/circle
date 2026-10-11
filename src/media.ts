@@ -3,9 +3,11 @@ import { createReadStream } from 'node:fs';
 import { basename, extname } from 'node:path';
 import type { MediaAttachment, Message } from './types.js';
 import { isRecord } from './settings.js';
-import { fitPng } from './image_fit.js';
+import { fitPng, MAX_EDGE, MAX_PIXELS } from './image_fit.js';
 
 export const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
+/** Images and PDFs one message can carry. */
+export const MAX_ATTACHMENTS = 16;
 const MIME: Record<string, MediaAttachment['mime_type']> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -58,7 +60,7 @@ export function makeAttachment(
 export function validateAttachments(
   value: unknown,
 ): asserts value is MediaAttachment[] {
-  if (!Array.isArray(value) || value.length > 16)
+  if (!Array.isArray(value) || value.length > MAX_ATTACHMENTS)
     throw new Error('invalid attachments');
   for (const item of value) {
     if (
@@ -181,6 +183,16 @@ export async function readMedia(
   let size = '';
   if (mime === 'image/png') {
     const fitted = fitPng(bytes);
+    // Too large to decode, or broken: sent as it is, an endpoint would refuse it, and every
+    // request after it while it stays in the conversation
+    if (
+      !fitted.from &&
+      (Math.max(fitted.width, fitted.height) > MAX_EDGE ||
+        fitted.width * fitted.height > MAX_PIXELS)
+    )
+      throw new Error(
+        `the picture is ${fitted.width}×${fitted.height} and cannot be scaled down; crop it or use a smaller one`,
+      );
     bytes = fitted.bytes;
     if (fitted.width)
       size = fitted.from

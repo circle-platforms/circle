@@ -1002,3 +1002,26 @@ test('an attached session shows the busy verb while it works and the turn line a
     output: 42,
   });
 });
+
+test('the retry on the busy line goes when a new step starts or a steering message is read', () => {
+  const turns = new TurnStatus(() => 0.35);
+  const event = (kind: string, payload: Record<string, unknown> = {}) =>
+    ({
+      kind,
+      payload,
+      tags: {},
+      run_id: '',
+      parent_run_id: null,
+      seq: 0,
+      ts: '',
+    }) as unknown as Parameters<TurnStatus['apply']>[0];
+  const retry = event('info', {
+    model_notice: { event: 'retry', kind: 'timeout', attempt: 3, max: 10 },
+  });
+  for (const next of ['llm_start', 'steer']) {
+    turns.apply(retry, () => undefined);
+    assert.equal(turns.retry, 'timeout 3/10');
+    turns.apply(event(next), () => undefined);
+    assert.equal(turns.retry, undefined, next);
+  }
+});

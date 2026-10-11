@@ -70,20 +70,20 @@ If an endpoint rejects a parameter Circle sent (thinking, reasoning effort, stre
 
 ## When a request fails
 
-Circle retries transient failures for you and shows the wait in the footer.
+Circle retries transient failures for you. While it does, the busy line says why and which try it is on, such as `Retrying… · timeout 3/10`.
 
 | Failure | Retries | Gives up after |
 |---|---|---|
+| Timeout: no answer within `CIRCLE_LLM_TIMEOUT` (45 seconds), a stream with no content for `CIRCLE_LLM_STALL_TIMEOUT` (180 seconds), or 408, 504 or 524 | 10 | no time limit |
 | Rate limit (429) | 5 | 10 minutes |
-| Server error (408, 409, 5xx) | 6 | 5 minutes |
-| Network error | 6 | 5 minutes |
+| Server error (409, other 5xx) | 6 | 5 minutes |
+| Network error (connection refused, reset or dropped) | 6 | 5 minutes |
 | Error inside an accepted stream | 3 | 2 minutes |
 
-The wait doubles each time up to a cap (2 minutes for rate limits, 30 seconds otherwise). If the endpoint sends `Retry-After`, `retry-after-ms` or says how long to wait in its error message, Circle uses that. Circle does not retry 402, quota or billing errors, other 4xx errors, or anything after the answer has started streaming. `esc` stops a request and a wait alike.
+The wait between tries doubles each time up to a cap (2 minutes for rate limits, 30 seconds otherwise). If the endpoint sends `Retry-After`, `retry-after-ms` or says how long to wait in its error message, Circle uses that. After a timeout the next try also waits twice as long for the answer to start, up to 5 minutes (Node.js's own limit), and twice as long for content in the stream, up to 8 times as long. A timeout or a dropped connection is retried even after part of the answer came: that part is dropped and the answer starts again. Other failures after the answer has started are not retried, and neither are 402, quota or billing errors, other 4xx errors, or certificate and TLS errors. When the retries run out, the error says how many were made. `esc` stops a request and a wait alike.
 
-Three more guards protect a turn:
+Two more guards protect a turn:
 
-- A stream that sends only keep-alives for 180 seconds is cut and sent again once.
 - A model that repeats itself while thinking is sent again with a reminder, twice at most. One that repeats itself in its answer is stopped.
 - A response that ends with no finish signal and no output is sent again once. When it has output, the output is kept and Circle says it may be truncated.
 

@@ -475,10 +475,14 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
           folder,
           new Date().toISOString().replace(/[:.]/g, '-') + '.png',
         );
+        // Nothing is taken for a model that could not look at it
+        if (context.imageInput === false)
+          throw new Error('the model in use does not read images');
         const hint = await takeScreenshot({
           ...hooks.screenshot,
           app,
           target,
+          signal: context.signal,
         });
         const { attachment, size } = await readMedia(target, context.signal);
         context.emitAttachments([attachment]);

@@ -45,7 +45,10 @@ const target = join(
   'data',
   'models_dev.json.gz',
 );
-writeFileSync(target, gzipSync(JSON.stringify(sorted(data)), { level: 9 }));
+const packed = gzipSync(JSON.stringify(sorted(data)), { level: 9 });
+// The gzip header names the system that wrote it: "unknown", so every system writes the same
+packed[9] = 255;
+writeFileSync(target, packed);
 const models = providers.reduce(
   (sum, provider) => sum + Object.keys(provider.models).length,
   0,

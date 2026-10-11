@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { ModelRequest, ModelResponse, ModelNotice } from './types.js';
 import { RepetitionMonitor } from './text_repetition.js';
 import { isRecord } from './settings.js';
+import { isCertificateError } from './net.js';
 export type RetryKind =
   'rate_limit' | 'server' | 'network' | 'timeout' | 'inband';
 export interface RetryBudget {
@@ -36,7 +37,7 @@ export const BUDGETS: Record<RetryKind, RetryBudget> = {
     jitter: 0,
   },
   // A slow endpoint, not a broken one: up to 10 tries however long each takes, and each
-  // waits longer for the answer to start (TIMEOUT_GROWTH)
+  // waits longer for the answer to start and for content (TIMEOUT_GROWTH)
   timeout: {
     maxRetries: 10,
     deadlineMs: 0,
@@ -57,7 +58,7 @@ export function envFlag(name: string): boolean {
     (process.env[name] || '1').trim().toLowerCase(),
   );
 }
-/** The request timeout grows this many times at most over the timeout retries. */
+/** The request and stall timeouts grow this many times at most over the timeout retries. */
 export const TIMEOUT_GROWTH = 8;
 /** A model request that ran out of retries: the last error, and how many were made. */
 export class RetriesExhausted extends Error {
@@ -148,10 +149,26 @@ const NETWORK_CODES = [
   'EAI_AGAIN',
   'UND_ERR_SOCKET',
 ];
+function tlsFailure(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  for (
+    let current: unknown = error;
+    current && !seen.has(current);
+    current = record(current).cause
+  ) {
+    seen.add(current);
+    if (/^ERR_(?:SSL|TLS)_/.test(String(record(current).code ?? '')))
+      return true;
+  }
+  return false;
+}
 export function errorKind(error: unknown): RetryKind | undefined {
   if (error instanceof StreamStalled) return 'timeout';
   if (error instanceof TextRepetitionLoop || error instanceof MissingFinish)
     return undefined;
+  // A certificate the system does not trust, or TLS spoken to a plain HTTP port, fails the
+  // same way every time
+  if (isCertificateError(error) || tlsFailure(error)) return undefined;
   const status = statusOf(error);
   const codes = bodies(error)
     .flatMap((item) => [item.code, item.type])
@@ -360,8 +377,12 @@ export class ModelGuard {
         : undefined;
       const fromEnv =
         Number(process.env.CIRCLE_LLM_STALL_TIMEOUT || 180) * 1000;
+      // A stream silent after a timeout gets longer too: a model that thinks without
+      // streaming it, behind a gateway that sends keep-alives, may need it
       const stallMs =
-        this.options.stallMs ?? (Number.isFinite(fromEnv) ? fromEnv : 180000);
+        (this.options.stallMs ??
+          (Number.isFinite(fromEnv) ? fromEnv : 180000)) *
+        (current.timeoutScale ?? 1);
       let timer: NodeJS.Timeout | undefined;
       const arm = (): void => {
         if (timer) clearTimeout(timer);
