@@ -168,7 +168,7 @@ try {
   );
   assert.match(firstCapture.dataUrl, /^data:image\/png;base64,/);
   assert.equal(firstCapture.sha256.length, 64);
-  assert.ok(firstCapture.attempts >= 1 && firstCapture.attempts <= 3);
+  assert.ok(firstCapture.attempts >= 1 && firstCapture.attempts <= 8);
   const png = Buffer.from(firstCapture.dataUrl.split(',')[1], 'base64');
   assert.ok(png.readUInt32BE(16) > 0 && png.readUInt32BE(20) > 0);
   const waitVisible = (expected) =>

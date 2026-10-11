@@ -111,7 +111,17 @@ jobs:
           export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.app }}"
           export CIRCLE_DESKTOP_EXECUTABLE="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.executable }}"
           run=()
-          if [ "$RUNNER_OS" = Linux ]; then run=(xvfb-run -a); fi
+          if [ "$RUNNER_OS" = Linux ]; then
+            sysctl kernel.apparmor_restrict_unprivileged_userns || true
+            # As a user who only unpacked the archive starts it
+            timeout 20 xvfb-run -a "$CIRCLE_DESKTOP_EXECUTABLE" 2>&1 | head -20 || true
+            # Chromium's sandbox helper must belong to root and be setuid where unprivileged
+            # user namespaces are restricted (Ubuntu 24.04 and later)
+            helper="$(dirname "$CIRCLE_DESKTOP_EXECUTABLE")/chrome-sandbox"
+            sudo chown root:root "$helper"
+            sudo chmod 4755 "$helper"
+            run=(xvfb-run -a)
+          fi
           "${run[@]}" npm --prefix apps/desktop run test:desktop
           "${run[@]}" npm --prefix apps/desktop run test:live
       - uses: actions/upload-artifact@v7

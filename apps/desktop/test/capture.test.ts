@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { captureFrame } from '../src/capture.ts';
+import { CAPTURE_ATTEMPTS, captureFrame } from '../src/capture.ts';
 
 test('first compositor failure retries into a real returned image and discloses the failed attempt', async () => {
   let calls = 0;
@@ -16,21 +16,30 @@ test('first compositor failure retries into a real returned image and discloses 
 
 test('an empty image cannot become a successful hashed observation', async () => {
   await assert.rejects(
-    captureFrame(async () => ({ isEmpty: () => true })),
+    captureFrame(
+      async () => ({ isEmpty: () => true }),
+      async () => {},
+    ),
     /browser frame unavailable: empty browser frame/,
   );
 });
 
 test('unavailable compositor frames stop after the bounded attempts with the errors intact', async () => {
   let calls = 0;
+  const waits: number[] = [];
   await assert.rejects(
-    captureFrame(async () => {
-      calls++;
-      throw Error('UnknownVizError');
-    }),
+    captureFrame(
+      async () => {
+        calls++;
+        throw Error('UnknownVizError');
+      },
+      async (ms) => waits.push(ms),
+    ),
     /browser frame unavailable/,
   );
-  assert.equal(calls, 3);
+  assert.equal(calls, CAPTURE_ATTEMPTS);
+  // Waits grow to 400 ms: about two seconds for a first frame before giving up
+  assert.deepEqual(waits, [50, 100, 200, 400, 400, 400, 400]);
 });
 
 test('unrelated capture failures are returned without repeating the request', async () => {
