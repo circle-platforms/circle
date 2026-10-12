@@ -69,6 +69,13 @@ interface Objects {
     contractVersion?: string;
     requiredOperations?: string[];
   }[];
+  tools?: { name: string; remote: string; write: boolean }[];
+  skillPacks?: {
+    skillPackId?: string;
+    id?: string;
+    version?: string;
+    status?: string;
+  }[];
 }
 const short = (hash?: string) => (hash ? hash.slice(0, 12) + '…' : '');
 
@@ -355,61 +362,107 @@ export function MethodsLivePage() {
       title="methods"
       description="E · the server's capability packs, at the versions it runs. Hand one a file of this workspace."
     >
-      {(objects, run) =>
-        objects.methods.length ? (
-          <div className="extension-list">
-            {objects.methods.map((pack) => (
-              <article className="extension-card" key={pack.capabilityPackId}>
-                <div className="detail-title">
-                  <div>
-                    <h2>
-                      {pack.capabilityPackId} {pack.version ?? ''}
-                    </h2>
-                    <p>
-                      {pack.title ?? ''}
-                      {pack.contractVersion ? ' · ' + pack.contractVersion : ''}
-                      {pack.inputFormats?.length
-                        ? ' · ' + pack.inputFormats.join(', ')
-                        : ''}
-                    </p>
+      {(objects, run) => (
+        <>
+          {objects.methods.length ? (
+            <div className="extension-list">
+              {objects.methods.map((pack) => (
+                <article className="extension-card" key={pack.capabilityPackId}>
+                  <div className="detail-title">
+                    <div>
+                      <h2>
+                        {pack.capabilityPackId} {pack.version ?? ''}
+                      </h2>
+                      <p>
+                        {pack.title ?? ''}
+                        {pack.contractVersion
+                          ? ' · ' + pack.contractVersion
+                          : ''}
+                        {pack.inputFormats?.length
+                          ? ' · ' + pack.inputFormats.join(', ')
+                          : ''}
+                      </p>
+                    </div>
                   </div>
-                </div>
-                <form
-                  className="form-stack"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    const file = files[pack.capabilityPackId]?.trim();
-                    if (file) run(`submit ${pack.capabilityPackId} ${file}`);
-                  }}
-                >
-                  <input
-                    aria-label={`file for ${pack.capabilityPackId}`}
-                    placeholder="file in the workspace"
-                    value={files[pack.capabilityPackId] ?? ''}
-                    onChange={(event) =>
-                      setFiles({
-                        ...files,
-                        [pack.capabilityPackId]: event.target.value,
-                      })
-                    }
-                  />
-                  <Button
-                    type="submit"
-                    aria-label={`hand over to ${pack.capabilityPackId}`}
+                  <form
+                    className="form-stack"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      const file = files[pack.capabilityPackId]?.trim();
+                      if (file) run(`submit ${pack.capabilityPackId} ${file}`);
+                    }}
                   >
-                    hand over
-                  </Button>
-                </form>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <EmptyState title="no capability packs">
-            The server lists none you may use.
-          </EmptyState>
-        )
-      }
+                    <input
+                      aria-label={`file for ${pack.capabilityPackId}`}
+                      placeholder="file in the workspace"
+                      value={files[pack.capabilityPackId] ?? ''}
+                      onChange={(event) =>
+                        setFiles({
+                          ...files,
+                          [pack.capabilityPackId]: event.target.value,
+                        })
+                      }
+                    />
+                    <Button
+                      type="submit"
+                      aria-label={`hand over to ${pack.capabilityPackId}`}
+                    >
+                      hand over
+                    </Button>
+                  </form>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <EmptyState title="no capability packs">
+              The server lists none you may use.
+            </EmptyState>
+          )}
+          <ServerTools objects={objects} />
+        </>
+      )}
     </Frame>
+  );
+}
+
+// What else the server offers: the tools the model has from it, and pushed skill packs.
+function ServerTools({ objects }: { objects: Objects }) {
+  const tools = objects.tools ?? [];
+  const packs = objects.skillPacks ?? [];
+  return (
+    <>
+      <p className="panel-note">
+        {tools.length
+          ? `${tools.length} server tools the model can use: ` +
+            tools
+              .map(
+                (tool) => `${tool.remote}${tool.write ? ' (asks first)' : ''}`,
+              )
+              .join(', ')
+          : 'This server offers the model no tools.'}
+      </p>
+      {packs.length > 0 && (
+        <div className="extension-list">
+          {packs.map((pack) => (
+            <article
+              className="extension-card"
+              key={pack.skillPackId ?? pack.id}
+            >
+              <div className="detail-title">
+                <div>
+                  <h2>
+                    skill pack {pack.id ?? pack.skillPackId}{' '}
+                    {pack.version ?? ''}
+                  </h2>
+                  <p>{pack.skillPackId}</p>
+                </div>
+                <Status value={pack.status ?? 'unknown'} />
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
 

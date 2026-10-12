@@ -331,12 +331,30 @@ export async function register(api: ExtensionAPI): Promise<void> {
         'conclusionScope',
       ]),
     );
+    // E also holds the skill packs people pushed, and the tools the model has from here.
+    const pushed = await optional<unknown>('/v1/skillpacks', []);
     objects = {
       refreshedAt: new Date().toISOString(),
       work,
       execution,
       knowledge,
       methods,
+      tools: [...serverTools].map(([name, held]) => ({
+        name,
+        remote: held.remote,
+        write: held.write,
+      })),
+      skillPacks: (Array.isArray(pushed) ? pushed : [])
+        .filter(isRecord)
+        .map((item) => {
+          const manifest = isRecord(item.manifest) ? item.manifest : {};
+          return {
+            skillPackId: item.skillPackId,
+            id: item.id ?? manifest.id,
+            version: item.version ?? manifest.version,
+            status: item.status,
+          };
+        }),
     };
     void showStatus();
     return { tasks: tasks.length, packs: methods.length };

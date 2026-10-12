@@ -39,7 +39,7 @@ async function fakeServer(t: Parameters<typeof scratch>[0]) {
   let tokens: string[] = [];
   let logins = 0;
   // The first token is turned down once it has been used five times, as an expired one is.
-  // This server has no tool catalog; asking for one does not count as a use.
+  // This server has no tool catalog or skill packs; asking for them does not count as a use.
   let uses = 0;
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://x');
@@ -68,7 +68,11 @@ async function fakeServer(t: Parameters<typeof scratch>[0]) {
       });
     }
     const presented = request.headers.authorization?.replace('Bearer ', '');
-    if (presented === TOKEN && url.pathname !== '/v1/tools') uses += 1;
+    if (
+      presented === TOKEN &&
+      !['/v1/tools', '/v1/skillpacks'].includes(url.pathname)
+    )
+      uses += 1;
     if (
       !presented ||
       !tokens.includes(presented) ||
