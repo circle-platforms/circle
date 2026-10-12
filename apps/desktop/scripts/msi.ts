@@ -47,6 +47,22 @@ export const PACKAGE_SOURCE = String.raw`<?xml version="1.0" encoding="utf-8"?>
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/qingshanfeihu/circle" />
     <Property Id="ARPNOMODIFY" Value="1" />
 
+    <!-- 安装成功提示和启动选项 -->
+    <UI>
+      <UIRef Id="WixUI_Minimal" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchCircle" Condition="NOT Installed AND LAUNCHCIRCLE=1" />
+    </UI>
+    <CustomAction Id="LaunchCircle" FileRef="Circle.exe" ExeCommand="" Return="asyncNoWait" />
+    <InstallExecuteSequence>
+      <Custom Action="LaunchCircle" After="InstallFinalize">NOT Installed</Custom>
+    </InstallExecuteSequence>
+
+    <!-- 卸载注册信息 -->
+    <Property Id="ARPCONTACT" Value="qingshanfeihu" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/qingshanfeihu/circle/issues" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/qingshanfeihu/circle/releases" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Circle" />
     </StandardDirectory>
