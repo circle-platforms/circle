@@ -72,7 +72,14 @@ try {
   if (msi) {
     assert.equal(existsSync(installed), false, `${installed} exists already`);
     stage(`installing ${msi}`);
-    msiexec('/i', msi, '/qn', '/l*v', join(temp, 'msi-install.log'));
+    msiexec(
+      '/i',
+      msi,
+      '/qn',
+      '/norestart',
+      '/l*v',
+      join(temp, 'msi-install.log'),
+    );
   } else
     await cp(appPath, installed, { recursive: true, verbatimSymlinks: true });
   installedPath = installed;
@@ -298,19 +305,36 @@ try {
 } finally {
   if (running && running.exitCode === null) running.kill();
   server?.close();
-  // The installed package goes, whichever version it is now
-  if (msi && existsSync(join(programFiles, 'Circle')))
+  // The installed package goes, whichever version it is now. Quietly, Windows Installer
+  // restarts the machine when a file it removes is in use: nothing may still run from the
+  // folder, and it must not restart.
+  if (msi && existsSync(join(programFiles, 'Circle'))) {
+    stage('stopping what runs from the installed folder');
+    spawnSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-Command',
+        `$inside = '${join(programFiles, 'Circle')}\\'; ` +
+          '$until = (Get-Date).AddSeconds(30); ' +
+          'do { $left = @(Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($inside, [StringComparison]::OrdinalIgnoreCase) }); ' +
+          '$left | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500 } ' +
+          'while ($left.Count -and (Get-Date) -lt $until)',
+      ],
+      { stdio: 'inherit', timeout: 60000 },
+    );
     for (const file of [
       join(temp, 'release', `circle-desktop-${next}-windows-x64.msi`),
       msi,
     ])
       try {
         stage(`removing ${file}`);
-        msiexec('/x', file, '/qn');
+        msiexec('/x', file, '/qn', '/norestart');
         break;
       } catch {
         /* the other one is installed */
       }
+  }
   // A failed check keeps its files to look at
   if (passed)
     await rm(temp, { recursive: true, force: true, maxRetries: 5 }).catch(
