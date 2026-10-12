@@ -1115,7 +1115,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
       produced.push({ path: output, sha256: sha256(readFileSync(path)) });
     }
     const files = packFiles(root);
+    // With more than one project the server needs to know which one the pack is for.
+    const scopeId = readConfig()?.scopeId;
     const { data } = await request('POST', '/v1/skillpacks', {
+      headers: scopeId ? { 'x-scope-id': scopeId } : {},
       json: {
         manifest,
         files,

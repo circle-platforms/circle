@@ -141,6 +141,7 @@ async function toolServer(t: Parameters<typeof scratch>[0]) {
       return send(200, { data: { status: 'succeeded', commands: 3812 } });
     if (url.pathname === '/v1/skillpacks' && request.method === 'POST') {
       const pack = JSON.parse(body.toString());
+      pack.scopeHeader = request.headers['x-scope-id'];
       packs.push(pack);
       const declared = new Set(pack.manifest.tools);
       const offered = new Set(catalog().map((tool) => tool.name));
@@ -454,6 +455,11 @@ test('a trial records which server tools the model used, and /server skill push 
   );
   const sent = server.packs[0]!;
   assert.equal(sent.manifest.id, 'mindmap-compile');
+  assert.equal(
+    sent.scopeHeader,
+    'scp_lab',
+    'the project signed in to goes along',
+  );
   assert.deepEqual(
     sent.files.map((file: { path: string }) => file.path),
     ['SKILL.md', 'scripts/emit.ts', 'skillpack.json'],
