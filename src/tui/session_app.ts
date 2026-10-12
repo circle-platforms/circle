@@ -108,6 +108,9 @@ import { PlanPanel } from '../ink/components/plan_panel.js';
 import { stripAnsi } from '../ink/string_width.js';
 import { modelScope } from '../model_scope.js';
 import { resumeHint, runningJobs, stoppedJobsLine } from './exit_lines.js';
+import { ChromeBrowser, findBrowser } from '../browser/chrome.js';
+import { browserTools } from '../browser/tools.js';
+import type { CertificateApproval } from '../browser/protocol.js';
 export { VERSION } from '../version.js';
 interface DialogPending {
   complete: (answer: unknown) => void;
@@ -155,6 +158,8 @@ export class SessionApp {
   private jobWakeSnoozed = false;
   // As in 0.5.0, a background agent's card shows whether a turn runs or not: after the
   // turn's own cards (the queue takes those first) and once typing pauses.
+  // The conversation browser, when a Chrome or Edge is installed
+  private browser?: ChromeBrowser;
   private interactions = new InteractionQueue(
     () => !this.externalEditor && !this.state.dialog,
     () => Boolean(this.state.draft || this.state.picker),
@@ -660,8 +665,30 @@ export class SessionApp {
     options: Omit<RuntimeOptions, 'approve' | 'question'>,
   ): Promise<void> {
     this.connecting = true;
+    // The conversation's browser: a Chrome or Edge window, started at the first browser
+    // action. Without one installed the model has no browser tools.
+    const executable = findBrowser();
+    if (executable && !this.browser)
+      this.browser = new ChromeBrowser({
+        executable,
+        trustFile: join(this.home, 'browser-certificates.json'),
+        headless: process.env.CIRCLE_BROWSER_HEADLESS === '1',
+      });
     this.runtime = new AgentRuntime({
       ...options,
+      extraTools: [
+        ...(options.extraTools ?? []),
+        ...(this.browser
+          ? browserTools(this.browser, {
+              confirm: (_session, approval, signal) =>
+                this.interactions.run(
+                  () => this.confirmCertificate(approval, signal),
+                  signal,
+                  false,
+                ),
+            })
+          : []),
+      ],
       settings: this.settings,
       ...this.cardHooks(),
     });
@@ -988,6 +1015,39 @@ export class SessionApp {
       signal?.addEventListener('abort', abort, { once: true });
       this.repaint();
     });
+  }
+  /** The model clicked proceed on the browser's certificate warning: only the person decides. */
+  private async confirmCertificate(
+    approval: CertificateApproval,
+    signal: AbortSignal,
+  ): Promise<'once' | 'always' | 'reject'> {
+    const always = 'always trust this certificate on this host';
+    const choice = await this.askChoice(
+      'certificate',
+      [
+        "Circle wants to go past the browser's certificate warning",
+        `site: ${approval.url}`,
+        `issued to: ${approval.subject || 'unknown'}`,
+        `issued by: ${approval.issuer || 'unknown'}`,
+        ...(approval.validExpiry
+          ? [
+              `valid until: ${new Date(approval.validExpiry * 1000).toISOString().slice(0, 10)}`,
+            ]
+          : []),
+        `sha256: ${approval.fingerprint || 'unknown'}`,
+      ].join('\n'),
+      [
+        'allow once',
+        ...(approval.privateHost && approval.fingerprint ? [always] : []),
+        'reject',
+      ],
+      signal,
+    );
+    return choice === 'allow once'
+      ? 'once'
+      : choice === always
+        ? 'always'
+        : 'reject';
   }
   private async approve(
     call: ToolCall,
@@ -1801,6 +1861,7 @@ export class SessionApp {
       followJobs: (list, rows) => {
         this.jobsList = { list, rows };
       },
+      secretValue: (body) => this.showCard(new SecretCard(body, true)),
       clearContextMeter: () => {
         this.meterCleared =
           this.runtime?.harness.messages
@@ -2319,7 +2380,7 @@ export class SessionApp {
     const runtime = this.runtime;
     const jobs = runtime ? runningJobs(runtime) : 0;
     const hint = runtime ? resumeHint(runtime, this.workspace) : '';
-    await runtime?.close();
+    await Promise.all([runtime?.close(), this.browser?.close()]);
     for (const line of [stoppedJobsLine(jobs), hint])
       if (line) this.terminal.write(line + '\n');
   }

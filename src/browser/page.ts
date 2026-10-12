@@ -209,7 +209,7 @@ export function browserPage(command: string, args: Record<string, any>) {
       (el as HTMLInputElement).type === 'password'
     )
       throw Error(
-        'password fields cannot be filled by the model; ask the user to enter the password in the browser panel',
+        'a password field takes only a saved secret written as %NAME%; ask the user to save one, or to type the password in the browser',
       );
   };
   const focused = (): Element | null => {
@@ -225,6 +225,16 @@ export function browserPage(command: string, args: Record<string, any>) {
     }
     return el;
   };
+  // What a warning page's control decides: Circle's own warning marks its controls, and
+  // Chrome's (the terminal's browser) has its proceed link. Other pages decide nothing.
+  const warningAction = (el: Element): string =>
+    location.protocol === 'circle-warning:'
+      ? (el
+          .closest('[data-circle-action]')
+          ?.getAttribute('data-circle-action') ?? '')
+      : location.protocol === 'chrome-error:' && el.closest('#proceed-link')
+        ? 'proceed'
+        : '';
   if (command === 'snapshot') {
     state.refs.clear();
     const fresh = state.snapshots++ > 0;
@@ -437,13 +447,7 @@ export function browserPage(command: string, args: Record<string, any>) {
       password:
         el.localName === 'input' &&
         (el as HTMLInputElement).type === 'password',
-      // Only Circle's own warning page marks its decisions
-      action:
-        location.protocol === 'circle-warning:'
-          ? (el
-              .closest('[data-circle-action]')
-              ?.getAttribute('data-circle-action') ?? '')
-          : '',
+      action: warningAction(el),
     };
   }
   if (command === 'focus') {
@@ -526,6 +530,16 @@ export function browserPage(command: string, args: Record<string, any>) {
   }
   if (command === 'guard-key') {
     if (!args.secret) rejectPassword(focused());
+    // A key on the warning's proceed link would go past it without the user's approval
+    const target = focused();
+    if (
+      ['Enter', 'Space'].includes(String(args.key)) &&
+      target &&
+      warningAction(target) === 'proceed'
+    )
+      throw Error(
+        'to proceed past a certificate warning, click its link with browser_click',
+      );
     return true;
   }
   if (command === 'select') {
@@ -574,7 +588,29 @@ export function browserPage(command: string, args: Record<string, any>) {
       const pointer = document.createElement('div');
       pointer.style.cssText =
         'position:absolute;left:-4px;top:-4px;width:24px;height:24px;transition:transform 450ms cubic-bezier(.2,.7,.2,1)';
-      pointer.innerHTML = `<svg viewBox="0 0 24 24" width="24" height="24"><path d="M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z" fill="currentColor" stroke="${args.background}" stroke-width="1.7" stroke-linejoin="round"/></svg>`;
+      // Built element by element: a page that requires Trusted Types refuses markup
+      const svgNs = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(svgNs, 'svg');
+      for (const [name, value] of [
+        ['viewBox', '0 0 24 24'],
+        ['width', '24'],
+        ['height', '24'],
+      ] as const)
+        svg.setAttribute(name, value);
+      const path = document.createElementNS(svgNs, 'path');
+      for (const [name, value] of [
+        [
+          'd',
+          'M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z',
+        ],
+        ['fill', 'currentColor'],
+        ['stroke', String(args.background)],
+        ['stroke-width', '1.7'],
+        ['stroke-linejoin', 'round'],
+      ] as [string, string][])
+        path.setAttribute(name, value);
+      svg.append(path);
+      pointer.append(svg);
       const bubble = document.createElement('div');
       bubble.style.cssText =
         'position:absolute;padding:6px 10px;border-radius:8px;font:13px system-ui;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
@@ -636,4 +672,13 @@ export function browserPage(command: string, args: Record<string, any>) {
     );
   }
   throw Error('unknown browser page command');
+}
+
+/**
+ * The expression that runs one command of the page script in a page and reports how it
+ * went. A compiler that names functions (`__name`, as tsx and esbuild's keepNames add)
+ * would leave a call the page does not have; the expression brings a stand-in.
+ */
+export function pageCall(command: string, args: Record<string, unknown>) {
+  return `(async () => { const __name = (target) => target; try { return { ok: true, value: await (${browserPage.toString()})(${JSON.stringify(command)},${JSON.stringify(args)}) }; } catch (error) { return { ok: false, error: String(error.message || error) }; } })()`;
 }

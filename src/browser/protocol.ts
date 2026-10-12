@@ -1,6 +1,8 @@
-// What the runtime asks of a conversation's browser, which lives in the main process, and
-// what it gets back. The runtime posts `{type:'browser', request}` and may post
-// `{type:'browser-cancel', id}`; the main process answers `{type:'browser-reply', reply}`.
+// What the runtime asks of a conversation's browser and what it gets back. In the desktop
+// application the browser lives in the main process: the runtime posts
+// `{type:'browser', request}` and may post `{type:'browser-cancel', id}`, and the main process
+// answers `{type:'browser-reply', reply}`. In the terminal it is the Chrome or Edge that
+// chrome.ts starts, in the same process.
 export const browserActions = [
   'navigate',
   'snapshot',

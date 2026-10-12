@@ -12,7 +12,7 @@ const require = createRequire(import.meta.url);
 const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'circle-browser-page-'));
 const source = await build({
-  entryPoints: [join(root, 'src/browser-page.ts')],
+  entryPoints: [join(root, '../../src/browser/page.ts')],
   bundle: true,
   write: false,
   format: 'iife',
@@ -156,11 +156,11 @@ try {
   assert.match(snapshot, /password "password"/);
   await assert.rejects(
     run('prepare', { ref: ref('password'), typing: true }),
-    /password fields cannot be filled/,
+    /a password field takes only a saved secret/,
   );
   await assert.rejects(
     run('focus', { ref: ref('password') }),
-    /password fields cannot be filled/,
+    /a password field takes only a saved secret/,
   );
   await assert.rejects(
     run('focus', { ref: ref('read only field') }),
@@ -246,7 +246,7 @@ try {
   await page.locator('#password').focus();
   await assert.rejects(
     run('guard-type', { ref: ref('username') }),
-    /password fields cannot be filled/,
+    /a password field takes only a saved secret/,
   );
   await run('focus', { ref: ref('username') });
   await page.locator('#username').evaluate((node) => {
@@ -286,7 +286,10 @@ try {
   );
   await run('overlay-hidden', { hidden: false });
   await page.locator('#password').focus();
-  await assert.rejects(run('guard-key'), /password fields cannot be filled/);
+  await assert.rejects(
+    run('guard-key'),
+    /a password field takes only a saved secret/,
+  );
   await page.evaluate(() => {
     for (let index = 0; index < 400; index++) {
       const long = document.createElement('p');

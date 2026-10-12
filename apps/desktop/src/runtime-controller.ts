@@ -42,8 +42,8 @@ import { loadSkillBody } from '../../../src/skills.js';
 import { attachmentFromBase64, MAX_MEDIA_BYTES } from '../../../src/media.js';
 import { readPrompt } from '../../../src/system_prompt.js';
 import { toMarkdown, toHtml } from '../../../src/session_export.js';
-import { browserTools, type BrowserPort } from './browser-tools';
-import type { CertificateApproval } from './browser-protocol';
+import { browserTools, type BrowserPort } from '../../../src/browser/tools.js';
+import type { CertificateApproval } from '../../../src/browser/protocol.js';
 import {
   loadSecrets,
   removeSecret,

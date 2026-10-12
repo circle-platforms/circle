@@ -8,8 +8,6 @@ import {
   type WebContents,
 } from 'electron';
 import { createHash, randomBytes, X509Certificate } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { safeExternalUrl } from './policy';
 import { captureFrame } from './capture';
@@ -24,8 +22,10 @@ import {
   validateBrowserRequest,
   type BrowserRequest,
   type BrowserResult,
-} from './browser-protocol';
-import { browserPage } from './browser-page';
+} from '../../../src/browser/protocol.js';
+import { pageCall } from '../../../src/browser/page.js';
+import { dialogLine, dialogSnapshot } from '../../../src/browser/format.js';
+import { TrustedCertificates } from '../../../src/browser/certificates.js';
 import { privateHost, WARNING_SCHEME, warningPage } from './browser-warning';
 import { nativeText, type NativeLocale } from './native-text';
 import {
@@ -134,7 +134,7 @@ const promptScript = (path: string) => `(() => {
 export class BrowserSessions {
   private conversations = new Map<string, Conversation>();
   private sessions = new WeakSet<Session>();
-  private trusted = new Set<string>();
+  private trusted: TrustedCertificates;
   private closed = false;
   // The window's theme, which Circle's own pages and the pointer follow
   private dark = nativeTheme.shouldUseDarkColors;
@@ -143,25 +143,10 @@ export class BrowserSessions {
     private emit: (state: BrowserState) => void = () => {},
     private locale: () => NativeLocale = () => 'en',
     // Certificates of hosts on this network the person trusted for good
-    private trustFile?: string,
+    trustFile?: string,
     private exceptions = new Map<string, Set<string>>(),
   ) {
-    try {
-      if (trustFile) {
-        const saved = JSON.parse(readFileSync(trustFile, 'utf8')) as {
-          certificates?: { host?: unknown; fingerprint?: unknown }[];
-        };
-        for (const entry of saved.certificates ?? [])
-          if (
-            typeof entry.host === 'string' &&
-            typeof entry.fingerprint === 'string' &&
-            privateHost(entry.host)
-          )
-            this.trusted.add(certificateKey(entry.host, entry.fingerprint));
-      }
-    } catch {
-      /* Nothing trusted yet. */
-    }
+    this.trusted = new TrustedCertificates(trustFile);
   }
   private validId(id: unknown): string {
     if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(id))
@@ -173,25 +158,6 @@ export class BrowserSessions {
   }
   private publish(id: string) {
     if (!this.window.isDestroyed()) this.emit(this.state(id));
-  }
-  private trust(key: string) {
-    this.trusted.add(key);
-    if (!this.trustFile) return;
-    mkdirSync(dirname(this.trustFile), { recursive: true, mode: 0o700 });
-    writeFileSync(
-      this.trustFile,
-      JSON.stringify(
-        {
-          certificates: [...this.trusted].map((entry) => {
-            const [host, fingerprint] = entry.split('\n');
-            return { host, fingerprint };
-          }),
-        },
-        null,
-        2,
-      ),
-      { mode: 0o600 },
-    );
   }
   // ---- conversations and tabs
   private conversation(id: string): Conversation {
@@ -402,7 +368,10 @@ export class BrowserSessions {
         event.preventDefault();
         const host = hostOf(url);
         const key = certificateKey(host, fingerprint(certificate));
-        if (conversation.exceptions.has(key) || this.trusted.has(key)) {
+        if (
+          conversation.exceptions.has(key) ||
+          this.trusted.has(host, fingerprint(certificate))
+        ) {
           conversation.insecureHosts.add(host);
           callback(true);
           return;
@@ -739,7 +708,7 @@ export class BrowserSessions {
       conversation.exceptions.add(key);
       conversation.insecureHosts.add(host);
       if (agent?.approved?.scope === 'always' && privateHost(host))
-        this.trust(key);
+        this.trusted.add(host, warning.certificate.fingerprint);
       conversation.events.push(
         `certificate warning for ${host}: ${agent ? 'Circle proceeded, approved by the user' : 'the user proceeded'}${agent?.approved?.scope === 'always' && privateHost(host) ? '; this certificate is trusted on this host from now on' : ''}`,
       );
@@ -1064,7 +1033,7 @@ export class BrowserSessions {
     const result = await this.limit(
       tab.view.webContents.executeJavaScriptInIsolatedWorld(1001, [
         {
-          code: `(async () => { try { return { ok: true, value: await (${browserPage.toString()})(${JSON.stringify(command)},${JSON.stringify(args)}) }; } catch (error) { return { ok: false, error: String(error.message || error) }; } })()`,
+          code: pageCall(command, args),
         },
       ]) as Promise<{ ok: boolean; value: T; error?: string }>,
       signal,
@@ -1103,7 +1072,7 @@ export class BrowserSessions {
   ) {
     const entry = BROWSER_KEYS[key];
     if (!entry) throw Error('unsupported browser key');
-    await this.js(tab, 'guard-key', { secret }, signal);
+    await this.js(tab, 'guard-key', { secret, key }, signal);
     const [code, windowsVirtualKeyCode, text] = entry;
     const values = {
       key: code === 'Space' ? ' ' : code,
@@ -1171,13 +1140,6 @@ export class BrowserSessions {
     }
   }
   // ---- what the model sees
-  private dialogLine(dialog: BrowserDialog) {
-    const what =
-      dialog.type === 'beforeunload'
-        ? 'the page asks whether to leave it; accept leaves, dismiss stays'
-        : `${quote(dialog.message)}${dialog.type === 'prompt' ? ` (default answer ${quote(dialog.defaultPrompt)})` : ''}`;
-    return `- [${dialog.id}] ${dialog.type} · tab ${dialog.tab} · from ${dialog.origin || 'the page'}: ${what} → browser_dialog`;
-  }
   private async result(
     conversation: Conversation,
     text: string,
@@ -1192,7 +1154,7 @@ export class BrowserSessions {
     if (dialogs.length)
       sections.push(
         '### Dialogs waiting\n' +
-          dialogs.map((dialog) => this.dialogLine(dialog)).join('\n'),
+          dialogs.map((dialog) => dialogLine(dialog)).join('\n'),
       );
     if (conversation.events.length)
       sections.push(
@@ -1218,18 +1180,7 @@ export class BrowserSessions {
     );
     let snapshot: string;
     const blocking = tab.dialogs[0];
-    if (blocking)
-      snapshot =
-        `The page waits for dialog ${blocking.id}; this is the dialog:\n` +
-        `- dialog ${blocking.type} [${blocking.id}] from ${blocking.origin || 'the page'}\n` +
-        (blocking.message ? `  - text ${quote(blocking.message)}\n` : '') +
-        (blocking.type === 'prompt'
-          ? `  - textbox ${quote(blocking.defaultPrompt)} → browser_dialog text\n`
-          : '') +
-        `  - button "OK" → browser_dialog accept: true\n` +
-        (blocking.type === 'alert'
-          ? ''
-          : `  - button "Cancel" → browser_dialog accept: false\n`);
+    if (blocking) snapshot = dialogSnapshot(blocking);
     else if (tab.failure)
       snapshot = `This site can't be reached: ${tab.failure.error} (${tab.failure.url}).`;
     else

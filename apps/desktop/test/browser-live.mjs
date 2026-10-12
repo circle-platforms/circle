@@ -442,7 +442,10 @@ try {
   // ---- page dialogs, answered by the model, never as native boxes
   await send('check password refusal, frames, shadow roots, cover and prompt');
   await page.getByText('browser edge cases checked', { exact: true }).waitFor();
-  assert.match(await textOf('password'), /password fields cannot be filled/);
+  assert.match(
+    await textOf('password'),
+    /a password field takes only a saved secret/,
+  );
   assert.match(await textOf('blocked'), /covered by .*Fixture blocker/);
   const opened = await textOf('open-dialog');
   assert.match(opened, /It opened dialog d1/);

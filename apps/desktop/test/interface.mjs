@@ -81,6 +81,8 @@ const expected = {
   trust: ['dialog', 'workspace trust'],
   settings: ['heading', 'settings'],
   themes: ['heading', 'settings'],
+  variables: ['heading', 'settings'],
+  secrets: ['heading', 'settings'],
   mcp: ['heading', 'mcp servers'],
   extensions: ['heading', 'extensions'],
   approvals: ['heading', 'approvals'],

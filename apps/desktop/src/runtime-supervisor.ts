@@ -11,7 +11,7 @@ import {
   type BrowserReply,
   type BrowserRequest,
   type BrowserResult,
-} from './browser-protocol';
+} from '../../../src/browser/protocol.js';
 export type BrowserHandler = (
   request: BrowserRequest,
   signal: AbortSignal,

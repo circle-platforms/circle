@@ -1,15 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { loadToolPrompt } from '../../../src/system_prompt.js';
-import { fitMedia } from '../../../src/media.js';
-import type { Effect, Tool } from '../../../src/types.js';
-import { onlyReferences } from '../../../src/secrets.js';
+import { loadToolPrompt } from '../system_prompt.js';
+import { fitMedia } from '../media.js';
+import type { Effect, Tool } from '../types.js';
+import { onlyReferences } from '../secrets.js';
 import {
   BROWSER_KEYS,
   type CertificateApproval,
   type BrowserAction,
   type BrowserReply,
   type BrowserResult,
-} from './browser-protocol';
+} from './protocol.js';
 
 /** Where the runtime's browser tools send their requests: the main process, or a test. */
 export interface BrowserPort {

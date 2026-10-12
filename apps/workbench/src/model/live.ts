@@ -695,6 +695,8 @@ export class LiveRuntime implements RuntimePort {
       help: 'help',
       settings: 'settings',
       themes: 'settings',
+      variables: 'settings',
+      secrets: 'settings',
       mcp: 'mcp',
       extensions: 'extensions',
       approvals: 'approvals',

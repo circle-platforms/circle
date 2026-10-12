@@ -16,6 +16,14 @@ export const BUILTIN_SLASH: SlashCommand[] = [
   { name: 'trust', description: 'Trust this workspace' },
   { name: 'settings', description: 'Show current settings' },
   {
+    name: 'variables',
+    description: 'Values the model uses as %NAME%: /variables [NAME=value]',
+  },
+  {
+    name: 'secrets',
+    description: 'Values the model uses as %NAME% unseen: /secrets [NAME]',
+  },
+  {
     name: 'themes',
     description: 'Show or set the theme: /themes [auto|dark|light]',
   },

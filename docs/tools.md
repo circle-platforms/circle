@@ -4,7 +4,7 @@ nav_order: 20
 
 # Built-in tools
 
-The main agent has these twenty-one core tools. The desktop application adds the nine browser tools below. MCP servers and [extensions](extensions.md) add more.
+The main agent has these twenty-one core tools. The desktop application adds the nine [browser tools](#the-browser) below, and so does the full-screen terminal interface when Chrome, Edge or Chromium is installed. MCP servers and [extensions](extensions.md) add more.
 
 "Asks" means Circle shows an approval card before the call runs. See [Security](security.md). In `read-only` mode the tools that do not ask keep working; the others are refused, except changes to a plan file (see [Read-only mode](security.md#read-only-mode)).
 
@@ -33,9 +33,12 @@ The main agent has these twenty-one core tools. The desktop application adds the
 
 The file tools refuse a credential file and a background job's output; `execute` refuses a command that names a credential file. See [Security](security.md#credential-files).
 
-## The desktop browser
+## The browser
 
-These tools use the browser of the current desktop conversation: the one in its browser panel, which you can use at the same time. They are available to the main agent only, and only in the desktop application. The panel opens when Circle starts using the browser, unless you are on another page of the application.
+These tools use the conversation's browser, which you can use at the same time as Circle. They are available to the main agent only.
+
+- In the desktop application it is the conversation's [browser panel](desktop.md#the-browser-panel). The panel opens when Circle starts using the browser, unless you are on another page of the application.
+- In the full-screen terminal interface it is a Chrome, Edge or Chromium window that Circle starts at the first browser action, with a new, empty profile of its own: your own browser's profile, cookies and passwords are never used. Circle looks for Chrome, then Edge, then Chromium where they are usually installed (on Linux, on `PATH`); [`CIRCLE_BROWSER`](environment-variables.md#browser) names another. Without one, and in line and print mode, there are no browser tools. The window closes when Circle exits.
 
 Every result has the same parts: what the action did; the dialogs pages are waiting on, in every tab; what happened since the model last looked (tabs opened or closed, dialogs answered and by whom, a certificate warning passed); the tabs, when there are several or they changed; the shown page; and its snapshot. The snapshot is the page's visible text and the elements the model can act on, each with a ref such as `e12`. A ref stays with its element as long as the page is the same document, and an element that appeared since the last snapshot is marked `[new]`. Same-origin frames and open shadow roots are read, tables row by row; frames from other sites are not. Password fields show only whether they are filled.
 
@@ -53,13 +56,15 @@ Every result has the same parts: what the action did; the dialogs pages are wait
 
 ### Dialogs, warnings and tabs
 
-A page's alert, confirm, prompt or "leave site?" question appears over that tab in the browser panel, on a picture of the page as it stopped, with where it came from. While Circle is working it also appears in the conversation. You, from either place, or the model, with `browser_dialog`, can answer it; the first answer counts, and the next result says who gave it. While a page waits on a dialog, the other tools that act on it refuse and say which dialog to answer.
+A page's alert, confirm, prompt or "leave site?" question waits in its tab. In the desktop application it appears over that tab in the browser panel, on a picture of the page as it stopped, with where it came from, and while Circle is working also in the conversation; in the terminal's browser it is the browser's own dialog, in its window. You, or the model with `browser_dialog`, can answer it; the first answer counts, and the next result says who gave it. While a page waits on a dialog, the other tools that act on it refuse and say which dialog to answer.
 
-When a site's certificate is not trusted, as with the self-signed certificate of a device's web interface, the tab shows the browser's privacy warning instead of the site, as Chrome does. You and the model see the same page: **Advanced** shows the certificate and the link to proceed. When the model clicks that link, Circle first asks you in the conversation, showing the site, the certificate's subject and issuer, its expiry and its SHA-256 fingerprint. You can allow it once; for a host on this network (a private, loopback or link-local address, or a name like `nas.lan`) you can also trust that certificate on that host for good. Allowing once lasts until Circle closes. A certificate you trust for good is kept in `browser-certificates.json` in the application's data folder; delete it there to forget it. Your own click on the link needs no approval. A different certificate on the same host shows the warning again.
+When a site's certificate is not trusted, as with the self-signed certificate of a device's web interface, the tab shows the browser's privacy warning instead of the site, as Chrome does: in the terminal it is the browser's own page, in the desktop application Circle's page made like it. You and the model see the same page: **Advanced** shows the link to proceed, and in the desktop application the certificate too. When the model clicks that link, Circle first asks you, in the conversation or on a card in the terminal, showing the site, the certificate's subject and issuer, its expiry and its SHA-256 fingerprint. You can allow it once; for a host on this network (a private, loopback or link-local address, or a name like `nas.lan`) you can also trust that certificate on that host for good. Allowing once lasts until Circle closes; in the terminal's browser it covers that host on every port, as the browser's own exception does. A certificate you trust for good is kept in `browser-certificates.json`, in the application's data folder for the desktop and in Circle's data folder for the terminal; delete it there to forget it. Your own click on the link needs no approval. A different certificate on the same host shows the warning again.
 
 A link or script that opens a new window opens a new tab, shown to both of you; one that opens in the background stays behind. The result names new tabs.
 
-One **allow for this session** choice covers all browser actions in this conversation; passing a certificate warning is asked separately every time, also in `auto` mode, unless you trust the certificate for good. `read-only` mode allows snapshots and browser screenshots and refuses the other tools. See [The browser panel](desktop.md#the-browser-panel) and [Browser safety](security.md#the-desktop-browser).
+One **allow for this session** choice covers all browser actions in this conversation; passing a certificate warning is asked separately every time, also in `auto` mode, unless you trust the certificate for good. `read-only` mode allows snapshots and browser screenshots and refuses the other tools. See [The browser panel](desktop.md#the-browser-panel), [Browser safety](security.md#the-desktop-browser) and [The terminal's browser](security.md#the-terminals-browser).
+
+A download is refused and the model is told.
 
 ## Working with you
 

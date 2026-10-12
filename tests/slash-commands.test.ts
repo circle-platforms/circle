@@ -1039,3 +1039,70 @@ test("/login asks for the URL and the key on its list, lists the endpoint's mode
   // The key saved for gateway.example never went to this endpoint
   assert.ok(!seen.some((line) => line.includes('old-key')), seen.join('\n'));
 });
+
+test('/variables and /secrets keep values as Windows writes them, and the model is told the names', async (t) => {
+  const { app, model, home, key, screen } = await session(t, [answer('noted')]);
+  await app.submit('/variables base_url=https://example.test');
+  assert.deepEqual(loadSettings(home).variables, {
+    BASE_URL: 'https://example.test',
+  });
+  assert.match(
+    screen(),
+    /BASE_URL=https:\/\/example\.test · the model writes %BASE_URL% to use it/,
+  );
+  await app.submit('/variables 1BAD=x');
+  assert.match(screen(), /Usage: \/variables NAME=value/);
+  // A secret's value is never typed in the input box
+  await app.submit('/secrets API_TOKEN=typed-in-the-box');
+  assert.match(screen(), /Type a secret's value on its masked card/);
+  assert.equal(existsSync(join(home, 'secrets.json')), false);
+  const saving = app.submit('/secrets api_token');
+  await until(() => app.state.dialog?.masked === true);
+  for (const char of 'token-value-1') await key(char, char);
+  assert.ok(!screen().includes('token-value-1'));
+  await key('enter');
+  await saving;
+  assert.match(
+    screen(),
+    /Saved secret API_TOKEN · the model writes %API_TOKEN% to use it/,
+  );
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(home, 'secrets.json'), 'utf8')),
+    { secrets: { API_TOKEN: 'token-value-1' } },
+  );
+  // One name, one kind
+  await app.submit('/variables API_TOKEN=x');
+  assert.match(screen(), /API_TOKEN is a secret · \/secrets API_TOKEN sets it/);
+  // The list puts the command for a row in the input box
+  await app.submit('/variables');
+  const list = app.state.picker!;
+  assert.equal(list.title, 'Variables');
+  assert.deepEqual(
+    list.items.map((item) => item.label),
+    [
+      'BASE_URL=https://example.test',
+      'API_TOKEN=••••••••',
+      'new variable',
+      'new secret',
+    ],
+  );
+  await key('enter');
+  await until(
+    () => app.state.draft === '/variables BASE_URL=https://example.test',
+  );
+  app.state.draft = '';
+  await app.submit('tell me what you know');
+  const system = model.requests[0]!.system;
+  assert.match(system, /- BASE_URL = https:\/\/example\.test/);
+  assert.match(system, /only by name: API_TOKEN/);
+  assert.equal(JSON.stringify(model.requests).includes('token-value-1'), false);
+  await app.submit('/variables BASE_URL=');
+  await app.submit('/secrets API_TOKEN=');
+  assert.deepEqual(loadSettings(home).variables, {});
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(home, 'secrets.json'), 'utf8')),
+    { secrets: {} },
+  );
+  assert.match(screen(), /Removed variable BASE_URL/);
+  assert.match(screen(), /Removed secret API_TOKEN/);
+});

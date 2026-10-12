@@ -7,12 +7,12 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { RuntimeController } from '../src/runtime-controller.ts';
-import { BrowserBridge, type BrowserPort } from '../src/browser-tools.ts';
+import { BrowserBridge, type BrowserPort } from '../../../src/browser/tools.ts';
 import {
   validateBrowserRequest,
   type BrowserRequest,
   type BrowserResult,
-} from '../src/browser-protocol.ts';
+} from '../../../src/browser/protocol.ts';
 import { ScriptedModel } from '../../../src/testing.ts';
 import { emptyUsage, type Message } from '../../../src/types.ts';
 import {
