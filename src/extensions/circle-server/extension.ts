@@ -79,6 +79,9 @@ interface Followed {
 class ServerError extends Error {
   status = 0;
 }
+// What a refusal names besides its message (the rows, tools or limits it is about), kept
+// short so a model reads it beside the code instead of a whole response.
+const MAX_DETAIL_CHARS = 2000;
 
 // A task in one of these phases changes no more; `unknown` waits for someone to check.
 const TERMINAL = new Set(['delivered', 'failed', 'cancelled', 'unknown']);
@@ -586,8 +589,12 @@ export async function register(api: ExtensionAPI): Promise<void> {
     if (!response.ok || (isRecord(parsed) && parsed.status === 'failed')) {
       const error =
         isRecord(parsed) && isRecord(parsed.error) ? parsed.error : {};
+      const details =
+        isRecord(error.details) && Object.keys(error.details).length
+          ? JSON.stringify(error.details)
+          : '';
       const failed = new ServerError(
-        `${String(error.code ?? response.status)}: ${String(error.message ?? 'request failed')}`,
+        `${String(error.code ?? response.status)}: ${String(error.message ?? 'request failed')}${details ? ` · ${details.length > MAX_DETAIL_CHARS ? `${details.slice(0, MAX_DETAIL_CHARS)}…` : details}` : ''}`,
       );
       failed.status = response.status;
       throw failed;

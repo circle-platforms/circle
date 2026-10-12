@@ -27,7 +27,11 @@ async function until(predicate: () => boolean, timeout = 5000): Promise<void> {
 // the same token for another hour (or is missing, as on an older server), and expire()
 // turns every token down.
 async function sessionServer(t: Parameters<typeof scratch>[0]) {
-  const state = { ttlMs: 3_600_000, refreshRoute: true };
+  const state = {
+    ttlMs: 3_600_000,
+    refreshRoute: true,
+    refuseWithDetails: false,
+  };
   const expiries = new Map<string, number>();
   const counts = { logins: 0, refreshes: 0, missingRefresh: 0, toolCalls: 0 };
   const server = createServer(async (request, response) => {
@@ -85,6 +89,20 @@ async function sessionServer(t: Parameters<typeof scratch>[0]) {
       });
     if (url.pathname === '/v1/tools/docs.list/call') {
       counts.toolCalls++;
+      if (state.refuseWithDetails)
+        return send(422, {
+          status: 'failed',
+          error: {
+            code: 'SKILLPACK_CHECK_FAILED',
+            message: 'Skill tools do not match the declared accessible catalog',
+            details: {
+              check: {
+                undeclaredTools: ['env.framework_files'],
+                missingTools: [],
+              },
+            },
+          },
+        });
       return send(200, { data: { result: { entries: ['a.md'] } } });
     }
     if (url.pathname === '/v1/tasks/task_f/status')
@@ -216,4 +234,25 @@ test('a model tool call and a followed task that meet an expired sign-in say so 
     'no password card in the middle of work',
   );
   await delay(100);
+});
+
+test('a refusal reaches the model with what the server named besides its message', async (t) => {
+  const server = await sessionServer(t);
+  server.state.refuseWithDetails = true;
+  const session = await connect(t);
+  await session.run(`login ${server.url} tester`);
+  const tool = session.host
+    .tools()
+    .find((item) => item.name === 'srv_docs_list')!;
+  const run = { signal: new AbortController().signal, sessionId: 's' } as never;
+  const answer = await session.host
+    .toolBoundary({ tool, args: {}, context: run }, (request) =>
+      tool.run(request.args, request.context),
+    )
+    .then(
+      (value) => JSON.stringify(value),
+      (error) => String(error),
+    );
+  assert.match(answer, /SKILLPACK_CHECK_FAILED: Skill tools do not match/);
+  assert.match(answer, /"undeclaredTools":\["env\.framework_files"\]/);
 });
