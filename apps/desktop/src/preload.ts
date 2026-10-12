@@ -39,6 +39,14 @@ const bridge: DesktopBridge = {
     ipcRenderer.invoke('circle:browser-bounds', id, bounds, visible),
   browserHide: (id) => ipcRenderer.invoke('circle:browser-hide', id),
   browserCapture: (id) => ipcRenderer.invoke('circle:browser-capture', id),
+  updateState: () => ipcRenderer.invoke('circle:update-state'),
+  update: (action) => ipcRenderer.invoke('circle:update', action),
+  onUpdate: (listener) => {
+    const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
+      listener(value);
+    ipcRenderer.on('circle:update', handler);
+    return () => ipcRenderer.removeListener('circle:update', handler);
+  },
   onAction: (listener) => {
     const handler = (_event: unknown, value: DesktopAction) => {
       if (actions.has(value)) listener(value);

@@ -17,7 +17,9 @@ import {
 } from 'electron';
 import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import originalFs from 'original-fs';
 import { join, dirname, basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { WorkspaceGrants, nativeFile } from './files';
@@ -37,7 +39,9 @@ import {
   trustedAppUrl,
   validSaveName,
 } from './policy';
-import type { DesktopAction, DesktopInfo } from './contracts';
+import type { DesktopAction, DesktopInfo, UpdateAction } from './contracts';
+import { installation, Updater } from './updater';
+import { releaseTag, updateCheckEnabled } from '../../../src/update.js';
 app.setName('Circle');
 // Windows shows notifications for the id the installer's Start menu shortcut carries.
 if (process.platform === 'win32')
@@ -213,6 +217,98 @@ function configureMenu() {
 // Outside the window: a dock badge for the requests that wait, a busy bar on Windows and
 // Linux, and a notification for a new request or an ended turn while you are elsewhere.
 const announced = new Set<string>();
+// Where a release link leads. Chromium's network stack applies the system's proxy settings,
+// and net.fetch does not report the address a redirect reached, so the redirect is read here.
+function redirectTarget(url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const request = net.request({ url, method: 'HEAD', redirect: 'manual' });
+    const timer = setTimeout(() => {
+      request.abort();
+      reject(Error('the release check timed out'));
+    }, 15000);
+    const done = (value: string) => {
+      clearTimeout(timer);
+      request.abort();
+      resolve(value);
+    };
+    request.on('redirect', (_status, _method, location) =>
+      done(new URL(location, url).href),
+    );
+    request.on('response', () => done(url));
+    request.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    request.end();
+  });
+}
+const updater = new Updater({
+  version: app.getVersion(),
+  home: join(dataPath, 'runtime-home'),
+  folder: join(dataPath, 'updates'),
+  installation: app.isPackaged
+    ? installation(
+        process.platform,
+        process.arch,
+        process.execPath,
+        process.env.ProgramFiles,
+      )
+    : undefined,
+  platform: process.platform,
+  request: (input, init) => net.fetch(input as string, init),
+  latest: async (releases) =>
+    releaseTag(await redirectTarget(`${releases}/latest`)),
+  // On macOS the installer runs on its own at once. On Windows it starts itself again apart
+  // from Circle and returns; Circle waits for that before it quits.
+  launch: (command, args) =>
+    new Promise<void>((resolve, reject) => {
+      const windows = process.platform === 'win32';
+      // In the data folder: a working folder inside the application would keep Windows from
+      // moving it
+      const installer = spawn(command, args, {
+        cwd: dataPath,
+        detached: !windows,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      installer.once('error', reject);
+      if (!windows) {
+        installer.once('spawn', () => resolve());
+        installer.unref();
+        return;
+      }
+      const timer = setTimeout(() => {
+        installer.kill();
+        reject(Error('it did not answer within a minute'));
+      }, 60000);
+      installer.once('exit', (code) => {
+        clearTimeout(timer);
+        if (code === 0) resolve();
+        else reject(Error(`it exited with ${code}`));
+      });
+    }),
+  quit: () => app.quit(),
+  remove: (path) =>
+    originalFs.promises.rm(path, {
+      recursive: true,
+      force: true,
+      maxRetries: 3,
+    }),
+  args: process.argv.slice(1),
+});
+// The daily check, as the terminal's: the packaged application, unless it is turned off.
+function dailyUpdateCheck() {
+  if (!app.isPackaged || fixtureProfile || previewMode) return;
+  let settings: { update_check?: unknown } = {};
+  try {
+    settings = JSON.parse(
+      readFileSync(join(dataPath, 'runtime-home', 'settings.json'), 'utf8'),
+    );
+  } catch {
+    /* no settings yet: the check is on */
+  }
+  if (updateCheckEnabled(settings)) void updater.check(false);
+}
 function showAttention(update: Parameters<typeof attention>[0]) {
   const state = attention(update, announced, text);
   if (process.platform !== 'win32') app.setBadgeCount(state.badge);
@@ -499,6 +595,15 @@ app
       if (!browsers) throw Error('window not ready');
       return browsers.capture(id);
     });
+    updater.subscribe((state) =>
+      window?.webContents.send('circle:update', state),
+    );
+    handle('circle:update-state', () => updater.state);
+    handle('circle:update', (action) => {
+      if (!['check', 'download', 'install'].includes(String(action)))
+        throw Error('invalid update action');
+      return updater.command(action as UpdateAction);
+    });
     handle('circle:window-control', (action) => {
       if (!window) return;
       switch (action) {
@@ -520,7 +625,15 @@ app
     });
     interfaceLocale = systemNativeLocale(app.getPreferredSystemLanguages());
     configureMenu();
+    // An update folder it cannot read or clear never keeps the application from starting
+    const updated = await updater.start().then(
+      (state) => state.phase === 'current',
+      () => false,
+    );
     await createWindow();
+    // Started by the installer, which macOS does not bring to the front by itself
+    if (updated) app.focus({ steal: true });
+    dailyUpdateCheck();
     app.on('activate', () => {
       if (!BrowserWindow.getAllWindows().length) void createWindow();
     });

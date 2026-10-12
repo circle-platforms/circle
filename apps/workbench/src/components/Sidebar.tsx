@@ -20,6 +20,7 @@ import { currentSession, sessionTitle } from '../model/state';
 import type { DialogId } from '../model/types';
 import { IconButton } from './common';
 import { t } from '../i18n';
+import { UpdateChip } from '../features/Update';
 // The labels are functions so they follow the interface language when it changes.
 export const NAVIGATION = [
   { id: 'models', label: () => t('models'), icon: Blocks },
@@ -218,6 +219,7 @@ export function Sidebar({
           </button>
         )}
       </div>
+      <UpdateChip />
       <footer className="sidebar-footer">
         <button
           className="connection-status"

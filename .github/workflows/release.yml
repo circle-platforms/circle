@@ -65,8 +65,8 @@ jobs:
           retention-days: 3
 
   # The desktop application, built and run as a user gets it: a signed-ad-hoc .dmg on macOS,
-  # an .msi and a .zip on Windows, a .tar.gz on Linux, each started from the package before it
-  # is published. The MSI holds the same folder as the .zip; it is installed and removed here.
+  # an .msi on Windows, a .tar.gz on Linux, each started from the package before it is
+  # published. The MSI holds the packaged folder; it is installed and removed here.
   desktop:
     name: desktop (${{ matrix.target }})
     timeout-minutes: 40
@@ -202,6 +202,13 @@ jobs:
           fi
           "${run[@]}" npm --prefix apps/desktop run test:desktop
           "${run[@]}" npm --prefix apps/desktop run test:live
+          # It updates itself to a newer package: the bundle on macOS, the installed MSI on
+          # Windows (installed and removed again by the check); Linux shows the release page
+          if [ "$RUNNER_OS" = Windows ]; then
+            version="$(node -p "require('./package.json').version")"
+            export CIRCLE_DESKTOP_UPDATE_MSI="$GITHUB_WORKSPACE/apps/desktop/out/circle-desktop-$version-windows-x64.msi"
+          fi
+          "${run[@]}" npm --prefix apps/desktop run test:update
       - uses: actions/upload-artifact@v7
         if: failure() && runner.os == 'Windows'
         with:
@@ -244,11 +251,11 @@ jobs:
             test -s "dist-release/circle-$VERSION-$target.zip"
             test -s "dist-release/circle-$VERSION-$target.zip.sha256"
           done
-          for asset in darwin-arm64.dmg darwin-x64.dmg windows-x64.msi windows-x64.zip linux-x64.tar.gz; do
+          for asset in darwin-arm64.dmg darwin-x64.dmg windows-x64.msi linux-x64.tar.gz; do
             test -s "dist-release/circle-desktop-$VERSION-$asset"
             test -s "dist-release/circle-desktop-$VERSION-$asset.sha256"
           done
-          test "$(ls dist-release | wc -l)" -eq 22
+          test "$(ls dist-release | wc -l)" -eq 20
           cp install.sh install.ps1 dist-release/
           cd dist-release
           sha256sum --check circle-*.sha256
