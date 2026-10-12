@@ -1016,10 +1016,25 @@ export async function register(api: ExtensionAPI): Promise<void> {
 
   // What the model did with the server's tools since /server trial start: the trial record a
   // skill pack is pushed with. Arguments are kept only as SHA-256.
+  // Kept in the extension's data folder too, so a reload or a restart does not lose it.
+  const savedTrial = readJson('trial.json');
   const trial: {
     startedAt: string;
     calls: { name: string; argsSha256: string; ok: boolean }[];
-  } = { startedAt: '', calls: [] };
+  } =
+    isRecord(savedTrial) && Array.isArray(savedTrial.calls)
+      ? {
+          startedAt: String(savedTrial.startedAt ?? ''),
+          calls: savedTrial.calls.filter(isRecord).map((call) => ({
+            name: String(call.name),
+            argsSha256: String(call.argsSha256),
+            ok: call.ok === true,
+          })),
+        }
+      : { startedAt: '', calls: [] };
+  const keepTrial = (): void => {
+    if (!fromRun) writeJson('trial.json', trial);
+  };
   const recordTrial: ToolMiddleware = async (invocation, next) => {
     const held = serverTools.get(invocation.tool.name);
     if (!held) return next(invocation);
@@ -1027,9 +1042,11 @@ export async function register(api: ExtensionAPI): Promise<void> {
     try {
       const text = await next(invocation);
       trial.calls.push({ name: held.remote, argsSha256, ok: true });
+      keepTrial();
       return text;
     } catch (error) {
       trial.calls.push({ name: held.remote, argsSha256, ok: false });
+      keepTrial();
       throw error;
     }
   };
@@ -1142,11 +1159,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       json: {
         manifest,
         files,
-        trial: {
-          startedAt: trial.startedAt || undefined,
-          toolCalls: trial.calls,
-          outputs: produced,
-        },
+        trial: { toolCalls: trial.calls, outputs: produced },
       },
       timeoutMs: 120_000,
     });
@@ -1327,6 +1340,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       if (verb !== 'start') throw new ServerError('usage: /server trial start');
       trial.calls = [];
       trial.startedAt = new Date().toISOString();
+      keepTrial();
       context.append(
         '  recording the server tool calls of this trial; /server skill push <folder> sends them with the pack',
       );

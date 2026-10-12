@@ -142,6 +142,18 @@ async function toolServer(t: Parameters<typeof scratch>[0]) {
       return send(200, { data: { status: 'succeeded', commands: 3812 } });
     if (url.pathname === '/v1/skillpacks' && request.method === 'POST') {
       const pack = JSON.parse(body.toString());
+      // The server's contract is strict: these keys and no others.
+      if (
+        Object.keys(pack).sort().join() !== 'files,manifest,trial' ||
+        Object.keys(pack.trial).sort().join() !== 'outputs,toolCalls'
+      )
+        return send(400, {
+          status: 'failed',
+          error: {
+            code: 'INVALID_PAYLOAD',
+            message: 'Payload does not satisfy the contract',
+          },
+        });
       pack.scopeHeader = request.headers['x-scope-id'];
       packs.push(pack);
       const declared = new Set(pack.manifest.tools);
@@ -453,6 +465,21 @@ test('a trial records which server tools the model used, and /server skill push 
     own.run(request.args, request.context),
   );
 
+  // The trial record outlives a reload of the extension.
+  const reloaded = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { 'circle-server': { enabled: true } },
+  }).load();
+  await reloaded
+    .commands()
+    .get('server')!
+    .handler('skill push skills/mindmap-compile --outputs cases.xlsx', context);
+  assert.equal(server.packs.length, 1);
+  assert.equal(server.packs[0]!.trial.toolCalls.length, 2);
+  server.packs.length = 0;
   await command.handler(
     'skill push skills/mindmap-compile --outputs cases.xlsx',
     context,
