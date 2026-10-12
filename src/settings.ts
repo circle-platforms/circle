@@ -32,6 +32,7 @@ export interface CircleSettings {
   mcp_servers: Record<string, unknown>[];
   extensions: Record<string, Record<string, unknown>>;
   credential_files: string[];
+  trust_cert_files: string[];
   update_check: boolean;
   default_thinking: string;
   enabled_models: string[];
@@ -55,6 +56,7 @@ export const defaultSettings = (): CircleSettings => ({
   mcp_servers: [],
   extensions: {},
   credential_files: [],
+  trust_cert_files: [],
   update_check: true,
   default_thinking: '',
   enabled_models: [],
@@ -95,6 +97,7 @@ export function loadSettingsFromDict(
       ) as Record<string, Record<string, unknown>>)
     : {};
   settings.credential_files = strings(raw.credential_files);
+  settings.trust_cert_files = strings(raw.trust_cert_files);
   settings.enabled_models = strings(raw.enabled_models);
   settings.models = Object.fromEntries(
     Object.entries(isRecord(raw.models) ? raw.models : {}).flatMap(

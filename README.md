@@ -42,6 +42,8 @@ Restart your terminal after installing, then run `circle`. Upgrade with `circle 
 
 **Coming from Circle 0.5.0 or older?** Those were written in Python. Run the install command above: it removes the Python version, keeps your settings, keys, skills and sessions, and installs 1.0 in its place. The old `circle update` cannot do this step. Python extensions have to be rewritten; see [Extensions](https://qingshanfeihu.github.io/circle/extensions/).
 
+**Does your organization sign its own certificates?** Put the CA's PEM file somewhere readable and list it under `trust_cert_files` in `~/.circle/settings.json`. Start `circle` with no environment variables: it adds those authorities to the ones it trusts, and the commands and tools it starts get one merged bundle through `SSL_CERT_FILE`, the system store included. See [Settings](https://qingshanfeihu.github.io/circle/settings/) and [Security](https://qingshanfeihu.github.io/circle/security/).
+
 ## Run
 
 ```bash
