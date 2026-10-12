@@ -26,6 +26,8 @@ interface Config {
   scopeId?: string;
   /** Who the server said you are when you signed in; a bot runs as its owner. */
   principalId?: string;
+  /** When the server said the current token runs out. */
+  expiresAt?: string;
 }
 interface ServerEvent {
   seq: number;
@@ -158,7 +160,6 @@ function answerOf(text: string): Record<string, unknown> {
 export async function register(api: ExtensionAPI): Promise<void> {
   const following = new Map<string, AbortController>();
   let failure = '';
-  let reauthorizing: Promise<void> | undefined;
 
   const file = (name: string): string => join(api.dataDir, name);
   function readJson(name: string): unknown {
@@ -201,6 +202,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
         scopeId: typeof value.scopeId === 'string' ? value.scopeId : undefined,
         principalId:
           typeof value.principalId === 'string' ? value.principalId : undefined,
+        expiresAt:
+          typeof value.expiresAt === 'string' ? value.expiresAt : undefined,
       };
     // An address given in settings.json under extensions.circle-server.url.
     const url = api.settings.url;
@@ -618,41 +621,82 @@ export async function register(api: ExtensionAPI): Promise<void> {
       scopeId: scopes[0],
       principalId:
         typeof issued.principalId === 'string' ? issued.principalId : undefined,
+      expiresAt:
+        typeof issued.expiresAt === 'string' ? issued.expiresAt : undefined,
     });
     failure = '';
+    expired = false;
+    scheduleRefresh();
     void showStatus();
     return scopes;
   }
 
-  // A token lasts minutes. When the server turns it down, ask for the password again on the
-  // masked card (once, however many requests were turned down) and go on.
-  async function reauthorize(): Promise<void> {
-    if (fromRun)
-      throw new ServerError('circle-server turned down the run token');
-    reauthorizing ??= (async () => {
-      await api.secrets.delete('token');
-      void showStatus();
-      const config = readConfig();
-      if (!config?.username)
-        throw new ServerError('signed out: /server login <url> <user>');
-      const password = await api.askSecret(
-        `circle-server signed you out. Password for ${config.username} on ${config.url}`,
-      );
-      if (password === null)
-        throw new ServerError('signed out: /server login <url> <user>');
-      await signIn(config.url, config.username, password);
-      void lookForBots();
+  // A session stays alive without asking anyone: shortly before the token runs out it is
+  // renewed at the server (POST /v1/auth/refresh), which keeps the same token and moves its
+  // expiry. A server without that route, or a run token, is left to expire.
+  let refreshing: Promise<boolean> | undefined;
+  let refreshUnsupported = false;
+  let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  // Two minutes before the end, or a fifth of what a short token has left.
+  function refreshDue(expiresAt: string | undefined): number | undefined {
+    const end = expiresAt ? Date.parse(expiresAt) : Number.NaN;
+    if (Number.isNaN(end)) return undefined;
+    return end - Math.min(120_000, Math.max((end - Date.now()) / 5, 5_000));
+  }
+  function scheduleRefresh(): void {
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = undefined;
+    if (fromRun || refreshUnsupported || expired) return;
+    const due = refreshDue(readConfig()?.expiresAt);
+    if (due === undefined) return;
+    refreshTimer = setTimeout(
+      () => void refresh(),
+      Math.max(due - Date.now(), 15_000),
+    );
+    refreshTimer.unref?.();
+  }
+  function refresh(): Promise<boolean> {
+    refreshing ??= (async () => {
+      if (fromRun || refreshUnsupported || !(await currentToken()))
+        return false;
+      try {
+        const { data } = await send('POST', '/v1/auth/refresh', { json: {} });
+        const issued = isRecord(data) ? data : {};
+        if (typeof issued.token === 'string' && issued.token)
+          await api.secrets.set('token', issued.token);
+        const config = readConfig();
+        if (config && typeof issued.expiresAt === 'string')
+          writeJson('config.json', { ...config, expiresAt: issued.expiresAt });
+        expired = false;
+        return true;
+      } catch (error) {
+        if (error instanceof ServerError && [404, 405].includes(error.status))
+          refreshUnsupported = true;
+        else if (error instanceof ServerError && error.status === 401)
+          expired = true;
+        return false;
+      } finally {
+        scheduleRefresh();
+        void showStatus();
+      }
     })().finally(() => {
-      reauthorizing = undefined;
+      refreshing = undefined;
     });
-    return reauthorizing;
+    return refreshing;
   }
 
+  // A token the server turns down is never followed by a password card: a model's tool call
+  // or a task being followed must not stop for one. The footer says the sign-in expired, and
+  // the person signs in again with /server login when they choose.
   async function request(
     method: string,
     path: string,
     options: Parameters<typeof send>[2] = {},
   ): Promise<{ data: unknown; bytes: Buffer; headers: Headers }> {
+    if (!options.anonymous && !fromRun) {
+      const due = refreshDue(readConfig()?.expiresAt);
+      if (due !== undefined && Date.now() >= due) await refresh();
+    }
     try {
       return await send(method, path, options);
     } catch (error) {
@@ -662,8 +706,15 @@ export async function register(api: ExtensionAPI): Promise<void> {
         error.status !== 401
       )
         throw error;
-      await reauthorize();
-      return send(method, path, options);
+      if (fromRun)
+        throw new ServerError('circle-server turned down the run token');
+      expired = true;
+      scheduleRefresh();
+      void showStatus();
+      const config = readConfig();
+      throw new ServerError(
+        `signed out: the sign-in has expired · /server login ${config?.url ?? '<url>'} ${config?.username || '<user>'}`,
+      );
     }
   }
 
@@ -1485,9 +1536,9 @@ export async function register(api: ExtensionAPI): Promise<void> {
       ({ bot, run }) => !keys.includes(runKey(bot.assetId, run)),
     );
   }
-  // Look for new results of your bots in the background. It never asks for a password: a
-  // token the server turns down only puts "sign-in expired" in the footer, and the next
-  // /server command that signs in again looks once more.
+  // Look for new results of your bots in the background. Like every request it never asks
+  // for a password: a token the server turns down only puts "sign-in expired" in the
+  // footer, and /server login looks once more.
   let lookingForBots: Promise<void> | undefined;
   function lookForBots(): Promise<void> {
     lookingForBots ??= (async () => {
@@ -1764,6 +1815,9 @@ export async function register(api: ExtensionAPI): Promise<void> {
           'Circle runs with a token from circle-server here; there is no sign-out',
         );
       const removed = await api.secrets.delete('token');
+      const config = readConfig();
+      if (config) writeJson('config.json', { ...config, expiresAt: undefined });
+      if (refreshTimer) clearTimeout(refreshTimer);
       dropServerTools();
       void showStatus();
       context.append(removed ? 'Signed out' : 'Not signed in');
@@ -2049,6 +2103,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     },
   );
   void showStatus();
+  scheduleRefresh();
   void lookForBots();
   api.registerCommand(
     'server',

@@ -402,8 +402,8 @@ test('a bot is made from Circle as a schedule and a skill pack, approved by some
     'shown once, the result is no longer new',
   );
 
-  // A token that runs out: the background look says so in the footer and asks nothing;
-  // the next command signs in again on the masked card and looks once more.
+  // A token that runs out: the background look says so in the footer and asks nothing; a
+  // command says to sign in again, and /server login looks once more.
   server.expire();
   const stale = await person(root, 'dev-home', workspace);
   await delay(300);
@@ -414,7 +414,11 @@ test('a bot is made from Circle as a schedule and a skill pack, approved by some
       .map((item) => [item.text.replace(/^.* · /, ''), item.lamp]),
     [['sign-in expired', 'wait']],
   );
-  await stale.run('bot list');
+  await assert.rejects(
+    stale.run('bot list'),
+    /signed out: the sign-in has expired · \/server login http:\/\/127\.0\.0\.1:\d+ developer/,
+  );
+  await stale.run(`login ${server.url} developer`);
   await delay(300);
   assert.equal(
     stale.host.statuses().find((item) => item.extension === 'circle-server')

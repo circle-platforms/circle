@@ -37,11 +37,6 @@ async function fakeServer(t: Parameters<typeof scratch>[0]) {
   let delivered = false;
   let looks = 0;
   let tokens: string[] = [];
-  let logins = 0;
-  // The first token is turned down once it has been used five times, as an expired one is.
-  // This server has no tool catalog, skill packs or bots, and no tool or indexing tasks to
-  // count; asking for them does not count as a use.
-  let uses = 0;
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://x');
     const body = await read(request);
@@ -62,24 +57,14 @@ async function fakeServer(t: Parameters<typeof scratch>[0]) {
           status: 'failed',
           error: { code: 'UNAUTHENTICATED', message: 'bad password' },
         });
-      const token = logins++ === 0 ? TOKEN : TOKEN + '-renewed';
+      const token = TOKEN;
       tokens = [...tokens, token];
       return send(200, {
         data: { token, tokenType: 'Bearer', scopes: ['scp_lab'] },
       });
     }
     const presented = request.headers.authorization?.replace('Bearer ', '');
-    if (
-      presented === TOKEN &&
-      !['/v1/tools', '/v1/skillpacks', '/v1/assets'].includes(url.pathname) &&
-      !['tool', 'index'].includes(url.searchParams.get('kind') ?? '')
-    )
-      uses += 1;
-    if (
-      !presented ||
-      !tokens.includes(presented) ||
-      (presented === TOKEN && uses > 5)
-    )
+    if (!presented || !tokens.includes(presented))
       return send(401, {
         status: 'failed',
         error: { code: 'UNAUTHENTICATED', message: 'expired' },
@@ -334,13 +319,11 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
   // The same files again: the same key, so the server returns the same task.
   await command.handler('submit mindmap-compile LBX-HA.xmind', context);
   assert.ok(lines.some((line) => /no new task/.test(line)));
-  // The first token was turned down after a few uses: the password was asked once more on
-  // the masked card, and the work went on with a new token.
-  assert.equal(prompts.length, 2);
-  assert.match(prompts[1]!, /signed you out/);
+  // Only signing in asked for the password.
+  assert.equal(prompts.length, 1);
   assert.equal(
     await new ExtensionSecrets(home, 'circle-server').get('token'),
-    TOKEN + '-renewed',
+    TOKEN,
   );
   // Neither the password nor a token ever reached the screen.
   const shown = lines.join('\n');
