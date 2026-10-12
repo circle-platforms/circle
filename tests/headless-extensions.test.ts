@@ -124,7 +124,10 @@ async function server(listen: Listen, seen: string[]): Promise<string> {
       return send(200, {
         data: { result: { entries: ['manual-cli.md'] }, evidence: [] },
       });
-    if (request.url === '/v1/tasks?limit=100' || request.url === '/v1/packs')
+    if (
+      request.url === '/v1/tasks?kind=work&limit=20' ||
+      request.url === '/v1/packs'
+    )
       return send(200, { data: [] });
     send(404, { status: 'failed', error: { code: 'TARGET_NOT_FOUND' } });
   });

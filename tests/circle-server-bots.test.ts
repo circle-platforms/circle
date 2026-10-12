@@ -28,6 +28,7 @@ async function botServer(t: Parameters<typeof scratch>[0]) {
   const posted: { path: string; body: Record<string, any>; by: string }[] = [];
   // Each sign-in gets a new token; expire() turns down every token given so far.
   const tokens = new Map<string, string>();
+  const taskQueries: string[] = [];
   let issued = 0;
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://x');
@@ -182,7 +183,9 @@ async function botServer(t: Parameters<typeof scratch>[0]) {
       });
     if (url.pathname === '/v1/tasks/task_b2/status')
       return send(200, { data: { taskId: 'task_b2', phase: 'running' } });
-    // Tool calls and the indexing of what they read are tasks too.
+    // Tool calls and the indexing of what they read are tasks too. This server ignores the
+    // kind filter, as one from before it did, and sends every task.
+    if (url.pathname === '/v1/tasks') taskQueries.push(url.search);
     if (url.pathname === '/v1/tasks')
       return send(200, {
         data: [
@@ -213,6 +216,7 @@ async function botServer(t: Parameters<typeof scratch>[0]) {
     assets,
     posted,
     expire: () => tokens.clear(),
+    taskQueries,
   };
 }
 
@@ -337,6 +341,11 @@ test('a bot is made from Circle as a schedule and a skill pack, approved by some
   const objects = (dev.host.view('circle-server') as Record<string, any>)
     .objects;
   assert.deepEqual(objects.work, [], 'tool calls and indexing are not work');
+  assert.deepEqual([...new Set(server.taskQueries)].sort(), [
+    '?kind=index&limit=100',
+    '?kind=tool&limit=100',
+    '?kind=work&limit=20',
+  ]);
   assert.deepEqual(objects.background, {
     toolReads: 1,
     indexing: 1,

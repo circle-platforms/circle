@@ -453,10 +453,12 @@ function Background({ objects }: { objects: Objects }) {
     indexingOpen = 0,
   } = objects.background ?? {};
   if (!toolReads && !indexing) return null;
+  // At most the latest 100 of each are read, so 100 means at least that many.
+  const count = (n: number) => (n >= 100 ? '100+' : String(n));
   return (
     <p className="panel-note">
-      Not listed: {toolReads} server tool read(s) and {indexing} knowledge
-      indexing job(s)
+      Not listed: {count(toolReads)} server tool read(s) and {count(indexing)}{' '}
+      knowledge indexing job(s)
       {indexingOpen
         ? `, ${indexingOpen} still indexing; search may not show their knowledge yet`
         : ''}

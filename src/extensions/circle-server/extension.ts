@@ -270,22 +270,32 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // artifacts, evidence and the server's own check; E: the capability packs. Read from the
   // server for the most recent tasks you may read; the server decides what you may see.
   async function collectObjects(): Promise<{ tasks: number; packs: number }> {
-    const listed = await optional<unknown>('/v1/tasks?limit=100', []);
-    const all = (Array.isArray(listed) ? listed : []).filter(isRecord);
     // Each server tool call, and the knowledge indexing of what it read, is a task of its
-    // own. They are counted here rather than listed among the work.
-    const kind = (name: string) =>
-      all.filter((task) => task.capabilityPackId === name);
-    const background = {
-      toolReads: kind('asset-tool').length,
-      indexing: kind('asset-index').length,
-      indexingOpen: kind('asset-index').filter(
-        (task) => !TERMINAL.has(String(task.phase)),
-      ).length,
+    // own: the server lists them apart (kind=tool, kind=index) and they are counted here
+    // rather than listed among the work. A server without that filter sends every task, so
+    // the capability pack decides as well.
+    const listed = async (kind: string, limit: number) => {
+      const value = await optional<unknown>(
+        `/v1/tasks?kind=${kind}&limit=${limit}`,
+        [],
+      );
+      return (Array.isArray(value) ? value : []).filter(isRecord);
     };
-    let tasks = all.filter(
-      (task) =>
-        !['asset-tool', 'asset-index'].includes(String(task.capabilityPackId)),
+    const internal = ['asset-tool', 'asset-index'];
+    const toolReads = (await listed('tool', 100)).filter(
+      (task) => task.capabilityPackId === 'asset-tool',
+    );
+    const indexing = (await listed('index', 100)).filter(
+      (task) => task.capabilityPackId === 'asset-index',
+    );
+    const background = {
+      toolReads: toolReads.length,
+      indexing: indexing.length,
+      indexingOpen: indexing.filter((task) => !TERMINAL.has(String(task.phase)))
+        .length,
+    };
+    let tasks = (await listed('work', 20)).filter(
+      (task) => !internal.includes(String(task.capabilityPackId)),
     );
     if (!tasks.length)
       for (const taskId of Object.keys(followed()).slice(-20))
