@@ -197,11 +197,17 @@ try {
   check('the update downloads and is checked');
   await control.getByRole('button', { name: 'restart to update' }).click();
   stage('restarting to update');
-  // An installer that does not start leaves the application open, saying why
+  // An installer that does not start leaves the application open, saying why. A line every
+  // 20 seconds shows that the machine is still there.
+  const beat = setInterval(
+    () => stage('still waiting for Circle to quit'),
+    20000,
+  );
   const left = await Promise.race([
     exited.then(() => true),
     new Promise((resolve) => setTimeout(() => resolve(false), 120000)),
   ]);
+  clearInterval(beat);
   if (!left)
     throw Error(
       `the application did not quit for the installer: ${JSON.stringify(
@@ -212,7 +218,13 @@ try {
   check('the application quits for the installer');
 
   stage('waiting for the new version to start');
-  ({ browser, page: view } = await page(180000));
+  const beat2 = setInterval(
+    () => stage('still waiting for the new version'),
+    20000,
+  );
+  ({ browser, page: view } = await page(180000).finally(() =>
+    clearInterval(beat2),
+  ));
   assert.equal((await info()).version, next);
   check(`the copy that started again is ${next}`);
   control = await settings(view);
@@ -221,10 +233,9 @@ try {
   // The download is cleared; the installer's log stays until the next update
   const updates = join(temp, 'data', 'updates');
   assert.deepEqual(await readdir(updates), ['install.log']);
-  assert.match(
-    await readFile(join(updates, 'install.log'), 'utf8'),
-    /installed/,
-  );
+  const log = await readFile(join(updates, 'install.log'), 'utf8');
+  console.log(log.trim());
+  assert.match(log, /installed/);
   if (msi) {
     // The newer package replaced the installed one rather than adding a second Circle
     const listed = execFileSync(
@@ -288,8 +299,8 @@ try {
     console.error(
       execFileSync(
         process.platform === 'win32' ? 'tasklist' : 'ps',
-        process.platform === 'win32' ? ['/v'] : ['-axo', 'pid,command'],
-        { encoding: 'utf8' },
+        process.platform === 'win32' ? [] : ['-axo', 'pid,command'],
+        { encoding: 'utf8', timeout: 20000 },
       )
         .split('\n')
         .filter(

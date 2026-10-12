@@ -157,17 +157,25 @@ $p = Get-Content -Raw -LiteralPath $Plan | ConvertFrom-Json
 function Write-Log([string]$Text) { Add-Content -LiteralPath $p.log -Value "$(Get-Date -Format o) $Text" }
 try {
   Write-Log "installing $($p.staged) over $($p.target)"
-  Wait-Process -Id $p.pid -ErrorAction SilentlyContinue
-  # Circle's other processes end soon after it; the files they hold cannot be replaced
-  $inside = $p.target.TrimEnd('\') + '\'
-  $until = (Get-Date).AddSeconds(30)
-  while ((Get-Date) -lt $until -and @(Get-Process | Where-Object {
-      $_.Path -and $_.Path.StartsWith($inside, [StringComparison]::OrdinalIgnoreCase) }).Count) {
+  $until = (Get-Date).AddSeconds(120)
+  while ((Get-Process -Id $p.pid -ErrorAction SilentlyContinue) -and (Get-Date) -lt $until) {
     Start-Sleep -Milliseconds 200
   }
+  # Circle's other processes end soon after it; the files they hold cannot be replaced
+  $inside = $p.target.TrimEnd('\') + '\'
+  $until = (Get-Date).AddSeconds(60)
+  do {
+    $left = @(Get-Process | Where-Object {
+      $_.Path -and $_.Path.StartsWith($inside, [StringComparison]::OrdinalIgnoreCase) })
+    if ($left.Count) { Start-Sleep -Milliseconds 200 }
+  } while ($left.Count -and (Get-Date) -lt $until)
+  if ($left.Count) { Write-Log "still running: $(($left | ForEach-Object { '{0} {1}' -f $_.Name, $_.Id }) -join ', ')" }
   Write-Log 'Circle has quit'
+  # Restart Manager would close or restart other programs; Circle has ended by now
   $msi = Start-Process $p.msiexec -Wait -PassThru -ArgumentList @(
-    '/i', ('"{0}"' -f $p.staged), '/passive', '/norestart', '/l*v', ('"{0}.msi"' -f $p.log))
+    '/i', ('"{0}"' -f $p.staged), '/passive', '/norestart', 'MSIRESTARTMANAGERCONTROL=Disable',
+    '/l*v', ('"{0}.msi"' -f $p.log))
+  Write-Log "msiexec exited with $($msi.ExitCode)"
   # 3010 and 1641: installed, and Windows wants a restart for files it could not replace
   if (@(0, 3010, 1641) -notcontains $msi.ExitCode) { throw "msiexec exited with $($msi.ExitCode)" }
   Write-Log 'installed'
