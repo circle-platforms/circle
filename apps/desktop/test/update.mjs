@@ -13,7 +13,7 @@ import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { cp, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { existsSync, createReadStream } from 'node:fs';
-import { join, relative, basename } from 'node:path';
+import { join, relative, basename, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
@@ -26,8 +26,11 @@ if (!['darwin', 'win32'].includes(process.platform)) {
   console.log('the desktop update installs itself on macOS and Windows only');
   process.exit(0);
 }
+// msiexec wants one kind of slash; Git Bash hands over both
 const msi =
-  process.platform === 'win32' && process.env.CIRCLE_DESKTOP_UPDATE_MSI;
+  process.platform === 'win32' &&
+  process.env.CIRCLE_DESKTOP_UPDATE_MSI &&
+  resolve(process.env.CIRCLE_DESKTOP_UPDATE_MSI);
 const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files';
 const msiexec = (...args) => {
   const result = spawnSync('msiexec.exe', args, { stdio: 'inherit' });

@@ -120,8 +120,11 @@ if (platform === 'darwin' && process.platform === 'darwin') {
 } else if (platform === 'win32') {
   const archive = `${asset}.zip`;
   await rm(archive, { force: true });
+  // Windows' own tar writes .zip; a GNU tar earlier on PATH (Git Bash) reads C:\ as a host
   execFileSync(
-    process.platform === 'win32' ? 'tar' : 'zip',
+    process.platform === 'win32'
+      ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
+      : 'zip',
     process.platform === 'win32'
       ? ['-a', '-c', '-f', archive, relative(outputRoot, paths[0])]
       : ['-qry', archive, relative(outputRoot, paths[0])],

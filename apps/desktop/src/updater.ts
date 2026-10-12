@@ -21,6 +21,11 @@ import { compareVersions, validVersion } from '../../../src/version.js';
 import type { UpdateAction, UpdateState } from './contracts';
 
 const run = promisify(execFile);
+/** Windows' own tar, which reads .zip; a GNU tar earlier on PATH (Git Bash) reads C:\ as a host. */
+export const systemTar = (platform = process.platform): string =>
+  platform === 'win32'
+    ? win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
+    : 'tar';
 
 /** Where releases are published; CIRCLE_DESKTOP_RELEASES points a check at a local copy. */
 export function releasesUrl(
@@ -449,7 +454,7 @@ export class Updater {
     }
     const unpacked = join(directory, 'unpacked');
     await mkdir(unpacked);
-    await run('tar', ['-xf', file, '-C', unpacked]);
+    await run(systemTar(), ['-xf', file, '-C', unpacked]);
     const entries = await readdir(unpacked);
     const name = win32.basename(found.executable);
     if (entries.length !== 1)

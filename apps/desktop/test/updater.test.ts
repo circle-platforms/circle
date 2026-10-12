@@ -18,6 +18,7 @@ import {
   checksumFor,
   installation,
   releasesUrl,
+  systemTar,
   Updater,
   type Installation,
 } from '../src/updater';
@@ -160,7 +161,7 @@ function archive(root: string, version: string): Buffer {
   mkdirSync(source);
   folderApp(source, version, root);
   const file = join(root, 'package.tar.gz');
-  execFileSync('tar', ['-czf', file, '-C', source, 'Circle-test']);
+  execFileSync(systemTar(), ['-czf', file, '-C', source, 'Circle-test']);
   return readFileSync(file);
 }
 const sha = (data: Buffer) => createHash('sha256').update(data).digest('hex');
