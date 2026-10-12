@@ -306,7 +306,6 @@ test(
     });
     assert.equal(anthropicUntrusted.status, 'failed');
     assert.equal(anthropicUntrusted.detail, TLS_HINT);
-    assert.equal(anthropicUntrusted.modelListUnavailable, undefined);
     const setup = configureNetwork({
       HTTPS_PROXY: relay.url,
       NO_PROXY: '127.0.0.1',

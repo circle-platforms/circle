@@ -2022,7 +2022,7 @@ export class SessionApp {
     const askKey = (list: Picker): void => {
       list.title = title();
       list.ask(
-        'api key' + (flow.hasSavedKey ? ' (enter keeps the saved one)' : ''),
+        'api key' + (flow.keepsKey ? ' (enter keeps the saved one)' : ''),
         '',
         (typed) => {
           flow.submitKey(typed);

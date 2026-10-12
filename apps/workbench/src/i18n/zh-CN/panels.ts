@@ -127,7 +127,7 @@ export const panels: Record<string, string> = {
   'the page in the browser waits for an answer': '浏览器里的网页在等待回答',
   'new tab': '新标签页',
   'close tab': '关闭标签页',
-  back: '后退',
-  forward: '前进',
+  'go back': '后退',
+  'go forward': '前进',
   'certificate error': '证书错误',
 };

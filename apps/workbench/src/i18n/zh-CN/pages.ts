@@ -31,6 +31,8 @@ export const pages: Record<string, string> = {
   'this endpoint does not provide a model list; enter a model ID manually':
     '这个端点不提供模型列表，请手动输入模型 ID',
   'refresh models': '刷新模型',
+  'The endpoint did not list its models ({detail}). Search for the model id below and use it.':
+    '端点没有列出它的模型（{detail}）。请在下方搜索模型 ID 并使用它。',
   connection: '连接',
   configured: '已配置',
   'not connected': '未连接',

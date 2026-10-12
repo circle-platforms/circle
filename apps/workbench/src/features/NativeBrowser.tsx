@@ -153,14 +153,14 @@ export function NativeBrowser() {
       )}
       <div className="browser-address">
         <IconButton
-          label={t('back')}
+          label={t('go back')}
           disabled={!state?.canGoBack}
           onClick={() => void navigate('back')}
         >
           <ArrowLeft size={14} />
         </IconButton>
         <IconButton
-          label={t('forward')}
+          label={t('go forward')}
           disabled={!state?.canGoForward}
           onClick={() => void navigate('forward')}
         >

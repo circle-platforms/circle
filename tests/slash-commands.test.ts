@@ -963,22 +963,21 @@ test("/login asks for the URL and the key on its list, lists the endpoint's mode
   await key('ctrl+u');
   ui.handle({ type: 'paste', text: base });
   await key('enter');
-  // The key as dots; an empty enter would keep the saved one
-  assert.equal(
-    line(),
-    'api key (enter keeps the saved one): ▏  enter continues · esc goes back',
-  );
+  // The key as dots. The saved key is for gateway.example, another host: an empty enter
+  // does not keep it
+  assert.equal(line(), 'api key: ▏  enter continues · esc goes back');
   // esc on the key goes back to the URL as it was given
   await key('escape');
   assert.equal(app.state.picker, picker);
   assert.equal(picker.title, 'Sign in');
   assert.equal(line(), `base url: ${base}▏  enter continues · esc closes`);
   await key('enter');
+  await key('enter');
+  assert.equal(picker.title, 'Sign in · Enter the key for this endpoint');
+  assert.equal(line(), 'api key: ▏  enter continues · esc goes back');
+  assert.equal(seen.length, 0, seen.join('\n'));
   ui.handle({ type: 'paste', text: 'new-key' });
-  assert.equal(
-    line(),
-    'api key (enter keeps the saved one): •••••••▏  enter continues · esc goes back',
-  );
+  assert.equal(line(), 'api key: •••••••▏  enter continues · esc goes back');
   await key('enter');
   // The endpoint's models, searchable; enter on a search nothing matches uses what was typed
   await until(() => app.state.picker?.items.length === 2);
@@ -1018,4 +1017,25 @@ test("/login asks for the URL and the key on its list, lists the endpoint's mode
   );
   assert.equal(runtime.harness.model.model, 'gamma');
   assert.equal(app.state.model, 'gamma');
+  // Again on the same host: an empty enter keeps the saved URL and key
+  await app.submit('/login');
+  assert.equal(line(), `base url: ${base}/v1▏  enter continues · esc closes`);
+  await key('enter');
+  assert.equal(
+    line(),
+    'api key (enter keeps the saved one): ▏  enter continues · esc goes back',
+  );
+  const asked = seen.length;
+  await key('enter');
+  await until(() => app.state.picker?.items.length === 2);
+  assert.deepEqual(seen.slice(asked), ['GET /v1/models Bearer new-key']);
+  await typed('beta');
+  await key('enter');
+  await until(
+    () => app.state.notices.at(-1)?.endsWith('model beta-two') === true,
+  );
+  assert.equal(loadSettings(home).auth.model, 'beta-two');
+  assert.equal(loadCredentials(home).api_key, 'new-key');
+  // The key saved for gateway.example never went to this endpoint
+  assert.ok(!seen.some((line) => line.includes('old-key')), seen.join('\n'));
 });

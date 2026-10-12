@@ -398,6 +398,7 @@ export class LiveRuntime implements RuntimePort {
       await this.changes;
       const names: Record<string, RuntimeCommandName> = {
         'configure-connection': 'configure',
+        'probe-connection': 'probe-connection',
         'cancel-interaction': 'answer',
         'import-native-session': 'import',
         'export-session': 'export',

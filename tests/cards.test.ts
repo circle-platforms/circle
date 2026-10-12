@@ -944,3 +944,40 @@ test('setup says what is wrong and asks again; an endpoint that cannot list its 
   assert.ok(!existsSync(join(home, 'settings.json')));
   assert.ok(!existsSync(join(home, 'credentials.json')));
 });
+
+test('setup asks for the key of a new host instead of sending it the key saved for another', async (t) => {
+  const { base, home, root, seen, start } = await setupScreen(t, (url, key) =>
+    url === '/v1/models' && key === 'Bearer new-key'
+      ? [200, { data: [{ id: 'fresh-model' }] }]
+      : [404, { error: 'not here' }],
+  );
+  const saved = defaultSettings();
+  saved.initialized = true;
+  saved.auth.base_url = 'https://old-provider.example/v1';
+  saved.auth.model = 'old-model';
+  saveSettings(trustFolder(saved, root), home);
+  saveCredentials({ api_key: 'saved-key' }, home);
+  const { app, done, key, type, card } = start();
+  const body = (): string[] =>
+    card(200).map((row) => stripAnsi(row).slice(1, -1).trimEnd());
+  await until(() => app.state.dialog !== undefined);
+  type(base);
+  key('enter');
+  assert.equal(app.state.dialog?.title, 'What is the API key?');
+  // The saved key is for another host: an empty enter does not keep it
+  assert.equal(body().at(-2), ' › ▏');
+  key('enter');
+  assert.equal(app.state.dialog?.title, 'What is the API key?');
+  assert.equal(body()[2], '   ✖ Enter the key for this endpoint');
+  assert.equal(seen.length, 0, seen.join('\n'));
+  type('new-key');
+  key('enter');
+  await until(() => app.state.dialog?.title === 'Which model?');
+  assert.ok(seen.includes('/v1/models Bearer new-key'), seen.join('\n'));
+  assert.ok(!seen.some((line) => line.includes('saved-key')), seen.join('\n'));
+  key('enter');
+  assert.equal(await done, true);
+  assert.equal(loadSettings(home).auth.base_url, `${base}/v1`);
+  assert.equal(loadSettings(home).auth.model, 'fresh-model');
+  assert.equal(loadCredentials(home).api_key, 'new-key');
+});

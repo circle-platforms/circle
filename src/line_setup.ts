@@ -8,6 +8,7 @@ import { normalizeBaseUrl, probeSummary, resolveEndpoint } from './probe.js';
 import {
   defaultAuth,
   defaultSettings,
+  keepsSavedKey,
   loadCredentials,
   loadSettings,
   saveCredentials,
@@ -122,8 +123,8 @@ async function pickModel(
   }
 }
 // Setup: the URL, the key, the protocol when the endpoint does not tell, and the model.
-// Enter keeps the saved URL and key. Returns the saved settings, or undefined when it was
-// left unfinished (the reason is said).
+// Enter keeps the saved URL, and the saved key while the URL stays on its host. Returns the
+// saved settings, or undefined when it was left unfinished (the reason is said).
 export async function runLineInit(
   home: string,
   io: LinePrompter = terminalPrompter(),
@@ -150,20 +151,22 @@ export async function runLineInit(
     const typedUrl = await io.ask(
       `API URL${savedUrl ? ` [${savedUrl}]` : ''}: `,
     );
+    const url = typedUrl?.trim() || savedUrl;
+    // A key saved for another host is not sent to this one
+    const keep = Boolean(savedKey) && keepsSavedKey(previous, url);
     const typedKey =
       typedUrl === undefined
         ? undefined
         : await io.ask(
-            savedKey ? 'API KEY (enter keeps the saved one): ' : 'API KEY: ',
+            keep ? 'API KEY (enter keeps the saved one): ' : 'API KEY: ',
             true,
           );
     if (typedKey === undefined) {
       io.say('Setup was not finished.');
       return undefined;
     }
-    const url = typedUrl!.trim() || savedUrl;
-    const key = typedKey.trim() || savedKey;
-    if (!url || !key) {
+    const key = typedKey.trim() || (keep ? savedKey : '');
+    if (!url || (!key && !savedKey)) {
       io.say('Both the URL and the key are needed.');
       return undefined;
     }
@@ -174,6 +177,10 @@ export async function runLineInit(
       io.say(
         `Not an API URL: ${error instanceof Error ? error.message : String(error)}`,
       );
+      return undefined;
+    }
+    if (!key) {
+      io.say('Enter the key for this endpoint: the saved one is for another.');
       return undefined;
     }
     io.say('Asking the endpoint for its models…');
