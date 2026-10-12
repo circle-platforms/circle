@@ -2239,7 +2239,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // not approving: someone else approves the asset before its sar_ id can be used.
   api.registerTool(
     'circle_server_source_artifact',
-    'Register files of the workspace on circle-server as one versioned source artifact: each file is uploaded as an original with its SHA-256 and listed with its role. The server keeps it as a draft until someone else approves it; circle_server_source_artifact_status then gives its sourceArtifactId (sar_…), which server tools take as sourceArtifactId. It sends the files to the server, so it asks first.',
+    'Register files of the workspace on circle-server as one versioned source artifact (a knowledge-source asset): each file is uploaded as an original with its SHA-256 and listed with its role. The server keeps it as a draft until someone else approves it; circle_server_source_artifact_status then gives its sourceArtifactId (sar_…), which server tools take as sourceArtifactId. A new version of an artifact you registered before takes its asset_id. It sends the files to the server, so it asks first.',
     {
       type: 'object',
       properties: {
@@ -2274,6 +2274,11 @@ export async function register(api: ExtensionAPI): Promise<void> {
           items: { type: 'string' },
           description:
             'principal ids besides you who may see the draft, such as the person who approves it',
+        },
+        asset_id: {
+          type: 'string',
+          description:
+            'the asset id of an artifact you registered before, for a new version of it',
         },
       },
       required: ['name', 'version', 'files'],
@@ -2317,16 +2322,36 @@ export async function register(api: ExtensionAPI): Promise<void> {
             sha256: source.sha256,
           });
         }
-        const { data } = await request('POST', '/v1/source-artifacts', {
+        // The platform's own chain: originals through /v1/sources, the artifact as a
+        // knowledge-source asset, approved through the asset lifecycle like any other.
+        const readers = [
+          ...new Set(
+            [
+              config.principalId,
+              ...(Array.isArray(args.readers) ? args.readers.map(String) : []),
+            ].filter((reader): reader is string => Boolean(reader)),
+          ),
+        ];
+        const { data } = await request('POST', '/v1/assets', {
           json: {
+            ...(typeof args.asset_id === 'string' && args.asset_id
+              ? { assetId: args.asset_id }
+              : {}),
             scopeId: config.scopeId,
+            kind: 'knowledge-source',
             name,
             version,
-            metadata: isRecord(args.metadata) ? args.metadata : {},
-            files: listed,
-            ...(Array.isArray(args.readers) && args.readers.length
-              ? { readers: args.readers.map(String) }
-              : {}),
+            declaration: {
+              reads: ['registered-source'],
+              writes: [],
+              credentials: [],
+            },
+            configuration: {
+              schema: 'external-source-artifact/1',
+              metadata: isRecord(args.metadata) ? args.metadata : {},
+              files: listed,
+            },
+            ...(readers.length ? { readers } : {}),
           },
         });
         return {
@@ -2351,9 +2376,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
       const id = String(args.asset_id ?? '');
       if (!id) throw new api.ToolError('asset_id is required');
       try {
-        return (
-          await request('GET', `/v1/source-artifacts/${encodeURIComponent(id)}`)
-        ).data;
+        return (await request('GET', `/v1/assets/${encodeURIComponent(id)}`))
+          .data;
       } catch (error) {
         throw new api.ToolError(reason(error));
       }

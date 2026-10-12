@@ -81,16 +81,16 @@ async function fakeServer(t: Parameters<typeof scratch>[0]) {
           scopeId: request.headers['x-scope-id'],
         },
       });
-    if (url.pathname === '/v1/source-artifacts' && request.method === 'POST')
+    if (url.pathname === '/v1/assets' && request.method === 'POST')
       return send(201, {
         data: {
           assetId: 'ast_source',
+          kind: JSON.parse(body.toString()).kind,
           lifecycle: 'draft',
           sourceArtifactId: null,
-          files: JSON.parse(body.toString()).files,
         },
       });
-    if (url.pathname === '/v1/source-artifacts/ast_source')
+    if (url.pathname === '/v1/assets/ast_source')
       return send(200, {
         data: {
           assetId: 'ast_source',
@@ -491,13 +491,18 @@ test('the connector tools let a model list packs, hand over a file and get the c
   assert.equal(registered.registered.assetId, 'ast_source');
   const listedSource = JSON.parse(
     server.seen
-      .filter((call) => call.path === '/v1/source-artifacts')
+      .filter((call) => call.path === '/v1/assets' && call.method === 'POST')
       .at(-1)!
       .body.toString(),
   );
   assert.equal(listedSource.scopeId, 'scp_lab');
+  assert.equal(listedSource.kind, 'knowledge-source');
+  assert.equal(listedSource.configuration.schema, 'external-source-artifact/1');
+  assert.deepEqual(listedSource.configuration.metadata, {
+    buildName: 'Rel_SYN_1',
+  });
   assert.deepEqual(listedSource.readers, ['prn_reviewer']);
-  assert.deepEqual(listedSource.files, [
+  assert.deepEqual(listedSource.configuration.files, [
     {
       path: 'tree.xml',
       role: 'command-tree',
