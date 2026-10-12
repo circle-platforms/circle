@@ -8,6 +8,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
   existsSync,
+  mkdirSync,
   readFileSync,
   readdirSync,
   statSync,
@@ -1028,6 +1029,32 @@ export async function register(api: ExtensionAPI): Promise<void> {
     serverTools.clear();
     catalogTag = '';
   }
+  // A server tool's response, kept in the workspace exactly as it came: a skill's own checks
+  // compare against this file, and the model cites it instead of retyping what it saw.
+  let returned = 0;
+  function keepReturn(
+    remote: string,
+    args: unknown,
+    response: unknown,
+  ): string | undefined {
+    if (!api.workspace) return undefined;
+    try {
+      const folder = join(api.workspace, '.circle', 'server-returns');
+      mkdirSync(folder, { recursive: true });
+      const name = `${new Date().toISOString().replace(/[:.]/g, '')}-${String(++returned).padStart(4, '0')}-${remote}.json`;
+      writeFileSync(
+        join(folder, name),
+        JSON.stringify(
+          { tool: remote, args, at: new Date().toISOString(), response },
+          null,
+          2,
+        ) + '\n',
+      );
+      return `.circle/server-returns/${name}`;
+    } catch {
+      return undefined;
+    }
+  }
   function registerServerTool(
     name: string,
     tool: Record<string, unknown>,
@@ -1043,7 +1070,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         name,
         `circle-server tool ${remote}${tool.title ? ` (${String(tool.title)})` : ''}: ${String(tool.description ?? '')}${
           write ? ' It changes something, so it asks first.' : ''
-        }${tool.mode === 'task' ? ' It runs as a server task and is waited for in the background.' : ''}`,
+        }${tool.mode === 'task' ? ' It runs as a server task and is waited for in the background.' : ' Its response is also saved as it came under .circle/server-returns/ in the workspace (savedAs), to cite or check against instead of retyping it.'}`,
         schema,
         async (args) => {
           let data: unknown;
@@ -1060,11 +1087,14 @@ export async function register(api: ExtensionAPI): Promise<void> {
             throw new api.ToolError(reason(error));
           }
           const reply = isRecord(data) ? data : {};
-          if (typeof reply.taskId !== 'string')
-            return {
+          if (typeof reply.taskId !== 'string') {
+            const response = {
               result: reply.result ?? null,
               evidence: reply.evidence ?? [],
             };
+            const savedAs = keepReturn(remote, args, response);
+            return savedAs ? { ...response, savedAs } : response;
+          }
           const taskId = reply.taskId;
           return new api.Watch(
             `circle-server ${remote} ${taskId}`,

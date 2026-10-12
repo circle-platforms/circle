@@ -711,7 +711,21 @@ test('a model can start the trial record and push the skill pack it changed, wit
     );
   };
   await call('circle_server_trial_start', {});
-  await call('srv_docs_list', { folder: 'manuals' });
+  const listed: unknown = await call('srv_docs_list', { folder: 'manuals' });
+  const answer = (typeof listed === 'string' ? JSON.parse(listed) : listed) as {
+    savedAs: string;
+    result: unknown;
+  };
+  // The response is kept in the workspace as it came, for the skill's checks to read.
+  const kept = JSON.parse(
+    readFileSync(join(workspace, answer.savedAs), 'utf8'),
+  );
+  assert.equal(kept.tool, 'docs.list');
+  assert.deepEqual(kept.args, { folder: 'manuals' });
+  assert.deepEqual(kept.response.result, answer.result);
+  assert.deepEqual(kept.response.result, {
+    entries: ['manual-cli.md', 'manual-app.md'],
+  });
   const raw: unknown = await call('circle_server_skill_push', {
     folder: 'skills/mindmap-compile',
     outputs: ['cases.xlsx'],
