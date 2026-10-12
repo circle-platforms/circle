@@ -279,7 +279,8 @@ test('an update is checked, downloaded, installed over the old folder and report
     quit: () => assert.fail('nothing to install'),
   });
   assert.deepEqual(await after.start(), { phase: 'current', updated: '1.1.0' });
-  assert.equal(existsSync(folder), false);
+  // Only the installer's log stays, until the next update
+  assert.deepEqual(readdirSync(folder), ['install.log']);
   assert.deepEqual(await after.check(), { phase: 'current' });
 });
 
@@ -361,7 +362,7 @@ test('a copy that cannot replace itself points to the release page, and an updat
   );
   writeFileSync(
     join(root, 'updates', 'install.log'),
-    'Mon installing\nMon failed: the new copy could not be written beside the old one\n',
+    'Mon installing\nMon failed: the new copy could not be written beside the old one\nMon starting Circle\n',
   );
   const state = await manual.start();
   assert.equal(state.phase, 'failed');

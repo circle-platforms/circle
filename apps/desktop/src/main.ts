@@ -258,12 +258,17 @@ const updater = new Updater({
   request: (input, init) => net.fetch(input as string, init),
   latest: async (releases) =>
     releaseTag(await redirectTarget(`${releases}/latest`)),
-  launch: (command, args) =>
-    spawn(command, args, {
+  launch: (command, args) => {
+    const installer = spawn(command, args, {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
-    }).unref(),
+    });
+    installer.on('error', (error) =>
+      process.stderr.write(`circle: the installer did not start: ${error}\n`),
+    );
+    installer.unref();
+  },
   quit: () => app.quit(),
   remove: (path) =>
     originalFs.promises.rm(path, {

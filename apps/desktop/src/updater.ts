@@ -104,39 +104,48 @@ async function sha256(path: string): Promise<string> {
   return hash.digest('hex');
 }
 
-// The installer for macOS: waits for the application to quit, copies the new bundle beside the
-// old one, swaps the two by renaming and starts the application. When the new copy cannot be
-// put in place the old one stays, and the application starts as it was.
+// The installer for macOS: waits for the application to quit, moves the new bundle beside the
+// old one (copies it when the two are on different disks), swaps the two by renaming and starts
+// the application. When the new copy cannot be put in place the old one stays, and the
+// application starts as it was. Each step goes to the log, which the next start reads.
 export const POSIX_INSTALLER = `#!/bin/sh
 pid=$1 staged=$2 target=$3 executable=$4 log=$5
 shift 5
 exec >>"$log" 2>&1
 echo "$(date) installing $staged over $target"
 while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
+echo "Circle has quit"
 parent=$(dirname "$target")
 name=$(basename "$target")
 next="$parent/.$name.update"
 old="$parent/.$name.old"
 rm -rf "$next" "$old"
 if command -v ditto >/dev/null 2>&1; then copy() { ditto "$1" "$2"; }; else copy() { cp -a "$1" "$2"; }; fi
-if copy "$staged" "$next" && mv "$target" "$old"; then
-  if mv "$next" "$target"; then
-    rm -rf "$old"
-    if command -v xattr >/dev/null 2>&1; then xattr -dr com.apple.quarantine "$target" 2>/dev/null; fi
-    echo installed
+if mv "$staged" "$next" 2>/dev/null || { rm -rf "$next"; copy "$staged" "$next"; }; then
+  if mv "$target" "$old"; then
+    if mv "$next" "$target"; then
+      rm -rf "$old"
+      if command -v xattr >/dev/null 2>&1; then xattr -dr com.apple.quarantine "$target" 2>/dev/null; fi
+      echo installed
+    else
+      mv "$old" "$target"
+      rm -rf "$next"
+      echo "failed: the new copy could not be moved into place"
+    fi
   else
-    mv "$old" "$target"
-    echo "failed: the new copy could not be moved into place"
+    rm -rf "$next"
+    echo "failed: the old copy could not be moved aside"
   fi
 else
   rm -rf "$next"
   echo "failed: the new copy could not be written beside the old one"
 fi
+echo "starting $executable"
 "$executable" "$@" >/dev/null 2>&1 &
 `;
 // The installer for Windows, given a JSON plan: runs the .msi, which replaces the installed
 // copy, or swaps folders as the macOS one swaps bundles. Windows keeps a folder busy for a
-// moment after the last process in it has ended, so the first rename is tried again.
+// while after the last process in it has ended, so the first rename is tried again.
 export const WINDOWS_INSTALLER = String.raw`param([string]$Plan)
 $ErrorActionPreference = 'Stop'
 $p = Get-Content -Raw -LiteralPath $Plan | ConvertFrom-Json
@@ -144,6 +153,7 @@ function Write-Log([string]$Text) { Add-Content -LiteralPath $p.log -Value "$(Ge
 try {
   Write-Log "installing $($p.staged) over $($p.target)"
   Wait-Process -Id $p.pid -ErrorAction SilentlyContinue
+  Write-Log 'Circle has quit'
   if ($p.kind -eq 'msi') {
     $msi = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
       '/i', ('"{0}"' -f $p.staged), '/passive', '/norestart', '/l*v', ('"{0}.msi"' -f $p.log))
@@ -156,10 +166,15 @@ try {
     foreach ($path in $next, $old) {
       if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
     }
-    Copy-Item -LiteralPath $p.staged -Destination $next -Recurse
+    try { Move-Item -LiteralPath $p.staged -Destination $next }
+    catch {
+      if (Test-Path -LiteralPath $next) { Remove-Item -LiteralPath $next -Recurse -Force }
+      Copy-Item -LiteralPath $p.staged -Destination $next -Recurse
+    }
+    Write-Log 'the new copy is beside the old one'
     for ($try = 1; ; $try++) {
       try { Rename-Item -LiteralPath $p.target -NewName ".$name.old"; break }
-      catch { if ($try -ge 50) { throw }; Start-Sleep -Milliseconds 200 }
+      catch { if ($try -ge 150) { throw }; Start-Sleep -Milliseconds 200 }
     }
     try { Rename-Item -LiteralPath $next -NewName $name }
     catch { Rename-Item -LiteralPath $old -NewName $name; throw }
@@ -169,6 +184,7 @@ try {
 } catch {
   Write-Log "failed: $_"
 }
+Write-Log "starting $($p.executable)"
 if ($p.args.Count) { Start-Process -FilePath $p.executable -ArgumentList $p.args } else { Start-Process -FilePath $p.executable }
 `;
 
@@ -273,16 +289,17 @@ export class Updater {
     if (pending) {
       const wanted = String(pending.version);
       if (wanted === version) {
-        await this.remove(folder);
+        // The installer's log stays until the next update, for when something looks wrong
+        for (const name of await readdir(folder))
+          if (name !== 'install.log') await this.remove(join(folder, name));
         return this.set({ phase: 'current', updated: version });
       }
       let detail = '';
       try {
         detail =
           readFileSync(join(folder, 'install.log'), 'utf8')
-            .trim()
             .split('\n')
-            .at(-1)
+            .findLast((line) => / failed: |^failed: /.test(line))
             ?.replace(/^(?:\S+ )?failed: /, '') ?? '';
       } catch {
         /* no log: the installer did not run */

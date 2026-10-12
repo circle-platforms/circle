@@ -12,8 +12,8 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { cp, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
-import { existsSync, createReadStream } from 'node:fs';
-import { join, relative, basename, resolve } from 'node:path';
+import { existsSync, createReadStream, openSync } from 'node:fs';
+import { join, relative, basename, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
@@ -51,6 +51,7 @@ const check = (name) => {
 let server;
 let running;
 let passed = false;
+let installedPath;
 let port;
 try {
   // The installed copy: in a folder of its own, or where the .msi puts it
@@ -62,6 +63,7 @@ try {
     msiexec('/i', msi, '/qn', '/l*v', join(temp, 'msi-install.log'));
   } else
     await cp(appPath, installed, { recursive: true, verbatimSymlinks: true });
+  installedPath = installed;
   const program = join(installed, relative(appPath, executable));
   // The newer version, packaged as a release is
   const release = join(temp, 'release');
@@ -103,16 +105,20 @@ try {
     CIRCLE_DESKTOP_RELEASES: `http://127.0.0.1:${server.address().port}/releases`,
   };
   delete env.ELECTRON_RUN_AS_NODE;
+  // What the first copy writes, for when the update fails
+  const output = openSync(join(temp, 'application.log'), 'a');
   running = spawn(program, [`--remote-debugging-port=${port}`], {
     env,
-    stdio: 'ignore',
+    stdio: ['ignore', output, output],
   });
   const exited = new Promise((resolve) => running.once('exit', resolve));
 
   // The window of the copy listening on `port`. Closing a browser reached over CDP quits the
   // application, so the connection stays open until the window is there.
-  const page = async () => {
-    const end = Date.now() + 60000;
+  // The copy the installer starts takes longer: it waits for the old one to quit and for the
+  // swap, and Windows scans the new files.
+  const page = async (wait = 60000) => {
+    const end = Date.now() + wait;
     let browser;
     while (!browser) {
       browser = await chromium
@@ -171,13 +177,19 @@ try {
   await browser.close().catch(() => {});
   check('the application quits for the installer');
 
-  ({ browser, page: view } = await page());
+  ({ browser, page: view } = await page(180000));
   assert.equal((await info()).version, next);
   check(`the copy that started again is ${next}`);
   control = await settings(view);
   await control.getByText(`Circle was updated to ${next}`).waitFor();
   check('settings say the update went in');
-  assert.equal(existsSync(join(temp, 'data', 'updates')), false);
+  // The download is cleared; the installer's log stays until the next update
+  const updates = join(temp, 'data', 'updates');
+  assert.deepEqual(await readdir(updates), ['install.log']);
+  assert.match(
+    await readFile(join(updates, 'install.log'), 'utf8'),
+    /installed/,
+  );
   if (msi) {
     // The newer package replaced the installed one rather than adding a second Circle
     const listed = execFileSync(
@@ -221,9 +233,36 @@ try {
   console.log(`update checks passed: ${checks.length}`);
   passed = true;
 } catch (error) {
-  // What the installer did, when it ran
-  const log = join(temp, 'data', 'updates', 'install.log');
-  if (existsSync(log)) console.error(await readFile(log, 'utf8'));
+  // What the installer did, what the application wrote and what is left
+  for (const file of [
+    join(temp, 'data', 'updates', 'install.log'),
+    join(temp, 'application.log'),
+    join(temp, 'data', 'DevToolsActivePort'),
+  ])
+    if (existsSync(file))
+      console.error(`--- ${file}\n${await readFile(file, 'utf8')}`);
+  for (const folder of [
+    join(temp, 'data', 'updates'),
+    dirname(installedPath ?? temp),
+  ])
+    if (existsSync(folder))
+      console.error(`--- ${folder}: ${(await readdir(folder)).join(', ')}`);
+  try {
+    console.error(
+      execFileSync(
+        process.platform === 'win32' ? 'tasklist' : 'ps',
+        process.platform === 'win32'
+          ? ['/fi', 'imagename eq Circle.exe']
+          : ['-axo', 'pid,command'],
+        { encoding: 'utf8' },
+      )
+        .split('\n')
+        .filter((line) => /Circle/.test(line) && !/Helper/.test(line))
+        .join('\n'),
+    );
+  } catch {
+    /* no process list */
+  }
   throw error;
 } finally {
   if (running && running.exitCode === null) running.kill();
