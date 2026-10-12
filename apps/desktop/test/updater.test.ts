@@ -190,7 +190,9 @@ test('an update is checked, downloaded, installed over the old folder and report
     folder,
     installation: found,
     releases,
-    launch: (command, args) => launched.push([command, args]),
+    launch: (command, args) => {
+      launched.push([command, args]);
+    },
     quit: () => quit++,
     args: ['--remote-debugging-port=9555'],
     pid: 1,
@@ -222,7 +224,9 @@ test('an update is checked, downloaded, installed over the old folder and report
     folder,
     installation: found,
     releases,
-    launch: (command, args) => launched.push([command, args]),
+    launch: (command, args) => {
+      launched.push([command, args]);
+    },
     quit: () => quit++,
     args: ['--remote-debugging-port=9555'],
     pid: 1,
@@ -245,15 +249,18 @@ test('an update is checked, downloaded, installed over the old folder and report
   const ended = spawnSync(process.execPath, ['-e', '0']);
   assert.equal(ended.status, 0);
   if (windows) {
-    const plan = args.at(-1)!;
+    // As Circle does: the installer starts itself again on its own and returns at once
+    assert.equal(command, 'powershell.exe');
+    assert.equal(args.at(-1), '-Start');
+    const plan = args.at(-2)!;
     const value = JSON.parse(readFileSync(plan, 'utf8'));
     assert.equal(value.kind, 'folder');
     assert.equal(value.target, installed);
     assert.deepEqual(value.args, ['--remote-debugging-port=9555']);
     value.pid = 2 ** 30;
     writeFileSync(plan, JSON.stringify(value));
-    assert.equal(command, 'powershell.exe');
-    spawnSync(command, args, { stdio: 'inherit' });
+    const started = spawnSync(command, args, { stdio: 'inherit' });
+    assert.equal(started.status, 0);
   } else {
     assert.equal(command, '/bin/sh');
     args[1] = String(2 ** 22 + 12345); // no such process
@@ -382,4 +389,40 @@ test('a copy that cannot replace itself points to the release page, and an updat
   });
   assert.deepEqual(await offline.check(false), { phase: 'idle' });
   assert.equal((await offline.check()).phase, 'failed');
+});
+
+test('an installer that does not start leaves the application running and says so', async (t) => {
+  const root = scratch(t);
+  const installed = folderApp(join(root, 'apps'), '1.0.0', root);
+  const folder = join(root, 'updates');
+  mkdirSync(join(folder, '1.1.0'), { recursive: true });
+  writeFileSync(
+    join(folder, 'ready.json'),
+    JSON.stringify({ version: '1.1.0', staged: join(folder, '1.1.0') }),
+  );
+  let quit = 0;
+  const updater = new Updater({
+    version: '1.0.0',
+    home: join(root, 'home'),
+    folder,
+    installation: {
+      kind: 'folder',
+      target: installed,
+      executable: join(installed, 'run.sh'),
+      asset: (version) => `circle-desktop-${version}-test.tar.gz`,
+    },
+    releases: 'http://127.0.0.1:9/releases',
+    launch: async () => {
+      throw Error('no PowerShell');
+    },
+    quit: () => quit++,
+  });
+  assert.equal((await updater.start()).phase, 'ready');
+  assert.deepEqual(await updater.install(), {
+    phase: 'failed',
+    version: '1.1.0',
+    error: 'the installer did not start: no PowerShell',
+  });
+  assert.equal(quit, 0);
+  assert.equal(existsSync(join(folder, 'pending.json')), false);
 });

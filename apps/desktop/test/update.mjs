@@ -236,6 +236,8 @@ try {
   // What the installer did, what the application wrote and what is left
   for (const file of [
     join(temp, 'data', 'updates', 'install.log'),
+    join(temp, 'data', 'updates', 'install.json.out'),
+    join(temp, 'data', 'updates', 'install.json.err'),
     join(temp, 'application.log'),
     join(temp, 'data', 'DevToolsActivePort'),
   ])
@@ -251,13 +253,14 @@ try {
     console.error(
       execFileSync(
         process.platform === 'win32' ? 'tasklist' : 'ps',
-        process.platform === 'win32'
-          ? ['/fi', 'imagename eq Circle.exe']
-          : ['-axo', 'pid,command'],
+        process.platform === 'win32' ? ['/v'] : ['-axo', 'pid,command'],
         { encoding: 'utf8' },
       )
         .split('\n')
-        .filter((line) => /Circle/.test(line) && !/Helper/.test(line))
+        .filter(
+          (line) =>
+            /Circle|powershell|msiexec/i.test(line) && !/Helper/.test(line),
+        )
         .join('\n'),
     );
   } catch {

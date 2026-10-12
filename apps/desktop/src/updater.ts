@@ -146,8 +146,17 @@ echo "starting $executable"
 // The installer for Windows, given a JSON plan: runs the .msi, which replaces the installed
 // copy, or swaps folders as the macOS one swaps bundles. Windows keeps a folder busy for a
 // while after the last process in it has ended, so the first rename is tried again.
-export const WINDOWS_INSTALLER = String.raw`param([string]$Plan)
+// Circle starts it with -Start and waits: it starts itself again with Start-Process, hidden
+// and apart from Circle's processes, with its own console and its output in <plan>.out and
+// <plan>.err, and returns. A copy started straight from Circle did not outlive it.
+export const WINDOWS_INSTALLER = String.raw`param([string]$Plan, [switch]$Start)
 $ErrorActionPreference = 'Stop'
+if ($Start) {
+  Start-Process powershell.exe -WindowStyle Hidden -RedirectStandardOutput "$Plan.out" -RedirectStandardError "$Plan.err" -ArgumentList @(
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+    ('"{0}"' -f $MyInvocation.MyCommand.Path), ('"{0}"' -f $Plan))
+  exit 0
+}
 $p = Get-Content -Raw -LiteralPath $Plan | ConvertFrom-Json
 function Write-Log([string]$Text) { Add-Content -LiteralPath $p.log -Value "$(Get-Date -Format o) $Text" }
 try {
@@ -203,8 +212,11 @@ export interface UpdaterOptions {
   request?: typeof fetch;
   /** The newest released version, asked of the network. */
   latest?: (releases: string) => Promise<string>;
-  /** Starts the installer, detached; it outlives the application. */
-  launch: (command: string, args: string[]) => void;
+  /**
+   * Starts the installer, which outlives the application. It settles once the installer is on
+   * its way; a rejection keeps the application running.
+   */
+  launch: (command: string, args: string[]) => void | Promise<void>;
   quit: () => void;
   /** The package.json inside an app.asar; Electron's fs reads into the archive. */
   readPackage?: (asar: string) => { name?: unknown; version?: unknown };
@@ -490,6 +502,7 @@ export class Updater {
     const log = join(folder, 'install.log');
     const pid = String(this.options.pid ?? process.pid);
     const args = this.options.args ?? [];
+    let command: [string, string[]];
     await writeFile(
       join(folder, 'pending.json'),
       JSON.stringify({ version: ready.version, from: this.options.version }) +
@@ -511,31 +524,48 @@ export class Updater {
         }),
       );
       await writeFile(script, WINDOWS_INSTALLER);
-      launch('powershell.exe', [
-        '-NoProfile',
-        '-NonInteractive',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-WindowStyle',
-        'Hidden',
-        '-File',
-        script,
-        plan,
-      ]);
+      command = [
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-WindowStyle',
+          'Hidden',
+          '-File',
+          script,
+          plan,
+          '-Start',
+        ],
+      ];
     } else {
       const script = join(folder, 'install.sh');
       await writeFile(script, POSIX_INSTALLER);
-      launch('/bin/sh', [
-        script,
-        pid,
-        ready.staged,
-        found.target,
-        found.executable,
-        log,
-        ...args,
-      ]);
+      command = [
+        '/bin/sh',
+        [
+          script,
+          pid,
+          ready.staged,
+          found.target,
+          found.executable,
+          log,
+          ...args,
+        ],
+      ];
     }
     this.set({ phase: 'installing', version: ready.version });
+    try {
+      await launch(...command);
+    } catch (error) {
+      await this.remove(join(folder, 'pending.json')).catch(() => {});
+      return this.set({
+        phase: 'failed',
+        version: ready.version,
+        error: `the installer did not start: ${message(error)}`,
+      });
+    }
     this.options.quit();
     return this.current;
   }

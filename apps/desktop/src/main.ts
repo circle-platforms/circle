@@ -258,17 +258,32 @@ const updater = new Updater({
   request: (input, init) => net.fetch(input as string, init),
   latest: async (releases) =>
     releaseTag(await redirectTarget(`${releases}/latest`)),
-  launch: (command, args) => {
-    const installer = spawn(command, args, {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    installer.on('error', (error) =>
-      process.stderr.write(`circle: the installer did not start: ${error}\n`),
-    );
-    installer.unref();
-  },
+  // On macOS the installer runs on its own at once. On Windows it starts itself again apart
+  // from Circle and returns; Circle waits for that before it quits.
+  launch: (command, args) =>
+    new Promise<void>((resolve, reject) => {
+      const windows = process.platform === 'win32';
+      const installer = spawn(command, args, {
+        detached: !windows,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      installer.once('error', reject);
+      if (!windows) {
+        installer.once('spawn', () => resolve());
+        installer.unref();
+        return;
+      }
+      const timer = setTimeout(() => {
+        installer.kill();
+        reject(Error('it did not answer within a minute'));
+      }, 60000);
+      installer.once('exit', (code) => {
+        clearTimeout(timer);
+        if (code === 0) resolve();
+        else reject(Error(`it exited with ${code}`));
+      });
+    }),
   quit: () => app.quit(),
   remove: (path) =>
     originalFs.promises.rm(path, {
