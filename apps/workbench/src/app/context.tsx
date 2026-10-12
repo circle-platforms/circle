@@ -11,6 +11,7 @@ import type {
   RuntimePort,
   WorkbenchSnapshot,
 } from '../model/types';
+import { t } from '../i18n';
 interface ContextValue {
   runtime: RuntimePort;
   snapshot: WorkbenchSnapshot;
@@ -48,10 +49,10 @@ export function RuntimeProvider({
       const result = action();
       if (result instanceof Promise)
         void result.catch((error) =>
-          notify(error instanceof Error ? error.message : 'action failed'),
+          notify(error instanceof Error ? error.message : t('action failed')),
         );
     } catch (error) {
-      notify(error instanceof Error ? error.message : 'action failed');
+      notify(error instanceof Error ? error.message : t('action failed'));
     }
   };
   const act = (action: () => CommandResult | Promise<CommandResult>) =>

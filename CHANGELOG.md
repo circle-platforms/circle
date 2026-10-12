@@ -4,6 +4,30 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.2.0 - 2026-10-12
+
+### Added
+
+- **Accept edits, a mode between asking and auto.** File changes inside the workspace run without a card; commands, deletes and changes outside the workspace still ask. `/mode` moves through manual, accept edits, plan and auto, or sets one: `/mode accept-edits`. When the model finishes a plan you can answer "implement plan, accept edits". The desktop application has the four modes in a menu under the input box, and `shift+tab` moves to the next one.
+- **The desktop application in Simplified Chinese.** It follows the system language the first time; settings → appearance → language switches between English and 简体中文. Menus, system dialogs and notifications follow. The terminal stays English.
+- **A Windows installer for the desktop application**, `circle-desktop-<version>-windows-x64.msi`: it installs Circle for all users into `C:\Program Files\Circle`, adds it to the Start menu and removes it from Installed apps. The `.zip` stays for use without installing.
+- **The desktop application tells you when it needs you** while its window is in the background: a system notification for an approval or a question and when a turn ends, a count of waiting requests on the Dock icon on macOS, and a busy bar on the taskbar on Windows and Linux.
+
+### Changed
+
+- **The desktop application is laid out like Claude's.** Folders and their sessions in the sidebar, with customize for skills, commands, MCP servers, extensions, tools and approvals; the session's title and folder in the top bar, with the side panels (terminal, files, changes, activity, browser, context) opening on the right; tool calls folded to one line, such as `ran 2 commands, edited calc.py +1 −1`; and under the input box the mode, the model, the thinking depth and a ring for the context, whose popover has the tokens, cost and cache.
+- **Approvals and questions appear in the desktop conversation**, under the call that waits, with the change as a diff, instead of behind a button. A finished file change shows its diff, and the changes panel lists what the session changed.
+- **The desktop input box has the terminal's frame**: the rainbow turns while the model works, with the busy word, time and tokens on its edge, and it is orange while Circle waits for you.
+- **Text size in the desktop application is one setting of four sizes**, and the default is larger: 14 px instead of 13.
+
+### Fixed
+
+- **The desktop application asks for the API URL, key and model the first time**, as the documentation said; it opened on an empty conversation that could not answer.
+- **The desktop footer showed `cost N/A` and a context share summed over every answer.** It now shows the session's cost as the terminal does and the context of the last answer.
+- **Tool calls keep their order in the desktop conversation** while one waits for approval; a finished call moved below the waiting one.
+- **The desktop files panel lists the folder Circle works in** when it is trusted, including the application's own folder, without opening it again.
+- **Changing only the URL or the model in the desktop connection form keeps the saved key**; it had to be entered again.
+
 ## 1.1.1 - 2026-10-11
 
 ### Fixed

@@ -94,7 +94,7 @@ The input box changes colour and behaviour depending on who has to act.
 
 A card that only says what Circle is doing, such as `Looking for models…` during setup, keeps a faint frame.
 
-At the bottom-right corner a single word shows the mode, but only when it is not the default: `read-only` or `auto`. When both are on, it shows `read-only`. See [Use Circle in the terminal](usage.md#modes).
+At the bottom-right corner a word shows the mode, but only when it is not the default: `accept edits`, `read-only` or `auto`. See [Use Circle in the terminal](usage.md#modes).
 
 ## Lamps
 

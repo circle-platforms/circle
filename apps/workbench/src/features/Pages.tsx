@@ -2,6 +2,8 @@ import { desktopHost } from '../host';
 import { validateKeybindings } from '../model/shortcuts';
 import { usePlugins } from '../plugins/context';
 import { useState } from 'react';
+import { NavLink } from 'react-router-dom';
+import { CUSTOMIZE, NAVIGATION } from '../components/Sidebar';
 import {
   Plus,
   Search,
@@ -29,11 +31,25 @@ import {
   MessageSquare,
 } from 'lucide-react';
 import { BUILTIN_SLASH } from '../../../../src/tui/slash_commands';
+import { slashText } from '../model/slash-text';
 import { VERSION } from '../../../../src/version';
 import { useRuntime } from '../app/context';
-import { currentSession, EFFORTS } from '../model/state';
+import {
+  currentSession,
+  EFFORTS,
+  sessionMode,
+  sessionTitle,
+} from '../model/state';
+import { EFFORT_TEXT, MODE_TEXT } from './Composer';
 import { shownTime } from '../model/time';
-import type { DialogId, PageId, PanelId, McpServer } from '../model/types';
+import type {
+  DialogId,
+  PageId,
+  PanelId,
+  McpServer,
+  TextSize,
+  Effort,
+} from '../model/types';
 import {
   Page,
   SearchInput,
@@ -46,16 +62,46 @@ import {
   Switch,
   Facts,
   PreviewNotice,
+  EmptyState,
 } from '../components/common';
 import { Markdown } from '../components/Markdown';
 import { BUILTIN_TOOL_INFO } from '../model/tool-info';
+import { TEXT_SIZES, textSizes } from '../theme';
+import { LANGUAGES, languageChoice, setLanguage, t, tn } from '../i18n';
 interface Props {
   page: PageId;
   onSession: () => void;
   onDialog: (dialog: DialogId, selection?: string) => void;
   onPanel: (panel: PanelId, selection?: string) => void;
 }
+// Skills, commands, MCP servers, extensions, tools and approvals share one place,
+// as Claude's customize does: a row of tabs over the page.
+function CustomizeTabs({ page }: { page: string }) {
+  return (
+    <nav className="customize-tabs" aria-label={t('customize')}>
+      {CUSTOMIZE.map((id) => (
+        <NavLink
+          key={id}
+          to={'/page/' + id}
+          className={page === id ? 'active' : ''}
+        >
+          {NAVIGATION.find((item) => item.id === id)!.label()}
+        </NavLink>
+      ))}
+    </nav>
+  );
+}
 export function ManagementPage(props: Props) {
+  if ((CUSTOMIZE as readonly string[]).includes(props.page))
+    return (
+      <div className="customize">
+        <CustomizeTabs page={props.page} />
+        <PageContent {...props} />
+      </div>
+    );
+  return <PageContent {...props} />;
+}
+function PageContent(props: Props) {
   switch (props.page) {
     case 'sessions':
       return <SessionsPage {...props} />;
@@ -93,8 +139,10 @@ function SessionsPage({ onSession, onDialog }: Props) {
   );
   return (
     <Page
-      title="sessions"
-      description="Reopen a conversation or continue from an earlier point."
+      title={t('sessions')}
+      description={t(
+        'Reopen a conversation or continue from an earlier point.',
+      )}
       action={
         <Button
           onClick={() =>
@@ -105,7 +153,7 @@ function SessionsPage({ onSession, onDialog }: Props) {
           }
         >
           <Plus size={14} />
-          new session
+          {t('new session')}
         </Button>
       }
     >
@@ -113,9 +161,9 @@ function SessionsPage({ onSession, onDialog }: Props) {
         <SearchInput
           value={search}
           onChange={setSearch}
-          label="search sessions"
+          label={t('search sessions')}
         />
-        <Switch label="all workspaces" checked={all} onChange={setAll} />
+        <Switch label={t('all workspaces')} checked={all} onChange={setAll} />
       </div>
       <div className="records">
         {sessions.map((session) => (
@@ -131,7 +179,7 @@ function SessionsPage({ onSession, onDialog }: Props) {
             >
               <MessageSquare size={17} />
               <span>
-                <strong>{session.title}</strong>
+                <strong>{sessionTitle(session.title)}</strong>
                 <small>
                   {
                     snapshot.workspaces.find(
@@ -141,10 +189,10 @@ function SessionsPage({ onSession, onDialog }: Props) {
                   · {shownTime(session.updatedAt)}
                 </small>
               </span>
-              {session.id === current.id && <Badge>open</Badge>}
+              {session.id === current.id && <Badge>{t('open')}</Badge>}
             </button>
             <IconButton
-              label={`pin ${session.title}`}
+              label={t('pin {title}', { title: session.title })}
               onClick={() =>
                 perform(() =>
                   runtime.change((state) => {
@@ -159,13 +207,13 @@ function SessionsPage({ onSession, onDialog }: Props) {
               <Pin size={14} fill={session.pinned ? 'currentColor' : 'none'} />
             </IconButton>
             <IconButton
-              label={`rename ${session.title}`}
+              label={t('rename {title}', { title: session.title })}
               onClick={() => onDialog('rename', session.id)}
             >
               <FileText size={14} />
             </IconButton>
             <IconButton
-              label={`delete ${session.title}`}
+              label={t('delete {title}', { title: session.title })}
               disabled={session.id === current.id}
               onClick={() => onDialog('delete-session', session.id)}
             >
@@ -183,16 +231,24 @@ function ModelsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
   const [selected, setSelected] = useState(currentSession(snapshot).model);
   const [saveDefault, setSaveDefault] = useState(false);
   const session = currentSession(snapshot);
+  // models.dev prices are in US dollars per million tokens
+  const usageModel = snapshot.models.find((item) => item.id === session.model);
+  const price = (value: number | null | undefined) =>
+    value === null || value === undefined
+      ? 'N/A'
+      : t('{amount} per million tokens', { amount: '$' + value });
   const models = snapshot.models.filter((model) =>
     (model.id + ' ' + model.provider).includes(query),
   );
   const choose = (id: string) =>
     perform(async () => {
       if (session.state === 'waiting')
-        throw Error('pause the current conversation before switching models');
+        throw Error(
+          t('pause the current conversation before switching models'),
+        );
       if (runtime.mode === 'live') {
         await runtime.request('set-model', { modelId: id, saveDefault });
-        notify('model selected');
+        notify(t('model selected'));
         return;
       }
       runtime.change((state) => {
@@ -204,8 +260,8 @@ function ModelsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
     });
   return (
     <Page
-      title="models"
-      description="Choose the model and thinking depth for this session."
+      title={t('models')}
+      description={t('Choose the model and thinking depth for this session.')}
       action={
         <div className="inline-actions">
           {runtime.mode === 'live' && (
@@ -213,16 +269,16 @@ function ModelsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
               onClick={() =>
                 perform(async () => {
                   await runtime.request('discover-models');
-                  notify('models refreshed');
+                  notify(t('models refreshed'));
                 })
               }
             >
-              refresh models
+              {t('refresh models')}
             </Button>
           )}
           <Button onClick={() => onDialog('connect')}>
             <Plug size={14} />
-            connection
+            {t('connection')}
           </Button>
         </div>
       }
@@ -231,15 +287,19 @@ function ModelsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
         <span>
           <i />
           {runtime.mode === 'live' && snapshot.runtime?.configured
-            ? 'configured'
-            : 'not connected'}
+            ? t('configured')
+            : t('not connected')}
         </span>
-        <code>{snapshot.settings.endpoint || 'no endpoint configured'}</code>
+        <code>{snapshot.settings.endpoint || t('no endpoint configured')}</code>
       </div>
       <div className="list-toolbar">
-        <SearchInput value={query} onChange={setQuery} label="search models" />
+        <SearchInput
+          value={query}
+          onChange={setQuery}
+          label={t('search models')}
+        />
         <Switch
-          label="save as default"
+          label={t('save as default')}
           checked={saveDefault}
           onChange={setSaveDefault}
         />
@@ -261,15 +321,20 @@ function ModelsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
                 <small>{model.provider}</small>
               </span>
               <span>
-                {model.contextWindow?.toLocaleString() ?? 'N/A'} context
+                {t('{size} context', {
+                  size: model.contextWindow?.toLocaleString() ?? 'N/A',
+                })}
               </span>
-              <span>{model.vision ? 'text + image' : 'text'}</span>
-              {session.model === model.id && <Badge>current</Badge>}
+              <span>{model.vision ? t('text + image') : t('text')}</span>
+              {session.model === model.id && <Badge>{t('current')}</Badge>}
             </button>
-            <label title="include in model cycling" className="check-label">
+            <label
+              title={t('include in model cycling')}
+              className="check-label"
+            >
               <input
                 type="checkbox"
-                aria-label={`cycle ${model.id}`}
+                aria-label={t('cycle {model}', { model: model.id })}
                 checked={
                   !snapshot.settings.enabledModels.length ||
                   snapshot.settings.enabledModels.includes(model.id)
@@ -292,21 +357,22 @@ function ModelsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
               disabled={session.state === 'waiting'}
               onClick={() => choose(model.id)}
             >
-              use model
+              {t('use model')}
             </Button>
           </div>
         ))}
         {!models.length && query.trim() && (
           <Button onClick={() => choose(query.trim())}>
-            use “{query.trim()}”
+            {t('use “{model}”', { model: query.trim() })}
           </Button>
         )}
       </div>
       <section className="settings-block">
-        <h2>thinking depth</h2>
+        <h2>{t('thinking depth')}</h2>
         <p>
-          Applied to the current session. The connected runtime will report
-          which levels the model accepts.
+          {t(
+            'Applied to the current session. The connected runtime will report which levels the model accepts.',
+          )}
         </p>
         <div className="effort-options">
           {EFFORTS.map((effort) => (
@@ -323,19 +389,24 @@ function ModelsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
                 )
               }
             >
-              {effort}
+              {EFFORT_TEXT[effort]()}
             </button>
           ))}
         </div>
       </section>
       <section className="settings-block">
-        <h2>usage</h2>
+        <h2>{t('usage')}</h2>
         <Facts
           values={{
-            'input price': 'N/A',
-            'output price': 'N/A',
-            'cache usage': 'N/A',
-            source: 'sample catalog; no endpoint queried',
+            [t('input price')]: price(usageModel?.inputPrice),
+            [t('output price')]: price(usageModel?.outputPrice),
+            [t('cache usage')]: session.meters?.input
+              ? `${((Math.min(session.meters.cacheRead, session.meters.input) / session.meters.input) * 100).toFixed(1)}%`
+              : 'N/A',
+            [t('source')]:
+              runtime.mode === 'live'
+                ? t('models.dev and your settings')
+                : 'sample catalog; no endpoint queried',
           }}
         />
       </section>
@@ -349,60 +420,68 @@ function SkillsPage() {
   const selected = snapshot.skills.find((skill) => skill.id === id);
   return (
     <Page
-      title="skills"
-      description="Instructions loaded into a conversation when needed."
+      title={t('skills')}
+      description={t('Instructions loaded into a conversation when needed.')}
     >
-      <div className="catalog-layout">
-        <div>
-          <SearchInput
-            value={query}
-            onChange={setQuery}
-            label="search skills"
-          />
-          {snapshot.skills
-            .filter((skill) =>
-              (skill.name + ' ' + skill.description).includes(query),
-            )
-            .map((skill) => (
-              <button
-                className={
-                  skill.id === id ? 'catalog-row active' : 'catalog-row'
-                }
-                key={skill.id}
-                onClick={() => setId(skill.id)}
-              >
-                <BookOpen size={16} />
-                <span>
-                  <strong>{skill.name}</strong>
-                  <small>{skill.scope}</small>
-                </span>
-              </button>
-            ))}
-        </div>
-        <div className="catalog-detail">
-          {selected && (
-            <>
-              <div className="detail-title">
-                <div>
-                  <h2>{selected.name}</h2>
-                  <p>{selected.description}</p>
-                </div>
-                <Button
-                  disabled={currentSession(snapshot).state === 'waiting'}
-                  onClick={() =>
-                    act(() => runtime.command('skill', selected.name))
+      {snapshot.skills.length ? (
+        <div className="catalog-layout">
+          <div>
+            <SearchInput
+              value={query}
+              onChange={setQuery}
+              label={t('search skills')}
+            />
+            {snapshot.skills
+              .filter((skill) =>
+                (skill.name + ' ' + skill.description).includes(query),
+              )
+              .map((skill) => (
+                <button
+                  className={
+                    skill.id === id ? 'catalog-row active' : 'catalog-row'
                   }
+                  key={skill.id}
+                  onClick={() => setId(skill.id)}
                 >
-                  <Plus size={14} />
-                  add to session
-                </Button>
-              </div>
-              <code className="file-path">{selected.path}</code>
-              <Markdown text={selected.content} />
-            </>
-          )}
+                  <BookOpen size={16} />
+                  <span>
+                    <strong>{skill.name}</strong>
+                    <small>{skill.scope}</small>
+                  </span>
+                </button>
+              ))}
+          </div>
+          <div className="catalog-detail">
+            {selected && (
+              <>
+                <div className="detail-title">
+                  <div>
+                    <h2>{selected.name}</h2>
+                    <p>{selected.description}</p>
+                  </div>
+                  <Button
+                    disabled={currentSession(snapshot).state === 'waiting'}
+                    onClick={() =>
+                      act(() => runtime.command('skill', selected.name))
+                    }
+                  >
+                    <Plus size={14} />
+                    {t('add to session')}
+                  </Button>
+                </div>
+                <code className="file-path">{selected.path}</code>
+                <Markdown text={selected.content} />
+              </>
+            )}
+          </div>
         </div>
-      </div>
+      ) : (
+        <EmptyState title={t('no skills yet')}>
+          {t(
+            'Add a folder with a SKILL.md file to .circle/skills in your project. Circle reads it when a session starts.',
+          )}
+        </EmptyState>
+      )}
     </Page>
   );
 }
@@ -415,8 +494,10 @@ function CommandsPage() {
   const selected = snapshot.commands.find((command) => command.name === id);
   return (
     <Page
-      title="commands"
-      description="Reusable prompts from your project, user folders and extensions."
+      title={t('commands')}
+      description={t(
+        'Reusable prompts from your project, user folders and extensions.',
+      )}
       action={
         <Button
           onClick={() => {
@@ -437,109 +518,118 @@ function CommandsPage() {
           }}
         >
           <Plus size={14} />
-          new command
+          {t('new command')}
         </Button>
       }
     >
-      <div className="catalog-layout">
-        <div>
-          <SearchInput
-            value={query}
-            onChange={setQuery}
-            label="search commands"
-          />
-          {snapshot.commands
-            .filter((command) =>
-              (command.name + ' ' + command.description).includes(query),
-            )
-            .map((command) => (
-              <button
-                key={command.name}
-                className={
-                  command.name === id ? 'catalog-row active' : 'catalog-row'
-                }
-                onClick={() => {
-                  setId(command.name);
-                  setEditing(false);
-                }}
-              >
-                <Command size={15} />
-                <span>
-                  <strong>/{command.name}</strong>
-                  <small>{command.scope}</small>
-                </span>
-              </button>
-            ))}
-        </div>
-        <div className="catalog-detail">
-          {selected && (
-            <>
-              <div className="detail-title">
-                <div>
-                  <h2>
-                    /{selected.name} {selected.arguments}
-                  </h2>
-                  <p>{selected.description}</p>
-                </div>
-                <Button
+      {snapshot.commands.length ? (
+        <div className="catalog-layout">
+          <div>
+            <SearchInput
+              value={query}
+              onChange={setQuery}
+              label={t('search commands')}
+            />
+            {snapshot.commands
+              .filter((command) =>
+                (command.name + ' ' + command.description).includes(query),
+              )
+              .map((command) => (
+                <button
+                  key={command.name}
+                  className={
+                    command.name === id ? 'catalog-row active' : 'catalog-row'
+                  }
                   onClick={() => {
-                    setTemplate(selected.template);
-                    setEditing(true);
+                    setId(command.name);
+                    setEditing(false);
                   }}
                 >
-                  edit template
-                </Button>
-              </div>
-              {editing ? (
-                <>
-                  <textarea
-                    aria-label="command template"
-                    className="code-editor short"
-                    value={selectedTemplate}
-                    onChange={(event) => setTemplate(event.target.value)}
-                  />
+                  <Command size={15} />
+                  <span>
+                    <strong>/{command.name}</strong>
+                    <small>{command.scope}</small>
+                  </span>
+                </button>
+              ))}
+          </div>
+          <div className="catalog-detail">
+            {selected && (
+              <>
+                <div className="detail-title">
+                  <div>
+                    <h2>
+                      /{selected.name} {selected.arguments}
+                    </h2>
+                    <p>{selected.description}</p>
+                  </div>
                   <Button
-                    onClick={() =>
-                      perform(() => {
-                        runtime.change((state) => {
-                          state.commands.find(
-                            (command) => command.name === id,
-                          )!.template = selectedTemplate;
-                        });
-                        setEditing(false);
-                        notify(
-                          runtime.mode === 'live'
-                            ? 'saving command template'
-                            : 'template saved to local preview',
-                        );
-                      })
-                    }
+                    onClick={() => {
+                      setTemplate(selected.template);
+                      setEditing(true);
+                    }}
                   >
-                    save template
+                    {t('edit template')}
                   </Button>
-                </>
-              ) : (
-                <pre className="source-preview">{selected.template}</pre>
-              )}
-              <p className="panel-note">
-                Shell snippets remain plain text in this frontend. A connected
-                runtime must expand and execute a custom command.
-              </p>
-              <Button
-                onClick={() => {
-                  runtime.change((state) => {
-                    currentSession(state).draft = '/' + selected.name + ' ';
-                  });
-                  notify('command added to the message draft');
-                }}
-              >
-                insert into draft
-                <ArrowUpRight size={12} />
-              </Button>
-            </>
-          )}
+                </div>
+                {editing ? (
+                  <>
+                    <textarea
+                      aria-label={t('command template')}
+                      className="code-editor short"
+                      value={selectedTemplate}
+                      onChange={(event) => setTemplate(event.target.value)}
+                    />
+                    <Button
+                      onClick={() =>
+                        perform(() => {
+                          runtime.change((state) => {
+                            state.commands.find(
+                              (command) => command.name === id,
+                            )!.template = selectedTemplate;
+                          });
+                          setEditing(false);
+                          notify(
+                            runtime.mode === 'live'
+                              ? t('saving command template')
+                              : 'template saved to local preview',
+                          );
+                        })
+                      }
+                    >
+                      {t('save template')}
+                    </Button>
+                  </>
+                ) : (
+                  <pre className="source-preview">{selected.template}</pre>
+                )}
+                <p className="panel-note">
+                  {t(
+                    'Shell snippets remain plain text in this frontend. A connected runtime must expand and execute a custom command.',
+                  )}
+                </p>
+                <Button
+                  onClick={() => {
+                    runtime.change((state) => {
+                      currentSession(state).draft = '/' + selected.name + ' ';
+                    });
+                    notify(t('command added to the message draft'));
+                  }}
+                >
+                  {t('insert into draft')}
+                  <ArrowUpRight size={12} />
+                </Button>
+              </>
+            )}
+          </div>
         </div>
-      </div>
+      ) : (
+        <EmptyState title={t('no commands yet')}>
+          {t(
+            'Save a prompt as a Markdown file in .circle/commands in your project, or use new command.',
+          )}
+        </EmptyState>
+      )}
     </Page>
   );
 }
@@ -550,8 +640,8 @@ function McpPage() {
   const server = snapshot.mcp.find((item) => item.id === selected);
   return (
     <Page
-      title="mcp servers"
-      description="Inspect server configuration and the tools it exposes."
+      title={t('mcp servers')}
+      description={t('Inspect server configuration and the tools it exposes.')}
       action={
         <div className="inline-actions">
           <Button
@@ -559,13 +649,13 @@ function McpPage() {
               runtime.request('mcp.reload');
               notify(
                 runtime.mode === 'live'
-                  ? 'reloading MCP servers'
+                  ? t('reloading MCP servers')
                   : 'reload requested; no server was started',
               );
             }}
           >
             <RotateCcw size={13} />
-            reload
+            {t('reload')}
           </Button>
           <Button
             onClick={() =>
@@ -583,11 +673,16 @@ function McpPage() {
             }
           >
             <Plus size={14} />
-            add server
+            {t('add server')}
           </Button>
         </div>
       }
     >
+      {!snapshot.mcp.length && (
+        <EmptyState title={t('no MCP servers yet')}>
+          {t('Add a server to give Circle tools from another program.')}
+        </EmptyState>
+      )}
       <div className="records">
         {snapshot.mcp.map((item) => (
           <div key={item.id} className="record-row">
@@ -599,17 +694,18 @@ function McpPage() {
               <span>
                 <strong>{item.name}</strong>
                 <small>
-                  {item.transport} · {item.tools.length} tools
+                  {item.transport} ·{' '}
+                  {tn(item.tools.length, '{n} tool', '{n} tools')}
                   {item.error ? ' · ' + item.error : ''}
                 </small>
               </span>
               <Status value={item.status} />
             </button>
             <Button onClick={() => setEditing(structuredClone(item))}>
-              configure
+              {t('configure')}
             </Button>
             <Switch
-              label={`enable ${item.name}`}
+              label={t('enable {name}', { name: item.name })}
               checked={item.enabled}
               onChange={(enabled) =>
                 perform(() =>
@@ -628,18 +724,18 @@ function McpPage() {
         onOpenChange={(open) => {
           if (!open) setSelected(null);
         }}
-        title={server?.name ?? 'server'}
+        title={server?.name ?? t('server')}
         wide
       >
         {server && (
           <>
             <Facts
               values={{
-                transport: server.transport,
-                command: server.command || '—',
-                arguments: server.args || '—',
-                url: server.url || '—',
-                status: server.status,
+                [t('transport')]: server.transport,
+                [t('command')]: server.command || '—',
+                [t('arguments')]: server.args || '—',
+                [t('url')]: server.url || '—',
+                [t('status')]: server.status,
               }}
             />
             {server.tools.map((tool) => (
@@ -648,11 +744,11 @@ function McpPage() {
                   {tool.name}
                   <span>{tool.description}</span>
                 </summary>
-                <DataBlock title="input schema" value={tool.schema} />
+                <DataBlock title={t('input schema')} value={tool.schema} />
               </details>
             ))}
             {!server.tools.length && (
-              <p className="muted">no tools discovered</p>
+              <p className="muted">{t('no tools discovered')}</p>
             )}
           </>
         )}
@@ -662,10 +758,10 @@ function McpPage() {
         onOpenChange={(open) => {
           if (!open) setEditing(null);
         }}
-        title="server configuration"
+        title={t('server configuration')}
         description={
           runtime.mode === 'live'
-            ? 'Save in Circle settings. Reload to connect the server.'
+            ? t('Save in Circle settings. Reload to connect the server.')
             : 'Saved only in this browser. No process or connection is started.'
         }
       >
@@ -678,7 +774,7 @@ function McpPage() {
                 !editing.name.trim() ||
                 !(editing.transport === 'stdio' ? editing.command : editing.url)
               ) {
-                notify('enter a name and a command or URL');
+                notify(t('enter a name and a command or URL'));
                 return;
               }
               perform(() => {
@@ -690,12 +786,12 @@ function McpPage() {
                   else state.mcp.push(editing);
                 });
                 setEditing(null);
-                notify('server configuration saved locally');
+                notify(t('server configuration saved locally'));
               });
             }}
           >
             <label>
-              name
+              {t('name')}
               <input
                 required
                 value={editing.name}
@@ -705,7 +801,7 @@ function McpPage() {
               />
             </label>
             <label>
-              transport
+              {t('transport')}
               <select
                 value={editing.transport}
                 onChange={(event) =>
@@ -725,7 +821,7 @@ function McpPage() {
             {editing.transport === 'stdio' ? (
               <>
                 <label>
-                  command
+                  {t('command')}
                   <input
                     required
                     value={editing.command}
@@ -735,7 +831,7 @@ function McpPage() {
                   />
                 </label>
                 <label>
-                  arguments
+                  {t('arguments')}
                   <input
                     value={editing.args}
                     onChange={(event) =>
@@ -746,7 +842,7 @@ function McpPage() {
               </>
             ) : (
               <label>
-                url
+                {t('url')}
                 <input
                   required
                   type="url"
@@ -757,12 +853,14 @@ function McpPage() {
                 />
               </label>
             )}
-            <p className="panel-note">
-              Environment secrets will be supplied by the runtime. This preview
-              does not collect them.
-            </p>
+            {runtime.mode !== 'live' && (
+              <p className="panel-note">
+                Environment secrets will be supplied by the runtime. This
+                preview does not collect them.
+              </p>
+            )}
             <Button type="submit" className="primary">
-              save configuration
+              {t('save configuration')}
             </Button>
           </form>
         )}
@@ -776,17 +874,19 @@ function ExtensionsPage() {
   const { registry, enabled, toggle } = usePlugins();
   return (
     <Page
-      title="extensions"
-      description="Runtime tools and interface components have separate lifecycles."
+      title={t('extensions')}
+      description={t(
+        'Extensions add tools, commands and checks written in JavaScript or TypeScript.',
+      )}
       action={
         <Button
           onClick={() => {
             runtime.request('extensions.reload');
-            notify('extension reload recorded; no code was loaded');
+            notify(t('extension reload recorded; no code was loaded'));
           }}
         >
           <RotateCcw size={14} />
-          reload
+          {t('reload')}
         </Button>
       }
     >
@@ -795,17 +895,24 @@ function ExtensionsPage() {
           className={tab === 'runtime' ? 'active' : ''}
           onClick={() => setTab('runtime')}
         >
-          runtime extensions
+          {t('runtime extensions')}
         </button>
         <button
           className={tab === 'interface' ? 'active' : ''}
           onClick={() => setTab('interface')}
         >
-          interface components
+          {t('interface components')}
         </button>
       </div>
       {tab === 'runtime' ? (
         <div className="extension-list">
+          {!snapshot.extensions.length && (
+            <EmptyState title={t('no extensions yet')}>
+              {t(
+                'Put an extension in .circle/extensions/<name>/ in your project, then reload.',
+              )}
+            </EmptyState>
+          )}
           {snapshot.extensions.map((extension) => (
             <article className="extension-card" key={extension.id}>
               <div className="detail-title">
@@ -819,7 +926,7 @@ function ExtensionsPage() {
                   </p>
                 </div>
                 <Switch
-                  label={`enable ${extension.name}`}
+                  label={t('enable {name}', { name: extension.name })}
                   checked={extension.enabled}
                   onChange={(enabled) =>
                     perform(() =>
@@ -836,14 +943,24 @@ function ExtensionsPage() {
                 <div className="inline-error">{extension.error}</div>
               )}
               <div className="extension-contributions">
-                <span>{extension.tools.length} tools</span>
-                <span>{extension.commands.length} commands</span>
-                <span>{extension.events.length} event handlers</span>
+                <span>
+                  {tn(extension.tools.length, '{n} tool', '{n} tools')}
+                </span>
+                <span>
+                  {tn(extension.commands.length, '{n} command', '{n} commands')}
+                </span>
+                <span>
+                  {tn(
+                    extension.events.length,
+                    '{n} event handler',
+                    '{n} event handlers',
+                  )}
+                </span>
               </div>
               <details>
-                <summary>contributions</summary>
+                <summary>{t('contributions')}</summary>
                 <DataBlock
-                  title="registered items"
+                  title={t('registered items')}
                   value={{
                     tools: extension.tools,
                     commands: extension.commands,
@@ -865,13 +982,15 @@ function ExtensionsPage() {
                   <p>{plugin.description}</p>
                 </div>
                 <Switch
-                  label={`enable ${plugin.id} interface`}
+                  label={t('enable {name} interface', { name: plugin.id })}
                   checked={enabled.includes(plugin.id)}
                   onChange={(value) => toggle(plugin.id, value)}
                 />
               </div>
               <p className="panel-note">
-                bundled first-party component · 0.1.0
+                {t('bundled first-party component · {version}', {
+                  version: '0.1.0',
+                })}
               </p>
             </article>
           ))}
@@ -880,36 +999,59 @@ function ExtensionsPage() {
     </Page>
   );
 }
+// What a tool does to the machine, as the core sorts tools.
+const TOOL_KIND: Record<string, () => string> = {
+  read: () => t('reads only'),
+  write: () => t('changes files'),
+  execute: () => t('runs commands'),
+  unknown: () => t('may change things'),
+};
 function ToolsPage() {
   const [query, setQuery] = useState('');
   const { runtime, snapshot } = useRuntime();
   return (
     <Page
-      title="tools"
-      description="Circle's built-in tools, with inputs and results shown in the conversation."
+      title={t('tools')}
+      description={t(
+        "Circle's built-in tools, with inputs and results shown in the conversation.",
+      )}
     >
-      <SearchInput value={query} onChange={setQuery} label="search tools" />
+      <SearchInput
+        value={query}
+        onChange={setQuery}
+        label={t('search tools')}
+      />
       <div className="tool-catalog">
         {(runtime.mode === 'live' ? (snapshot.tools ?? []) : BUILTIN_TOOL_INFO)
           .filter((tool) =>
             (tool.name + ' ' + tool.description).includes(query),
           )
-          .map((tool) => (
-            <details className="tool-definition" key={tool.name}>
-              <summary>
-                <Code size={15} />
-                <code>{tool.name}</code>
-                <span>{tool.description}</span>
-                <Badge>{tool.kind}</Badge>
-              </summary>
-              <p>{tool.detail}</p>
-              <p className="muted small">
-                {runtime.mode === 'live'
-                  ? 'Inputs and results are recorded by Circle and shown in the conversation.'
-                  : 'Raw inputs and outputs use the same expandable transcript renderer. Actual execution requires Circle.'}
-              </p>
-            </details>
-          ))}
+          .map((tool) => {
+            // One line for each tool: Circle's own words for a built-in one, else the
+            // first sentence of what the model is told; the full text folds open.
+            const known = BUILTIN_TOOL_INFO.find(
+              (item) => item.name === tool.name,
+            );
+            // The descriptions come from Markdown tables; their bold marks are not text.
+            const line = (
+              known?.description ??
+              tool.description.split(/(?<=\.)\s|\n/)[0]!.slice(0, 160)
+            ).replaceAll('**', '');
+            return (
+              <details className="tool-definition" key={tool.name}>
+                <summary>
+                  <Code size={15} />
+                  <code>{tool.name}</code>
+                  <span>{line}</span>
+                  <Badge>{TOOL_KIND[tool.kind]?.() ?? tool.kind}</Badge>
+                </summary>
+                <p>{(known?.detail ?? tool.detail).replaceAll('**', '')}</p>
+                {runtime.mode === 'live' && (
+                  <pre className="tool-prompt">{tool.description}</pre>
+                )}
+              </details>
+            );
+          })}
       </div>
     </Page>
   );
@@ -922,19 +1064,17 @@ function ApprovalsPage() {
   );
   return (
     <Page
-      title="approvals"
-      description="Allow rules belong to the current session."
+      title={t('approvals')}
+      description={t('Allow rules belong to the current session.')}
     >
       <div className="connection-banner">
         <ShieldCheck size={18} />
-        <span>
-          {session.readOnly
-            ? 'read-only'
-            : session.auto
-              ? 'auto'
-              : 'ask before changes'}
-        </span>
-        <small>preview policy</small>
+        <span>{MODE_TEXT[sessionMode(session)].label()}</span>
+        <small>
+          {runtime.mode === 'live'
+            ? MODE_TEXT[sessionMode(session)].detail()
+            : 'preview policy'}
+        </small>
       </div>
       <div className="records">
         {rules.map((rule) => (
@@ -943,7 +1083,9 @@ function ApprovalsPage() {
               <ShieldCheck size={16} />
               <span>
                 <strong>{rule.description}</strong>
-                <small>{rule.kind} · this session</small>
+                <small>
+                  {rule.kind} · {t('this session')}
+                </small>
               </span>
             </div>
             <Button
@@ -958,18 +1100,21 @@ function ApprovalsPage() {
                 })
               }
             >
-              revoke
+              {t('revoke')}
             </Button>
           </div>
         ))}
         {!rules.length && (
           <div className="empty-state">
-            <h3>no session rules</h3>
+            <h3>{t('no session rules')}</h3>
           </div>
         )}
       </div>
       <section className="settings-block">
-        <h2>recent decisions</h2>
+        <h2>{t('recent decisions')}</h2>
+        {!snapshot.interactions.some(
+          (item) => item.sessionId === session.id && item.status === 'recorded',
+        ) && <p className="muted">{t('no decisions in this session yet')}</p>}
         {snapshot.interactions
           .filter(
             (item) =>
@@ -981,13 +1126,26 @@ function ApprovalsPage() {
               <strong>{item.decision}</strong>
             </div>
           ))}
-        <p className="panel-note">
-          Preview decisions do not grant permissions to a running agent.
-        </p>
+        {runtime.mode !== 'live' && (
+          <p className="panel-note">
+            Preview decisions do not grant permissions to a running agent.
+          </p>
+        )}
       </section>
     </Page>
   );
 }
+const TEXT_SIZE_LABELS: Record<TextSize, () => string> = {
+  small: () => t('small'),
+  default: () => t('default'),
+  large: () => t('large'),
+  larger: () => t('larger'),
+};
+const THEME_LABELS: Record<'auto' | 'light' | 'dark', () => string> = {
+  auto: () => t('auto'),
+  light: () => t('light'),
+  dark: () => t('dark'),
+};
 function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
   const { snapshot, runtime, perform, notify } = useRuntime();
   const settings = snapshot.settings;
@@ -999,17 +1157,17 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
     perform(() => runtime.change((state) => update(state.settings)));
   return (
     <Page
-      title="settings"
+      title={t('settings')}
       description={
         runtime.mode === 'live'
-          ? 'Circle preferences and display settings.'
+          ? t('Circle preferences and display settings.')
           : 'Preferences here apply to this frontend preview.'
       }
     >
       <section className="settings-block first">
-        <h2>appearance</h2>
+        <h2>{t('appearance')}</h2>
         <div className="setting-row">
-          <span>theme</span>
+          <span>{t('theme')}</span>
           <div className="segmented">
             {(['auto', 'light', 'dark'] as const).map((theme) => (
               <button
@@ -1021,45 +1179,52 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
                   })
                 }
               >
-                {theme}
+                {THEME_LABELS[theme]()}
               </button>
             ))}
           </div>
         </div>
         <div className="setting-row">
-          <label htmlFor="ui-font">interface size</label>
-          <input
-            id="ui-font"
-            type="range"
-            min={11}
-            max={18}
-            value={settings.uiFontSize}
-            onChange={(event) =>
-              save((value) => {
-                value.uiFontSize = Number(event.target.value);
-              })
-            }
-          />
-          <span>{settings.uiFontSize}</span>
+          <span>{t('text size')}</span>
+          <div className="segmented" role="group" aria-label={t('text size')}>
+            {textSizes.map((size) => (
+              <button
+                key={size}
+                aria-pressed={settings.textSize === size}
+                className={settings.textSize === size ? 'active' : ''}
+                style={{ fontSize: TEXT_SIZES[size][0] + 'px' }}
+                onClick={() =>
+                  save((value) => {
+                    value.textSize = size;
+                  })
+                }
+              >
+                {TEXT_SIZE_LABELS[size]()}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="setting-row">
-          <label htmlFor="code-font">code size</label>
-          <input
-            id="code-font"
-            type="range"
-            min={11}
-            max={20}
-            value={settings.codeFontSize}
-            onChange={(event) =>
-              save((value) => {
-                value.codeFontSize = Number(event.target.value);
-              })
-            }
-          />
-          <span>{settings.codeFontSize}</span>
+          <span>{t('language')}</span>
+          <div className="segmented" role="group" aria-label={t('language')}>
+            {LANGUAGES.map((language) => (
+              <button
+                key={language}
+                aria-pressed={languageChoice() === language}
+                className={languageChoice() === language ? 'active' : ''}
+                onClick={() => setLanguage(language, localStorage)}
+              >
+                {language === 'system'
+                  ? t('follow system')
+                  : language === 'zh-CN'
+                    ? '简体中文'
+                    : 'English'}
+              </button>
+            ))}
+          </div>
         </div>
         <Switch
-          label="hide thinking in new sessions"
+          label={t('hide thinking in new sessions')}
           checked={settings.hideThinking}
           onChange={(checked) =>
             save((value) => {
@@ -1069,14 +1234,14 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
         />
       </section>
       <section className="settings-block">
-        <h2>session defaults</h2>
+        <h2>{t('session defaults')}</h2>
         <div className="setting-row">
-          <span>model</span>
+          <span>{t('model')}</span>
           <code>{settings.defaultModel}</code>
-          <Button onClick={() => onDialog('connect')}>connection</Button>
+          <Button onClick={() => onDialog('connect')}>{t('connection')}</Button>
         </div>
         <div className="setting-row">
-          <label htmlFor="double-escape">double escape</label>
+          <label htmlFor="double-escape">{t('double escape')}</label>
           <select
             id="double-escape"
             value={settings.doubleEscape}
@@ -1087,13 +1252,21 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
               })
             }
           >
-            {['tree', 'fork', 'none'].map((value) => (
-              <option key={value}>{value}</option>
+            {(
+              [
+                ['tree', () => t('open the session tree')],
+                ['fork', () => t('fork the session')],
+                ['none', () => t('nothing')],
+              ] as const
+            ).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label()}
+              </option>
             ))}
           </select>
         </div>
         <div className="setting-row">
-          <label htmlFor="default-effort">thinking depth</label>
+          <label htmlFor="default-effort">{t('thinking depth')}</label>
           <select
             id="default-effort"
             value={settings.defaultEffort}
@@ -1104,14 +1277,16 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
               })
             }
           >
-            {['default', ...EFFORTS].map((value) => (
-              <option key={value}>{value}</option>
+            {(['default', ...EFFORTS] as Effort[]).map((value) => (
+              <option key={value} value={value}>
+                {EFFORT_TEXT[value]()}
+              </option>
             ))}
           </select>
         </div>
       </section>
       <section className="settings-block">
-        <h2>workspace trust</h2>
+        <h2>{t('workspace trust')}</h2>
         {snapshot.workspaces.map((workspace) => (
           <div className="setting-row" key={workspace.id}>
             <span>
@@ -1120,15 +1295,15 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
             </span>
             <Status value={workspace.trusted ? 'trusted' : 'not trusted'} />
             <Button onClick={() => onDialog('trust', workspace.id)}>
-              review
+              {t('review')}
             </Button>
           </div>
         ))}
       </section>
       <section className="settings-block">
-        <h2>protected files</h2>
+        <h2>{t('protected files')}</h2>
         <label className="field-label" htmlFor="credential-patterns">
-          additional file patterns
+          {t('additional file patterns')}
         </label>
         <textarea
           id="credential-patterns"
@@ -1143,15 +1318,18 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
           }
         />
         <p className="panel-note">
-          Circle's built-in protections remain in force when a runtime is
-          connected.
+          {t(
+            "Circle's built-in protections remain in force when a runtime is connected.",
+          )}
         </p>
       </section>
       <section className="settings-block">
-        <h2>keyboard</h2>
-        <Button onClick={() => onDialog('hotkeys')}>view shortcuts</Button>
+        <h2>{t('keyboard')}</h2>
+        <Button onClick={() => onDialog('hotkeys')}>
+          {t('view shortcuts')}
+        </Button>
         <textarea
-          aria-label="keybindings json"
+          aria-label={t('keybindings json')}
           className="code-editor short"
           value={bindings}
           onChange={(event) => setBindings(event.target.value)}
@@ -1163,11 +1341,15 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
               save((value) => {
                 value.keybindings = parsed;
               });
-              notify('preview key preferences saved');
+              notify(
+                runtime.mode === 'live'
+                  ? t('key preferences saved')
+                  : 'preview key preferences saved',
+              );
             })
           }
         >
-          save key preferences
+          {t('save key preferences')}
         </Button>
       </section>
       {runtime.mode === 'preview' && (
@@ -1190,24 +1372,24 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
         </section>
       )}
       <section className="settings-block">
-        <h2>about</h2>
+        <h2>{t('about')}</h2>
         <Facts
           values={{
-            version: VERSION,
-            runtime: snapshot.runtime?.connected
-              ? 'connected'
-              : 'not connected',
-            host: desktopHost()
-              ? 'desktop application'
+            [t('version')]: VERSION,
+            [t('runtime')]: snapshot.runtime?.connected
+              ? t('connected')
+              : t('not connected'),
+            [t('host')]: desktopHost()
+              ? t('desktop application')
               : 'browser layout preview',
-            data:
+            [t('data')]:
               runtime.mode === 'live'
-                ? 'Circle desktop data folder'
+                ? t('Circle desktop data folder')
                 : 'this browser only',
           }}
         />
         <Switch
-          label="check for updates"
+          label={t('check for updates')}
           checked={settings.updateCheck}
           onChange={(checked) =>
             save((value) => {
@@ -1216,19 +1398,27 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
           }
         />
         <Button
-          onClick={() => {
-            runtime.request('check-update');
-            notify('update check requires a connected host');
-          }}
-        >
-          check now
-        </Button>
-        <Button
           onClick={() =>
-            onDialog(runtime.mode === 'live' ? 'session' : 'preview')
+            perform(async () => {
+              if (runtime.mode !== 'live') {
+                runtime.request('check-update');
+                notify('update check requires a connected host');
+                return;
+              }
+              const result = (await runtime.request('check-update')) as {
+                available?: string;
+              };
+              notify(
+                result?.available
+                  ? t('Circle {version} is available', {
+                      version: result.available,
+                    })
+                  : t('Circle is up to date'),
+              );
+            })
           }
         >
-          {runtime.mode === 'live' ? 'session details' : 'preview data'}
+          {t('check now')}
         </Button>
       </section>
     </Page>
@@ -1242,16 +1432,18 @@ function HelpPage({ onDialog }: { onDialog: Props['onDialog'] }) {
   const [query, setQuery] = useState('');
   return (
     <Page
-      title="commands & help"
-      description="Every Circle command has a frontend entry point. Runtime actions are recorded as requests."
+      title={t('commands & help')}
+      description={t('Type a command in the message box, starting with /.')}
       action={
-        <Button onClick={() => onDialog('hotkeys')}>keyboard shortcuts</Button>
+        <Button onClick={() => onDialog('hotkeys')}>
+          {t('keyboard shortcuts')}
+        </Button>
       }
     >
       <SearchInput
         value={query}
         onChange={setQuery}
-        label="search built-in commands"
+        label={t('search built-in commands')}
       />
       <div className="command-table">
         {BUILTIN_SLASH.filter((command) =>
@@ -1270,7 +1462,7 @@ function HelpPage({ onDialog }: { onDialog: Props['onDialog'] }) {
             onClick={() => act(() => runtime.command(command.name))}
           >
             <code>/{command.name}</code>
-            <span>{command.description}</span>
+            <span>{slashText(command.name, command.description)}</span>
             <small>
               {command.aliases?.map((alias) => '/' + alias).join(' ')}
             </small>
@@ -1284,10 +1476,12 @@ function HelpPage({ onDialog }: { onDialog: Props['onDialog'] }) {
           target="_blank"
           rel="noreferrer"
         >
-          Circle documentation
+          {t('Circle documentation')}
           <ArrowUpRight size={12} />
         </a>
-        <span>UI controls are local; no runtime effects are implied.</span>
+        {runtime.mode !== 'live' && (
+          <span>UI controls are local; no runtime effects are implied.</span>
+        )}
       </div>
     </Page>
   );

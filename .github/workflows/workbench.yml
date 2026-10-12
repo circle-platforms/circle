@@ -78,7 +78,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -87,8 +87,19 @@ jobs:
       - run: npm ci
       - run: npm --prefix apps/workbench ci
       - run: npm --prefix apps/desktop ci
+      - name: Install the WiX Toolset
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          dotnet tool install --global wix --version 5.0.2
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.dotnet\tools"
       - run: npm --prefix apps/desktop run test:runtime
       - run: npm --prefix apps/desktop run package
+      # The release workflow installs and removes it; here it only has to build and validate
+      - name: Build the MSI
+        if: runner.os == 'Windows'
+        run: npm --prefix apps/desktop run package:msi
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: circle-desktop-${{ matrix.os }}-development

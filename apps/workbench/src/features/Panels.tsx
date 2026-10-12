@@ -26,7 +26,10 @@ import {
   Check,
 } from 'lucide-react';
 import { useRuntime } from '../app/context';
-import { currentSession } from '../model/state';
+import { currentSession, sessionMode } from '../model/state';
+import { DiffBlock } from '../components/DiffBlock';
+import { EFFORT_TEXT, MODE_TEXT } from './Composer';
+import { t, tn } from '../i18n';
 import type { PanelId, Interaction, DialogId } from '../model/types';
 import {
   Button,
@@ -44,6 +47,20 @@ export const PANEL_DEFINITIONS = [
   { id: 'activity', label: 'activity', icon: Activity, plugin: 'activity' },
   { id: 'browser', label: 'browser', icon: Globe, plugin: 'browser' },
 ] as const;
+// What an attached piece of context is, and what a request asks for.
+const ATTACHMENT_KIND: Record<string, () => string> = {
+  file: () => t('file'),
+  image: () => t('image'),
+  document: () => t('document'),
+  skill: () => t('skill'),
+  paste: () => t('pasted text'),
+};
+const REQUEST_KIND: Record<string, () => string> = {
+  approval: () => t('approval'),
+  question: () => t('question'),
+  secret: () => t('secret'),
+  'plan-exit': () => t('plan exit'),
+};
 interface Props {
   panel: PanelId;
   selection: string;
@@ -54,47 +71,93 @@ interface Props {
   onInteraction: (item: Interaction) => void;
   onDialog: (dialog: DialogId, selection?: string) => void;
 }
-export function Inspector(props: Props) {
-  const { snapshot } = useRuntime();
+// The panels the inspector can show: context, then those the enabled components add.
+function usePanels() {
   const { registry, enabled } = usePlugins();
-  const session = currentSession(snapshot);
-  const panels = registry
+  return registry
     .active(enabled)
     .flatMap((plugin) =>
       (plugin.panels ?? []).map((panel) => ({ plugin, panel })),
     );
+}
+/**
+ * The inspector's panels as icons in the top bar, as Claude places them: a click opens
+ * that panel, a second click closes it.
+ */
+export function PanelButtons({
+  panel,
+  open,
+  onPanel,
+  onClose,
+}: {
+  panel: PanelId;
+  open: boolean;
+  onPanel: (panel: PanelId) => void;
+  onClose: () => void;
+}) {
+  const panels = usePanels();
+  const active = panels.some((item) => item.panel.id === panel)
+    ? panel
+    : 'context';
+  const current = panel === 'terminal' ? 'terminal' : active;
+  const toggle = (id: PanelId) =>
+    open && current === id ? onClose() : onPanel(id);
+  return (
+    <>
+      <IconButton
+        label={t('terminal panel')}
+        aria-pressed={open && current === 'terminal'}
+        className={`icon-button ${open && current === 'terminal' ? 'active' : ''}`}
+        onClick={() => toggle('terminal')}
+      >
+        <Terminal size={16} />
+      </IconButton>
+      {panels.map(({ panel: item }) => (
+        <IconButton
+          key={item.id}
+          label={t('{title} panel', { title: item.title })}
+          aria-pressed={open && current === item.id}
+          className={`icon-button ${open && current === item.id ? 'active' : ''}`}
+          onClick={() => toggle(item.id)}
+        >
+          <item.icon size={16} />
+        </IconButton>
+      ))}
+      <IconButton
+        label={t('context panel')}
+        aria-pressed={open && current === 'context'}
+        className={`icon-button ${open && current === 'context' ? 'active' : ''}`}
+        onClick={() => toggle('context')}
+      >
+        <Layers size={16} />
+      </IconButton>
+    </>
+  );
+}
+export function Inspector(props: Props) {
+  const { snapshot } = useRuntime();
+  const session = currentSession(snapshot);
+  const panels = usePanels();
   const selected = panels.find((item) => item.panel.id === props.panel);
-  const active = selected ? props.panel : 'context';
+  const terminal = props.panel === 'terminal';
   return (
     <aside className="inspector">
-      <header className="inspector-tabs">
-        <div>
-          <button
-            aria-label="context panel"
-            title="context"
-            className={active === 'context' ? 'active' : ''}
-            onClick={() => props.onPanel('context')}
-          >
-            <Layers size={15} />
-          </button>
-          {panels.map(({ panel }) => (
-            <button
-              key={panel.id}
-              aria-label={panel.title + ' panel'}
-              title={panel.title}
-              className={active === panel.id ? 'active' : ''}
-              onClick={() => props.onPanel(panel.id)}
-            >
-              <panel.icon size={15} />
-            </button>
-          ))}
-        </div>
-        <IconButton label="close inspector" onClick={props.onClose}>
+      <header className="inspector-title">
+        <h2>
+          {terminal
+            ? t('terminal')
+            : selected
+              ? selected.panel.title
+              : t('context')}
+        </h2>
+        <IconButton label={t('close inspector')} onClick={props.onClose}>
           <X size={15} />
         </IconButton>
       </header>
-      <div className="inspector-body">
-        {selected ? (
+      <div className={`inspector-body ${terminal ? 'flush' : ''}`}>
+        {terminal ? (
+          <TerminalPanel embedded onClose={props.onClose} />
+        ) : selected ? (
           <PluginBoundary key={selected.panel.id} name={selected.plugin.title}>
             <selected.panel.component {...props} sessionId={session.id} />
           </PluginBoundary>
@@ -127,20 +190,20 @@ export function FilesPanel({
   return (
     <>
       <div className="inspector-heading">
-        <h2>files</h2>
+        <h2>{t('files')}</h2>
         <span>
           {snapshot.workspaces.find(
             (workspace) => workspace.id === session.workspaceId,
           )?.origin === 'native'
-            ? 'local workspace'
+            ? t('local workspace')
             : 'sample workspace'}
         </span>
       </div>
       <SearchInput
         value={query}
         onChange={setQuery}
-        label="search files"
-        placeholder="find a file…"
+        label={t('search files')}
+        placeholder={t('find a file…')}
       />
       <div className="file-tree">
         {folders.map((folder) => (
@@ -181,13 +244,76 @@ export function FilesPanel({
         {snapshot.workspaces.find(
           (workspace) => workspace.id === session.workspaceId,
         )?.origin === 'native'
-          ? 'Selected folder. Files are read through granted handles; saving a buffer does not write to disk.'
+          ? files.length || query
+            ? t('The folder Circle works in, read through granted handles.')
+            : t(
+                'Trust this folder to list its files here, or open it again with open folder.',
+              )
           : 'Files shown here are isolated sample data. Opening a file does not access your disk.'}
       </p>
     </>
   );
 }
 export function ChangesPanel({ onFile }: Pick<Props, 'onFile'>) {
+  const { snapshot, runtime } = useRuntime();
+  if (runtime.mode === 'live') return <LiveChanges onFile={onFile} />;
+  return <SampleChanges onFile={onFile} />;
+}
+// What this session changed on disk while the app ran, each file against its version
+// before the session's first change to it.
+function LiveChanges({ onFile }: Pick<Props, 'onFile'>) {
+  const { snapshot } = useRuntime();
+  const session = currentSession(snapshot);
+  const workspace = snapshot.workspaces.find(
+    (item) => item.id === session.workspaceId,
+  );
+  const changes = session.changes ?? [];
+  const shown = (path: string) =>
+    workspace && path.startsWith(workspace.path + '/')
+      ? path.slice(workspace.path.length + 1)
+      : path;
+  return (
+    <>
+      <div className="inspector-heading">
+        <h2>{t('changes')}</h2>
+        <span>{tn(changes.length, '{n} file', '{n} files')}</span>
+      </div>
+      {changes.length ? (
+        changes.map((change) => (
+          <div className="change-entry" key={change.path}>
+            <button
+              className="change-file"
+              disabled={change.kind === 'deleted'}
+              onClick={() => onFile(shown(change.path))}
+            >
+              <FileText size={15} />
+              <span>
+                {shown(change.path)}
+                <small className={change.kind}>
+                  {change.kind === 'added'
+                    ? t('added')
+                    : change.kind === 'deleted'
+                      ? t('deleted')
+                      : t('modified')}
+                </small>
+              </span>
+              <ChevronRight size={13} />
+            </button>
+            <DiffBlock diff={change.diff} compact />
+          </div>
+        ))
+      ) : (
+        <p className="muted">{t('no files changed in this session yet')}</p>
+      )}
+      <p className="panel-note">
+        {t(
+          'Files this session changed while the app was open, each against its version before the first change.',
+        )}
+      </p>
+    </>
+  );
+}
+function SampleChanges({ onFile }: Pick<Props, 'onFile'>) {
   const { snapshot, runtime, notify } = useRuntime();
   const session = currentSession(snapshot);
   const changes = snapshot.files.filter(
@@ -253,25 +379,28 @@ export function ContextPanel({ onDialog }: Pick<Props, 'onDialog'>) {
   return (
     <>
       <div className="inspector-heading">
-        <h2>session context</h2>
+        <h2>{t('session context')}</h2>
         <button className="text-button" onClick={() => onDialog('session')}>
-          details
+          {t('details')}
           <ArrowUpRight size={12} />
         </button>
       </div>
       <Facts
         values={{
-          workspace: workspace.path,
-          model: session.model,
-          effort: session.effort,
-          mode: session.readOnly ? 'read-only' : session.auto ? 'auto' : 'ask',
-          connection: snapshot.runtime?.configured
-            ? 'configured'
-            : 'not connected',
+          [t('workspace')]: workspace.path,
+          [t('model')]: session.model,
+          [t('effort')]: EFFORT_TEXT[session.effort]?.() ?? session.effort,
+          [t('mode')]: MODE_TEXT[sessionMode(session)].label(),
+          [t('connection')]: snapshot.runtime?.configured
+            ? t('configured')
+            : t('not configured'),
         }}
       />
       <div className="panel-section">
-        <h3>instructions</h3>
+        <h3>{t('instructions')}</h3>
+        {!workspace.instructions.length && (
+          <p className="muted">{t('no instruction files in this folder')}</p>
+        )}
         {workspace.instructions.map((item) => (
           <details key={item.name} className="context-source">
             <summary>
@@ -284,7 +413,7 @@ export function ContextPanel({ onDialog }: Pick<Props, 'onDialog'>) {
       </div>
       <div className="panel-section">
         <h3>
-          attached context <span>{session.attachments.length}</span>
+          {t('attached context')} <span>{session.attachments.length}</span>
         </h3>
         {session.attachments.length ? (
           session.attachments.map((file) => (
@@ -292,7 +421,7 @@ export function ContextPanel({ onDialog }: Pick<Props, 'onDialog'>) {
               <summary>
                 <FileText size={14} />
                 {file.name}
-                <span>{file.kind}</span>
+                <span>{ATTACHMENT_KIND[file.kind]?.() ?? file.kind}</span>
               </summary>
               {file.kind === 'image' ? (
                 <img
@@ -305,7 +434,7 @@ export function ContextPanel({ onDialog }: Pick<Props, 'onDialog'>) {
               )}
               {file.truncated && (
                 <p className="panel-note">
-                  preview truncated; original file not stored
+                  {t('preview truncated; original file not stored')}
                 </p>
               )}
               <Button
@@ -319,12 +448,12 @@ export function ContextPanel({ onDialog }: Pick<Props, 'onDialog'>) {
                   )
                 }
               >
-                remove
+                {t('remove')}
               </Button>
             </details>
           ))
         ) : (
-          <p className="muted">no files or skills attached</p>
+          <p className="muted">{t('no files or skills attached')}</p>
         )}
       </div>
       {widgets.map(({ plugin, widget }) => (
@@ -332,29 +461,32 @@ export function ContextPanel({ onDialog }: Pick<Props, 'onDialog'>) {
           <widget.component sessionId={session.id} />
         </PluginBoundary>
       ))}
-      <div className="panel-section">
-        <h3>
-          pending requests{' '}
-          <span>
-            {
-              snapshot.requests.filter((item) => item.sessionId === session.id)
-                .length
-            }
-          </span>
-        </h3>
-        {snapshot.requests
-          .filter((item) => item.sessionId === session.id)
-          .slice(0, 8)
-          .map((request) => (
-            <details className="context-source" key={request.id}>
-              <summary>
-                {request.kind}
-                <small>not sent</small>
-              </summary>
-              <DataBlock title="request" value={request} />
-            </details>
-          ))}
-      </div>
+      {runtime.mode !== 'live' && (
+        <div className="panel-section">
+          <h3>
+            {t('pending requests')}{' '}
+            <span>
+              {
+                snapshot.requests.filter(
+                  (item) => item.sessionId === session.id,
+                ).length
+              }
+            </span>
+          </h3>
+          {snapshot.requests
+            .filter((item) => item.sessionId === session.id)
+            .slice(0, 8)
+            .map((request) => (
+              <details className="context-source" key={request.id}>
+                <summary>
+                  {request.kind}
+                  <small>{t('not sent')}</small>
+                </summary>
+                <DataBlock title={t('request')} value={request} />
+              </details>
+            ))}
+        </div>
+      )}
     </>
   );
 }
@@ -379,15 +511,15 @@ export function ActivityPanel({
   return (
     <>
       <div className="inspector-heading">
-        <h2>activity</h2>
+        <h2>{t('activity')}</h2>
         <button className="text-button" onClick={() => setAll(!all)}>
-          {all ? 'this session' : 'all sessions'}
+          {all ? t('this session') : t('all sessions')}
         </button>
       </div>
       {job ? (
         <div className="job-detail">
           <button className="text-button" onClick={() => setSelected('')}>
-            ← jobs
+            ← {t('jobs')}
           </button>
           <h3>
             {job.id} · {job.title}
@@ -395,11 +527,11 @@ export function ActivityPanel({
           <Status value={job.state} />
           <Facts
             values={{
-              elapsed: job.elapsed,
-              output: job.outputPath,
-              stop: job.stopRequested
-                ? 'requested · unverified'
-                : 'not requested',
+              [t('elapsed')]: job.elapsed,
+              [t('output')]: job.outputPath,
+              [t('stop')]: job.stopRequested
+                ? t('requested · unverified')
+                : t('not requested'),
             }}
           />
           <pre>{job.output}</pre>
@@ -409,7 +541,7 @@ export function ActivityPanel({
                 disabled={job.stopRequested}
                 onClick={() => onDialog('job-stop', job.id)}
               >
-                request stop
+                {t('request stop')}
               </Button>
             ) : (
               <Button
@@ -424,12 +556,12 @@ export function ActivityPanel({
                   })
                 }
               >
-                remove from preview
+                {t('remove from preview')}
               </Button>
             )}
             {job.agentId && (
               <Button onClick={() => onAgent(job.agentId!)}>
-                agent record
+                {t('agent record')}
               </Button>
             )}
           </div>
@@ -438,7 +570,7 @@ export function ActivityPanel({
         <>
           <div className="panel-section first">
             <h3>
-              jobs <span>{jobs.length}</span>
+              {t('jobs')} <span>{jobs.length}</span>
             </h3>
             {jobs.map((item) => (
               <button
@@ -452,9 +584,11 @@ export function ActivityPanel({
                     {item.id} · {item.title}
                   </strong>
                   <small>
-                    {item.sessionId !== session.id ? 'other session · ' : ''}
+                    {item.sessionId !== session.id
+                      ? t('other session') + ' · '
+                      : ''}
                     {item.elapsed}
-                    {item.stopRequested ? ' · stop requested' : ''}
+                    {item.stopRequested ? ' · ' + t('stop requested') : ''}
                   </small>
                 </span>
                 <Status value={item.state} />
@@ -462,7 +596,7 @@ export function ActivityPanel({
             ))}
           </div>
           <div className="panel-section">
-            <h3>subagents</h3>
+            <h3>{t('subagents')}</h3>
             {snapshot.agents
               .filter((agent) => agent.sessionId === session.id)
               .map((agent) => (
@@ -484,7 +618,7 @@ export function ActivityPanel({
       )}
       <div className="panel-section">
         <h3>
-          requests{' '}
+          {t('requests')}{' '}
           <span>
             {interactions.filter((item) => item.status === 'pending').length}
           </span>
@@ -499,13 +633,13 @@ export function ActivityPanel({
             <span>
               <strong>{item.title}</strong>
               <small>
-                {item.kind} ·{' '}
+                {REQUEST_KIND[item.kind]?.() ?? item.kind} ·{' '}
                 {item.status === 'pending'
                   ? runtime.mode === 'live'
-                    ? 'waiting for your response'
+                    ? t('waiting for your response')
                     : 'sample request'
                   : runtime.mode === 'live'
-                    ? 'response sent to Circle'
+                    ? t('response sent to Circle')
                     : 'response saved locally'}
               </small>
             </span>
@@ -565,31 +699,44 @@ function BrowserPlaceholder() {
     </>
   );
 }
-export function TerminalPanel({ onClose }: { onClose: () => void }) {
+// What each session's terminal printed, kept while the app runs: switching panels or
+// closing the inspector does not clear it.
+const terminalOutput = new Map<string, string[]>();
+export function TerminalPanel({
+  onClose,
+  embedded = false,
+}: {
+  onClose: () => void;
+  embedded?: boolean;
+}) {
   const { runtime, snapshot, perform } = useRuntime();
   const session = currentSession(snapshot);
   const [input, setInput] = useState('');
-  const [output, setOutput] = useState<string[]>([
+  const greeting = () => [
     runtime.mode === 'live' ? 'Circle shell' : 'terminal not connected',
     runtime.mode === 'live'
-      ? 'Commands run in this session workspace.'
+      ? t('Commands run in this session workspace.')
       : 'commands stay in the preview request log',
-  ]);
+  ];
+  const [output, setLines] = useState<string[]>(
+    () => terminalOutput.get(session.id) ?? greeting(),
+  );
+  const setOutput = (update: (lines: string[]) => string[]) =>
+    setLines((lines) => {
+      const next = update(lines);
+      terminalOutput.set(session.id, next);
+      return next;
+    });
   useEffect(() => {
     setInput('');
-    setOutput([
-      runtime.mode === 'live' ? 'Circle shell' : 'terminal not connected',
-      runtime.mode === 'live'
-        ? 'Commands run in this session workspace.'
-        : 'commands stay in the preview request log',
-    ]);
+    setLines(terminalOutput.get(session.id) ?? greeting());
   }, [session.id]);
   return (
-    <section className="terminal-pane">
-      <header>
+    <section className={`terminal-pane ${embedded ? 'embedded' : ''}`}>
+      <header hidden={embedded}>
         <span>
           <Terminal size={14} />
-          terminal{' '}
+          {t('terminal')}{' '}
           <small>
             {
               snapshot.workspaces.find(
@@ -600,9 +747,9 @@ export function TerminalPanel({ onClose }: { onClose: () => void }) {
         </span>
         <div>
           <span className="muted small">
-            {runtime.mode === 'live' ? 'connected' : 'not connected'}
+            {runtime.mode === 'live' ? t('connected') : t('not connected')}
           </span>
-          <IconButton label="close terminal" onClick={onClose}>
+          <IconButton label={t('close terminal')} onClick={onClose}>
             <X size={13} />
           </IconButton>
         </div>
@@ -628,8 +775,10 @@ export function TerminalPanel({ onClose }: { onClose: () => void }) {
                   ...lines,
                   result.output,
                   result.job
-                    ? `background job ${result.job.id}`
-                    : `exit ${result.exit_code ?? 'unknown'}`,
+                    ? t('background job {id}', { id: result.job.id })
+                    : t('exit {code}', {
+                        code: result.exit_code ?? t('unknown'),
+                      }),
                 ]);
               });
               return;
@@ -646,12 +795,12 @@ export function TerminalPanel({ onClose }: { onClose: () => void }) {
       >
         <span>›</span>
         <input
-          aria-label="terminal command"
+          aria-label={t('terminal command')}
           value={input}
-          placeholder="enter a command…"
+          placeholder={t('enter a command…')}
           onChange={(event) => setInput(event.target.value)}
         />
-        <button aria-label="record terminal command">
+        <button aria-label={t('record terminal command')}>
           <ArrowUpRight size={14} />
         </button>
       </form>

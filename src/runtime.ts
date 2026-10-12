@@ -4,7 +4,11 @@ import { readFileSync } from 'node:fs';
 import type { ChatModel, Message, ToolCall } from './types.js';
 import { GatewayModel, EFFORT_LEVELS } from './model.js';
 import { CheckpointStore, type Session } from './checkpoint_store.js';
-import { defaultPolicy, DEFAULT_CREDENTIAL_FILES } from './approvals.js';
+import {
+  defaultPolicy,
+  DEFAULT_CREDENTIAL_FILES,
+  type SessionMode,
+} from './approvals.js';
 import { Sandbox } from './sandbox.js';
 import { buildTools, type Todo } from './tools.js';
 import { buildSystemPrompt } from './system_prompt.js';
@@ -311,7 +315,12 @@ export class AgentRuntime {
                   options: [
                     {
                       label: 'implement plan',
-                      description: 'Leave read-only mode',
+                      description: 'Leave read-only mode, ask before edits',
+                    },
+                    {
+                      label: 'implement plan, accept edits',
+                      description:
+                        'Leave read-only mode, edit workspace files without asking',
                     },
                     {
                       label: 'continue planning',
@@ -333,8 +342,14 @@ export class AgentRuntime {
             answers = undefined;
           }
           const chosen = Array.isArray(answers) ? answers.flat() : [];
+          if (chosen.includes('implement plan, accept edits')) {
+            this.setMode('accept-edits');
+            return 'Read-only mode disabled. File edits inside the workspace are accepted without asking.';
+          }
           if (!chosen.includes('implement plan'))
             return 'The user kept read-only mode active. Continue planning.';
+          this.setMode('manual');
+          return 'Read-only mode disabled.';
         }
         this.setPlanMode(enabled);
         return enabled ? 'Read-only mode enabled.' : 'Read-only mode disabled.';
@@ -812,6 +827,14 @@ export class AgentRuntime {
           : '[Circle system] Plan mode is now OFF. Previous plan-mode constraints no longer apply. Implement changes subject to normal approval.',
       },
     ]);
+  }
+  get mode(): SessionMode {
+    return this.harness.planMode ? 'plan' : this.policy.mode(this.session.id);
+  }
+  // Plan leaves the approval mode at manual, so leaving plan asks again.
+  setMode(mode: SessionMode): void {
+    this.setPlanMode(mode === 'plan');
+    this.policy.setMode(this.session.id, mode === 'plan' ? 'manual' : mode);
   }
   setModel(model: string): void {
     if (this.busy) throw new Error('a turn is running');

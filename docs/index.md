@@ -19,6 +19,7 @@ New here? Start with the [Quickstart](quickstart.md). Coming from Circle 0.5.0? 
 | Connect a model or switch to another | [Choose a model](models.md) |
 | Know what it may do to my machine | [Run Circle safely](security.md) |
 | Find out what the screen is telling me | [The interface](interface.md) |
+| Use the desktop application | [The desktop application](desktop.md) |
 | Steer, stop, copy, find | [Use Circle in the terminal](usage.md) |
 | Keep, reopen or branch a conversation | [Sessions and context](sessions.md) |
 | Run a server, a watcher or a subagent while I keep working | [Background jobs](background-jobs.md) |
@@ -53,6 +54,7 @@ What you may notice afterwards:
 
 - [Use Circle in the terminal](usage.md)
 - [The interface](interface.md)
+- [The desktop application](desktop.md)
 - [Choose a model](models.md)
 - [Sessions and context](sessions.md)
 - [Background jobs](background-jobs.md)

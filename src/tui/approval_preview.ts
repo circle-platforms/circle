@@ -286,6 +286,7 @@ export function approvalPreview(
   name: string,
   args: Record<string, unknown>,
   resolve?: (path: string) => string,
+  maxRows = APPROVAL_PREVIEW_LINES,
 ): CardLine[] {
   if (!['edit_file', 'write_file', 'apply_patch'].includes(name)) return [];
   const path = String(text(args, 'file_path', 'path') ?? '');
@@ -327,12 +328,37 @@ export function approvalPreview(
     const removed = rows.filter((item) => item.tone === 'removed').length;
     summary = `+${added} -${removed}`;
   }
-  if (rows.length > APPROVAL_PREVIEW_LINES)
-    rows = [
-      ...rows.slice(0, APPROVAL_PREVIEW_LINES),
-      row(`… +${rows.length - APPROVAL_PREVIEW_LINES} more lines`),
-    ];
-  return [row(summary), ...rows];
+  return [row(summary), ...cut(rows, maxRows)];
+}
+function cut(rows: Row[], maxRows: number): Row[] {
+  return rows.length > maxRows
+    ? [...rows.slice(0, maxRows), row(`… +${rows.length - maxRows} more lines`)]
+    : rows;
+}
+/**
+ * How a file changed between two moments, as approvalPreview shows it: a summary row,
+ * then the diff. `before` undefined is a file that did not exist; `after` undefined is
+ * one that is gone. Empty when nothing changed.
+ */
+export function fileChange(
+  before: string | undefined,
+  after: string | undefined,
+  maxRows = APPROVAL_PREVIEW_LINES,
+): CardLine[] {
+  if (before === after) return [];
+  if (after === undefined) {
+    const count = before ? splitKeep(before).length : 0;
+    return [row(`deleted, ${count} ${count === 1 ? 'line' : 'lines'}`)];
+  }
+  const rows = fileDiff(before ?? '', after);
+  if (!rows.length) return [];
+  let summary: string;
+  if (before === undefined) {
+    const count = splitKeep(after).length;
+    summary = `new file, ${count} ${count === 1 ? 'line' : 'lines'}`;
+  } else
+    summary = `+${rows.filter((item) => item.tone === 'added').length} -${rows.filter((item) => item.tone === 'removed').length}`;
+  return [row(summary), ...cut(rows, maxRows)];
 }
 /** Everything an approval card shows for `call`, from what the policy said about it. */
 export function approvalRequest(
