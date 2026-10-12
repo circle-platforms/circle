@@ -7,6 +7,12 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { RuntimeController } from '../src/runtime-controller.ts';
+import { BrowserBridge, type BrowserPort } from '../src/browser-tools.ts';
+import {
+  validateBrowserRequest,
+  type BrowserRequest,
+  type BrowserResult,
+} from '../src/browser-protocol.ts';
 import { ScriptedModel } from '../../../src/testing.ts';
 import { emptyUsage, type Message } from '../../../src/types.ts';
 import {
@@ -18,6 +24,7 @@ import {
 import { visibleMessages } from '../../workbench/src/model/state.ts';
 import { createServer } from 'node:http';
 import { ModelCatalog } from '../../../src/model_catalog.ts';
+import { loadSecrets } from '../../../src/secrets.ts';
 import type {
   RuntimeCommandName,
   RuntimeUpdate,
@@ -43,6 +50,7 @@ async function setup(
   t: TestContext,
   replies: ConstructorParameters<typeof ScriptedModel>[0],
   trusted = true,
+  browser?: BrowserPort,
 ) {
   const root = await mkdtemp(join(tmpdir(), 'circle-core-desktop-'));
   const home = join(root, 'home');
@@ -61,6 +69,7 @@ async function setup(
     workspace,
     userHome: home,
     model,
+    browser,
     emit: (update) => updates.push(update),
   });
   const call = (
@@ -74,6 +83,829 @@ async function setup(
   });
   return { root, home, workspace, model, controller, call, updates };
 }
+
+function fakeBrowser(result: BrowserResult = { text: 'page snapshot' }) {
+  const requests: Omit<BrowserRequest, 'id'>[] = [];
+  const port: BrowserPort = {
+    async request(sessionId, action, args, signal) {
+      signal.throwIfAborted();
+      requests.push({ sessionId, action, args: structuredClone(args) });
+      return result;
+    },
+  };
+  return { port, requests };
+}
+
+test('browser tools are available only when a browser port is connected', async (t) => {
+  const absent = await setup(t, [{ message: assistant('no browser') }]);
+  await absent.call('prompt', { text: 'inspect tools' });
+  await wait(() => absent.model.requests.length === 1, 'model request');
+  assert.equal(
+    absent.model.requests[0]!.tools.some((tool) =>
+      tool.name.startsWith('browser_'),
+    ),
+    false,
+  );
+  const browser = fakeBrowser();
+  const connected = await setup(
+    t,
+    [{ message: assistant('browser ready') }],
+    true,
+    browser.port,
+  );
+  await connected.call('prompt', { text: 'inspect tools' });
+  await wait(
+    () => connected.model.requests.length === 1,
+    'connected model request',
+  );
+  const tools = connected.model.requests[0]!.tools.filter((tool) =>
+    tool.name.startsWith('browser_'),
+  );
+  assert.equal(tools.length, 9);
+  assert(tools.every((tool) => tool.subagents === false));
+});
+
+// A port that records requests and says back what it typed, as a page may.
+function typingBrowser() {
+  const requests: Omit<BrowserRequest, 'id'>[] = [];
+  const port: BrowserPort = {
+    async request(sessionId, action, args, signal) {
+      signal.throwIfAborted();
+      requests.push({ sessionId, action, args: structuredClone(args) });
+      return { text: `typed ${String(args.text)}` };
+    },
+  };
+  return { port, requests };
+}
+
+test('a secret written as %NAME% reaches the browser as its value, marked, and the model sees only the name', async (t) => {
+  const browser = typingBrowser();
+  const f = await setup(
+    t,
+    [
+      {
+        message: assistant('', [
+          {
+            id: 'password',
+            name: 'browser_type',
+            args: {
+              ref: 'e8',
+              element: 'password',
+              text: '%LOGIN_PASSWORD%',
+              submit: true,
+            },
+          },
+          {
+            id: 'user',
+            name: 'browser_type',
+            args: { ref: 'e7', element: 'user', text: '%USER_NAME% %NOT_SET%' },
+          },
+          {
+            id: 'mixed',
+            name: 'browser_type',
+            args: {
+              ref: 'e8',
+              element: 'password',
+              text: '%LOGIN_PASSWORD%%USER_NAME%',
+            },
+          },
+        ]),
+      },
+      { message: assistant('signed in') },
+    ],
+    true,
+    browser.port,
+  );
+  assert.equal(
+    (
+      await f.call('save-secret', {
+        name: 'LOGIN_PASSWORD',
+        value: 'saved-value-123',
+      })
+    ).ok,
+    true,
+  );
+  assert.equal(
+    (
+      await f.call('save-settings', {
+        settings: { variables: { USER_NAME: 'admin' } },
+      })
+    ).ok,
+    true,
+  );
+  assert.deepEqual(f.controller.snapshot().settings.secrets, [
+    'LOGIN_PASSWORD',
+  ]);
+  assert.equal(
+    JSON.stringify(f.controller.snapshot()).includes('saved-value-123'),
+    false,
+  );
+  await f.call('set-mode', { mode: 'auto' });
+  await f.call('prompt', { text: 'sign in' });
+  await wait(() => f.model.requests.length === 2, 'tool results');
+  assert.deepEqual(
+    browser.requests.map((request) => request.args),
+    [
+      {
+        ref: 'e8',
+        element: 'password',
+        text: 'saved-value-123',
+        submit: true,
+        secret: true,
+        secretName: 'LOGIN_PASSWORD',
+      },
+      // A plain variable is put in unmarked; a name that is not set stays as written
+      { ref: 'e7', element: 'user', text: 'admin %NOT_SET%' },
+      // Text that is not made only of secrets is never marked for a password field
+      { ref: 'e8', element: 'password', text: 'saved-value-123admin' },
+    ],
+  );
+  const results = f.model.requests[1]!.messages.filter(
+    (message) => message.role === 'tool',
+  );
+  assert.equal(
+    results.find((row) => row.tool_call_id === 'password')?.content,
+    'typed %LOGIN_PASSWORD%',
+  );
+  assert.equal(
+    JSON.stringify(f.model.requests).includes('saved-value-123'),
+    false,
+  );
+  assert.match(f.model.requests[0]!.system, /only by name: LOGIN_PASSWORD/);
+  assert.equal(
+    (await f.call('remove-secret', { name: 'LOGIN_PASSWORD' })).ok,
+    true,
+  );
+  assert.deepEqual(f.controller.snapshot().settings.secrets, []);
+  assert.equal(
+    (await f.call('remove-secret', { name: 'LOGIN_PASSWORD' })).ok,
+    false,
+  );
+});
+
+test('variables saved in settings reach the next model request; names are checked and kept apart from secrets', async (t) => {
+  const f = await setup(t, [{ message: assistant('noted') }]);
+  assert.equal(
+    (
+      await f.call('save-settings', {
+        settings: {
+          variables: {
+            BASE_URL: 'https://example.test',
+            USER_NAME: 'admin',
+          },
+        },
+      })
+    ).ok,
+    true,
+  );
+  assert.deepEqual(f.controller.snapshot().settings.variables, {
+    BASE_URL: 'https://example.test',
+    USER_NAME: 'admin',
+  });
+  assert.equal(
+    (await f.call('save-settings', { settings: { variables: { lower: 'x' } } }))
+      .ok,
+    false,
+  );
+  assert.equal(
+    (await f.call('save-secret', { name: 'bad name', value: 'x' })).ok,
+    false,
+  );
+  // One name means one thing: a secret may not take a variable's name, nor the reverse
+  assert.equal(
+    (await f.call('save-secret', { name: 'USER_NAME', value: 'x' })).ok,
+    false,
+  );
+  assert.equal(
+    (await f.call('save-secret', { name: 'OLD_TOKEN', value: 'kept-value' }))
+      .ok,
+    true,
+  );
+  assert.equal(
+    (
+      await f.call('save-settings', {
+        settings: { variables: { OLD_TOKEN: 'x' } },
+      })
+    ).ok,
+    false,
+  );
+  // Renamed with no new value, a secret keeps its value under the new name
+  assert.equal(
+    (
+      await f.call('save-secret', {
+        name: 'API_TOKEN',
+        previous: 'OLD_TOKEN',
+        value: '',
+      })
+    ).ok,
+    true,
+  );
+  assert.deepEqual(loadSecrets(f.home), { API_TOKEN: 'kept-value' });
+  assert.equal(
+    (await f.call('save-secret', { name: 'EMPTY_TOKEN', value: '' })).ok,
+    false,
+  );
+  // A password saved as a plain variable by mistake becomes a secret in one step
+  await f.call('save-settings', {
+    settings: {
+      variables: {
+        BASE_URL: 'https://example.test',
+        USER_NAME: 'admin',
+        DB_PASSWORD: 'typed-into-the-wrong-table',
+      },
+    },
+  });
+  assert.equal(
+    (
+      await f.call('save-secret', {
+        name: 'DB_PASSWORD',
+        value: 'typed-into-the-wrong-table',
+        replaces: 'NOT_A_VARIABLE',
+      })
+    ).ok,
+    false,
+  );
+  assert.equal(
+    (
+      await f.call('save-secret', {
+        name: 'DB_PASSWORD',
+        value: 'typed-into-the-wrong-table',
+        replaces: 'DB_PASSWORD',
+      })
+    ).ok,
+    true,
+  );
+  assert.deepEqual(f.controller.snapshot().settings.variables, {
+    BASE_URL: 'https://example.test',
+    USER_NAME: 'admin',
+  });
+  assert.deepEqual(f.controller.snapshot().settings.secrets, [
+    'API_TOKEN',
+    'DB_PASSWORD',
+  ]);
+  assert.equal(
+    (await readFile(join(f.home, 'settings.json'), 'utf8')).includes(
+      'typed-into-the-wrong-table',
+    ),
+    false,
+  );
+  await f.call('prompt', { text: 'what do you know' });
+  await wait(() => f.model.requests.length === 1, 'first request');
+  assert.match(
+    f.model.requests[0]!.system,
+    /- BASE_URL = https:\/\/example\.test/,
+  );
+  assert.match(f.model.requests[0]!.system, /- USER_NAME = admin/);
+  assert.match(
+    f.model.requests[0]!.system,
+    /only by name: API_TOKEN, DB_PASSWORD/,
+  );
+  assert.equal(
+    JSON.stringify(f.model.requests).includes('typed-into-the-wrong-table'),
+    false,
+  );
+});
+
+// A port whose first click lands on Circle's certificate warning's "proceed" link.
+function warningBrowser(privateHost: boolean) {
+  const requests: Omit<BrowserRequest, 'id'>[] = [];
+  const port: BrowserPort = {
+    async request(sessionId, action, args, signal) {
+      signal.throwIfAborted();
+      requests.push({ sessionId, action, args: structuredClone(args) });
+      if (args.approval) return { text: 'device page' };
+      return {
+        text: 'needs approval',
+        approval: {
+          kind: 'certificate',
+          token: 'warning-token-7f3a',
+          url: 'https://172.16.6.215:8888/login',
+          host: privateHost ? '172.16.6.215:8888' : 'example.com',
+          subject: 'CN=ProductWebUI, O=Company',
+          issuer: 'CN=RSAWebRoot',
+          fingerprint: 'AB:CD:EF',
+          validExpiry: 2284675286,
+          privateHost,
+        },
+      };
+    },
+  };
+  return { port, requests };
+}
+
+test('passing a certificate warning waits for the person, also in auto mode, under its call, and the token never reaches the model', async (t) => {
+  const browser = warningBrowser(true);
+  const f = await setup(
+    t,
+    [
+      {
+        message: assistant('', [
+          {
+            id: 'proceed-call',
+            name: 'browser_click',
+            args: { ref: 'e3', element: 'proceed link' },
+          },
+        ]),
+      },
+      { message: assistant('inside') },
+    ],
+    true,
+    browser.port,
+  );
+  // Browser control itself needs no question in auto mode; the certificate still does
+  assert.equal((await f.call('set-mode', { mode: 'auto' })).ok, true);
+  await f.call('prompt', { text: 'open the device' });
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((row) => row.status === 'pending'),
+    'certificate approval',
+  );
+  const row = f.controller
+    .snapshot()
+    .interactions.find((row) => row.status === 'pending')!;
+  assert.equal(row.reason, 'trusts an untrusted certificate');
+  assert.equal(row.tool, 'browser_click');
+  assert.equal(row.callId, 'proceed-call');
+  assert.deepEqual(row.choices, ['approve', 'always', 'reject']);
+  assert.equal(row.input?.host, '172.16.6.215:8888');
+  assert.equal(row.input?.sha256, 'AB:CD:EF');
+  assert.equal(row.input?.issued_by, 'CN=RSAWebRoot');
+  assert.equal(browser.requests.length, 1);
+  assert.equal(
+    (
+      await f.call('answer', {
+        id: row.id,
+        revision: row.revision,
+        answer: 'always',
+      })
+    ).ok,
+    true,
+  );
+  await wait(() => f.model.requests.length === 2, 'next model request');
+  assert.equal(browser.requests.length, 2);
+  assert.equal(browser.requests[0]!.args.approval, undefined);
+  assert.deepEqual(browser.requests[1]!.args.approval, {
+    token: 'warning-token-7f3a',
+    scope: 'always',
+  });
+  const sent = JSON.stringify(f.model.requests);
+  assert.equal(sent.includes('warning-token-7f3a'), false);
+  assert(
+    f.model.requests[1]!.messages.some(
+      (message) =>
+        message.role === 'tool' &&
+        message.content === 'device page' &&
+        message.status === 'success',
+    ),
+  );
+  // The model cannot pass the approval itself: the schema refuses the argument
+  const click = f.model.requests[0]!.tools.find(
+    (tool) => tool.name === 'browser_click',
+  )!;
+  assert.equal(
+    (click.parameters as { additionalProperties?: boolean })
+      .additionalProperties,
+    false,
+  );
+  assert.equal(
+    'approval' in
+      (click.parameters as { properties: Record<string, unknown> }).properties,
+    false,
+  );
+});
+
+test('a public host offers no lasting trust, and refusing sends the browser nothing more', async (t) => {
+  const browser = warningBrowser(false);
+  const f = await setup(
+    t,
+    [
+      {
+        message: assistant('', [
+          {
+            id: 'proceed-call',
+            name: 'browser_click',
+            args: { ref: 'e3', element: 'proceed link' },
+          },
+        ]),
+      },
+      { message: assistant('stopped') },
+    ],
+    true,
+    browser.port,
+  );
+  assert.equal((await f.call('set-mode', { mode: 'auto' })).ok, true);
+  await f.call('prompt', { text: 'open the site' });
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((row) => row.status === 'pending'),
+    'certificate approval',
+  );
+  const row = f.controller
+    .snapshot()
+    .interactions.find((row) => row.status === 'pending')!;
+  assert.deepEqual(row.choices, ['approve', 'reject']);
+  await f.call('answer', {
+    id: row.id,
+    revision: row.revision,
+    answer: 'reject',
+  });
+  await wait(() => f.model.requests.length === 2, 'next model request');
+  assert.equal(browser.requests.length, 1);
+  assert(
+    f.model.requests[1]!.messages.some(
+      (message) =>
+        message.role === 'tool' &&
+        message.status === 'error' &&
+        /did not approve/.test(String(message.content)),
+    ),
+  );
+});
+
+test('browser approval carries its input and one session choice permits all later browser actions', async (t) => {
+  const browser = fakeBrowser();
+  const click = { ref: 'e3', element: 'sign in' };
+  const type = { ref: 'e2', element: 'username', text: 'admin', submit: false };
+  const calls = [
+    { id: 'type', name: 'browser_type', args: type },
+    {
+      id: 'navigate',
+      name: 'browser_navigate',
+      args: { url: 'https://example.test/' },
+    },
+    {
+      id: 'select',
+      name: 'browser_select',
+      args: { ref: 'e4', element: 'mode', values: ['local'] },
+    },
+    { id: 'press', name: 'browser_press', args: { key: 'Enter' } },
+    { id: 'dialog', name: 'browser_dialog', args: { accept: true } },
+  ];
+  const f = await setup(
+    t,
+    [
+      {
+        message: assistant('', [
+          { id: 'click', name: 'browser_click', args: click },
+        ]),
+      },
+      ...calls.map((call) => ({ message: assistant('', [call]) })),
+      { message: assistant('browser done') },
+    ],
+    true,
+    browser.port,
+  );
+  await f.call('prompt', { text: 'sign in' });
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((row) => row.status === 'pending'),
+    'browser approval',
+  );
+  const row = f.controller
+    .snapshot()
+    .interactions.find((row) => row.status === 'pending')!;
+  assert.equal(row.tool, 'browser_click');
+  assert.equal(row.reason, 'clicks in the browser');
+  assert.deepEqual(row.input, click);
+  assert.deepEqual(row.choices, ['approve', 'always', 'reject']);
+  assert.equal(browser.requests.length, 0);
+  assert.equal(
+    (
+      await f.call('answer', {
+        id: row.id,
+        revision: row.revision,
+        answer: 'always',
+      })
+    ).ok,
+    true,
+  );
+  await wait(
+    () => f.model.requests.length === 7 && activeSession(f).state === 'idle',
+    'all browser actions',
+  );
+  assert.deepEqual(
+    browser.requests.map((request) => request.action),
+    ['click', 'type', 'navigate', 'select', 'press', 'dialog'],
+  );
+  assert(
+    browser.requests.every((request) => request.sessionId === row.sessionId),
+  );
+  assert.deepEqual(browser.requests[1]!.args, type);
+  assert.equal(f.controller.snapshot().interactions.length, 1);
+  assert.equal(f.controller.snapshot().approvalRules.length, 1);
+  assert.equal(
+    f.controller.snapshot().approvalRules[0]!.description,
+    'browser · browser control',
+  );
+  for (let index = 1; index < f.model.requests.length; index++) {
+    assert(
+      f.model.requests[index]!.messages.some(
+        (message) =>
+          message.role === 'tool' &&
+          message.content === 'page snapshot' &&
+          message.status === 'success',
+      ),
+    );
+  }
+});
+
+test('browser snapshot and screenshot run without approval and the screenshot reaches the next model request', async (t) => {
+  const { PNG } = await import('pngjs');
+  const image = new PNG({ width: 30, height: 20 });
+  image.data.fill(180);
+  const bytes = PNG.sync.write(image);
+  const browser = fakeBrowser({
+    text: 'captured browser',
+    image: bytes.toString('base64'),
+  });
+  // A snapshot is text only; the fake port returns pixels just for screenshots.
+  const port: BrowserPort = {
+    request(sessionId, action, args, signal) {
+      return action === 'snapshot'
+        ? Promise.resolve({
+            text: 'url: https://example.test/\n[e1] button sign in',
+          })
+        : browser.port.request(sessionId, action, args, signal);
+    },
+  };
+  const f = await setup(
+    t,
+    [
+      {
+        message: assistant('', [
+          { id: 'snapshot', name: 'browser_snapshot', args: {} },
+        ]),
+      },
+      {
+        message: assistant('', [
+          { id: 'screenshot', name: 'browser_screenshot', args: {} },
+        ]),
+      },
+      { message: assistant('page seen') },
+    ],
+    true,
+    port,
+  );
+  await f.call('prompt', { text: 'inspect this page' });
+  await wait(
+    () => f.model.requests.length === 3 && activeSession(f).state === 'idle',
+    'browser image in request',
+  );
+  assert.equal(f.controller.snapshot().interactions.length, 0);
+  assert.match(
+    f.model.requests[1]!.messages.find(
+      (message) => message.tool_call_id === 'snapshot',
+    )!.content,
+    /\[e1\]/,
+  );
+  const result = f.model.requests[2]!.messages.find(
+    (message) => message.tool_call_id === 'screenshot',
+  )!;
+  assert.equal(result.status, 'success');
+  assert.match(result.content, /30×20/);
+  assert.equal(result.attachments?.length, 1);
+  assert.equal(result.attachments![0]!.filename, 'browser.png');
+  assert.equal(result.attachments![0]!.mime_type, 'image/png');
+  assert.deepEqual(Buffer.from(result.attachments![0]!.data, 'base64'), bytes);
+});
+
+test('read-only mode refuses browser clicks before contacting the browser', async (t) => {
+  const browser = fakeBrowser();
+  const f = await setup(
+    t,
+    [
+      {
+        message: assistant('', [
+          {
+            id: 'click',
+            name: 'browser_click',
+            args: { ref: 'e1', element: 'submit' },
+          },
+        ]),
+      },
+      { message: assistant('read only') },
+    ],
+    true,
+    browser.port,
+  );
+  await f.call('set-mode', { mode: 'plan' });
+  await f.call('prompt', { text: 'click submit' });
+  await wait(
+    () => f.model.requests.length === 2 && activeSession(f).state === 'idle',
+    'click refusal',
+  );
+  assert.equal(browser.requests.length, 0);
+  assert.equal(f.controller.snapshot().interactions.length, 0);
+  const result = f.model.requests[1]!.messages.find(
+    (message) => message.tool_call_id === 'click',
+  )!;
+  assert.equal(result.status, 'error');
+  assert.match(result.content, /read-only mode/);
+});
+
+test('the browser bridge cancels pending requests, ignores stale replies and closes all callers', async () => {
+  const messages: { type: string; request?: BrowserRequest; id?: string }[] =
+    [];
+  const bridge = new BrowserBridge((message) =>
+    messages.push(message as (typeof messages)[number]),
+  );
+  const controller = new AbortController();
+  const pending = bridge.request(
+    'session',
+    'navigate',
+    { url: 'https://example.test/' },
+    controller.signal,
+  );
+  const first = messages[0]!.request!;
+  assert.equal(first.sessionId, 'session');
+  controller.abort(Error('stopped by user'));
+  await assert.rejects(pending, /stopped by user/);
+  assert.deepEqual(messages[1], { type: 'browser-cancel', id: first.id });
+  bridge.receive({ id: first.id, ok: true, data: { text: 'too late' } });
+  const success = bridge.request(
+    'session',
+    'snapshot',
+    {},
+    new AbortController().signal,
+  );
+  bridge.receive({
+    id: messages[2]!.request!.id,
+    ok: true,
+    data: { text: 'page' },
+  });
+  assert.deepEqual(await success, { text: 'page' });
+  const closing = bridge.request(
+    'session',
+    'snapshot',
+    {},
+    new AbortController().signal,
+  );
+  bridge.close();
+  await assert.rejects(closing, /browser is closed/);
+  await assert.rejects(
+    bridge.request('session', 'snapshot', {}, new AbortController().signal),
+    /browser is closed/,
+  );
+  assert.equal(messages.length, 4);
+});
+
+test('a failed browser transport rejects the action and removes its abort listener', async () => {
+  let attempts = 0;
+  const bridge = new BrowserBridge(() => {
+    attempts++;
+    throw Error('browser transport disconnected');
+  });
+  const controller = new AbortController();
+  await assert.rejects(
+    bridge.request('session', 'snapshot', {}, controller.signal),
+    /browser transport disconnected/,
+  );
+  controller.abort();
+  assert.equal(attempts, 1);
+  bridge.close();
+});
+
+test('a text-only model cannot capture a browser screenshot', async (t) => {
+  const browser = fakeBrowser();
+  const f = await setup(
+    t,
+    [
+      {
+        message: assistant('', [
+          { id: 'screenshot', name: 'browser_screenshot', args: {} },
+        ]),
+      },
+      { message: assistant('snapshot instead') },
+    ],
+    true,
+    browser.port,
+  );
+  Object.assign(f.model, { imageInput: false });
+  await f.call('prompt', { text: 'show the browser' });
+  await wait(
+    () => f.model.requests.length === 2 && activeSession(f).state === 'idle',
+    'text-only refusal',
+  );
+  assert.equal(browser.requests.length, 0);
+  assert.equal(f.controller.snapshot().interactions.length, 0);
+  const result = f.model.requests[1]!.messages.find(
+    (message) => message.tool_call_id === 'screenshot',
+  )!;
+  assert.equal(result.status, 'error');
+  assert.match(result.content, /does not read images; use browser_snapshot/);
+  assert.equal(result.attachments, undefined);
+});
+
+test('aborting a waiting browser action stops its port and leaves the next user turn usable', async (t) => {
+  let started = false;
+  let cancelled = 0;
+  const port: BrowserPort = {
+    request(_sessionId, _action, _args, signal) {
+      started = true;
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener(
+          'abort',
+          () => {
+            cancelled++;
+            reject(signal.reason);
+          },
+          { once: true },
+        );
+      });
+    },
+  };
+  const f = await setup(
+    t,
+    [
+      {
+        message: assistant('', [
+          {
+            id: 'navigate',
+            name: 'browser_navigate',
+            args: { url: 'https://local.test/' },
+          },
+        ]),
+      },
+      { message: assistant('next turn works') },
+    ],
+    true,
+    port,
+  );
+  await f.call('prompt', {
+    text: 'navigate and wait for my certificate choice',
+  });
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((row) => row.status === 'pending'),
+    'browser approval',
+  );
+  const approval = f.controller
+    .snapshot()
+    .interactions.find((row) => row.status === 'pending')!;
+  await f.call('answer', {
+    id: approval.id,
+    revision: approval.revision,
+    answer: 'always',
+  });
+  await wait(() => started, 'browser choice wait');
+  assert.equal((await f.call('abort')).ok, true);
+  await wait(
+    () => activeSession(f).state === 'idle',
+    'cancelled browser action',
+  );
+  assert.equal(cancelled, 1);
+  assert.equal(f.model.requests.length, 1);
+  await f.call('prompt', { text: 'continue with another task' });
+  await wait(
+    () => f.model.requests.length === 2 && activeSession(f).state === 'idle',
+    'next user turn',
+  );
+  assert(
+    f.model.requests[1]!.messages.some(
+      (message) =>
+        message.role === 'user' &&
+        message.content === 'continue with another task',
+    ),
+  );
+  assert.equal(
+    f.model.requests[1]!.messages.some(
+      (message) =>
+        message.tool_call_id === 'navigate' && message.status === 'success',
+    ),
+    false,
+  );
+});
+
+test('browser request validation rejects unsupported actions and oversized or invalid identities', () => {
+  const request: BrowserRequest = {
+    id: 'request-1',
+    sessionId: 'session-1',
+    action: 'snapshot',
+    args: {},
+  };
+  assert.deepEqual(validateBrowserRequest(request), request);
+  for (const invalid of [
+    null,
+    [],
+    { ...request, action: 'proceed' },
+    { ...request, id: '../session' },
+    { ...request, sessionId: '' },
+    { ...request, args: [] },
+    { ...request, args: { text: 'x'.repeat(200_001) } },
+  ]) {
+    assert.throws(
+      () => validateBrowserRequest(invalid),
+      /invalid browser request/,
+    );
+  }
+});
 
 test('native approval waits at the core gate; stale replies do not write a file', async (t) => {
   const f = await setup(t, [
@@ -685,6 +1517,67 @@ test('saved API configuration, model selection and effort produce actual local g
   assert.equal((await call('prompt', { text: 'after logout' })).ok, false);
   assert.equal((await call('compact')).ok, false);
   assert.equal(requests.length, 1);
+});
+
+test('an Anthropic endpoint without model discovery keeps the saved model available for manual selection', async (t) => {
+  let status = 404;
+  const requests: { url?: string; key?: string; version?: string }[] = [];
+  const server = createServer((req, res) => {
+    requests.push({
+      url: req.url,
+      key: req.headers['x-api-key'] as string | undefined,
+      version: req.headers['anthropic-version'] as string | undefined,
+    });
+    res.writeHead(status);
+    res.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const f = await setup(t, []);
+  const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}/apps/anthropic`;
+  assert.equal(
+    (
+      await f.call('configure', {
+        endpoint,
+        protocol: 'anthropic',
+        model: 'local-manual-model',
+        apiKey: 'local-only-key',
+      })
+    ).ok,
+    true,
+  );
+  for (const unavailable of [404, 405]) {
+    status = unavailable;
+    const reply = await f.call('discover-models');
+    assert.equal(reply.ok, true);
+    assert.deepEqual(reply.data, {
+      models: ['local-manual-model'],
+      status: 'manual',
+      detail:
+        'this endpoint does not provide a model list; enter a model ID manually',
+    });
+    assert(
+      f.controller
+        .snapshot()
+        .models.some((model) => model.id === 'local-manual-model'),
+    );
+    assert.equal(loadSettings(f.home).auth.model, 'local-manual-model');
+  }
+  assert.deepEqual(
+    requests,
+    [404, 405].map(() => ({
+      url: '/apps/anthropic/v1/models',
+      key: 'local-only-key',
+      version: '2023-06-01',
+    })),
+  );
+  for (const failed of [401, 403, 500]) {
+    status = failed;
+    const reply = await f.call('discover-models');
+    assert.equal(reply.ok, false);
+    assert.match(reply.error!, new RegExp(`http ${failed}`));
+  }
+  assert.equal(f.model.requests.length, 0);
 });
 
 test('a retried native command cannot create duplicate sessions or change its bound input', async (t) => {

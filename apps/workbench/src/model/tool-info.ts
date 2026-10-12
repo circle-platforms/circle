@@ -148,6 +148,112 @@ export const BUILTIN_TOOL_INFO = [
     kind: 'read',
   },
   {
+    name: 'browser_navigate',
+    get description() {
+      return t('Open a page in the session browser');
+    },
+    get detail() {
+      return t(
+        "Open an HTTP or HTTPS page, or go back, forward or reload. An untrusted certificate shows the browser's warning in the tab; passing it needs your approval.",
+      );
+    },
+    kind: 'browser',
+  },
+  {
+    name: 'browser_snapshot',
+    get description() {
+      return t('Read the visible page and its element refs');
+    },
+    get detail() {
+      return t(
+        'Read the page, its waiting dialogs, tabs and what happened since the last look. Refs stay with their elements; password values are omitted.',
+      );
+    },
+    kind: 'read',
+  },
+  {
+    name: 'browser_click',
+    get description() {
+      return t('Click an element in the browser');
+    },
+    get detail() {
+      return t(
+        'Click an element by its ref with the visible pointer, then read the updated page. Covered elements cannot be clicked.',
+      );
+    },
+    kind: 'browser',
+  },
+  {
+    name: 'browser_type',
+    get description() {
+      return t('Type text into a browser element');
+    },
+    get detail() {
+      return t(
+        'Replace text in an element, optionally submitting with Enter. Password fields require you to type in the browser panel.',
+      );
+    },
+    kind: 'browser',
+  },
+  {
+    name: 'browser_select',
+    get description() {
+      return t('Choose options in a browser element');
+    },
+    get detail() {
+      return t('Choose options in a select element by their text or value.');
+    },
+    kind: 'browser',
+  },
+  {
+    name: 'browser_press',
+    get description() {
+      return t('Press a key in the browser');
+    },
+    get detail() {
+      return t(
+        'Press Enter, Tab, Escape, an arrow key or another supported browser key.',
+      );
+    },
+    kind: 'browser',
+  },
+  {
+    name: 'browser_screenshot',
+    get description() {
+      return t('Capture the session browser for the model');
+    },
+    get detail() {
+      return t(
+        'Send the browser viewport as an image to the model. The operation overlay is hidden during capture.',
+      );
+    },
+    kind: 'read',
+  },
+  {
+    name: 'browser_dialog',
+    get description() {
+      return t('Answer a browser JavaScript dialog');
+    },
+    get detail() {
+      return t(
+        "Accept or dismiss a page's alert, confirm, prompt or leave-page question, as you can in the panel or the conversation.",
+      );
+    },
+    kind: 'browser',
+  },
+  {
+    name: 'browser_tabs',
+    get description() {
+      return t('List, open, show or close browser tabs');
+    },
+    get detail() {
+      return t(
+        'Pages that open a new window or tab appear as tabs; you and Circle see the same shown tab.',
+      );
+    },
+    kind: 'browser',
+  },
+  {
     name: 'execute',
     get description() {
       return t('Run a shell command in the workspace');

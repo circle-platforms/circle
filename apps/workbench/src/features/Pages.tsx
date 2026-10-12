@@ -66,6 +66,7 @@ import {
 } from '../components/common';
 import { Markdown } from '../components/Markdown';
 import { UpdateControl } from './Update';
+import { VariablesSettings } from './VariablesSettings';
 import { BUILTIN_TOOL_INFO } from '../model/tool-info';
 import { TEXT_SIZES, textSizes } from '../theme';
 import { LANGUAGES, languageChoice, setLanguage, t, tn } from '../i18n';
@@ -269,8 +270,16 @@ function ModelsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
             <Button
               onClick={() =>
                 perform(async () => {
-                  await runtime.request('discover-models');
-                  notify(t('models refreshed'));
+                  const result = (await runtime.request('discover-models')) as {
+                    status?: string;
+                  };
+                  notify(
+                    result.status === 'manual'
+                      ? t(
+                          'this endpoint does not provide a model list; enter a model ID manually',
+                        )
+                      : t('models refreshed'),
+                  );
                 })
               }
             >
@@ -1324,6 +1333,7 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
           )}
         </p>
       </section>
+      <VariablesSettings />
       <section className="settings-block">
         <h2>{t('keyboard')}</h2>
         <Button onClick={() => onDialog('hotkeys')}>

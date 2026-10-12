@@ -17,7 +17,8 @@ import { VERSION } from '../../../../src/version';
 import { useRuntime } from '../app/context';
 import { t } from '../i18n';
 import { DiffBlock } from '../components/DiffBlock';
-import { requestReason } from './InlineRequest';
+import { BrowserApproval, requestReason } from './InlineRequest';
+import { hasToolInput } from '../model/browser';
 import { branchMessages, currentSession, sessionText } from '../model/state';
 import type { DialogId, Interaction, Session } from '../model/types';
 import {
@@ -994,14 +995,17 @@ export function InteractionDialog({
                 : 'sample request'}
             </span>
           </div>
-          {item.command ? (
+          {item.tool?.startsWith('browser_') ? (
+            <BrowserApproval input={item.input} />
+          ) : item.command ? (
             <pre className="approval-command">{item.command}</pre>
           ) : item.diff ? (
             <DiffBlock diff={item.diff} path={item.target || undefined} />
           ) : (
             item.target && <p className="file-path">{item.target}</p>
           )}
-          {item.input &&
+          {!item.tool?.startsWith('browser_') &&
+            hasToolInput(item.input) &&
             (item.command || item.diff ? (
               <details className="request-input">
                 <summary>{t('tool input')}</summary>

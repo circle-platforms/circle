@@ -30,6 +30,7 @@ import {
   writePrivateJson,
   loadCredentials,
   type CircleSettings,
+  VARIABLE_NAME,
 } from '../../../src/settings.js';
 import {
   discoverCustomCommands,
@@ -40,6 +41,14 @@ import { loadSkillBody } from '../../../src/skills.js';
 import { attachmentFromBase64, MAX_MEDIA_BYTES } from '../../../src/media.js';
 import { readPrompt } from '../../../src/system_prompt.js';
 import { toMarkdown, toHtml } from '../../../src/session_export.js';
+import { browserTools, type BrowserPort } from './browser-tools';
+import type { CertificateApproval } from './browser-protocol';
+import {
+  loadSecrets,
+  removeSecret,
+  saveSecret,
+  secretNames,
+} from '../../../src/secrets.js';
 import { normalizeBaseUrl, resolveEndpoint } from '../../../src/probe.js';
 import { availableUpdate } from '../../../src/update.js';
 import { BUILTIN_SLASH } from '../../../src/tui/slash_commands.js';
@@ -148,6 +157,8 @@ export interface ControllerOptions {
   model?: ChatModel;
   catalog?: (home: string) => ModelCatalog;
   emit: (update: RuntimeUpdate) => void;
+  /** The conversation browsers in the main process; without it there are no browser tools. */
+  browser?: BrowserPort;
 }
 
 /** The IPC adapter delegates execution and persistence to the existing Circle core. */
@@ -249,6 +260,12 @@ export class RuntimeController {
           (isReady(settings) ? undefined : new DisconnectedModel()),
         catalog: this.options.catalog?.(this.home),
         session,
+        extraTools: this.options.browser
+          ? browserTools(this.options.browser, {
+              confirm: (_sessionId, approval, signal, callId) =>
+                this.confirmCertificate(runtime, approval, signal, callId),
+            })
+          : undefined,
         approve: (call, signal, origin) =>
           this.approve(runtime, call, signal, origin),
         question: (args, signal, origin) =>
@@ -678,6 +695,9 @@ export class RuntimeController {
         endpoint: settings.auth.base_url,
         protocol: settings.auth.protocol as 'openai' | 'anthropic',
         credentialFiles: settings.credential_files,
+        variables: { ...settings.variables },
+        // Names only: a saved value never leaves the runtime
+        secrets: secretNames(this.home),
         updateCheck: settings.update_check,
         textSize: 'default',
         keybindings: {},
@@ -978,6 +998,51 @@ export class RuntimeController {
       ? { decision: 'reject', message: answer.slice(8) }
       : (answer as ApprovalDecision);
   }
+  /** The variables or saved secrets changed: every conversation's model is told anew. */
+  private secretsChanged() {
+    for (const runtime of this.runtimes.values()) runtime.refreshPrompt();
+    this.publish();
+  }
+  /** The model pressed "proceed" on a certificate warning: only the person decides. */
+  private async confirmCertificate(
+    runtime: AgentRuntime,
+    approval: CertificateApproval,
+    signal: AbortSignal,
+    callId?: string,
+  ): Promise<'once' | 'always' | 'reject'> {
+    const answer = await this.wait(
+      runtime,
+      {
+        kind: 'approval',
+        callId,
+        tool: 'browser_click',
+        title: `browser_click · trusts an untrusted certificate`,
+        reason: 'trusts an untrusted certificate',
+        target: approval.url,
+        input: {
+          host: approval.host,
+          issued_to: approval.subject,
+          issued_by: approval.issuer,
+          valid_until: new Date(approval.validExpiry * 1000)
+            .toISOString()
+            .slice(0, 10),
+          sha256: approval.fingerprint,
+        },
+        // Only a host on this network can be trusted for good.
+        choices: [
+          'approve',
+          ...(approval.privateHost ? ['always'] : []),
+          'reject',
+        ],
+      },
+      signal,
+    );
+    return answer === 'approve'
+      ? 'once'
+      : answer === 'always'
+        ? 'always'
+        : 'reject';
+  }
   private async question(
     runtime: AgentRuntime,
     args: Record<string, unknown>,
@@ -1022,7 +1087,12 @@ export class RuntimeController {
   ): Promise<void> {
     await this.wait(
       runtime,
-      { kind: 'secret', title: request.question, target: request.target_file },
+      {
+        kind: 'secret',
+        title: request.question,
+        // Kept as a Circle secret when no file is named
+        target: request.target_file || `%${request.key}%`,
+      },
       signal,
       origin,
       request,
@@ -1430,6 +1500,26 @@ export class RuntimeController {
               throw Error('invalid settings list');
             settings[core] = data[ui] as string[];
           }
+        if (data.variables !== undefined) {
+          if (
+            !data.variables ||
+            typeof data.variables !== 'object' ||
+            Array.isArray(data.variables)
+          )
+            throw Error('invalid variables');
+          const variables: Record<string, string> = {};
+          for (const [name, value] of Object.entries(data.variables)) {
+            if (!VARIABLE_NAME.test(name))
+              throw Error(
+                'a variable name is capital letters, digits and _, starting with a letter',
+              );
+            // One name, one value: %NAME% must not mean two things
+            if (secretNames(this.home).includes(name))
+              throw Error(`${name} is already a secret`);
+            variables[name] = text(value, 'variable value', 2000);
+          }
+          settings.variables = variables;
+        }
         if (p.mcp !== undefined) {
           if (!Array.isArray(p.mcp)) throw Error('invalid MCP settings');
           settings.mcp_servers = p.mcp.map((entry) => {
@@ -1477,7 +1567,13 @@ export class RuntimeController {
           update_check: settings.update_check,
           enabled_models: settings.enabled_models,
           credential_files: settings.credential_files,
+          variables: settings.variables,
         });
+        if (data.variables !== undefined)
+          for (const owner of this.runtimes.values()) {
+            owner.options.settings.variables = { ...settings.variables };
+            owner.refreshPrompt();
+          }
         return {};
       }
       case 'reload': {
@@ -1767,6 +1863,49 @@ export class RuntimeController {
         writeFileSync(path, reply.content, { mode: 0o600 });
         return { path };
       }
+      case 'save-secret': {
+        const name = text(p.name, 'secret name', 64);
+        const previous =
+          p.previous === undefined
+            ? undefined
+            : text(p.previous, 'secret name', 64);
+        // A plain variable made secret leaves settings in the same step, so the model is
+        // never told its value again
+        const replaces =
+          p.replaces === undefined
+            ? undefined
+            : text(p.replaces, 'variable name', 64);
+        const settings = loadSettings(this.home);
+        if (replaces !== undefined && !(replaces in settings.variables))
+          throw Error(`no variable named ${replaces}`);
+        const variables = Object.fromEntries(
+          Object.entries(settings.variables).filter(
+            ([key]) => key !== replaces,
+          ),
+        );
+        if (name in variables) throw Error(`${name} is already a variable`);
+        // Renamed without a new value: the saved value moves to the new name
+        const value =
+          p.value === undefined || p.value === ''
+            ? previous && loadSecrets(this.home)[previous]
+            : text(p.value, 'value', 4096);
+        if (!value) throw Error('enter the value');
+        saveSecret(this.home, name, value);
+        if (previous && previous !== name) removeSecret(this.home, previous);
+        if (replaces !== undefined) {
+          settings.variables = variables;
+          saveSettings(settings, this.home);
+          for (const owner of this.runtimes.values())
+            owner.options.settings.variables = { ...variables };
+        }
+        this.secretsChanged();
+        return {};
+      }
+      case 'remove-secret':
+        if (!removeSecret(this.home, text(p.name, 'secret name', 64)))
+          throw Error('no such secret');
+        this.secretsChanged();
+        return {};
       case 'discover-models': {
         const settings = loadSettings(this.home);
         if (!isReady(settings)) throw Error('connect an endpoint first');
@@ -1775,6 +1914,17 @@ export class RuntimeController {
           loadCredentials(this.home)[settings.auth.api_key_ref] ?? '',
           { protocol: settings.auth.protocol },
         );
+        if (found.modelListUnavailable) {
+          this.discoveredModels = settings.auth.model
+            ? [settings.auth.model]
+            : [];
+          return {
+            models: this.discoveredModels,
+            status: 'manual',
+            detail:
+              'this endpoint does not provide a model list; enter a model ID manually',
+          };
+        }
         if (found.status === 'failed')
           throw Error(found.detail || 'model discovery failed');
         this.discoveredModels = found.models;

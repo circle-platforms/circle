@@ -1,24 +1,49 @@
 import { useEffect, useRef, useState } from 'react';
-import { Camera, Globe, ArrowUpRight } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  ArrowUpRight,
+  Camera,
+  Globe,
+  Plus,
+  RotateCw,
+  ShieldAlert,
+  X,
+} from 'lucide-react';
 import { desktopHost } from '../host';
 import { useRuntime } from '../app/context';
 import { currentSession } from '../model/state';
-import type {
-  BrowserState,
-  BrowserCapture,
-} from '../../../desktop/src/contracts';
+import {
+  browserEventAddress,
+  browserOpened,
+  shownDialog,
+} from '../model/browser';
+import { useBrowserState } from './useBrowserState';
+import type { BrowserCapture } from '../../../desktop/src/contracts';
 import { Button, IconButton, Status } from '../components/common';
+import { BrowserDialogPanel } from './BrowserDialog';
 import { t } from '../i18n';
+
 export function NativeBrowser() {
   const { snapshot, notify } = useRuntime();
   const id = currentSession(snapshot).id;
+  const state = useBrowserState(id);
   const [url, setUrl] = useState('');
-  const [state, setState] = useState<BrowserState | null>(null);
   const [capture, setCapture] = useState<BrowserCapture | null>(null);
   const viewport = useRef<HTMLDivElement>(null);
   const active = useRef(false);
+  const wasOpened = useRef(false);
+  const editingAddress = useRef(false);
+  const updateBounds = useRef<() => void>(() => {});
   const host = desktopHost()!;
+  const opened = browserOpened(state);
+  const dialog = shownDialog(state);
   useEffect(() => {
+    active.current = false;
+    wasOpened.current = false;
+    editingAddress.current = false;
+    setUrl('');
+    setCapture(null);
     const update = () => {
       const rect = viewport.current?.getBoundingClientRect();
       if (!rect || rect.width < 1 || rect.height < 1) return;
@@ -38,20 +63,13 @@ export function NativeBrowser() {
         )
         .catch(() => {});
     };
+    updateBounds.current = update;
     const observer = new ResizeObserver(update);
     if (viewport.current) observer.observe(viewport.current);
     const dialogs = new MutationObserver(update);
     dialogs.observe(document.body, { childList: true, subtree: true });
     addEventListener('resize', update);
     addEventListener('scroll', update, true);
-    void host.browserState(id).then((value) => {
-      if (value.url && value.url !== 'about:blank') {
-        active.current = true;
-        setState(value);
-        setUrl(value.url);
-        requestAnimationFrame(update);
-      }
-    });
     return () => {
       observer.disconnect();
       dialogs.disconnect();
@@ -60,46 +78,150 @@ export function NativeBrowser() {
       void host.browserHide(id);
     };
   }, [id]);
-  const navigate = async () => {
+  // The page's own view shows once a page is open; it follows the shown tab.
+  useEffect(() => {
+    if (!state) return;
+    if (opened !== active.current) {
+      active.current = opened;
+      requestAnimationFrame(() => updateBounds.current());
+    }
+    const address = browserEventAddress(
+      state,
+      editingAddress.current,
+      wasOpened.current,
+    );
+    if (address !== undefined) setUrl(address);
+    wasOpened.current = wasOpened.current || opened;
+  }, [state, opened]);
+  const navigate = async (target: string) => {
+    editingAddress.current = false;
     try {
       active.current = true;
-      const result = await host.browserNavigate(id, url);
-      setState(result);
-      const rect = viewport.current!.getBoundingClientRect();
-      await host.browserBounds(
-        id,
-        { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-        true,
-      );
-      setUrl(result.url);
       setCapture(null);
-    } catch (error) {
-      active.current = false;
-      notify(error instanceof Error ? error.message : t('navigation failed'));
+      await host.browserNavigate(id, target);
+      requestAnimationFrame(() => updateBounds.current());
+    } catch {
+      if (!['back', 'forward', 'reload'].includes(target)) {
+        setUrl(target);
+        editingAddress.current = true;
+      }
+      notify(t('navigation failed'));
     }
   };
+  const tabs = (action: 'new' | 'select' | 'close', tab?: string) =>
+    void host
+      .browserTabs(id, action, tab)
+      .then(() => requestAnimationFrame(() => updateBounds.current()))
+      .catch(() => notify(t('navigation failed')));
+  const failure = state?.failure;
   return (
     <>
+      {!!state?.tabs?.length && (
+        <div className="browser-tabs" role="tablist">
+          {state.tabs.map((tab) => (
+            <div
+              key={tab.id}
+              className={`browser-tab${tab.active ? ' active' : ''}`}
+              role="tab"
+              aria-selected={tab.active}
+              title={tab.url}
+            >
+              <button
+                className="browser-tab-title"
+                onClick={() => tabs('select', tab.id)}
+              >
+                {state.dialogs?.some((dialog) => dialog.tab === tab.id) && (
+                  <i className="browser-tab-alert" />
+                )}
+                {tab.title ||
+                  (tab.url && tab.url !== 'about:blank'
+                    ? tab.url
+                    : t('new tab'))}
+              </button>
+              <IconButton
+                label={t('close tab')}
+                onClick={() => tabs('close', tab.id)}
+              >
+                <X size={12} />
+              </IconButton>
+            </div>
+          ))}
+          <IconButton label={t('new tab')} onClick={() => tabs('new')}>
+            <Plus size={13} />
+          </IconButton>
+        </div>
+      )}
       <div className="browser-address">
-        <Globe size={13} />
+        <IconButton
+          label={t('back')}
+          disabled={!state?.canGoBack}
+          onClick={() => void navigate('back')}
+        >
+          <ArrowLeft size={14} />
+        </IconButton>
+        <IconButton
+          label={t('forward')}
+          disabled={!state?.canGoForward}
+          onClick={() => void navigate('forward')}
+        >
+          <ArrowRight size={14} />
+        </IconButton>
+        <IconButton
+          label={t('reload page')}
+          disabled={!opened}
+          onClick={() => void navigate('reload')}
+        >
+          <RotateCw size={13} />
+        </IconButton>
+        {state?.warning ? (
+          <span className="browser-insecure" data-testid="browser-warning">
+            <ShieldAlert size={13} />
+            {t('certificate error')}
+          </span>
+        ) : state?.insecure ? (
+          <span className="browser-insecure" data-testid="browser-insecure">
+            <ShieldAlert size={13} />
+            {t('not secure')}
+          </span>
+        ) : (
+          <Globe size={13} />
+        )}
         <input
           aria-label={t('browser address')}
           value={url}
           placeholder="https://…"
-          onChange={(event) => setUrl(event.target.value)}
+          onChange={(event) => {
+            editingAddress.current = true;
+            setUrl(event.target.value);
+          }}
           onKeyDown={(event) => {
-            if (event.key === 'Enter') void navigate();
+            if (event.key === 'Enter') void navigate(url);
           }}
         />
         <IconButton
           label={t('navigate browser')}
-          onClick={() => void navigate()}
+          onClick={() => void navigate(url)}
         >
           <ArrowUpRight size={14} />
         </IconButton>
       </div>
       <div className="native-browser-viewport" ref={viewport}>
-        {!state && (
+        {dialog ? (
+          <BrowserDialogPanel sessionId={id} dialog={dialog} />
+        ) : failure ? (
+          <div
+            className="browser-error-page"
+            data-testid="browser-load-failure"
+          >
+            <Globe size={30} />
+            <h3>{t('cannot reach this site')}</h3>
+            <p>{failure.url}</p>
+            <code>{failure.error}</code>
+            <Button onClick={() => void navigate(failure.url)}>
+              {t('reload page')}
+            </Button>
+          </div>
+        ) : !opened ? (
           <div className="browser-empty">
             <Globe size={30} />
             <h3>{t('open a page')}</h3>
@@ -107,18 +229,28 @@ export function NativeBrowser() {
               {t('A sandboxed native browser belongs to this Circle session.')}
             </p>
           </div>
-        )}
+        ) : null}
       </div>
       <div className="native-browser-footer">
-        <Status value={state ? 'native browser' : 'not opened'} />
-        <code>{state?.sessionId ?? 'browser:' + id}</code>
+        {state?.operating ? (
+          <span className="browser-operating" data-testid="browser-operating">
+            <span className="browser-operation-dot" />
+            {t('Circle is operating')}
+          </span>
+        ) : (
+          <Status value={opened ? 'native browser' : 'not opened'} />
+        )}
+        <code>
+          {(state?.sessionId ?? 'browser:' + id) +
+            (state?.tab ? ' · ' + state.tab : '')}
+        </code>
         <IconButton
           label={t('capture browser')}
-          disabled={!state}
+          disabled={!opened || !!failure || !!dialog}
           onClick={() =>
             void host.browserCapture(id).then(
               (value) => setCapture(value),
-              (error) => notify(String(error)),
+              () => notify(t('browser capture failed')),
             )
           }
         >
@@ -135,16 +267,8 @@ export function NativeBrowser() {
           />
           <code>{capture.sha256}</code>
           <p className="panel-note">{capture.observedAt}</p>
-          <pre className="code-block">
-            {JSON.stringify({ ...capture, dataUrl: undefined }, null, 2)}
-          </pre>
         </details>
       )}
-      <p className="panel-note">
-        {t(
-          'The local operator controls this session. Agent control will use the same session identity when Circle is connected.',
-        )}
-      </p>
     </>
   );
 }

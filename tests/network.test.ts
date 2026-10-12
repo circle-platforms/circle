@@ -301,6 +301,12 @@ test(
     });
     assert.equal(untrusted.status, 'failed');
     assert.equal(untrusted.detail, TLS_HINT);
+    const anthropicUntrusted = await resolveEndpoint(models, 'key', {
+      protocol: 'anthropic',
+    });
+    assert.equal(anthropicUntrusted.status, 'failed');
+    assert.equal(anthropicUntrusted.detail, TLS_HINT);
+    assert.equal(anthropicUntrusted.modelListUnavailable, undefined);
     const setup = configureNetwork({
       HTTPS_PROXY: relay.url,
       NO_PROXY: '127.0.0.1',

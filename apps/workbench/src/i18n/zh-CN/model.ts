@@ -70,6 +70,22 @@ export const model: Record<string, string> = {
   'Take a screenshot of the main screen, or of the front window of the application named in `app`, and send it to the model as an image. It asks each time unless allowed for the session, and is refused in read-only mode.':
     '截取主屏幕，或 `app` 指定的应用最前面的窗口，并作为图片发送给模型。除非本会话内已允许，否则每次都会询问；只读模式下会被拒绝。',
   'Run a shell command in the workspace': '在工作区中运行 shell 命令',
+  'Open a page in the session browser': '在会话浏览器中打开页面',
+  'Read the visible page and its element refs': '读取可见页面及元素编号',
+  'Click an element in the browser': '点击浏览器中的元素',
+  'Type text into a browser element': '在浏览器元素中输入文本',
+  'Replace text in an element, optionally submitting with Enter. Password fields require you to type in the browser panel.':
+    '替换元素中的文本，可选择回车提交。密码框需要你在浏览器面板中亲自输入。',
+  'Choose options in a browser element': '选择浏览器元素中的选项',
+  'Choose options in a select element by their text or value.':
+    '按文本或值选择下拉框中的选项。',
+  'Press a key in the browser': '在浏览器中按键',
+  'Press Enter, Tab, Escape, an arrow key or another supported browser key.':
+    '在浏览器中按 Enter、Tab、Escape、方向键或其他支持的按键。',
+  'Capture the session browser for the model': '截取会话浏览器画面给模型',
+  'Send the browser viewport as an image to the model. The operation overlay is hidden during capture.':
+    '把浏览器视口作为图片交给模型。截取时会隐藏操作覆盖层。',
+  'Answer a browser JavaScript dialog': '回答浏览器的 JavaScript 对话框',
   'Run a shell command in the workspace. With `background: true` it runs as a background job and returns at once. Standard output and standard error come back together, in the order they were written.':
     '在工作区中运行 shell 命令。设置 `background: true` 时作为后台任务运行并立即返回。标准输出和标准错误按写入顺序一起返回。',
   'Keep the plan shown in the plan box.': '维护计划框中显示的计划。',
@@ -159,4 +175,16 @@ export const model: Record<string, string> = {
   'Next approval mode, or /mode manual|accept-edits|plan|auto':
     '切换到下一个审批模式，或 /mode manual|accept-edits|plan|auto',
   'Quit Circle': '退出 Circle',
+  "Open an HTTP or HTTPS page, or go back, forward or reload. An untrusted certificate shows the browser's warning in the tab; passing it needs your approval.":
+    '打开 HTTP 或 HTTPS 页面，或者后退、前进、重新加载。证书不受信任时，标签页里会显示浏览器的警告；越过警告需要你批准。',
+  'Read the page, its waiting dialogs, tabs and what happened since the last look. Refs stay with their elements; password values are omitted.':
+    '读取页面、等待回答的对话框、标签页，以及上次查看以来发生的事。元素编号跟随元素不变；不输出密码值。',
+  'Click an element by its ref with the visible pointer, then read the updated page. Covered elements cannot be clicked.':
+    '用可见的指针按编号点击元素，然后读取更新后的页面。被遮挡的元素无法点击。',
+  "Accept or dismiss a page's alert, confirm, prompt or leave-page question, as you can in the panel or the conversation.":
+    '接受或拒绝网页的提示、确认、输入或离开页面询问，和你在面板或对话里能做的一样。',
+  'List, open, show or close browser tabs':
+    '列出、打开、切换或关闭浏览器标签页',
+  'Pages that open a new window or tab appear as tabs; you and Circle see the same shown tab.':
+    '网页打开的新窗口或标签页会成为标签页；你和 Circle 看到的是同一个当前标签页。',
 };

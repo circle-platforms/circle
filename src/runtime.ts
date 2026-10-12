@@ -11,6 +11,7 @@ import {
 } from './approvals.js';
 import { Sandbox } from './sandbox.js';
 import { buildTools, type Todo } from './tools.js';
+import { loadSecrets, secretNames } from './secrets.js';
 import { buildSystemPrompt } from './system_prompt.js';
 import { Harness, type ApprovalDecision } from './harness.js';
 import { EventBus } from './events.js';
@@ -448,6 +449,7 @@ export class AgentRuntime {
         });
         const childTools = (custom?.tools ?? this.allTools).filter(
           (tool) =>
+            tool.subagents !== false &&
             tool.name !== 'task' &&
             tool.name !== 'compact_conversation' &&
             tool.name !== 'plan_enter' &&
@@ -507,6 +509,8 @@ export class AgentRuntime {
               : tool,
         );
         const child: Harness = new Harness({
+          variables: () => this.options.settings.variables,
+          secrets: () => loadSecrets(this.options.home),
           model: childModel,
           tools: ownedChildTools,
           store: this.store,
@@ -593,6 +597,8 @@ export class AgentRuntime {
     // A new or resumed session after the integrations loaded keeps their subagents.
     if (this.integrationsReady) this.describeSubagents(tools);
     const harness = new Harness({
+      variables: () => this.options.settings.variables,
+      secrets: () => loadSecrets(this.options.home),
       model: this.extensions.model(model),
       tools,
       store: this.store,
@@ -703,8 +709,14 @@ export class AgentRuntime {
         extensionTools: this.extensions.tools(),
         userHome: this.options.userHome,
         localContext: this.options.localContext,
+        variables: this.options.settings.variables,
+        secrets: secretNames(this.options.home),
       },
     );
+  }
+  /** The variables or the secrets changed: the next request tells the model. */
+  refreshPrompt(): void {
+    this.refreshSystemPrompt();
   }
   private refreshSystemPrompt(): void {
     this.harness.system = this.systemPrompt(this.harness.model.model);

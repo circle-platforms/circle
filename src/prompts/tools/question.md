@@ -13,10 +13,14 @@ Usage notes:
 - Where no panel is available (line mode), the questions come back as text instead: ask them in your reply and wait for the user
 
 Secrets (passwords, tokens, credentials):
-- For any secret, add `secret: true` plus `key` (ENV-style name, e.g. `JUMPHOST_PASS`) and
-  `target_file` (the env file the value should land in, e.g. `~/.config/compile-excel/env`).
-- The user types the value in a masked input (Ctrl+S when prompted); the harness writes
-  `KEY=value` (file mode 600) and the tool result only confirms collection — the value
-  NEVER enters this conversation. Do not ask for secrets in plain questions.
+- For any secret, add `secret: true` plus `key` (ENV-style name, e.g. `JUMPHOST_PASS`).
+- Without `target_file`, the value is kept as a Circle secret: afterwards write `%KEY%` in any
+  tool's arguments (a command, a browser field, an MCP tool's input) and Circle puts the value in
+  when the tool runs. Check the secrets already listed in your instructions before asking.
+- With `target_file` (the env file the value should land in, e.g. `~/.config/compile-excel/env`),
+  the harness writes `KEY=value` there (file mode 600) instead.
+- The user types the value in a masked input (Ctrl+S when prompted); the tool result only
+  confirms collection — the value NEVER enters this conversation. Do not ask for secrets in
+  plain questions.
 - If secret collection reports unavailable/failed, tell the user to write the credential
   into the target file themselves; never fall back to collecting it in chat.

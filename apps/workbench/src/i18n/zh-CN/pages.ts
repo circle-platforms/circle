@@ -28,6 +28,8 @@ export const pages: Record<string, string> = {
   'Choose the model and thinking depth for this session.':
     '为这个会话选择模型和思考深度。',
   'models refreshed': '模型已刷新',
+  'this endpoint does not provide a model list; enter a model ID manually':
+    '这个端点不提供模型列表，请手动输入模型 ID',
   'refresh models': '刷新模型',
   connection: '连接',
   configured: '已配置',
@@ -211,4 +213,28 @@ export const pages: Record<string, string> = {
   'changes files': '修改文件',
   'runs commands': '运行命令',
   'may change things': '可能有改动',
+  variables: '变量',
+  "Written as Windows writes environment variables: %NAME% in a tool's arguments takes the value when the tool runs. The model also reads the values.":
+    '写法同 Windows 环境变量：工具参数里的 %NAME% 在工具执行时换成变量值。模型也能看到这些值。',
+  secrets: '密钥',
+  'Variables whose values the model never sees: it knows the name, and reads %NAME% wherever a value shows in output. A saved value is not shown again.':
+    '模型看不到值的变量：模型只知道名字，输出里出现值的地方显示为 %NAME%。保存后的值不再显示。',
+  variable: '变量',
+  value: '值',
+  'new…': '新建…',
+  'edit…': '编辑…',
+  delete: '删除',
+  ok: '确定',
+  'new variable': '新建变量',
+  'edit variable': '编辑变量',
+  'new secret': '新建密钥',
+  'edit secret': '编辑密钥',
+  'variable name': '变量名',
+  'variable value': '变量值',
+  'leave empty to keep the value': '留空则保留原值',
+  'secret: the model never sees the value': '密钥：模型看不到值',
+  'a variable name is capital letters, digits and _, starting with a letter':
+    '变量名只能用大写字母、数字和下划线，并以字母开头',
+  '{name} is already a variable': '已有名为 {name} 的变量',
+  '{name} is already a secret': '已有名为 {name} 的密钥',
 };

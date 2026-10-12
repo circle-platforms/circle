@@ -272,6 +272,10 @@ export interface Settings {
   endpoint: string;
   protocol: 'openai' | 'anthropic';
   credentialFiles: string[];
+  /** Values the model may use by name, as `settings.json` keeps them. */
+  variables: Record<string, string>;
+  /** Names of the saved secrets, used as %NAME%: never a value. */
+  secrets: string[];
   updateCheck: boolean;
   textSize: TextSize;
   keybindings: Record<string, string | string[]>;

@@ -65,6 +65,8 @@ const integer = (description: string, minimum = 1) => ({
 export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
   const read = new Set<string>();
   const tools: Tool[] = [];
+  // What these write stays on disk: a %NAME% there is text, never a variable's value.
+  const FILE_WRITERS = new Set(['write_file', 'edit_file', 'apply_patch']);
   const add = (
     name: string,
     effect: Tool['effect'],
@@ -77,6 +79,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       parameters,
       description: loadToolPrompt(name),
       run,
+      ...(FILE_WRITERS.has(name) ? { variables: false } : {}),
     });
   };
   add(

@@ -14,6 +14,7 @@ import { CheckpointStore, type Session } from './checkpoint_store.js';
 import { attachPrompt } from './mentions.js';
 import { prepareToolCall, RecoverableToolError } from './tool_call_compat.js';
 import { redact } from './redact.js';
+import { expandVariables, redactSecrets } from './secrets.js';
 import { httpStatus } from './model_guard.js';
 import { validateAttachments } from './media.js';
 export type ApprovalDecision =
@@ -24,6 +25,10 @@ export type ApprovalDecision =
   // a rejection with the user's reason, which the model reads in the tool result
   | { decision: 'reject'; message: string };
 export interface HarnessOptions {
+  /** The variables, read for each call: %NAME% in arguments becomes the value. */
+  variables?: () => Record<string, string>;
+  /** The saved secrets, read for each call: variables whose values the model never sees. */
+  secrets?: () => Record<string, string>;
   model: ChatModel;
   tools: Tool[];
   store: CheckpointStore;
@@ -465,6 +470,7 @@ export class Harness {
     signal: AbortSignal,
   ): Promise<Message> {
     let call = original;
+    let secrets: Record<string, string> = {};
     let content = '';
     let status: 'success' | 'error' = 'success';
     let recoverable = false;
@@ -529,9 +535,26 @@ export class Harness {
       )
         throw new Error('read-only mode: this tool cannot run');
       this.bus.emit('tool_start', { payload: { ...call } });
+      // Approved as written, with %NAME%; run with the values, a secret's never shown to the model
+      secrets =
+        tool.variables === false ? {} : (this.options.secrets?.() ?? {});
+      const used = new Set<string>();
+      const args = expandVariables(
+        call.args,
+        tool.variables === false
+          ? {}
+          : { ...this.options.variables?.(), ...secrets },
+        used,
+      );
+      const usedSecrets = [...used].filter((name) =>
+        Object.hasOwn(secrets, name),
+      );
       const context = {
         signal,
         sessionId: this.sessionId,
+        callId: call.id,
+        ...(used.size ? { rawArgs: structuredClone(call.args) } : {}),
+        ...(usedSecrets.length ? { secretNames: usedSecrets } : {}),
         imageInput: this.model.imageInput,
         emitAttachments: (items: MediaAttachment[]) => {
           if (!acceptingAttachments)
@@ -561,8 +584,8 @@ export class Harness {
         },
       };
       content = this.options.toolBoundary
-        ? await this.options.toolBoundary(guardedTool, call.args, context)
-        : await guardedTool.run(call.args, context);
+        ? await this.options.toolBoundary(guardedTool, args, context)
+        : await guardedTool.run(args, context);
       if (typeof content !== 'string') throw new Error('tool must return text');
       signal.throwIfAborted();
     } catch (error) {
@@ -573,6 +596,19 @@ export class Harness {
     } finally {
       acceptingAttachments = false;
     }
+    // A command or a page may show a secret back: the model reads its name instead. A value
+    // that is also a plain variable's is known to the model already: hiding it would only
+    // rename that variable's text, as a user name that is also the password
+    const known = new Set(Object.values(this.options.variables?.() ?? {}));
+    content = redactSecrets(
+      content,
+      Object.fromEntries(
+        Object.entries({
+          ...secrets,
+          ...(this.options.secrets?.() ?? {}),
+        }).filter(([, value]) => !known.has(value)),
+      ),
+    );
     return {
       id: randomUUID(),
       role: 'tool',

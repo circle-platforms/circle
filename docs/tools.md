@@ -4,7 +4,7 @@ nav_order: 20
 
 # Built-in tools
 
-The main agent has these twenty-one tools. MCP servers and [extensions](extensions.md) add more.
+The main agent has these twenty-one core tools. The desktop application adds the nine browser tools below. MCP servers and [extensions](extensions.md) add more.
 
 "Asks" means Circle shows an approval card before the call runs. See [Security](security.md). In `read-only` mode the tools that do not ask keep working; the others are refused, except changes to a plan file (see [Read-only mode](security.md#read-only-mode)).
 
@@ -32,6 +32,34 @@ The main agent has these twenty-one tools. MCP servers and [extensions](extensio
 | `execute` | Run a shell command in the workspace. With `background: true` it runs as a [background job](background-jobs.md) and returns at once. Standard output and standard error come back together, in the order they were written. | yes | A command still running at 120 seconds goes on as a background job; one the model gave a `timeout` (up to 600 seconds) is ended at that time. Processes a command leaves running become a job. The model gets the first 80,000 bytes of output and the path of the rest. With `background`, `timeout` is the longest the job may run (up to a day; `0` for no limit). |
 
 The file tools refuse a credential file and a background job's output; `execute` refuses a command that names a credential file. See [Security](security.md#credential-files).
+
+## The desktop browser
+
+These tools use the browser of the current desktop conversation: the one in its browser panel, which you can use at the same time. They are available to the main agent only, and only in the desktop application. The panel opens when Circle starts using the browser, unless you are on another page of the application.
+
+Every result has the same parts: what the action did; the dialogs pages are waiting on, in every tab; what happened since the model last looked (tabs opened or closed, dialogs answered and by whom, a certificate warning passed); the tabs, when there are several or they changed; the shown page; and its snapshot. The snapshot is the page's visible text and the elements the model can act on, each with a ref such as `e12`. A ref stays with its element as long as the page is the same document, and an element that appeared since the last snapshot is marked `[new]`. Same-origin frames and open shadow roots are read, tables row by row; frames from other sites are not. Password fields show only whether they are filled.
+
+| Tool | What it does | Asks | Limits |
+|---|---|---|---|
+| `browser_navigate` | Open `url` in the shown tab, or use `back`, `forward` or `reload`. | yes | HTTP and HTTPS only, including local and private addresses. A site whose certificate is not trusted gets the browser's warning page in the tab, which the result shows; see below. |
+| `browser_snapshot` | Read the shown page and the rest of the result. | no | About 30,000 characters. Password values and Circle's pointer are left out. |
+| `browser_click` | Move the pointer to `ref`, described by `element`, and click it with real mouse events. | yes | Refuses a covered element and names what covers it. |
+| `browser_type` | Replace what `ref` holds with `text`; `submit: true` presses Enter. `%NAME%` in the text puts in a variable or a saved [secret](security.md#secrets-by-name). | yes | A password field takes only text made of secrets' names. |
+| `browser_select` | Choose options of a select element at `ref`, by text or value. | yes | |
+| `browser_press` | Press `key`: Enter, Tab, Escape, Backspace, Delete, Space, an arrow key, Home, End, PageUp or PageDown. | yes | |
+| `browser_screenshot` | Send a PNG of the shown page to the model. | no | Not while the page waits on a dialog or shows an error. The model must accept images. |
+| `browser_dialog` | Answer a page's dialog: `accept: true` presses OK (or leaves the page), `false` Cancel (or stays); `text` answers a prompt; `id` picks a dialog in another tab. | yes | |
+| `browser_tabs` | `list`, `new` (with an optional `url`), `select` or `close` a tab. | yes | |
+
+### Dialogs, warnings and tabs
+
+A page's alert, confirm, prompt or "leave site?" question appears over that tab in the browser panel, on a picture of the page as it stopped, with where it came from. While Circle is working it also appears in the conversation. You, from either place, or the model, with `browser_dialog`, can answer it; the first answer counts, and the next result says who gave it. While a page waits on a dialog, the other tools that act on it refuse and say which dialog to answer.
+
+When a site's certificate is not trusted, as with the self-signed certificate of a device's web interface, the tab shows the browser's privacy warning instead of the site, as Chrome does. You and the model see the same page: **Advanced** shows the certificate and the link to proceed. When the model clicks that link, Circle first asks you in the conversation, showing the site, the certificate's subject and issuer, its expiry and its SHA-256 fingerprint. You can allow it once; for a host on this network (a private, loopback or link-local address, or a name like `nas.lan`) you can also trust that certificate on that host for good. Allowing once lasts until Circle closes. A certificate you trust for good is kept in `browser-certificates.json` in the application's data folder; delete it there to forget it. Your own click on the link needs no approval. A different certificate on the same host shows the warning again.
+
+A link or script that opens a new window opens a new tab, shown to both of you; one that opens in the background stays behind. The result names new tabs.
+
+One **allow for this session** choice covers all browser actions in this conversation; passing a certificate warning is asked separately every time, also in `auto` mode, unless you trust the certificate for good. `read-only` mode allows snapshots and browser screenshots and refuses the other tools. See [The browser panel](desktop.md#the-browser-panel) and [Browser safety](security.md#the-desktop-browser).
 
 ## Working with you
 

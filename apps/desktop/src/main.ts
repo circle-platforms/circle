@@ -77,6 +77,8 @@ protocol.registerSchemesAsPrivileged([
 const grants = new WorkspaceGrants();
 let window: BrowserWindow | null = null;
 let browsers: BrowserSessions | null = null;
+// Certificate exceptions live only in this application process, across window recreation.
+const browserCertificates = new Map<string, Set<string>>();
 let runtime: RuntimeSupervisor | undefined;
 const workspaceSelections = new Map<string, string>();
 const previewMode = process.env.CIRCLE_WORKBENCH_MODE === 'preview';
@@ -353,7 +355,17 @@ async function createWindow() {
       webSecurity: true,
     },
   });
-  browsers = new BrowserSessions(window);
+  browsers = new BrowserSessions(
+    window,
+    (state) => window?.webContents.send('circle:browser-event', state),
+    () => interfaceLocale,
+    join(dataPath, 'browser-certificates.json'),
+    browserCertificates,
+  );
+  runtime?.onBrowser((request, signal) => {
+    if (!browsers) throw Error('the browser is closed');
+    return browsers.agent(request, signal);
+  });
   window.webContents.setWindowOpenHandler(({ url }) => {
     const allowed = safeExternalUrl(url);
     if (allowed && !fixtureProfile) void shell.openExternal(allowed);
@@ -594,6 +606,19 @@ app
     handle('circle:browser-capture', (id) => {
       if (!browsers) throw Error('window not ready');
       return browsers.capture(id);
+    });
+    handle('circle:set-theme', (dark) => browsers?.setDark(dark === true));
+    handle('circle:browser-tabs', (id, action, tab) => {
+      if (!browsers) throw Error('window not ready');
+      return browsers.tabs(id, action, tab);
+    });
+    handle('circle:browser-dialog', (id, dialog, accept, text) => {
+      if (!browsers) throw Error('window not ready');
+      return browsers.dialog(id, dialog, accept, text);
+    });
+    handle('circle:browser-dialog-screen', (id, dialog) => {
+      if (!browsers) throw Error('window not ready');
+      return browsers.dialogScreen(id, dialog);
     });
     updater.subscribe((state) =>
       window?.webContents.send('circle:update', state),

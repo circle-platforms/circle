@@ -38,6 +38,7 @@ export const DEFAULT_CREDENTIAL_FILES = [
   '.pgpass',
   '.git-credentials',
   'credentials.json',
+  'secrets.json',
   'token.json',
   'id_rsa',
   'id_dsa',
@@ -596,6 +597,20 @@ export const SESSION_MODES: readonly SessionMode[] = [
 export const isSessionMode = (value: unknown): value is SessionMode =>
   SESSION_MODES.includes(value as SessionMode);
 const EDIT_TOOLS = ['write_file', 'edit_file', 'apply_patch'];
+// The desktop application's browser tools that act on a page. One "allow for this session"
+// covers all of them: they are one browser, driven a step at a time.
+const BROWSER_ACTIONS: Record<string, string> = {
+  browser_navigate: 'opens a page in the browser',
+  browser_click: 'clicks in the browser',
+  browser_type: 'types in the browser',
+  browser_select: 'chooses an option in the browser',
+  browser_press: 'presses a key in the browser',
+  browser_dialog: 'answers a dialog in the browser',
+  browser_tabs: "manages the browser's tabs",
+};
+/** The tool name an approval rule is kept under: `browser` for every browser action. */
+export const ruleTool = (tool: string): string =>
+  Object.hasOwn(BROWSER_ACTIONS, tool) ? 'browser' : tool;
 export class ApprovalPolicy {
   private modes = new Map<string, ApprovalMode>();
   constructor(
@@ -689,6 +704,11 @@ export class ApprovalPolicy {
           : 'shows the model the whole screen',
         { pattern: '*', scope: 'every screenshot' },
       );
+    if (Object.hasOwn(BROWSER_ACTIONS, tool))
+      return review('ASK', BROWSER_ACTIONS[tool]!, {
+        pattern: '*',
+        scope: 'browser control',
+      });
     return review('ASK', `${tool} can change state`, {
       pattern: '*',
       scope: `every ${tool} call`,
@@ -714,7 +734,7 @@ export class ApprovalPolicy {
       found.pattern === 'workspace'
     )
       return false;
-    return !this.store.matchesAny(thread, tool, [
+    return !this.store.matchesAny(thread, ruleTool(tool), [
       found.pattern,
       ...found.covered_by,
     ]);
@@ -732,7 +752,7 @@ export class ApprovalPolicy {
         : found.pattern;
     if (['always', 'prefix'].includes(decision)) {
       if (found.verdict !== 'ASK' || !pattern) return false;
-      this.store.record(thread, 'always', tool, pattern, found.scope);
+      this.store.record(thread, 'always', ruleTool(tool), pattern, found.scope);
       return true;
     }
     this.store.record(

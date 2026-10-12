@@ -420,6 +420,8 @@ export class LiveRuntime implements RuntimePort {
         'discover-models': 'discover-models',
         'launch-options': 'launch-options',
         'trust-workspace': 'trust',
+        'save-secret': 'save-secret',
+        'remove-secret': 'remove-secret',
         execute: 'shell',
       };
       if (kind === 'export-session') {

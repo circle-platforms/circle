@@ -31,6 +31,8 @@ import { Button, IconButton, FileChip, Status } from '../components/common';
 import { Markdown } from '../components/Markdown';
 import { ToolGroup } from '../components/ToolGroup';
 import { MessageView } from '../components/MessageView';
+import { BrowserDialogRequest } from './BrowserDialog';
+import { useBrowserState } from './useBrowserState';
 import { InlineRequest } from './InlineRequest';
 import {
   BusyLabel,
@@ -443,6 +445,8 @@ export function Conversation({
   const pending = snapshot.interactions.filter(
     (item) => item.sessionId === session.id && item.status === 'pending',
   );
+  // A page's dialog while Circle works also waits here, to be answered from the conversation.
+  const browser = useBrowserState(session.id);
   // Approvals sit under the call they wait for; the rest after the last message.
   const toolIds = new Set(
     messages.flatMap((message) => (message.tool ? [message.tool.id] : [])),
@@ -551,6 +555,7 @@ export function Conversation({
                       .filter(
                         (request) =>
                           request.kind === 'approval' &&
+                          !!request.callId &&
                           item.rows.some(
                             (row) => row.tool?.id === request.callId,
                           ),
@@ -595,6 +600,14 @@ export function Conversation({
               onSecret={() => onDialog('secret')}
             />
           ))}
+          {session.turn &&
+            browser?.dialogs?.map((dialog) => (
+              <BrowserDialogRequest
+                key={dialog.id}
+                sessionId={session.id}
+                dialog={dialog}
+              />
+            ))}
           {session.state === 'waiting' && runtime.mode !== 'live' && (
             <div className="pending-message">
               <i />

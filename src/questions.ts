@@ -109,17 +109,15 @@ export async function askQuestions(
   }
   if (secret.length) {
     const requests = secret.map((question) => {
-      if (
-        typeof question.target_file !== 'string' ||
-        !question.target_file.trim()
-      )
-        throw new Error('secret question names no target_file');
+      // Without a target file the value is kept as a Circle secret, used as %KEY%
+      const target =
+        typeof question.target_file === 'string'
+          ? question.target_file.trim()
+          : '';
       return {
         question: String(question.question || '').trim(),
         key: String(question.key || '').trim(),
-        target_file: sandbox.resolvePath(
-          String(question.target_file || '').trim(),
-        ),
+        target_file: target ? sandbox.resolvePath(target) : '',
       };
     });
     try {
@@ -137,7 +135,11 @@ export async function askQuestions(
     } catch (error) {
       signal.throwIfAborted();
       lines.push(
-        'SECRET_QUESTIONS — the secret was not collected. Ask the user to enter the credential in the target file themselves, never in chat.',
+        `SECRET_QUESTIONS — the secret was not collected (${error instanceof Error ? error.message : String(error)}). ` +
+          // Without a target file there is no file to point the user to
+          (requests.some((request) => request.target_file)
+            ? 'Ask the user to enter the credential in the target file themselves, never in chat.'
+            : 'Ask again with the question tool when the user is ready, or ask them to save it as a Circle secret themselves; never ask for it in chat.'),
       );
     }
   }

@@ -78,6 +78,27 @@ export interface DesktopBridge {
   ) => Promise<BrowserState>;
   browserHide: (sessionId: string) => Promise<void>;
   browserCapture: (sessionId: string) => Promise<BrowserCapture>;
+  /** Open, show or close a tab of the conversation's browser. */
+  browserTabs: (
+    sessionId: string,
+    action: 'new' | 'select' | 'close',
+    tab?: string,
+  ) => Promise<BrowserState>;
+  /** The person answers a page's dialog (alert, confirm, prompt, leave page). */
+  browserDialog: (
+    sessionId: string,
+    dialog: string,
+    accept: boolean,
+    text?: string,
+  ) => Promise<BrowserState>;
+  /** The page as it was when its dialog opened: the page itself is stopped meanwhile. */
+  browserDialogScreen: (
+    sessionId: string,
+    dialog: string,
+  ) => Promise<string | null>;
+  onBrowserEvent: (listener: (state: BrowserState) => void) => () => void;
+  /** Whether the window shows dark or light: the browser's own pages follow it. */
+  setTheme: (dark: boolean) => Promise<void>;
   onAction: (listener: (action: DesktopAction) => void) => () => void;
   updateState: () => Promise<UpdateState>;
   update: (action: UpdateAction) => Promise<UpdateState>;
@@ -97,6 +118,43 @@ export interface BrowserState {
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
+  failure?: { url: string; error: string };
+  /** The tab shows Circle's certificate warning for this host instead of the site. */
+  warning?: { host: string; error: string };
+  insecure?: boolean;
+  operating?: boolean;
+  tab?: string;
+  tabs?: BrowserTab[];
+  /** Dialogs pages are waiting on, in every tab, oldest first. */
+  dialogs?: BrowserDialog[];
+}
+export interface BrowserTab {
+  id: string;
+  title: string;
+  url: string;
+  loading: boolean;
+  active: boolean;
+}
+export interface BrowserDialog {
+  id: string;
+  tab: string;
+  type: 'alert' | 'confirm' | 'prompt' | 'beforeunload';
+  message: string;
+  defaultPrompt: string;
+  origin: string;
+  /** Circle is answering it: the panel shows the pointer pressing the button first. */
+  answering?: { accept: boolean };
+}
+export interface BrowserCertificate {
+  url: string;
+  host: string;
+  error: string;
+  subject: string;
+  issuer: string;
+  /** Certificate validity, in Unix seconds as returned by Electron. */
+  validStart: number;
+  validExpiry: number;
+  fingerprint: string;
 }
 export interface BrowserCapture extends BrowserState {
   dataUrl: string;

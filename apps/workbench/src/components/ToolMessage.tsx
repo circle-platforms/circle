@@ -10,6 +10,7 @@ import {
   Terminal,
   Users,
   FileText,
+  Globe,
 } from 'lucide-react';
 import type { ToolCall } from '../model/types';
 import { useRuntime } from '../app/context';
@@ -18,6 +19,7 @@ import { DiffBlock } from './DiffBlock';
 import { t } from '../i18n';
 import { relativePath } from '../model/format';
 import { currentSession } from '../model/state';
+import { hasToolInput } from '../model/browser';
 export function ToolMessage({
   tool,
   expanded,
@@ -41,9 +43,11 @@ export function ToolMessage({
       ? Users
       : tool.name === 'execute'
         ? Terminal
-        : tool.diff || tool.before !== undefined
-          ? FileDiff
-          : FileText;
+        : tool.name.startsWith('browser_')
+          ? Globe
+          : tool.diff || tool.before !== undefined
+            ? FileDiff
+            : FileText;
   // A file change that happened shows its diff under the call; a waiting one shows it in
   // the request below, and one that failed changed nothing.
   const diff = tool.diff && tool.status === 'success' ? tool.diff : undefined;
@@ -67,6 +71,9 @@ export function ToolMessage({
                 tool.input.description ??
                 tool.input.query ??
                 tool.input.pattern ??
+                tool.input.url ??
+                tool.input.element ??
+                tool.input.key ??
                 '',
             ),
             root,
@@ -99,12 +106,14 @@ export function ToolMessage({
               >
                 {t('output')}
               </button>
-              <button
-                className={tab === 'input' ? 'active' : ''}
-                onClick={() => setTab('input')}
-              >
-                {t('input')}
-              </button>
+              {hasToolInput(tool.input) && (
+                <button
+                  className={tab === 'input' ? 'active' : ''}
+                  onClick={() => setTab('input')}
+                >
+                  {t('input')}
+                </button>
+              )}
             </div>
             {tool.filePath && (
               <button
@@ -140,10 +149,12 @@ export function ToolMessage({
               <Copy size={13} />
             </IconButton>
           </div>
-          <DataBlock
-            title={tab === 'input' ? t('raw input') : t('raw output')}
-            value={tab === 'input' ? tool.input : tool.output}
-          />
+          {(tab === 'output' || hasToolInput(tool.input)) && (
+            <DataBlock
+              title={tab === 'input' ? t('raw input') : t('raw output')}
+              value={tab === 'input' ? tool.input : tool.output}
+            />
+          )}
           {runtime.mode !== 'live' && (
             <div className="tool-meta">{tool.id} · sample record</div>
           )}

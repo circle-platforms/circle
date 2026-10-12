@@ -1,12 +1,12 @@
 import { Search, ShieldAlert, X } from 'lucide-react';
 import { Dialog, Tooltip } from 'radix-ui';
-import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react';
 import { t } from '../i18n';
 export function Button({
   children,
   className = '',
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement>) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { ref?: Ref<HTMLButtonElement> }) {
   return (
     <button className={`button ${className}`} {...props}>
       {children}

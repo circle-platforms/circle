@@ -2966,7 +2966,8 @@ pre {
   display: none;
 }
 .native-browser-viewport {
-  height: 390px;
+  position: relative;
+  height: min(640px, max(320px, calc(100vh - 300px)));
   margin: 12px -5px 0;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -2987,6 +2988,195 @@ pre {
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: var(--ui-tiny);
+}
+.browser-insecure,
+.browser-operating {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.browser-insecure {
+  color: var(--attention);
+  font-size: var(--ui-tiny);
+}
+.browser-operating {
+  color: var(--accent);
+}
+.browser-operation-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: browser-operation-pulse 1.6s ease-in-out infinite;
+}
+@keyframes browser-operation-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+.browser-error-page {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 30px 24px;
+  background: var(--bg);
+  color: var(--fg);
+}
+.browser-error-page h3 {
+  font-size: calc(var(--ui-size) + 3px);
+  line-height: 1.5;
+}
+.browser-error-page p {
+  color: var(--secondary);
+  font-size: var(--ui-small);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.browser-error-page > code {
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  overflow-wrap: anywhere;
+}
+.browser-approval-input {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  width: 100%;
+  font-size: var(--ui-small);
+}
+.browser-approval-input > div {
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr);
+  gap: 8px;
+}
+.browser-approval-input dt {
+  color: var(--muted);
+}
+.browser-approval-input dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.browser-approval-input code {
+  font-size: var(--code-size);
+}
+/* Tabs of the conversation's browser, above its address bar. */
+.browser-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 12px -5px 0;
+  overflow-x: auto;
+}
+.browser-tab {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 180px;
+  flex: 0 1 auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.browser-tab.active {
+  background: var(--bg);
+  border-color: var(--secondary);
+}
+.browser-tab-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 4px 4px 4px 8px;
+  font-size: var(--ui-tiny);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: none;
+  border: 0;
+  color: var(--fg);
+}
+.browser-tab-alert {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--attention);
+}
+.browser-tab .icon-button {
+  flex: none;
+}
+/* A page's dialog over its tab: the page as it stopped, dimmed, under the box. */
+.browser-dialog-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 18%;
+  background: var(--surface);
+  overflow: hidden;
+}
+.browser-dialog-screen {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top left;
+  opacity: 0.45;
+}
+.browser-dialog-box {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  width: min(380px, calc(100% - 32px));
+  padding: 18px 18px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--fg) 18%, transparent);
+  font-size: var(--ui-small);
+}
+.browser-dialog-box p,
+.browser-dialog-message {
+  margin: 0;
+  color: var(--secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.browser-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.browser-dialog-note {
+  color: var(--accent);
+}
+.browser-dialog-pointer {
+  position: absolute;
+  left: -4px;
+  top: -4px;
+  color: var(--fg);
+  fill: currentColor;
+  stroke: var(--bg);
+  stroke-width: 1.7;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 1px 1px var(--bg));
+  transition: transform 420ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  pointer-events: none;
+  z-index: 2;
+}
+.browser-dialog-pointer.pressed {
+  scale: 0.85;
+}
+.browser-approval-input {
+  padding: 10px 0 4px;
 }
 
 /* The composer frame, as the terminal's: the rainbow turns while the model works, it is
@@ -4147,4 +4337,76 @@ pre {
 .update-chip svg {
   flex-shrink: 0;
   color: var(--accent);
+}
+
+/* Variables in settings, as Windows lists environment variables: a framed table of names
+   and values, the selected row marked, new, edit and delete under it. */
+.variable-table {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.variable-table-frame {
+  min-height: 92px;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.variable-table table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: var(--ui-small);
+}
+.variable-table th {
+  position: sticky;
+  top: 0;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--secondary);
+  font-weight: 500;
+  text-align: left;
+}
+.variable-table th:first-child,
+.variable-table td:first-child {
+  width: 34%;
+}
+.variable-table td {
+  padding: 6px 10px;
+  overflow: hidden;
+  color: var(--fg);
+  font-family: var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.variable-table tbody tr {
+  cursor: default;
+}
+.variable-table tbody tr:hover {
+  background: var(--hover);
+}
+.variable-table tbody tr[aria-selected='true'] {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.variable-table tbody tr:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.form-stack label.variable-secret {
+  flex-direction: row;
+  align-items: center;
+  color: var(--fg);
+}
+.variable-table-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.settings-block h3 {
+  margin: 18px 0 4px;
+  font-size: var(--ui-size);
 }

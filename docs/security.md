@@ -17,6 +17,8 @@ Read this page before you point Circle at anything you cannot restore, and befor
 | Delete a file (`delete`) or a patch that deletes | Always asks. |
 | Read, list, search, `webfetch`, `websearch`, `lsp` | Does not ask. |
 | Take a screenshot (`screenshot`) | Asks: the picture can show any window on the screen. "Allow for this session" covers every screenshot. |
+| Read the desktop browser (`browser_snapshot`, `browser_screenshot`) | Does not ask. The screenshot covers only this conversation's browser viewport. |
+| Operate the desktop browser | Asks. "Allow for this session" covers all browser actions in this conversation. Passing a certificate warning asks every time, also in `auto` mode, unless you trusted that certificate on that host for good. |
 | Tools from MCP servers | Asks. |
 | Tools from extensions | Asks, unless the extension marks the tool read-only or turns approval off. |
 | Custom-command shell snippets | Do not ask. |
@@ -47,6 +49,7 @@ What "the same kind" means for option 2:
 | A file change outside the workspace | Not offered. It asks every time. |
 | Deleting anything, and the risky commands below | Not offered. It asks every time. |
 | An MCP or extension tool | Every call to that tool. |
+| A desktop browser operation | All browser actions: navigate, click, type, select, press, dialog and tabs. Not passing a certificate warning. |
 
 Option 3 keeps the program and what names the work: the script or module of an interpreter (`python3 todo.py`, `python3 -m pytest`, `node build.js`), the subcommand of tools such as `git`, `npm`, `pnpm`, `yarn`, `cargo`, `go`, `uv`, `pip`, `make`, `docker` and `gh` (`git add`, `npm run build`), or the program alone (`pytest`). It is offered only for a command with no pipe, `&&`, `;`, redirection, `$`, backtick or wrapper such as `env` or `timeout`, and it covers only such commands. It is not offered for an interpreter with no script (`python3 -c ...`), for the commands that only read (option 2 covers them), or for programs where it would allow nearly anything: `curl`, `wget`, `ssh`, `scp`, `rsync`, `chmod`, `chown`, `kill`, `mv`, `cp`, `ln`, `open`, `eval`, `source`, `sed`, `awk`, `tee` and the elevation commands. The commands that always ask still ask.
 
@@ -79,7 +82,7 @@ This reading is textual and it has gaps. `perl -e 'unlink q(a)'`, `mv a /dev/nul
 
 ### Credential files
 
-These file names are refused: `.env`, `.env.*`, `*.env`, `.netrc`, `.pgpass`, `.git-credentials`, `credentials.json`, `token.json`, `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `*.pem`, `*.p12`, `*.pfx`. A shell command that names one is refused, and the file tools (`read_file`, `write_file`, `edit_file`, `apply_patch`, `delete`, `grep`, `lsp`) and `@` mentions in the input box refuse or skip such a file. A file you name with `@` on the command line is read, since you named it. Only the name is checked: `ls` and `glob` still list them, and a command that reaches one without naming it is not stopped.
+These file names are refused: `.env`, `.env.*`, `*.env`, `.netrc`, `.pgpass`, `.git-credentials`, `credentials.json`, `secrets.json`, `token.json`, `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `*.pem`, `*.p12`, `*.pfx`. A shell command that names one is refused, and the file tools (`read_file`, `write_file`, `edit_file`, `apply_patch`, `delete`, `grep`, `lsp`) and `@` mentions in the input box refuse or skip such a file. A file you name with `@` on the command line is read, since you named it. Only the name is checked: `ls` and `glob` still list them, and a command that reaches one without naming it is not stopped.
 
 Add names with `credential_files` in [settings](settings.md), or in a project's `.circle/settings.json`. Patterns use `*` and `?`. What you add comes on top of the list above; it cannot remove a name from it. In 0.5.0 a list there replaced the default list. Circle reads it when it starts; `/reload` does not change it.
 
@@ -88,6 +91,16 @@ Add names with `credential_files` in [settings](settings.md), or in a project's 
 `/plan` turns on `read-only`, and so can the model with `plan_enter`. Circle then cannot run commands at all, and can change only a file named `plan.md` (or `plan`), anywhere, with the usual approval. Reads, searches and the web keep working. A card is never shown for a blocked call; the model is simply told. Your own `!` commands are refused too. To leave it, run `/plan` again, or answer yes when the model asks with `plan_exit`.
 
 MCP tools and extension tools that are not marked read-only are blocked. Secret entry is not.
+
+## The desktop browser
+
+The [desktop browser](desktop.md#the-browser-panel) is a sandboxed native view with no Node.js integration or application preload. Each conversation has its own browser. Its tools are available only to the main agent, and page input uses Chromium's mouse and keyboard events. Only HTTP and HTTPS navigation is allowed, including local and private addresses; unlike `webfetch`, these tools can use a local device's interface.
+
+Snapshots and viewport screenshots are reads and do not ask. The other tools ask, and one **allow for this session** rule covers all of them in that conversation. In `read-only` mode only snapshots and browser screenshots work. Approving browser input can submit a form or change a device, just as clicking it yourself can; read the target and text on the card.
+
+A certificate error replaces the page with the browser's warning, in the tab. Under **Advanced** it shows the certificate's subject, issuer, validity dates and SHA-256 fingerprint and the link to proceed. You can click it. When the model clicks it, Circle asks you first in the conversation, every time and also in `auto` mode; for a private, loopback or link-local address, or a name such as `nas.lan`, you can trust that certificate on that host for good. The approval is carried by a token the model never sees and cannot pass, and a page's own scripts cannot take that link. An exception matches host, port and fingerprint; one allowed once ends when the application exits, one trusted for good is kept in `browser-certificates.json` in the application's data folder. The address then shows **not secure**. Exceptions do not change certificate checks for model connections, updates, `webfetch` or other services.
+
+Snapshots never include a password field's value. The model cannot type plain text into a password field, only a [secret by name](#secrets-by-name), whose value it never sees. Other visible page text can contain sensitive data, and a browser screenshot can show it. A page can send any input to its server, and content from the page is untrusted model input. Cross-origin frame contents cannot be read.
 
 ## Accept-edits mode
 
@@ -126,6 +139,14 @@ Instruction files and `.agents/skills` in the folders above the workspace, up to
 ## Secrets
 
 The model asks for a secret with the `question` tool, naming a variable such as `API_TOKEN` and the file to write it to. A card shows both. You type the value with `ctrl+s`, masked. Circle writes it straight to that file as `NAME=value`, keeping the file's other lines, at mode `0600`, and tells the model only that it was collected. The value never enters the conversation, and a value that could not be collected is never asked for in chat. The model chooses the file: read the card before you enter a value. See [Secrets](usage.md#secrets).
+
+### Secrets by name
+
+A secret is a [variable](settings.md#keys) whose value the model never sees, such as a password or a token: it knows only the name. Save one in the desktop settings under **variables** → **secrets**, or answer the model's secret question with no `target_file`, which keeps the value as a secret named by its `key`. Secrets are in `secrets.json` in Circle's data folder, readable only by you (mode `0600`; on Windows, where file modes do not apply, the folder's own permissions protect it, as for `credentials.json`). Values are stored as they are, not encrypted. The file's name is on the [credential list](#credential-files), so the model's tools cannot read it by name.
+
+The model's instructions list the names. It writes `%NAME%` in any tool's arguments, as Windows writes an environment variable: a command, a browser field, an MCP or extension tool's input. Approval cards show `%NAME%`; Circle puts the value in only when the tool runs, and wherever the value appears in a tool's output or error, the model reads `%NAME%` instead. Plain variables are put in the same way, but their values are not hidden; a secret whose value is also a plain variable's is not hidden either, since the model knows that value. A name that is neither stays as written, so `%PATH%` in a Windows command still means the system's own variable unless you keep one named `PATH`. The tools that write files (`write_file`, `edit_file`, `apply_patch`) keep `%NAME%` as text, so a reference never puts a secret on disk; to write one into an env file, the model asks with a `target_file`.
+
+A secret can go wherever a tool sends it: a command can pass it to any program or host. In `manual` mode read the command on the card; in `auto` mode such a command runs without asking. Output a command writes to its own files or a job's output file on disk is not changed.
 
 ## The update check and downloads
 

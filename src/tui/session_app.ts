@@ -916,7 +916,7 @@ export class SessionApp {
     try {
       const choice = await this.askChoice(
         'secret',
-        `${request.question}\n${request.key} → ${request.target_file}\nctrl+s enters a masked value`,
+        `${request.question}\n${request.key} → ${request.target_file || `Circle secret %${request.key}%`}\nctrl+s enters a masked value`,
         ['enter secret', 'cancel'],
         signal,
       );
@@ -926,7 +926,7 @@ export class SessionApp {
       }
       const value = await this.showCard(
         new SecretCard(
-          `${request.question}\n${request.key} → ${request.target_file}`,
+          `${request.question}\n${request.key} → ${request.target_file || `Circle secret %${request.key}%`}`,
           request.mask !== false,
         ),
         signal,

@@ -2,6 +2,8 @@ import { readFileSync, appendFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { RuntimeController } from './runtime-controller';
+import { BrowserBridge } from './browser-tools';
+import type { BrowserReply } from './browser-protocol';
 import { ScriptedModel } from '../../../src/testing.js';
 import { emptyUsage, type ModelResponse } from '../../../src/types.js';
 import { ModelCatalog } from '../../../src/model_catalog.js';
@@ -65,9 +67,11 @@ if (fixturePath) {
     ),
   );
 }
+const browser = new BrowserBridge((message) => port.postMessage(message));
 const controller = new RuntimeController({
   home,
   model,
+  browser,
   userHome: home,
   catalog: process.env.CIRCLE_WORKBENCH_TEST_PROFILE
     ? (path) =>
@@ -76,6 +80,11 @@ const controller = new RuntimeController({
   emit: (update) => port.postMessage({ type: 'update', update }),
 });
 port.on('message', ({ data }) => {
+  const message = data as { type?: unknown; reply?: BrowserReply };
+  if (message?.type === 'browser-reply' && message.reply) {
+    browser.receive(message.reply);
+    return;
+  }
   void controller
     .dispatch(data)
     .then((reply) => port.postMessage({ type: 'reply', reply }));

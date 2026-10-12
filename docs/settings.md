@@ -46,6 +46,7 @@ Read [Before you edit by hand](#before-you-edit-by-hand) first.
 | `mcp_servers` | list of objects | `[]` | MCP servers to connect. See [MCP](mcp.md). |
 | `extensions` | object | `{}` | `{"name": {"enabled": false}}` turns an extension off. See [Extensions](extensions.md). |
 | `credential_files` | list of strings | `[]` | More file name patterns the model may not touch, on top of Circle's own list. See [Security](security.md#credential-files). |
+| `variables` | object | `{}` | Named values, such as `{"BASE_URL": "https://example.test"}`, written as Windows writes environment variables: `%BASE_URL%` in a tool's arguments takes the value when the tool runs. The model is told the names and the values. Names are capital letters, digits and `_`, from a letter; values up to 2,000 characters. Keep passwords as [secrets](security.md#secrets-by-name) instead. The desktop settings edit them. |
 | `models` | object | `{}` | Per model: `{"glm-5.3": {"context_window": 1000000}}` sets the context window the footer shows and the automatic compaction uses, in place of the one from models.dev. On the Anthropic protocol the answer limit is at most a quarter of it; [Models](models.md#cost-and-context-in-the-footer) says where compaction starts. `CIRCLE_MODEL_CTX` sets one window for every model. `{"my-model": {"images": true}}` says whether the model reads images, where models.dev does not know it or is wrong; see [Images and screenshots](usage.md#images-and-screenshots). |
 | `update_check` | boolean | `true` | Once a day, when the full-screen interface starts, ask GitHub whether a newer release exists and say so in one line. `false` turns it off. See [Updating](cli.md#updating). |
 
@@ -69,7 +70,9 @@ The API key is not in `settings.json`. It is in `credentials.json` next to it, a
 { "api_key": "sk-..." }
 ```
 
-`auth.api_key_ref` names which entry to use. Both files are readable only by you (mode `0600`).
+`auth.api_key_ref` names which entry to use. Both files are readable only by you (mode `0600`; on Windows the folder's permissions protect them).
+
+Secrets the model uses by name are in `secrets.json`, also next to it; see [Secrets by name](security.md#secrets-by-name).
 
 ## Before you edit by hand
 

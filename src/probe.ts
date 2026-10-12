@@ -6,6 +6,8 @@ export interface ProbeResult {
   base_url: string;
   status: 'discovered' | 'empty' | 'failed';
   detail: string;
+  /** An explicitly selected Anthropic API can support messages without listing models. */
+  modelListUnavailable?: boolean;
 }
 const BAD_URL =
   'use an http(s) API base URL without credentials, query or fragment';
@@ -104,6 +106,19 @@ export async function resolveEndpoint(
           { headers, signal: AbortSignal.timeout(options.timeout ?? 2500) },
         );
         if (!response.ok) {
+          if (
+            options.protocol === 'anthropic' &&
+            [404, 405].includes(response.status)
+          )
+            return {
+              protocol,
+              models: [],
+              inferred: false,
+              base_url: resolved,
+              status: 'failed',
+              detail: `http ${response.status}`,
+              modelListUnavailable: true,
+            };
           failures.push(`http ${response.status}`);
           continue;
         }

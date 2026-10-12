@@ -129,6 +129,10 @@ export interface PromptCatalog {
   localContext?: boolean;
   skills?: { name: string; description: string }[];
   extensionTools?: { name: string; description: string }[];
+  /** The user's variables, values included. */
+  variables?: Record<string, string>;
+  /** Names of the saved secrets: the model never sees a value. */
+  secrets?: string[];
 }
 export function buildSystemPrompt(
   workspace: string,
@@ -187,6 +191,20 @@ export function buildSystemPrompt(
         catalog.skills
           .map((skill) => `- ${skill.name}: ${skill.description}`)
           .join('\n'),
+    );
+  const variables = Object.entries(catalog.variables ?? {});
+  if (variables.length || catalog.secrets?.length)
+    sections.push(
+      '<variables>\n' +
+        "Variables the user keeps in Circle. Write %NAME% in a tool's arguments (a command, a browser field, an MCP tool's input) and Circle puts the value in when the tool runs, as Windows does with environment variables. Files you write keep %NAME% as text." +
+        (variables.length
+          ? '\n' +
+            variables.map(([name, value]) => `- ${name} = ${value}`).join('\n')
+          : '') +
+        (catalog.secrets?.length
+          ? `\nSecrets, which you know only by name: ${catalog.secrets.join(', ')}. Use them the same way; wherever a secret's value appears in output you read %NAME% instead.`
+          : '') +
+        '\n</variables>',
     );
   if (catalog.extensionTools?.length)
     sections.push(
