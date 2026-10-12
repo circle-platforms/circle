@@ -5,7 +5,7 @@
 //
 // This file is loaded as written (Node strips the types), so it uses only syntax that
 // type stripping accepts and imports nothing from Circle at run time.
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, extname, join, resolve } from 'node:path';
 import type { CommandContext, ExtensionAPI } from '../../extensions.js';
@@ -55,6 +55,7 @@ const USAGE = [
   '/server refresh                  read work, execution, knowledge and methods from the server',
   '/server approve <id> <approval>  approve an action a task waits on (reject: /server reject …)',
   '/server reconcile <id>           ask the server to check an operation whose outcome is unknown',
+  '/server tools                    the server’s tools the model can use, read again',
 ].join('\n');
 
 const sha256 = (bytes: Buffer): string =>
@@ -392,6 +393,9 @@ export function register(api: ExtensionAPI): void {
       throw new ServerError(`cannot reach ${config.url}: ${reason(error)}`);
     }
     const bytes = Buffer.from(await response.arrayBuffer());
+    // Asked with If-None-Match: nothing changed since the last answer.
+    if (response.status === 304)
+      return { data: undefined, bytes, headers: response.headers };
     if (options.raw && response.ok)
       return { data: undefined, bytes, headers: response.headers };
     let parsed: unknown;
@@ -757,6 +761,165 @@ export function register(api: ExtensionAPI): void {
     };
   }
 
+  // The server's tools, offered to the model as srv_<name>: read after signing in, on
+  // /server refresh and /server tools, and when a session starts (an ETag keeps that cheap).
+  // Signing out removes them. Read tools run at once; the others ask first.
+  const serverTools = new Map<
+    string,
+    { remote: string; fingerprint: string; write: boolean }
+  >();
+  let catalogTag = '';
+  let syncing: Promise<boolean> | undefined;
+  const toolName = (remote: string): string =>
+    ('srv_' + remote.replace(/[^A-Za-z0-9_]/g, '_')).slice(0, 64);
+  function dropServerTools(): void {
+    for (const name of serverTools.keys()) api.unregisterTool(name);
+    serverTools.clear();
+    catalogTag = '';
+  }
+  function registerServerTool(
+    name: string,
+    tool: Record<string, unknown>,
+  ): boolean {
+    const remote = String(tool.name);
+    const write = tool.effect !== 'read';
+    const schema =
+      isRecord(tool.inputSchema) && tool.inputSchema.type === 'object'
+        ? tool.inputSchema
+        : { type: 'object', properties: {} };
+    try {
+      api.registerTool(
+        name,
+        `circle-server tool ${remote}${tool.title ? ` (${String(tool.title)})` : ''}: ${String(tool.description ?? '')}${
+          write ? ' It changes something, so it asks first.' : ''
+        }${tool.mode === 'task' ? ' It runs as a server task and is waited for in the background.' : ''}`,
+        schema,
+        async (args) => {
+          let data: unknown;
+          try {
+            ({ data } = await request(
+              'POST',
+              `/v1/tools/${encodeURIComponent(remote)}/call`,
+              {
+                json: { args, idempotencyKey: randomUUID() },
+                timeoutMs: 120_000,
+              },
+            ));
+          } catch (error) {
+            throw new api.ToolError(reason(error));
+          }
+          const reply = isRecord(data) ? data : {};
+          if (typeof reply.taskId !== 'string')
+            return {
+              result: reply.result ?? null,
+              evidence: reply.evidence ?? [],
+            };
+          const taskId = reply.taskId;
+          return new api.Watch(
+            `circle-server ${remote} ${taskId}`,
+            async () => {
+              const current = await status(taskId);
+              const phase = String(current.phase ?? '');
+              if (!TERMINAL.has(phase)) return null;
+              const result = await optional<unknown>(
+                `/v1/tasks/${encodeURIComponent(taskId)}/result`,
+                null,
+              );
+              return { taskId, phase, result };
+            },
+            {
+              interval_s: 3,
+              deadline_s: 3600,
+              result: { taskId, phase: reply.phase ?? 'admitted' },
+            },
+          );
+        },
+        { readOnly: !write, approval: write },
+      );
+      return true;
+    } catch {
+      // A name another extension or Circle already uses: leave that one alone.
+      return false;
+    }
+  }
+  // Resolves to false when the server has no tool catalog (an older server): no tools then.
+  async function syncTools(force = false): Promise<boolean> {
+    if (!(await api.secrets.get('token'))) {
+      dropServerTools();
+      return false;
+    }
+    syncing ??= (async () => {
+      let reply: Awaited<ReturnType<typeof request>>;
+      try {
+        reply = await request('GET', '/v1/tools', {
+          headers: catalogTag && !force ? { 'if-none-match': catalogTag } : {},
+        });
+      } catch (error) {
+        if (error instanceof ServerError && error.status === 404) {
+          dropServerTools();
+          return false;
+        }
+        throw error;
+      }
+      const { data, headers } = reply;
+      if (data === undefined && catalogTag && !force) return true;
+      catalogTag = headers.get('etag') ?? '';
+      const wanted = new Map<string, Record<string, unknown>>();
+      for (const tool of (Array.isArray(data) ? data : []).filter(isRecord))
+        if (
+          typeof tool.name === 'string' &&
+          /^[a-z0-9._]{1,60}$/.test(tool.name)
+        )
+          wanted.set(toolName(tool.name), tool);
+      for (const [name, held] of [...serverTools]) {
+        const tool = wanted.get(name);
+        if (tool && JSON.stringify(tool) === held.fingerprint) continue;
+        api.unregisterTool(name);
+        serverTools.delete(name);
+      }
+      for (const [name, tool] of wanted)
+        if (!serverTools.has(name) && registerServerTool(name, tool))
+          serverTools.set(name, {
+            remote: String(tool.name),
+            fingerprint: JSON.stringify(tool),
+            write: tool.effect !== 'read',
+          });
+      return true;
+    })().finally(() => {
+      syncing = undefined;
+    });
+    return syncing;
+  }
+  async function announceTools(
+    context: CommandContext,
+    list = false,
+  ): Promise<void> {
+    let catalog: boolean;
+    try {
+      catalog = await syncTools(list);
+    } catch (error) {
+      context.append(`  could not read the server's tools: ${reason(error)}`);
+      return;
+    }
+    if (!catalog) {
+      if (list) context.append('  this server offers no tools');
+      return;
+    }
+    context.append(
+      `  ${serverTools.size} server tools available to the model from its next turn`,
+    );
+    if (list)
+      for (const [name, held] of serverTools)
+        context.append(
+          `    ${name} ← ${held.remote} · ${held.write ? 'asks first' : 'read-only'}`,
+        );
+  }
+  // Read again whenever a session starts (load, reload, a new session); an unchanged
+  // catalog costs one 304.
+  api.on('session_start', () => {
+    void syncTools().catch(() => {});
+  });
+
   const commands: Record<
     string,
     (rest: string[], context: CommandContext) => Promise<void>
@@ -782,9 +945,11 @@ export function register(api: ExtensionAPI): void {
             : ''
         }`,
       );
+      await announceTools(context);
     },
     async logout(_rest, context) {
       const removed = await api.secrets.delete('token');
+      dropServerTools();
       void showStatus();
       context.append(removed ? 'Signed out' : 'Not signed in');
     },
@@ -876,6 +1041,11 @@ export function register(api: ExtensionAPI): void {
       context.append(
         `  read ${counts.tasks} tasks and ${counts.packs} capability packs from the server`,
       );
+      await announceTools(context);
+    },
+    async tools(_rest, context) {
+      catalogTag = '';
+      await announceTools(context, true);
     },
     async approve(rest, context) {
       await decide(rest, true, context);
@@ -1007,7 +1177,7 @@ export function register(api: ExtensionAPI): void {
   void showStatus();
   api.registerCommand(
     'server',
-    'Work with a circle-server: /server [login | logout | packs | submit | tasks | task | respond | get]',
+    'Work with a circle-server: /server [login | logout | packs | submit | tasks | task | respond | get | refresh | tools]',
     async (args, context) => {
       const [verb, ...rest] = words(args);
       if (!verb) {

@@ -94,8 +94,11 @@ Connects Circle to a [circle-server](https://github.com/qingshanfeihu/circle-ser
 | `/server refresh` | Read work, execution, knowledge and methods from the server for the pages above. |
 | `/server approve <id> <approval>` | Approve an action a task waits on, bound to the input revision, target identity and action digest the server states. `/server reject` declines it. |
 | `/server reconcile <id>` | Ask the server to check an operation whose outcome is unknown. It does not turn an unknown outcome into success. |
+| `/server tools` | The server's tools the model can use, read again from the server. |
 
 The address can also be set in `settings.json` as `"extensions": { "circle-server": { "enabled": true, "url": "https://…" } }`. The lines the commands write are notices for you; the model does not see them.
+
+**The server's own tools.** A server that publishes a tool catalog (`GET /v1/tools`) has its tools offered to the model once you sign in, each as `srv_<name>`, for example `srv_docs_list` for the server's `docs.list`. The server decides which tools you get. A tool that only reads runs without asking; one that changes something asks first; one the server runs as a task is waited for in the background. The list is read again on `/server refresh`, `/server tools` and when a session starts, and the model sees changes from its next turn. Signing out removes them. A server without a catalog offers none.
 
 It also gives the model three tools, so you can ask in words: `circle_server_packs` and `circle_server_task` only read, and `circle_server_submit` (a pack and a file in the workspace) asks first, since it sends the file and writes the results. `circle_server_submit` returns at once and waits as a [background job](background-jobs.md); when the task is delivered, the results are saved in the workspace after their SHA-256 is checked, as `/server submit` does. Sign in with `/server login` first: the tools never ask for a password themselves, except when the server has signed you out.
 
@@ -127,7 +130,8 @@ Circle 0.5.0 and older loaded `extension.py`. This version does not run Python, 
 | `api.dataDir` | A folder of the extension's own, `~/.circle/extension_data/<name>/` (`0700`), made the first time it is read. For what the extension keeps that is not secret. |
 | `api.secrets` | Values the extension keeps between runs, such as a token. See [Secrets](#secrets). |
 | `api.askSecret(question, options)` | Ask you for a value on a masked card; it goes back to the extension only. See [Secrets](#secrets). |
-| `registerTool(name, description, parameters, execute, options)` | Add a tool. |
+| `registerTool(name, description, parameters, execute, options)` | Add a tool. It can also be called later, for example once a service tells the extension what it offers: the model gets the tool from its next turn, never in the middle of one. |
+| `unregisterTool(name)` | Remove a tool this extension added; returns `false` if it has none of that name. The model stops seeing it from its next turn. |
 | `registerCommand(name, description, handler)` | Add a slash command. |
 | `registerMiddleware(handler, slot)` | Wrap model calls or tool calls. `slot` defaults to `tool_boundary`. |
 | `registerSubagent(spec, tools)` | Add a subagent for `task`. |

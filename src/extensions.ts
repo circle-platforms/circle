@@ -118,7 +118,12 @@ export interface ExtensionServices {
   onStatus?: () => void;
   /** Opens a checked http(s) link where this interface opens links. */
   openUrl?: (url: string) => Promise<void>;
+  /** Called when an extension adds or removes a tool after it loaded. */
+  onTools?: () => void;
 }
+// APIs whose register(api) has returned: tools they add or remove from then on change a
+// running session's tool list, from its next turn.
+const live = new WeakSet<ExtensionAPI>();
 export class ExtensionAPI {
   readonly ToolError = ToolError;
   readonly Watch = Watch;
@@ -286,6 +291,7 @@ export class ExtensionAPI {
       );
     if (typeof execute !== 'function')
       throw new ExtensionError(`tool '${name}': execute must be callable`);
+    if (live.has(this)) this.reservedTools.add(name);
     this.ext.tools.push({
       name,
       description: description || name,
@@ -332,6 +338,16 @@ export class ExtensionAPI {
           : JSON.stringify(result ?? null);
       },
     });
+    if (live.has(this)) this.services?.onTools?.();
+  }
+  /** Removes a tool this extension registered. A running session sees it gone from its next turn. */
+  unregisterTool(name: string): boolean {
+    const index = this.ext.tools.findIndex((tool) => tool.name === name);
+    if (index < 0) return false;
+    this.ext.tools.splice(index, 1);
+    this.reservedTools.delete(name);
+    if (live.has(this)) this.services?.onTools?.();
+    return true;
   }
   registerCommand(
     name: string,
@@ -439,6 +455,8 @@ export interface ExtensionHostOptions {
   onStatus?: () => void;
   /** Where api.openUrl opens a link; without it openUrl fails. */
   openUrl?: (url: string) => Promise<void>;
+  /** Called when a loaded extension adds or removes a tool. */
+  onTools?: () => void;
   /** Shows a masked card for api.askSecret; without it askSecret fails. */
   secret?: ExtensionServices['secret'];
   secretTimeoutMs?: number;
@@ -524,25 +542,26 @@ export class ExtensionHost {
         );
         if (!isRecord(module) || typeof module.register !== 'function')
           throw new ExtensionError('extension defines no register(api)');
-        await module.register(
-          new ExtensionAPI(
-            ext,
-            tools,
-            commands,
-            this.options.jobs,
-            this.options.jobOwner,
-            {
-              home: this.options.home,
-              workspace: this.options.workspace,
-              secret: this.options.secret,
-              secretTimeoutMs: this.options.secretTimeoutMs,
-              settings: this.options.settings?.[discovered.name],
-              onStatus: this.options.onStatus,
-              openUrl: this.options.openUrl,
-            },
-          ),
+        const api = new ExtensionAPI(
+          ext,
+          tools,
+          commands,
+          this.options.jobs,
+          this.options.jobOwner,
+          {
+            home: this.options.home,
+            workspace: this.options.workspace,
+            secret: this.options.secret,
+            secretTimeoutMs: this.options.secretTimeoutMs,
+            settings: this.options.settings?.[discovered.name],
+            onStatus: this.options.onStatus,
+            openUrl: this.options.openUrl,
+            onTools: this.options.onTools,
+          },
         );
+        await module.register(api);
         for (const tool of ext.tools) tools.add(tool.name);
+        live.add(api);
         for (const command of ext.commands) commands.add(command.name);
       } catch (error) {
         ext.error =
