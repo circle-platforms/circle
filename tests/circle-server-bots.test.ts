@@ -316,6 +316,24 @@ test('a bot is made from Circle as a schedule and a skill pack, approved by some
     dev.lines.at(-1)!,
     /ast_bot · nightly-compile every 1h · running · every 1h from 2026-10-12T00:00:00\.000Z \(trigger running\) · 3 run\(s\), 2 new: \/server bot runs ast_bot/,
   );
+  // The desktop's methods page reads the same bots from the extension's view.
+  await dev.run('refresh');
+  assert.deepEqual(
+    (dev.host.view('circle-server') as Record<string, any>).objects.bots,
+    [
+      {
+        assetId: 'ast_bot',
+        name: 'nightly-compile every 1h',
+        lifecycle: 'running',
+        trigger: 'every 1h from 2026-10-12T00:00:00.000Z',
+        triggerLifecycle: 'running',
+        mine: true,
+        owner: 'prn_dev',
+        runs: 3,
+        fresh: 2,
+      },
+    ],
+  );
   await approver.run('bot list');
   assert.match(
     approver.lines.at(-1)!,

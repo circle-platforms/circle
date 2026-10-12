@@ -382,6 +382,32 @@ export async function register(api: ExtensionAPI): Promise<void> {
     );
     // E also holds the skill packs people pushed, and the tools the model has from here.
     const pushed = await optional<unknown>('/v1/skillpacks', []);
+    // And the bots you may see: yours with their runs and how many are new to you.
+    const me = readConfig()?.principalId;
+    const seen = seenRuns();
+    const botViews: Record<string, unknown>[] = [];
+    for (const item of (await bots().catch(() => [] as Asset[])).slice(0, 20)) {
+      const trigger = await asset(
+        String(item.configuration.triggerAssetId),
+      ).catch(() => undefined);
+      const mine = item.ownerPrincipalId === me;
+      const runs = mine
+        ? await botRuns(item.assetId).catch(() => [] as BotRun[])
+        : [];
+      botViews.push({
+        assetId: item.assetId,
+        name: item.name,
+        lifecycle: item.lifecycle,
+        trigger: triggerLabel(trigger),
+        triggerLifecycle: trigger?.lifecycle,
+        mine,
+        owner: item.ownerPrincipalId,
+        runs: runs.length,
+        fresh: runs.filter(
+          (run) => news(run) && !seen.has(runKey(item.assetId, run)),
+        ).length,
+      });
+    }
     objects = {
       refreshedAt: new Date().toISOString(),
       work,
@@ -404,8 +430,9 @@ export async function register(api: ExtensionAPI): Promise<void> {
             status: item.status,
           };
         }),
+      bots: botViews,
     };
-    void showStatus();
+    await showStatus();
     return { tasks: tasks.length, packs: methods.length };
   }
   // A context whose lines are also kept for the view.

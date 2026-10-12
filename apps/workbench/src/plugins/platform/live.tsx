@@ -76,6 +76,17 @@ interface Objects {
     version?: string;
     status?: string;
   }[];
+  bots?: {
+    assetId: string;
+    name: string;
+    lifecycle: string;
+    trigger: string;
+    triggerLifecycle?: string;
+    mine: boolean;
+    owner: string;
+    runs: number;
+    fresh: number;
+  }[];
 }
 const short = (hash?: string) => (hash ? hash.slice(0, 12) + '…' : '');
 
@@ -418,17 +429,25 @@ export function MethodsLivePage() {
               The server lists none you may use.
             </EmptyState>
           )}
-          <ServerTools objects={objects} />
+          <ServerTools objects={objects} run={run} />
         </>
       )}
     </Frame>
   );
 }
 
-// What else the server offers: the tools the model has from it, and pushed skill packs.
-function ServerTools({ objects }: { objects: Objects }) {
+// What else the server offers: the tools the model has from it, pushed skill packs, and
+// the bots that run them. A bot's buttons are its /server bot commands.
+function ServerTools({
+  objects,
+  run,
+}: {
+  objects: Objects;
+  run: (args: string) => void;
+}) {
   const tools = objects.tools ?? [];
   const packs = objects.skillPacks ?? [];
+  const bots = objects.bots ?? [];
   return (
     <>
       <p className="panel-note">
@@ -457,6 +476,58 @@ function ServerTools({ objects }: { objects: Objects }) {
                   <p>{pack.skillPackId}</p>
                 </div>
                 <Status value={pack.status ?? 'unknown'} />
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+      {bots.length > 0 && (
+        <div className="extension-list">
+          {bots.map((bot) => (
+            <article className="extension-card" key={bot.assetId}>
+              <div className="detail-title">
+                <div>
+                  <h2>bot {bot.name}</h2>
+                  <p>
+                    {bot.assetId} · {bot.trigger}
+                    {bot.mine
+                      ? ` · ${bot.runs} run(s)${bot.fresh ? `, ${bot.fresh} new` : ''}`
+                      : ` · owner ${bot.owner}`}
+                  </p>
+                </div>
+                <Status value={bot.lifecycle} />
+                {bot.mine && (
+                  <Button
+                    aria-label={`runs of ${bot.assetId}`}
+                    onClick={() => run(`bot runs ${bot.assetId}`)}
+                  >
+                    runs
+                  </Button>
+                )}
+                {bot.mine && bot.lifecycle === 'approved' && (
+                  <Button
+                    aria-label={`start ${bot.assetId}`}
+                    onClick={() => run(`bot start ${bot.assetId}`)}
+                  >
+                    start
+                  </Button>
+                )}
+                {bot.mine && bot.lifecycle === 'running' && (
+                  <Button
+                    aria-label={`stop ${bot.assetId}`}
+                    onClick={() => run(`bot stop ${bot.assetId}`)}
+                  >
+                    stop
+                  </Button>
+                )}
+                {!bot.mine && bot.lifecycle === 'draft' && (
+                  <Button
+                    aria-label={`approve ${bot.assetId}`}
+                    onClick={() => run(`bot approve ${bot.assetId}`)}
+                  >
+                    approve
+                  </Button>
+                )}
               </div>
             </article>
           ))}
