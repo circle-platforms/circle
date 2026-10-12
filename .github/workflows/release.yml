@@ -202,6 +202,8 @@ jobs:
           fi
           "${run[@]}" npm --prefix apps/desktop run test:desktop
           "${run[@]}" npm --prefix apps/desktop run test:live
+          # It updates itself to a newer package (on macOS and Windows; Linux shows the page)
+          "${run[@]}" npm --prefix apps/desktop run test:update
       - uses: actions/upload-artifact@v7
         if: failure() && runner.os == 'Windows'
         with:

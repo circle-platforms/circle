@@ -4104,3 +4104,47 @@ pre {
   flex: 1;
   min-height: 0;
 }
+
+/* The application's own update: a line and its next step in settings, a chip in the sidebar. */
+.update-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.update-line {
+  color: var(--secondary);
+  font-size: var(--ui-small);
+}
+.update-control[data-phase='failed'] .update-line {
+  color: var(--negative);
+}
+.update-control progress {
+  width: 160px;
+  height: 4px;
+  accent-color: var(--accent);
+}
+.update-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 2px 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--fg);
+  font-size: var(--ui-small);
+  text-align: left;
+}
+.update-chip:hover:not(:disabled) {
+  background: var(--hover);
+}
+.update-chip:disabled {
+  color: var(--secondary);
+}
+.update-chip svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}

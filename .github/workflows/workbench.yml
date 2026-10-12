@@ -63,6 +63,7 @@ jobs:
           cp apps/desktop/artifacts/desktop/receipt.json apps/desktop/artifacts/desktop/packaged-receipt.json
           npm --prefix apps/desktop run test:live
           CIRCLE_DESKTOP_TEST_WIDTH=1024 npm --prefix apps/desktop run test:live
+          npm --prefix apps/desktop run test:update
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         if: always()
         with:
@@ -100,6 +101,18 @@ jobs:
       - name: Build the MSI
         if: runner.os == 'Windows'
         run: npm --prefix apps/desktop run package:msi
+      # The application updates itself to a newer package: the unpacked folder, then the
+      # installed MSI
+      - name: Update the packaged application
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/Circle-win32-x64"
+          export CIRCLE_DESKTOP_EXECUTABLE="$CIRCLE_DESKTOP_APP_PATH/Circle.exe"
+          version="$(node -p "require('./package.json').version")"
+          npm --prefix apps/desktop run test:update
+          CIRCLE_DESKTOP_UPDATE_MSI="$GITHUB_WORKSPACE/apps/desktop/out/circle-desktop-$version-windows-x64.msi" \
+            npm --prefix apps/desktop run test:update
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: circle-desktop-${{ matrix.os }}-development

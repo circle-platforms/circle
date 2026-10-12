@@ -227,9 +227,14 @@ export async function buildMsi(): Promise<string> {
   refuseOtherHosts(process.platform);
   const root = fileURLToPath(new URL('..', import.meta.url));
   const outputRoot = process.env.CIRCLE_DESKTOP_OUTPUT_DIR ?? join(root, 'out');
-  const { version } = JSON.parse(
-    await readFile(join(root, '../../package.json'), 'utf8'),
-  ) as { version: string };
+  // test/update.mjs builds a newer one to update to, as package.mjs does
+  const version =
+    process.env.CIRCLE_DESKTOP_VERSION ??
+    (
+      JSON.parse(await readFile(join(root, '../../package.json'), 'utf8')) as {
+        version: string;
+      }
+    ).version;
   msiVersion(version);
   const folder = `Circle-win32-${ARCH}`;
   const app = join(outputRoot, folder);

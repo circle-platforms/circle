@@ -95,7 +95,7 @@ Each has a `.sha256` file beside it, and the release's `SHA256SUMS` lists them a
 
   Move the folder with `mv` afterwards, not `cp`, which drops the setting. Circle refuses `--no-sandbox`.
 
-The application does not update itself, and `circle update` updates only the command line: to update the application, take the new release's file and replace it. On Windows, open the new `.msi`; it replaces the installed version.
+The application updates itself on macOS and Windows: settings → about → check now, then update and restart to update ([Updates](desktop.md#updates) has the details). `circle update` updates only the command line. On Linux, take the new release's `.tar.gz` and replace the folder, then give `chrome-sandbox` to root again. Releases up to 1.2.0 do not update themselves: install the newer release over them once by hand (on Windows, open the new `.msi`; it replaces the installed version).
 
 It keeps its settings, key and sessions in a data folder of its own, apart from `~/.circle`: `~/Library/Application Support/Circle` on macOS, `%APPDATA%\Circle` on Windows, `~/.config/Circle` on Linux. The first time, it asks for the API URL, the key and the model. Open a folder and trust it before Circle reads it or runs anything in it. [The desktop application](desktop.md) explains its window.
 

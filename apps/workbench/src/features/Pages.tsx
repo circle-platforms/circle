@@ -65,6 +65,7 @@ import {
   EmptyState,
 } from '../components/common';
 import { Markdown } from '../components/Markdown';
+import { UpdateControl } from './Update';
 import { BUILTIN_TOOL_INFO } from '../model/tool-info';
 import { TEXT_SIZES, textSizes } from '../theme';
 import { LANGUAGES, languageChoice, setLanguage, t, tn } from '../i18n';
@@ -1397,29 +1398,18 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
             })
           }
         />
-        <Button
-          onClick={() =>
-            perform(async () => {
-              if (runtime.mode !== 'live') {
-                runtime.request('check-update');
-                notify('update check requires a connected host');
-                return;
-              }
-              const result = (await runtime.request('check-update')) as {
-                available?: string;
-              };
-              notify(
-                result?.available
-                  ? t('Circle {version} is available', {
-                      version: result.available,
-                    })
-                  : t('Circle is up to date'),
-              );
-            })
-          }
-        >
-          {t('check now')}
-        </Button>
+        {desktopHost() ? (
+          <UpdateControl />
+        ) : (
+          <Button
+            onClick={() => {
+              runtime.request('check-update');
+              notify('update check requires the desktop application');
+            }}
+          >
+            {t('check now')}
+          </Button>
+        )}
       </section>
     </Page>
   );
