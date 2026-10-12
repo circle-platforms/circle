@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.2.0 - 2026-10-12
+
 ### Added
 
 - **Accept edits, a mode between asking and auto.** File changes inside the workspace run without a card; commands, deletes and changes outside the workspace still ask. `/mode` moves through manual, accept edits, plan and auto, or sets one: `/mode accept-edits`. When the model finishes a plan you can answer "implement plan, accept edits". The desktop application has the four modes in a menu under the input box, and `shift+tab` moves to the next one.
