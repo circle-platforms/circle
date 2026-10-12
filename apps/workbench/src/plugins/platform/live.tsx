@@ -76,6 +76,7 @@ interface Objects {
     version?: string;
     status?: string;
   }[];
+  background?: { toolReads: number; indexing: number; indexingOpen: number };
   bots?: {
     assetId: string;
     name: string;
@@ -146,102 +147,109 @@ export function WorkLivePage() {
       title="work"
       description="C · tasks as the server holds them: their phase, what they wait on, and approvals bound to an input revision."
     >
-      {(objects, run) =>
-        objects.work.length ? (
-          <div className="extension-list">
-            {objects.work.map((task) => (
-              <article className="extension-card" key={task.taskId}>
-                <div className="detail-title">
-                  <div>
-                    <h2>{task.title || task.taskId}</h2>
-                    <p>
-                      {task.taskId} · input {task.inputRevisionId}
-                      {task.capabilityPackId
-                        ? ' · ' + task.capabilityPackId
-                        : ''}
-                    </p>
-                  </div>
-                  <Status value={task.phase} />
-                  <Button
-                    aria-label={`follow ${task.taskId}`}
-                    onClick={() => run(`task ${task.taskId}`)}
-                  >
-                    follow
-                  </Button>
-                </div>
-                {task.pendingInputs.map((item) => (
-                  <form
-                    key={item.requestId}
-                    className="form-stack"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      const answer = answers[item.requestId]?.trim();
-                      if (answer) run(`respond ${task.taskId} ${answer}`);
-                    }}
-                  >
-                    <p>{item.question}</p>
-                    <input
-                      aria-label={`answer ${item.requestId}`}
-                      value={answers[item.requestId] ?? ''}
-                      onChange={(event) =>
-                        setAnswers({
-                          ...answers,
-                          [item.requestId]: event.target.value,
-                        })
-                      }
-                    />
-                    <Button
-                      type="submit"
-                      aria-label={`send answer ${item.requestId}`}
-                    >
-                      answer
-                    </Button>
-                  </form>
-                ))}
-                {task.approvals.map((approval) => (
-                  <div className="detail-title" key={approval.approvalId}>
+      {(objects, run) => (
+        <>
+          {objects.work.length ? (
+            <div className="extension-list">
+              {objects.work.map((task) => (
+                <article className="extension-card" key={task.taskId}>
+                  <div className="detail-title">
                     <div>
-                      <h2>approval {approval.approvalId}</h2>
+                      <h2>{task.title || task.taskId}</h2>
                       <p>
-                        {approval.status} · asked by {approval.applicantId}
-                        {approval.approvedBy
-                          ? ' · decided by ' + approval.approvedBy
-                          : ''}{' '}
-                        · input {approval.inputRevisionId} · target{' '}
-                        {short(approval.targetIdentity)}
+                        {task.taskId} · input {task.inputRevisionId}
+                        {task.capabilityPackId
+                          ? ' · ' + task.capabilityPackId
+                          : ''}
                       </p>
                     </div>
-                    {approval.status === 'open' && (
-                      <>
-                        <Button
-                          aria-label={`approve ${approval.approvalId}`}
-                          onClick={() =>
-                            run(`approve ${task.taskId} ${approval.approvalId}`)
-                          }
-                        >
-                          approve
-                        </Button>
-                        <Button
-                          aria-label={`reject ${approval.approvalId}`}
-                          onClick={() =>
-                            run(`reject ${task.taskId} ${approval.approvalId}`)
-                          }
-                        >
-                          reject
-                        </Button>
-                      </>
-                    )}
+                    <Status value={task.phase} />
+                    <Button
+                      aria-label={`follow ${task.taskId}`}
+                      onClick={() => run(`task ${task.taskId}`)}
+                    >
+                      follow
+                    </Button>
                   </div>
-                ))}
-              </article>
-            ))}
-          </div>
-        ) : (
-          <EmptyState title="no work">
-            Nothing you may read on this server yet.
-          </EmptyState>
-        )
-      }
+                  {task.pendingInputs.map((item) => (
+                    <form
+                      key={item.requestId}
+                      className="form-stack"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        const answer = answers[item.requestId]?.trim();
+                        if (answer) run(`respond ${task.taskId} ${answer}`);
+                      }}
+                    >
+                      <p>{item.question}</p>
+                      <input
+                        aria-label={`answer ${item.requestId}`}
+                        value={answers[item.requestId] ?? ''}
+                        onChange={(event) =>
+                          setAnswers({
+                            ...answers,
+                            [item.requestId]: event.target.value,
+                          })
+                        }
+                      />
+                      <Button
+                        type="submit"
+                        aria-label={`send answer ${item.requestId}`}
+                      >
+                        answer
+                      </Button>
+                    </form>
+                  ))}
+                  {task.approvals.map((approval) => (
+                    <div className="detail-title" key={approval.approvalId}>
+                      <div>
+                        <h2>approval {approval.approvalId}</h2>
+                        <p>
+                          {approval.status} · asked by {approval.applicantId}
+                          {approval.approvedBy
+                            ? ' · decided by ' + approval.approvedBy
+                            : ''}{' '}
+                          · input {approval.inputRevisionId} · target{' '}
+                          {short(approval.targetIdentity)}
+                        </p>
+                      </div>
+                      {approval.status === 'open' && (
+                        <>
+                          <Button
+                            aria-label={`approve ${approval.approvalId}`}
+                            onClick={() =>
+                              run(
+                                `approve ${task.taskId} ${approval.approvalId}`,
+                              )
+                            }
+                          >
+                            approve
+                          </Button>
+                          <Button
+                            aria-label={`reject ${approval.approvalId}`}
+                            onClick={() =>
+                              run(
+                                `reject ${task.taskId} ${approval.approvalId}`,
+                              )
+                            }
+                          >
+                            reject
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </article>
+              ))}
+            </div>
+          ) : (
+            <EmptyState title="no work">
+              Nothing you may read on this server yet.
+            </EmptyState>
+          )}
+          <Background objects={objects} />
+        </>
+      )}
     </Frame>
   );
 }
@@ -433,6 +441,27 @@ export function MethodsLivePage() {
         </>
       )}
     </Frame>
+  );
+}
+
+// The tasks the work list leaves out: the model's server tool calls and the knowledge
+// indexing of what they read, which finishes after the read itself.
+function Background({ objects }: { objects: Objects }) {
+  const {
+    toolReads = 0,
+    indexing = 0,
+    indexingOpen = 0,
+  } = objects.background ?? {};
+  if (!toolReads && !indexing) return null;
+  return (
+    <p className="panel-note">
+      Not listed: {toolReads} server tool read(s) and {indexing} knowledge
+      indexing job(s)
+      {indexingOpen
+        ? `, ${indexingOpen} still indexing; search may not show their knowledge yet`
+        : ''}
+      .
+    </p>
   );
 }
 

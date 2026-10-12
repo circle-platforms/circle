@@ -182,7 +182,23 @@ async function botServer(t: Parameters<typeof scratch>[0]) {
       });
     if (url.pathname === '/v1/tasks/task_b2/status')
       return send(200, { data: { taskId: 'task_b2', phase: 'running' } });
-    if (['/v1/tasks', '/v1/packs', '/v1/tools'].includes(url.pathname))
+    // Tool calls and the indexing of what they read are tasks too.
+    if (url.pathname === '/v1/tasks')
+      return send(200, {
+        data: [
+          {
+            taskId: 'task_tool',
+            capabilityPackId: 'asset-tool',
+            phase: 'delivered',
+          },
+          {
+            taskId: 'task_index',
+            capabilityPackId: 'asset-index',
+            phase: 'running',
+          },
+        ],
+      });
+    if (['/v1/packs', '/v1/tools'].includes(url.pathname))
       return send(200, { data: [] });
     fail(404, 'TARGET_NOT_FOUND');
   });
@@ -318,22 +334,27 @@ test('a bot is made from Circle as a schedule and a skill pack, approved by some
   );
   // The desktop's methods page reads the same bots from the extension's view.
   await dev.run('refresh');
-  assert.deepEqual(
-    (dev.host.view('circle-server') as Record<string, any>).objects.bots,
-    [
-      {
-        assetId: 'ast_bot',
-        name: 'nightly-compile every 1h',
-        lifecycle: 'running',
-        trigger: 'every 1h from 2026-10-12T00:00:00.000Z',
-        triggerLifecycle: 'running',
-        mine: true,
-        owner: 'prn_dev',
-        runs: 3,
-        fresh: 2,
-      },
-    ],
-  );
+  const objects = (dev.host.view('circle-server') as Record<string, any>)
+    .objects;
+  assert.deepEqual(objects.work, [], 'tool calls and indexing are not work');
+  assert.deepEqual(objects.background, {
+    toolReads: 1,
+    indexing: 1,
+    indexingOpen: 1,
+  });
+  assert.deepEqual(objects.bots, [
+    {
+      assetId: 'ast_bot',
+      name: 'nightly-compile every 1h',
+      lifecycle: 'running',
+      trigger: 'every 1h from 2026-10-12T00:00:00.000Z',
+      triggerLifecycle: 'running',
+      mine: true,
+      owner: 'prn_dev',
+      runs: 3,
+      fresh: 2,
+    },
+  ]);
   await approver.run('bot list');
   assert.match(
     approver.lines.at(-1)!,
