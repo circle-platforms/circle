@@ -95,6 +95,10 @@ Connects Circle to a [circle-server](https://github.com/qingshanfeihu/circle-ser
 | `/server approve <id> <approval>` | Approve an action a task waits on, bound to the input revision, target identity and action digest the server states. `/server reject` declines it. |
 | `/server reconcile <id>` | Ask the server to check an operation whose outcome is unknown. It does not turn an unknown outcome into success. |
 | `/server tools` | The server's tools the model can use, read again from the server. |
+| `/server trial start` | Start recording which server tools the model calls, for the trial record a skill pack is sent with. Only the tool names, whether each call worked, and a SHA-256 of its arguments are kept. |
+| `/server skill push <folder> [--outputs a,b]` | Send a skill pack: the folder's `skillpack.json` (`id`, `version`, `tools`, …), its `SKILL.md` and other files (not hidden ones, not `node_modules`), with the trial record and the SHA-256 of the named output files. The server checks the record against the tools the pack declares and keeps the pack for approval. |
+| `/server skill list` | The skill packs on the server. |
+| `/server skill run <id> [json]` | Run a skill pack on the server with these inputs, and follow the task. |
 
 The address can also be set in `settings.json` as `"extensions": { "circle-server": { "enabled": true, "url": "https://…" } }`. The lines the commands write are notices for you; the model does not see them.
 

@@ -6,9 +6,19 @@
 // This file is loaded as written (Node strips the types), so it uses only syntax that
 // type stripping accepts and imports nothing from Circle at run time.
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { basename, extname, join, resolve } from 'node:path';
-import type { CommandContext, ExtensionAPI } from '../../extensions.js';
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { basename, extname, join, relative, resolve, sep } from 'node:path';
+import type {
+  CommandContext,
+  ExtensionAPI,
+  ToolMiddleware,
+} from '../../extensions.js';
 
 interface Config {
   url: string;
@@ -56,10 +66,30 @@ const USAGE = [
   '/server approve <id> <approval>  approve an action a task waits on (reject: /server reject …)',
   '/server reconcile <id>           ask the server to check an operation whose outcome is unknown',
   '/server tools                    the server’s tools the model can use, read again',
+  '/server trial start              record the server tool calls of a trial run from now',
+  '/server skill push <folder>      submit a skill pack with the trial record (--outputs a,b)',
+  '/server skill list               the skill packs on the server',
+  '/server skill run <id> [json]    run a skill pack on the server and follow it',
 ].join('\n');
 
 const sha256 = (bytes: Buffer): string =>
   createHash('sha256').update(bytes).digest('hex');
+// Keys in a fixed order, so the same arguments always hash the same.
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object')
+    return `{${Object.keys(value)
+      .sort()
+      .map(
+        (key) =>
+          `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`,
+      )
+      .join(',')}}`;
+  return JSON.stringify(value ?? null);
+}
+const MAX_PACK_FILES = 200;
+const MAX_PACK_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_PACK_BYTES = 10 * 1024 * 1024;
 const short = (hash: unknown): string =>
   typeof hash === 'string' ? hash.slice(0, 12) + '…' : '';
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -319,11 +349,18 @@ export function register(api: ExtensionAPI): void {
 
   // The footer line: where you are signed in, and how many tasks this window follows.
   let statusRun = 0;
+  // Called in the background from many places; a status line that cannot be read now (the
+  // secrets file busy or gone) is simply not redrawn.
   async function showStatus(): Promise<void> {
     // Several refreshes may overlap; only the latest one draws.
     const run = ++statusRun;
     const config = readConfig();
-    const signedIn = Boolean(await api.secrets.get('token'));
+    let signedIn: boolean;
+    try {
+      signedIn = Boolean(await api.secrets.get('token'));
+    } catch {
+      return;
+    }
     if (run !== statusRun) return;
     publishView(signedIn);
     if (!config || !signedIn) {
@@ -920,6 +957,156 @@ export function register(api: ExtensionAPI): void {
     void syncTools().catch(() => {});
   });
 
+  // What the model did with the server's tools since /server trial start: the trial record a
+  // skill pack is pushed with. Arguments are kept only as SHA-256.
+  const trial: {
+    startedAt: string;
+    calls: { name: string; argsSha256: string; ok: boolean }[];
+  } = { startedAt: '', calls: [] };
+  const recordTrial: ToolMiddleware = async (invocation, next) => {
+    const held = serverTools.get(invocation.tool.name);
+    if (!held) return next(invocation);
+    const argsSha256 = sha256(Buffer.from(canonical(invocation.args)));
+    try {
+      const text = await next(invocation);
+      trial.calls.push({ name: held.remote, argsSha256, ok: true });
+      return text;
+    } catch (error) {
+      trial.calls.push({ name: held.remote, argsSha256, ok: false });
+      throw error;
+    }
+  };
+  api.registerMiddleware(recordTrial, 'tool_boundary');
+
+  function packFiles(
+    root: string,
+  ): { path: string; base64: string; sha256: string }[] {
+    const files: { path: string; base64: string; sha256: string }[] = [];
+    let total = 0;
+    const walk = (directory: string): void => {
+      for (const entry of readdirSync(directory, { withFileTypes: true }).sort(
+        (a, b) =>
+          // Code-point order, the same on every machine, so a pack always lists the same way.
+          a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+      )) {
+        if (entry.name.startsWith('.') || entry.name === 'node_modules')
+          continue;
+        const path = join(directory, entry.name);
+        if (entry.isDirectory()) walk(path);
+        else if (entry.isFile()) {
+          const bytes = readFileSync(path);
+          if (bytes.length > MAX_PACK_FILE_BYTES)
+            throw new ServerError(
+              `${relative(root, path)} is larger than 2 MB`,
+            );
+          total += bytes.length;
+          if (total > MAX_PACK_BYTES)
+            throw new ServerError('the skill pack is larger than 10 MB');
+          files.push({
+            path: relative(root, path).split(sep).join('/'),
+            base64: bytes.toString('base64'),
+            sha256: sha256(bytes),
+          });
+          if (files.length > MAX_PACK_FILES)
+            throw new ServerError(`more than ${MAX_PACK_FILES} files`);
+        }
+      }
+    };
+    walk(root);
+    return files;
+  }
+  async function pushSkill(
+    rest: string[],
+    context: CommandContext,
+  ): Promise<void> {
+    const flag = rest.indexOf('--outputs');
+    const outputs =
+      flag >= 0 ? (rest[flag + 1] ?? '').split(',').filter(Boolean) : [];
+    const folder = rest.filter(
+      (_, index) => index !== flag && index !== flag + 1,
+    )[0];
+    if (!folder)
+      throw new ServerError(
+        'usage: /server skill push <folder> [--outputs a,b]',
+      );
+    const workspace = api.workspace ?? context.workspace;
+    const root = resolve(workspace, folder);
+    if (!existsSync(root) || !statSync(root).isDirectory())
+      throw new ServerError(`${folder} is not a folder`);
+    let manifest: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(
+        readFileSync(join(root, 'skillpack.json'), 'utf8'),
+      );
+      if (!isRecord(parsed)) throw new Error('not an object');
+      manifest = parsed;
+    } catch (error) {
+      throw new ServerError(`${folder}/skillpack.json: ${reason(error)}`);
+    }
+    if (
+      typeof manifest.id !== 'string' ||
+      !/^[a-z0-9][a-z0-9-]{1,63}$/.test(manifest.id) ||
+      typeof manifest.version !== 'string' ||
+      !Array.isArray(manifest.tools)
+    )
+      throw new ServerError(
+        'skillpack.json needs id (lowercase letters, digits, -), version and tools[]',
+      );
+    if (!existsSync(join(root, 'SKILL.md')))
+      throw new ServerError(`${folder} has no SKILL.md`);
+    const declared = new Set(manifest.tools.map(String));
+    const undeclared = [
+      ...new Set(
+        trial.calls
+          .map((call) => call.name)
+          .filter((name) => !declared.has(name)),
+      ),
+    ];
+    if (undeclared.length)
+      context.append(
+        `  ! the trial used tools skillpack.json does not declare: ${undeclared.join(', ')}`,
+      );
+    const produced: { path: string; sha256: string }[] = [];
+    for (const output of outputs) {
+      const path = resolve(workspace, output);
+      if (!existsSync(path)) {
+        context.append(
+          `  ! ${output} does not exist; left out of the trial record`,
+        );
+        continue;
+      }
+      produced.push({ path: output, sha256: sha256(readFileSync(path)) });
+    }
+    const files = packFiles(root);
+    const { data } = await request('POST', '/v1/skillpacks', {
+      json: {
+        manifest,
+        files,
+        trial: {
+          startedAt: trial.startedAt || undefined,
+          toolCalls: trial.calls,
+          outputs: produced,
+        },
+      },
+      timeoutMs: 120_000,
+    });
+    const reply = isRecord(data) ? data : {};
+    const check = isRecord(reply.check) ? reply.check : {};
+    context.append(
+      `✓ submitted ${String(manifest.id)} ${String(manifest.version)} · ${files.length} files · ${trial.calls.length} trial calls · ${String(reply.skillPackId ?? '?')} · digest ${short(reply.digest)} · ${String(reply.status ?? 'submitted')}`,
+    );
+    for (const [key, label] of [
+      [
+        'undeclaredTools',
+        'the server found tools the trial used but the pack does not declare',
+      ],
+      ['missingTools', 'the server offers none of'],
+    ] as const) {
+      const names = Array.isArray(check[key]) ? check[key].map(String) : [];
+      if (names.length) context.append(`  ✖ ${label}: ${names.join(', ')}`);
+    }
+  }
+
   const commands: Record<
     string,
     (rest: string[], context: CommandContext) => Promise<void>
@@ -1042,6 +1229,60 @@ export function register(api: ExtensionAPI): void {
         `  read ${counts.tasks} tasks and ${counts.packs} capability packs from the server`,
       );
       await announceTools(context);
+    },
+    async trial([verb], context) {
+      if (verb !== 'start') throw new ServerError('usage: /server trial start');
+      trial.calls = [];
+      trial.startedAt = new Date().toISOString();
+      context.append(
+        '  recording the server tool calls of this trial; /server skill push <folder> sends them with the pack',
+      );
+    },
+    async skill([verb, ...rest], context) {
+      if (verb === 'push') return pushSkill(rest, context);
+      if (verb === 'list') {
+        const { data } = await request('GET', '/v1/skillpacks');
+        const packs = (Array.isArray(data) ? data : []).filter(isRecord);
+        context.append(
+          packs.length
+            ? packs
+                .map(
+                  (pack) =>
+                    `  ${String(pack.skillPackId ?? '')} · ${String(pack.id ?? (isRecord(pack.manifest) ? pack.manifest.id : ''))} ${String(pack.version ?? (isRecord(pack.manifest) ? pack.manifest.version : ''))} · ${String(pack.status ?? '')}`,
+                )
+                .join('\n')
+            : 'No skill packs on this server',
+        );
+        return;
+      }
+      if (verb === 'run') {
+        const [id, ...json] = rest;
+        if (!id)
+          throw new ServerError('usage: /server skill run <id> [json inputs]');
+        let inputs: unknown = {};
+        if (json.length)
+          try {
+            inputs = JSON.parse(json.join(' '));
+          } catch (error) {
+            throw new ServerError(`inputs are not JSON: ${reason(error)}`);
+          }
+        const { data } = await request(
+          'POST',
+          `/v1/skillpacks/${encodeURIComponent(id)}/runs`,
+          { json: { inputs, idempotencyKey: randomUUID() } },
+        );
+        const taskId = isRecord(data) ? String(data.taskId ?? '') : '';
+        if (!taskId) throw new ServerError('the server started no task');
+        remember(taskId, { title: `skill pack ${id}`, seq: 0 });
+        context.append(
+          `✓ running ${id} on the server as ${taskId} · following it`,
+        );
+        void follow(taskId, context);
+        return;
+      }
+      throw new ServerError(
+        'usage: /server skill push <folder> | list | run <id> [json]',
+      );
     },
     async tools(_rest, context) {
       catalogTag = '';

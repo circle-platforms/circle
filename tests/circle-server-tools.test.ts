@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer, type IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ExtensionHost, bundledExtensionsRoot } from '../src/extensions.js';
@@ -21,6 +22,7 @@ async function read(request: IncomingMessage): Promise<Buffer> {
 // tool that changes something, and one whose source is down.
 async function toolServer(t: Parameters<typeof scratch>[0]) {
   const calls: { name: string; body: Record<string, unknown> }[] = [];
+  const packs: Record<string, any>[] = [];
   let catalogVersion = 1;
   let catalogReads = 0;
   let notModified = 0;
@@ -137,6 +139,57 @@ async function toolServer(t: Parameters<typeof scratch>[0]) {
       });
     if (url.pathname === '/v1/tasks/task_tree/result')
       return send(200, { data: { status: 'succeeded', commands: 3812 } });
+    if (url.pathname === '/v1/skillpacks' && request.method === 'POST') {
+      const pack = JSON.parse(body.toString());
+      packs.push(pack);
+      const declared = new Set(pack.manifest.tools);
+      const offered = new Set(catalog().map((tool) => tool.name));
+      return send(200, {
+        data: {
+          skillPackId: 'skp_1',
+          digest: 'd'.repeat(64),
+          status: 'submitted',
+          check: {
+            undeclaredTools: [
+              ...new Set(
+                pack.trial.toolCalls
+                  .map((call: { name: string }) => call.name)
+                  .filter((name: string) => !declared.has(name)),
+              ),
+            ],
+            missingTools: pack.manifest.tools.filter(
+              (name: string) => !offered.has(name),
+            ),
+          },
+        },
+      });
+    }
+    if (url.pathname === '/v1/skillpacks')
+      return send(200, {
+        data: packs.map(() => ({
+          skillPackId: 'skp_1',
+          manifest: { id: 'mindmap-compile', version: '0.1.0' },
+          status: 'submitted',
+        })),
+      });
+    if (url.pathname === '/v1/skillpacks/skp_1/runs')
+      return send(200, { data: { taskId: 'task_run', phase: 'admitted' } });
+    if (url.pathname === '/v1/tasks/task_run/status')
+      return send(200, { data: { taskId: 'task_run', phase: 'delivered' } });
+    if (url.pathname === '/v1/tasks/task_run/events')
+      return send(200, {
+        data: {
+          events: [
+            {
+              seq: 1,
+              type: 'task.delivered',
+              payload: { status: 'succeeded' },
+            },
+          ],
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_run/result')
+      return send(200, { data: { status: 'succeeded', artifacts: [] } });
     if (url.pathname === '/v1/tasks' || url.pathname === '/v1/packs')
       return send(200, { data: [] });
     send(404, { status: 'failed', error: { code: 'TARGET_NOT_FOUND' } });
@@ -153,6 +206,7 @@ async function toolServer(t: Parameters<typeof scratch>[0]) {
     changeCatalog: () => {
       catalogVersion = 2;
     },
+    packs,
     reads: () => ({ catalogReads, notModified }),
   };
 }
@@ -319,4 +373,146 @@ test('a server without a tool catalog offers no tools and says nothing about it 
   await command.handler('tools', context);
   assert.equal(lines.at(-1), '  this server offers no tools');
   await delay(200);
+});
+
+test('a trial records which server tools the model used, and /server skill push sends the pack with that record', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  const pack = join(workspace, 'skills', 'mindmap-compile');
+  mkdirSync(join(pack, 'scripts'), { recursive: true });
+  writeFileSync(
+    join(pack, 'skillpack.json'),
+    JSON.stringify({
+      id: 'mindmap-compile',
+      version: '0.1.0',
+      title: 'Mindmap compile',
+      owner: 'tester',
+      tools: ['docs.list', 'buildsite.command_tree'],
+      triggers: ['manual'],
+      inputs: { mindmap: 'file' },
+      outputs: ['cases.xlsx'],
+      model: 'any',
+    }),
+  );
+  writeFileSync(join(pack, 'SKILL.md'), '# Mindmap compile\n');
+  writeFileSync(join(pack, 'scripts', 'emit.ts'), 'export {};\n');
+  writeFileSync(join(pack, '.hidden'), 'not sent');
+  writeFileSync(join(workspace, 'cases.xlsx'), 'synthetic workbook');
+  const server = await toolServer(t);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { 'circle-server': { enabled: true } },
+    secret: async (request) => {
+      await submitAnswer(home, request.id, PASSWORD);
+    },
+  }).load();
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('server')!;
+  await command.handler(`login ${server.url} tester`, context);
+  await command.handler('trial start', context);
+  const run = { signal: new AbortController().signal, sessionId: 's' } as never;
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const tool = host.tools().find((item) => item.name === name)!;
+    return host
+      .toolBoundary({ tool, args, context: run }, (request) =>
+        tool.run(request.args, request.context),
+      )
+      .catch((error) => String(error));
+  };
+  await call('srv_docs_list', { folder: 'manuals', depth: 1 });
+  await call('srv_env_inventory', {});
+  // A tool that is not the server's is not part of the trial record.
+  const own = host.tools().find((item) => item.name === 'circle_server_packs')!;
+  await host.toolBoundary({ tool: own, args: {}, context: run }, (request) =>
+    own.run(request.args, request.context),
+  );
+
+  await command.handler(
+    'skill push skills/mindmap-compile --outputs cases.xlsx',
+    context,
+  );
+  const sent = server.packs[0]!;
+  assert.equal(sent.manifest.id, 'mindmap-compile');
+  assert.deepEqual(
+    sent.files.map((file: { path: string }) => file.path),
+    ['SKILL.md', 'scripts/emit.ts', 'skillpack.json'],
+    'hidden files stay home; paths use forward slashes',
+  );
+  const skill = sent.files.find(
+    (file: { path: string }) => file.path === 'SKILL.md',
+  );
+  assert.equal(
+    Buffer.from(skill.base64, 'base64').toString(),
+    '# Mindmap compile\n',
+  );
+  assert.equal(
+    skill.sha256,
+    createHash('sha256').update('# Mindmap compile\n').digest('hex'),
+  );
+  assert.deepEqual(
+    sent.trial.toolCalls.map((item: { name: string; ok: boolean }) => [
+      item.name,
+      item.ok,
+    ]),
+    [
+      ['docs.list', true],
+      ['env.inventory', false],
+    ],
+  );
+  // Arguments travel only as a hash of their canonical form.
+  assert.equal(
+    sent.trial.toolCalls[0].argsSha256,
+    createHash('sha256').update('{"depth":1,"folder":"manuals"}').digest('hex'),
+  );
+  assert.deepEqual(sent.trial.outputs, [
+    {
+      path: 'cases.xlsx',
+      sha256: createHash('sha256')
+        .update(readFileSync(join(workspace, 'cases.xlsx')))
+        .digest('hex'),
+    },
+  ]);
+  assert.ok(
+    lines.some((line) =>
+      /the trial used tools skillpack\.json does not declare: env\.inventory/.test(
+        line,
+      ),
+    ),
+  );
+  assert.ok(
+    lines.some((line) =>
+      /✓ submitted mindmap-compile 0\.1\.0 · 3 files · 2 trial calls · skp_1/.test(
+        line,
+      ),
+    ),
+  );
+  assert.ok(
+    lines.some((line) =>
+      /✖ the server found tools the trial used but the pack does not declare: env\.inventory/.test(
+        line,
+      ),
+    ),
+  );
+
+  await command.handler('skill list', context);
+  assert.match(lines.at(-1)!, /skp_1 · mindmap-compile 0\.1\.0 · submitted/);
+  await command.handler('skill run skp_1 {"mindmap":"LBX-200.xmind"}', context);
+  assert.ok(
+    lines.some((line) =>
+      /✓ running skp_1 on the server as task_run/.test(line),
+    ),
+  );
+  const runs = server.packs.length;
+  assert.equal(runs, 1);
+  await delay(300);
 });
