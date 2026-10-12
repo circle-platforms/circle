@@ -842,8 +842,24 @@ export async function register(api: ExtensionAPI): Promise<void> {
   >();
   let catalogTag = '';
   let syncing: Promise<boolean> | undefined;
-  const toolName = (remote: string): string =>
-    ('srv_' + remote.replace(/[^A-Za-z0-9_]/g, '_')).slice(0, 64);
+  // srv_<name> with dots as underscores. Names that would come out the same (docs.list and
+  // docs_list) or be cut at 64 characters get a suffix from their full name instead, so the
+  // same catalog always gives the same names, whatever order it lists them in.
+  function toolNames(remotes: string[]): Map<string, string> {
+    const plain = (remote: string): string =>
+      'srv_' + remote.replace(/[^A-Za-z0-9_]/g, '_');
+    const counts = new Map<string, number>();
+    for (const remote of remotes)
+      counts.set(plain(remote), (counts.get(plain(remote)) ?? 0) + 1);
+    return new Map(
+      remotes.map((remote) => {
+        const base = plain(remote);
+        if (counts.get(base) === 1 && base.length <= 64) return [remote, base];
+        const suffix = '_' + sha256(Buffer.from(remote)).slice(0, 8);
+        return [remote, base.slice(0, 64 - suffix.length) + suffix];
+      }),
+    );
+  }
   function dropServerTools(): void {
     for (const name of serverTools.keys()) api.unregisterTool(name);
     serverTools.clear();
@@ -936,13 +952,17 @@ export async function register(api: ExtensionAPI): Promise<void> {
       const { data, headers } = reply;
       if (data === undefined && catalogTag && !force) return true;
       catalogTag = headers.get('etag') ?? '';
+      const listed = (Array.isArray(data) ? data : [])
+        .filter(isRecord)
+        .filter(
+          (tool) =>
+            typeof tool.name === 'string' &&
+            /^[a-z0-9._]{1,200}$/.test(tool.name),
+        );
+      const names = toolNames(listed.map((tool) => String(tool.name)));
       const wanted = new Map<string, Record<string, unknown>>();
-      for (const tool of (Array.isArray(data) ? data : []).filter(isRecord))
-        if (
-          typeof tool.name === 'string' &&
-          /^[a-z0-9._]{1,60}$/.test(tool.name)
-        )
-          wanted.set(toolName(tool.name), tool);
+      for (const tool of listed)
+        wanted.set(names.get(String(tool.name))!, tool);
       for (const [name, held] of [...serverTools]) {
         const tool = wanted.get(name);
         if (tool && JSON.stringify(tool) === held.fingerprint) continue;

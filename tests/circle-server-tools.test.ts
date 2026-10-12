@@ -540,3 +540,76 @@ test('a trial records which server tools the model used, and /server skill push 
   assert.equal(runs, 1);
   await delay(300);
 });
+
+test('server tool names that would collide or run past 64 characters get a stable suffix from their full name', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = await toolServer(t);
+  const long = 'documents.' + 'x'.repeat(70) + '.list';
+  let order = ['docs.list', 'docs_list', long, 'env.inventory'];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith('/v1/tools'))
+      return new Response(
+        JSON.stringify({
+          data: order.map((name) => ({
+            name,
+            description: name,
+            inputSchema: { type: 'object', properties: {} },
+            effect: 'read',
+            mode: 'sync',
+          })),
+        }),
+        { status: 200, headers: { etag: `"${order.join()}"` } },
+      );
+    return original(input, init);
+  }) as typeof fetch;
+  cleanup(t, () => {
+    globalThis.fetch = original;
+  });
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { 'circle-server': { enabled: true } },
+    secret: async (request) => {
+      await submitAnswer(home, request.id, PASSWORD);
+    },
+  }).load();
+  const context = {
+    workspace,
+    toast: () => {},
+    append: () => {},
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('server')!;
+  const names = () =>
+    host
+      .tools()
+      .map((tool) => tool.name)
+      .filter((name) => name.startsWith('srv_'))
+      .sort();
+  await command.handler(`login ${server.url} tester`, context);
+  const first = names();
+  assert.equal(first.length, 4);
+  assert.equal(new Set(first).size, 4);
+  assert.ok(
+    first.every((name) => name.length <= 64 && /^[A-Za-z0-9_-]+$/.test(name)),
+  );
+  assert.ok(
+    first.includes('srv_env_inventory'),
+    'a name with no clash stays plain',
+  );
+  assert.ok(
+    !first.includes('srv_docs_list'),
+    'neither of the clashing names takes the plain one',
+  );
+  // Another order of the same catalog gives the same names.
+  order = [...order].reverse();
+  await command.handler('tools', context);
+  assert.deepEqual(names(), first);
+  await delay(200);
+});
