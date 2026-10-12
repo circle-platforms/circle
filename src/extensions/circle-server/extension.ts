@@ -118,7 +118,7 @@ function answerOf(text: string): Record<string, unknown> {
   return { answer: text };
 }
 
-export function register(api: ExtensionAPI): void {
+export async function register(api: ExtensionAPI): Promise<void> {
   const following = new Map<string, AbortController>();
   let failure = '';
   let reauthorizing: Promise<void> | undefined;
@@ -136,7 +136,22 @@ export function register(api: ExtensionAPI): void {
       mode: 0o600,
     });
   }
+  // A program that runs Circle on a server's behalf (circle-server's own runner) hands over
+  // the address and a short-lived token in the environment. Nothing is written to disk then,
+  // and a token the server turns down is not asked for again.
+  const runUrl = process.env.CIRCLE_SERVER_URL?.trim() ?? '';
+  const runToken = process.env.CIRCLE_SERVER_TOKEN?.trim() ?? '';
+  const fromRun = Boolean(runUrl && runToken);
+  async function currentToken(): Promise<string | null | undefined> {
+    return fromRun ? runToken : api.secrets.get('token');
+  }
   function readConfig(): Config | undefined {
+    if (fromRun)
+      return {
+        url: runUrl,
+        username: process.env.CIRCLE_SERVER_USER?.trim() ?? '',
+        scopeId: process.env.CIRCLE_SERVER_SCOPE?.trim() || undefined,
+      };
     const value = readJson('config.json');
     if (
       isRecord(value) &&
@@ -357,7 +372,7 @@ export function register(api: ExtensionAPI): void {
     const config = readConfig();
     let signedIn: boolean;
     try {
-      signedIn = Boolean(await api.secrets.get('token'));
+      signedIn = Boolean(await currentToken());
     } catch {
       return;
     }
@@ -405,7 +420,7 @@ export function register(api: ExtensionAPI): void {
       throw new ServerError('not signed in: /server login <url> <user>');
     const headers: Record<string, string> = { ...options.headers };
     if (!options.anonymous) {
-      const token = await api.secrets.get('token');
+      const token = await currentToken();
       if (!token)
         throw new ServerError('not signed in: /server login <url> <user>');
       headers.authorization = `Bearer ${token}`;
@@ -483,6 +498,8 @@ export function register(api: ExtensionAPI): void {
   // A token lasts minutes. When the server turns it down, ask for the password again on the
   // masked card (once, however many requests were turned down) and go on.
   async function reauthorize(): Promise<void> {
+    if (fromRun)
+      throw new ServerError('circle-server turned down the run token');
     reauthorizing ??= (async () => {
       await api.secrets.delete('token');
       void showStatus();
@@ -881,7 +898,7 @@ export function register(api: ExtensionAPI): void {
   }
   // Resolves to false when the server has no tool catalog (an older server): no tools then.
   async function syncTools(force = false): Promise<boolean> {
-    if (!(await api.secrets.get('token'))) {
+    if (!(await currentToken())) {
       dropServerTools();
       return false;
     }
@@ -956,6 +973,8 @@ export function register(api: ExtensionAPI): void {
   api.on('session_start', () => {
     void syncTools().catch(() => {});
   });
+  // Run for a server: its tools are there before the first prompt, or not at all.
+  if (fromRun) await syncTools().catch(() => {});
 
   // What the model did with the server's tools since /server trial start: the trial record a
   // skill pack is pushed with. Arguments are kept only as SHA-256.
@@ -1137,6 +1156,10 @@ export function register(api: ExtensionAPI): void {
     (rest: string[], context: CommandContext) => Promise<void>
   > = {
     async login([address, username], context) {
+      if (fromRun)
+        throw new ServerError(
+          'Circle runs with a token from circle-server here; there is no sign-in',
+        );
       if (!address || !username)
         throw new ServerError('usage: /server login <url> <user>');
       const url = serverUrl(address);
@@ -1160,6 +1183,10 @@ export function register(api: ExtensionAPI): void {
       await announceTools(context);
     },
     async logout(_rest, context) {
+      if (fromRun)
+        throw new ServerError(
+          'Circle runs with a token from circle-server here; there is no sign-out',
+        );
       const removed = await api.secrets.delete('token');
       dropServerTools();
       void showStatus();
@@ -1448,7 +1475,7 @@ export function register(api: ExtensionAPI): void {
       const [verb, ...rest] = words(args);
       if (!verb) {
         const config = readConfig();
-        const signedIn = Boolean(await api.secrets.get('token'));
+        const signedIn = Boolean(await currentToken());
         context.append(
           config
             ? `${signedIn ? '●' : '○'} ${config.url}${config.username ? ' · ' + config.username : ''}${config.scopeId ? ' · project ' + config.scopeId : ''}${signedIn ? '' : ' · not signed in'}\n${USAGE}`

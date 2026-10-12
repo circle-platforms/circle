@@ -112,6 +112,8 @@ export interface RuntimeOptions {
    * By default it is offered where there is a desktop on this machine. */
   screenshot?: Omit<ScreenshotOptions, 'app' | 'target'> | false;
   headless?: boolean;
+  /** Load MCP servers and extensions even when headless (`--extensions`). */
+  integrations?: boolean;
   approve?: (
     call: ToolCall,
     signal: AbortSignal,
@@ -775,7 +777,7 @@ export class AgentRuntime {
     );
   }
   async initialize(signal?: AbortSignal): Promise<void> {
-    if (this.options.headless) return;
+    if (this.options.headless && !this.options.integrations) return;
     if (!this.integrationsReady) {
       this.integrationsReady = (async () => {
         const base = this.coreTools;

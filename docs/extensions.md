@@ -100,6 +100,8 @@ Connects Circle to a [circle-server](https://github.com/qingshanfeihu/circle-ser
 | `/server skill list` | The skill packs on the server. |
 | `/server skill run <id> [json]` | Run a skill pack on the server with these inputs, and follow the task. |
 
+**When a program runs Circle for the server.** circle-server's own runner starts Circle without a person, as `circle --mode rpc --extensions`, and hands over the address and a short-lived token in the environment: `CIRCLE_SERVER_URL` and `CIRCLE_SERVER_TOKEN` (with `CIRCLE_SERVER_USER` and `CIRCLE_SERVER_SCOPE` if it has them). The extension then reads the server's tools before the first prompt, writes nothing to disk, and does not ask for a password when the token is turned down; `/server login` and `/server logout` are refused.
+
 The address can also be set in `settings.json` as `"extensions": { "circle-server": { "enabled": true, "url": "https://…" } }`. The lines the commands write are notices for you; the model does not see them.
 
 **The server's own tools.** A server that publishes a tool catalog (`GET /v1/tools`) has its tools offered to the model once you sign in, each as `srv_<name>`, for example `srv_docs_list` for the server's `docs.list`. The server decides which tools you get. A tool that only reads runs without asking; one that changes something asks first; one the server runs as a task is waited for in the background. The list is read again on `/server refresh`, `/server tools` and when a session starts, and the model sees changes from its next turn. Signing out removes them. A server without a catalog offers none.
