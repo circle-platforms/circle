@@ -687,6 +687,257 @@ test('saved API configuration, model selection and effort produce actual local g
   assert.equal(requests.length, 1);
 });
 
+test('the connection form probes endpoints as setup does, lists only the saved endpoint models and never sends a key to another host', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-desktop-probe-'));
+  const home = join(root, 'home');
+  await mkdir(home);
+  // Three local endpoints, each recording what reached it: OpenAI-style models under /v1
+  // only, an Anthropic-style path that takes x-api-key, and one that answers 404 to all.
+  const seen = {
+    openai: [] as string[],
+    anthropic: [] as string[],
+    none: [] as string[],
+  };
+  let anthropicDown = false;
+  const endpoint = async (
+    name: keyof typeof seen,
+    answer: (req: import('node:http').IncomingMessage) => unknown,
+  ) => {
+    const server = createServer(async (req, res) => {
+      for await (const _chunk of req);
+      seen[name].push(
+        [
+          req.method,
+          req.url,
+          req.headers.authorization,
+          req.headers['x-api-key'],
+        ]
+          .filter(Boolean)
+          .join(' '),
+      );
+      const body = answer(req);
+      res.writeHead(body ? 200 : 404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(body ?? { error: 'not here' }));
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    t.after(
+      () => new Promise<void>((resolve) => server.close(() => resolve())),
+    );
+    return `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  };
+  const openai = await endpoint('openai', (req) =>
+    req.url === '/v1/models'
+      ? { data: [{ id: 'open-one' }, { id: 'open-two' }] }
+      : undefined,
+  );
+  const anthropic = await endpoint('anthropic', (req) =>
+    !anthropicDown &&
+    req.url === '/apps/anthropic/v1/models' &&
+    req.headers['x-api-key'] === 'key-b'
+      ? { data: [{ id: 'claude-fixture' }, { id: 'claude-other' }] }
+      : undefined,
+  );
+  const none = await endpoint('none', () => undefined);
+  const updates: RuntimeUpdate[] = [];
+  const controller = new RuntimeController({
+    home,
+    userHome: home,
+    catalog: (path) =>
+      new ModelCatalog(path, { env: { CIRCLE_NO_MODELS_REFRESH: '1' } }),
+    emit: (update) => updates.push(update),
+  });
+  const replies: unknown[] = [];
+  t.after(async () => {
+    await controller.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const call = async (
+    name: RuntimeCommandName,
+    payload: Record<string, unknown> = {},
+  ) => {
+    const reply = await controller.dispatch({
+      id: randomUUID(),
+      name,
+      sessionId: controller.snapshot().activeSessionId,
+      payload,
+    });
+    replies.push(reply);
+    return reply;
+  };
+  const models = () => controller.snapshot().models.map((model) => model.id);
+  // Nothing saved: a key is needed before anything is asked
+  const keyless = await call('probe-connection', {
+    endpoint: openai,
+    apiKey: '',
+  });
+  assert.equal(keyless.ok, false);
+  assert.equal(keyless.error, 'enter the API key for this endpoint');
+  assert.deepEqual(seen.openai, []);
+  // OpenAI-style, listed only under /v1: that URL is the one to save
+  const first = await call('probe-connection', {
+    endpoint: openai + '/',
+    apiKey: 'key-a',
+  });
+  assert.equal(first.ok, true, first.error);
+  assert.deepEqual(first.data, {
+    status: 'discovered',
+    protocol: 'openai',
+    models: ['open-one', 'open-two'],
+    baseUrl: `${openai}/v1`,
+    inferred: false,
+    summary: 'discovered 2 models (openai)',
+    detail: '',
+  });
+  assert.deepEqual(seen.openai, [
+    'GET /models Bearer key-a',
+    'GET /v1/models Bearer key-a',
+  ]);
+  // Probing saves nothing
+  assert.equal(existsSync(join(home, 'credentials.json')), false);
+  assert.equal(loadSettings(home).auth.base_url, '');
+  const saved = await call('configure', {
+    endpoint: `${openai}/v1`,
+    protocol: 'openai',
+    model: 'open-one',
+    apiKey: 'key-a',
+  });
+  assert.equal(saved.ok, true, saved.error);
+  assert.deepEqual(
+    models()
+      .filter((id) => id.startsWith('open-'))
+      .sort(),
+    ['open-one', 'open-two'],
+  );
+  assert.equal(
+    (
+      await call('save-settings', {
+        settings: { enabledModels: ['open-two'] },
+      })
+    ).ok,
+    true,
+  );
+  assert.deepEqual(controller.snapshot().settings.enabledModels, ['open-two']);
+  // The same host keeps the saved key when none is typed, on another path too
+  seen.openai.length = 0;
+  const again = await call('probe-connection', {
+    endpoint: `${openai}/v1`,
+    apiKey: '',
+  });
+  assert.equal(again.ok, true, again.error);
+  assert.deepEqual(seen.openai, ['GET /v1/models Bearer key-a']);
+  // Another host does not get it: the probe and the save are refused, nothing is sent
+  for (const name of ['probe-connection', 'configure'] as const) {
+    const refused = await call(name, {
+      endpoint: `${anthropic}/apps/anthropic`,
+      protocol: 'anthropic',
+      model: 'claude-fixture',
+      apiKey: '',
+    });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.error, 'enter the API key for this endpoint');
+  }
+  assert.deepEqual(seen.anthropic, []);
+  assert.equal(loadSettings(home).auth.base_url, `${openai}/v1`);
+  // Anthropic-style: the URL names it, so it is asked first, with x-api-key
+  const second = await call('probe-connection', {
+    endpoint: `${anthropic}/apps/anthropic`,
+    apiKey: 'key-b',
+  });
+  assert.equal(second.ok, true, second.error);
+  assert.deepEqual(second.data, {
+    status: 'discovered',
+    protocol: 'anthropic',
+    models: ['claude-fixture', 'claude-other'],
+    baseUrl: `${anthropic}/apps/anthropic`,
+    inferred: false,
+    summary: 'discovered 2 models (anthropic)',
+    detail: '',
+  });
+  assert.deepEqual(seen.anthropic, ['GET /apps/anthropic/v1/models key-b']);
+  assert.equal(
+    (
+      await call('configure', {
+        endpoint: `${anthropic}/apps/anthropic`,
+        protocol: 'anthropic',
+        model: 'claude-fixture',
+        apiKey: 'key-b',
+      })
+    ).ok,
+    true,
+  );
+  // Only the new endpoint's models: the old ones and their ctrl+p scope are gone
+  assert(models().includes('claude-other'));
+  assert(!models().some((id) => id.startsWith('open-')), models().join());
+  assert.deepEqual(controller.snapshot().settings.enabledModels, []);
+  assert.deepEqual(loadSettings(home).enabled_models, []);
+  assert.equal(
+    controller.snapshot().settings.endpoint,
+    `${anthropic}/apps/anthropic`,
+  );
+  assert.equal(controller.snapshot().settings.protocol, 'anthropic');
+  // A refresh that fails is an answer, not an error; the list stays as it was
+  anthropicDown = true;
+  const refresh = await call('discover-models');
+  assert.equal(refresh.ok, true, refresh.error);
+  assert.deepEqual(refresh.data, {
+    status: 'failed',
+    models: [],
+    detail: 'http 404',
+  });
+  assert(models().includes('claude-other'));
+  anthropicDown = false;
+  assert.deepEqual((await call('discover-models')).data, {
+    status: 'discovered',
+    models: ['claude-fixture', 'claude-other'],
+    detail: '',
+  });
+  // An endpoint that lists nothing (as an Anthropic-style path without GET /v1/models):
+  // failed, with the kind of API its URL suggests, and saved as typed
+  const third = await call('probe-connection', {
+    endpoint: `${none}/apps/anthropic`,
+    apiKey: 'key-c',
+  });
+  assert.equal(third.ok, true, third.error);
+  assert.deepEqual(third.data, {
+    status: 'failed',
+    protocol: 'anthropic',
+    models: [],
+    baseUrl: `${none}/apps/anthropic`,
+    inferred: true,
+    summary: 'model discovery failed; protocol is unverified (http 404)',
+    detail: 'http 404',
+  });
+  assert(seen.none.length > 0);
+  assert.equal(
+    (
+      await call('configure', {
+        endpoint: `${none}/apps/anthropic`,
+        protocol: 'anthropic',
+        model: 'typed-model',
+        apiKey: 'key-c',
+      })
+    ).ok,
+    true,
+  );
+  assert(models().includes('typed-model'));
+  assert(!models().includes('claude-other'), models().join());
+  assert.deepEqual(loadSettings(home).auth, {
+    protocol: 'anthropic',
+    base_url: `${none}/apps/anthropic`,
+    model: 'typed-model',
+    api_key_ref: 'api_key',
+  });
+  // No key ever reached another host, a reply, a snapshot or an event
+  assert(!seen.anthropic.some((line) => /key-a|key-c/.test(line)));
+  assert(!seen.none.some((line) => /key-a|key-b/.test(line)));
+  assert(!seen.openai.some((line) => /key-b|key-c/.test(line)));
+  for (const key of ['key-a', 'key-b', 'key-c'])
+    for (const shown of [replies, updates, controller.snapshot()])
+      assert.equal(JSON.stringify(shown).includes(key), false, key);
+});
+
 test('a retried native command cannot create duplicate sessions or change its bound input', async (t) => {
   const f = await setup(t, []);
   const command = {

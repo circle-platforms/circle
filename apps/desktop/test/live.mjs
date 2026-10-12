@@ -346,8 +346,16 @@ try {
   await app.close();
   app = undefined;
   const gatewayRequests = [];
+  const modelListKeys = [];
+  let modelListDown = false;
   gateway = createServer(async (req, res) => {
     if (req.url === '/v1/models') {
+      modelListKeys.push(req.headers.authorization);
+      if (modelListDown) {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({ data: [{ id: 'native-fixture-model' }] }));
       return;
@@ -419,16 +427,88 @@ try {
   await page
     .getByRole('textbox', { name: 'base url', exact: true })
     .fill(`http://127.0.0.1:${gateway.address().port}/v1`);
+  // Nothing saved: the key is required
+  assert.equal(
+    await page
+      .getByRole('textbox', { name: 'api key', exact: true })
+      .getAttribute('placeholder'),
+    'required',
+  );
   await page
     .getByRole('textbox', { name: 'api key', exact: true })
     .fill('native-local-key');
+  // First the URL and the key; the endpoint is asked for its models, as setup does
+  await page.getByRole('button', { name: 'next', exact: true }).click();
   await page
-    .getByLabel('connection model', { exact: true })
-    .fill('native-fixture-model');
+    .getByRole('option', { name: 'native-fixture-model', exact: true })
+    .waitFor();
+  await page
+    .getByText('discovered 1 model (openai)', { exact: true })
+    .waitFor();
+  assert.deepEqual(modelListKeys, ['Bearer native-local-key']);
+  assert.equal((await state()).runtime.configured, false);
+  await page
+    .getByRole('option', { name: 'native-fixture-model', exact: true })
+    .click();
   await page.getByRole('button', { name: 'connect', exact: true }).click();
   await waitFor(
     async () => (await state()).runtime.configured,
     'saved connection',
+  );
+  assert.equal(
+    (await state()).settings.endpoint,
+    `http://127.0.0.1:${gateway.address().port}/v1`,
+  );
+  checks.push(
+    'the connection form asks for the URL and key, lists the models the endpoint answered with, and saves the chosen one',
+  );
+  // Again: the saved key is kept only while the URL stays on the saved endpoint's host
+  await send('/login');
+  const keyBox = page.getByRole('textbox', { name: 'api key', exact: true });
+  await keyBox.waitFor();
+  assert.equal(
+    await keyBox.getAttribute('placeholder'),
+    'leave empty to keep the saved key',
+  );
+  await page
+    .getByRole('textbox', { name: 'base url', exact: true })
+    .fill('https://another-provider.example/v1');
+  assert.equal(await keyBox.getAttribute('placeholder'), 'required');
+  assert.equal(await keyBox.evaluate((input) => input.required), true);
+  await page.getByRole('button', { name: 'cancel', exact: true }).click();
+  await keyBox.waitFor({ state: 'detached' });
+  checks.push(
+    'an empty key keeps the saved one only for the saved host; another host needs its key',
+  );
+  // An endpoint that stops listing its models: refresh says so instead of failing
+  modelListDown = true;
+  await page.evaluate(() => {
+    location.hash = '/page/models';
+  });
+  await page
+    .getByRole('button', { name: 'refresh models', exact: true })
+    .click();
+  await page
+    .getByText(
+      'The endpoint did not list its models (http 404). Search for the model id below and use it.',
+      { exact: true },
+    )
+    .waitFor();
+  assert.equal(modelListKeys.at(-1), 'Bearer native-local-key');
+  assert.equal((await state()).runtime.error, undefined);
+  assert(
+    (await state()).models.some((model) => model.id === 'native-fixture-model'),
+  );
+  modelListDown = false;
+  await page.evaluate(
+    (id) => {
+      location.hash = '/session/' + id;
+    },
+    (await state()).activeSessionId,
+  );
+  await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
+  checks.push(
+    'refreshing models from an endpoint that does not list them explains it and keeps the list',
   );
   assert.equal(
     await page.evaluate(() =>

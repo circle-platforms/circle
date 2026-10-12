@@ -8,7 +8,14 @@ The desktop application is a window around the same Circle: the same model conne
 
 ## First start
 
-The first time, Circle opens the connection form by itself: the API URL, the key and the model id your endpoint uses. Later, open it from the connection at the bottom of the sidebar (`connect a model` until one is set), from the top bar's ⋯ menu or from settings. To change only the URL or the model, leave the key empty: the saved key is kept.
+The first time, Circle opens the connection form by itself. Later, open it from the connection at the bottom of the sidebar (`connect a model` until one is set), from the top bar's ⋯ menu, from settings or with `/login`. It asks what the terminal's setup asks, in two steps:
+
+1. The API URL and the key. Next asks the endpoint for its models, as [setup](models.md#connect-an-endpoint) does: it works out whether the API is OpenAI-style or Anthropic-style and which URL answers. Nothing is saved yet.
+2. The model. When the endpoint listed its models, pick one from the list (arrow keys and `enter` work in its search box); type to search it, and `use “…”` takes an id it does not list. When it listed none, or could not be asked, type the model id your provider documents; it is not checked. If the endpoint could not be asked, choose whether the API is OpenAI-style or Anthropic-style too. Connect saves the URL that answered (the one you typed when none did), the kind of API, the model and the key, and lists that endpoint's models in place of the ones listed before.
+
+The key field can stay empty only while the URL stays on the host (and port) of the saved endpoint: then the saved key is kept, so the path or the model can change alone. For another host the key is required, and the saved one is never sent there. Back returns to the first step; the key you typed is kept in the form until it closes.
+
+The models page lists what the saved endpoint offered when it was connected or last refreshed, with the models in use. Refresh models asks it again; an endpoint that does not list its models, such as an Anthropic-style path without `GET /v1/models`, gets a note saying so, and its model ids are typed in the search and used from there.
 
 ## The window
 

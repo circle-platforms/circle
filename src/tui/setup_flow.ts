@@ -11,8 +11,10 @@ import {
 } from '../probe.js';
 import {
   defaultAuth,
+  keepsSavedKey,
   loadCredentials,
   loadSettings,
+  type CircleSettings,
   type ModelAuth,
 } from '../settings.js';
 import {
@@ -50,9 +52,11 @@ export class SetupFlow {
   // What is typed under the model list: it keeps the models with every word in them
   query = '';
   model = '';
-  // Set up before with a key: an empty enter keeps the saved URL and key
+  // Set up before: an empty enter keeps the saved URL, and the saved key while the URL stays
+  // on the same host (keepsSavedKey)
   readonly savedUrl: string = '';
   private savedKey = '';
+  private saved?: CircleSettings;
   constructor(
     readonly home: string,
     private probe: (
@@ -63,6 +67,7 @@ export class SetupFlow {
     try {
       const previous = loadSettings(home);
       if (previous.initialized) {
+        this.saved = previous;
         this.savedUrl = previous.auth.base_url;
         this.savedKey =
           loadCredentials(home)[previous.auth.api_key_ref || 'api_key'] || '';
@@ -71,8 +76,12 @@ export class SetupFlow {
       /* Nothing saved that can be read: nothing to keep. */
     }
   }
-  get hasSavedKey(): boolean {
-    return Boolean(this.savedKey);
+  /** Whether an empty enter on the key keeps the saved one: on the saved host only. */
+  get keepsKey(): boolean {
+    return (
+      Boolean(this.savedKey && this.saved) &&
+      keepsSavedKey(this.saved!, this.baseUrl)
+    );
   }
   /** Back to the first question (/login, chosen again after esc). */
   restart(): void {
@@ -97,9 +106,12 @@ export class SetupFlow {
   }
   submitKey(text: string): void {
     this.error = '';
-    const key = text.trim() || this.savedKey;
+    const key = text.trim() || (this.keepsKey ? this.savedKey : '');
     if (!key) {
-      this.error = 'Enter a key';
+      // A key saved for another host is not sent here
+      this.error = this.savedKey
+        ? 'Enter the key for this endpoint'
+        : 'Enter a key';
       return;
     }
     this.apiKey = key;
@@ -204,8 +216,9 @@ export class SetupFlow {
 export type SetupAnswer = 'done' | 'leave';
 /**
  * Setup as one card in the frame, a step at a time: the URL and the key are typed in its
- * input row (the key as dots; an empty enter keeps the saved one), the model is a searched
- * list with `use "…"` for an id the endpoint does not list. esc, ctrl+c and ctrl+d leave.
+ * input row (the key as dots; an empty enter keeps the saved one on the saved host), the
+ * model is a searched list with `use "…"` for an id the endpoint does not list. esc, ctrl+c
+ * and ctrl+d leave.
  */
 export class SetupCard implements Card<SetupAnswer> {
   input = '';
@@ -264,7 +277,7 @@ export class SetupCard implements Card<SetupAnswer> {
         ],
         input: this.input,
         masked: true,
-        placeholder: flow.hasSavedKey ? 'enter keeps the saved key' : '',
+        placeholder: flow.keepsKey ? 'enter keeps the saved key' : '',
       });
     if (flow.step === 'probing')
       return card({

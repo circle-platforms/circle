@@ -16,6 +16,23 @@ export const dialogs: Record<string, string> = {
     '密钥由 Circle 私密保存，不会出现在对话或前端存储中。',
   connect: '连接',
   'connection saved': '连接已保存',
+  // the connection form's two steps: the URL and key, then the model
+  next: '下一步',
+  back: '返回',
+  'looking for models…': '正在查找模型…',
+  'discovered {n} model ({protocol})': '发现 {n} 个模型（{protocol}）',
+  'discovered {n} models ({protocol})': '发现 {n} 个模型（{protocol}）',
+  'the endpoint listed no models': '端点没有列出模型',
+  'model discovery failed': '模型发现失败',
+  'model discovery failed ({detail})': '模型发现失败（{detail}）',
+  'not listed': '未列出',
+  'no model has that name': '没有这个名字的模型',
+  'kind of API': 'API 类型',
+  'openai-style': 'OpenAI 风格',
+  'anthropic-style': 'Anthropic 风格',
+  'The endpoint did not list its models, so the id is not checked: type the one your provider documents.':
+    '端点没有列出它的模型，所以不会检查这个 ID：请填写服务商文档中的 ID。',
+  'choose a model or type its id': '请选择一个模型，或输入它的 ID',
   'use an http or https endpoint without credentials in the URL':
     '请使用 http 或 https 端点，且 URL 中不要包含凭据',
   'Circle data folder': 'Circle 数据文件夹',

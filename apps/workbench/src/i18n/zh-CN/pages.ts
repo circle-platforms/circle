@@ -29,6 +29,8 @@ export const pages: Record<string, string> = {
     '为这个会话选择模型和思考深度。',
   'models refreshed': '模型已刷新',
   'refresh models': '刷新模型',
+  'The endpoint did not list its models ({detail}). Search for the model id below and use it.':
+    '端点没有列出它的模型（{detail}）。请在下方搜索模型 ID 并使用它。',
   connection: '连接',
   configured: '已配置',
   'not connected': '未连接',

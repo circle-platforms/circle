@@ -1,5 +1,5 @@
 import { desktopHost, saveExport } from '../host';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   ArrowUpRight,
   Check,
@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { VERSION } from '../../../../src/version';
 import { useRuntime } from '../app/context';
-import { t } from '../i18n';
+import { t, tn } from '../i18n';
 import { DiffBlock } from '../components/DiffBlock';
 import { requestReason } from './InlineRequest';
 import { branchMessages, currentSession, sessionText } from '../model/state';
@@ -85,6 +85,350 @@ function desktopShortcuts(): [string, string][] {
     [mod + 'S', t('enter a secret')],
     [mod + 'X', t('copy the last answer, when nothing is selected')],
   ];
+}
+// What the runtime's probe-connection answers (src/probe.ts resolveEndpoint): the kind of
+// API, the models it lists and the URL that answered. Never the key.
+interface ConnectionProbe {
+  status: 'discovered' | 'empty' | 'failed';
+  protocol: 'openai' | 'anthropic';
+  models: string[];
+  baseUrl: string;
+  inferred: boolean;
+  summary: string;
+  detail: string;
+}
+const hostOf = (url: string): string => {
+  try {
+    return new URL(url.trim()).host.toLowerCase();
+  } catch {
+    return '';
+  }
+};
+// The connection, asked as the terminal's /login asks it: the URL and the key, then what the
+// endpoint lists, or the kind of API and a typed model id when it lists nothing. The key is
+// kept in this component's state only and is gone when the dialog closes.
+function ConnectionWizard({ onClose }: { onClose: () => void }) {
+  const { snapshot, runtime, notify } = useRuntime();
+  const current = currentSession(snapshot);
+  const [endpoint, setEndpoint] = useState(snapshot.settings.endpoint);
+  const [secret, setSecret] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [probe, setProbe] = useState<ConnectionProbe | null>(null);
+  const [protocol, setProtocol] = useState<'openai' | 'anthropic'>('openai');
+  const [query, setQuery] = useState('');
+  const [focus, setFocus] = useState(0);
+  const [typedModel, setTypedModel] = useState('');
+  const list = useRef<HTMLDivElement>(null);
+  // As in the terminal: an empty key keeps the saved one only on the saved endpoint's host.
+  const savedHost = hostOf(snapshot.settings.endpoint);
+  const keepsKey =
+    !!snapshot.runtime?.hasKey && !!savedHost && hostOf(endpoint) === savedHost;
+  // Nothing listed to choose from: the kind of API when it could not tell, and a typed id
+  const manual = !!probe && (probe.status === 'failed' || probe.inferred);
+  const listed = !!probe && !manual && probe.models.length > 0;
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const typed = query.trim();
+  const choices = probe
+    ? [
+        ...probe.models
+          .filter((id) =>
+            words.every((word) => id.toLowerCase().includes(word)),
+          )
+          .map((id) => ({ id, listed: true })),
+        ...(typed && !probe.models.includes(typed)
+          ? [{ id: typed, listed: false }]
+          : []),
+      ]
+    : [];
+  const chosenIndex = Math.min(focus, choices.length - 1);
+  const chosen = choices[chosenIndex];
+  useEffect(() => {
+    list.current
+      ?.querySelector('[aria-selected="true"]')
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [focus, query, probe]);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (busy) return;
+    setError('');
+    setBusy(true);
+    try {
+      if (!probe) {
+        let url: URL | undefined;
+        try {
+          url = new URL(endpoint.trim());
+        } catch {
+          url = undefined;
+        }
+        if (
+          !url ||
+          !['http:', 'https:'].includes(url.protocol) ||
+          url.username ||
+          url.password
+        )
+          throw Error(
+            t('use an http or https endpoint without credentials in the URL'),
+          );
+        const found = (await runtime.request('probe-connection', {
+          endpoint: endpoint.trim(),
+          apiKey: secret,
+        })) as ConnectionProbe;
+        setProtocol(found.protocol === 'anthropic' ? 'anthropic' : 'openai');
+        setQuery('');
+        setTypedModel('');
+        setFocus(Math.max(0, found.models.indexOf(current.model)));
+        setProbe(found);
+        return;
+      }
+      const model = listed ? chosen?.id : typedModel.trim();
+      if (!model) throw Error(t('choose a model or type its id'));
+      await runtime.request('configure-connection', {
+        // The URL that answered; for a kind of API chosen here, the URL as typed
+        endpoint: manual ? endpoint.trim() : probe.baseUrl,
+        protocol: manual ? protocol : probe.protocol,
+        model,
+        apiKey: secret,
+      });
+      setSecret('');
+      notify(t('connection saved'));
+      onClose();
+    } catch (problem) {
+      setError(problem instanceof Error ? problem.message : t('action failed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const actions = (primary: string) => (
+    <div className="dialog-actions">
+      {probe ? (
+        <Button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setError('');
+            setProbe(null);
+          }}
+        >
+          {t('back')}
+        </Button>
+      ) : (
+        <Button
+          type="button"
+          onClick={() => {
+            setSecret('');
+            onClose();
+          }}
+        >
+          {t('cancel')}
+        </Button>
+      )}
+      <Button type="submit" className="primary" disabled={busy}>
+        {primary}
+      </Button>
+    </div>
+  );
+  const problem = error && (
+    <p className="inline-error" role="alert">
+      {error}
+    </p>
+  );
+  if (!probe)
+    return (
+      <form className="form-stack" onSubmit={submit}>
+        <div className="connection-banner">
+          <Status
+            value={
+              snapshot.runtime?.configured ? 'configured' : 'not configured'
+            }
+          />
+          <span>{t('API URL, key and model')}</span>
+        </div>
+        {!snapshot.runtime?.configured && (
+          <p className="dialog-paragraph">
+            {t(
+              'Circle answers with your own model endpoint. Enter its API URL, key and model to start.',
+            )}
+          </p>
+        )}
+        <label>
+          {t('base url')}
+          <input
+            type="url"
+            required
+            autoFocus
+            placeholder="https://api.example.com/v1"
+            aria-label={t('base url')}
+            value={endpoint}
+            onChange={(event) => setEndpoint(event.target.value)}
+          />
+        </label>
+        <label>
+          {t('api key')}
+          <input
+            type="password"
+            autoComplete="off"
+            aria-label={t('api key')}
+            required={!keepsKey}
+            value={secret}
+            onChange={(event) => setSecret(event.target.value)}
+            placeholder={
+              keepsKey ? t('leave empty to keep the saved key') : t('required')
+            }
+          />
+        </label>
+        <p className="panel-note">
+          {t(
+            'The key is saved privately by Circle. It is excluded from conversations and frontend storage.',
+          )}
+        </p>
+        {busy && (
+          <p className="pending-message" role="status">
+            <i />
+            {t('looking for models…')}
+          </p>
+        )}
+        {problem}
+        {actions(t('next'))}
+      </form>
+    );
+  const move = (delta: number) => {
+    if (choices.length)
+      setFocus((chosenIndex + delta + choices.length) % choices.length);
+  };
+  return (
+    <form className="form-stack" onSubmit={submit}>
+      <div className="connection-banner">
+        <span>
+          <i />
+          {manual
+            ? probe.detail
+              ? t('model discovery failed ({detail})', {
+                  detail: probe.detail,
+                })
+              : t('model discovery failed')
+            : probe.models.length
+              ? tn(
+                  probe.models.length,
+                  'discovered {n} model ({protocol})',
+                  'discovered {n} models ({protocol})',
+                  { protocol: probe.protocol },
+                )
+              : t('the endpoint listed no models')}
+        </span>
+        <code>{manual ? endpoint.trim() : probe.baseUrl}</code>
+      </div>
+      {listed ? (
+        <>
+          <SearchInput
+            value={query}
+            onChange={(value) => {
+              setQuery(value);
+              setFocus(0);
+            }}
+            label={t('search models')}
+            inputProps={{
+              autoFocus: true,
+              role: 'combobox',
+              'aria-expanded': true,
+              'aria-controls': 'connection-model-choices',
+              'aria-activedescendant': chosen
+                ? `connection-choice-${chosenIndex}`
+                : undefined,
+              onKeyDown: (event) => {
+                if (event.nativeEvent.isComposing) return;
+                if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                  event.preventDefault();
+                  move(event.key === 'ArrowDown' ? 1 : -1);
+                }
+              },
+            }}
+          />
+          <div
+            className="model-choices"
+            role="listbox"
+            id="connection-model-choices"
+            aria-label={t('models')}
+            ref={list}
+          >
+            {choices.map((choice, index) => (
+              <button
+                type="button"
+                role="option"
+                id={`connection-choice-${index}`}
+                tabIndex={-1}
+                key={(choice.listed ? 'model:' : 'use:') + choice.id}
+                aria-selected={index === chosenIndex}
+                className={index === chosenIndex ? 'selected' : ''}
+                onClick={() => setFocus(index)}
+              >
+                <span>
+                  {choice.listed
+                    ? choice.id
+                    : t('use “{model}”', { model: choice.id })}
+                </span>
+                {choice.listed && choice.id === current.model && (
+                  <small>{t('current')}</small>
+                )}
+                {!choice.listed && <small>{t('not listed')}</small>}
+              </button>
+            ))}
+            {!choices.length && (
+              <p className="model-choices-empty">
+                {t('no model has that name')}
+              </p>
+            )}
+          </div>
+        </>
+      ) : (
+        <>
+          {manual && (
+            <div className="field-label">
+              {t('kind of API')}
+              <div
+                className="segmented"
+                role="radiogroup"
+                aria-label={t('kind of API')}
+              >
+                {(['openai', 'anthropic'] as const).map((kind) => (
+                  <button
+                    type="button"
+                    role="radio"
+                    key={kind}
+                    aria-checked={protocol === kind}
+                    className={protocol === kind ? 'active' : ''}
+                    onClick={() => setProtocol(kind)}
+                  >
+                    {kind === 'openai'
+                      ? t('openai-style')
+                      : t('anthropic-style')}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <label>
+            {t('model')}
+            <input
+              required
+              autoFocus
+              aria-label={t('connection model')}
+              placeholder={t('the model id your endpoint uses')}
+              value={typedModel}
+              onChange={(event) => setTypedModel(event.target.value)}
+            />
+          </label>
+          <p className="panel-note">
+            {t(
+              'The endpoint did not list its models, so the id is not checked: type the one your provider documents.',
+            )}
+          </p>
+        </>
+      )}
+      {problem}
+      {actions(t('connect'))}
+    </form>
+  );
 }
 export function DialogHost({
   dialog,
@@ -525,7 +869,10 @@ export function DialogHost({
           </div>
         </>
       )}
-      {dialog === 'connect' && (
+      {dialog === 'connect' && runtime.mode === 'live' && (
+        <ConnectionWizard onClose={onClose} />
+      )}
+      {dialog === 'connect' && runtime.mode !== 'live' && (
         <form
           className="form-stack"
           onSubmit={(event) => {
@@ -542,18 +889,6 @@ export function DialogHost({
                     'use an http or https endpoint without credentials in the URL',
                   ),
                 );
-              if (runtime.mode === 'live') {
-                await runtime.request('configure-connection', {
-                  endpoint,
-                  protocol,
-                  model,
-                  apiKey: secret,
-                });
-                setSecret('');
-                notify(t('connection saved'));
-                onClose();
-                return;
-              }
               runtime.change((state) => {
                 state.settings.endpoint = endpoint;
                 state.settings.protocol = protocol;
@@ -574,22 +909,9 @@ export function DialogHost({
           }}
         >
           <div className="connection-banner">
-            <Status
-              value={
-                runtime.mode === 'live' && snapshot.runtime?.configured
-                  ? 'configured'
-                  : 'not configured'
-              }
-            />
+            <Status value="not configured" />
             <span>{t('API URL, key and model')}</span>
           </div>
-          {runtime.mode === 'live' && !snapshot.runtime?.configured && (
-            <p className="dialog-paragraph">
-              {t(
-                'Circle answers with your own model endpoint. Enter its API URL, key and model to start.',
-              )}
-            </p>
-          )}
           <label>
             {t('base url')}
             <input
@@ -620,16 +942,9 @@ export function DialogHost({
               type="password"
               autoComplete="off"
               aria-label={t('api key')}
-              required={runtime.mode === 'live' && !snapshot.runtime?.hasKey}
               value={secret}
               onChange={(event) => setSecret(event.target.value)}
-              placeholder={
-                runtime.mode !== 'live'
-                  ? 'not saved or sent by this preview'
-                  : snapshot.runtime?.hasKey
-                    ? t('leave empty to keep the saved key')
-                    : t('required')
-              }
+              placeholder="not saved or sent by this preview"
             />
           </label>
           <label>
@@ -651,11 +966,8 @@ export function DialogHost({
             </datalist>
           </label>
           <p className="panel-note">
-            {runtime.mode === 'live'
-              ? t(
-                  'The key is saved privately by Circle. It is excluded from conversations and frontend storage.',
-                )
-              : 'Credentials stay in this form and are discarded when it closes. The desktop host will own the actual connection.'}
+            Credentials stay in this form and are discarded when it closes. The
+            desktop host will own the actual connection.
           </p>
           <div className="dialog-actions">
             <Button
@@ -668,7 +980,7 @@ export function DialogHost({
               {t('cancel')}
             </Button>
             <Button type="submit" className="primary">
-              {runtime.mode === 'live' ? t('connect') : 'save connection draft'}
+              save connection draft
             </Button>
           </div>
         </form>

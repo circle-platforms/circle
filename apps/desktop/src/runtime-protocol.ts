@@ -20,6 +20,7 @@ export type RuntimeCommandName =
   | 'set-auto'
   | 'set-mode'
   | 'configure'
+  | 'probe-connection'
   | 'logout'
   | 'trust'
   | 'save-settings'
@@ -92,6 +93,7 @@ export const runtimeCommands = new Set<RuntimeCommandName>([
   'set-auto',
   'set-mode',
   'configure',
+  'probe-connection',
   'logout',
   'trust',
   'save-settings',

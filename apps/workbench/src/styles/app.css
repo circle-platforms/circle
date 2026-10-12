@@ -1844,6 +1844,54 @@ pre {
   font-size: var(--ui-tiny);
   color: var(--muted);
 }
+/* The connection form's second step: the models the endpoint lists, searched and chosen as
+   in the terminal's /login. */
+.model-choices {
+  max-height: min(320px, 38vh);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  margin-top: -6px;
+}
+.model-choices button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.model-choices button:last-child {
+  border-bottom: 0;
+}
+.model-choices button.selected {
+  background: var(--active);
+}
+.model-choices span {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: var(--ui-small);
+  overflow-wrap: anywhere;
+}
+.model-choices small,
+.model-choices-empty {
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+}
+.model-choices-empty {
+  padding: 12px;
+}
+.form-stack > .field-label {
+  margin: 0;
+}
+.form-stack > .field-label .segmented {
+  align-self: flex-start;
+}
+.form-stack > .pending-message {
+  margin: 0;
+}
 .model-glyph {
   display: grid;
   place-items: center;

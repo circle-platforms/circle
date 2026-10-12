@@ -231,6 +231,9 @@ function ModelsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(currentSession(snapshot).model);
   const [saveDefault, setSaveDefault] = useState(false);
+  // Why refresh found no list: an endpoint that does not list its models (an Anthropic-style
+  // path without GET /v1/models) still takes a model id typed here.
+  const [unlisted, setUnlisted] = useState('');
   const session = currentSession(snapshot);
   // models.dev prices are in US dollars per million tokens
   const usageModel = snapshot.models.find((item) => item.id === session.model);
@@ -269,7 +272,15 @@ function ModelsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
             <Button
               onClick={() =>
                 perform(async () => {
-                  await runtime.request('discover-models');
+                  const found = (await runtime.request('discover-models')) as {
+                    status?: string;
+                    detail?: string;
+                  };
+                  if (found?.status === 'failed') {
+                    setUnlisted(found.detail || t('model discovery failed'));
+                    return;
+                  }
+                  setUnlisted('');
                   notify(t('models refreshed'));
                 })
               }
@@ -293,6 +304,14 @@ function ModelsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
         </span>
         <code>{snapshot.settings.endpoint || t('no endpoint configured')}</code>
       </div>
+      {unlisted && (
+        <p className="panel-note" role="status">
+          {t(
+            'The endpoint did not list its models ({detail}). Search for the model id below and use it.',
+            { detail: unlisted },
+          )}
+        </p>
+      )}
       <div className="list-toolbar">
         <SearchInput
           value={query}

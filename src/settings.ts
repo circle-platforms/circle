@@ -219,6 +219,20 @@ export function withConnection(
     out.enabled_models = [];
   return { ...out, initialized: true, auth };
 }
+// Whether an empty key may keep the saved one for `url`: only when Circle was set up before
+// and `url` is on the saved endpoint's host and port. A key saved for one provider is never
+// sent to another; a new host needs its key typed.
+export function keepsSavedKey(saved: CircleSettings, url: string): boolean {
+  if (!saved.initialized || !saved.auth.base_url) return false;
+  try {
+    return (
+      new URL(url.trim()).host.toLowerCase() ===
+      new URL(saved.auth.base_url.trim()).host.toLowerCase()
+    );
+  } catch {
+    return false;
+  }
+}
 export function applyAuthToEnviron(
   settings: CircleSettings,
   home = circleHome(),

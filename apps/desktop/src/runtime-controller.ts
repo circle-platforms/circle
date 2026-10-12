@@ -27,6 +27,7 @@ import {
   isFolderTrusted,
   trustFolder,
   isReady,
+  keepsSavedKey,
   writePrivateJson,
   loadCredentials,
   type CircleSettings,
@@ -40,7 +41,11 @@ import { loadSkillBody } from '../../../src/skills.js';
 import { attachmentFromBase64, MAX_MEDIA_BYTES } from '../../../src/media.js';
 import { readPrompt } from '../../../src/system_prompt.js';
 import { toMarkdown, toHtml } from '../../../src/session_export.js';
-import { normalizeBaseUrl, resolveEndpoint } from '../../../src/probe.js';
+import {
+  normalizeBaseUrl,
+  probeSummary,
+  resolveEndpoint,
+} from '../../../src/probe.js';
 import { availableUpdate } from '../../../src/update.js';
 import { BUILTIN_SLASH } from '../../../src/tui/slash_commands.js';
 import { ModelCatalog } from '../../../src/model_catalog.js';
@@ -192,6 +197,9 @@ export class RuntimeController {
   >();
   private tasks = new Set<Promise<unknown>>();
   private discoveredModels: string[] = [];
+  // What the connection form's last probe found, so that saving that endpoint lists its
+  // models. Never the key.
+  private probed?: { baseUrl: string; protocol: string; models: string[] };
   // Whether a key is saved, read once and again after configure or logout.
   private keySaved?: boolean;
   // A workspace's git branch, read at most every two seconds: snapshots follow tokens.
@@ -790,6 +798,30 @@ export class RuntimeController {
       return '';
     }
   }
+  // The key for `url`: the one typed, or else the saved one while `url` stays on the saved
+  // endpoint's host (keepsSavedKey). A key saved for one provider is never sent to another.
+  private keyFor(url: string, typed: unknown): string {
+    const key = text(typed, 'API key', 4096).trim();
+    if (key) return key;
+    let saved: CircleSettings;
+    try {
+      saved = loadSettings(this.home);
+    } catch {
+      return '';
+    }
+    return keepsSavedKey(saved, url) ? this.savedKey() : '';
+  }
+  // An API URL the connection form may use: http(s), without credentials, query or fragment.
+  private endpointOf(value: unknown): string {
+    const endpoint = new URL(text(value, 'endpoint', 2000).trim());
+    if (
+      !['http:', 'https:'].includes(endpoint.protocol) ||
+      endpoint.username ||
+      endpoint.password
+    )
+      throw Error('invalid API endpoint');
+    return normalizeBaseUrl(endpoint.href, 'openai');
+  }
   publish(event?: RuntimeUpdate['event']) {
     if (this.closing) return;
     this.persistLocation();
@@ -1306,23 +1338,17 @@ export class RuntimeController {
           )
         )
           throw Error('finish the current turn before changing connection');
-        const endpoint = new URL(text(p.endpoint, 'endpoint', 2000));
-        if (
-          !['http:', 'https:'].includes(endpoint.protocol) ||
-          endpoint.username ||
-          endpoint.password
-        )
-          throw Error('invalid API endpoint');
+        const endpoint = this.endpointOf(p.endpoint);
         const protocol = text(p.protocol, 'protocol', 20);
         if (!['openai', 'anthropic'].includes(protocol))
           throw Error('invalid protocol');
-        const baseUrl = normalizeBaseUrl(endpoint.href, protocol);
+        const baseUrl = normalizeBaseUrl(endpoint, protocol);
         const model = text(p.model, 'model', 500);
         if (!model.trim()) throw Error('model required');
-        // An empty key keeps the saved one, so the URL or model can change alone.
-        const secret =
-          text(p.apiKey, 'API key', 4096).trim() || this.savedKey();
-        if (!secret) throw Error('API key required');
+        // An empty key keeps the saved one on the same host, so the path or the model can
+        // change alone; another host needs its own key.
+        const secret = this.keyFor(baseUrl, p.apiKey);
+        if (!secret) throw Error('enter the API key for this endpoint');
         saveCredentials({ api_key: secret }, this.home);
         this.keySaved = true;
         const settings = withConnection(
@@ -1330,16 +1356,50 @@ export class RuntimeController {
           this.home,
         );
         saveSettings(settings, this.home);
+        // The models listed are this endpoint's: what the form's probe found at the URL and
+        // kind of API being saved, or none until they are asked for.
+        const probed = this.probed;
+        this.discoveredModels =
+          probed &&
+          probed.protocol === protocol &&
+          normalizeBaseUrl(probed.baseUrl, protocol) === baseUrl
+            ? [...probed.models]
+            : [];
         for (const owner of this.runtimes.values()) {
           owner.options.settings = {
             ...owner.options.settings,
             auth: structuredClone(settings.auth),
             initialized: settings.initialized,
+            // withConnection empties it when the endpoint changes: it named the old one's models
+            enabled_models: [...settings.enabled_models],
           };
           owner.options.model = undefined;
           owner.setModel(model);
         }
         return {};
+      }
+      case 'probe-connection': {
+        // Setup's discovery (src/probe.ts): which kind of API answers at the URL, or its /v1,
+        // and what models it lists. Nothing is saved; the key is neither returned nor kept.
+        const endpoint = this.endpointOf(p.endpoint);
+        const key = this.keyFor(endpoint, p.apiKey);
+        if (!key) throw Error('enter the API key for this endpoint');
+        const found = await resolveEndpoint(endpoint, key);
+        const baseUrl = found.base_url || endpoint;
+        this.probed = {
+          baseUrl,
+          protocol: found.protocol,
+          models: [...found.models],
+        };
+        return {
+          status: found.status,
+          protocol: found.protocol,
+          models: found.models,
+          baseUrl,
+          inferred: found.inferred,
+          summary: probeSummary(found),
+          detail: found.detail,
+        };
       }
       case 'logout': {
         this.keySaved = undefined;
@@ -1775,10 +1835,20 @@ export class RuntimeController {
           loadCredentials(this.home)[settings.auth.api_key_ref] ?? '',
           { protocol: settings.auth.protocol },
         );
+        // An endpoint that does not list its models (an Anthropic-style path without
+        // GET /v1/models) is not an error: its model ids are typed instead.
         if (found.status === 'failed')
-          throw Error(found.detail || 'model discovery failed');
+          return {
+            status: 'failed',
+            models: [],
+            detail: found.detail || 'model discovery failed',
+          };
         this.discoveredModels = found.models;
-        return { models: found.models, detail: found.detail };
+        return {
+          status: found.status,
+          models: found.models,
+          detail: found.detail,
+        };
       }
       case 'check-update':
         return {
