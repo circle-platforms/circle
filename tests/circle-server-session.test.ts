@@ -105,6 +105,20 @@ async function sessionServer(t: Parameters<typeof scratch>[0]) {
         });
       return send(200, { data: { result: { entries: ['a.md'] } } });
     }
+    if (url.pathname === '/v1/tasks/task_x/status')
+      return send(200, { data: { taskId: 'task_x', phase: 'failed' } });
+    if (url.pathname === '/v1/tasks/task_x/result')
+      return send(200, {
+        status: 'failed',
+        data: {
+          taskId: 'task_x',
+          status: 'failed',
+          error: {
+            code: 'SOURCE_FORBIDDEN',
+            message: 'Knowledge record is not available to this identity',
+          },
+        },
+      });
     if (url.pathname === '/v1/tasks/task_f/status')
       return send(200, { data: { taskId: 'task_f', phase: 'running' } });
     if (url.pathname === '/v1/tasks/task_f/events') {
@@ -255,4 +269,18 @@ test('a refusal reaches the model with what the server named besides its message
     );
   assert.match(answer, /SKILLPACK_CHECK_FAILED: Skill tools do not match/);
   assert.match(answer, /"undeclaredTools":\["env\.framework_files"\]/);
+});
+
+test('a task that ended failed is shown with its own error, not as a failed request', async (t) => {
+  const server = await sessionServer(t);
+  const session = await connect(t);
+  await session.run(`login ${server.url} tester`);
+  const tool = session.host
+    .tools()
+    .find((item) => item.name === 'circle_server_task')!;
+  const run = { signal: new AbortController().signal, sessionId: 's' } as never;
+  const answer = JSON.stringify(await tool.run({ task_id: 'task_x' }, run));
+  assert.match(answer, /SOURCE_FORBIDDEN/);
+  assert.match(answer, /Knowledge record is not available to this identity/);
+  assert.doesNotMatch(answer, /request failed/);
 });

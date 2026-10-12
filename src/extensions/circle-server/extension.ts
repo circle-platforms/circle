@@ -586,7 +586,19 @@ export async function register(api: ExtensionAPI): Promise<void> {
     } catch {
       throw new ServerError(`${method} ${path} → ${response.status}, not JSON`);
     }
-    if (!response.ok || (isRecord(parsed) && parsed.status === 'failed')) {
+    // A refusal carries its error at the top. A task that ended failed is answered with HTTP
+    // 200, status "failed" and the task's own result (its error inside) as data: that is
+    // what was asked for, so it is returned, not thrown away as a request failure.
+    const endedFailed =
+      response.ok &&
+      isRecord(parsed) &&
+      parsed.status === 'failed' &&
+      !isRecord(parsed.error) &&
+      'data' in parsed;
+    if (
+      !endedFailed &&
+      (!response.ok || (isRecord(parsed) && parsed.status === 'failed'))
+    ) {
       const error =
         isRecord(parsed) && isRecord(parsed.error) ? parsed.error : {};
       const details =
