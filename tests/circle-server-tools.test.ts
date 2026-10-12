@@ -658,3 +658,89 @@ test('server tool names that would collide or run past 64 characters get a stabl
   assert.deepEqual(names(), first);
   await delay(200);
 });
+
+test('a model can start the trial record and push the skill pack it changed, without the /server command', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  const pack = join(workspace, 'skills', 'mindmap-compile');
+  mkdirSync(pack, { recursive: true });
+  writeFileSync(
+    join(pack, 'skillpack.json'),
+    JSON.stringify({
+      id: 'mindmap-compile',
+      version: '0.2.0',
+      title: 'Mindmap compile',
+      owner: 'tester',
+      tools: ['docs.list'],
+      triggers: ['manual'],
+      inputs: {},
+      outputs: ['cases.xlsx'],
+      model: 'any',
+    }),
+  );
+  writeFileSync(join(pack, 'SKILL.md'), '# Mindmap compile\n');
+  writeFileSync(join(workspace, 'cases.xlsx'), 'synthetic workbook v2');
+  const server = await toolServer(t);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { 'circle-server': { enabled: true } },
+    secret: async (request) => {
+      await submitAnswer(home, request.id, PASSWORD);
+    },
+  }).load();
+  const context = {
+    workspace,
+    toast: () => {},
+    append: () => {},
+    sendUserMessage: () => {},
+  };
+  await host
+    .commands()
+    .get('server')!
+    .handler(`login ${server.url} tester`, context);
+  const run = { signal: new AbortController().signal, sessionId: 's' } as never;
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const tool = host.tools().find((item) => item.name === name)!;
+    assert.ok(tool, `${name} is offered to the model`);
+    return host.toolBoundary({ tool, args, context: run }, (request) =>
+      tool.run(request.args, request.context),
+    );
+  };
+  await call('circle_server_trial_start', {});
+  await call('srv_docs_list', { folder: 'manuals' });
+  const raw: unknown = await call('circle_server_skill_push', {
+    folder: 'skills/mindmap-compile',
+    outputs: ['cases.xlsx'],
+  });
+  const pushed = (typeof raw === 'string' ? JSON.parse(raw) : raw) as {
+    lines: string[];
+  };
+  const sent = server.packs.at(-1)!;
+  assert.equal(sent.manifest.version, '0.2.0');
+  assert.deepEqual(
+    sent.trial.toolCalls.map((item: { name: string }) => item.name),
+    ['docs.list'],
+    'the trial the model started is what goes with the pack',
+  );
+  assert.equal(
+    sent.trial.outputs[0].sha256,
+    createHash('sha256').update('synthetic workbook v2').digest('hex'),
+  );
+  assert.ok(
+    pushed.lines.some((line) =>
+      /✓ submitted mindmap-compile 0\.2\.0 · 2 files · 1 trial calls · skp_1/.test(
+        line,
+      ),
+    ),
+  );
+  assert.ok(
+    pushed.lines.some((line) =>
+      /someone else approves: \/server approve/.test(line),
+    ),
+  );
+  await delay(200);
+});

@@ -2102,6 +2102,55 @@ export async function register(api: ExtensionAPI): Promise<void> {
       );
     },
   );
+  // A model that fixes a skill pack records its trial and sends the new version itself.
+  // Sending is not registering: someone else still approves the new digest on the server.
+  api.registerTool(
+    'circle_server_trial_start',
+    'Start recording which circle-server tools the model calls: the trial record a skill pack is pushed with, as /server trial start does. Clears the previous record. Start it before the trial run of a new or changed skill pack.',
+    { type: 'object', properties: {} },
+    async () => {
+      trial.calls = [];
+      trial.startedAt = new Date().toISOString();
+      keepTrial();
+      return { recording: true, startedAt: trial.startedAt };
+    },
+  );
+  api.registerTool(
+    'circle_server_skill_push',
+    'Submit a skill pack folder of the workspace (skillpack.json, SKILL.md and its files) to circle-server with the current trial record and the SHA-256 of the files the trial produced, as /server skill push does. The server checks the tools the trial used against the pack; someone else must approve the new digest before it runs there. It sends the folder, so it asks first.',
+    {
+      type: 'object',
+      properties: {
+        folder: {
+          type: 'string',
+          description: 'the skill pack folder, a path in the workspace',
+        },
+        outputs: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'files the trial produced, paths in the workspace',
+        },
+      },
+      required: ['folder'],
+    },
+    async (args) => {
+      const folder = String(args.folder ?? '');
+      if (!folder) throw new api.ToolError('folder is required');
+      const outputs = Array.isArray(args.outputs)
+        ? args.outputs.map(String).filter(Boolean)
+        : [];
+      const sent = collecting();
+      try {
+        await pushSkill(
+          outputs.length ? [folder, '--outputs', outputs.join(',')] : [folder],
+          sent.context,
+        );
+      } catch (error) {
+        throw new api.ToolError(reason(error));
+      }
+      return { lines: sent.lines };
+    },
+  );
   void showStatus();
   scheduleRefresh();
   void lookForBots();
