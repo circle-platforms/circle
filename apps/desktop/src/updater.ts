@@ -141,7 +141,7 @@ try {
   Wait-Process -Id $p.pid -ErrorAction SilentlyContinue
   if ($p.kind -eq 'msi') {
     $msi = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
-      '/i', "\"$($p.staged)\"", '/passive', '/norestart', '/l*v', "\"$($p.log).msi\"")
+      '/i', ('"{0}"' -f $p.staged), '/passive', '/norestart', '/l*v', ('"{0}.msi"' -f $p.log))
     if ($msi.ExitCode -ne 0) { throw "msiexec exited with $($msi.ExitCode)" }
   } else {
     $parent = Split-Path -Parent $p.target
@@ -164,8 +164,7 @@ try {
 } catch {
   Write-Log "failed: $_"
 }
-if ($p.args.Count) { Start-Process -FilePath $p.executable -ArgumentList $p.args }
-else { Start-Process -FilePath $p.executable }
+if ($p.args.Count) { Start-Process -FilePath $p.executable -ArgumentList $p.args } else { Start-Process -FilePath $p.executable }
 `;
 
 export interface UpdaterOptions {
