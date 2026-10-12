@@ -81,6 +81,23 @@ async function fakeServer(t: Parameters<typeof scratch>[0]) {
           scopeId: request.headers['x-scope-id'],
         },
       });
+    if (url.pathname === '/v1/source-artifacts' && request.method === 'POST')
+      return send(201, {
+        data: {
+          assetId: 'ast_source',
+          lifecycle: 'draft',
+          sourceArtifactId: null,
+          files: JSON.parse(body.toString()).files,
+        },
+      });
+    if (url.pathname === '/v1/source-artifacts/ast_source')
+      return send(200, {
+        data: {
+          assetId: 'ast_source',
+          lifecycle: 'approved',
+          sourceArtifactId: 'sar_one',
+        },
+      });
     if (url.pathname === '/v1/tasks/submit') {
       const input = JSON.parse(body.toString());
       const again = keys.has(input.idempotencyKey);
@@ -456,6 +473,55 @@ test('the connector tools let a model list packs, hand over a file and get the c
     readFileSync(join(workspace, 'cases.xlsx')),
     server.workbook,
   );
+  // Files become one source artifact: each uploaded as an original, listed with its role.
+  writeFileSync(join(workspace, 'tree.xml'), Buffer.from('<tree/>'));
+  assert.equal(tool('circle_server_source_artifact').approval, true);
+  const registered = JSON.parse(
+    await tool('circle_server_source_artifact').run(
+      {
+        name: 'command source',
+        version: '1.0.0',
+        files: [{ path: 'tree.xml', role: 'command-tree' }],
+        metadata: { buildName: 'Rel_SYN_1' },
+      },
+      context,
+    ),
+  );
+  assert.equal(registered.registered.assetId, 'ast_source');
+  const listedSource = JSON.parse(
+    server.seen
+      .filter((call) => call.path === '/v1/source-artifacts')
+      .at(-1)!
+      .body.toString(),
+  );
+  assert.equal(listedSource.scopeId, 'scp_lab');
+  assert.deepEqual(listedSource.files, [
+    {
+      path: 'tree.xml',
+      role: 'command-tree',
+      sourceRevisionId: 'src_abc',
+      sha256: createHash('sha256').update(Buffer.from('<tree/>')).digest('hex'),
+    },
+  ]);
+  await assert.rejects(
+    tool('circle_server_source_artifact').run(
+      {
+        name: 'x',
+        version: '1',
+        files: [{ path: '../outside.xml', role: 'r' }],
+      },
+      context,
+    ),
+    /outside the workspace/,
+  );
+  assert.equal(tool('circle_server_source_artifact_status').effect, 'read');
+  const approvedSource = JSON.parse(
+    await tool('circle_server_source_artifact_status').run(
+      { asset_id: 'ast_source' },
+      context,
+    ),
+  );
+  assert.equal(approvedSource.sourceArtifactId, 'sar_one');
   const looked = JSON.parse(
     await tool('circle_server_task').run({ task_id: 'task_one' }, context),
   );

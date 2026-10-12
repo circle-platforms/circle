@@ -14,7 +14,15 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, extname, join, relative, resolve, sep } from 'node:path';
+import {
+  basename,
+  extname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 import type {
   CommandContext,
   ExtensionAPI,
@@ -2225,6 +2233,123 @@ export async function register(api: ExtensionAPI): Promise<void> {
       }
       return { lines: sent.lines };
     },
+  );
+  // Files of the workspace kept on the server as one versioned source artifact: a command
+  // tree, a contract, any original a tool should read instead of the network. Registering is
+  // not approving: someone else approves the asset before its sar_ id can be used.
+  api.registerTool(
+    'circle_server_source_artifact',
+    'Register files of the workspace on circle-server as one versioned source artifact: each file is uploaded as an original with its SHA-256 and listed with its role. The server keeps it as a draft until someone else approves it; circle_server_source_artifact_status then gives its sourceArtifactId (sar_…), which server tools take as sourceArtifactId. It sends the files to the server, so it asks first.',
+    {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'the artifact name' },
+        version: {
+          type: 'string',
+          description: 'a new version for changed contents',
+        },
+        files: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'path in the workspace' },
+              role: {
+                type: 'string',
+                description:
+                  'what the file is to the tools that read it, for example command-tree',
+              },
+              mediaType: { type: 'string' },
+            },
+            required: ['path', 'role'],
+          },
+        },
+        metadata: {
+          type: 'object',
+          description:
+            'what the uploader expects the artifact to be, for example the build it is meant for; readers take it as a claim, not a fact',
+        },
+      },
+      required: ['name', 'version', 'files'],
+    },
+    async (args) => {
+      const config = readConfig();
+      if (!config?.scopeId)
+        throw new api.ToolError(
+          'no project: sign in again with /server login <url> <user>',
+        );
+      const name = String(args.name ?? '');
+      const version = String(args.version ?? '');
+      const files = Array.isArray(args.files) ? args.files : [];
+      if (!name || !version || !files.length)
+        throw new api.ToolError(
+          'name, version and at least one file are required',
+        );
+      if (args.metadata !== undefined && !isRecord(args.metadata))
+        throw new api.ToolError('metadata is an object');
+      const listed: Record<string, unknown>[] = [];
+      try {
+        for (const file of files) {
+          if (!isRecord(file) || typeof file.path !== 'string' || !file.path)
+            throw new ServerError('each file needs a path in the workspace');
+          if (typeof file.role !== 'string' || !file.role)
+            throw new ServerError(`${file.path}: role is required`);
+          const path = resolve(api.workspace, file.path);
+          const inside = relative(api.workspace, path);
+          if (!inside || inside.startsWith('..') || isAbsolute(inside))
+            throw new ServerError(`${file.path} is outside the workspace`);
+          if (!existsSync(path))
+            throw new ServerError(`no such file: ${file.path}`);
+          const source = await upload(path, config.scopeId);
+          listed.push({
+            path: inside.split(sep).join('/'),
+            role: file.role,
+            ...(typeof file.mediaType === 'string'
+              ? { mediaType: file.mediaType }
+              : {}),
+            sourceRevisionId: source.id,
+            sha256: source.sha256,
+          });
+        }
+        const { data } = await request('POST', '/v1/source-artifacts', {
+          json: {
+            scopeId: config.scopeId,
+            name,
+            version,
+            metadata: isRecord(args.metadata) ? args.metadata : {},
+            files: listed,
+          },
+        });
+        return {
+          registered: data,
+          files: listed,
+          next: 'someone else approves the asset; then circle_server_source_artifact_status gives the sourceArtifactId',
+        };
+      } catch (error) {
+        throw new api.ToolError(reason(error));
+      }
+    },
+  );
+  api.registerTool(
+    'circle_server_source_artifact_status',
+    'Look up a source artifact on circle-server by its asset id: its version, lifecycle, files with their SHA-256 and, once someone else has approved it, its sourceArtifactId (sar_…). Read-only.',
+    {
+      type: 'object',
+      properties: { asset_id: { type: 'string' } },
+      required: ['asset_id'],
+    },
+    async (args) => {
+      const id = String(args.asset_id ?? '');
+      if (!id) throw new api.ToolError('asset_id is required');
+      try {
+        return (
+          await request('GET', `/v1/source-artifacts/${encodeURIComponent(id)}`)
+        ).data;
+      } catch (error) {
+        throw new api.ToolError(reason(error));
+      }
+    },
+    { readOnly: true },
   );
   void showStatus();
   scheduleRefresh();
