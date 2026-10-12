@@ -55,6 +55,7 @@ What these do and do not do is on [Sessions](sessions.md). Several have limits i
 |---|---|---|
 | `/plan [on\|off]` | `/plan-mode` | Turn `read-only` mode on or off. With no argument it switches. |
 | `/yolo [off]` | `/auto` | Stop asking before commands and file changes in this session. `/yolo off` asks again. Anything else, including no argument, turns it on. |
+| `/mode [manual\|accept-edits\|plan\|auto]` | | Set how this session asks. With no argument it moves to the next mode. `accept edits` changes files inside the workspace without asking. See [Modes](usage.md#modes). |
 | `/approvals [revoke N]` | | List the "always allow" rules of this session, with the last decisions under the title; `enter` on a rule, or its number, revokes it. The list has no search: `k` `j` move, and other keys go to the input box. `revoke N` removes rule N directly. |
 | `/trust` | | Trust this folder. It is saved in your settings; nothing is written into the folder. The full-screen interface asks before it opens a folder you have not trusted, so there it only confirms. |
 

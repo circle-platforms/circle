@@ -285,21 +285,15 @@ try {
   checks.push(
     'native export writes selected destination and rejects invalid names',
   );
-  await page
-    .getByRole('button', { name: 'orbit-api fix/reconnect', exact: true })
-    .click();
+  // Open folder sits in the sidebar, under the folders and their sessions.
   await page.getByRole('button', { name: 'open folder', exact: true }).click();
   await page
     .getByRole('heading', { name: 'new session', exact: true })
     .waitFor();
-  if (
-    !(await page
-      .getByRole('button', { name: 'files panel', exact: true })
-      .isVisible())
-  )
-    await page
-      .getByRole('button', { name: 'toggle inspector', exact: true })
-      .click();
+  // The side panel starts closed; the top bar's files icon opens it.
+  const files = page.getByRole('button', { name: 'files panel', exact: true });
+  if ((await files.getAttribute('aria-pressed')) !== 'true')
+    await files.click();
   await page.getByRole('button', { name: 'hello.ts', exact: true }).click();
   await page
     .getByText('export const hello = "native workspace";', { exact: true })

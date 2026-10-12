@@ -4,6 +4,7 @@ import {
   existsSync,
   readFileSync,
   realpathSync,
+  statSync,
   writeFileSync,
   unlinkSync,
 } from 'node:fs';
@@ -44,6 +45,15 @@ import { availableUpdate } from '../../../src/update.js';
 import { BUILTIN_SLASH } from '../../../src/tui/slash_commands.js';
 import { ModelCatalog } from '../../../src/model_catalog.js';
 import { VERSION } from '../../../src/version.js';
+import { isSessionMode } from '../../../src/approvals.js';
+import { currentBranch } from '../../../src/git_info.js';
+import { formatCosts } from '../../../src/pricing.js';
+import { TurnStatus } from '../../../src/tui/turn_status.js';
+import {
+  approvalPreview,
+  fileChange,
+} from '../../../src/tui/approval_preview.js';
+import type { CardLine } from '../../../src/ink/components/dialog_card.js';
 class DisconnectedModel implements ChatModel {
   model = 'not connected';
   async complete(): Promise<never> {
@@ -63,6 +73,7 @@ import type {
   Message,
   Interaction,
   Effort,
+  DiffView,
 } from '../../workbench/src/model/types';
 import {
   validateRuntimeCommand,
@@ -82,6 +93,42 @@ const flag = (value: unknown) => {
   if (typeof value !== 'boolean') throw Error('boolean required');
   return value;
 };
+// The app has room for longer diffs than the terminal's card.
+const DIFF_ROWS = 400;
+const FILE_TOOLS = ['write_file', 'edit_file', 'apply_patch', 'delete'];
+const diffView = (lines: CardLine[]): DiffView | undefined =>
+  lines.length
+    ? {
+        summary: lines[0]!.text,
+        rows: lines
+          .slice(1)
+          .map((line) =>
+            line.tone === 'added' || line.tone === 'removed'
+              ? { text: line.text, tone: line.tone }
+              : { text: line.text },
+          ),
+      }
+    : undefined;
+// The paths a file tool call changes: a patch names its own.
+function changedPaths(name: string, args: Record<string, unknown>): string[] {
+  if (name === 'apply_patch')
+    return [
+      ...String(args.patchText ?? '').matchAll(
+        /^\*\*\* (?:Add File|Update File|Delete File|Move to):\s*(.+)$/gm,
+      ),
+    ].map((match) => match[1]!.trim());
+  const path = String(args.file_path ?? args.path ?? '');
+  return path ? [path] : [];
+}
+// A file's text, or undefined when it is missing, too large or not text.
+function readText(path: string): string | undefined {
+  try {
+    if (!existsSync(path) || statSync(path).size > 256 * 1024) return undefined;
+    return new TextDecoder('utf-8', { fatal: true }).decode(readFileSync(path));
+  } catch {
+    return undefined;
+  }
+}
 interface Pending {
   row: Interaction;
   signal: AbortSignal;
@@ -124,6 +171,18 @@ export class RuntimeController {
     string,
     { status: 'running' | 'waiting' | 'error' | 'success'; output?: string }
   >();
+  // Per `${session}:${call}`: the diff a file tool showed before it ran.
+  private diffs = new Map<string, DiffView>();
+  // Per session and resolved path: the file before this session's first change to it
+  // (undefined: it did not exist), and how it differs now.
+  private changes = new Map<
+    string,
+    Map<string, { original: string | undefined; diff?: DiffView; at: string }>
+  >();
+  private turns = new Map<
+    string,
+    { status: TurnStatus; started: number; waited: number; since?: number }
+  >();
   private error?: string;
   private closing = false;
   private mutation = Promise.resolve();
@@ -133,6 +192,17 @@ export class RuntimeController {
   >();
   private tasks = new Set<Promise<unknown>>();
   private discoveredModels: string[] = [];
+  // Whether a key is saved, read once and again after configure or logout.
+  private keySaved?: boolean;
+  // A workspace's git branch, read at most every two seconds: snapshots follow tokens.
+  private branches = new Map<string, { branch: string; at: number }>();
+  private branch(path: string): string {
+    const cached = this.branches.get(path);
+    if (cached && Date.now() - cached.at < 2000) return cached.branch;
+    const branch = currentBranch(path);
+    this.branches.set(path, { branch, at: Date.now() });
+    return branch;
+  }
   constructor(readonly options: ControllerOptions) {
     this.home = options.home;
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
@@ -216,8 +286,8 @@ export class RuntimeController {
       if (raw.role === 'tool') {
         const call = calls.get(raw.tool_call_id ?? '');
         if (call?.tool) {
-          result.splice(result.indexOf(call), 1);
-          result.push({
+          // In place: a finished call keeps its position among its turn's calls.
+          result[result.indexOf(call)] = {
             ...call,
             id: node.id,
             parentId: node.parent,
@@ -226,7 +296,7 @@ export class RuntimeController {
               output: raw.content,
               status: raw.status ?? 'success',
             },
-          });
+          };
         } else
           result.push({
             id: node.id,
@@ -286,6 +356,7 @@ export class RuntimeController {
             status: state?.status ?? 'unknown',
             filePath:
               String(call.args.file_path ?? call.args.path ?? '') || undefined,
+            diff: this.diffs.get(`${id}:${call.id}`),
           },
         };
         calls.set(call.id, row);
@@ -383,6 +454,10 @@ export class RuntimeController {
         state: selected && owner.busy ? 'waiting' : 'idle',
         readOnly: selected ? owner.harness.planMode : false,
         auto: selected ? owner.policy.yoloEnabled(row.id) : false,
+        mode: selected ? owner.mode : 'manual',
+        meters: selected ? this.meters(owner) : undefined,
+        turn: this.turn(row.id),
+        changes: this.changeList(row.id),
         showThinking: !settings.hide_thinking,
         expandTools: false,
         todos: selected
@@ -428,13 +503,14 @@ export class RuntimeController {
         coreVersion: VERSION,
         observedAt: new Date().toISOString(),
         configured: !!this.options.model || isReady(settings),
+        hasKey: (this.keySaved ??= Boolean(this.savedKey())),
         error: this.error,
       },
       workspaces: paths.map((path) => ({
         id: identity(path),
         name: path === join(this.home, 'workspace') ? 'circle' : basename(path),
         path,
-        branch: 'local workspace',
+        branch: this.branch(path),
         trusted: isFolderTrusted(settings, path),
         origin: 'native',
         instructions: [],
@@ -603,11 +679,116 @@ export class RuntimeController {
         protocol: settings.auth.protocol as 'openai' | 'anthropic',
         credentialFiles: settings.credential_files,
         updateCheck: settings.update_check,
-        uiFontSize: 13,
-        codeFontSize: 12,
+        textSize: 'default',
         keybindings: {},
       },
     };
+  }
+  // The terminal footer's numbers (src/tui/session_app.ts): usage over the whole session,
+  // cost as formatCosts writes it, and the context of the last answer from this model.
+  private meters(runtime: AgentRuntime): NonNullable<Session['meters']> {
+    const stats = runtime.stats();
+    const facts =
+      runtime.harness.model.modelFacts ??
+      runtime.catalog.facts(
+        runtime.harness.model.model,
+        runtime.options.settings,
+        runtime.harness.model.contextWindow,
+      );
+    const last = runtime.harness.messages
+      .filter((message) => message.role === 'assistant' && message.usage)
+      .at(-1);
+    return {
+      input: stats.usage.input_tokens,
+      output: stats.usage.output_tokens,
+      cacheRead: stats.usage.cache_read_tokens,
+      cost: formatCosts(
+        [stats.costs],
+        facts.rates?.input !== undefined && facts.rates.output !== undefined,
+      ),
+      contextInput:
+        !last?.request_model ||
+        last.request_model === runtime.harness.model.model
+          ? (last?.usage?.input_tokens ?? null)
+          : null,
+      contextWindow: facts.windowKnown ? facts.contextWindow : null,
+    };
+  }
+  private turn(id: string): Session['turn'] {
+    const turn = this.turns.get(id);
+    if (!turn) return undefined;
+    return {
+      verb: turn.status.verb,
+      startedAt: turn.started,
+      waited:
+        turn.waited + (turn.since === undefined ? 0 : Date.now() - turn.since),
+      tokens: turn.status.tokens,
+      retry: turn.status.retry,
+    };
+  }
+  private changeList(id: string): Session['changes'] {
+    const files = this.changes.get(id);
+    if (!files) return undefined;
+    return [...files]
+      .filter(([, file]) => file.diff)
+      .map(([path, file]) => ({
+        path,
+        kind:
+          file.original === undefined
+            ? ('added' as const)
+            : file.diff!.summary.startsWith('deleted')
+              ? ('deleted' as const)
+              : ('modified' as const),
+        diff: file.diff!,
+        at: file.at,
+      }));
+  }
+  // Before a file tool runs: its diff against the file as it is, and the file's first
+  // version for the session's changes. After it ran: how the file differs from that.
+  private fileEvent(runtime: AgentRuntime, id: string, event: CircleEvent) {
+    const name = String(event.payload.name ?? '');
+    const args = (event.payload.args ?? {}) as Record<string, unknown>;
+    const callId = String(event.payload.id ?? '');
+    if (!FILE_TOOLS.includes(name) || !callId) return;
+    const resolve = (path: string) => runtime.sandbox.resolvePath(path);
+    if (event.kind === 'tool_waiting' || event.kind === 'tool_start') {
+      const diff = diffView(approvalPreview(name, args, resolve, DIFF_ROWS));
+      if (diff) this.diffs.set(`${id}:${callId}`, diff);
+      if (event.kind !== 'tool_start') return;
+      const files = this.changes.get(id) ?? new Map();
+      this.changes.set(id, files);
+      for (const path of changedPaths(name, args)) {
+        let target: string;
+        try {
+          target = resolve(path);
+        } catch {
+          continue;
+        }
+        if (!files.has(target))
+          files.set(target, { original: readText(target), at: event.ts });
+      }
+      return;
+    }
+    if (event.kind !== 'tool_result') return;
+    for (const [target, file] of this.changes.get(id) ?? []) {
+      const now = existsSync(target) ? readText(target) : undefined;
+      const diff = diffView(fileChange(file.original, now, DIFF_ROWS));
+      file.diff = diff;
+      if (diff) file.at = event.ts;
+    }
+  }
+  private savedKey(): string {
+    try {
+      const settings = loadSettings(this.home);
+      const credentials = loadCredentials(this.home);
+      return (
+        credentials[settings.auth.api_key_ref] ||
+        credentials.api_key ||
+        ''
+      ).trim();
+    } catch {
+      return '';
+    }
   }
   publish(event?: RuntimeUpdate['event']) {
     if (this.closing) return;
@@ -627,6 +808,34 @@ export class RuntimeController {
     if (event.kind === 'run_start') this.activeRuns.add(id);
     if (['run_end', 'run_error'].includes(event.kind))
       this.activeRuns.delete(id);
+    if (!event.tags?.subagent) {
+      const now = Date.now();
+      if (event.kind === 'run_start')
+        this.turns.set(id, {
+          status: new TurnStatus(),
+          started: now,
+          waited: 0,
+        });
+      const turn = this.turns.get(id);
+      if (turn) {
+        turn.status.apply(event, () => undefined, now);
+        // Time spent waiting for a person is not the model's: the busy clock leaves it out.
+        if (event.kind === 'tool_waiting') turn.since ??= now;
+        if (
+          ['tool_start', 'tool_result'].includes(event.kind) &&
+          turn.since !== undefined
+        ) {
+          turn.waited += now - turn.since;
+          turn.since = undefined;
+        }
+      }
+      if (['run_end', 'run_error'].includes(event.kind)) this.turns.delete(id);
+    }
+    try {
+      this.fileEvent(runtime, id, event);
+    } catch {
+      /* A diff is a view; failing to draw one never stops the turn. */
+    }
     if (event.kind === 'run_error' && !event.payload.interrupted) {
       const rows = this.failures.get(id) ?? [];
       rows.push({
@@ -739,12 +948,22 @@ export class RuntimeController {
         callId: call.id,
         input: structuredClone(call.args),
         title: `${call.name} · ${review.reason}`,
+        reason: review.reason,
+        prefix: review.prefix.length ? review.prefix.join(' ') : undefined,
         tool: call.name,
         command:
           typeof call.args.command === 'string' ? call.args.command : undefined,
         target: String(call.args.file_path ?? call.args.path ?? ''),
-        after:
-          typeof call.args.content === 'string' ? call.args.content : undefined,
+        diff:
+          this.diffs.get(`${runtime.session.id}:${call.id}`) ??
+          diffView(
+            approvalPreview(
+              call.name,
+              call.args,
+              (path) => runtime.sandbox.resolvePath(path),
+              DIFF_ROWS,
+            ),
+          ),
         choices: [
           'approve',
           ...(review.verdict === 'ASK' && review.pattern ? ['always'] : []),
@@ -1070,6 +1289,10 @@ export class RuntimeController {
       case 'set-auto':
         runtime.policy.setYolo(runtime.session.id, flag(p.enabled));
         return {};
+      case 'set-mode':
+        if (!isSessionMode(p.mode)) throw Error('invalid mode');
+        runtime.setMode(p.mode);
+        return {};
       case 'configure': {
         if (
           [...this.runtimes.values()].some(
@@ -1096,9 +1319,12 @@ export class RuntimeController {
         const baseUrl = normalizeBaseUrl(endpoint.href, protocol);
         const model = text(p.model, 'model', 500);
         if (!model.trim()) throw Error('model required');
-        const secret = text(p.apiKey, 'API key', 4096);
-        if (!secret.trim()) throw Error('API key required');
+        // An empty key keeps the saved one, so the URL or model can change alone.
+        const secret =
+          text(p.apiKey, 'API key', 4096).trim() || this.savedKey();
+        if (!secret) throw Error('API key required');
         saveCredentials({ api_key: secret }, this.home);
+        this.keySaved = true;
         const settings = withConnection(
           { protocol, base_url: baseUrl, model, api_key_ref: 'api_key' },
           this.home,
@@ -1116,6 +1342,7 @@ export class RuntimeController {
         return {};
       }
       case 'logout': {
+        this.keySaved = undefined;
         if (
           [...this.runtimes.values()].some(
             (owner) =>

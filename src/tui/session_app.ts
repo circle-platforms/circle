@@ -356,6 +356,8 @@ export class SessionApp {
       this.state.autoMode = this.runtime.policy.yoloEnabled(
         this.runtime.session.id,
       );
+      this.state.acceptEdits =
+        this.runtime.policy.mode(this.runtime.session.id) === 'accept-edits';
       this.state.busy = this.runtime.busy;
       const stats = this.runtime.stats();
       this.state.usage = stats.usage;

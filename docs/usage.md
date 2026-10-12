@@ -69,14 +69,15 @@ To change or drop a waiting message, take it back into the input box. `↑` in a
 
 ## Modes
 
-Two modes change what Circle is allowed to do. The current one is shown in the bottom-right corner of the input box. Normal mode shows nothing.
+Three modes change what Circle is allowed to do. The current one is shown in the bottom-right corner of the input box. Normal mode (`manual`, asking before each change and command) shows nothing.
 
 | Mode | Turn on | What it does |
 |---|---|---|
-| `read-only` | `/plan` | Circle can read and search, and change only a file named `plan.md`. It cannot run commands or change other files. It writes its plan to `plan.md` for you to review. The model can turn it on itself, and asks you before it turns it off. |
-| `auto` | `/yolo` or `/auto` | Circle stops asking. Every command and file change runs without a card. Use `/yolo off` to go back. |
+| `accept edits` | `/mode accept-edits` | Circle changes files inside the workspace without asking. Commands, deletes and changes outside the workspace still ask. |
+| `read-only` | `/plan` or `/mode plan` | Circle can read and search, and change only a file named `plan.md`. It cannot run commands or change other files. It writes its plan to `plan.md` for you to review. The model can turn it on itself, and asks you before it turns it off: you can answer that it should then accept edits. |
+| `auto` | `/yolo`, `/auto` or `/mode auto` | Circle stops asking. Every command and file change runs without a card. Use `/yolo off` to go back. |
 
-`read-only` wins when both are on. Auto mode applies only to the current conversation and is forgotten when you start a new one. Read [Security](security.md#auto-mode) before you use it.
+`/mode` with no argument moves to the next mode: manual, accept edits, read-only, auto, and back to manual. `/mode manual` goes back to asking. Leaving `read-only` returns to manual. The modes apply only to the current conversation and are forgotten when you start a new one. Read [Security](security.md#auto-mode) before you use auto.
 
 ## The plan
 

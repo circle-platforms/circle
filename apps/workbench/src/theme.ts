@@ -7,9 +7,17 @@ import {
   palette,
   setPalette,
 } from '../../../src/ink/theme';
-import type { Theme } from './model/types';
+import type { TextSize, Theme } from './model/types';
+/** Interface and code text sizes in px for each preset; code is one step smaller. */
+export const TEXT_SIZES: Record<TextSize, [number, number]> = {
+  small: [13, 12],
+  default: [14, 13],
+  large: [15, 14],
+  larger: [17, 16],
+};
+export const textSizes = Object.keys(TEXT_SIZES) as TextSize[];
 /** Browser tokens are derived from Circle's existing palette, never a second color table. */
-export function applyTheme(choice: Theme, uiSize = 13, codeSize = 13) {
+export function applyTheme(choice: Theme, size: TextSize = 'default') {
   const dark =
     choice === 'auto'
       ? matchMedia('(prefers-color-scheme: dark)').matches
@@ -44,18 +52,27 @@ export function applyTheme(choice: Theme, uiSize = 13, codeSize = 13) {
     '--negative',
     `rgb(${p.rainbow_stops[2]![1].join(' ')})`,
   );
-  root.style.setProperty(
-    '--logo-gradient',
-    `conic-gradient(${p.rainbow_stops.map(([at, value]) => `rgb(${value.join(' ')}) ${at * 100}%`).join(',')})`,
-  );
-  root.style.setProperty(
-    '--ui-size',
-    Math.min(18, Math.max(11, uiSize)) + 'px',
-  );
-  root.style.setProperty(
-    '--code-size',
-    Math.min(20, Math.max(11, codeSize)) + 'px',
-  );
+  const stop = (index: number) =>
+    `rgb(${p.rainbow_stops[index]![1].join(' ')})`;
+  const stops = p.rainbow_stops
+    .map(([at, value]) => `rgb(${value.join(' ')}) ${at * 100}%`)
+    .join(',');
+  root.style.setProperty('--logo-gradient', `conic-gradient(${stops})`);
+  // The composer frame turns through these, as the terminal's frame does.
+  root.style.setProperty('--rainbow-stops', stops);
+  // Your turn: the terminal's frame is yellow; the app takes the rainbow's orange, which
+  // the palette has already darkened to read on a light background.
+  root.style.setProperty('--attention', stop(3));
+  const hex = (index: number) =>
+    '#' +
+    p.rainbow_stops[index]![1].map((value) =>
+      value.toString(16).padStart(2, '0'),
+    ).join('');
+  root.style.setProperty('--removed-bg', rgb(mix(p.bg_hex, hex(2), 0.16)));
+  root.style.setProperty('--added-bg', rgb(p.write_bg_hex));
+  const [ui, code] = TEXT_SIZES[size] ?? TEXT_SIZES.default;
+  root.style.setProperty('--ui-size', ui + 'px');
+  root.style.setProperty('--code-size', code + 'px');
   root.dataset.theme = dark ? 'dark' : 'light';
   root.style.colorScheme = dark ? 'dark' : 'light';
 }

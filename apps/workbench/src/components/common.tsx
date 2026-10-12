@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { ChevronDown, ChevronRight, FileText, Search, X } from 'lucide-react';
 import { Button, IconButton } from './ui';
+import { t } from '../i18n';
 export { Button, IconButton, Modal, Badge, DataBlock, EmptyState } from './ui';
 export function Page({
   title,
@@ -29,8 +30,8 @@ export function Page({
 export function SearchInput({
   value,
   onChange,
-  label = 'search',
-  placeholder = 'search…',
+  label = t('search'),
+  placeholder = t('search…'),
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -47,7 +48,7 @@ export function SearchInput({
         onChange={(event) => onChange(event.target.value)}
       />
       {value && (
-        <IconButton label="clear search" onClick={() => onChange('')}>
+        <IconButton label={t('clear search')} onClick={() => onChange('')}>
           <X size={13} />
         </IconButton>
       )}
@@ -112,11 +113,36 @@ export function Fold({
     </div>
   );
 }
+// The states records and cards show; a state not listed is shown as it is.
+const STATES: Record<string, () => string> = {
+  waiting: () => t('waiting'),
+  running: () => t('running'),
+  success: () => t('done'),
+  completed: () => t('completed'),
+  error: () => t('error'),
+  failed: () => t('failed'),
+  unknown: () => t('queued'),
+  pending: () => t('pending'),
+  recorded: () => t('answered'),
+  idle: () => t('idle'),
+  active: () => t('active'),
+  trusted: () => t('trusted'),
+  'not trusted': () => t('not trusted'),
+  configured: () => t('configured'),
+  'not configured': () => t('not configured'),
+  connected: () => t('connected'),
+  'not connected': () => t('not connected'),
+  'reload required': () => t('reload required'),
+  added: () => t('added'),
+  modified: () => t('modified'),
+  'native browser': () => t('native browser'),
+  'not opened': () => t('not opened'),
+};
 export function Status({ value }: { value: string }) {
   return (
     <span className={`status status-${value.replaceAll(' ', '-')}`}>
       <i />
-      {value}
+      {STATES[value]?.() ?? value}
     </span>
   );
 }
@@ -136,7 +162,7 @@ export function FileChip({
         {name}
       </button>
       {onRemove && (
-        <button aria-label={`remove ${name}`} onClick={onRemove}>
+        <button aria-label={t('remove {name}', { name })} onClick={onRemove}>
           <X size={11} />
         </button>
       )}

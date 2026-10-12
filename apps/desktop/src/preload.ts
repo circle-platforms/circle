@@ -25,6 +25,9 @@ const bridge: DesktopBridge = {
   chooseWorkspace: () => ipcRenderer.invoke('circle:choose-workspace'),
   readWorkspaceFile: (workspaceId, fileId) =>
     ipcRenderer.invoke('circle:read-workspace-file', workspaceId, fileId),
+  listWorkspace: (workspaceId) =>
+    ipcRenderer.invoke('circle:list-workspace', workspaceId),
+  setLanguage: (locale) => ipcRenderer.invoke('circle:set-language', locale),
   saveFile: (options) => ipcRenderer.invoke('circle:save-file', options),
   copyText: (text) => ipcRenderer.invoke('circle:copy-text', text),
   windowControl: (action) =>

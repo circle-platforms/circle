@@ -14,6 +14,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { stripAnsi } from '../src/ink/string_width.js';
 import type { Picker } from '../src/ink/components/picker.js';
 import { SessionApp } from '../src/tui/session_app.js';
+import { renderScreen } from '../src/tui/render.js';
 import { parseSlash, closeMatch } from '../src/tui/slash_commands.js';
 import { ScriptedModel } from '../src/testing.js';
 import {
@@ -433,6 +434,44 @@ test('/yolo takes off, 0, false and no as off; /plan takes on and off and says w
   await app.submit('/plan');
   assert.ok(!runtime.harness.planMode);
   assert.equal(app.state.notices.at(-1), 'Read-only off');
+});
+
+test('/mode steps through manual, accept edits, plan and auto, and the frame names the mode', async (t) => {
+  const { app, runtime } = await session(t);
+  const id = runtime.session.id;
+  const word = () =>
+    renderScreen(app.state, 80, 24)
+      .map(stripAnsi)
+      .filter((row) => row.startsWith('╰'))
+      .at(-1);
+  assert.equal(runtime.mode, 'manual');
+  await app.submit('/mode');
+  assert.equal(runtime.policy.mode(id), 'accept-edits');
+  assert.equal(
+    app.state.notices.at(-1),
+    'Accept edits · workspace file edits run without asking, commands and deletes still ask',
+  );
+  assert.match(word()!, /accept edits/);
+  await app.submit('/mode');
+  assert.ok(runtime.harness.planMode);
+  assert.match(word()!, /read-only/);
+  await app.submit('/mode');
+  assert.ok(!runtime.harness.planMode);
+  assert.ok(runtime.policy.yoloEnabled(id));
+  assert.match(word()!, /auto/);
+  await app.submit('/mode');
+  assert.equal(runtime.mode, 'manual');
+  assert.equal(
+    app.state.notices.at(-1),
+    'Manual · asking before each change and command',
+  );
+  assert.doesNotMatch(word()!, /auto|accept|read-only/);
+  await app.submit('/mode accept edits');
+  assert.equal(runtime.mode, 'accept-edits');
+  await app.submit('/mode accept-edits');
+  assert.equal(app.state.flash, 'Mode is already accept edits');
+  await app.submit('/mode sometimes');
+  assert.equal(app.state.flash, 'Usage: /mode [manual|accept-edits|plan|auto]');
 });
 
 test('/export, /share and /unshare write the screen as Markdown under the names 0.5.0 used', async (t) => {

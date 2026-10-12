@@ -126,6 +126,8 @@ try {
         assert.equal(snapshot.sessions[0].readOnly, true);
       else if (command.name === 'yolo')
         assert.equal(snapshot.sessions[0].auto, true);
+      else if (command.name === 'mode')
+        assert.equal(snapshot.sessions[0].mode, 'accept-edits');
       else if (command.name === 'thinking')
         assert.equal(snapshot.sessions[0].showThinking, false);
       else if (command.name === 'details')
@@ -219,7 +221,10 @@ try {
   await page
     .getByRole('button', { name: /execute needs your permission approval/ })
     .click();
-  await page.getByRole('button', { name: 'allow once', exact: true }).click();
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'allow once', exact: true })
+    .click();
   const decision = await state();
   assert.equal(decision.interactions[0].status, 'recorded');
   assert.equal(decision.jobs[0].state, 'running');

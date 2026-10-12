@@ -27,6 +27,11 @@ import type {
 } from '../ink/components/picker.js';
 import { palette } from '../ink/theme.js';
 import { stripAnsi } from '../ink/string_width.js';
+import {
+  isSessionMode,
+  SESSION_MODES,
+  type SessionMode,
+} from '../approvals.js';
 import { transcriptRows, type ScreenState } from './render.js';
 import { elapsed, type Job } from '../jobs.js';
 import { emptyUsage } from '../types.js';
@@ -296,6 +301,42 @@ function yolo(host: CommandHost, args: string): void {
       ? 'Auto on · tool calls run without asking'
       : 'Auto off · asking for each call again',
   );
+}
+
+const MODE_NOTICES: Record<SessionMode, string> = {
+  manual: 'Manual · asking before each change and command',
+  'accept-edits':
+    'Accept edits · workspace file edits run without asking, commands and deletes still ask',
+  plan: 'Read-only on · writes and shell are blocked, /plan.md is allowed',
+  auto: 'Auto on · tool calls run without asking',
+};
+
+// /mode with no argument moves to the next mode, as shift+tab does in other agents.
+function mode(host: CommandHost, args: string): void {
+  const runtime = host.runtime;
+  const token = args
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, '-');
+  const current = runtime.mode;
+  let want: SessionMode;
+  if (!token)
+    want =
+      SESSION_MODES[
+        (SESSION_MODES.indexOf(current) + 1) % SESSION_MODES.length
+      ]!;
+  else if (isSessionMode(token)) want = token;
+  else if (token === 'yolo') want = 'auto';
+  else {
+    host.flash(`Usage: /mode [${SESSION_MODES.join('|')}]`);
+    return;
+  }
+  if (want === current) {
+    host.flash(`Mode is already ${want.replace('-', ' ')}`);
+    return;
+  }
+  runtime.setMode(want);
+  host.notice(MODE_NOTICES[want]);
 }
 
 function thinking(host: CommandHost, args: string): void {
@@ -1394,6 +1435,7 @@ const HANDLERS: Record<string, Handler> = {
   hotkeys: (host) => host.notice(hotkeysText()),
   plan,
   yolo,
+  mode,
   thinking,
   details,
   themes,

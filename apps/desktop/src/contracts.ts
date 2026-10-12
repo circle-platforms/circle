@@ -23,6 +23,8 @@ export interface DesktopInfo {
   dataPath: string;
   runtimeConnected: boolean;
   frontendOnly: boolean;
+  /** A language set for this run (checks, CIRCLE_WORKBENCH_LANGUAGE); not saved. */
+  language?: 'en' | 'zh-CN';
 }
 export type DesktopAction =
   'new' | 'tree' | 'import' | 'export' | 'settings' | 'open-folder' | 'help';
@@ -40,6 +42,10 @@ export interface DesktopBridge {
     workspaceId: string,
     fileId: string,
   ) => Promise<NativeFile>;
+  /** The files of the active, trusted workspace; null for any other. */
+  listWorkspace: (workspaceId: string) => Promise<NativeWorkspace | null>;
+  /** The window's language, for menus, system dialogs and notifications. */
+  setLanguage: (locale: 'en' | 'zh-CN') => Promise<void>;
   saveFile: (options: {
     name: string;
     content: string;

@@ -8,6 +8,7 @@ import type {
   BrowserCapture,
 } from '../../../desktop/src/contracts';
 import { Button, IconButton, Status } from '../components/common';
+import { t } from '../i18n';
 export function NativeBrowser() {
   const { snapshot, notify } = useRuntime();
   const id = currentSession(snapshot).id;
@@ -74,7 +75,7 @@ export function NativeBrowser() {
       setCapture(null);
     } catch (error) {
       active.current = false;
-      notify(error instanceof Error ? error.message : 'navigation failed');
+      notify(error instanceof Error ? error.message : t('navigation failed'));
     }
   };
   return (
@@ -82,7 +83,7 @@ export function NativeBrowser() {
       <div className="browser-address">
         <Globe size={13} />
         <input
-          aria-label="browser address"
+          aria-label={t('browser address')}
           value={url}
           placeholder="https://…"
           onChange={(event) => setUrl(event.target.value)}
@@ -90,7 +91,10 @@ export function NativeBrowser() {
             if (event.key === 'Enter') void navigate();
           }}
         />
-        <IconButton label="navigate browser" onClick={() => void navigate()}>
+        <IconButton
+          label={t('navigate browser')}
+          onClick={() => void navigate()}
+        >
           <ArrowUpRight size={14} />
         </IconButton>
       </div>
@@ -98,8 +102,10 @@ export function NativeBrowser() {
         {!state && (
           <div className="browser-empty">
             <Globe size={30} />
-            <h3>open a page</h3>
-            <p>A sandboxed native browser belongs to this Circle session.</p>
+            <h3>{t('open a page')}</h3>
+            <p>
+              {t('A sandboxed native browser belongs to this Circle session.')}
+            </p>
           </div>
         )}
       </div>
@@ -107,7 +113,7 @@ export function NativeBrowser() {
         <Status value={state ? 'native browser' : 'not opened'} />
         <code>{state?.sessionId ?? 'browser:' + id}</code>
         <IconButton
-          label="capture browser"
+          label={t('capture browser')}
           disabled={!state}
           onClick={() =>
             void host.browserCapture(id).then(
@@ -121,11 +127,11 @@ export function NativeBrowser() {
       </div>
       {capture && (
         <details className="context-source">
-          <summary>captured observation</summary>
+          <summary>{t('captured observation')}</summary>
           <img
             className="attachment-image"
             src={capture.dataUrl}
-            alt="browser observation"
+            alt={t('browser observation')}
           />
           <code>{capture.sha256}</code>
           <p className="panel-note">{capture.observedAt}</p>
@@ -135,8 +141,9 @@ export function NativeBrowser() {
         </details>
       )}
       <p className="panel-note">
-        The local operator controls this session. Agent control will use the
-        same session identity when Circle is connected.
+        {t(
+          'The local operator controls this session. Agent control will use the same session identity when Circle is connected.',
+        )}
       </p>
     </>
   );

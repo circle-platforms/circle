@@ -577,20 +577,45 @@ export class ApprovalStore {
     return entry;
   }
 }
+// How a session answers approvals. Plan mode is not one of these: it lives
+// on the harness, because it removes tools rather than answering for them.
+export type ApprovalMode = 'manual' | 'accept-edits' | 'auto';
+export const APPROVAL_MODES: readonly ApprovalMode[] = [
+  'manual',
+  'accept-edits',
+  'auto',
+];
+// What a person picks: the approval modes plus plan, in cycling order.
+export type SessionMode = ApprovalMode | 'plan';
+export const SESSION_MODES: readonly SessionMode[] = [
+  'manual',
+  'accept-edits',
+  'plan',
+  'auto',
+];
+export const isSessionMode = (value: unknown): value is SessionMode =>
+  SESSION_MODES.includes(value as SessionMode);
+const EDIT_TOOLS = ['write_file', 'edit_file', 'apply_patch'];
 export class ApprovalPolicy {
-  private yolo = new Set<string>();
+  private modes = new Map<string, ApprovalMode>();
   constructor(
     readonly store: ApprovalStore,
     readonly workspace: string,
     readonly credentialFiles = DEFAULT_CREDENTIAL_FILES,
     private readonly resolvePath?: (path: string) => string,
   ) {}
+  setMode(thread: string, mode: ApprovalMode): void {
+    if (mode === 'manual') this.modes.delete(thread);
+    else this.modes.set(thread, mode);
+  }
+  mode(thread: string): ApprovalMode {
+    return this.modes.get(thread) ?? 'manual';
+  }
   setYolo(thread: string, enabled: boolean): void {
-    if (enabled) this.yolo.add(thread);
-    else this.yolo.delete(thread);
+    this.setMode(thread, enabled ? 'auto' : 'manual');
   }
   yoloEnabled(thread: string): boolean {
-    return this.yolo.has(thread);
+    return this.mode(thread) === 'auto';
   }
   review(tool: string, args: Record<string, unknown>): Review {
     if (tool === 'execute') {
@@ -626,7 +651,7 @@ export class ApprovalPolicy {
         /^\*\*\* Delete File:/m.test(String(args.patchText || '')))
     )
       return review('ASK_FORCED', 'deletes files', { warn_delete: true });
-    if (['write_file', 'edit_file', 'apply_patch'].includes(tool)) {
+    if (EDIT_TOOLS.includes(tool)) {
       const paths =
         tool === 'apply_patch'
           ? [
@@ -677,8 +702,18 @@ export class ApprovalPolicy {
   ): boolean {
     const found = this.review(tool, args);
     if (found.verdict === 'DENY') return false;
-    if (allowYolo && this.yolo.has(thread)) return false;
+    const mode = this.mode(thread);
+    if (allowYolo && mode === 'auto') return false;
     if (found.verdict === 'ASK_FORCED') return true;
+    // accept-edits answers only for file changes that stay in the workspace;
+    // deletes are ASK_FORCED above, and commands still ask.
+    if (
+      allowYolo &&
+      mode === 'accept-edits' &&
+      EDIT_TOOLS.includes(tool) &&
+      found.pattern === 'workspace'
+    )
+      return false;
     return !this.store.matchesAny(thread, tool, [
       found.pattern,
       ...found.covered_by,

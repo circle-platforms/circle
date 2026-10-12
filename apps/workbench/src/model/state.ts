@@ -10,9 +10,14 @@ import type {
   Message,
   RuntimePort,
   Session,
+  SessionMode,
   WorkbenchSnapshot,
 } from './types.ts';
 import { createFixtures } from '../preview/fixtures.ts';
+import { t } from '../i18n/index.ts';
+/** A session's title; the core's placeholder for an untitled one reads in the interface language. */
+export const sessionTitle = (title: string) =>
+  title === 'new session' ? t('new session') : title;
 export const STORAGE_KEY = 'circle.workbench.preview.v1';
 export const EFFORTS: Effort[] = [
   'minimal',
@@ -22,6 +27,22 @@ export const EFFORTS: Effort[] = [
   'xhigh',
   'max',
 ];
+export const MODES: SessionMode[] = ['manual', 'accept-edits', 'plan', 'auto'];
+/** The session's approval mode; older snapshots only had the plan and auto flags. */
+export const sessionMode = (session: Session): SessionMode =>
+  session.mode ??
+  (session.readOnly ? 'plan' : session.auto ? 'auto' : 'manual');
+export const nextMode = (mode: SessionMode): SessionMode =>
+  MODES[(MODES.indexOf(mode) + 1) % MODES.length]!;
+export function parseMode(args: string, current: SessionMode) {
+  const word = args
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, '-');
+  if (!word) return nextMode(current);
+  if (word === 'yolo') return 'auto';
+  return MODES.includes(word as SessionMode) ? (word as SessionMode) : null;
+}
 export const COMMAND_UI: Record<string, string> = {
   help: 'help',
   hotkeys: 'hotkeys',
@@ -43,6 +64,7 @@ export const COMMAND_UI: Record<string, string> = {
   models: 'models',
   compact: 'compact',
   plan: 'mode',
+  mode: 'mode',
   skill: 'skills',
   tree: 'tree',
   fork: 'fork',
@@ -507,6 +529,17 @@ export class PreviewRuntime implements RuntimePort {
         currentSession(state).auto = args !== 'off';
       });
       return { notice: 'auto applies only to this preview session' };
+    }
+    if (name === 'mode') {
+      const mode = parseMode(args, sessionMode(currentSession(this.snapshot)));
+      if (!mode) return { notice: 'choose manual, accept-edits, plan or auto' };
+      this.change((state) => {
+        const target = currentSession(state);
+        target.mode = mode;
+        target.readOnly = mode === 'plan';
+        target.auto = mode === 'auto';
+      });
+      return {};
     }
     if (name === 'thinking' && !args) {
       this.change((state) => {

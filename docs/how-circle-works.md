@@ -58,7 +58,7 @@ With `background: true` a subagent runs as a [background job](background-jobs.md
 
 ## Safety
 
-Every session runs in a folder you have trusted. Commands and file changes ask first, and some commands are always refused. There are two modes you can switch on: `read-only` blocks all changes, and `auto` stops asking. None of this is an operating-system sandbox: a command you approve runs with your full user rights. Read [Security](security.md) before you rely on it.
+Every session runs in a folder you have trusted. Commands and file changes ask first, and some commands are always refused. There are three modes you can switch on: `accept edits` stops asking for file changes inside the workspace, `read-only` blocks all changes, and `auto` stops asking. None of this is an operating-system sandbox: a command you approve runs with your full user rights. Read [Security](security.md) before you rely on it.
 
 ## Sessions
 

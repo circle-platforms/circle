@@ -89,6 +89,10 @@ Add names with `credential_files` in [settings](settings.md), or in a project's 
 
 MCP tools and extension tools that are not marked read-only are blocked. Secret entry is not.
 
+## Accept-edits mode
+
+`/mode accept-edits` turns on `accept edits`. Changes to files inside the workspace (`write_file`, `edit_file`, and patches that add or change files) then run without a card. Everything else still asks: commands, deleting files (`delete`, or a patch that deletes one), changes outside the workspace, MCP and extension tools. It is decided call by call: a patch that touches one file outside the workspace asks. The model can also leave `read-only` into this mode, when you answer its `plan_exit` question with "implement plan, accept edits". Like `auto`, it applies to the current conversation only.
+
 ## Auto mode
 
 `/yolo` (or `/auto`) turns on `auto`. In auto mode Circle stops asking, **including for the calls that always ask**: `rm -rf`, force pushes, `delete`, patches that delete files, and writes outside the workspace. Credential files and `sudo` are still refused. `/yolo off` turns it off.

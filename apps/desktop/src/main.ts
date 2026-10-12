@@ -10,6 +10,7 @@ import {
   Menu,
   nativeTheme,
   net,
+  Notification,
   protocol,
   shell,
   session,
@@ -20,6 +21,13 @@ import { existsSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { WorkspaceGrants, nativeFile } from './files';
+import { attention } from './attention';
+import {
+  isNativeLocale,
+  nativeText,
+  systemNativeLocale,
+  type NativeLocale,
+} from './native-text';
 import {
   assetPath,
   boundedText,
@@ -31,6 +39,9 @@ import {
 } from './policy';
 import type { DesktopAction, DesktopInfo } from './contracts';
 app.setName('Circle');
+// Windows shows notifications for the id the installer's Start menu shortcut carries.
+if (process.platform === 'win32')
+  app.setAppUserModelId('com.qingshanfeihu.circle');
 const dataPath =
   process.env.CIRCLE_WORKBENCH_DATA_DIR ??
   (existsSync(join(app.getPath('appData'), 'Circle Workbench'))
@@ -69,6 +80,14 @@ const rendererRoot = join(__dirname, 'renderer');
 const fixtureProfile = process.env.CIRCLE_WORKBENCH_TEST_PROFILE
   ? JSON.parse(process.env.CIRCLE_WORKBENCH_TEST_PROFILE)
   : undefined;
+// The window follows the system language; checks read it in English on any machine.
+// (Chromium's --lang does not change the languages a page sees on macOS.)
+const forcedLanguage: NativeLocale | undefined = process.env
+  .CIRCLE_WORKBENCH_LANGUAGE
+  ? systemNativeLocale([process.env.CIRCLE_WORKBENCH_LANGUAGE])
+  : fixtureProfile
+    ? 'en'
+    : undefined;
 function checkSender(event: IpcMainInvokeEvent) {
   if (
     !window ||
@@ -87,94 +106,130 @@ function handle(channel: string, handler: (...args: unknown[]) => unknown) {
 }
 const sendAction = (action: DesktopAction) =>
   window?.webContents.send('circle:action', action);
+// The window says which language it shows; until it does, the system's.
+let interfaceLocale: NativeLocale = 'en';
+const text = (value: string) => nativeText(interfaceLocale)(value);
+// Electron names role items in English; in Chinese the menu names them itself.
+const role = (
+  name: NonNullable<MenuItemConstructorOptions['role']>,
+  english: string,
+): MenuItemConstructorOptions =>
+  interfaceLocale === 'en'
+    ? { role: name }
+    : { role: name, label: text(english) };
 function configureMenu() {
   const menu: MenuItemConstructorOptions[] = [];
   if (process.platform === 'darwin')
     menu.push({
       label: app.name,
       submenu: [
-        { role: 'about' },
+        role('about', 'About Circle'),
         { type: 'separator' },
         {
-          label: 'settings',
+          label: text('settings'),
           accelerator: 'CmdOrCtrl+,',
           click: () => sendAction('settings'),
         },
         { type: 'separator' },
-        { role: 'hide' },
-        { role: 'hideOthers' },
-        { role: 'unhide' },
+        role('hide', 'Hide Circle'),
+        role('hideOthers', 'Hide Others'),
+        role('unhide', 'Show All'),
         { type: 'separator' },
-        { role: 'quit' },
+        role('quit', 'Quit Circle'),
       ],
     });
   menu.push(
     {
-      label: 'file',
+      label: text('file'),
       submenu: [
         {
-          label: 'new session',
+          label: text('new session'),
           accelerator: 'CmdOrCtrl+N',
           click: () => sendAction('new'),
         },
         {
-          label: 'open folder',
+          label: text('open folder'),
           accelerator: 'CmdOrCtrl+O',
           click: () => sendAction('open-folder'),
         },
         { type: 'separator' },
-        { label: 'import session', click: () => sendAction('import') },
-        { label: 'export session', click: () => sendAction('export') },
+        { label: text('import session'), click: () => sendAction('import') },
+        { label: text('export session'), click: () => sendAction('export') },
         { type: 'separator' },
-        { role: process.platform === 'darwin' ? 'close' : 'quit' },
+        process.platform === 'darwin'
+          ? role('close', 'Close Window')
+          : role('quit', 'Quit Circle'),
       ],
     },
     {
-      label: 'edit',
+      label: text('edit'),
       submenu: [
-        { role: 'undo' },
-        { role: 'redo' },
+        role('undo', 'Undo'),
+        role('redo', 'Redo'),
         { type: 'separator' },
-        { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
-        { role: 'selectAll' },
+        role('cut', 'Cut'),
+        role('copy', 'Copy'),
+        role('paste', 'Paste'),
+        role('selectAll', 'Select All'),
       ],
     },
     {
-      label: 'view',
+      label: text('view'),
       submenu: [
-        { label: 'session tree', click: () => sendAction('tree') },
+        { label: text('session tree'), click: () => sendAction('tree') },
         { type: 'separator' },
         {
-          label: 'reload window',
+          label: text('reload window'),
           accelerator: 'CmdOrCtrl+Shift+R',
           click: () => window?.webContents.reload(),
         },
-        { role: 'toggleDevTools' },
+        role('toggleDevTools', 'Toggle Developer Tools'),
         { type: 'separator' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
-        { role: 'togglefullscreen' },
+        role('resetZoom', 'Actual Size'),
+        role('zoomIn', 'Zoom In'),
+        role('zoomOut', 'Zoom Out'),
+        role('togglefullscreen', 'Toggle Full Screen'),
       ],
     },
     {
-      label: 'window',
+      label: text('window'),
       submenu: [
-        { role: 'minimize' },
-        { role: 'zoom' },
+        role('minimize', 'Minimize'),
+        role('zoom', 'Zoom'),
         ...(process.platform === 'darwin'
-          ? [{ role: 'front' } as MenuItemConstructorOptions]
+          ? [role('front', 'Bring All to Front')]
           : []),
       ],
     },
     {
-      label: 'help',
-      submenu: [{ label: 'Circle help', click: () => sendAction('help') }],
+      label: text('help'),
+      submenu: [
+        { label: text('Circle help'), click: () => sendAction('help') },
+      ],
     },
   );
   Menu.setApplicationMenu(Menu.buildFromTemplate(menu));
+}
+// Outside the window: a dock badge for the requests that wait, a busy bar on Windows and
+// Linux, and a notification for a new request or an ended turn while you are elsewhere.
+const announced = new Set<string>();
+function showAttention(update: Parameters<typeof attention>[0]) {
+  const state = attention(update, announced, text);
+  if (process.platform !== 'win32') app.setBadgeCount(state.badge);
+  if (process.platform !== 'darwin')
+    window?.setProgressBar(state.busy && !state.badge ? 2 : -1);
+  if (!window || window.isFocused() || fixtureProfile) return;
+  if (state.badge && process.platform === 'darwin')
+    app.dock?.bounce('informational');
+  if (!Notification.isSupported()) return;
+  for (const notice of state.notices) {
+    const note = new Notification({ title: notice.title, body: notice.body });
+    note.on('click', () => {
+      window?.show();
+      window?.focus();
+    });
+    note.show();
+  }
 }
 async function createWindow() {
   window = new BrowserWindow({
@@ -263,15 +318,17 @@ app
       dataPath,
       runtimeConnected: runtime?.connected ?? false,
       frontendOnly: previewMode,
+      language: forcedLanguage,
     }));
     if (!previewMode) {
       runtime = new RuntimeSupervisor(
         join(dataPath, 'runtime-home'),
         __dirname,
       );
-      runtime.subscribe((update) =>
-        window?.webContents.send('circle:runtime-update', update),
-      );
+      runtime.subscribe((update) => {
+        window?.webContents.send('circle:runtime-update', update);
+        showAttention(update);
+      });
       await runtime.start();
     }
     handle('circle:runtime-state', () => {
@@ -300,7 +357,10 @@ app
         fixtureProfile?.files ??
         (
           await dialog.showOpenDialog(window!, {
-            title: purpose === 'import' ? 'import a session' : 'choose files',
+            title:
+              purpose === 'import'
+                ? text('import a session')
+                : text('choose files'),
             properties:
               purpose === 'attach'
                 ? ['openFile', 'multiSelections']
@@ -309,13 +369,13 @@ app
               purpose === 'import'
                 ? [
                     {
-                      name: 'session or text',
+                      name: text('session or text'),
                       extensions: ['json', 'jsonl', 'md', 'txt'],
                     },
                   ]
                 : [
                     {
-                      name: 'supported files',
+                      name: text('supported files'),
                       extensions: [
                         'txt',
                         'md',
@@ -360,13 +420,40 @@ app
         ? [fixtureProfile.workspace]
         : (
             await dialog.showOpenDialog(window!, {
-              title: 'open a workspace',
+              title: text('open a workspace'),
               properties: ['openDirectory'],
             })
           ).filePaths;
       const selected = paths[0] ? await grants.open(paths[0]) : null;
       if (selected) workspaceSelections.set(selected.id, selected.path);
       return selected;
+    });
+    // The files of the folder the runtime works in, when it is trusted: the app's own
+    // workspace, or one you opened and trusted. Reads still go through granted handles.
+    handle('circle:list-workspace', async (workspaceId) => {
+      if (!runtime || typeof workspaceId !== 'string')
+        throw Error('invalid workspace');
+      const snapshot = runtime.state().snapshot;
+      const active = snapshot.sessions.find(
+        (row) => row.id === snapshot.activeSessionId,
+      );
+      const workspace = snapshot.workspaces.find(
+        (row) => row.id === workspaceId,
+      );
+      if (
+        !workspace ||
+        active?.workspaceId !== workspaceId ||
+        !workspace.trusted
+      )
+        return null;
+      const listed = await grants.open(workspace.path);
+      workspaceSelections.set(listed.id, listed.path);
+      return listed;
+    });
+    handle('circle:set-language', (value) => {
+      if (!isNativeLocale(value)) throw Error('invalid language');
+      interfaceLocale = value;
+      configureMenu();
     });
     handle('circle:read-workspace-file', async (workspaceId, fileId) => {
       if (typeof workspaceId !== 'string' || typeof fileId !== 'string')
@@ -382,7 +469,7 @@ app
       const result = fixtureProfile?.exportPath
         ? { canceled: false, filePath: fixtureProfile.exportPath }
         : await dialog.showSaveDialog(window!, {
-            title: 'export session',
+            title: text('export session'),
             defaultPath: name,
           });
       if (result.canceled || !result.filePath) return { saved: false };
@@ -431,6 +518,7 @@ app
           throw Error('invalid window action');
       }
     });
+    interfaceLocale = systemNativeLocale(app.getPreferredSystemLanguages());
     configureMenu();
     await createWindow();
     app.on('activate', () => {
@@ -459,7 +547,7 @@ app.on('before-quit', (event) => {
     .catch((error) => {
       void dialog.showMessageBox({
         type: 'error',
-        message: 'Circle could not stop its runtime',
+        message: text('Circle could not stop its runtime'),
         detail: String(error),
       });
     });
