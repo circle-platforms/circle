@@ -483,6 +483,7 @@ test('the connector tools let a model list packs, hand over a file and get the c
         version: '1.0.0',
         files: [{ path: 'tree.xml', role: 'command-tree' }],
         metadata: { buildName: 'Rel_SYN_1' },
+        readers: ['prn_reviewer'],
       },
       context,
     ),
@@ -495,6 +496,7 @@ test('the connector tools let a model list packs, hand over a file and get the c
       .body.toString(),
   );
   assert.equal(listedSource.scopeId, 'scp_lab');
+  assert.deepEqual(listedSource.readers, ['prn_reviewer']);
   assert.deepEqual(listedSource.files, [
     {
       path: 'tree.xml',

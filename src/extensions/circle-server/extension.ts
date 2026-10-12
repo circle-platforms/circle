@@ -2269,6 +2269,12 @@ export async function register(api: ExtensionAPI): Promise<void> {
           description:
             'what the uploader expects the artifact to be, for example the build it is meant for; readers take it as a claim, not a fact',
         },
+        readers: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'principal ids besides you who may see the draft, such as the person who approves it',
+        },
       },
       required: ['name', 'version', 'files'],
     },
@@ -2318,6 +2324,9 @@ export async function register(api: ExtensionAPI): Promise<void> {
             version,
             metadata: isRecord(args.metadata) ? args.metadata : {},
             files: listed,
+            ...(Array.isArray(args.readers) && args.readers.length
+              ? { readers: args.readers.map(String) }
+              : {}),
           },
         });
         return {
