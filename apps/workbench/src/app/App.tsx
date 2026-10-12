@@ -696,6 +696,18 @@ export function App() {
                 </>
               )}
             </Group>
+            {/* A narrow window lays the panel over the conversation, on the right,
+                and keeps the top bar's icons usable. */}
+            {inspectorVisible && narrow && (
+              <div
+                className="inspector-overlay"
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') setInspectorOpen(false);
+                }}
+              >
+                {inspector}
+              </div>
+            )}
           </div>
         </main>
         <Modal
@@ -711,13 +723,6 @@ export function App() {
             onNavigate={() => setSidebarOpen(false)}
             onDialog={(kind) => onDialog(kind)}
           />
-        </Modal>
-        <Modal
-          open={narrow && inspectorVisible}
-          onOpenChange={setInspectorOpen}
-          title={t('inspector')}
-        >
-          {inspector}
         </Modal>
         <Modal
           open={searchOpen}

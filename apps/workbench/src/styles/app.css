@@ -4083,3 +4083,24 @@ pre {
   font-size: inherit;
   font-weight: inherit;
 }
+/* In a narrow window the side panel lies over the conversation on the right. */
+.workspace-content {
+  position: relative;
+}
+.inspector-overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  width: min(380px, 92%);
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  box-shadow: -10px 0 28px color-mix(in srgb, var(--fg) 10%, transparent);
+}
+.inspector-overlay > .inspector {
+  flex: 1;
+  min-height: 0;
+}

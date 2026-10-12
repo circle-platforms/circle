@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ZH_CN } from '../src/i18n/zh-CN/index.ts';
 import {
   loadLanguage,
@@ -52,10 +52,10 @@ test('the same English has the same Chinese in every area', async () => {
   for (const name of readdirSync(folder).filter(
     (file) => file !== 'index.ts',
   )) {
-    const module = (await import(join(folder, name))) as Record<
-      string,
-      Record<string, string>
-    >;
+    // A URL, not a path: Windows paths are not import specifiers.
+    const module = (await import(
+      pathToFileURL(join(folder, name)).href
+    )) as Record<string, Record<string, string>>;
     for (const dictionary of Object.values(module))
       for (const [english, chinese] of Object.entries(dictionary)) {
         const before = seen.get(english);
