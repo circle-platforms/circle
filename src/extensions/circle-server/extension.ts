@@ -24,6 +24,8 @@ interface Config {
   url: string;
   username: string;
   scopeId?: string;
+  /** Who the server said you are when you signed in; a bot runs as its owner. */
+  principalId?: string;
 }
 interface ServerEvent {
   seq: number;
@@ -37,6 +39,25 @@ interface Artifact {
   sha256: string;
   size?: number;
   downloadPath?: string;
+}
+// An asset as the server lists it; a bot and its trigger are assets with a lifecycle.
+interface Asset {
+  assetId: string;
+  kind: string;
+  name: string;
+  version: string;
+  sha256: string;
+  lifecycle: string;
+  ownerPrincipalId: string;
+  configuration: Record<string, unknown>;
+}
+// One occurrence of a bot's trigger and the task it started; published once its output
+// went to the bot's channel.
+interface BotRun {
+  taskId: string;
+  occurrenceKey: string;
+  channel: string;
+  published: boolean;
 }
 // What this window remembers of a task it handed over: the last event it has shown.
 interface Followed {
@@ -70,6 +91,12 @@ const USAGE = [
   '/server skill push <folder>      submit a skill pack with the trial record (--outputs a,b)',
   '/server skill list               the skill packs on the server',
   '/server skill run <id> [json]    run a skill pack on the server and follow it (--file <path> attaches)',
+  '/server bot list                 the bots you can see; yours with their runs and new results',
+  '/server bot every <pack> <1h>    a bot that runs a skill pack on a schedule (--from, --inputs, --file, --name)',
+  '/server bot on <pack> <source> <event>  a bot that runs a skill pack when a connector reports the event',
+  '/server bot approve <bot>        approve someone else’s bot and its trigger',
+  '/server bot start|stop <bot>     turn your approved bot on or off',
+  '/server bot runs <bot>           its runs and what each delivered to Circle',
 ].join('\n');
 
 const sha256 = (bytes: Buffer): string =>
@@ -97,11 +124,14 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const reason = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-// Words split on spaces, with "…" or '…' kept together.
+// Words split on spaces, with "…" or '…' kept together. Only a word that is all one quoted
+// part loses its quotes, so {"a": "b c"} keeps the quotes JSON needs.
 function words(text: string): string[] {
   const found: string[] = [];
-  for (const match of text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g))
-    found.push(match[1] ?? match[2] ?? match[3] ?? '');
+  for (const match of text.matchAll(/(?:"[^"]*"|'[^']*'|[^\s"']+|["'])+/g)) {
+    const quoted = /^"([^"]*)"$|^'([^']*)'$/.exec(match[0]);
+    found.push(quoted ? (quoted[1] ?? quoted[2] ?? '') : match[0]);
+  }
   return found;
 }
 // An answer as the server takes it: a JSON object, key=value pairs, or plain text.
@@ -162,6 +192,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
         url: value.url,
         username: value.username,
         scopeId: typeof value.scopeId === 'string' ? value.scopeId : undefined,
+        principalId:
+          typeof value.principalId === 'string' ? value.principalId : undefined,
       };
     // An address given in settings.json under extensions.circle-server.url.
     const url = api.settings.url;
@@ -180,6 +212,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // What a paired page of the desktop application shows (api.setView): where you are
   // signed in, the tasks handed over from here and the last lines this extension wrote.
   const recent: string[] = [];
+  // Runs of your bots the server has published to Circle and this window has not shown yet.
+  let botNews: { bot: Asset; run: BotRun }[] = [];
   // The four platform objects as the server last reported them (/server refresh).
   let objects: Record<string, unknown> | undefined;
   function publishView(signedIn: boolean): void {
@@ -195,6 +229,12 @@ export async function register(api: ExtensionAPI): Promise<void> {
         .map(([taskId, item]) => ({ taskId, ...item })),
       recent: recent.slice(-30),
       objects,
+      botResults: botNews.map(({ bot, run }) => ({
+        botAssetId: bot.assetId,
+        name: bot.name,
+        taskId: run.taskId,
+        occurrenceKey: run.occurrenceKey,
+      })),
     };
     try {
       api.setView(view);
@@ -404,6 +444,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
     if (failure) api.setStatus(`${where} · ${failure}`, 'error');
     else if (following.size)
       api.setStatus(`${where} · ${following.size} running`, 'running');
+    else if (botNews.length)
+      api.setStatus(`${where} · ${botNews.length} bot result(s)`, 'wait');
     else api.setStatus(where, 'ok');
   }
 
@@ -507,7 +549,13 @@ export async function register(api: ExtensionAPI): Promise<void> {
     const scopes = Array.isArray(issued.scopes)
       ? issued.scopes.map(String)
       : [];
-    writeJson('config.json', { url, username, scopeId: scopes[0] });
+    writeJson('config.json', {
+      url,
+      username,
+      scopeId: scopes[0],
+      principalId:
+        typeof issued.principalId === 'string' ? issued.principalId : undefined,
+    });
     failure = '';
     void showStatus();
     return scopes;
@@ -1205,6 +1253,374 @@ export async function register(api: ExtensionAPI): Promise<void> {
     );
   }
 
+  // Files of the workspace as a skill pack run takes them: inputs.files.
+  function attach(
+    names: string[],
+    context: CommandContext,
+  ): { path: string; base64: string; sha256: string }[] {
+    const workspace = api.workspace ?? context.workspace;
+    return names.map((name) => {
+      const path = resolve(workspace, name);
+      if (!existsSync(path) || !statSync(path).isFile())
+        throw new ServerError(`${name} is not a file in the workspace`);
+      if (statSync(path).size > MAX_UPLOAD_BYTES)
+        throw new ServerError(`${name} is larger than 16 MB`);
+      const bytes = readFileSync(path);
+      return {
+        path: relative(workspace, path).split(sep).join('/'),
+        base64: bytes.toString('base64'),
+        sha256: sha256(bytes),
+      };
+    });
+  }
+  function jsonObject(text: string, what: string): Record<string, unknown> {
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (!isRecord(parsed)) throw new Error('not an object');
+      return parsed;
+    } catch (error) {
+      throw new ServerError(`${what} are not a JSON object: ${reason(error)}`);
+    }
+  }
+  // Words, then --options: an option takes the words up to the next option, and may repeat.
+  function options(rest: string[]): {
+    args: string[];
+    values: Record<string, string[]>;
+  } {
+    const args: string[] = [];
+    const values: Record<string, string[]> = {};
+    let open: string[] | undefined;
+    for (const word of rest) {
+      const flag = /^--([a-z]+)$/.exec(word);
+      if (flag) {
+        open = values[flag[1]!] ??= [];
+        open.push('');
+      } else if (open)
+        open[open.length - 1] = open.at(-1) ? `${open.at(-1)} ${word}` : word;
+      else args.push(word);
+    }
+    return { args, values };
+  }
+
+  const UNITS: Record<string, number> = {
+    s: 1000,
+    m: 60_000,
+    h: 3_600_000,
+    d: 86_400_000,
+  };
+  function every(text: string | undefined): number {
+    const match = /^(\d+)([smhd])$/.exec(text ?? '');
+    if (!match)
+      throw new ServerError(
+        `not an interval: ${text ?? ''} (for example 30m, 1h or 1d)`,
+      );
+    return Number(match[1]) * UNITS[match[2]!]!;
+  }
+  const asAsset = (value: unknown): Asset => {
+    if (!isRecord(value) || typeof value.assetId !== 'string')
+      throw new ServerError('the server sent no asset');
+    return {
+      ...(value as unknown as Asset),
+      configuration: isRecord(value.configuration) ? value.configuration : {},
+    };
+  };
+  async function asset(id: string): Promise<Asset> {
+    return asAsset(
+      (await request('GET', `/v1/assets/${encodeURIComponent(id)}`)).data,
+    );
+  }
+  async function bots(get: typeof request = request): Promise<Asset[]> {
+    const { data } = await get('GET', '/v1/assets?kind=bot&limit=100');
+    const items = isRecord(data) && Array.isArray(data.items) ? data.items : [];
+    return items.filter(isRecord).map(asAsset);
+  }
+  async function botRuns(
+    id: string,
+    get: typeof request = request,
+  ): Promise<BotRun[]> {
+    const { data } = await get(
+      'GET',
+      `/v1/automations/bots/${encodeURIComponent(id)}/runs`,
+    );
+    return (Array.isArray(data) ? data : []).filter(isRecord).map((run) => ({
+      taskId: String(run.taskId ?? ''),
+      occurrenceKey: String(run.occurrenceKey ?? ''),
+      channel: String(run.channel ?? ''),
+      published: run.published === true,
+    }));
+  }
+  // A lifecycle step bound to the version and digest the server showed: approved (by
+  // someone other than the owner), running or disabled (by the owner).
+  async function move(item: Asset, state: string): Promise<Asset> {
+    return asAsset(
+      (
+        await request(
+          'POST',
+          `/v1/assets/${encodeURIComponent(item.assetId)}/lifecycle`,
+          { json: { version: item.version, sha256: item.sha256, state } },
+        )
+      ).data,
+    );
+  }
+  function triggerLabel(trigger: Asset | undefined): string {
+    const configuration = trigger?.configuration ?? {};
+    if (configuration.kind === 'schedule') {
+      const ms = Number(configuration.intervalMs);
+      const unit =
+        Object.entries(UNITS)
+          .reverse()
+          .find(([, size]) => ms % size === 0) ?? (['ms', 1] as const);
+      return `every ${ms / unit[1]}${unit[0]} from ${String(configuration.startsAt)}`;
+    }
+    if (configuration.kind === 'event')
+      return `on ${String(configuration.eventName)} of ${String(configuration.sourceAssetId)}`;
+    return 'no trigger';
+  }
+  // The output the server published for a run: the bot.output event of its task.
+  async function botOutput(
+    taskId: string,
+  ): Promise<Record<string, unknown> | undefined> {
+    const { data } = await request(
+      'GET',
+      `/v1/tasks/${encodeURIComponent(taskId)}/events?after=0&waitMs=0`,
+    );
+    const events = (
+      isRecord(data) && Array.isArray(data.events) ? data.events : []
+    ) as ServerEvent[];
+    return events.filter((event) => event.kind === 'bot.output').at(-1)
+      ?.payload;
+  }
+  function seenRuns(): Set<string> {
+    const value = readJson('bots.json');
+    return new Set(
+      isRecord(value) && Array.isArray(value.seen)
+        ? value.seen.map(String)
+        : [],
+    );
+  }
+  function markSeen(taskIds: string[]): void {
+    const seen = [...seenRuns(), ...taskIds];
+    writeJson('bots.json', { seen: [...new Set(seen)].slice(-1000) });
+    botNews = botNews.filter(({ run }) => !taskIds.includes(run.taskId));
+  }
+  // Look for published runs of your bots in the background. It never asks for a password:
+  // a token the server turns down just leaves the footer as it was.
+  let lookingForBots: Promise<void> | undefined;
+  function lookForBots(): Promise<void> {
+    lookingForBots ??= (async () => {
+      const me = readConfig()?.principalId;
+      if (fromRun || !me || !(await currentToken())) return;
+      const quiet: typeof request = (method, path, options = {}) =>
+        send(method, path, options);
+      const seen = seenRuns();
+      const found: { bot: Asset; run: BotRun }[] = [];
+      for (const bot of (await bots(quiet))
+        .filter((item) => item.ownerPrincipalId === me)
+        .slice(0, 20))
+        for (const run of await botRuns(bot.assetId, quiet))
+          if (run.published && !seen.has(run.taskId)) found.push({ bot, run });
+      botNews = found;
+      void showStatus();
+    })()
+      .catch(() => {})
+      .finally(() => {
+        lookingForBots = undefined;
+      });
+    return lookingForBots;
+  }
+  if (!fromRun) setInterval(() => void lookForBots(), 60_000).unref();
+
+  async function bot(
+    [verb, ...rest]: string[],
+    context: CommandContext,
+  ): Promise<void> {
+    const config = readConfig();
+    if (verb === 'every' || verb === 'on') {
+      const { args, values } = options(rest);
+      if (!config?.scopeId)
+        throw new ServerError(
+          'no project: sign in again with /server login <url> <user>',
+        );
+      if (!config.principalId)
+        throw new ServerError(
+          'the server has not said who you are here; sign in again with /server login <url> <user>',
+        );
+      const [pack] = args;
+      const schedule = verb === 'every';
+      if (!pack || args.length !== (schedule ? 2 : 3))
+        throw new ServerError(
+          schedule
+            ? 'usage: /server bot every <skill pack> <interval> [--from <time>] [--inputs <json>] [--file <path>] [--name <name>]'
+            : 'usage: /server bot on <skill pack> <connector asset> <event> [--inputs <json>] [--file <path>] [--name <name>]',
+        );
+      const trigger = schedule
+        ? (() => {
+            const from = values.from?.at(-1);
+            const startsAt = from ? new Date(from) : new Date();
+            if (Number.isNaN(startsAt.getTime()))
+              throw new ServerError(`not a time: ${from}`);
+            return {
+              kind: 'schedule',
+              intervalMs: every(args[1]),
+              startsAt: startsAt.toISOString(),
+            };
+          })()
+        : { kind: 'event', sourceAssetId: args[1], eventName: args[2] };
+      const inputs = values.inputs?.length
+        ? jsonObject(values.inputs.at(-1)!, 'inputs')
+        : {};
+      if (values.file?.length) inputs.files = attach(values.file, context);
+      const listed = await optional<unknown>('/v1/skillpacks', []);
+      const known = (Array.isArray(listed) ? listed : [])
+        .filter(isRecord)
+        .find((item) => item.skillPackId === pack);
+      const label =
+        known && isRecord(known.manifest) ? String(known.manifest.id) : pack;
+      const name =
+        values.name?.at(-1) ||
+        (schedule ? `${label} every ${args[1]}` : `${label} on ${args[2]}`);
+      const common = { scopeId: config.scopeId, version: '1.0.0', name };
+      const made = asAsset(
+        (
+          await request('POST', '/v1/automations/triggers', {
+            json: { ...common, ...trigger },
+          })
+        ).data,
+      );
+      const created = asAsset(
+        (
+          await request('POST', '/v1/automations/bots', {
+            json: {
+              ...common,
+              skillPackId: pack,
+              triggerAssetId: made.assetId,
+              identityPrincipalId: config.principalId,
+              channel: 'circle-events',
+              inputs,
+            },
+          })
+        ).data,
+      );
+      context.append(
+        `✓ bot ${created.assetId} · ${name} · runs ${pack} ${triggerLabel(made)} as you · output to Circle · ${created.lifecycle}`,
+      );
+      context.append(
+        `  someone else approves it: /server bot approve ${created.assetId} · then you turn it on: /server bot start ${created.assetId}`,
+      );
+      return;
+    }
+    if (verb === 'list') {
+      const me = config?.principalId;
+      const all = await bots();
+      if (!all.length) {
+        context.append('No bots you can see on this server');
+        return;
+      }
+      const seen = seenRuns();
+      const rows: string[] = [];
+      for (const item of all) {
+        let trigger: Asset | undefined;
+        try {
+          trigger = await asset(String(item.configuration.triggerAssetId));
+        } catch {
+          trigger = undefined;
+        }
+        let runs = '';
+        if (item.ownerPrincipalId === me) {
+          const list = await botRuns(item.assetId).catch(() => []);
+          const fresh = list.filter(
+            (run) => run.published && !seen.has(run.taskId),
+          ).length;
+          runs = ` · ${list.length} run(s)${fresh ? `, ${fresh} new: /server bot runs ${item.assetId}` : ''}`;
+        } else runs = ` · owner ${item.ownerPrincipalId}`;
+        rows.push(
+          `  ${item.assetId} · ${item.name} · ${item.lifecycle} · ${triggerLabel(trigger)}${trigger ? ` (trigger ${trigger.lifecycle})` : ''}${runs}`,
+        );
+      }
+      context.append(rows.join('\n'));
+      return;
+    }
+    const [id] = rest;
+    if (!id || !['approve', 'start', 'stop', 'runs'].includes(verb ?? ''))
+      throw new ServerError(
+        'usage: /server bot list | every <pack> <interval> | on <pack> <source> <event> | approve <bot> | start <bot> | stop <bot> | runs <bot>',
+      );
+    const item = await asset(id);
+    if (item.kind !== 'bot') throw new ServerError(`${id} is not a bot`);
+    const triggerId = String(item.configuration.triggerAssetId ?? '');
+    if (verb === 'approve' || verb === 'start') {
+      // The trigger first: a running bot needs a running trigger before it fires.
+      const target = verb === 'approve' ? 'approved' : 'running';
+      for (const part of [await asset(triggerId), item]) {
+        const what = part.kind === 'bot' ? 'bot' : 'trigger';
+        if (
+          (verb === 'approve' && part.lifecycle !== 'draft') ||
+          (verb === 'start' && part.lifecycle === 'running')
+        ) {
+          context.append(
+            `  ${what} ${part.assetId} is already ${part.lifecycle}`,
+          );
+          continue;
+        }
+        if (verb === 'start' && part.lifecycle !== 'approved')
+          throw new ServerError(
+            `${what} ${part.assetId} is ${part.lifecycle}; someone else approves it first: /server bot approve ${id}`,
+          );
+        const moved = await move(part, target);
+        context.append(
+          `✓ ${what} ${moved.assetId} ${moved.lifecycle} · version ${moved.version} · digest ${short(moved.sha256)}`,
+        );
+      }
+      if (verb === 'start')
+        context.append(
+          `  ${id} runs ${triggerLabel(await asset(triggerId))}; its results come to Circle: /server bot runs ${id}`,
+        );
+      return;
+    }
+    if (verb === 'stop') {
+      const moved = await move(item, 'disabled');
+      context.append(
+        `✓ bot ${moved.assetId} ${moved.lifecycle}; it starts no more runs`,
+      );
+      return;
+    }
+    const runs = await botRuns(id);
+    if (!runs.length) {
+      context.append(`  ${id} has not run yet`);
+      return;
+    }
+    const shown: string[] = [];
+    for (const run of runs.slice(-10)) {
+      const output = run.published ? await botOutput(run.taskId) : undefined;
+      if (!output) {
+        let phase = 'not published yet';
+        try {
+          phase = String((await status(run.taskId)).phase);
+        } catch {
+          /* The task is not readable now. */
+        }
+        context.append(`  ${run.taskId} · ${run.occurrenceKey} · ${phase}`);
+        continue;
+      }
+      const artifacts = Array.isArray(output.artifacts) ? output.artifacts : [];
+      const unknowns = Array.isArray(output.unknowns)
+        ? output.unknowns.map(String)
+        : [];
+      context.append(
+        `  ${run.taskId} · ${run.occurrenceKey} · ${String(output.status)} · ${artifacts.length} file(s)${unknowns.length ? ` · unknown: ${unknowns.join('; ')}` : ''} · /server get ${run.taskId} saves them`,
+      );
+      for (const artifact of artifacts.filter(isRecord).slice(0, 5))
+        context.append(
+          `    ${String(artifact.fileName ?? artifact.artifactId)} · sha256 ${short(artifact.sha256)}`,
+        );
+      shown.push(run.taskId);
+    }
+    if (runs.length > 10)
+      context.append(`  (${runs.length - 10} earlier run(s) not shown)`);
+    markSeen(shown);
+    await showStatus();
+  }
+
   const commands: Record<
     string,
     (rest: string[], context: CommandContext) => Promise<void>
@@ -1235,6 +1651,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         }`,
       );
       await announceTools(context);
+      void lookForBots();
     },
     async logout(_rest, context) {
       if (fromRun)
@@ -1374,32 +1791,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
           throw new ServerError(
             'usage: /server skill run <id> [json inputs] [--file <path>]…',
           );
-        let inputs: Record<string, unknown> = {};
-        if (json.length)
-          try {
-            const parsed: unknown = JSON.parse(json.join(' '));
-            if (!isRecord(parsed)) throw new Error('not an object');
-            inputs = parsed;
-          } catch (error) {
-            throw new ServerError(
-              `inputs are not a JSON object: ${reason(error)}`,
-            );
-          }
-        const workspace = api.workspace ?? context.workspace;
-        if (attached.length)
-          inputs.files = attached.map((name) => {
-            const path = resolve(workspace, name);
-            if (!existsSync(path) || !statSync(path).isFile())
-              throw new ServerError(`${name} is not a file in the workspace`);
-            if (statSync(path).size > MAX_UPLOAD_BYTES)
-              throw new ServerError(`${name} is larger than 16 MB`);
-            const bytes = readFileSync(path);
-            return {
-              path: relative(workspace, path).split(sep).join('/'),
-              base64: bytes.toString('base64'),
-              sha256: sha256(bytes),
-            };
-          });
+        const inputs = json.length ? jsonObject(json.join(' '), 'inputs') : {};
+        if (attached.length) inputs.files = attach(attached, context);
         const { data } = await request(
           'POST',
           `/v1/skillpacks/${encodeURIComponent(id)}/runs`,
@@ -1422,6 +1815,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       catalogTag = '';
       await announceTools(context, true);
     },
+    bot,
     async approve(rest, context) {
       await decide(rest, true, context);
     },
@@ -1550,9 +1944,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
     },
   );
   void showStatus();
+  void lookForBots();
   api.registerCommand(
     'server',
-    'Work with a circle-server: /server [login | logout | packs | submit | tasks | task | respond | get | refresh | tools]',
+    'Work with a circle-server: /server [login | logout | packs | submit | tasks | task | respond | get | refresh | tools | skill | bot]',
     async (args, context) => {
       const [verb, ...rest] = words(args);
       if (!verb) {
