@@ -23,6 +23,7 @@ async function read(request: IncomingMessage): Promise<Buffer> {
 async function toolServer(t: Parameters<typeof scratch>[0]) {
   const calls: { name: string; body: Record<string, unknown> }[] = [];
   const packs: Record<string, any>[] = [];
+  const runs: Record<string, any>[] = [];
   let catalogVersion = 1;
   let catalogReads = 0;
   let notModified = 0;
@@ -185,6 +186,8 @@ async function toolServer(t: Parameters<typeof scratch>[0]) {
         ],
       });
     if (url.pathname === '/v1/skillpacks/skp_1/runs')
+      runs.push(JSON.parse(body.toString()));
+    if (url.pathname === '/v1/skillpacks/skp_1/runs')
       return send(200, { data: { taskId: 'task_run', phase: 'admitted' } });
     if (url.pathname === '/v1/tasks/task_run/status')
       return send(200, { data: { taskId: 'task_run', phase: 'delivered' } });
@@ -219,6 +222,7 @@ async function toolServer(t: Parameters<typeof scratch>[0]) {
       catalogVersion = 2;
     },
     packs,
+    runs,
     reads: () => ({ catalogReads, notModified }),
   };
 }
@@ -530,7 +534,21 @@ test('a trial records which server tools the model used, and /server skill push 
   );
   await command.handler('skill list', context);
   assert.match(lines.at(-1)!, /skp_1 · mindmap-compile 0\.1\.0 · submitted/);
-  await command.handler('skill run skp_1 {"mindmap":"LBX-200.xmind"}', context);
+  writeFileSync(join(workspace, 'LBX-200.json'), '[{"data":{},"children":[]}]');
+  await command.handler(
+    'skill run skp_1 {"mindmap":"LBX-200.json"} --file LBX-200.json',
+    context,
+  );
+  const runBody = server.runs.at(-1)!;
+  assert.equal(runBody.inputs.mindmap, 'LBX-200.json');
+  assert.deepEqual(
+    runBody.inputs.files.map((f: { path: string }) => f.path),
+    ['LBX-200.json'],
+  );
+  assert.equal(
+    Buffer.from(runBody.inputs.files[0].base64, 'base64').toString(),
+    '[{"data":{},"children":[]}]',
+  );
   assert.ok(
     lines.some((line) =>
       /✓ running skp_1 on the server as task_run/.test(line),

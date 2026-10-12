@@ -69,7 +69,7 @@ const USAGE = [
   '/server trial start              record the server tool calls of a trial run from now',
   '/server skill push <folder>      submit a skill pack with the trial record (--outputs a,b)',
   '/server skill list               the skill packs on the server',
-  '/server skill run <id> [json]    run a skill pack on the server and follow it',
+  '/server skill run <id> [json]    run a skill pack on the server and follow it (--file <path> attaches)',
 ].join('\n');
 
 const sha256 = (bytes: Buffer): string =>
@@ -1349,16 +1349,43 @@ export async function register(api: ExtensionAPI): Promise<void> {
         return;
       }
       if (verb === 'run') {
-        const [id, ...json] = rest;
+        // --file <path> attaches a file of the workspace as inputs.files.
+        const attached: string[] = [];
+        const words: string[] = [];
+        for (let i = 0; i < rest.length; i++)
+          if (rest[i] === '--file' && rest[i + 1]) attached.push(rest[++i]!);
+          else words.push(rest[i]!);
+        const [id, ...json] = words;
         if (!id)
-          throw new ServerError('usage: /server skill run <id> [json inputs]');
-        let inputs: unknown = {};
+          throw new ServerError(
+            'usage: /server skill run <id> [json inputs] [--file <path>]…',
+          );
+        let inputs: Record<string, unknown> = {};
         if (json.length)
           try {
-            inputs = JSON.parse(json.join(' '));
+            const parsed: unknown = JSON.parse(json.join(' '));
+            if (!isRecord(parsed)) throw new Error('not an object');
+            inputs = parsed;
           } catch (error) {
-            throw new ServerError(`inputs are not JSON: ${reason(error)}`);
+            throw new ServerError(
+              `inputs are not a JSON object: ${reason(error)}`,
+            );
           }
+        const workspace = api.workspace ?? context.workspace;
+        if (attached.length)
+          inputs.files = attached.map((name) => {
+            const path = resolve(workspace, name);
+            if (!existsSync(path) || !statSync(path).isFile())
+              throw new ServerError(`${name} is not a file in the workspace`);
+            if (statSync(path).size > MAX_UPLOAD_BYTES)
+              throw new ServerError(`${name} is larger than 16 MB`);
+            const bytes = readFileSync(path);
+            return {
+              path: relative(workspace, path).split(sep).join('/'),
+              base64: bytes.toString('base64'),
+              sha256: sha256(bytes),
+            };
+          });
         const { data } = await request(
           'POST',
           `/v1/skillpacks/${encodeURIComponent(id)}/runs`,

@@ -98,7 +98,7 @@ Connects Circle to a [circle-server](https://github.com/qingshanfeihu/circle-ser
 | `/server trial start` | Start recording which server tools the model calls, for the trial record a skill pack is sent with. Only the tool names, whether each call worked, and a SHA-256 of its arguments are kept. |
 | `/server skill push <folder> [--outputs a,b]` | Send a skill pack: the folder's `skillpack.json` (`id`, `version`, `tools`, …), its `SKILL.md` and other files (not hidden ones, not `node_modules`), with the trial record and the SHA-256 of the named output files. The server checks the record against the tools the pack declares and keeps the pack for approval. |
 | `/server skill list` | The skill packs on the server. |
-| `/server skill run <id> [json]` | Run a skill pack on the server with these inputs, and follow the task. |
+| `/server skill run <id> [json] [--file <path>]…` | Run a skill pack on the server with these inputs, and follow the task. Each `--file` attaches a file of the workspace as `inputs.files`, which the run finds in its own workspace. |
 
 **When a program runs Circle for the server.** circle-server's own runner starts Circle without a person, as `circle --mode rpc --extensions`, and hands over the address and a short-lived token in the environment: `CIRCLE_SERVER_URL` and `CIRCLE_SERVER_TOKEN` (with `CIRCLE_SERVER_USER` and `CIRCLE_SERVER_SCOPE` if it has them). The extension then reads the server's tools before the first prompt, writes nothing to disk, and does not ask for a password when the token is turned down; `/server login` and `/server logout` are refused.
 
