@@ -105,6 +105,7 @@ jobs:
       # installed MSI
       - name: Update the packaged application
         if: runner.os == 'Windows'
+        timeout-minutes: 15
         shell: bash
         run: |
           export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/Circle-win32-x64"

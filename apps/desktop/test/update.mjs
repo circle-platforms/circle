@@ -33,10 +33,17 @@ const msi =
   resolve(process.env.CIRCLE_DESKTOP_UPDATE_MSI);
 const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files';
 const msiexec = (...args) => {
-  const result = spawnSync('msiexec.exe', args, { stdio: 'inherit' });
+  const result = spawnSync('msiexec.exe', args, {
+    stdio: 'inherit',
+    timeout: 300000,
+  });
   if (result.status !== 0)
-    throw Error(`msiexec ${args.join(' ')} exited with ${result.status}`);
+    throw Error(
+      `msiexec ${args.join(' ')} exited with ${result.status ?? result.error}`,
+    );
 };
+// Each stage says when it starts, so a run that hangs shows where
+const stage = (text) => console.log(`-- ${text}`);
 const { version } = JSON.parse(
   await readFile(join(root, '../../package.json'), 'utf8'),
 );
@@ -60,6 +67,7 @@ try {
     : join(temp, 'apps', basename(appPath));
   if (msi) {
     assert.equal(existsSync(installed), false, `${installed} exists already`);
+    stage(`installing ${msi}`);
     msiexec('/i', msi, '/qn', '/l*v', join(temp, 'msi-install.log'));
   } else
     await cp(appPath, installed, { recursive: true, verbatimSymlinks: true });
@@ -67,8 +75,10 @@ try {
   const program = join(installed, relative(appPath, executable));
   // The newer version, packaged as a release is
   const release = join(temp, 'release');
-  const build = (script) =>
+  const build = (script) => {
+    stage(`building ${next} with ${script}`);
     execFileSync(process.execPath, [join(root, 'scripts', script)], {
+      timeout: 900000,
       cwd: root,
       env: {
         ...process.env,
@@ -77,6 +87,7 @@ try {
       },
       stdio: ['ignore', 'ignore', 'inherit'],
     });
+  };
   build('package.mjs');
   if (msi) build('msi.ts');
   const published = (await readdir(release)).filter((name) =>
@@ -107,6 +118,7 @@ try {
   delete env.ELECTRON_RUN_AS_NODE;
   // What the first copy writes, for when the update fails
   const output = openSync(join(temp, 'application.log'), 'a');
+  stage(`starting ${program}`);
   running = spawn(program, [`--remote-debugging-port=${port}`], {
     env,
     stdio: ['ignore', output, output],
@@ -173,10 +185,22 @@ try {
     .waitFor({ timeout: 120000 });
   check('the update downloads and is checked');
   await control.getByRole('button', { name: 'restart to update' }).click();
-  await exited;
+  stage('restarting to update');
+  // An installer that does not start leaves the application open, saying why
+  const left = await Promise.race([
+    exited.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 120000)),
+  ]);
+  if (!left)
+    throw Error(
+      `the application did not quit for the installer: ${JSON.stringify(
+        await view.evaluate(() => window.circleDesktop.updateState()),
+      )}`,
+    );
   await browser.close().catch(() => {});
   check('the application quits for the installer');
 
+  stage('waiting for the new version to start');
   ({ browser, page: view } = await page(180000));
   assert.equal((await info()).version, next);
   check(`the copy that started again is ${next}`);
@@ -277,6 +301,7 @@ try {
       msi,
     ])
       try {
+        stage(`removing ${file}`);
         msiexec('/x', file, '/qn');
         break;
       } catch {

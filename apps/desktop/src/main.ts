@@ -263,7 +263,10 @@ const updater = new Updater({
   launch: (command, args) =>
     new Promise<void>((resolve, reject) => {
       const windows = process.platform === 'win32';
+      // In the data folder: a working folder inside the application would keep Windows from
+      // moving it
       const installer = spawn(command, args, {
+        cwd: dataPath,
         detached: !windows,
         stdio: 'ignore',
         windowsHide: true,

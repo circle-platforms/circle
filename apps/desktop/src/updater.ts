@@ -162,11 +162,19 @@ function Write-Log([string]$Text) { Add-Content -LiteralPath $p.log -Value "$(Ge
 try {
   Write-Log "installing $($p.staged) over $($p.target)"
   Wait-Process -Id $p.pid -ErrorAction SilentlyContinue
+  # Circle's other processes end soon after it; the files they hold cannot be replaced
+  $inside = $p.target.TrimEnd('\') + '\'
+  $until = (Get-Date).AddSeconds(30)
+  while ((Get-Date) -lt $until -and @(Get-Process | Where-Object {
+      $_.Path -and $_.Path.StartsWith($inside, [StringComparison]::OrdinalIgnoreCase) }).Count) {
+    Start-Sleep -Milliseconds 200
+  }
   Write-Log 'Circle has quit'
   if ($p.kind -eq 'msi') {
     $msi = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
       '/i', ('"{0}"' -f $p.staged), '/passive', '/norestart', '/l*v', ('"{0}.msi"' -f $p.log))
-    if ($msi.ExitCode -ne 0) { throw "msiexec exited with $($msi.ExitCode)" }
+    # 3010 and 1641: installed, and Windows wants a restart for files it could not replace
+    if (@(0, 3010, 1641) -notcontains $msi.ExitCode) { throw "msiexec exited with $($msi.ExitCode)" }
   } else {
     $parent = Split-Path -Parent $p.target
     $name = Split-Path -Leaf $p.target
@@ -194,7 +202,9 @@ try {
   Write-Log "failed: $_"
 }
 Write-Log "starting $($p.executable)"
-if ($p.args.Count) { Start-Process -FilePath $p.executable -ArgumentList $p.args } else { Start-Process -FilePath $p.executable }
+# In its own folder, as the Start menu and Explorer start it
+$folder = Split-Path -Parent $p.executable
+if ($p.args.Count) { Start-Process -FilePath $p.executable -WorkingDirectory $folder -ArgumentList $p.args } else { Start-Process -FilePath $p.executable -WorkingDirectory $folder }
 `;
 
 export interface UpdaterOptions {
