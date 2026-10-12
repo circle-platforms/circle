@@ -415,6 +415,40 @@ test('the connector tools let a model list packs, hand over a file and get the c
   );
   assert.equal(submitted.taskId, 'task_one');
   assert.equal(submitted.phase, 'delivered');
+  // The rest of the input a pack asks for goes along; the file's own source stays the tool's.
+  await tool('circle_server_submit').run(
+    {
+      pack: 'apv-case-execute',
+      file: 'map.xmind',
+      input: {
+        gatewayAssetId: 'ast_gateway',
+        build: 'apv-10.4.6.4',
+        sourceRevisionId: 'src_other',
+      },
+    },
+    context,
+  );
+  const carried = JSON.parse(
+    server.seen
+      .filter((call) => call.path === '/v1/tasks/submit')
+      .at(-1)!
+      .body.toString(),
+  );
+  assert.deepEqual(carried.input, {
+    gatewayAssetId: 'ast_gateway',
+    build: 'apv-10.4.6.4',
+    sourceRevisionId: 'src_abc',
+    sourceSha256: createHash('sha256')
+      .update(Buffer.from('another mindmap'))
+      .digest('hex'),
+  });
+  await assert.rejects(
+    tool('circle_server_submit').run(
+      { pack: 'apv-case-execute', file: 'map.xmind', input: 'build=x' },
+      context,
+    ),
+    /input is an object/,
+  );
   assert.ok(
     submitted.lines.some((line: string) => /✓ saved .*cases\.xlsx/.test(line)),
   );

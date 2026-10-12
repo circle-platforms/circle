@@ -925,13 +925,15 @@ export async function register(api: ExtensionAPI): Promise<void> {
     return { id, sha256: sha256(bytes), name: basename(path) };
   }
 
-  // Upload one file of the workspace and hand the server a task on it. The same pack and
-  // file give the same idempotency key, so sending twice finds the same task.
+  // Upload one file of the workspace and hand the server a task on it, with whatever else
+  // the pack's input asks for (the assets it binds, a build). The same pack, file and input
+  // give the same idempotency key, so sending twice finds the same task.
   async function handOver(
     pack: string,
     file: string,
     again: boolean,
     context: CommandContext,
+    extra: Record<string, unknown> = {},
   ): Promise<{
     taskId: string;
     phase: string;
@@ -959,6 +961,13 @@ export async function register(api: ExtensionAPI): Promise<void> {
             pack,
             source.sha256,
             again ? Date.now() : 0,
+            ...(Object.keys(extra).length
+              ? [
+                  Object.keys(extra)
+                    .sort()
+                    .map((key) => [key, extra[key]]),
+                ]
+              : []),
           ]),
         ),
       ).slice(0, 40);
@@ -968,7 +977,11 @@ export async function register(api: ExtensionAPI): Promise<void> {
         title,
         capabilityPackId: pack,
         idempotencyKey,
-        input: { sourceRevisionId: source.id, sourceSha256: source.sha256 },
+        input: {
+          ...extra,
+          sourceRevisionId: source.id,
+          sourceSha256: source.sha256,
+        },
       },
     });
     const task = isRecord(data) ? data : {};
@@ -2059,7 +2072,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // The same work as tools, for a model that is told to hand work to the server.
   api.registerTool(
     'circle_server_packs',
-    'List what the connected circle-server can do: its capability packs, their input formats and versions. Read-only.',
+    'List what the connected circle-server can do: its capability packs, their input formats, the input each one takes (inputSchema) and versions. Read-only.',
     { type: 'object', properties: {} },
     async () => (await request('GET', '/v1/packs')).data,
     { readOnly: true },
@@ -2099,6 +2112,11 @@ export async function register(api: ExtensionAPI): Promise<void> {
       properties: {
         pack: { type: 'string', description: 'capability pack id' },
         file: { type: 'string', description: 'path in the workspace' },
+        input: {
+          type: 'object',
+          description:
+            'the rest of the task input the pack asks for, for example the asset ids it binds and the build; the uploaded file’s sourceRevisionId and sourceSha256 are filled in here',
+        },
       },
       required: ['pack', 'file'],
     },
@@ -2106,10 +2124,18 @@ export async function register(api: ExtensionAPI): Promise<void> {
       const pack = String(args.pack ?? '');
       const file = String(args.file ?? '');
       if (!pack || !file) throw new api.ToolError('pack and file are required');
+      if (args.input !== undefined && !isRecord(args.input))
+        throw new api.ToolError('input is an object of task input fields');
       const accepted = collecting();
       let task;
       try {
-        task = await handOver(pack, file, false, accepted.context);
+        task = await handOver(
+          pack,
+          file,
+          false,
+          accepted.context,
+          isRecord(args.input) ? args.input : {},
+        );
       } catch (error) {
         throw new api.ToolError(reason(error));
       }
