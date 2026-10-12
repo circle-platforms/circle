@@ -51,14 +51,21 @@ interface Asset {
   ownerPrincipalId: string;
   configuration: Record<string, unknown>;
 }
-// One occurrence of a bot's trigger and the task it started; published once its output
-// went to the bot's channel.
+// One occurrence of a bot's trigger. Admitted, it has the task it started and is published
+// once its output went to the bot's channel; failed, the server started no task and says why.
 interface BotRun {
+  /** The task it started; '' when the occurrence was not admitted. */
   taskId: string;
   occurrenceKey: string;
   channel: string;
   published: boolean;
+  status: string;
+  trigger: Record<string, unknown>;
+  error: string;
 }
+// A run is known by its task, or by bot and occurrence when it has none.
+const runKey = (botId: string, run: BotRun): string =>
+  run.taskId || `${botId}:${run.occurrenceKey}`;
 // What this window remembers of a task it handed over: the last event it has shown.
 interface Followed {
   title: string;
@@ -212,8 +219,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // What a paired page of the desktop application shows (api.setView): where you are
   // signed in, the tasks handed over from here and the last lines this extension wrote.
   const recent: string[] = [];
-  // Runs of your bots the server has published to Circle and this window has not shown yet.
+  // Runs of your bots the server has published to Circle, or could not start, that this
+  // window has not shown yet; and whether the last look found the token expired.
   let botNews: { bot: Asset; run: BotRun }[] = [];
+  let expired = false;
   // The four platform objects as the server last reported them (/server refresh).
   let objects: Record<string, unknown> | undefined;
   function publishView(signedIn: boolean): void {
@@ -444,6 +453,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     if (failure) api.setStatus(`${where} · ${failure}`, 'error');
     else if (following.size)
       api.setStatus(`${where} · ${following.size} running`, 'running');
+    else if (expired) api.setStatus(`${where} · sign-in expired`, 'wait');
     else if (botNews.length)
       api.setStatus(`${where} · ${botNews.length} bot result(s)`, 'wait');
     else api.setStatus(where, 'ok');
@@ -578,6 +588,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       if (password === null)
         throw new ServerError('signed out: /server login <url> <user>');
       await signIn(config.url, config.username, password);
+      void lookForBots();
     })().finally(() => {
       reauthorizing = undefined;
     });
@@ -1342,13 +1353,29 @@ export async function register(api: ExtensionAPI): Promise<void> {
       'GET',
       `/v1/automations/bots/${encodeURIComponent(id)}/runs`,
     );
-    return (Array.isArray(data) ? data : []).filter(isRecord).map((run) => ({
-      taskId: String(run.taskId ?? ''),
-      occurrenceKey: String(run.occurrenceKey ?? ''),
-      channel: String(run.channel ?? ''),
-      published: run.published === true,
-    }));
+    return (Array.isArray(data) ? data : []).filter(isRecord).map((run) => {
+      const error = isRecord(run.error)
+        ? [run.error.code ?? run.error.category, run.error.message]
+            .filter((part) => part !== undefined && part !== '')
+            .map(String)
+            .join(': ')
+        : typeof run.error === 'string'
+          ? run.error
+          : '';
+      return {
+        taskId: typeof run.taskId === 'string' ? run.taskId : '',
+        occurrenceKey: String(run.occurrenceKey ?? ''),
+        channel: String(run.channel ?? ''),
+        published: run.published === true,
+        status: String(run.status ?? (run.taskId ? 'admitted' : 'failed')),
+        trigger: isRecord(run.trigger) ? run.trigger : {},
+        error,
+      };
+    });
   }
+  // What a run has for its owner: a published output, or an occurrence that never started.
+  const news = (run: BotRun): boolean =>
+    run.published || (run.status === 'failed' && !run.taskId);
   // A lifecycle step bound to the version and digest the server showed: approved (by
   // someone other than the owner), running or disabled (by the owner).
   async function move(item: Asset, state: string): Promise<Asset> {
@@ -1398,13 +1425,16 @@ export async function register(api: ExtensionAPI): Promise<void> {
         : [],
     );
   }
-  function markSeen(taskIds: string[]): void {
-    const seen = [...seenRuns(), ...taskIds];
+  function markSeen(keys: string[]): void {
+    const seen = [...seenRuns(), ...keys];
     writeJson('bots.json', { seen: [...new Set(seen)].slice(-1000) });
-    botNews = botNews.filter(({ run }) => !taskIds.includes(run.taskId));
+    botNews = botNews.filter(
+      ({ bot, run }) => !keys.includes(runKey(bot.assetId, run)),
+    );
   }
-  // Look for published runs of your bots in the background. It never asks for a password:
-  // a token the server turns down just leaves the footer as it was.
+  // Look for new results of your bots in the background. It never asks for a password: a
+  // token the server turns down only puts "sign-in expired" in the footer, and the next
+  // /server command that signs in again looks once more.
   let lookingForBots: Promise<void> | undefined;
   function lookForBots(): Promise<void> {
     lookingForBots ??= (async () => {
@@ -1418,11 +1448,18 @@ export async function register(api: ExtensionAPI): Promise<void> {
         .filter((item) => item.ownerPrincipalId === me)
         .slice(0, 20))
         for (const run of await botRuns(bot.assetId, quiet))
-          if (run.published && !seen.has(run.taskId)) found.push({ bot, run });
+          if (news(run) && !seen.has(runKey(bot.assetId, run)))
+            found.push({ bot, run });
       botNews = found;
+      expired = false;
       void showStatus();
     })()
-      .catch(() => {})
+      .catch((error) => {
+        if (error instanceof ServerError && error.status === 401) {
+          expired = true;
+          void showStatus();
+        }
+      })
       .finally(() => {
         lookingForBots = undefined;
       });
@@ -1529,7 +1566,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         if (item.ownerPrincipalId === me) {
           const list = await botRuns(item.assetId).catch(() => []);
           const fresh = list.filter(
-            (run) => run.published && !seen.has(run.taskId),
+            (run) => news(run) && !seen.has(runKey(item.assetId, run)),
           ).length;
           runs = ` · ${list.length} run(s)${fresh ? `, ${fresh} new: /server bot runs ${item.assetId}` : ''}`;
         } else runs = ` · owner ${item.ownerPrincipalId}`;
@@ -1591,6 +1628,19 @@ export async function register(api: ExtensionAPI): Promise<void> {
     }
     const shown: string[] = [];
     for (const run of runs.slice(-10)) {
+      // Occurrences a late approval or a stopped server missed, folded into this one run.
+      const skipped = Number(run.trigger.skippedOccurrences ?? 0);
+      const folded =
+        skipped > 0
+          ? ` · ${skipped} missed occurrence(s) since ${String(run.trigger.firstDueAt)} folded into this run`
+          : '';
+      if (!run.taskId) {
+        context.append(
+          `  — · ${run.occurrenceKey} · not started: ${run.error || run.status}${folded}`,
+        );
+        shown.push(runKey(id, run));
+        continue;
+      }
       const output = run.published ? await botOutput(run.taskId) : undefined;
       if (!output) {
         let phase = 'not published yet';
@@ -1599,7 +1649,9 @@ export async function register(api: ExtensionAPI): Promise<void> {
         } catch {
           /* The task is not readable now. */
         }
-        context.append(`  ${run.taskId} · ${run.occurrenceKey} · ${phase}`);
+        context.append(
+          `  ${run.taskId} · ${run.occurrenceKey} · ${phase}${folded}`,
+        );
         continue;
       }
       const artifacts = Array.isArray(output.artifacts) ? output.artifacts : [];
@@ -1607,7 +1659,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         ? output.unknowns.map(String)
         : [];
       context.append(
-        `  ${run.taskId} · ${run.occurrenceKey} · ${String(output.status)} · ${artifacts.length} file(s)${unknowns.length ? ` · unknown: ${unknowns.join('; ')}` : ''} · /server get ${run.taskId} saves them`,
+        `  ${run.taskId} · ${run.occurrenceKey} · ${String(output.status)} · ${artifacts.length} file(s)${unknowns.length ? ` · unknown: ${unknowns.join('; ')}` : ''}${folded} · /server get ${run.taskId} saves them`,
       );
       for (const artifact of artifacts.filter(isRecord).slice(0, 5))
         context.append(

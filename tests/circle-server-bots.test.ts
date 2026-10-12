@@ -11,9 +11,9 @@ import { ExtensionHost, bundledExtensionsRoot } from '../src/extensions.js';
 import { submitAnswer } from '../src/secret_prompt.js';
 
 const PASSWORD = 'pw-bots-3317-zz';
-const PEOPLE: Record<string, { token: string; principalId: string }> = {
-  developer: { token: 'tok-bots-dev-81a2', principalId: 'prn_dev' },
-  approver: { token: 'tok-bots-apr-6c0f', principalId: 'prn_apr' },
+const PEOPLE: Record<string, string> = {
+  developer: 'prn_dev',
+  approver: 'prn_apr',
 };
 async function read(request: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
@@ -26,6 +26,9 @@ async function read(request: IncomingMessage): Promise<Buffer> {
 async function botServer(t: Parameters<typeof scratch>[0]) {
   const assets = new Map<string, Record<string, any>>();
   const posted: { path: string; body: Record<string, any>; by: string }[] = [];
+  // Each sign-in gets a new token; expire() turns down every token given so far.
+  const tokens = new Map<string, string>();
+  let issued = 0;
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://x');
     const text = (await read(request)).toString();
@@ -37,20 +40,17 @@ async function botServer(t: Parameters<typeof scratch>[0]) {
     const fail = (status: number, code: string, message = code) =>
       send(status, { status: 'failed', error: { code, message } });
     if (url.pathname === '/v1/auth/dev-login') {
-      const person = PEOPLE[body.username];
-      if (!person || body.password !== PASSWORD) return fail(401, 'BAD');
-      return send(200, {
-        data: {
-          token: person.token,
-          principalId: person.principalId,
-          scopes: ['scp_lab'],
-        },
-      });
+      const principalId = PEOPLE[body.username];
+      if (!principalId || body.password !== PASSWORD) return fail(401, 'BAD');
+      const token = `tok-bots-${++issued}-5e19`;
+      tokens.set(token, principalId);
+      return send(200, { data: { token, principalId, scopes: ['scp_lab'] } });
     }
-    const caller = Object.values(PEOPLE).find(
-      (person) => request.headers.authorization === `Bearer ${person.token}`,
+    const principalId = tokens.get(
+      String(request.headers.authorization).replace(/^Bearer /, ''),
     );
-    if (!caller) return fail(401, 'UNAUTHENTICATED');
+    if (!principalId) return fail(401, 'UNAUTHENTICATED');
+    const caller = { principalId };
     if (request.method === 'POST')
       posted.push({ path: url.pathname, body, by: caller.principalId });
     if (url.pathname === '/v1/status')
@@ -119,12 +119,35 @@ async function botServer(t: Parameters<typeof scratch>[0]) {
                       occurrenceKey: 'schedule:2026-10-12T00:00:00.000Z',
                       channel: 'circle-events',
                       published: true,
+                      status: 'admitted',
+                      trigger: {
+                        kind: 'schedule',
+                        firstDueAt: '2026-10-11T22:00:00.000Z',
+                        dueAt: '2026-10-12T00:00:00.000Z',
+                        skippedOccurrences: 2,
+                      },
+                      error: null,
                     },
                     {
-                      taskId: 'task_b2',
+                      taskId: null,
                       occurrenceKey: 'schedule:2026-10-12T01:00:00.000Z',
                       channel: 'circle-events',
                       published: false,
+                      status: 'failed',
+                      trigger: { kind: 'schedule', skippedOccurrences: 0 },
+                      error: {
+                        code: 'APPROVAL_STALE',
+                        message: 'Package asset revision is no longer approved',
+                      },
+                    },
+                    {
+                      taskId: 'task_b2',
+                      occurrenceKey: 'schedule:2026-10-12T02:00:00.000Z',
+                      channel: 'circle-events',
+                      published: false,
+                      status: 'admitted',
+                      trigger: { kind: 'schedule', skippedOccurrences: 0 },
+                      error: null,
                     },
                   ],
                 },
@@ -169,7 +192,12 @@ async function botServer(t: Parameters<typeof scratch>[0]) {
     () => new Promise<void>((resolve) => server.close(() => resolve())),
   );
   const { port } = server.address() as AddressInfo;
-  return { url: `http://127.0.0.1:${port}`, assets, posted };
+  return {
+    url: `http://127.0.0.1:${port}`,
+    assets,
+    posted,
+    expire: () => tokens.clear(),
+  };
 }
 
 async function person(
@@ -286,7 +314,7 @@ test('a bot is made from Circle as a schedule and a skill pack, approved by some
   await dev.run('bot list');
   assert.match(
     dev.lines.at(-1)!,
-    /ast_bot · nightly-compile every 1h · running · every 1h from 2026-10-12T00:00:00\.000Z \(trigger running\) · 2 run\(s\), 1 new: \/server bot runs ast_bot/,
+    /ast_bot · nightly-compile every 1h · running · every 1h from 2026-10-12T00:00:00\.000Z \(trigger running\) · 3 run\(s\), 2 new: \/server bot runs ast_bot/,
   );
   await approver.run('bot list');
   assert.match(
@@ -307,22 +335,43 @@ test('a bot is made from Circle as a schedule and a skill pack, approved by some
       [
         'circle-server · developer@127.0.0.1:' +
           new URL(server.url).port +
-          ' · 1 bot result(s)',
+          ' · 2 bot result(s)',
         'wait',
       ],
     ],
   );
   await later.run('bot runs ast_bot');
-  assert.deepEqual(later.lines.slice(-3), [
-    '  task_b1 · schedule:2026-10-12T00:00:00.000Z · succeeded · 1 file(s) · /server get task_b1 saves them',
+  assert.deepEqual(later.lines.slice(-4), [
+    '  task_b1 · schedule:2026-10-12T00:00:00.000Z · succeeded · 1 file(s) · 2 missed occurrence(s) since 2026-10-11T22:00:00.000Z folded into this run · /server get task_b1 saves them',
     `    out/case.xlsx · sha256 ${'c'.repeat(12)}…`,
-    '  task_b2 · schedule:2026-10-12T01:00:00.000Z · running',
+    '  — · schedule:2026-10-12T01:00:00.000Z · not started: APPROVAL_STALE: Package asset revision is no longer approved',
+    '  task_b2 · schedule:2026-10-12T02:00:00.000Z · running',
   ]);
   assert.equal(
     later.host.statuses().find((item) => item.extension === 'circle-server')
       ?.lamp,
     'ok',
     'shown once, the result is no longer new',
+  );
+
+  // A token that runs out: the background look says so in the footer and asks nothing;
+  // the next command signs in again on the masked card and looks once more.
+  server.expire();
+  const stale = await person(root, 'dev-home', workspace);
+  await delay(300);
+  assert.deepEqual(
+    stale.host
+      .statuses()
+      .filter((item) => item.extension === 'circle-server')
+      .map((item) => [item.text.replace(/^.* · /, ''), item.lamp]),
+    [['sign-in expired', 'wait']],
+  );
+  await stale.run('bot list');
+  await delay(300);
+  assert.equal(
+    stale.host.statuses().find((item) => item.extension === 'circle-server')
+      ?.lamp,
+    'ok',
   );
 
   await dev.run('bot stop ast_bot');
