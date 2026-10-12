@@ -149,6 +149,7 @@ async function toolServer(t: Parameters<typeof scratch>[0]) {
           skillPackId: 'skp_1',
           digest: 'd'.repeat(64),
           status: 'submitted',
+          approvalTaskId: 'task_approve',
           check: {
             undeclaredTools: [
               ...new Set(
@@ -171,6 +172,16 @@ async function toolServer(t: Parameters<typeof scratch>[0]) {
           manifest: { id: 'mindmap-compile', version: '0.1.0' },
           status: 'submitted',
         })),
+      });
+    if (url.pathname === '/v1/tasks/task_approve/approvals')
+      return send(200, {
+        data: [
+          {
+            approvalId: 'apr_skill',
+            status: 'open',
+            inputRevisionId: 'inrev_s',
+          },
+        ],
       });
     if (url.pathname === '/v1/skillpacks/skp_1/runs')
       return send(200, { data: { taskId: 'task_run', phase: 'admitted' } });
@@ -504,6 +515,13 @@ test('a trial records which server tools the model used, and /server skill push 
     ),
   );
 
+  assert.ok(
+    lines.some((line) =>
+      /waiting for approval apr_skill in task_approve · someone else approves: \/server approve task_approve apr_skill/.test(
+        line,
+      ),
+    ),
+  );
   await command.handler('skill list', context);
   assert.match(lines.at(-1)!, /skp_1 · mindmap-compile 0\.1\.0 · submitted/);
   await command.handler('skill run skp_1 {"mindmap":"LBX-200.xmind"}', context);

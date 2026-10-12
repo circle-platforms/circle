@@ -1105,6 +1105,31 @@ export function register(api: ExtensionAPI): void {
       const names = Array.isArray(check[key]) ? check[key].map(String) : [];
       if (names.length) context.append(`  ✖ ${label}: ${names.join(', ')}`);
     }
+    // Submitted is not approved: the approval bound to this digest waits in its own task.
+    const approvalTask =
+      typeof reply.approvalTaskId === 'string' ? reply.approvalTaskId : '';
+    if (!approvalTask) return;
+    remember(approvalTask, {
+      title: `approve skill pack ${String(manifest.id)}`,
+      seq: 0,
+    });
+    const approvals = await optional<unknown>(
+      `/v1/tasks/${encodeURIComponent(approvalTask)}/approvals`,
+      [],
+    );
+    const open = (Array.isArray(approvals) ? approvals : [])
+      .filter(isRecord)
+      .filter((item) => item.status === 'open');
+    context.append(
+      open.length
+        ? open
+            .map(
+              (item) =>
+                `  waiting for approval ${String(item.approvalId)} in ${approvalTask} · someone else approves: /server approve ${approvalTask} ${String(item.approvalId)}`,
+            )
+            .join('\n')
+        : `  approval task ${approvalTask} · no open approval yet`,
+    );
   }
 
   const commands: Record<
