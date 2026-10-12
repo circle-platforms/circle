@@ -4,9 +4,10 @@
 // passes when the copy that starts again is the newer version, and the old one is gone.
 //   CIRCLE_DESKTOP_APP_PATH    the packaged Circle.app (macOS) or Circle-win32-x64 folder
 //   CIRCLE_DESKTOP_EXECUTABLE  the program inside it
-//   CIRCLE_DESKTOP_UPDATE_MSI  on Windows: the package's .msi. It is installed instead of the
-//                              copy, and the update installs a newer .msi over it (this needs an
-//                              administrator, as on CI) and removes it afterwards.
+//   CIRCLE_DESKTOP_UPDATE_MSI  on Windows, where only the .msi is released and updates itself:
+//                              the package's .msi. It is installed instead of a copy, the update
+//                              installs a newer .msi over it (this needs an administrator, as on
+//                              CI), and it is removed afterwards.
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
@@ -26,10 +27,13 @@ if (!['darwin', 'win32'].includes(process.platform)) {
   console.log('the desktop update installs itself on macOS and Windows only');
   process.exit(0);
 }
+if (process.platform === 'win32' && !process.env.CIRCLE_DESKTOP_UPDATE_MSI)
+  throw Error(
+    'on Windows only the .msi updates itself: set CIRCLE_DESKTOP_UPDATE_MSI',
+  );
 // msiexec wants one kind of slash; Git Bash hands over both
 const msi =
   process.platform === 'win32' &&
-  process.env.CIRCLE_DESKTOP_UPDATE_MSI &&
   resolve(process.env.CIRCLE_DESKTOP_UPDATE_MSI);
 const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files';
 const msiexec = (...args) => {

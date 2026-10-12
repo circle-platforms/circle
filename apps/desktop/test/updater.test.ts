@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -18,7 +18,6 @@ import {
   checksumFor,
   installation,
   releasesUrl,
-  systemTar,
   Updater,
   type Installation,
 } from '../src/updater';
@@ -58,16 +57,18 @@ test('an installation is found from where the application runs', () => {
   );
   assert.equal(msi?.kind, 'msi');
   assert.equal(msi?.asset('1.3.0'), 'circle-desktop-1.3.0-windows-x64.msi');
-  const zip = installation(
-    'win32',
-    'x64',
-    'D:\\tools\\Circle-win32-x64\\Circle.exe',
-    'C:\\Program Files',
+  assert.equal(msi?.target, 'C:\\Program Files\\Circle');
+  // Only the .msi is released for Windows: a copy elsewhere is updated by hand. No package
+  // for the others, and Linux's sandbox helper must stay root's
+  assert.equal(
+    installation(
+      'win32',
+      'x64',
+      'D:\\tools\\Circle-win32-x64\\Circle.exe',
+      'C:\\Program Files',
+    ),
+    undefined,
   );
-  assert.equal(zip?.kind, 'folder');
-  assert.equal(zip?.target, 'D:\\tools\\Circle-win32-x64');
-  assert.equal(zip?.asset('1.3.0'), 'circle-desktop-1.3.0-windows-x64.zip');
-  // No package for these, and Linux's sandbox helper must stay root's
   assert.equal(
     installation('win32', 'arm64', 'C:\\Circle\\Circle.exe'),
     undefined,
@@ -131,72 +132,58 @@ async function release(
   const { port } = server.address() as { port: number };
   return `http://127.0.0.1:${port}/releases`;
 }
-// An installed folder, as the .zip unpacks: the program, its archive's package.json and a
-// file that says which version it is. The program notes in `<root>/started` how it was started.
-function folderApp(parent: string, version: string, root: string): string {
-  const folder = join(parent, 'Circle-test');
-  mkdirSync(join(folder, 'resources/app.asar'), { recursive: true });
-  writeFileSync(
-    join(folder, 'resources/app.asar/package.json'),
-    JSON.stringify({ name: 'circle', version }),
-  );
-  writeFileSync(join(folder, 'VERSION'), version);
-  const marker = join(root, 'started');
-  if (windows)
-    writeFileSync(join(folder, 'run.cmd'), `@echo %* > "${marker}"\r\n`);
-  else {
-    writeFileSync(
-      join(folder, 'run.sh'),
-      `#!/bin/sh\necho "$@" > "${marker}"\n`,
-      {
-        mode: 0o755,
-      },
-    );
+const sha = (data: Buffer | string) =>
+  createHash('sha256').update(data).digest('hex');
+// A program that notes how it was started, in `marker`: what the installer starts again, or
+// on Windows a stand-in for msiexec.
+function recorder(path: string, marker: string): string {
+  if (windows) {
+    writeFileSync(`${path}.cmd`, `@echo %* > "${marker}"\r\n@exit /b 0\r\n`);
+    return `${path}.cmd`;
   }
-  return folder;
+  writeFileSync(path, `#!/bin/sh\necho "$@" > "${marker}"\n`, { mode: 0o755 });
+  return path;
 }
-function archive(root: string, version: string): Buffer {
-  const source = join(root, 'source');
-  rmSync(source, { recursive: true, force: true });
-  mkdirSync(source);
-  folderApp(source, version, root);
-  const file = join(root, 'package.tar.gz');
-  execFileSync(systemTar(), ['-czf', file, '-C', source, 'Circle-test']);
-  return readFileSync(file);
-}
-const sha = (data: Buffer) => createHash('sha256').update(data).digest('hex');
-
-test('an update is checked, downloaded, installed over the old folder and reported', async (t) => {
-  const root = scratch(t);
-  const installed = folderApp(join(root, 'apps'), '1.0.0', root);
-  const found: Installation = {
-    kind: 'folder',
-    target: installed,
-    executable: join(installed, windows ? 'run.cmd' : 'run.sh'),
-    asset: (version) => `circle-desktop-${version}-test.tar.gz`,
+const INSTALLER = 'circle-desktop-1.1.0-windows-x64.msi';
+const msiInstallation = (root: string): Installation => {
+  const target = join(root, 'Program Files', 'Circle');
+  mkdirSync(target, { recursive: true });
+  return {
+    kind: 'msi',
+    target,
+    executable: recorder(join(target, 'Circle'), join(root, 'started')),
+    asset: (version) => `circle-desktop-${version}-windows-x64.msi`,
   };
-  const good = archive(root, '1.1.0');
+};
+
+test('an update is checked, downloaded, checked against its checksum, handed to the installer and reported', async (t) => {
+  const root = scratch(t);
+  const found = msiInstallation(root);
+  const msi = 'an installer package';
   const releases = await release(t, '1.1.0', {
-    'circle-desktop-1.1.0-test.tar.gz': good,
-    'circle-desktop-1.1.0-test.tar.gz.sha256': `${sha(good)}  circle-desktop-1.1.0-test.tar.gz\n`,
+    [INSTALLER]: msi,
+    [`${INSTALLER}.sha256`]: `${sha(msi)}  ${INSTALLER}\n`,
   });
   const home = join(root, 'home');
   const folder = join(root, 'data', 'updates');
   const launched: [string, string[]][] = [];
   let quit = 0;
-  const updater = new Updater({
+  const options = {
     version: '1.0.0',
     home,
     folder,
     installation: found,
     releases,
-    launch: (command, args) => {
+    launch: (command: string, args: string[]) => {
       launched.push([command, args]);
     },
     quit: () => quit++,
     args: ['--remote-debugging-port=9555'],
     pid: 1,
-  });
+    platform: 'win32',
+    msiexec: recorder(join(root, 'msiexec'), join(root, 'msiexec-ran')),
+  };
+  const updater = new Updater(options);
   const seen: string[] = [];
   updater.subscribe((state) => seen.push(state.phase));
 
@@ -215,133 +202,150 @@ test('an update is checked, downloaded, installed over the old folder and report
   });
   assert.ok(seen.includes('checking') && seen.includes('downloading'));
   const ready = JSON.parse(readFileSync(join(folder, 'ready.json'), 'utf8'));
-  assert.equal(readFileSync(join(ready.staged, 'VERSION'), 'utf8'), '1.1.0');
+  assert.equal(readFileSync(ready.staged, 'utf8'), msi);
 
   // A restart still finds the download
-  const again = new Updater({
-    version: '1.0.0',
-    home,
-    folder,
-    installation: found,
-    releases,
-    launch: (command, args) => {
-      launched.push([command, args]);
-    },
-    quit: () => quit++,
-    args: ['--remote-debugging-port=9555'],
-    pid: 1,
-  });
+  const again = new Updater(options);
   assert.deepEqual(await again.start(), { phase: 'ready', version: '1.1.0' });
-
   assert.deepEqual(await again.install(), {
     phase: 'installing',
     version: '1.1.0',
   });
   assert.equal(quit, 1);
-  assert.equal(launched.length, 1);
   const [command, args] = launched[0];
+  assert.equal(command, 'powershell.exe');
+  assert.equal(args.at(-1), '-Start');
   assert.deepEqual(
     JSON.parse(readFileSync(join(folder, 'pending.json'), 'utf8')),
     { version: '1.1.0', from: '1.0.0' },
   );
+  const plan = JSON.parse(readFileSync(args.at(-2)!, 'utf8'));
+  assert.equal(plan.staged, ready.staged);
+  assert.equal(plan.target, found.target);
+  assert.deepEqual(plan.args, ['--remote-debugging-port=9555']);
 
-  // Run the installer as the application would, for a process that has already ended
-  const ended = spawnSync(process.execPath, ['-e', '0']);
-  assert.equal(ended.status, 0);
   if (windows) {
-    // As Circle does: the installer starts itself again on its own and returns at once
-    assert.equal(command, 'powershell.exe');
-    assert.equal(args.at(-1), '-Start');
-    const plan = args.at(-2)!;
-    const value = JSON.parse(readFileSync(plan, 'utf8'));
-    assert.equal(value.kind, 'folder');
-    assert.equal(value.target, installed);
-    assert.deepEqual(value.args, ['--remote-debugging-port=9555']);
-    value.pid = 2 ** 30;
-    writeFileSync(plan, JSON.stringify(value));
-    const started = spawnSync(command, args, { stdio: 'inherit' });
-    assert.equal(started.status, 0);
-  } else {
-    assert.equal(command, '/bin/sh');
-    args[1] = String(2 ** 22 + 12345); // no such process
-    spawn(command, args, { stdio: 'inherit' });
+    // As Circle does: the installer starts itself again on its own and returns at once; that
+    // copy waits for Circle, runs the package and starts Circle again
+    plan.pid = 2 ** 30;
+    writeFileSync(args.at(-2)!, JSON.stringify(plan));
+    assert.equal(spawnSync(command, args, { stdio: 'inherit' }).status, 0);
+    await until(() => existsSync(join(root, 'started')));
+    assert.match(
+      readFileSync(join(root, 'msiexec-ran'), 'utf8'),
+      /\/i ".+circle-desktop-1\.1\.0-windows-x64\.msi" \/passive \/norestart/,
+    );
+    assert.match(
+      readFileSync(join(root, 'started'), 'utf8'),
+      /--remote-debugging-port=9555/,
+    );
+    assert.match(
+      readFileSync(join(folder, 'install.log'), 'utf8'),
+      /installed/,
+    );
   }
-  await until(() => existsSync(join(root, 'started')));
-  assert.match(
-    readFileSync(join(root, 'started'), 'utf8'),
-    /--remote-debugging-port=9555/,
-  );
-  assert.equal(readFileSync(join(installed, 'VERSION'), 'utf8'), '1.1.0');
-  assert.deepEqual(readdirSync(join(root, 'apps')), ['Circle-test']);
-  assert.match(readFileSync(join(folder, 'install.log'), 'utf8'), /installed/);
 
-  // The new version starts, sees that it is the one asked for and clears the folder
-  const after = new Updater({
-    version: '1.1.0',
-    home,
-    folder,
-    installation: found,
-    releases,
-    launch: () => assert.fail('nothing to install'),
-    quit: () => assert.fail('nothing to install'),
+  // The new version starts, sees that it is the one asked for and clears the download
+  const after = new Updater({ ...options, version: '1.1.0' });
+  assert.deepEqual(await after.start(), {
+    phase: 'current',
+    updated: '1.1.0',
   });
-  assert.deepEqual(await after.start(), { phase: 'current', updated: '1.1.0' });
   // Only the installer's log stays, until the next update
-  assert.deepEqual(readdirSync(folder), ['install.log']);
+  assert.deepEqual(readdirSync(folder), windows ? ['install.log'] : []);
   assert.deepEqual(await after.check(), { phase: 'current' });
 });
 
-test('a download that does not match its checksum or version is not installed', async (t) => {
+test(
+  'the macOS installer puts the new bundle in place of the old one and starts it',
+  {
+    skip: windows,
+  },
+  async (t) => {
+    const root = scratch(t);
+    const bundle = (parent: string, version: string) => {
+      const app = join(parent, 'Circle.app');
+      mkdirSync(join(app, 'Contents', 'MacOS'), { recursive: true });
+      writeFileSync(join(app, 'Contents', 'VERSION'), version);
+      recorder(join(app, 'Contents', 'MacOS', 'Circle'), join(root, 'started'));
+      return app;
+    };
+    const installed = bundle(join(root, 'Applications'), '1.0.0');
+    const folder = join(root, 'updates');
+    const staged = bundle(join(folder, '1.1.0'), '1.1.0');
+    writeFileSync(
+      join(folder, 'ready.json'),
+      JSON.stringify({ version: '1.1.0', staged }),
+    );
+    const launched: [string, string[]][] = [];
+    const updater = new Updater({
+      version: '1.0.0',
+      home: join(root, 'home'),
+      folder,
+      installation: {
+        kind: 'bundle',
+        target: installed,
+        executable: join(installed, 'Contents', 'MacOS', 'Circle'),
+        asset: (version) => `circle-desktop-${version}-darwin-arm64.dmg`,
+      },
+      releases: 'http://127.0.0.1:9/releases',
+      launch: (command, args) => {
+        launched.push([command, args]);
+      },
+      quit: () => {},
+      args: ['--remote-debugging-port=9555'],
+      platform: 'darwin',
+    });
+    assert.deepEqual(await updater.start(), {
+      phase: 'ready',
+      version: '1.1.0',
+    });
+    await updater.install();
+    const [command, args] = launched[0];
+    assert.equal(command, '/bin/sh');
+    args[1] = String(2 ** 22 + 12345); // a process that has ended
+    spawn(command, args, { stdio: 'inherit' });
+    await until(() => existsSync(join(root, 'started')));
+    assert.match(
+      readFileSync(join(root, 'started'), 'utf8'),
+      /--remote-debugging-port=9555/,
+    );
+    assert.equal(
+      readFileSync(join(installed, 'Contents', 'VERSION'), 'utf8'),
+      '1.1.0',
+    );
+    assert.deepEqual(readdirSync(join(root, 'Applications')), ['Circle.app']);
+    assert.equal(existsSync(staged), false);
+    assert.match(
+      readFileSync(join(folder, 'install.log'), 'utf8'),
+      /installed/,
+    );
+  },
+);
+
+test('a download that does not match its checksum is not installed', async (t) => {
   const root = scratch(t);
-  const installed = folderApp(join(root, 'apps'), '1.0.0', root);
-  const found: Installation = {
-    kind: 'folder',
-    target: installed,
-    executable: join(installed, windows ? 'run.cmd' : 'run.sh'),
-    asset: (version) => `circle-desktop-${version}-test.tar.gz`,
-  };
-  const wrong = archive(root, '1.0.5');
-  const options = (releases: string) => ({
+  const releases = await release(t, '1.1.0', {
+    [INSTALLER]: 'an installer package',
+    [`${INSTALLER}.sha256`]: `${'0'.repeat(64)}  ${INSTALLER}\n`,
+  });
+  const updater = new Updater({
     version: '1.0.0',
     home: join(root, 'home'),
     folder: join(root, 'updates'),
-    installation: found,
+    installation: msiInstallation(root),
     releases,
     launch: () => assert.fail('nothing to install'),
     quit: () => assert.fail('nothing to install'),
   });
-  const corrupt = new Updater(
-    options(
-      await release(t, '1.1.0', {
-        'circle-desktop-1.1.0-test.tar.gz': wrong,
-        'circle-desktop-1.1.0-test.tar.gz.sha256': `${'0'.repeat(64)}  circle-desktop-1.1.0-test.tar.gz\n`,
-      }),
-    ),
-  );
-  await corrupt.check();
-  const failed = await corrupt.download();
+  await updater.check();
+  const failed = await updater.download();
   assert.equal(failed.phase, 'failed');
   assert.match(
     (failed as { error: string }).error,
     /does not match its checksum/,
   );
   assert.equal(existsSync(join(root, 'updates')), false);
-
-  const mislabelled = new Updater(
-    options(
-      await release(t, '1.1.0', {
-        'circle-desktop-1.1.0-test.tar.gz': wrong,
-        'circle-desktop-1.1.0-test.tar.gz.sha256': sha(wrong),
-      }),
-    ),
-  );
-  await mislabelled.check();
-  const other = await mislabelled.download();
-  assert.match(
-    (other as { error: string }).error,
-    /does not hold Circle 1\.1\.0/,
-  );
-  assert.equal(readFileSync(join(installed, 'VERSION'), 'utf8'), '1.0.0');
 });
 
 test('a copy that cannot replace itself points to the release page, and an update that did not go in says so', async (t) => {
@@ -369,13 +373,13 @@ test('a copy that cannot replace itself points to the release page, and an updat
   );
   writeFileSync(
     join(root, 'updates', 'install.log'),
-    'Mon installing\nMon failed: the new copy could not be written beside the old one\nMon starting Circle\n',
+    'Mon installing\nMon failed: msiexec exited with 1602\nMon starting Circle\n',
   );
   const state = await manual.start();
   assert.equal(state.phase, 'failed');
   assert.equal(
     (state as { error: string }).error,
-    'Circle 2.0.0 was not installed: the new copy could not be written beside the old one',
+    'Circle 2.0.0 was not installed: msiexec exited with 1602',
   );
 
   // Offline: a check now says why; the daily check says nothing
@@ -393,24 +397,22 @@ test('a copy that cannot replace itself points to the release page, and an updat
 
 test('an installer that does not start leaves the application running and says so', async (t) => {
   const root = scratch(t);
-  const installed = folderApp(join(root, 'apps'), '1.0.0', root);
   const folder = join(root, 'updates');
   mkdirSync(join(folder, '1.1.0'), { recursive: true });
+  writeFileSync(join(folder, '1.1.0', INSTALLER), 'an installer package');
   writeFileSync(
     join(folder, 'ready.json'),
-    JSON.stringify({ version: '1.1.0', staged: join(folder, '1.1.0') }),
+    JSON.stringify({
+      version: '1.1.0',
+      staged: join(folder, '1.1.0', INSTALLER),
+    }),
   );
   let quit = 0;
   const updater = new Updater({
     version: '1.0.0',
     home: join(root, 'home'),
     folder,
-    installation: {
-      kind: 'folder',
-      target: installed,
-      executable: join(installed, 'run.sh'),
-      asset: (version) => `circle-desktop-${version}-test.tar.gz`,
-    },
+    installation: msiInstallation(root),
     releases: 'http://127.0.0.1:9/releases',
     launch: async () => {
       throw Error('no PowerShell');

@@ -1,9 +1,10 @@
 // Keeps the desktop application up to date. A check asks GitHub for the newest release; the
-// update downloads this system's package into the data folder, checks its checksum, its
-// signature and its version, and a restart hands it to a small installer that waits for the
-// application to quit, puts the new copy where the running one is and starts it. A copy that
-// cannot replace itself (Linux, a folder it may not write, a copy macOS runs from a translocated
-// path) offers the release page instead.
+// update downloads this system's package into the data folder and checks it, and a restart hands
+// it to a small installer that waits for the application to quit, puts the new version in place
+// and starts it: on macOS the .dmg's bundle replaces the running one, on Windows the .msi
+// replaces the installed copy. Any other copy (Linux, Windows outside the .msi's folder, a
+// bundle macOS runs from a translocated path or that may not be written) offers the release
+// page instead.
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { constants, createReadStream, readFileSync } from 'node:fs';
@@ -21,11 +22,6 @@ import { compareVersions, validVersion } from '../../../src/version.js';
 import type { UpdateAction, UpdateState } from './contracts';
 
 const run = promisify(execFile);
-/** Windows' own tar, which reads .zip; a GNU tar earlier on PATH (Git Bash) reads C:\ as a host. */
-export const systemTar = (platform = process.platform): string =>
-  platform === 'win32'
-    ? win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
-    : 'tar';
 
 /** Where releases are published; CIRCLE_DESKTOP_RELEASES points a check at a local copy. */
 export function releasesUrl(
@@ -42,9 +38,9 @@ export function releasesUrl(
 
 /** How this copy of the application is installed, and so how an update replaces it. */
 export interface Installation {
-  /** A macOS .app bundle, a folder unpacked from a .zip, or a folder an .msi installed. */
-  kind: 'bundle' | 'folder' | 'msi';
-  /** What the update replaces: the bundle, or the folder that holds the executable. */
+  /** A macOS .app bundle, or the folder the Windows .msi installed. */
+  kind: 'bundle' | 'msi';
+  /** What the update replaces: the bundle, or the installed folder. */
   target: string;
   /** What starts the application again afterwards. */
   executable: string;
@@ -72,17 +68,18 @@ export function installation(
         }
       : undefined;
   }
-  if (platform === 'win32' && arch === 'x64') {
+  // Windows: the copy the .msi put in Program Files\Circle; the .msi is all that is released
+  if (platform === 'win32' && arch === 'x64' && programFiles) {
     const folder = win32.dirname(executable);
-    // The installer package puts Circle in Program Files\Circle; another folder is a .zip
-    const msi =
-      !!programFiles &&
-      folder.toLowerCase() === win32.join(programFiles, 'Circle').toLowerCase();
+    if (
+      folder.toLowerCase() !== win32.join(programFiles, 'Circle').toLowerCase()
+    )
+      return undefined;
     return {
-      kind: msi ? 'msi' : 'folder',
+      kind: 'msi',
       target: folder,
       executable,
-      asset: asset('windows', msi ? 'msi' : 'zip'),
+      asset: asset('windows', 'msi'),
     };
   }
   // Linux: Chromium's sandbox helper must belong to root, which an update cannot keep
@@ -143,9 +140,8 @@ fi
 echo "starting $executable"
 "$executable" "$@" >/dev/null 2>&1 &
 `;
-// The installer for Windows, given a JSON plan: runs the .msi, which replaces the installed
-// copy, or swaps folders as the macOS one swaps bundles. Windows keeps a folder busy for a
-// while after the last process in it has ended, so the first rename is tried again.
+// The installer for Windows, given a JSON plan: waits for Circle and its other processes to end,
+// runs the .msi, which replaces the installed copy, and starts Circle again.
 // Circle starts it with -Start and waits: it starts itself again with Start-Process, hidden
 // and apart from Circle's processes, with its own console and its output in <plan>.out and
 // <plan>.err, and returns. A copy started straight from Circle did not outlive it.
@@ -170,33 +166,10 @@ try {
     Start-Sleep -Milliseconds 200
   }
   Write-Log 'Circle has quit'
-  if ($p.kind -eq 'msi') {
-    $msi = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
-      '/i', ('"{0}"' -f $p.staged), '/passive', '/norestart', '/l*v', ('"{0}.msi"' -f $p.log))
-    # 3010 and 1641: installed, and Windows wants a restart for files it could not replace
-    if (@(0, 3010, 1641) -notcontains $msi.ExitCode) { throw "msiexec exited with $($msi.ExitCode)" }
-  } else {
-    $parent = Split-Path -Parent $p.target
-    $name = Split-Path -Leaf $p.target
-    $next = Join-Path $parent ".$name.update"
-    $old = Join-Path $parent ".$name.old"
-    foreach ($path in $next, $old) {
-      if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
-    }
-    try { Move-Item -LiteralPath $p.staged -Destination $next }
-    catch {
-      if (Test-Path -LiteralPath $next) { Remove-Item -LiteralPath $next -Recurse -Force }
-      Copy-Item -LiteralPath $p.staged -Destination $next -Recurse
-    }
-    Write-Log 'the new copy is beside the old one'
-    for ($try = 1; ; $try++) {
-      try { Rename-Item -LiteralPath $p.target -NewName ".$name.old"; break }
-      catch { if ($try -ge 150) { throw }; Start-Sleep -Milliseconds 200 }
-    }
-    try { Rename-Item -LiteralPath $next -NewName $name }
-    catch { Rename-Item -LiteralPath $old -NewName $name; throw }
-    Remove-Item -LiteralPath $old -Recurse -Force -ErrorAction SilentlyContinue
-  }
+  $msi = Start-Process $p.msiexec -Wait -PassThru -ArgumentList @(
+    '/i', ('"{0}"' -f $p.staged), '/passive', '/norestart', '/l*v', ('"{0}.msi"' -f $p.log))
+  # 3010 and 1641: installed, and Windows wants a restart for files it could not replace
+  if (@(0, 3010, 1641) -notcontains $msi.ExitCode) { throw "msiexec exited with $($msi.ExitCode)" }
   Write-Log 'installed'
 } catch {
   Write-Log "failed: $_"
@@ -238,6 +211,8 @@ export interface UpdaterOptions {
   /** The arguments the new version starts with: the ones this one had. */
   args?: string[];
   pid?: number;
+  /** Windows Installer, msiexec.exe; a test gives a stand-in. */
+  msiexec?: string;
 }
 interface Ready {
   version: string;
@@ -283,16 +258,17 @@ export class Updater {
   private page(version: string) {
     return `${this.releases}/tag/v${version}`;
   }
-  /** Whether the running copy may be replaced: its folder is writable and macOS runs it in place. */
+  /**
+   * Whether the running copy may be replaced: the .msi asks for permission itself; a bundle must
+   * be writable, in a writable folder, and not run by macOS from a translocated copy.
+   */
   private canReplace(): Promise<boolean> {
     const found = this.options.installation;
     this.replaceable ??= (async () => {
       if (!found) return false;
       if (found.kind === 'msi') return true;
       if (found.target.includes('/AppTranslocation/')) return false;
-      const parent = (
-        this.options.platform === 'win32' ? win32 : posix
-      ).dirname(found.target);
+      const parent = posix.dirname(found.target);
       try {
         await access(found.target, constants.W_OK);
         await access(parent, constants.W_OK);
@@ -438,11 +414,8 @@ export class Updater {
       if ((await sha256(file)) !== expected)
         throw Error(`${asset} does not match its checksum`);
       const staged = await this.unpack(found, file, directory);
-      if (found.kind !== 'msi') {
-        const asar =
-          found.kind === 'bundle'
-            ? join(staged, 'Contents/Resources/app.asar')
-            : join(staged, 'resources/app.asar');
+      if (found.kind === 'bundle') {
+        const asar = join(staged, 'Contents/Resources/app.asar');
         const manifest = (
           this.options.readPackage ??
           ((path) =>
@@ -467,7 +440,6 @@ export class Updater {
     file: string,
     directory: string,
   ): Promise<string> {
-    if (found.kind === 'msi') return file;
     if (found.kind === 'bundle') {
       const mount = join(directory, 'mount');
       const app = join(directory, 'Circle.app');
@@ -491,16 +463,7 @@ export class Updater {
       await run('codesign', ['--verify', '--deep', '--strict', app]);
       return app;
     }
-    const unpacked = join(directory, 'unpacked');
-    await mkdir(unpacked);
-    await run(systemTar(), ['-xf', file, '-C', unpacked]);
-    const entries = await readdir(unpacked);
-    const name = win32.basename(found.executable);
-    if (entries.length !== 1)
-      throw Error(`${win32.basename(file)} does not hold one folder`);
-    const top = join(unpacked, entries[0]);
-    await access(join(top, name));
-    return top;
+    return file;
   }
 
   /** Hands the downloaded version to the installer and quits; it starts the new one. */
@@ -525,7 +488,7 @@ export class Updater {
         plan,
         JSON.stringify({
           pid: Number(pid),
-          kind: found.kind,
+          msiexec: this.options.msiexec ?? 'msiexec.exe',
           staged: ready.staged,
           target: found.target,
           executable: found.executable,

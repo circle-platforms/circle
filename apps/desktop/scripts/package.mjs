@@ -117,20 +117,6 @@ if (platform === 'darwin' && process.platform === 'darwin') {
   }
   await rm(content, { recursive: true, force: true });
   archives.push(image);
-} else if (platform === 'win32') {
-  const archive = `${asset}.zip`;
-  await rm(archive, { force: true });
-  // Windows' own tar writes .zip; a GNU tar earlier on PATH (Git Bash) reads C:\ as a host
-  execFileSync(
-    process.platform === 'win32'
-      ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
-      : 'zip',
-    process.platform === 'win32'
-      ? ['-a', '-c', '-f', archive, relative(outputRoot, paths[0])]
-      : ['-qry', archive, relative(outputRoot, paths[0])],
-    { cwd: outputRoot, stdio: 'inherit' },
-  );
-  archives.push(archive);
 } else if (platform === 'linux') {
   const archive = `${asset}.tar.gz`;
   execFileSync(
@@ -140,6 +126,8 @@ if (platform === 'darwin' && process.platform === 'darwin') {
   );
   archives.push(archive);
 }
+// Windows has no archive: its folder is released only as the .msi, which scripts/msi.ts
+// builds from it
 for (const archive of archives) {
   const sha256 = createHash('sha256')
     .update(await readFile(archive))

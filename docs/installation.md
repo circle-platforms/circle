@@ -75,15 +75,13 @@ Each release also has the Circle desktop application: a window of its own around
 |---|---|
 | macOS, Apple silicon | `circle-desktop-<version>-darwin-arm64.dmg` |
 | macOS, Intel | `circle-desktop-<version>-darwin-x64.dmg` |
-| Windows x64 | `circle-desktop-<version>-windows-x64.msi`, or the `.zip` to run Circle without installing it |
+| Windows x64 | `circle-desktop-<version>-windows-x64.msi` |
 | Linux x64 | `circle-desktop-<version>-linux-x64.tar.gz` |
 
 Each has a `.sha256` file beside it, and the release's `SHA256SUMS` lists them all. The application carries everything it needs; it does not use the `circle` command.
 
 - **macOS:** open the `.dmg` and drag Circle to Applications. Circle is signed ad hoc, not by an Apple developer, so the first time macOS says it cannot check it. Open System Settings → Privacy & Security, click Open Anyway beside the line about Circle, and confirm. In a terminal, `xattr -dr com.apple.quarantine /Applications/Circle.app` does the same.
 - **Windows:** open the `.msi`. Circle is not signed, so if SmartScreen says it protected your PC, click More info, then Run anyway. Windows asks for administrator permission, then installs Circle for all users into `C:\Program Files\Circle` and adds Circle to the Start menu; there are no setup pages. To remove it, open Settings → Apps → Installed apps (Apps & features on Windows 10), choose Circle and Uninstall: that removes the program and its Start menu entry and leaves the data folder `%APPDATA%\Circle` as it is. An older release's `.msi` does not install over a newer one; it stops with "A newer version of Circle is already installed." Quit Circle before you update or remove it.
-
-  The `.zip` holds the same program for use without installing: unpack it, for example into `%LOCALAPPDATA%\Programs`, and start `Circle-win32-x64\Circle.exe`, with the same SmartScreen step.
 - **Linux:** unpack the `.tar.gz` and, once, give Chromium's sandbox helper to root, which Ubuntu 24.04 and later need; without it Circle stops at once with `The SUID sandbox helper binary was found, but is not configured correctly`. Then start `Circle`:
 
   ```sh
