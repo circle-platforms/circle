@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.2.1 - 2026-10-12
+
 ### Added
 
 - **The desktop application updates itself** on macOS and Windows. Settings → about → check now asks GitHub for the newest release; update downloads it and checks its checksum (and on macOS its signature), and restart to update puts it in place of the running copy and starts it. A newer version also shows at the foot of the sidebar, with how far the download is. An installed `.msi` is updated with the new `.msi`. On Linux, check now links to the release page. Versions up to 1.2.0 cannot update themselves: install this one over them by hand once.
