@@ -4,6 +4,10 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Fixed
+
+- **The desktop update check leaves a Circle installed on the machine alone.** `npm --prefix apps/desktop run test:update` refuses to run beside a Circle in `C:\Program Files`, but then stopped that installation's processes and removed it; now it removes only what it installed itself, a partially failed install of its own included.
+
 ## 1.3.0 - 2026-10-13
 
 ### Added
