@@ -183,6 +183,19 @@ test(
         return page(
           `<title>Links</title><a href="${url.searchParams.get('to')}">Device</a>`,
         );
+      if (url.pathname === '/auth') {
+        // HTTP sign-in, as a device's admin pages ask for it
+        const sent = req.headers.authorization ?? '';
+        if (
+          sent === `Basic ${Buffer.from('admin:lab-pass').toString('base64')}`
+        )
+          return page('<title>Lab device</title><p>signed in by HTTP</p>');
+        res.writeHead(401, {
+          'www-authenticate': 'Basic realm="Lab device"',
+          'content-type': 'text/html',
+        });
+        return res.end('<!doctype html><title>401</title><p>sign in first</p>');
+      }
       if (url.pathname === '/download') {
         res.writeHead(200, {
           'content-type': 'application/octet-stream',
@@ -389,6 +402,50 @@ test(
       '### Download\nThe user did not keep the download; it was discarded.\n- download dl1 was not kept',
     );
     assert.equal(existsSync(join(downloads, 'report (2).bin')), false);
+
+    // ---- an HTTP sign-in Circle's action meets waits for the model, as a dialog
+    const auth = await act('navigate', { url: `${http}/auth` });
+    assert.match(
+      auth.text,
+      /### Result\nThe site asks for a sign-in: dialog (d\d+)\./,
+    );
+    const signIn = ref(auth.text, /sign-in: dialog (d\d+)\./);
+    assert.match(
+      auth.text,
+      new RegExp(
+        `- \\[${signIn}\\] sign-in · tab t1 · the site http://127\\.0\\.0\\.1:\\d+ \\("Lab device"\\) asks for a user name and password`,
+      ),
+    );
+    assert.match(auth.text, /password "Password" → browser_dialog password/);
+    // Nothing else is done on the page meanwhile
+    const authBlocked = await act('press', { key: 'Enter' });
+    assert.match(authBlocked.text, new RegExp(`waits for dialog ${signIn}`));
+    const authWrong = await act('dialog', {
+      accept: true,
+      text: 'admin',
+      password: 'not-it',
+    });
+    assert.match(
+      authWrong.text,
+      /it asks again, so the user name or password was not accepted/,
+    );
+    const authAgain = ref(authWrong.text, /\[(d\d+)\] sign-in/);
+    assert.notEqual(authAgain, signIn);
+    // A password answers only a sign-in
+    const authAnswered = await act('dialog', {
+      id: authAgain,
+      accept: true,
+      text: 'admin',
+      password: 'lab-pass',
+    });
+    assert.match(
+      authAnswered.text,
+      new RegExp(
+        `Answered sign-in ${authAgain} for http://127\\.0\\.0\\.1:\\d+ as "admin"\\.`,
+      ),
+    );
+    assert.match(authAnswered.text, /signed in by HTTP/);
+    assert.doesNotMatch(authAnswered.text, /lab-pass/);
 
     // ---- files for a page, by a file input's ref or for the chooser a click opened,
     // each time with the person's approval

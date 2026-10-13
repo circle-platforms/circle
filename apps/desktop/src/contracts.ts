@@ -84,12 +84,16 @@ export interface DesktopBridge {
     action: 'new' | 'select' | 'close',
     tab?: string,
   ) => Promise<BrowserState>;
-  /** The person answers a page's dialog (alert, confirm, prompt, leave page). */
+  /**
+   * The person answers a page's dialog (alert, confirm, prompt, leave page), or a sign-in
+   * with a user name (`text`) and password.
+   */
   browserDialog: (
     sessionId: string,
     dialog: string,
     accept: boolean,
     text?: string,
+    password?: string,
   ) => Promise<BrowserState>;
   /** The page as it was when its dialog opened: the page itself is stopped meanwhile. */
   browserDialogScreen: (
@@ -98,6 +102,12 @@ export interface DesktopBridge {
   ) => Promise<string | null>;
   /** The person chooses the files for the file chooser a click of Circle's opened. */
   browserChoose: (sessionId: string, chooser: string) => Promise<BrowserState>;
+  /** The person allows or blocks what a page asked permission for. */
+  browserPermission: (
+    sessionId: string,
+    request: string,
+    allow: boolean,
+  ) => Promise<BrowserState>;
   /** Shows a download in the system's file manager. */
   browserReveal: (sessionId: string, download: string) => Promise<void>;
   /** The person takes the browser from Circle, or hands it back. */
@@ -140,6 +150,8 @@ export interface BrowserState {
   chooser?: { id: string; multiple: boolean };
   /** The conversation's latest downloads, newest last. */
   downloads?: BrowserDownload[];
+  /** What the shown tab's page asks permission for, waiting for the person. */
+  permissions?: BrowserPermission[];
   /**
    * Who has the browser: no one in particular (`shared`), Circle in the middle of an action
    * (`agent`), the person waiting for that action to end (`user_pending`), or the person
@@ -150,6 +162,21 @@ export interface BrowserState {
   handoff?: string;
 }
 export type BrowserControl = 'shared' | 'agent' | 'user_pending' | 'user';
+/** A page's request for a permission, which only the person answers. */
+export interface BrowserPermission {
+  id: string;
+  origin: string;
+  kinds: (
+    | 'camera'
+    | 'microphone'
+    | 'location'
+    | 'notifications'
+    | 'clipboard'
+    | 'midi'
+    | 'idle'
+    | 'windows'
+  )[];
+}
 export interface BrowserDownload {
   id: string;
   name: string;
@@ -167,10 +194,15 @@ export interface BrowserTab {
 export interface BrowserDialog {
   id: string;
   tab: string;
-  type: 'alert' | 'confirm' | 'prompt' | 'beforeunload';
+  /** `auth`: the site, or a proxy, asks for a user name and password. */
+  type: 'alert' | 'confirm' | 'prompt' | 'beforeunload' | 'auth';
   message: string;
   defaultPrompt: string;
   origin: string;
+  /** A sign-in's realm, as the site names it. */
+  realm?: string;
+  /** A sign-in a proxy asks for, not the site. */
+  proxy?: boolean;
   /** Circle is answering it: the panel shows the pointer pressing the button first. */
   answering?: { accept: boolean };
 }

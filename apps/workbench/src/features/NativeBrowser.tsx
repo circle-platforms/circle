@@ -12,6 +12,7 @@ import {
   Plus,
   RotateCw,
   ShieldAlert,
+  ShieldQuestion,
   X,
 } from 'lucide-react';
 import { desktopHost } from '../host';
@@ -24,10 +25,29 @@ import {
   shownDialog,
 } from '../model/browser';
 import { useBrowserState } from './useBrowserState';
-import type { BrowserCapture } from '../../../desktop/src/contracts';
+import type {
+  BrowserCapture,
+  BrowserPermission,
+} from '../../../desktop/src/contracts';
 import { Button, IconButton, Status } from '../components/common';
 import { BrowserDialogPanel } from './BrowserDialog';
 import { t } from '../i18n';
+
+const PERMISSIONS: Record<BrowserPermission['kinds'][number], () => string> = {
+  camera: () => t('use your camera'),
+  microphone: () => t('use your microphone'),
+  location: () => t('know your location'),
+  notifications: () => t('show notifications'),
+  clipboard: () => t('see text and images copied to the clipboard'),
+  midi: () => t('use your MIDI devices'),
+  idle: () => t('know when you are using this device'),
+  windows: () => t('manage windows on all your displays'),
+};
+/** What a page asks permission for, as a browser says it. */
+const permissionText = (kinds: BrowserPermission['kinds']) =>
+  kinds.length === 2 && kinds.includes('camera') && kinds.includes('microphone')
+    ? t('use your camera and microphone')
+    : kinds.map((kind) => PERMISSIONS[kind]()).join(', ');
 
 export function NativeBrowser() {
   const { snapshot, notify } = useRuntime();
@@ -271,6 +291,37 @@ export function NativeBrowser() {
           </Button>
         </div>
       )}
+      {state?.permissions?.map((request) => (
+        // The page asks as it would in a browser: only the person answers
+        <div
+          key={request.id}
+          className="browser-chooser"
+          data-testid="browser-permission"
+        >
+          <ShieldQuestion size={14} />
+          <span>
+            {t('{site} wants to {what}', {
+              site: request.origin,
+              what: permissionText(request.kinds),
+            })}
+          </span>
+          <Button
+            onClick={() =>
+              void host.browserPermission(id, request.id, false).catch(() => {})
+            }
+          >
+            {t('block')}
+          </Button>
+          <Button
+            className="primary"
+            onClick={() =>
+              void host.browserPermission(id, request.id, true).catch(() => {})
+            }
+          >
+            {t('allow')}
+          </Button>
+        </div>
+      ))}
       <div className="native-browser-footer">
         {state?.control === 'user_pending' ? (
           <span className="browser-operating" data-testid="browser-pending">

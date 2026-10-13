@@ -8,6 +8,7 @@ import type { BrowserApproval } from '../src/browser/protocol.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { ScriptedModel } from '../src/testing.js';
 import { defaultSettings, trustFolder } from '../src/settings.js';
+import { saveSecret } from '../src/secrets.js';
 
 const scratch = (t: test.TestContext) => {
   const dir = mkdtempSync(join(tmpdir(), 'circle-browser-tools-'));
@@ -299,4 +300,78 @@ test('a download the model starts is kept or discarded by the person, and the mo
     ],
   );
   assert.equal(JSON.stringify(model.requests).includes('"held"'), false);
+});
+
+test("a sign-in's password is only ever a saved secret: the browser gets the value, the model and the card see %NAME%", async (t) => {
+  const root = scratch(t);
+  saveSecret(root, 'LAB_PASSWORD', 'value-of-the-secret');
+  const requests: Record<string, unknown>[] = [];
+  const port: BrowserPort = {
+    async request(_session, action, args) {
+      requests.push({ action, ...structuredClone(args) });
+      // The page echoes what it got, as a careless one could
+      return { text: `Answered sign-in d1 with ${String(args.password)}.` };
+    },
+  };
+  const dialog = (id: string, password: string) => ({
+    id,
+    name: 'browser_dialog',
+    args: { id: 'd1', accept: true, text: 'admin', password },
+  });
+  const model = new ScriptedModel([
+    {
+      message: {
+        id: '1',
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          dialog('plain', 'typed-by-the-model'),
+          dialog('mixed', 'x%LAB_PASSWORD%'),
+          dialog('secret', '%LAB_PASSWORD%'),
+        ],
+      },
+    },
+    { message: { id: '2', role: 'assistant', content: 'done' } },
+  ]);
+  const cards: Record<string, unknown>[] = [];
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: trustFolder(defaultSettings(), root),
+    model,
+    extraTools: browserTools(port),
+    approve: async (call) => {
+      cards.push(structuredClone(call.args));
+      return 'approve';
+    },
+  });
+  t.after(() => runtime.close());
+  await runtime.harness.run('sign in to the device');
+  const results = Object.fromEntries(
+    model.requests[1]!.messages.filter(
+      (message) => message.role === 'tool',
+    ).map((message) => [message.tool_call_id, String(message.content)]),
+  );
+  for (const id of ['plain', 'mixed'])
+    assert.match(
+      results[id]!,
+      /a sign-in's password takes only a saved secret, written %NAME%/,
+    );
+  assert.equal(results.secret, 'Answered sign-in d1 with %LAB_PASSWORD%.');
+  // Only the secret's answer reached the browser, with the value
+  assert.deepEqual(requests, [
+    {
+      action: 'dialog',
+      id: 'd1',
+      accept: true,
+      text: 'admin',
+      password: 'value-of-the-secret',
+    },
+  ]);
+  assert.equal(
+    JSON.stringify(model.requests).includes('value-of-the-secret'),
+    false,
+  );
+  assert.equal(JSON.stringify(cards).includes('value-of-the-secret'), false);
+  assert(cards.some((card) => card.password === '%LAB_PASSWORD%'));
 });

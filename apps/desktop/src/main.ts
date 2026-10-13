@@ -617,9 +617,9 @@ app
       if (!browsers) throw Error('window not ready');
       return browsers.tabs(id, action, tab);
     });
-    handle('circle:browser-dialog', (id, dialog, accept, text) => {
+    handle('circle:browser-dialog', (id, dialog, accept, text, password) => {
       if (!browsers) throw Error('window not ready');
-      return browsers.dialog(id, dialog, accept, text);
+      return browsers.dialog(id, dialog, accept, text, password);
     });
     handle('circle:browser-dialog-screen', (id, dialog) => {
       if (!browsers) throw Error('window not ready');
@@ -628,6 +628,10 @@ app
     handle('circle:browser-choose', (id, chooser) => {
       if (!browsers) throw Error('window not ready');
       return browsers.choose(id, chooser);
+    });
+    handle('circle:browser-permission', (id, request, allow) => {
+      if (!browsers) throw Error('window not ready');
+      return browsers.permission(id, request, allow);
     });
     handle('circle:browser-control', (id, action) => {
       if (!browsers) throw Error('window not ready');

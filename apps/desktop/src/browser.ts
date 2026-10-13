@@ -27,6 +27,7 @@ import type {
   BrowserControl,
   BrowserDialog,
   BrowserDownload,
+  BrowserPermission,
   BrowserState,
 } from './contracts';
 import {
@@ -38,8 +39,10 @@ import {
 import { pageCall } from '../../../src/browser/page.js';
 import {
   dialogLine,
+  dialogOpened,
   dialogSnapshot,
   downloadDecision,
+  signInAnswered,
 } from '../../../src/browser/format.js';
 import { TrustedCertificates } from '../../../src/browser/certificates.js';
 import { siteOf } from '../../../src/browser/hosts.js';
@@ -70,8 +73,56 @@ interface Arriving {
   held: boolean;
   discarded?: boolean;
 }
+/** What a page may ask the person for, as a browser asks: the rest is refused. */
+type PermissionKind = BrowserPermission['kinds'][number];
+/** A page's request for a permission, which only the person answers. */
+interface Permission extends BrowserPermission {
+  tab: string;
+  answers: ((granted: boolean) => void)[];
+}
+/** The kinds a request of Electron's is for, or nothing for one Circle refuses. */
+function permissionKinds(
+  permission: string,
+  mediaTypes: string[] = [],
+): PermissionKind[] | undefined {
+  if (permission === 'media') {
+    const kinds: PermissionKind[] = [];
+    if (mediaTypes.includes('video')) kinds.push('camera');
+    if (mediaTypes.includes('audio')) kinds.push('microphone');
+    return kinds.length ? kinds : undefined;
+  }
+  const kind = (
+    {
+      geolocation: 'location',
+      notifications: 'notifications',
+      'clipboard-read': 'clipboard',
+      midiSysex: 'midi',
+      'idle-detection': 'idle',
+      'window-management': 'windows',
+    } as Record<string, PermissionKind>
+  )[permission];
+  return kind ? [kind] : undefined;
+}
+/** What a permission request asks, for the model. */
+const permissionText = (kinds: PermissionKind[]) =>
+  kinds
+    .map(
+      (kind) =>
+        ({
+          camera: 'use the camera',
+          microphone: 'use the microphone',
+          location: 'know the location',
+          notifications: 'show notifications',
+          clipboard: 'read the clipboard',
+          midi: 'use MIDI devices',
+          idle: 'detect when the user is idle',
+          windows: 'manage windows on all displays',
+        })[kind],
+    )
+    .join(' and ');
 interface Dialog extends BrowserDialog {
-  answer: (accept: boolean, text: string) => void;
+  // A sign-in's answer carries the password too
+  answer: (accept: boolean, text: string, password?: string) => void;
   screen?: Promise<string | null>;
   // The intercepted request of a prompt(), answered with the reply
   request?: string;
@@ -137,6 +188,11 @@ interface Conversation {
   downloads: (BrowserDownload & { path: string })[];
   // Sites whose downloads the person allowed for this conversation
   downloadSites: Set<string>;
+  // Pages' permission requests waiting for the person, and the answers given, by
+  // "<site> <kind>", until Circle closes
+  permissions: Permission[];
+  nextPermission: number;
+  allowed: Map<string, boolean>;
   // What an action of the model's downloaded from a site not yet allowed
   hold?: { token: string; site: string; asked: boolean; downloads: Arriving[] };
   control: BrowserControl;
@@ -245,6 +301,9 @@ export class BrowserSessions {
         nextChooser: 0,
         downloads: [],
         downloadSites: new Set(),
+        permissions: [],
+        nextPermission: 0,
+        allowed: new Map(),
         control: 'shared',
         handedBack: new Set(),
       };
@@ -275,10 +334,37 @@ export class BrowserSessions {
   private prepareSession(conversation: Conversation, session: Session) {
     if (this.sessions.has(session)) return;
     this.sessions.add(session);
-    session.setPermissionRequestHandler((_contents, _permission, callback) =>
-      callback(false),
+    // A page asks the person, as a browser asks; only they answer, and the answer holds
+    // for that site until Circle closes. What a browser would not ask about is refused.
+    session.setPermissionRequestHandler(
+      (contents, permission, callback, details) => {
+        const tab = [...conversation.tabs.values()].find(
+          (entry) => entry.view.webContents === contents,
+        );
+        const kinds = permissionKinds(
+          permission,
+          'mediaTypes' in details ? details.mediaTypes : undefined,
+        );
+        const origin = siteOf(details.requestingUrl ?? '');
+        if (!tab || !kinds || !origin) return callback(false);
+        this.askPermission(conversation, tab, origin, kinds, callback);
+      },
     );
-    session.setPermissionCheckHandler(() => false);
+    session.setPermissionCheckHandler(
+      (_contents, permission, requestingOrigin, details) => {
+        const kinds = permissionKinds(
+          permission,
+          details.mediaType ? [details.mediaType] : undefined,
+        );
+        const origin = siteOf(requestingOrigin);
+        return (
+          !!kinds &&
+          kinds.every(
+            (kind) => conversation.allowed.get(`${origin} ${kind}`) === true,
+          )
+        );
+      },
+    );
     // A download goes to the downloads folder under its own name, as a browser keeps it; the
     // path is set here, or Electron would ask with a save dialog
     session.on('will-download', (_event, item) => {
@@ -448,11 +534,82 @@ export class BrowserSessions {
     this.publish(conversation.id);
     return tab;
   }
+  /** A page's permission request waits for the person, unless they answered it before. */
+  private askPermission(
+    conversation: Conversation,
+    tab: Tab,
+    origin: string,
+    kinds: PermissionKind[],
+    answer: (granted: boolean) => void,
+  ) {
+    const given = kinds.map((kind) =>
+      conversation.allowed.get(`${origin} ${kind}`),
+    );
+    if (given.every((value) => value === true)) return answer(true);
+    if (given.some((value) => value === false)) return answer(false);
+    const waiting = conversation.permissions.find(
+      (entry) =>
+        entry.tab === tab.id &&
+        entry.origin === origin &&
+        entry.kinds.join() === kinds.join(),
+    );
+    if (waiting) {
+      waiting.answers.push(answer);
+      return;
+    }
+    conversation.permissions.push({
+      id: `p${++conversation.nextPermission}`,
+      tab: tab.id,
+      origin,
+      kinds,
+      answers: [answer],
+    });
+    this.publish(conversation.id);
+  }
+  /** The person allows or blocks what a page asked for. */
+  permission(idValue: unknown, requestValue: unknown, allow: unknown) {
+    const id = this.validId(idValue);
+    const conversation = this.conversations.get(id);
+    const request = conversation?.permissions.find(
+      (entry) => entry.id === requestValue,
+    );
+    if (!conversation || !request || typeof allow !== 'boolean')
+      throw Error('no such permission request');
+    conversation.permissions = conversation.permissions.filter(
+      (entry) => entry !== request,
+    );
+    for (const kind of request.kinds)
+      conversation.allowed.set(`${request.origin} ${kind}`, allow);
+    for (const answer of request.answers) answer(allow);
+    conversation.events.push(
+      `permission request ${request.id} (${request.origin} to ${permissionText(request.kinds)}) ${allow ? 'allowed' : 'blocked'} by the user`,
+    );
+    this.publish(id);
+    return this.state(id);
+  }
+  /** A tab's page went away: what it asked is no longer asked. */
+  private dropPermissions(conversation: Conversation, tab: Tab) {
+    const gone = conversation.permissions.filter(
+      (entry) => entry.tab === tab.id,
+    );
+    if (!gone.length) return;
+    conversation.permissions = conversation.permissions.filter(
+      (entry) => !gone.includes(entry),
+    );
+    for (const request of gone) {
+      for (const answer of request.answers) answer(false);
+      conversation.events.push(
+        `permission request ${request.id} ended: the page went away`,
+      );
+    }
+    this.publish(conversation.id);
+  }
   private closeTab(conversation: Conversation, tab: Tab, reason: string) {
     if (tab.closed) return;
     tab.closed = true;
     for (const dialog of tab.dialogs) dialog.answer(false, '');
     tab.dialogs = [];
+    this.dropPermissions(conversation, tab);
     conversation.tabs.delete(tab.id);
     if (!this.window.isDestroyed())
       this.window.contentView.removeChildView(tab.view);
@@ -631,6 +788,32 @@ export class BrowserSessions {
           },
         ),
     );
+    // A sign-in the site or a proxy asks for (HTTP authentication) waits in the tab as a
+    // dialog: the person answers it in the panel or the conversation, or the model with a
+    // saved secret. Electron would cancel it.
+    contents.removeAllListeners('login');
+    contents.on('login', (event, details, authInfo, callback) => {
+      event.preventDefault();
+      this.openDialog(
+        conversation,
+        tab,
+        {
+          type: 'auth',
+          message: '',
+          defaultPrompt: '',
+          origin: authInfo.isProxy
+            ? `${authInfo.host}:${authInfo.port}`
+            : siteOf(details.url) || authInfo.host,
+          realm: authInfo.realm,
+          proxy: authInfo.isProxy,
+        },
+        (accept, user, password) => {
+          if (contents.isDestroyed()) return;
+          if (accept) callback(user, password ?? '');
+          else callback();
+        },
+      );
+    });
     events.removeAllListeners('-cancel-dialogs');
     events.on('-cancel-dialogs', () => {
       const closing = tab.dialogs.filter(
@@ -694,6 +877,7 @@ export class BrowserSessions {
       if (method === 'Page.frameNavigated' && !params.frame?.parentId) {
         tab.chooser = undefined;
         tab.upload = undefined;
+        this.dropPermissions(conversation, tab);
         // Where the tab went while Circle was not acting: the person, or the page itself.
         // What they typed or saw is never told.
         const address = String(params.frame.url ?? '');
@@ -796,9 +980,9 @@ export class BrowserSessions {
     tab: Tab,
     fields: Pick<
       BrowserDialog,
-      'type' | 'message' | 'defaultPrompt' | 'origin'
+      'type' | 'message' | 'defaultPrompt' | 'origin' | 'realm' | 'proxy'
     >,
-    answer: (accept: boolean, text: string) => void,
+    answer: Dialog['answer'],
   ) {
     const dialog: Dialog = {
       id: 'd' + ++conversation.nextDialog,
@@ -823,6 +1007,7 @@ export class BrowserSessions {
     accept: boolean,
     text: string,
     by: 'model' | 'user',
+    password?: string,
   ): Promise<Dialog> {
     for (const tab of conversation.tabs.values()) {
       const dialog = tab.dialogs.find((entry) => entry.id === dialogId);
@@ -836,10 +1021,12 @@ export class BrowserSessions {
           throw Error(`dialog ${dialogId} was already answered`);
       }
       tab.dialogs = tab.dialogs.filter((entry) => entry !== dialog);
-      dialog.answer(accept, text);
+      dialog.answer(accept, text, password);
       this.release(tab);
       conversation.events.push(
-        `dialog ${dialog.id} (${dialog.type}) ${accept ? 'accepted' : 'dismissed'} by ${by === 'model' ? 'Circle' : 'the user'}`,
+        dialog.type === 'auth'
+          ? `sign-in ${dialog.id} for ${dialog.origin} ${accept ? 'answered' : 'cancelled'} by ${by === 'model' ? 'Circle' : 'the user'}`
+          : `dialog ${dialog.id} (${dialog.type}) ${accept ? 'accepted' : 'dismissed'} by ${by === 'model' ? 'Circle' : 'the user'}`,
       );
       this.visibility(conversation);
       this.publish(conversation.id);
@@ -963,6 +1150,9 @@ export class BrowserSessions {
       ...(tab?.chooser?.backendNodeId
         ? { chooser: { id: tab.chooser.id, multiple: tab.chooser.multiple } }
         : {}),
+      permissions: (conversation?.permissions ?? [])
+        .filter((request) => request.tab === tab?.id)
+        .map(({ id, origin, kinds }) => ({ id, origin, kinds: [...kinds] })),
       downloads: (conversation?.downloads ?? []).map(
         ({ path: _path, ...download }) => ({ ...download }),
       ),
@@ -1078,12 +1268,16 @@ export class BrowserSessions {
     dialogValue: unknown,
     accept: unknown,
     text: unknown,
+    password?: unknown,
   ) {
     const id = this.validId(idValue);
     if (
       typeof dialogValue !== 'string' ||
       typeof accept !== 'boolean' ||
-      (text !== undefined && typeof text !== 'string')
+      (text !== undefined &&
+        (typeof text !== 'string' || text.length > 4096)) ||
+      (password !== undefined &&
+        (typeof password !== 'string' || password.length > 4096))
     )
       throw Error('invalid dialog answer');
     await this.answerDialog(
@@ -1092,6 +1286,7 @@ export class BrowserSessions {
       accept,
       String(text ?? ''),
       'user',
+      password === undefined ? undefined : String(password),
     );
     return this.state(id);
   }
@@ -1566,6 +1761,16 @@ export class BrowserSessions {
             )
             .join('\n'),
       );
+    if (conversation.permissions.length)
+      sections.push(
+        '### Permission requests waiting\n' +
+          conversation.permissions
+            .map(
+              (request) =>
+                `- [${request.id}] tab ${request.tab} · ${request.origin} asks to ${permissionText(request.kinds)}: only the user answers, in the browser panel; the page goes on meanwhile`,
+            )
+            .join('\n'),
+      );
     if (conversation.events.length)
       sections.push(
         '### Events\n' +
@@ -1776,12 +1981,18 @@ export class BrowserSessions {
           ? all.find((dialog) => dialog.id === args.id)
           : (tab.dialogs[0] ?? all[0]);
       if (!target) throw Error('no dialog is open');
+      if (
+        args.password !== undefined &&
+        (target.type !== 'auth' || typeof args.password !== 'string')
+      )
+        throw Error('a password answers only a sign-in');
       const dialog = await this.answerDialog(
         conversation,
         target.id,
         args.accept,
         typeof args.text === 'string' ? args.text : target.defaultPrompt,
         'model',
+        typeof args.password === 'string' ? args.password : undefined,
       );
       // The page goes on where it stopped and may ask again at once, as confirm then alert
       const answered = conversation.tabs.get(dialog.tab) ?? tab;
@@ -1792,7 +2003,14 @@ export class BrowserSessions {
       return {
         text: await this.result(
           conversation,
-          `${args.accept ? 'Accepted' : 'Dismissed'} dialog ${dialog.id}.`,
+          dialog.type === 'auth'
+            ? signInAnswered(
+                dialog,
+                args.accept,
+                typeof args.text === 'string' ? args.text : '',
+                answered.dialogs.some((entry) => entry.type === 'auth'),
+              )
+            : `${args.accept ? 'Accepted' : 'Dismissed'} dialog ${dialog.id}.`,
           signal,
         ),
       };
@@ -1834,7 +2052,7 @@ export class BrowserSessions {
             : tab.failure
               ? `The page could not be loaded: ${tab.failure.error}.`
               : tab.dialogs.length
-                ? `The page opened dialog ${tab.dialogs[0]!.id}.`
+                ? dialogOpened(tab.dialogs[0]!)
                 : 'Loaded.';
       return { text: await this.result(conversation, text, signal) };
     }

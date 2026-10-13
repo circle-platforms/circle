@@ -196,6 +196,17 @@ export function browserTools(
           secret: true,
           secretName: context.secretNames.join(', '),
         };
+      // A sign-in's password, as a password field's, is only ever a saved secret
+      if (action === 'dialog' && args.password !== undefined) {
+        if (
+          typeof context.rawArgs?.password !== 'string' ||
+          !context.secretNames?.length ||
+          !onlyReferences(context.rawArgs.password, context.secretNames)
+        )
+          throw Error(
+            "a sign-in's password takes only a saved secret, written %NAME%",
+          );
+      }
       if (action === 'upload') {
         if (
           !Array.isArray(args.paths) ||
@@ -350,7 +361,14 @@ export function browserTools(
           description:
             'True presses OK (or leaves the page), false presses Cancel (or stays)',
         },
-        text: { type: 'string', description: 'The answer to a prompt' },
+        text: {
+          type: 'string',
+          description: 'The answer to a prompt, or the user name for a sign-in',
+        },
+        password: {
+          type: 'string',
+          description: "A sign-in's password: only a saved secret's %NAME%",
+        },
       },
       ['accept'],
     ),

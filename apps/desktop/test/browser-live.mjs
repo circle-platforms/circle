@@ -99,7 +99,38 @@ const document = `<!doctype html>
   });
 </script></body></html>`;
 
+// What each request for the admin page sent to sign in, decoded
+const authorizations = [];
 const handler = async (request, response) => {
+  if (request.url === '/auth') {
+    const sent = request.headers.authorization ?? '';
+    authorizations.push(
+      sent && Buffer.from(sent.replace(/^Basic /, ''), 'base64').toString(),
+    );
+    if (
+      sent ===
+      `Basic ${Buffer.from('admin:secret-from-circle').toString('base64')}`
+    ) {
+      response.writeHead(200, { 'Content-Type': 'text/html' });
+      response.end(
+        '<!doctype html><title>Admin</title><p>admin page signed in</p>',
+      );
+      return;
+    }
+    response.writeHead(401, {
+      'WWW-Authenticate': 'Basic realm="Circle fixture admin"',
+      'Content-Type': 'text/html',
+    });
+    response.end('<!doctype html><title>401</title><p>sign in first</p>');
+    return;
+  }
+  if (request.url === '/permission') {
+    response.writeHead(200, { 'Content-Type': 'text/html' });
+    response.end(
+      `<!doctype html><title>Alerts</title><button onclick="Notification.requestPermission().then((answer) => { document.getElementById('out').textContent = 'notifications: ' + answer; })">Ask</button><output id="out"></output>`,
+    );
+    return;
+  }
   if (request.url === '/files' && request.method === 'POST') {
     let body = '';
     for await (const chunk of request) body += chunk;
@@ -282,6 +313,27 @@ await script([
   ]),
   calls('after-takeover', [call('after-takeover', 'browser_snapshot', {})]),
   answer('takeover-done', 'takeover checked'),
+  calls('auth-nav', [
+    call('auth-nav', 'browser_navigate', { url: url + 'auth' }),
+  ]),
+  answer('auth-seen', 'sign-in seen'),
+  calls('auth-answer', [
+    call('auth-answer', 'browser_dialog', {
+      accept: true,
+      text: 'admin',
+      password: '%FIXTURE_PASSWORD%',
+    }),
+  ]),
+  answer('auth-done', 'signed in by HTTP'),
+  calls('permission-nav', [
+    call('permission-nav', 'browser_navigate', { url: url + 'permission' }),
+  ]),
+  calls('permission-ask', [
+    call('permission-ask', 'browser_click', { ref: 'e1', element: 'Ask' }),
+  ]),
+  answer('permission-seen', 'permission waiting'),
+  calls('permission-after', [call('permission-after', 'browser_snapshot', {})]),
+  answer('permission-done', 'permission answered'),
 ]);
 const env = {
   ...process.env,
@@ -794,6 +846,104 @@ try {
   assert.equal((await browserState(sessionId)).control, 'shared');
   checks.push(
     "the model hands the person the browser and learns only where the tabs went; the person's click on the layer over the page takes it once Circle's action ends, and Circle's next look waits for it back",
+  );
+
+  // ---- an HTTP sign-in waits in the tab for whoever answers it: the person in the
+  // panel, or the model with a saved secret
+  const origin = new URL(url).origin;
+  await send('open the admin page');
+  await page.getByText('sign-in seen', { exact: true }).waitFor();
+  const authNav = await textOf('auth-nav');
+  assert.match(authNav, /The site asks for a sign-in: dialog d\d+\./);
+  assert.match(authNav, /textbox "Username" → browser_dialog text/);
+  const signIn = page.getByTestId('browser-page-dialog');
+  await signIn.waitFor();
+  assert.match(await signIn.innerText(), new RegExp(`sign in to ${origin}`));
+  assert.match(await signIn.innerText(), /Circle fixture admin/);
+  const firstSignIn = (await browserState(sessionId)).dialogs[0].id;
+  // The sign-in in both palettes
+  await page.screenshot({ path: join(output, 'browser-sign-in.png') });
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: join(output, 'browser-sign-in-dark.png') });
+  await page.emulateMedia({ colorScheme: null });
+  await signIn
+    .getByRole('textbox', { name: 'user name', exact: true })
+    .fill('admin');
+  await signIn.getByLabel('password', { exact: true }).fill('wrong-password');
+  await signIn.getByRole('button', { name: 'sign in', exact: true }).click();
+  await waitFor(async () => {
+    const dialogs = (await browserState(sessionId)).dialogs;
+    return (
+      dialogs.length === 1 &&
+      dialogs[0].type === 'auth' &&
+      dialogs[0].id !== firstSignIn
+    );
+  }, 'the site asks again');
+  await send('sign in with the saved password');
+  await page.getByText('signed in by HTTP', { exact: true }).waitFor();
+  const authAnswer = await textOf('auth-answer');
+  assert.match(
+    authAnswer,
+    new RegExp(`Answered sign-in d\\d+ for ${origin} as "admin"\\.`),
+  );
+  assert.match(authAnswer, /admin page signed in/);
+  assert(
+    authAnswer.includes(
+      `sign-in ${firstSignIn} for ${origin} answered by the user`,
+    ),
+  );
+  assert.deepEqual(authorizations, [
+    '',
+    'admin:wrong-password',
+    'admin:secret-from-circle',
+  ]);
+  assert(!JSON.stringify(await requests()).includes('secret-from-circle'));
+  assert(!JSON.stringify(await requests()).includes('wrong-password'));
+  checks.push(
+    "an HTTP sign-in waits in the tab: the person's answer in the panel reaches the site and the model learns only that they answered; the model answers with a saved secret, which the site gets and the model never sees",
+  );
+
+  // ---- a page's permission request waits for the person alone
+  await send('ask for notifications');
+  await page.getByText('permission waiting', { exact: true }).waitFor();
+  assert.match(
+    await textOf('permission-ask'),
+    new RegExp(
+      `### Permission requests waiting\\n- \\[p1\\] tab t\\d+ · ${origin} asks to show notifications: only the user answers`,
+    ),
+  );
+  const permission = page.getByTestId('browser-permission');
+  await permission.waitFor();
+  assert.match(
+    await permission.innerText(),
+    new RegExp(`${origin} wants to show notifications`),
+  );
+  await page.screenshot({ path: join(output, 'browser-permission.png') });
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: join(output, 'browser-permission-dark.png') });
+  await page.emulateMedia({ colorScheme: null });
+  await permission.getByRole('button', { name: 'allow', exact: true }).click();
+  await permission.waitFor({ state: 'hidden' });
+  await waitFor(
+    async () =>
+      (await native(`document.getElementById('out').textContent`)) ===
+      'notifications: granted',
+    'the page is allowed',
+  );
+  assert.equal(await native('Notification.permission'), 'granted');
+  await send('look again');
+  await page.getByText('permission answered', { exact: true }).waitFor();
+  const afterPermission = await textOf('permission-after');
+  assert(
+    afterPermission.includes(
+      `permission request p1 (${origin} to show notifications) allowed by the user`,
+    ),
+  );
+  assert.match(afterPermission, /notifications: granted/);
+  checks.push(
+    "a page's permission request waits in the panel for the person alone; the model sees it waiting and then the answer, and the page gets it",
   );
 
   // ---- the person's own click on proceed needs no approval, on another port

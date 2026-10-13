@@ -10,37 +10,110 @@ import { t } from '../i18n';
 const title = (dialog: BrowserDialog) =>
   dialog.type === 'beforeunload'
     ? t('leave site?')
-    : t('{host} says', { host: dialogSource(dialog) || t('this page') });
+    : dialog.type === 'auth'
+      ? dialog.proxy
+        ? t('the proxy {host} asks you to sign in', { host: dialog.origin })
+        : t('sign in to {host}', { host: dialog.origin })
+      : t('{host} says', { host: dialogSource(dialog) || t('this page') });
 const body = (dialog: BrowserDialog) =>
   dialog.type === 'beforeunload'
     ? t('Changes you made may not be saved.')
-    : dialog.message;
+    : dialog.type === 'auth'
+      ? (dialog.realm ?? '')
+      : dialog.message;
 
 /** One answer per dialog, from wherever the person answers it. */
 function useAnswer(sessionId: string, dialog: BrowserDialog) {
   const { notify } = useRuntime();
   const [text, setText] = useState(dialog.defaultPrompt);
+  // A sign-in's password stays here and goes only to the browser
+  const [password, setPassword] = useState('');
   const [sent, setSent] = useState(false);
   useEffect(() => {
     setText(dialog.defaultPrompt);
+    setPassword('');
     setSent(false);
   }, [dialog.id, dialog.defaultPrompt]);
   const answer = (accept: boolean) => {
     if (sent || dialog.answering) return;
     setSent(true);
+    const auth = dialog.type === 'auth' && accept;
     void desktopHost()!
       .browserDialog(
         sessionId,
         dialog.id,
         accept,
-        dialog.type === 'prompt' ? text : undefined,
+        dialog.type === 'prompt' || auth ? text : undefined,
+        auth ? password : undefined,
       )
       .catch(() => {
         setSent(false);
         notify(t('the dialog was already answered'));
       });
   };
-  return { text, setText, answer, busy: sent || !!dialog.answering };
+  return {
+    text,
+    setText,
+    password,
+    setPassword,
+    answer,
+    busy: sent || !!dialog.answering,
+  };
+}
+
+/** What the person types into a dialog: a prompt's answer, or a sign-in's name and password. */
+function Fields({
+  dialog,
+  form,
+  focus,
+}: {
+  dialog: BrowserDialog;
+  form: ReturnType<typeof useAnswer>;
+  focus?: boolean;
+}) {
+  const { text, setText, password, setPassword, answer, busy } = form;
+  const enter = (event: React.KeyboardEvent) => {
+    if (event.key === 'Enter') answer(true);
+  };
+  if (dialog.type === 'prompt')
+    return (
+      <input
+        className="input"
+        aria-label={t('dialog answer')}
+        value={text}
+        disabled={busy}
+        autoFocus={focus}
+        onChange={(event) => setText(event.target.value)}
+        onKeyDown={enter}
+      />
+    );
+  if (dialog.type !== 'auth') return null;
+  return (
+    <div className="browser-dialog-fields">
+      <input
+        className="input"
+        aria-label={t('user name')}
+        placeholder={t('user name')}
+        autoComplete="off"
+        value={text}
+        disabled={busy}
+        autoFocus={focus}
+        onChange={(event) => setText(event.target.value)}
+        onKeyDown={enter}
+      />
+      <input
+        className="input"
+        type="password"
+        aria-label={t('password')}
+        placeholder={t('password')}
+        autoComplete="off"
+        value={password}
+        disabled={busy}
+        onChange={(event) => setPassword(event.target.value)}
+        onKeyDown={enter}
+      />
+    </div>
+  );
 }
 
 const Buttons = ({
@@ -68,7 +141,11 @@ const Buttons = ({
       disabled={busy}
       onClick={() => answer(true)}
     >
-      {dialog.type === 'beforeunload' ? t('leave') : t('OK')}
+      {dialog.type === 'beforeunload'
+        ? t('leave')
+        : dialog.type === 'auth'
+          ? t('sign in')
+          : t('OK')}
     </Button>
   </div>
 );
@@ -84,7 +161,8 @@ export function BrowserDialogPanel({
   sessionId: string;
   dialog: BrowserDialog;
 }) {
-  const { text, setText, answer, busy } = useAnswer(sessionId, dialog);
+  const form = useAnswer(sessionId, dialog);
+  const { answer, busy } = form;
   const [screen, setScreen] = useState<string | null>(null);
   const [pointer, setPointer] = useState<{
     x: number;
@@ -147,19 +225,7 @@ export function BrowserDialogPanel({
       >
         <strong>{title(dialog)}</strong>
         {body(dialog) && <p>{body(dialog)}</p>}
-        {dialog.type === 'prompt' && (
-          <input
-            className="input"
-            aria-label={t('dialog answer')}
-            value={text}
-            disabled={busy}
-            autoFocus
-            onChange={(event) => setText(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') answer(true);
-            }}
-          />
-        )}
+        <Fields dialog={dialog} form={form} focus />
         <Buttons
           dialog={dialog}
           answer={answer}
@@ -197,7 +263,8 @@ export function BrowserDialogRequest({
   sessionId: string;
   dialog: BrowserDialog;
 }) {
-  const { text, setText, answer, busy } = useAnswer(sessionId, dialog);
+  const form = useAnswer(sessionId, dialog);
+  const { answer, busy } = form;
   return (
     <section
       className="inline-request"
@@ -210,15 +277,7 @@ export function BrowserDialogRequest({
         <span>{t('the page in the browser waits for an answer')}</span>
       </header>
       {body(dialog) && <p className="browser-dialog-message">{body(dialog)}</p>}
-      {dialog.type === 'prompt' && (
-        <input
-          className="input"
-          aria-label={t('dialog answer')}
-          value={text}
-          disabled={busy}
-          onChange={(event) => setText(event.target.value)}
-        />
-      )}
+      <Fields dialog={dialog} form={form} />
       <Buttons dialog={dialog} answer={answer} busy={busy} />
     </section>
   );

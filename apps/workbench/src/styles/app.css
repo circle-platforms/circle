@@ -3203,6 +3203,10 @@ pre {
   justify-content: flex-end;
   gap: 8px;
 }
+.browser-dialog-fields {
+  display: grid;
+  gap: 8px;
+}
 .browser-dialog-note {
   color: var(--accent);
 }

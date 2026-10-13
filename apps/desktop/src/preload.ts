@@ -42,12 +42,21 @@ const bridge: DesktopBridge = {
   setTheme: (dark) => ipcRenderer.invoke('circle:set-theme', dark),
   browserTabs: (id, action, tab) =>
     ipcRenderer.invoke('circle:browser-tabs', id, action, tab),
-  browserDialog: (id, dialog, accept, text) =>
-    ipcRenderer.invoke('circle:browser-dialog', id, dialog, accept, text),
+  browserDialog: (id, dialog, accept, text, password) =>
+    ipcRenderer.invoke(
+      'circle:browser-dialog',
+      id,
+      dialog,
+      accept,
+      text,
+      password,
+    ),
   browserDialogScreen: (id, dialog) =>
     ipcRenderer.invoke('circle:browser-dialog-screen', id, dialog),
   browserChoose: (id, chooser) =>
     ipcRenderer.invoke('circle:browser-choose', id, chooser),
+  browserPermission: (id, request, allow) =>
+    ipcRenderer.invoke('circle:browser-permission', id, request, allow),
   browserReveal: (id, download) =>
     ipcRenderer.invoke('circle:browser-reveal', id, download),
   browserControl: (id, action) =>

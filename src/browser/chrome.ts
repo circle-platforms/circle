@@ -17,8 +17,10 @@ import { CdpPipe, type CdpEvent } from './cdp.js';
 import { TrustedCertificates } from './certificates.js';
 import {
   dialogLine,
+  dialogOpened,
   dialogSnapshot,
   downloadDecision,
+  signInAnswered,
   quote,
   type PageDialog,
 } from './format.js';
@@ -145,7 +147,7 @@ interface Tab {
   loading: boolean;
   network: Set<string>;
   lastNetwork: number;
-  dialogs: PageDialog[];
+  dialogs: (PageDialog & { request?: string })[];
   /** Dialogs Circle answered whose close is still to come. */
   answered: number;
   wake: Set<() => void>;
@@ -388,6 +390,21 @@ export class ChromeBrowser implements BrowserPort {
           'Security.enable',
         ].map((method) => this.send(method, {}, sessionId)),
       );
+      // A page's sign-in comes to Circle first: documents only, which go on at once
+      await this.send(
+        'Fetch.enable',
+        {
+          patterns: [
+            {
+              urlPattern: '*',
+              resourceType: 'Document',
+              requestStage: 'Request',
+            },
+          ],
+          handleAuthRequests: true,
+        },
+        sessionId,
+      ).catch(() => {});
       return tab;
     })();
     this.adopting.set(info.targetId, adopting);
@@ -545,7 +562,8 @@ export class ChromeBrowser implements BrowserPort {
         if (tab.answered) tab.answered--;
         else {
           // The person answered it in the browser
-          const dialog = tab.dialogs.shift();
+          const dialog = tab.dialogs.find((entry) => entry.type !== 'auth');
+          tab.dialogs = tab.dialogs.filter((entry) => entry !== dialog);
           if (dialog)
             tab.conversation.events.push(
               `dialog ${dialog.id} (${dialog.type}) was ${params.result ? 'accepted' : 'dismissed'} by the user`,
@@ -553,6 +571,50 @@ export class ChromeBrowser implements BrowserPort {
         }
         this.release(tab);
         break;
+      case 'Fetch.requestPaused':
+        void this.send(
+          'Fetch.continueRequest',
+          { requestId: params.requestId },
+          tab.session,
+        ).catch(() => {});
+        break;
+      case 'Fetch.authRequired': {
+        const challenge = params.authChallenge ?? {};
+        const proxy = challenge.source === 'Proxy';
+        const origin = proxy
+          ? String(challenge.origin ?? '')
+          : originOf(params.request?.url ?? '') ||
+            String(challenge.origin ?? '');
+        // The person browses: the browser's own dialog asks them, in its window
+        if (!tab.conversation.acting) {
+          void this.send(
+            'Fetch.continueWithAuth',
+            {
+              requestId: params.requestId,
+              authChallengeResponse: { response: 'Default' },
+            },
+            tab.session,
+          ).catch(() => {});
+          tab.conversation.events.push(
+            `tab ${tab.id}: ${proxy ? 'the proxy' : 'the site'} ${origin} asked for a sign-in, in the browser's own dialog, for the user`,
+          );
+          break;
+        }
+        // Circle's action led here: the sign-in waits for the model, as a page's dialog
+        tab.dialogs.push({
+          id: `d${++tab.conversation.nextDialog}`,
+          tab: tab.id,
+          type: 'auth',
+          message: '',
+          defaultPrompt: '',
+          origin,
+          realm: String(challenge.realm ?? ''),
+          proxy,
+          request: params.requestId,
+        });
+        for (const wake of tab.wake) wake();
+        break;
+      }
       case 'Page.frameNavigated':
         if (!params.frame.parentId) {
           tab.frameUrl = params.frame.url;
@@ -900,6 +962,54 @@ export class ChromeBrowser implements BrowserPort {
       if (now !== 'hidden') return;
       await delay(50, undefined, { signal });
     }
+  }
+  /** The model's answer to a sign-in: the user name and a secret's value, or cancel. */
+  private async signIn(
+    conversation: Conversation,
+    tab: Tab,
+    dialog: PageDialog & { request?: string },
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<BrowserResult> {
+    if (args.password !== undefined && typeof args.password !== 'string')
+      throw Error('invalid browser dialog answer');
+    tab.dialogs = tab.dialogs.filter((entry) => entry !== dialog);
+    const next = this.dialogOpens(tab);
+    await this.send(
+      'Fetch.continueWithAuth',
+      {
+        requestId: dialog.request,
+        authChallengeResponse: args.accept
+          ? {
+              response: 'ProvideCredentials',
+              username: typeof args.text === 'string' ? args.text : '',
+              password: typeof args.password === 'string' ? args.password : '',
+            }
+          : { response: 'CancelAuth' },
+      },
+      tab.session,
+    ).catch((error: Error) => {
+      throw Error(`the sign-in could not be answered: ${error.message}`);
+    });
+    conversation.events.push(
+      `sign-in ${dialog.id} for ${dialog.origin} ${args.accept ? 'answered' : 'cancelled'} by Circle`,
+    );
+    // Wrong credentials ask again at once
+    await Promise.race([next.opened, delay(300, undefined, { signal })]);
+    next.stop();
+    await this.idle(tab, signal);
+    return {
+      text: await this.result(
+        conversation,
+        signInAnswered(
+          dialog,
+          args.accept === true,
+          typeof args.text === 'string' ? args.text : '',
+          tab.dialogs.some((entry) => entry.type === 'auth'),
+        ),
+        signal,
+      ),
+    };
   }
   /** Sends an input event; a dialog the event opens ends the wait at once. */
   private async input(
@@ -1301,6 +1411,24 @@ export class ChromeBrowser implements BrowserPort {
         throw Error('there is no one to hand the browser to here');
       // The window comes to the front for the person, who has it until they hand it back
       await this.send('Page.bringToFront', {}, tab.session).catch(() => {});
+      // A sign-in waiting for the model is the browser's own dialog for them
+      for (const owner of conversation.tabs.values())
+        for (const dialog of owner.dialogs.filter(
+          (entry) => entry.type === 'auth',
+        )) {
+          owner.dialogs = owner.dialogs.filter((entry) => entry !== dialog);
+          await this.send(
+            'Fetch.continueWithAuth',
+            {
+              requestId: dialog.request,
+              authChallengeResponse: { response: 'Default' },
+            },
+            owner.session,
+          ).catch(() => {});
+          conversation.events.push(
+            `sign-in ${dialog.id} for ${dialog.origin} went to the browser's own dialog, for the user`,
+          );
+        }
       conversation.acting = false;
       try {
         await this.options.handoff(
@@ -1337,6 +1465,10 @@ export class ChromeBrowser implements BrowserPort {
           : (all.find((entry) => entry.tab === tab) ?? all[0]);
       if (!target) throw Error('no dialog is open');
       const owner = target.tab;
+      if (target.dialog.type === 'auth')
+        return this.signIn(conversation, owner, target.dialog, args, signal);
+      if (args.password !== undefined)
+        throw Error('a password answers only a sign-in');
       owner.dialogs = owner.dialogs.filter(
         (dialog) => dialog !== target.dialog,
       );
@@ -1427,7 +1559,7 @@ export class ChromeBrowser implements BrowserPort {
             : tab.failure
               ? `The page could not be loaded: ${tab.failure.error}.`
               : tab.dialogs.length
-                ? `The page opened dialog ${tab.dialogs[0]!.id}.`
+                ? dialogOpened(tab.dialogs[0]!)
                 : 'Loaded.';
       return { text: await this.result(conversation, text, signal) };
     }
