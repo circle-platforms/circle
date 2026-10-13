@@ -507,7 +507,17 @@ test(
       ref: addLogs,
       element: 'add logs',
     }).catch((error: Error) => {
-      error.message += ` (${product}; chooser events: ${choosers.length})`;
+      const shown = (
+        chrome as unknown as {
+          conversations: Map<
+            string,
+            { tabs: Map<string, { interceptFailure?: string }> }
+          >;
+        }
+      ).conversations
+        .get('conversation-1')
+        ?.tabs.get('t1');
+      error.message += ` (${product}; chooser events: ${choosers.length}; interception ${shown?.interceptFailure ?? 'taken'})`;
       throw error;
     });
     stop();

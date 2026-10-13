@@ -170,6 +170,8 @@ interface Tab {
   closed: boolean;
   /** Circle's clicks get file choosers; turned off again once no dialog holds the page. */
   intercepting?: boolean;
+  /** Why the browser did not take file chooser interception, when it did not. */
+  interceptFailure?: string;
   /** A file chooser a click of Circle's opened, which browser_upload answers. */
   chooser?: { id: string; multiple: boolean; backendNodeId?: number };
   /** The files Circle asked the person about, by the token their approval carries. */
@@ -801,7 +803,11 @@ export class ChromeBrowser implements BrowserPort {
       this.send('Page.setInterceptFileChooserDialog', { enabled }, tab.session),
       undefined,
       2000,
-    ).catch(() => {});
+    ).then(
+      () => (tab.interceptFailure = undefined),
+      (error: Error) =>
+        (tab.interceptFailure = `${enabled ? 'on' : 'off'}: ${error.message}`),
+    );
   }
   /** Ends interception left on while a dialog held the page. */
   private release(tab: Tab) {
