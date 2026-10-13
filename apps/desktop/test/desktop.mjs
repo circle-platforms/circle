@@ -1,5 +1,9 @@
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
-import { observePage, captureFailure } from './helpers/diagnostics.mjs';
+import {
+  armDeadline,
+  observePage,
+  captureFailure,
+} from './helpers/diagnostics.mjs';
 import { readViewport, setViewport } from './helpers/viewport.mjs';
 import { createServer } from 'node:http';
 import { _electron as electron } from 'playwright';
@@ -48,6 +52,7 @@ const checks = [];
 const errors = [];
 let app;
 let page;
+armDeadline({ minutes: 12, page: () => page, events: errors, output, checks });
 let originalClipboard;
 let viewportSizing;
 const route = async (path) => {
