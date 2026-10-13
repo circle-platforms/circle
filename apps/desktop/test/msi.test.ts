@@ -8,9 +8,11 @@ import { fileURLToPath } from 'node:url';
 import {
   ARCH,
   PACKAGE_SOURCE,
+  UI_EXTENSION,
   WIX_VERSION,
   checkWixVersion,
   checksumLine,
+  licenseRtf,
   msiName,
   msiVersion,
   refuseOtherHosts,
@@ -30,7 +32,7 @@ type Element = {
   children: Element[];
 };
 
-// Enough XML for the package source: elements and attributes, no text except in <Custom>
+// Enough XML for the package source: elements and attributes, with no inner text.
 function parseXml(source: string): Element {
   const body = source
     .replace(/<\?[\s\S]*?\?>/g, '')
@@ -42,8 +44,7 @@ function parseXml(source: string): Element {
   let end = 0;
   for (const match of body.matchAll(tag)) {
     const text = body.slice(end, match.index).trim();
-    if (text && open.at(-1)!.name !== 'Custom')
-      assert.equal(text, '', `unexpected text before ${match[0]}`);
+    assert.equal(text, '', `unexpected text before ${match[0]}`);
     end = match.index + match[0].length;
     const [, closing, name, attributeText, selfClosing] = match;
     const parent = open.at(-1)!;
@@ -234,31 +235,58 @@ test('Installed apps shows the icon and the project page', () => {
   assert.equal(properties.ARPNOREPAIR, '1');
 });
 
-test('the installer shows a completion dialog and can launch Circle', () => {
+test('only the completion button can launch Circle, after an unchecked opt-in', () => {
+  assert.equal(only(pkg, 'ui:WixUI').attributes.Id, 'WixUI_Minimal');
+  assert.deepEqual(only(pkg, 'WixVariable').attributes, {
+    Id: 'WixUILicenseRtf',
+    Value: '$(var.License)',
+  });
+  const properties = Object.fromEntries(
+    all(pkg, 'Property').map((item) => [
+      item.attributes.Id,
+      item.attributes.Value,
+    ]),
+  );
+  assert.equal(
+    properties.WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT,
+    'launch Circle',
+  );
+  assert.equal(
+    properties.WIXUI_EXITDIALOGOPTIONALCHECKBOX,
+    undefined,
+    'launch is unchecked until chosen',
+  );
   const ui = only(pkg, 'UI');
-  assert.equal(only(ui, 'UIRef').attributes.Id, 'WixUI_Minimal');
   const publish = only(ui, 'Publish');
   assert.deepEqual(publish.attributes, {
     Dialog: 'ExitDialog',
     Control: 'Finish',
     Event: 'DoAction',
     Value: 'LaunchCircle',
-    Condition: 'NOT Installed AND LAUNCHCIRCLE=1',
+    Order: '1',
+    Condition: 'NOT Installed AND WIXUI_EXITDIALOGOPTIONALCHECKBOX=1',
   });
   const action = only(pkg, 'CustomAction');
   assert.deepEqual(action.attributes, {
     Id: 'LaunchCircle',
-    FileRef: 'Circle.exe',
-    ExeCommand: '',
+    Directory: 'INSTALLFOLDER',
+    ExeCommand: '&quot;[INSTALLFOLDER]Circle.exe&quot;',
     Return: 'asyncNoWait',
+    Impersonate: 'yes',
   });
-  const sequence = only(pkg, 'InstallExecuteSequence');
-  const custom = only(sequence, 'Custom');
-  assert.deepEqual(custom.attributes, {
-    Action: 'LaunchCircle',
-    After: 'InstallFinalize',
-  });
-  assert.equal(custom.children.length, 0);
+  assert.equal(
+    all(pkg, 'Custom').length,
+    0,
+    'quiet installs and updates cannot launch from an execute sequence',
+  );
+  assert.equal(all(pkg, 'InstallExecuteSequence').length, 0);
+});
+
+test('the actual license is literal RTF, including braces, slashes and non-ASCII text', () => {
+  const result = licenseRtf('MIT License\r\n{\\中文}');
+  assert.match(result, /^\{\\rtf1/);
+  assert.ok(result.includes('MIT License\\par\n\\{\\\\\\u20013?\\u25991?\\}'));
+  assert.ok(result.endsWith('}'));
 });
 
 test('wix build and wix msi validate get the pinned arguments', () => {
@@ -267,6 +295,7 @@ test('wix build and wix msi validate get the pinned arguments', () => {
     wxs: join(work, 'Circle.wxs'),
     app: join('out', 'Circle-win32-x64'),
     icon: join('dist', 'assets', 'circle.ico'),
+    license: join(work, 'LICENSE.rtf'),
     version: '1.2.3',
     output: join('out', msiName('1.2.3')),
     work,
@@ -277,10 +306,14 @@ test('wix build and wix msi validate get the pinned arguments', () => {
     options.wxs,
     '-arch',
     'x64',
+    '-ext',
+    UI_EXTENSION,
     '-d',
     'Version=1.2.3',
     '-d',
     `Icon=${options.icon}`,
+    '-d',
+    `License=${options.license}`,
     '-bindpath',
     `App=${options.app}`,
     '-intermediatefolder',
@@ -378,6 +411,10 @@ test('CI installs the WiX the script expects and builds the MSI', async () => {
         `dotnet tool install --global wix --version ${WIX_VERSION}`,
       ),
       `${workflow} installs WiX ${WIX_VERSION}`,
+    );
+    assert.ok(
+      text.includes(`extension add --global ${UI_EXTENSION}`),
+      `${workflow} installs the pinned UI extension`,
     );
     assert.match(text, /npm --prefix apps\/desktop run package:msi/);
   }

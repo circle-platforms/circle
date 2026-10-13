@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 interface TestContext {
@@ -25,8 +26,8 @@ function owned(t: TestContext): Resources {
       }
       for (const root of state!.roots.reverse()) {
         try {
-          // Windows keeps a folder busy for a moment after a process in it was killed.
-          rmSync(root, {
+          // Let process close callbacks run while Windows releases a killed child's folder.
+          await rm(root, {
             recursive: true,
             force: true,
             maxRetries: 10,
