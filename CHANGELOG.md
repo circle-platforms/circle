@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.3.0 - 2026-10-13
+
 ### Added
 
 - **The browser: web pages Circle and you use together.** Ask Circle to open a page, such as a device's web interface on your network, and it uses the browser as you would: it reads the page, moves a visible pointer to click and type, follows new tabs, and answers the page's alert, confirm, prompt and "leave site?" questions, which wait in their tab and show in the conversation. A certificate warning shows in the tab like any page; passing it asks you first, also in `auto` mode, and on a private host you can trust that certificate for good. Downloads, and the file chooser a page opens, reach the model and you. In the desktop application the browser is the browser panel; in the terminal's full-screen interface the same tools drive the Chrome, Edge or Chromium installed on the machine, in a window of its own with a temporary profile (`CIRCLE_BROWSER` names another), and the approvals are cards. See [Tools](docs/tools.md#the-browser).
