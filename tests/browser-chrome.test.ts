@@ -1782,6 +1782,8 @@ test(
       return chrome;
     };
     const asked: string[] = [];
+    // The calls that asked every time: a click that deletes, and a replay that has one
+    const forced: string[] = [];
     const conversation = (model: ScriptedModel) => {
       const chrome = browser();
       const runtime: AgentRuntime = new AgentRuntime({
@@ -1796,7 +1798,16 @@ test(
             return 'once';
           },
         }),
-        approve: async () => 'always',
+        // The person allows the site for the session, and a delete once: its card offers
+        // no "for this session"
+        approve: async (call) => {
+          if (
+            runtime.policy.review(call.name, call.args).verdict !== 'ASK_FORCED'
+          )
+            return 'always';
+          forced.push(call.name);
+          return 'approve';
+        },
       });
       cleanup(t, () => runtime.close());
       return runtime;
@@ -1925,5 +1936,7 @@ test(
       { username: 'operator', role: 'maintainer' },
     ]);
     assert.deepEqual(deletes, ['b', 'b']);
+    // The delete asked when the model clicked it, and the replay that clicks it again asked too
+    assert.deepEqual(forced, ['browser_click', 'browser_replay']);
   },
 );
