@@ -111,7 +111,7 @@ import { stripAnsi } from '../ink/string_width.js';
 import { modelScope } from '../model_scope.js';
 import { resumeHint, runningJobs, stoppedJobsLine } from './exit_lines.js';
 import { ChromeBrowser, findBrowser } from '../browser/chrome.js';
-import { browserTools } from '../browser/tools.js';
+import { browserTools, runtimeBrowserOptions } from '../browser/tools.js';
 import type {
   BrowserApproval,
   CertificateApproval,
@@ -696,11 +696,7 @@ export class SessionApp {
                   signal,
                   false,
                 ),
-              files: (path) => {
-                const full = this.runtime!.sandbox.resolvePath(path);
-                this.runtime!.sandbox.checkCredentialPath(full);
-                return full;
-              },
+              ...runtimeBrowserOptions(() => this.runtime!),
             })
           : []),
       ],

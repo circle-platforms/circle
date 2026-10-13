@@ -511,3 +511,94 @@ test('a navigation written with a variable is allowed for the site it goes to, n
     ['https://device.lan:8443/login', 'https://other.example/'],
   );
 });
+
+test('a replay whose script clicks a control that deletes asks every time in manual mode, and names those steps', async (t) => {
+  const root = scratch(t);
+  const port: BrowserPort = {
+    async request() {
+      return { text: 'done', origin: 'https://device.lan' };
+    },
+  };
+  const write = (name: string, steps: unknown[]) => {
+    const path = join(root, name);
+    writeFileSync(
+      path,
+      JSON.stringify({ circle: 'browser-script/1', name, steps }),
+    );
+    return path;
+  };
+  const cleanupScript = write('cleanup.json', [
+    { navigate: 'https://device.lan/vs' },
+    { click: { role: 'checkbox', name: '' } },
+    { click: { role: 'button', name: '删除' } },
+    { dialog: 'accept' },
+  ]);
+  const setupScript = write('setup.json', [
+    { navigate: 'https://device.lan/vs' },
+    { click: { role: 'button', name: '添加' } },
+  ]);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: trustFolder(defaultSettings(), root),
+    model: new ScriptedModel([]),
+    extraTools: browserTools(port, { files: (path) => path }),
+  });
+  cleanup(t, () => runtime.close());
+  const replay = runtime.allTools.find(
+    (tool) => tool.name === 'browser_replay',
+  )!;
+  const facts = replay.approvalFacts!(
+    { path: cleanupScript },
+    runtime.session.id,
+  )!;
+  assert.deepEqual(facts, {
+    site: 'https://device.lan',
+    deletes: 'step 3: button "删除"',
+  });
+  const review = runtime.policy.review('browser_replay', {
+    path: cleanupScript,
+    ...facts,
+  });
+  assert.equal(review.verdict, 'ASK_FORCED');
+  assert.match(review.reason, /step 3: button \\"删除\\"/);
+  // A rule for the site does not cover it; auto mode does not ask
+  runtime.policy.remember(
+    runtime.session.id,
+    'browser_navigate',
+    { site: 'https://device.lan' },
+    'always',
+  );
+  assert.equal(
+    runtime.policy.needsApproval(
+      'browser_replay',
+      { path: cleanupScript, ...facts },
+      runtime.session.id,
+    ),
+    true,
+  );
+  runtime.policy.setMode(runtime.session.id, 'auto');
+  assert.equal(
+    runtime.policy.needsApproval(
+      'browser_replay',
+      { path: cleanupScript, ...facts },
+      runtime.session.id,
+    ),
+    false,
+  );
+  // A script that deletes nothing is covered by the site's rule
+  runtime.policy.setMode(runtime.session.id, 'manual');
+  const plain = replay.approvalFacts!(
+    { path: setupScript },
+    runtime.session.id,
+  )!;
+  assert.deepEqual(plain, { site: 'https://device.lan' });
+  assert.equal(
+    runtime.policy.needsApproval(
+      'browser_replay',
+      { path: setupScript, ...plain },
+      runtime.session.id,
+    ),
+    false,
+  );
+});
