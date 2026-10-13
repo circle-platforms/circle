@@ -148,6 +148,13 @@ let running;
 let passed = false;
 let installedPath;
 let port;
+// A watch of its own: a check blocked in a call that never returns cannot end itself
+const watch = spawn(
+  process.execPath,
+  [join(root, 'test/helpers/watch.mjs'), String(process.pid), temp, '12'],
+  { stdio: ['ignore', 'inherit', 'inherit'] },
+);
+watch.unref();
 try {
   // The installed copy: in a folder of its own, or where the .msi puts it
   const installed = msi
@@ -335,7 +342,7 @@ try {
         '-Command',
         "@(Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue | Where-Object DisplayName -eq 'Circle' | ForEach-Object DisplayVersion) -join ','",
       ],
-      { encoding: 'utf8' },
+      { encoding: 'utf8', timeout: 60000 },
     ).trim();
     assert.equal(listed, next);
   } else
@@ -373,6 +380,7 @@ try {
   await evidence();
   throw error;
 } finally {
+  watch.kill();
   if (running && running.exitCode === null) running.kill();
   server?.close();
   // The installed package goes, whichever version it is now. Quietly, Windows Installer
