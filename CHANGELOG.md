@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.4.0 - 2026-10-13
+
 ### Added
 
 - **Extensions are told when Circle closes them.** `api.signal` fires when Circle leaves and before extensions are loaded again, and Circle waits for work an extension handed to `api.background`, so nothing of an extension loaded before goes on running after `/extensions reload`.
@@ -11,7 +13,7 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 ### Fixed
 
 - **The circle-server extension went on following a task after Circle left it**, reading its secrets file and the server after `/extensions reload` or after Circle ended; it now stops at once, and `/server task` picks the task up again.
-- **A screenshot on a slow Windows machine failed after 20 seconds** with "PowerShell did not take the screenshot". The first one builds a small window helper, which can take longer than that; PowerShell now has a minute, and when it runs out of time the error says so.
+- **A screenshot on a slow Windows machine failed after 20 seconds** with "PowerShell did not take the screenshot". PowerShell builds a small window helper for each screenshot, which on a busy machine can take longer than that; it now has a minute, and when it runs out of time the error says so.
 
 ## 1.3.1 - 2026-10-13
 
