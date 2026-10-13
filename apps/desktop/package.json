@@ -11,14 +11,15 @@
     "dev": "npm run build && npm start",
     "package": "npm run build && node scripts/package.mjs",
     "package:msi": "node scripts/msi.ts",
-    "test": "node --test test/policy.test.ts test/capture.test.ts test/sandbox-guard.test.ts test/msi.test.ts test/attention.test.ts",
+    "test": "node --test test/policy.test.ts test/capture.test.ts test/sandbox-guard.test.ts test/msi.test.ts test/attention.test.ts test/harness.test.mjs",
     "test:runtime": "node ../../node_modules/tsx/dist/cli.mjs --test test/runtime.test.ts test/updater.test.ts test/browser-warning.test.ts",
     "test:live": "node test/live.mjs && node test/browser-live.mjs",
     "test:desktop": "node test/desktop.mjs && node test/browser-page.mjs",
     "format:check": "prettier --check src test scripts package.json tsconfig.json",
     "typecheck": "tsc --noEmit",
     "test:interface": "node test/interface.mjs",
-    "test:update": "node test/update.mjs"
+    "test:update": "node test/update.mjs",
+    "test:msi": "node test/msi-package.mjs"
   },
   "engines": {
     "node": ">=24"

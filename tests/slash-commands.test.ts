@@ -9,7 +9,8 @@ import {
 } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { join, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { stripAnsi } from '../src/ink/string_width.js';
 import type { Picker } from '../src/ink/components/picker.js';
@@ -250,7 +251,12 @@ test('/settings changes the marked setting and saves only that key', async (t) =
       ['endpoint', 'openai · http://127.0.0.1:9/v1'],
       ['trusted folders', '1'],
       ['mcp servers', '0 · /mcp'],
-      ['data folder', home],
+      [
+        'data folder',
+        home.startsWith(homedir() + sep)
+          ? '~' + home.slice(homedir().length)
+          : home,
+      ],
     ],
   );
   const choose = async (label: string): Promise<void> => {

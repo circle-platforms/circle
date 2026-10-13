@@ -111,6 +111,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           dotnet tool install --global wix --version 5.0.2
           Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.dotnet\tools"
+          & "$env:USERPROFILE\.dotnet\tools\wix.exe" extension add --global WixToolset.UI.wixext/5.0.2
       - run: npm --prefix apps/workbench test
       - run: npm --prefix apps/desktop run test:runtime
       - run: npm --prefix apps/desktop run package
@@ -119,6 +120,9 @@ jobs:
       - name: Build the MSI
         if: runner.os == 'Windows'
         run: npm --prefix apps/desktop run package:msi
+      - name: Inspect the compiled MSI
+        if: runner.os == 'Windows'
+        run: npm --prefix apps/desktop run test:msi
       - name: Install and remove the MSI
         if: runner.os == 'Windows'
         shell: pwsh

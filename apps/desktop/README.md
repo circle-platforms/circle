@@ -23,6 +23,17 @@ The default desktop data folder is `Circle` under the operating system's applica
 npm --prefix apps/desktop run package
 ```
 
+On Windows, install the pinned UI extension alongside WiX before building the MSI:
+
+```sh
+dotnet tool install --global wix --version 5.0.2
+wix extension add --global WixToolset.UI.wixext/5.0.2
+npm --prefix apps/desktop run package:msi
+npm --prefix apps/desktop run test:msi
+```
+
+The installer displays Circle's MIT license and an unchecked `launch Circle` option on its completion page. Circle starts only when that option is selected and Finish is pressed. Silent installation and the application's updates do not start it through this option. The compiled-MSI check reads its database without installing it or changing system registration.
+
 The current host platform is packaged under `apps/desktop/out/` as `circle-desktop-<version>-<os>-<arch>` with a `.sha256` beside it: on macOS `Circle.app`, signed again ad hoc, and a `.dmg` holding it and an Applications-folder link; on Linux a `.tar.gz`. On Windows it leaves the `Circle-win32-x64` folder only: Windows gets the `.msi` alone. The version is Circle's, from the root `package.json`. On Windows, `npm --prefix apps/desktop run package:msi` then builds `circle-desktop-<version>-windows-x64.msi` and its `.sha256` from the packaged `Circle-win32-x64` folder, a per-machine installer for `C:\Program Files\Circle` with a Start menu entry. It needs the WiX Toolset 5.0.2 (`dotnet tool install --global wix --version 5.0.2`), checks the MSI with `wix msi validate`, refuses other hosts and versions with a prerelease suffix, and adds the MSI to `out/artifact-receipt.json`. The `release` workflow builds the same files on four targets, runs each, installs and removes the MSI, and publishes them with every release; these commands do not publish anything or install into Applications or Program Files.
 
 The desktop package includes the renderer, Circle runtime/dependencies, prompts, model metadata, icon, license and third-party notices. It needs no globally installed Node or Circle executable. Build dependencies are pinned in the repository and application lockfiles.
