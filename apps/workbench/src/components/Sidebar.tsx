@@ -16,6 +16,7 @@ import {
   SlidersHorizontal,
 } from 'lucide-react';
 import { useRuntime } from '../app/context';
+import { usePlugins } from '../plugins/context';
 import { currentSession, sessionTitle } from '../model/state';
 import type { DialogId } from '../model/types';
 import { IconButton } from './common';
@@ -53,6 +54,9 @@ export function Sidebar({
   onDialog?: (dialog: DialogId) => void;
 }) {
   const { snapshot, runtime, perform, notify } = useRuntime();
+  // The pages of the extensions that are on, such as circle-server's
+  const { registry, enabled } = usePlugins();
+  const pluginPages = registry.pages(enabled);
   const navigate = useNavigate();
   const location = useLocation();
   const current = currentSession(snapshot);
@@ -133,6 +137,26 @@ export function Sidebar({
           <span>{t('all sessions')}</span>
         </NavLink>
       </nav>
+      {pluginPages.length > 0 && (
+        <nav className="sidebar-primary" aria-label={t('platform')}>
+          <div className="section-label">
+            <span>{t('platform')}</span>
+          </div>
+          {pluginPages.map(({ page }) => (
+            <NavLink
+              key={page.id}
+              to={`/page/${page.id}`}
+              className={({ isActive }) =>
+                isActive ? 'sidebar-item active' : 'sidebar-item'
+              }
+              onClick={onNavigate}
+            >
+              <page.icon size={15} />
+              <span>{page.title}</span>
+            </NavLink>
+          ))}
+        </nav>
+      )}
       <div className="project-list">
         {projects.map((workspace) => {
           const sessions = snapshot.sessions
