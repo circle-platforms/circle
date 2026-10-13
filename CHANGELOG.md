@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.3.0 - 2026-10-13
+
 ### Added
 
 - **`trust_cert_files` in `settings.json` trusts an organization's certificate authorities without an environment variable.** Each entry is a PEM file, `~/` allowed: Circle adds what they hold to the authorities it trusts itself, and starts commands, extensions and their tools with one merged `SSL_CERT_FILE` bundle written under the data folder, the system store included, so a lab CA and the public internet work at the same time. The start says the count and the bundle path, and a certificate failure names what is in force instead of only pointing at `SSL_CERT_FILE`. A machine with nothing configured keeps its environment exactly as it is. See [Settings](docs/settings.md) and [Security](docs/security.md#the-shell-environment).
