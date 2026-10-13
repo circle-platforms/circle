@@ -454,6 +454,8 @@ export function browserPage(command: string, args: Record<string, any>) {
       y,
       width,
       height,
+      // The element as the snapshot shows it, read as the action uses it
+      role: role(el),
       name: name(el),
       origin: el.ownerDocument.location.origin,
       password:
@@ -568,6 +570,7 @@ export function browserPage(command: string, args: Record<string, any>) {
     return {
       multiple: el.multiple,
       accept: el.accept,
+      role: role(el),
       name: name(el),
       origin: el.ownerDocument.location.origin,
     };

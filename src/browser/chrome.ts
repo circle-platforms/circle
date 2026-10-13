@@ -16,13 +16,17 @@ import { palette } from '../ink/theme.js';
 import { CdpPipe, type CdpEvent } from './cdp.js';
 import { TrustedCertificates } from './certificates.js';
 import {
+  actedOn,
+  describedOther,
   dialogLine,
   dialogOpened,
   dialogSnapshot,
   downloadDecision,
+  shownName,
   signInAnswered,
   quote,
   type PageDialog,
+  type PageElement,
 } from './format.js';
 import { downloadSite, privateHost, siteOf, webUrl } from './hosts.js';
 import {
@@ -1763,17 +1767,18 @@ export class ChromeBrowser implements BrowserPort {
       origin: string;
       element: string;
       multiple: boolean;
-      ref?: string;
+      // For a ref: the input as the snapshot shows it, and the note when the model
+      // described another
+      which?: string;
+      other?: string;
     };
     const chooser = tab.chooser;
     if (typeof args.ref === 'string') {
       if (!/^e[1-9][0-9]*$/.test(args.ref)) throw Error('invalid element ref');
       const token = randomUUID();
-      const input = await this.js<{
-        multiple: boolean;
-        name: string;
-        origin: string;
-      }>(tab, 'file-input', { ref: args.ref, token }, signal);
+      const input = await this.js<
+        PageElement & { multiple: boolean; origin: string }
+      >(tab, 'file-input', { ref: args.ref, token }, signal);
       let backendNodeId: number;
       try {
         backendNodeId = await this.marked(tab, token);
@@ -1783,12 +1788,10 @@ export class ChromeBrowser implements BrowserPort {
       target = {
         backendNodeId,
         origin: input.origin,
-        element:
-          typeof args.element === 'string' && args.element
-            ? args.element
-            : input.name,
+        element: shownName(input, args.element),
         multiple: input.multiple,
-        ref: args.ref,
+        which: actedOn(args.ref, input),
+        other: describedOther(args.element, input),
       };
     } else if (chooser) {
       if (!chooser.backendNodeId)
@@ -1808,11 +1811,10 @@ export class ChromeBrowser implements BrowserPort {
       throw Error(
         "no file chooser is waiting: give a file input's ref, or click what opens the chooser first",
       );
-    const which = target.ref
-      ? `${target.ref} ${quote(target.element)}`
-      : quote(target.element);
+    const which = target.which ?? quote(target.element);
+    const other = target.other ?? '';
     if (!paths.length) {
-      if (!target.ref && chooser) {
+      if (!target.which && chooser) {
         tab.chooser = undefined;
         return {
           text: await this.result(
@@ -1828,7 +1830,11 @@ export class ChromeBrowser implements BrowserPort {
         tab.session,
       );
       return {
-        text: await this.result(conversation, `Cleared ${which}.`, signal),
+        text: await this.result(
+          conversation,
+          `Cleared ${which}${other}.`,
+          signal,
+        ),
       };
     }
     if (!target.multiple && paths.length > 1)
@@ -1866,13 +1872,13 @@ export class ChromeBrowser implements BrowserPort {
       },
       tab.session,
     );
-    if (!target.ref) tab.chooser = undefined;
+    if (!target.which) tab.chooser = undefined;
     tab.lastNetwork = Date.now();
     await this.idle(tab, signal);
     return {
       text: await this.result(
         conversation,
-        `Gave ${files.map((file) => `${quote(file.name)} (${sizeText(file.size)})`).join(', ')} to ${which}.`,
+        `Gave ${files.map((file) => `${quote(file.name)} (${sizeText(file.size)})`).join(', ')} to ${which}${other}.`,
         signal,
       ),
     };
@@ -1912,14 +1918,15 @@ export class ChromeBrowser implements BrowserPort {
           !args.values.every((value) => typeof value === 'string'))
       )
         throw Error('invalid browser options');
-      const target = await this.js<{
-        x: number;
-        y: number;
-        width: number;
-        height: number;
-        name: string;
-        action: string;
-      }>(
+      const target = await this.js<
+        PageElement & {
+          x: number;
+          y: number;
+          width: number;
+          height: number;
+          action: string;
+        }
+      >(
         tab,
         'prepare',
         { ref: args.ref, typing: action === 'type', secret: !!secret },
@@ -1951,28 +1958,27 @@ export class ChromeBrowser implements BrowserPort {
       }
       const verb =
         action === 'type' ? 'type' : action === 'select' ? 'select' : 'click';
-      const element =
-        typeof args.element === 'string' && args.element
-          ? args.element
-          : target.name;
       await this.js(
         tab,
         'overlay',
         {
           ...target,
-          label: `${verb} ${action === 'type' ? (secret ? '••••••' : args.text) : element}`,
+          label: `${verb} ${action === 'type' ? (secret ? '••••••' : args.text) : shownName(target, args.element)}`,
           typing: action === 'type',
           click: action === 'click',
           ...this.overlayColors(),
         },
         signal,
       );
-      const point = await this.js<{ x: number; y: number }>(
+      // Read again as the input goes in: the result names this element, not the model's words
+      const point = await this.js<PageElement & { x: number; y: number }>(
         tab,
         'prepare',
         { ref: args.ref, typing: action === 'type', secret: !!secret },
         signal,
       );
+      const which = actedOn(args.ref, point);
+      const other = describedOther(args.element, point);
       if (action === 'click') {
         if (trust) tab.proceeding = 'approved';
         if (trust === 'always' && tab.warning)
@@ -1994,7 +2000,7 @@ export class ChromeBrowser implements BrowserPort {
         // Past the warning, the site's page follows: a slow machine takes a moment to
         // start it, and the result must show that page, not the warning
         if (trust) await this.proceeded(tab, signal);
-        text = `Clicked ${args.ref} ${quote(element)}.`;
+        text = `Clicked ${which}${other}.`;
       } else if (action === 'type') {
         await this.js(
           tab,
@@ -2035,10 +2041,10 @@ export class ChromeBrowser implements BrowserPort {
         }
         if (args.submit && !tab.dialogs.length)
           await this.key(tab, 'Enter', signal, !!secret);
-        text = `Typed ${secret ? `secret ${secret.name}` : 'text'} into ${args.ref} ${quote(element)}${args.submit ? ' and pressed Enter' : ''}.`;
+        text = `Typed ${secret ? `secret ${secret.name}` : 'text'} into ${which}${args.submit ? ' and pressed Enter' : ''}${other}.`;
       } else {
         await this.js(tab, 'select', args, signal);
-        text = `Chose ${(args.values as string[]).map(quote).join(', ')} in ${args.ref} ${quote(element)}.`;
+        text = `Chose ${(args.values as string[]).map(quote).join(', ')} in ${which}${other}.`;
       }
     }
     tab.lastNetwork = Date.now();

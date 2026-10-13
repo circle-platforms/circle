@@ -381,7 +381,13 @@ test(
       secret: true,
       secretName: 'LAB_PASSWORD',
     });
-    assert.match(typed.text, /Typed secret LAB_PASSWORD into/);
+    // The field as the page names it, never the value
+    assert.match(
+      typed.text,
+      new RegExp(
+        `### Result\nTyped secret LAB_PASSWORD into ${password} password "Password"\\.`,
+      ),
+    );
     assert.match(typed.text, /password "Password" filled/);
     assert.doesNotMatch(typed.text, /value-from-a-secret/);
     await act('select', { ref: role, element: 'role', values: ['Maintainer'] });
@@ -559,7 +565,8 @@ test(
         kind: 'upload',
         token: 'string',
         origin: http,
-        element: 'attachment',
+        // The person is shown the input as the page names it
+        element: 'Attachment',
         files: [{ path: realpathSync(notes), name: 'notes.txt', size: 17 }],
       },
     );
@@ -577,7 +584,10 @@ test(
       paths: [log],
       approval: { token: other.approval!.token },
     });
-    assert.match(given.text, /Gave "run\.log" \(8 B\) to e\d+ "attachment"\./);
+    assert.match(
+      given.text,
+      /Gave "run\.log" \(8 B\) to e\d+ file "Attachment"\./,
+    );
     assert.match(
       given.text,
       /\[e\d+\] file "Attachment" accepts "\.txt" chosen "run\.log"/,
@@ -1331,5 +1341,136 @@ test(
     );
     await new Promise((resolve) => setTimeout(resolve, 500));
     assert.equal(tab.chooser, undefined);
+  },
+);
+
+test(
+  'an action names the element its ref acted on, as the snapshot does, and says when the model described another',
+  { skip: executable ? false : 'no Chrome, Edge or Chromium is installed' },
+  async (t) => {
+    const temp = made(t, 'circle-chrome-names-');
+    // Which pages the clicks reached: the real effect of each
+    const visited: string[] = [];
+    const site = createHttp((req, res) => {
+      const path = new URL(req.url ?? '/', 'http://local').pathname;
+      if (path !== '/favicon.ico') visited.push(path);
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      if (path === '/host')
+        return res.end('<!doctype html><title>Host</title><p>host page</p>');
+      if (path === '/network')
+        return res.end(
+          '<!doctype html><title>Network</title><p>network page</p>',
+        );
+      res.end(
+        `<!doctype html><title>Menu</title><nav><a href="/host">主机设置</a> <a href="/network">网络</a></nav><label>Name <input id="name"></label><select id="mode" aria-label="Mode"><option>auto</option><option>manual</option></select><input type="file" aria-label="Firmware"><button id="bare" style="width:40px;height:24px" onclick="this.dataset.clicked = 'yes'"></button>`,
+      );
+    });
+    const menu = `http://127.0.0.1:${await listen(site)}/menu`;
+    t.after(() => site.close());
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: join(temp, 'downloads'),
+    });
+    cleanup(t, () => chrome.close());
+    const signal = new AbortController().signal;
+    const act = (action: BrowserAction, args: Record<string, unknown> = {}) =>
+      chrome.request('c', action, args, signal);
+    const ref = (text: string, pattern: RegExp) => {
+      const match = text.match(pattern);
+      assert(match, `no ${pattern} in:\n${text}`);
+      return match[1]!;
+    };
+    // The line that says what the action did
+    const result = (text: string) => ref(text, /### Result\n(.*)/);
+    const internals = chrome as unknown as {
+      conversations: Map<string, { tabs: Map<string, unknown> }>;
+      evaluate: (tab: unknown, expression: string) => Promise<unknown>;
+    };
+    // What the pointer's label shows the person, and what the page holds, read in the
+    // browser's own world
+    const page = (expression: string) =>
+      internals.evaluate(
+        internals.conversations.get('c')!.tabs.get('t1')!,
+        expression,
+      );
+    const shown = await act('navigate', { url: menu });
+    const host = ref(shown.text, /\[(e\d+)\] link "主机设置"/);
+    const name = ref(shown.text, /\[(e\d+)\] textbox "Name"/);
+    const mode = ref(shown.text, /\[(e\d+)\] combobox "Mode"/);
+    const firmware = ref(shown.text, /\[(e\d+)\] file "Firmware"/);
+    const bare = ref(shown.text, /\[(e\d+)\] button ""/);
+
+    // A description that fits says nothing more
+    const typed = await act('type', {
+      ref: name,
+      element: 'name field',
+      text: 'router',
+    });
+    assert.equal(result(typed.text), `Typed text into ${name} textbox "Name".`);
+    assert.equal(await page(`document.querySelector('#name').value`), 'router');
+    // One that names something else is said, and the person's pointer shows the page's name
+    const chosen = await act('select', {
+      ref: mode,
+      element: 'speed',
+      values: ['manual'],
+    });
+    assert.equal(
+      result(chosen.text),
+      `Chose "manual" in ${mode} combobox "Mode" — you described it as "speed"; check the snapshot.`,
+    );
+    assert.equal(await page(`document.querySelector('#mode').value`), 'manual');
+    assert.equal(
+      await page('window.circleBrowser.bubble.textContent'),
+      'select Mode',
+    );
+    // An element without a name: its role, and no claim about the description
+    const clicked = await act('click', { ref: bare, element: 'close icon' });
+    assert.equal(result(clicked.text), `Clicked ${bare} button.`);
+    assert.equal(
+      await page(`document.querySelector('#bare').dataset.clicked`),
+      'yes',
+    );
+    assert.equal(
+      await page('window.circleBrowser.bubble.textContent'),
+      'click close icon',
+    );
+    // A file input: the person is asked about the input the page names
+    const firmwareFile = join(temp, 'fw.bin');
+    writeFileSync(firmwareFile, 'firmware');
+    const ask = await act('upload', {
+      ref: firmware,
+      element: 'certificate file',
+      paths: [firmwareFile],
+    });
+    assert.equal(ask.approval?.kind, 'upload');
+    assert.equal((ask.approval as { element: string }).element, 'Firmware');
+    const given = await act('upload', {
+      ref: firmware,
+      element: 'certificate file',
+      paths: [firmwareFile],
+      approval: { token: ask.approval!.token },
+    });
+    assert.equal(
+      result(given.text),
+      `Gave "fw.bin" (8 B) to ${firmware} file "Firmware" — you described it as "certificate file"; check the snapshot.`,
+    );
+    assert.match(given.text, /file "Firmware" chosen "fw\.bin"/);
+
+    // The live run's mistake: the model clicks the ref of 主机设置 believing it is the
+    // network menu. The click reaches the host page, and the result says so.
+    const wrong = await act('click', { ref: host, element: '网络菜单' });
+    assert.equal(
+      result(wrong.text),
+      `Clicked ${host} link "主机设置" — you described it as "网络菜单"; check the snapshot.`,
+    );
+    assert.match(wrong.text, /host page/);
+    assert.equal(visited.at(-1), '/host');
+    const back = await act('navigate', { url: menu });
+    const network = ref(back.text, /\[(e\d+)\] link "网络"/);
+    const right = await act('click', { ref: network, element: '网络菜单' });
+    assert.equal(result(right.text), `Clicked ${network} link "网络".`);
+    assert.match(right.text, /network page/);
+    assert.equal(visited.at(-1), '/network');
   },
 );

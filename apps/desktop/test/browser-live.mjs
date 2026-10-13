@@ -108,6 +108,7 @@ const document = `<!doctype html>
 <a id="status" href="/status" target="_blank">Status in new tab</a>
 <button id="delete" onclick="document.querySelector('#delete-result').textContent = confirm('Delete the configuration?') ? 'deleted' : 'kept'">Delete configuration</button>
 <output id="delete-result"></output>
+<button id="restart" onclick="window.restarts = (window.restarts || 0) + 1">Restart device</button>
 <script>
   const shadowButton = document.createElement('button');
   shadowButton.textContent = 'Shadow action';
@@ -301,6 +302,14 @@ await script([
     call('answer-alert', 'browser_dialog', { accept: true }),
   ]),
   answer('edge-done', 'browser edge cases checked'),
+  // The model believes e11 is another button: the result names the one it clicked
+  calls('described-other', [
+    call('described-other', 'browser_click', {
+      ref: 'e11',
+      element: 'Factory reset',
+    }),
+  ]),
+  answer('described-done', 'clicked what e11 is'),
   calls('delete', [
     call('delete', 'browser_click', { ref: 'e10', element: 'Delete' }),
   ]),
@@ -650,6 +659,19 @@ try {
       false,
     );
     assert.match(await textOf('submit'), /Submitted admin as maintainer/);
+    // Each result names the element as the snapshot does, never the secret
+    assert.match(
+      await textOf('password-secret'),
+      /### Result\nTyped secret FIXTURE_PASSWORD into e2 password "Password"\./,
+    );
+    assert.match(
+      await textOf('role'),
+      /### Result\nChose "maintainer" in e3 combobox "Role"\./,
+    );
+    assert.match(
+      await textOf('submit'),
+      /### Result\nClicked e4 button "Log in"\./,
+    );
     const overlay = await native(`(() => {
     const host = document.querySelector('[data-circle-browser-overlay]');
     return {exists: Boolean(host), closed: Boolean(host) && host.shadowRoot === null, pointerEvents: host && getComputedStyle(host).pointerEvents};
@@ -718,6 +740,29 @@ try {
     assert.equal(await nativeDialogs(), 0);
     checks.push(
       'prompt, confirm and alert wait in the tab for browser_dialog, each named with its message and origin; no native box appears; passwords, covered controls, frames and shadow roots behave as before',
+    );
+
+    // ---- a ref the model took for another element: the result names the one clicked
+    await send('press the factory reset button');
+    await page.getByText('clicked what e11 is', { exact: true }).waitFor();
+    assert.match(
+      await textOf('described-other'),
+      /### Result\nClicked e11 button "Restart device" — you described it as "Factory reset"; check the snapshot\./,
+    );
+    assert.equal(await native('window.restarts || 0'), 1);
+    // The pointer's label shows the person the page's name too
+    assert.equal(
+      await app.evaluate(async ({ BrowserWindow }) => {
+        const views = BrowserWindow.getAllWindows()[0].contentView.children;
+        const view = views.find((view) => view.getVisible()) ?? views[0];
+        return view.webContents.executeJavaScriptInIsolatedWorld(1001, [
+          { code: 'window.circleBrowser.bubble.textContent' },
+        ]);
+      }),
+      'click Restart device',
+    );
+    checks.push(
+      "an action's result names the element its ref acted on, as the snapshot does, and says when the model described another; the pointer shows the page's name",
     );
 
     // ---- a dialog the person answers in the conversation while the model works
@@ -873,7 +918,7 @@ try {
     await page.getByText('file chooser waiting', { exact: true }).waitFor();
     assert.match(
       await textOf('upload-ref'),
-      /Gave "notes\.txt" \(17 B\) to e1 "Attachment"\./,
+      /Gave "notes\.txt" \(17 B\) to e1 file "Attachment"\./,
     );
     assert.match(
       await textOf('add-logs'),

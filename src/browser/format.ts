@@ -1,5 +1,5 @@
-// How a conversation browser's dialogs read in a tool result, the same in the desktop
-// application and in the terminal's browser.
+// How a conversation browser's dialogs and actions read in a tool result, the same in the
+// desktop application and in the terminal's browser.
 export interface PageDialog {
   id: string;
   tab: string;
@@ -14,6 +14,83 @@ export interface PageDialog {
   proxy?: boolean;
 }
 export const quote = (value: string) => JSON.stringify(value);
+
+/** An element as the page script read it when an action used it: its role and name, as a snapshot shows them. */
+export interface PageElement {
+  role: string;
+  name: string;
+}
+/** The element an action acted on, as the snapshot shows it: `e28 link "Host settings"`. */
+export function actedOn(ref: string, element: PageElement): string {
+  return `${ref} ${element.role}${element.name ? ` ${quote(element.name)}` : ''}`;
+}
+/**
+ * What ends an action's sentence when the model described another element than the one its
+ * ref named, so that it looks again: nothing when the description fits.
+ */
+export function describedOther(
+  description: unknown,
+  element: PageElement,
+): string {
+  return typeof description !== 'string' || describes(description, element)
+    ? ''
+    : ` — you described it as ${quote(description.trim())}; check the snapshot`;
+}
+/** The element named for the person, on the page's pointer and in an approval: the page's name first. */
+export function shownName(element: PageElement, description: unknown): string {
+  return (
+    element.name ||
+    (typeof description === 'string' ? description.trim() : '') ||
+    element.role
+  );
+}
+// Words that say what kind of control something is, not which one: "the Proceed link" is
+// the link named "Proceed to …", "网络菜单" the one named "网络"
+const KINDS = new Set([
+  'a',
+  'an',
+  'the',
+  'button',
+  'link',
+  'field',
+  'box',
+  'input',
+  'textbox',
+  'checkbox',
+  'radio',
+  'dropdown',
+  'combobox',
+  'select',
+  'menu',
+  'tab',
+  'option',
+  'icon',
+]);
+const KIND_WORDS =
+  /单选按钮|下拉列表|下拉菜单|超链接|菜单项|输入框|文本框|下拉框|选项卡|标签页|复选框|单选框|按钮|链接|菜单|图标/g;
+const fold = (value: string) =>
+  value.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+// One holds the other, spaces aside: "Login" is "Log in"
+const holds = (one: string, other: string) => {
+  const [a, b] = [one.replace(/ /g, ''), other.replace(/ /g, '')];
+  return a.includes(b) || b.includes(a);
+};
+/**
+ * Whether a description, a few words the model wrote for the user, can be of the element:
+ * one holds the other, or every word of it but the kind of control is in the element's
+ * name. An element without a name fits any description.
+ */
+export function describes(description: string, element: PageElement): boolean {
+  const name = fold(element.name);
+  const said = fold(description);
+  if (!name || !said || holds(name, said)) return true;
+  const role = fold(element.role);
+  return said
+    .replace(KIND_WORDS, ' ')
+    .split(/[\s"'`“”‘’「」『』()（）[\]:：,，.。]+/u)
+    .filter((word) => word && word !== role && !KINDS.has(word))
+    .every((word) => name.includes(word));
+}
 /** One line of "Dialogs waiting". */
 export function dialogLine(dialog: PageDialog): string {
   if (dialog.type === 'auth')
