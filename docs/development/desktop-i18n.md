@@ -1,3 +1,8 @@
+---
+parent: Development
+nav_order: 7
+---
+
 # Desktop interface language
 
 The desktop application shows its interface in English or Simplified Chinese. The terminal interface stays English.
