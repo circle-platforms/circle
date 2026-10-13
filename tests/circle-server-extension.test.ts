@@ -265,6 +265,7 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
       await submitAnswer(home, request.id, PASSWORD);
     },
   }).load();
+  cleanup(t, () => host.close());
   assert.equal(
     host.extensions.find((ext) => ext.name === 'circle-server')?.version,
     '0.1.0',
@@ -367,8 +368,6 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
   assert.match(ours()!.text, /^circle-server · tester@127\.0\.0\.1:\d+$/);
   await command.handler('logout', context);
   await until(() => ours()?.text === 'circle-server · signed out');
-  // Let the last status refresh finish before the folder is removed.
-  await delay(50);
   assert.equal(
     await new ExtensionSecrets(home, 'circle-server').get('token'),
     undefined,
@@ -394,6 +393,7 @@ test('the connector tools let a model list packs, hand over a file and get the c
     settings: { 'circle-server': { enabled: true } },
     secret: async (request) => submitAnswer(home, request.id, PASSWORD),
   }).load();
+  cleanup(t, () => host.close());
   const lines: string[] = [];
   await host
     .commands()
@@ -435,7 +435,6 @@ test('the connector tools let a model list packs, hand over a file and get the c
   assert.equal(looked.result.verification.rowCount, 8);
   const everything = JSON.stringify([submitted, looked]);
   assert.ok(!everything.includes(TOKEN));
-  await delay(50);
 });
 
 test('the connector reads work, execution, knowledge and methods from the server and decides approvals as the server stated them', async (t) => {
@@ -452,6 +451,7 @@ test('the connector reads work, execution, knowledge and methods from the server
     settings: { 'circle-server': { enabled: true } },
     secret: async (request) => submitAnswer(home, request.id, PASSWORD),
   }).load();
+  cleanup(t, () => host.close());
   const lines: string[] = [];
   const context = {
     workspace,
@@ -507,5 +507,87 @@ test('the connector reads work, execution, knowledge and methods from the server
   await command.handler('reconcile task_one', context);
   assert.match(lines.at(-1)!, /task_one · reconcile · .*reconciled/);
   assert.ok(!JSON.stringify(host.view('circle-server')).includes(TOKEN));
-  await delay(50);
+});
+
+test('closing the host ends a task the connector is still following, long poll and all', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  // A server whose task never ends and whose event poll waits as a real one does.
+  const seen: string[] = [];
+  let cut = false;
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? '/', 'http://x');
+    await read(request);
+    seen.push(url.pathname);
+    const send = (status: number, value: unknown) => {
+      response.writeHead(status, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(value));
+    };
+    if (url.pathname === '/v1/auth/dev-login')
+      return send(200, { data: { token: TOKEN, scopes: ['scp_lab'] } });
+    if (url.pathname === '/v1/status')
+      return send(200, { data: { apiVersion: '1.0.0' } });
+    if (url.pathname === '/v1/tasks/task_two/status')
+      return send(200, {
+        data: { taskId: 'task_two', phase: 'running', title: 'slow' },
+      });
+    if (url.pathname === '/v1/tasks/task_two/events') {
+      // Held until the client gives up on it, which is how the host's close shows.
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 10_000);
+        timer.unref();
+        response.once('close', () => {
+          cut = true;
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+      return send(200, { data: { events: [], after: 0 } });
+    }
+    send(404, { status: 'failed', error: { code: 'TARGET_NOT_FOUND' } });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  cleanup(
+    t,
+    () => new Promise<void>((resolve) => server.close(() => resolve())),
+  );
+  const { port } = server.address() as AddressInfo;
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { 'circle-server': { enabled: true } },
+    secret: async (request) => submitAnswer(home, request.id, PASSWORD),
+  }).load();
+  cleanup(t, () => host.close());
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('server')!;
+  await command.handler(`login http://127.0.0.1:${port} tester`, context);
+  await command.handler('task task_two', context);
+  const ours = () =>
+    host.statuses().find((item) => item.extension === 'circle-server');
+  await until(() => ours()?.lamp === 'running');
+  await until(() => seen.includes('/v1/tasks/task_two/events'));
+  await host.close();
+  // The poll was given up (the server sees the socket go a moment after the close), nothing
+  // more was asked of the server, and the connector said nothing about it: the task goes on
+  // on the server for /server task to pick up.
+  await until(() => cut);
+  const asked = seen.length;
+  await delay(100);
+  assert.equal(seen.length, asked);
+  assert.ok(!lines.some((line) => line.startsWith('✖')));
+  assert.deepEqual(
+    host.extensions.find((ext) => ext.name === 'circle-server')!.warnings,
+    [],
+  );
 });

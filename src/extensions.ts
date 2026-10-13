@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import type {
   ChatModel,
   ModelRequest,
@@ -118,12 +119,22 @@ export interface ExtensionServices {
   onStatus?: () => void;
   /** Opens a checked http(s) link where this interface opens links. */
   openUrl?: (url: string) => Promise<void>;
+  /** Fires when the host closes: what the extension sees as api.signal. */
+  signal?: AbortSignal;
+  /** Work of the extension that the host waits for when it closes. */
+  track?: (work: Promise<unknown>) => void;
 }
+const settled = (): void => undefined;
 export class ExtensionAPI {
   readonly ToolError = ToolError;
   readonly Watch = Watch;
   /** Values this extension keeps between runs, in a private file of its own. */
   readonly secrets: ExtensionSecrets;
+  /**
+   * Fires when Circle closes the extension: when it leaves, and before extensions are loaded
+   * again. Pass it to requests and timers, and end loops on it.
+   */
+  readonly signal: AbortSignal;
   constructor(
     private ext: Extension,
     private reservedTools: Set<string>,
@@ -137,6 +148,27 @@ export class ExtensionAPI {
       ext.name,
       (value) => ext.mask.remember(value),
     );
+    this.signal = services?.signal ?? new AbortController().signal;
+  }
+  /**
+   * Work that goes on after a tool or command returned, such as following something until it
+   * ends. Circle waits for it when it closes the extension, once api.signal has fired, so
+   * nothing of the extension runs after Circle has left or loaded extensions again. An error
+   * in it is shown under the extension in /extensions.
+   */
+  background(work: Promise<unknown>): void {
+    if (!work || typeof work.then !== 'function')
+      throw new ExtensionError('background needs a promise');
+    const done = Promise.resolve(work).catch((error: unknown) => {
+      const note = `background work failed: ${this.ext.mask.text(error instanceof Error ? error.message : String(error))}`;
+      if (!this.ext.warnings.includes(note)) this.ext.warnings.push(note);
+    });
+    this.services?.track?.(done);
+  }
+  // A tool call or command in flight is work the host waits for when it closes.
+  private tracked<T>(work: Promise<T>): Promise<T> {
+    this.services?.track?.(work.then(settled, settled));
+    return work;
   }
   get name(): string {
     return this.ext.name;
@@ -231,9 +263,12 @@ export class ExtensionAPI {
       mask: options.mask,
     });
     const controller = new AbortController();
-    const signal = options.signal
-      ? AbortSignal.any([options.signal, controller.signal])
-      : controller.signal;
+    // The card also goes when the extension is closed.
+    const signal = AbortSignal.any([
+      controller.signal,
+      this.signal,
+      ...(options.signal ? [options.signal] : []),
+    ]);
     const answering = pollAnswer(
       home,
       request.id,
@@ -292,46 +327,53 @@ export class ExtensionAPI {
       parameters,
       effect: options.readOnly ? 'read' : 'unknown',
       approval: options.approval ?? !options.readOnly,
-      run: async (args, context) => {
-        let result: unknown;
-        try {
-          result = await execute(args, context);
-        } catch (error) {
-          throw this.masked(error);
-        }
-        if (result instanceof Watch) result = this.maskWatch(result);
-        else result = this.ext.mask.value(result);
-        if (result instanceof Watch) {
-          if (!this.jobs) {
-            const complete = await waitWatch(result, context.signal);
-            return typeof complete === 'string'
-              ? complete
-              : JSON.stringify(complete);
-          }
-          context.signal.throwIfAborted();
-          const job = this.jobs.startWatch(
-            result,
-            this.owner?.(context) ?? {
-              sessionId: context.sessionId,
-              startedBy: 'model',
-            },
-            this.ext.name,
-          );
-          const initial = result.options.result;
-          return (
-            (initial === undefined
-              ? ''
-              : typeof initial === 'string'
-                ? initial + '\n'
-                : JSON.stringify(initial) + '\n') +
-            `Watching in background: ${jobLine(job)}. A notice arrives when it ends; do not poll or sleep.`
-          );
-        }
-        return typeof result === 'string'
-          ? result
-          : JSON.stringify(result ?? null);
-      },
+      run: (args, context) =>
+        this.tracked(this.runTool(execute, args, context)),
     });
+  }
+  private async runTool(
+    execute: (
+      args: Record<string, unknown>,
+      context: ToolContext,
+    ) => unknown | Promise<unknown>,
+    args: Record<string, unknown>,
+    context: ToolContext,
+  ): Promise<string> {
+    let result: unknown;
+    try {
+      result = await execute(args, context);
+    } catch (error) {
+      throw this.masked(error);
+    }
+    if (result instanceof Watch) result = this.maskWatch(result);
+    else result = this.ext.mask.value(result);
+    if (result instanceof Watch) {
+      if (!this.jobs) {
+        const complete = await waitWatch(result, context.signal);
+        return typeof complete === 'string'
+          ? complete
+          : JSON.stringify(complete);
+      }
+      context.signal.throwIfAborted();
+      const job = this.jobs.startWatch(
+        result,
+        this.owner?.(context) ?? {
+          sessionId: context.sessionId,
+          startedBy: 'model',
+        },
+        this.ext.name,
+      );
+      const initial = result.options.result;
+      return (
+        (initial === undefined
+          ? ''
+          : typeof initial === 'string'
+            ? initial + '\n'
+            : JSON.stringify(initial) + '\n') +
+        `Watching in background: ${jobLine(job)}. A notice arrives when it ends; do not poll or sleep.`
+      );
+    }
+    return typeof result === 'string' ? result : JSON.stringify(result ?? null);
   }
   registerCommand(
     name: string,
@@ -351,19 +393,22 @@ export class ExtensionAPI {
     this.ext.commands.push({
       name,
       description,
-      handler: async (args, context) => {
-        try {
-          await handler(args, {
-            workspace: context.workspace,
-            toast: (message) => context.toast(mask.text(String(message))),
-            append: (message) => context.append(mask.text(String(message))),
-            sendUserMessage: (message) =>
-              context.sendUserMessage(mask.text(String(message))),
-          });
-        } catch (error) {
-          throw this.masked(error);
-        }
-      },
+      handler: (args, context) =>
+        this.tracked(
+          (async () => {
+            try {
+              await handler(args, {
+                workspace: context.workspace,
+                toast: (message) => context.toast(mask.text(String(message))),
+                append: (message) => context.append(mask.text(String(message))),
+                sendUserMessage: (message) =>
+                  context.sendUserMessage(mask.text(String(message))),
+              });
+            } catch (error) {
+              throw this.masked(error);
+            }
+          })(),
+        ),
     });
   }
   // A watch whose results pass through the mask, read when each one arrives.
@@ -450,6 +495,12 @@ export interface ExtensionHostOptions {
 }
 export class ExtensionHost {
   extensions: Extension[] = [];
+  // Fired by close(); every extension's api.signal.
+  private readonly controller = new AbortController();
+  // Work of the extensions that close() waits for: tool calls and commands in flight, event
+  // handlers, and what they gave api.background.
+  private readonly pending = new Set<Promise<unknown>>();
+  private closing?: Promise<void>;
   constructor(readonly options: ExtensionHostOptions) {}
   discover(): Pick<
     Extension,
@@ -539,6 +590,8 @@ export class ExtensionHost {
               settings: this.options.settings?.[discovered.name],
               onStatus: this.options.onStatus,
               openUrl: this.options.openUrl,
+              signal: this.controller.signal,
+              track: (work) => this.track(work),
             },
           ),
         );
@@ -655,16 +708,57 @@ export class ExtensionHost {
       .find((renderer) => renderer !== undefined);
   }
   emit(event: ExtensionEvent, payload: Record<string, unknown>): void {
+    if (this.closing) return;
     for (const ext of this.loaded())
       for (const handler of ext.handlers.get(event) ?? []) {
         try {
-          Promise.resolve(handler({ ...payload })).catch((error) =>
-            this.warn(ext, event, error),
+          this.track(
+            Promise.resolve(handler({ ...payload })).catch((error) =>
+              this.warn(ext, event, error),
+            ),
           );
         } catch (error) {
           this.warn(ext, event, error);
         }
       }
+  }
+  private track(work: Promise<unknown>): void {
+    const tracked: Promise<void> = work.then(
+      () => void this.pending.delete(tracked),
+      () => void this.pending.delete(tracked),
+    );
+    this.pending.add(tracked);
+  }
+  /**
+   * End the extensions: their api.signal fires, then nothing of them runs any more, once the
+   * tool calls and commands in flight, the event handlers and the work they gave
+   * api.background have ended. With a bound in milliseconds the wait stops when the time is
+   * up; the signal has fired either way. Closing again waits for the same end.
+   */
+  async close(timeoutMs = Infinity): Promise<void> {
+    this.closing ??= this.drain(timeoutMs);
+    return this.closing;
+  }
+  private async drain(timeoutMs: number): Promise<void> {
+    this.controller.abort(new ExtensionError('the extension was closed'));
+    const timer = new AbortController();
+    const expired: Promise<'expired'> = Number.isFinite(timeoutMs)
+      ? delay(timeoutMs, 'expired' as const, { signal: timer.signal }).catch(
+          () => 'expired' as const,
+        )
+      : new Promise<never>(() => {});
+    try {
+      // Work that ends may start more: wait until nothing is left, or the time is up.
+      while (this.pending.size) {
+        const outcome = await Promise.race([
+          Promise.allSettled([...this.pending]).then(() => 'settled' as const),
+          expired,
+        ]);
+        if (outcome === 'expired') return;
+      }
+    } finally {
+      timer.abort();
+    }
   }
   private warn(ext: Extension, event: string, error: unknown): void {
     const note = `${event} handler failed: ${error instanceof Error ? error.message : String(error)}`;
