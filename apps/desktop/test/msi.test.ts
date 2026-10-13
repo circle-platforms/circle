@@ -30,7 +30,7 @@ type Element = {
   children: Element[];
 };
 
-// Enough XML for the package source: elements and attributes, no text
+// Enough XML for the package source: elements and attributes, no text except in <Custom>
 function parseXml(source: string): Element {
   const body = source
     .replace(/<\?[\s\S]*?\?>/g, '')
@@ -41,11 +41,9 @@ function parseXml(source: string): Element {
   const open = [top];
   let end = 0;
   for (const match of body.matchAll(tag)) {
-    assert.equal(
-      body.slice(end, match.index).trim(),
-      '',
-      `unexpected text before ${match[0]}`,
-    );
+    const text = body.slice(end, match.index).trim();
+    if (text && open.at(-1)!.name !== 'Custom')
+      assert.equal(text, '', `unexpected text before ${match[0]}`);
     end = match.index + match[0].length;
     const [, closing, name, attributeText, selfClosing] = match;
     const parent = open.at(-1)!;
@@ -224,6 +222,43 @@ test('Installed apps shows the icon and the project page', () => {
     properties.ARPURLINFOABOUT,
     'https://github.com/qingshanfeihu/circle',
   );
+  assert.equal(properties.ARPCONTACT, 'qingshanfeihu');
+  assert.equal(
+    properties.ARPHELPLINK,
+    'https://github.com/qingshanfeihu/circle/issues',
+  );
+  assert.equal(
+    properties.ARPURLUPDATEINFO,
+    'https://github.com/qingshanfeihu/circle/releases',
+  );
+  assert.equal(properties.ARPNOREPAIR, '1');
+});
+
+test('the installer shows a completion dialog and can launch Circle', () => {
+  const ui = only(pkg, 'UI');
+  assert.equal(only(ui, 'UIRef').attributes.Id, 'WixUI_Minimal');
+  const publish = only(ui, 'Publish');
+  assert.deepEqual(publish.attributes, {
+    Dialog: 'ExitDialog',
+    Control: 'Finish',
+    Event: 'DoAction',
+    Value: 'LaunchCircle',
+    Condition: 'NOT Installed AND LAUNCHCIRCLE=1',
+  });
+  const action = only(pkg, 'CustomAction');
+  assert.deepEqual(action.attributes, {
+    Id: 'LaunchCircle',
+    FileRef: 'Circle.exe',
+    ExeCommand: '',
+    Return: 'asyncNoWait',
+  });
+  const sequence = only(pkg, 'InstallExecuteSequence');
+  const custom = only(sequence, 'Custom');
+  assert.deepEqual(custom.attributes, {
+    Action: 'LaunchCircle',
+    After: 'InstallFinalize',
+  });
+  assert.equal(custom.children.length, 0);
 });
 
 test('wix build and wix msi validate get the pinned arguments', () => {
