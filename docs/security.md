@@ -50,7 +50,17 @@ What "the same kind" means for option 2:
 
 Option 3 keeps the program and what names the work: the script or module of an interpreter (`python3 todo.py`, `python3 -m pytest`, `node build.js`), the subcommand of tools such as `git`, `npm`, `pnpm`, `yarn`, `cargo`, `go`, `uv`, `pip`, `make`, `docker` and `gh` (`git add`, `npm run build`), or the program alone (`pytest`). It is offered only for a command with no pipe, `&&`, `;`, redirection, `$`, backtick or wrapper such as `env` or `timeout`, and it covers only such commands. It is not offered for an interpreter with no script (`python3 -c ...`), for the commands that only read (option 2 covers them), or for programs where it would allow nearly anything: `curl`, `wget`, `ssh`, `scp`, `rsync`, `chmod`, `chown`, `kill`, `mv`, `cp`, `ln`, `open`, `eval`, `source`, `sed`, `awk`, `tee` and the elevation commands. The commands that always ask still ask.
 
-The rules are kept per conversation in `approvals/` in the data folder. Exact commands are stored as hashes, not text; a rule from option 3 keeps its words. `/approvals` lists the rules and the last five decisions, and lets you revoke one. A revoked rule asks again from the next call.
+The rules are kept per conversation in `approvals/` in the data folder. Exact commands are stored as hashes, not text; a rule from option 3 keeps its words. `/approvals` lists the rules and the last five decisions, and lets you revoke one. A revoked rule asks again from the next call. A rule revoked by a Python release (which keeps it with a mark) stays revoked here.
+
+### Command patterns in settings
+
+`allowed_commands` in [settings](settings.md) is a list of wildcard patterns (`*` and `?`) for commands that run without a card, in every conversation, in every mode — including print, line and RPC runs and the calls the model makes in the background. `/approvals add <pattern>` writes one to your settings and it takes effect at once; `/approvals remove <pattern|number>` takes it back; `/approvals` lists what is in force. `/reload` re-reads them.
+
+A command is covered only when **every segment** of it matches a pattern (the segments a shell would run: split at `;`, `&&`, `||`, `|`, `&`, parentheses and newlines). Quotes come off and runs of whitespace become one space before matching, a leading `cd` into the workspace is left out as on the card, and a command that does not parse is never covered. On Windows the match ignores case. `npm *` covers `npm run build` but not plain `npm`; `npm ci && rm -rf dist` needs both `npm *` and `rm -rf *`.
+
+A pattern you wrote is treated as your explicit intent: it also covers the commands that always ask (`rm -rf`, a force push, `find -delete`), which a card answer never does. Refused commands stay refused — a pattern cannot allow `sudo` or a command that names a credential file. Patterns match the command text only, not what it reaches: `git *` covers `git push --force`, and `bash *` covers anything inside `bash -c`, so keep them narrow. Subagents share the list with the main conversation.
+
+A trusted folder's `.circle/settings.json` may add patterns to yours (never remove one); they apply while Circle works in that folder. Trusting a folder is therefore also trusting the command patterns it ships — see [Workspace trust](#workspace-trust).
 
 ### How commands are sorted
 
@@ -97,11 +107,11 @@ MCP tools and extension tools that are not marked read-only are blocked. Secret 
 
 `/yolo` (or `/auto`) turns on `auto`. In auto mode Circle stops asking, **including for the calls that always ask**: `rm -rf`, force pushes, `delete`, patches that delete files, and writes outside the workspace. Credential files and `sudo` are still refused. `/yolo off` turns it off.
 
-Auto mode applies to the current conversation only and is not saved. `/new`, `/fork`, `/clone`, `/import` and restarting turn it off. Use it for work you could throw away.
+Auto mode applies to the current conversation only and is not saved. `/new`, `/fork`, `/clone`, `/import` and restarting turn it off — unless you set `default_mode` to `auto` in [settings](settings.md), which starts every new session (and every print, line and RPC run) in auto. That is a standing decision to never be asked; only set it where you would run `--yolo` every time anyway. Use auto for work you could throw away.
 
 ## Print mode and line mode
 
-`circle -p`, `--line` and `--mode` cannot show a card. A call that would ask is not run, and the model is told why, unless you pass `--yolo`. With `--yolo` such calls run, except the ones that always ask, which are still not run. Refused commands stay refused. The same rule decides for [background subagents](background-jobs.md#background-subagents). See [CLI](cli.md#print-mode).
+`circle -p`, `--line` and `--mode` cannot show a card. A call that would ask is not run, and the model is told why, unless you pass `--yolo`. With `--yolo` such calls run, except the ones that always ask, which are still not run. A command that matches an [`allowed_commands`](#command-patterns-in-settings) pattern runs whether or not you pass `--yolo`, including one that always asks. Refused commands stay refused. The same rule decides for [background subagents](background-jobs.md#background-subagents). See [CLI](cli.md#print-mode).
 
 ## The shell environment
 

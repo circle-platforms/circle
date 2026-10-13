@@ -14,6 +14,7 @@ import {
   ensureHome,
   normalizeWorkspace,
 } from './paths.js';
+import type { SessionMode } from './approvals.js';
 
 // Circle signs in only with an API URL and key. A `mode` or `oauth_provider` that older
 // releases wrote is dropped on load; the Python releases read a missing `mode` as `api_key`.
@@ -33,6 +34,11 @@ export interface CircleSettings {
   extensions: Record<string, Record<string, unknown>>;
   credential_files: string[];
   trust_cert_files: string[];
+  // Wildcard patterns; a command every segment of which matches one runs
+  // without asking (src/approvals.ts commandAllowed)
+  allowed_commands: string[];
+  // The mode a session starts with; "" is manual. A project may not set it.
+  default_mode: SessionMode | '';
   update_check: boolean;
   default_thinking: string;
   enabled_models: string[];
@@ -57,6 +63,8 @@ export const defaultSettings = (): CircleSettings => ({
   extensions: {},
   credential_files: [],
   trust_cert_files: [],
+  allowed_commands: [],
+  default_mode: '',
   update_check: true,
   default_thinking: '',
   enabled_models: [],
@@ -70,6 +78,22 @@ const strings = (value: unknown): string[] =>
   Array.isArray(value)
     ? value.filter((item) => typeof item === 'string' && item.trim())
     : [];
+// The session modes, spelled as in approvals.ts SESSION_MODES (a test pins
+// the two lists together); anything else, or nothing, means manual.
+const MODE_NAMES: readonly (SessionMode | '')[] = [
+  'manual',
+  'accept-edits',
+  'plan',
+  'auto',
+];
+const modeName = (value: unknown): SessionMode | '' => {
+  const name = String(value || '')
+    .trim()
+    .toLowerCase();
+  return (MODE_NAMES as readonly string[]).includes(name)
+    ? (name as SessionMode)
+    : '';
+};
 export function loadSettingsFromDict(
   raw: Record<string, unknown>,
 ): CircleSettings {
@@ -98,6 +122,8 @@ export function loadSettingsFromDict(
     : {};
   settings.credential_files = strings(raw.credential_files);
   settings.trust_cert_files = strings(raw.trust_cert_files);
+  settings.allowed_commands = strings(raw.allowed_commands);
+  settings.default_mode = modeName(raw.default_mode);
   settings.enabled_models = strings(raw.enabled_models);
   settings.models = Object.fromEntries(
     Object.entries(isRecord(raw.models) ? raw.models : {}).flatMap(
@@ -244,6 +270,7 @@ export const PROJECT_KEYS = [
   'hide_thinking',
   'theme',
   'credential_files',
+  'allowed_commands',
 ] as const;
 export type ProjectChanges = Record<string, [unknown, unknown]>;
 export function applyProjectSettings(
@@ -289,14 +316,10 @@ export function applyProjectSettings(
   }
   for (const key of PROJECT_KEYS) {
     if (key === 'model' || !(key in raw)) continue;
+    // A project adds to these two lists, never narrows them.
     const theirs =
-      key === 'credential_files'
-        ? [
-            ...new Set([
-              ...settings.credential_files,
-              ...project.credential_files,
-            ]),
-          ]
+      key === 'credential_files' || key === 'allowed_commands'
+        ? [...new Set([...settings[key], ...project[key]])]
         : project[key];
     if (JSON.stringify(theirs) !== JSON.stringify(settings[key])) {
       changed[key] = [structuredClone(settings[key]), structuredClone(theirs)];

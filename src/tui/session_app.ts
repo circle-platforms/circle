@@ -1417,7 +1417,10 @@ export class SessionApp {
       void this.command('copy', '').catch((error) => this.fail(error));
     else if (key === 'ctrl+p')
       void this.cycleModel().catch((error) => this.fail(error));
-    else if (key === 'shift+tab' && this.runtime) {
+    else if (key === 'shift+tab' && this.runtime)
+      // cycles the session mode, as shift+tab does in other coding agents
+      void this.command('mode', '').catch((error) => this.fail(error));
+    else if (key === 'alt+t' && this.runtime) {
       try {
         cycleThinking(this.commandHost());
       } catch (error) {

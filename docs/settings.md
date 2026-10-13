@@ -39,6 +39,7 @@ Read [Before you edit by hand](#before-you-edit-by-hand) first.
 | `auth.model` | string | `""` | The model id sent to the endpoint, the default for new sessions. `ctrl+s` in `/models` sets it. |
 | `auth.api_key_ref` | string | `"api_key"` | The name of the key in `credentials.json`. |
 | `default_thinking` | string | `""` | The thinking depth to start with: `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. Empty means the protocol's default. `CIRCLE_REASONING_EFFORT` wins over it. `ctrl+s` in `/effort` sets it. See [Models](models.md#thinking-depth). |
+| `default_mode` | string | `""` | The mode new sessions start in: `manual`, `accept-edits`, `plan` or `auto`. Empty means `manual`. `ctrl+s` in the `default mode` list of `/settings` sets it. A project cannot set it. Read [Security](security.md#auto-mode) before choosing `auto`. |
 | `enabled_models` | list of strings | `[]` | The models `ctrl+p` switches between. Each entry is a model id or a pattern such as `step-*`, matched against what the endpoint lists. Empty means every listed model. |
 | `double_escape` | string | `"tree"` | What `esc` twice on an empty input box opens: `tree` (the session tree), `fork` (the fork list) or `none`. `/settings` changes it. |
 | `hide_thinking` | boolean | `false` | Start sessions with the model's thinking rows hidden. `/thinking` shows them for a session; `/settings` changes the default. |
@@ -48,6 +49,7 @@ Read [Before you edit by hand](#before-you-edit-by-hand) first.
 | `extensions` | object | `{}` | `{"name": {"enabled": false}}` turns an extension off. See [Extensions](extensions.md). |
 | `credential_files` | list of strings | `[]` | More file name patterns the model may not touch, on top of Circle's own list. See [Security](security.md#credential-files). |
 | `trust_cert_files` | list of strings | `[]` | PEM files whose certificate authorities Circle trusts on top of the system ones, for its own requests and for the commands and tools it starts, which get a merged bundle through `SSL_CERT_FILE`. `~/` is your home folder. See [Security](security.md#the-shell-environment). |
+| `allowed_commands` | list of strings | `[]` | Wildcard patterns (`*`, `?`); a command runs without asking when every segment of it matches one. `/approvals add <pattern>` writes here; a project's settings add to the list. Read [Security](security.md#command-patterns-in-settings) first. |
 | `models` | object | `{}` | Per model: `{"glm-5.3": {"context_window": 1000000}}` sets the context window the footer shows and the automatic compaction uses, in place of the one from models.dev. On the Anthropic protocol the answer limit is at most a quarter of it; [Models](models.md#cost-and-context-in-the-footer) says where compaction starts. `CIRCLE_MODEL_CTX` sets one window for every model. `{"my-model": {"images": true}}` says whether the model reads images, where models.dev does not know it or is wrong; see [Images and screenshots](usage.md#images-and-screenshots). |
 | `update_check` | boolean | `true` | Once a day, when the full-screen interface starts, ask GitHub whether a newer release exists and say so in one line. `false` turns it off. See [Updating](cli.md#updating). |
 
@@ -56,12 +58,12 @@ Read [Before you edit by hand](#before-you-edit-by-hand) first.
 A project can set a few things for its folder in `.circle/settings.json`, as pi's `.pi/settings.json` does:
 
 ```json
-{"model": "step-5-preview", "default_thinking": "high", "credential_files": ["*.key"]}
+{"model": "step-5-preview", "default_thinking": "high", "credential_files": ["*.key"], "allowed_commands": ["make *"]}
 ```
 
-Only these keys are read: `model`, `default_thinking`, `enabled_models`, `double_escape`, `hide_thinking`, `theme` and `credential_files`. They apply while Circle works in that folder, once it is trusted (sessions, `-p`, line mode and RPC mode), and are never written to your `settings.json`. `--model` on the command line wins over the project's `model`. `credential_files` is added to yours, so a project can protect more files but not fewer. The endpoint, the key, MCP servers, extensions and trusted folders cannot be set by a project; a key Circle does not take is named in red at start (on standard error without the full-screen interface).
+Only these keys are read: `model`, `default_thinking`, `enabled_models`, `double_escape`, `hide_thinking`, `theme`, `credential_files` and `allowed_commands`. They apply while Circle works in that folder, once it is trusted (sessions, `-p`, line mode and RPC mode), and are never written to your `settings.json`. `--model` on the command line wins over the project's `model`. `credential_files` and `allowed_commands` are added to yours, so a project can protect more files and allow more of its own commands, but never narrow either list. The endpoint, the key, MCP servers, extensions, trusted folders and `default_mode` cannot be set by a project; a key Circle does not take is named in red at start (on standard error without the full-screen interface).
 
-When you change one of these in a session (`/themes`, `/settings`, `ctrl+s` in `/models` or `/effort`, `tab` in `/models`), your choice is saved as yours and used from then on in this session.
+When you change one of these in a session (`/themes`, `/settings`, `ctrl+s` in `/models` or `/effort`, `tab` in `/models`, `/approvals add`), your choice is saved as yours and used from then on in this session.
 
 ## credentials.json
 
@@ -81,4 +83,4 @@ The API key is not in `settings.json`. It is in `credentials.json` next to it, a
 
 ## Reloading
 
-`/reload` re-reads `settings.json`, the project's `.circle/settings.json` and `credentials.json`, reconnects MCP servers, reloads extensions, and rebuilds the model. It applies `theme`. It does not re-read `credential_files`. It is refused while a turn is running.
+`/reload` re-reads `settings.json`, the project's `.circle/settings.json` and `credentials.json`, reconnects MCP servers, reloads extensions, and rebuilds the model. It applies `theme` and re-reads `allowed_commands`. It does not re-read `credential_files`, and it does not re-apply `default_mode` (a session-start setting). It is refused while a turn is running.

@@ -12,7 +12,7 @@ A message that looks like a command but is not one, such as `/modles`, is **not 
 
 Most commands wait until the turn ends and answer `Busy · wait for the current turn to finish`. These work at any time:
 
-`/help`, `/hotkeys`, `/exit`, `/yolo`, `/settings`, `/approvals`, `/jobs`, `/session`, `/name`, `/tree`, `/themes`, `/thinking`, `/details`, `/copy`, `/export`, `/share`, `/unshare`, `/logout`, `/mcp` (listing only), `/skill` and `/extensions` (listing only: `/skill <name>` and `/extensions reload` wait)
+`/help`, `/hotkeys`, `/exit`, `/yolo`, `/mode`, `/settings`, `/approvals`, `/jobs`, `/session`, `/name`, `/tree`, `/themes`, `/thinking`, `/details`, `/copy`, `/export`, `/share`, `/unshare`, `/logout`, `/mcp` (listing only), `/skill` and `/extensions` (listing only: `/skill <name>` and `/extensions reload` wait)
 
 Going back with `/tree` while a turn runs stops the turn first. A [custom command](custom-commands.md) also works: its text is queued like any message.
 
@@ -55,8 +55,8 @@ What these do and do not do is on [Sessions](sessions.md). Several have limits i
 |---|---|---|
 | `/plan [on\|off]` | `/plan-mode` | Turn `read-only` mode on or off. With no argument it switches. |
 | `/yolo [off]` | `/auto` | Stop asking before commands and file changes in this session. `/yolo off` asks again. Anything else, including no argument, turns it on. |
-| `/mode [manual\|accept-edits\|plan\|auto]` | | Set how this session asks. With no argument it moves to the next mode. `accept edits` changes files inside the workspace without asking. See [Modes](usage.md#modes). |
-| `/approvals [revoke N]` | | List the "always allow" rules of this session, with the last decisions under the title; `enter` on a rule, or its number, revokes it. The list has no search: `k` `j` move, and other keys go to the input box. `revoke N` removes rule N directly. |
+| `/mode [manual\|accept-edits\|plan\|auto]` | | Set how this session asks. With no argument it moves to the next mode, as `shift+tab` does. `accept edits` changes files inside the workspace without asking. See [Modes](usage.md#modes). |
+| `/approvals [add P\|remove P\|revoke N]` | | List the "always allow" rules of this session and the command patterns from settings, with the last decisions under the title; `enter` on a row, or its number, revokes a rule or removes a pattern. The list has no search: `k` `j` move, and other keys go to the input box. `revoke N` removes session rule N directly. `add <pattern>` saves a command pattern to your settings and `remove <pattern|N>` takes it back. See [Security](security.md#command-patterns-in-settings). |
 | `/trust` | | Trust this folder. It is saved in your settings; nothing is written into the folder. The full-screen interface asks before it opens a folder you have not trusted, so there it only confirms. |
 
 See [Security](security.md).
@@ -68,7 +68,7 @@ See [Security](security.md).
 | `/models [name]` | `/model` | Choose a model from what the endpoint offers, or use one by its id, for this session. `ctrl+s` in the list also saves it as the default. |
 | `/login` | `/connect` | Change the endpoint, key and model. It asks on its list's own line for the base URL, filled in with the saved one, then the key, shown as dots (an empty `enter` keeps the saved key); `esc` on the key goes back to the URL, and `esc` on the URL leaves. Then it lists the endpoint's models to search; `enter` on a search nothing matches uses what you typed. The session switches to them and they are saved, with the URL that answered; nothing is saved before a model is chosen. |
 | `/logout` | | Clear the saved credentials and mark Circle as not set up. |
-| `/settings` | | A list of the settings: theme, whether thinking is shown, what `esc` `esc` opens, and the model, thinking depth, endpoint, trusted folders, MCP servers and data folder. `enter` changes the marked one and saves it at once; the model, depth and MCP rows open `/models`, `/effort` and `/mcp`, and the endpoint row opens `/login`. |
+| `/settings` | | A list of the settings: theme, whether thinking is shown, what `esc` `esc` opens, and the model, thinking depth, default mode, endpoint, trusted folders, MCP servers and data folder. `enter` changes the marked one and saves it at once; the model, depth and MCP rows open `/models`, `/effort` and `/mcp`, the default mode row opens the mode list (`enter` for this session, `ctrl+s` also saves `default_mode`), and the endpoint row opens `/login`. |
 | `/themes [auto\|dark\|light]` | | Show or set the theme. It applies at once and is saved. `auto` follows your terminal live; `dark` or `light` overrides it. |
 
 See [Choose a model](models.md).
