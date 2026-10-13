@@ -4,6 +4,10 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Changed
+
+- **The documentation site is the English guides.** The TUI contract is in Chinese, and the desktop working notes live under `docs/workbench/`; both stay in the repository and are not pages on the site. The README describes the desktop application with the terminal.
+
 ## 1.2.1 - 2026-10-12
 
 ### Added
