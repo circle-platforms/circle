@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 // WiX 5 is the last release under the MS-RL licence alone; 6 and later add the Open Source
 // Maintenance Fee terms. 5 already has <Files> harvesting.
 export const WIX_VERSION = '5.0.2';
+export const UI_EXTENSION = `WixToolset.UI.wixext/${WIX_VERSION}`;
 export const ARCH = 'x64';
 
 // The package source, written to Circle.wxs for `wix build`. It is kept here rather than in a
@@ -27,7 +28,7 @@ export const ARCH = 'x64';
 // the Start menu entry. A shortcut that is not advertised needs a per-user registry key as its
 // key path (ICE38, ICE43).
 export const PACKAGE_SOURCE = String.raw`<?xml version="1.0" encoding="utf-8"?>
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package
     Name="Circle"
     Manufacturer="qingshanfeihu"
@@ -45,17 +46,14 @@ export const PACKAGE_SOURCE = String.raw`<?xml version="1.0" encoding="utf-8"?>
     <Icon Id="circle.ico" SourceFile="$(var.Icon)" />
     <Property Id="ARPPRODUCTICON" Value="circle.ico" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/qingshanfeihu/circle" />
-    <Property Id="ARPNOMODIFY" Value="1" />
 
-    <!-- 安装成功提示和启动选项 -->
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.License)" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="launch Circle" />
     <UI>
-      <UIRef Id="WixUI_Minimal" />
-      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchCircle" Condition="NOT Installed AND LAUNCHCIRCLE=1" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchCircle" Order="1" Condition="NOT Installed AND WIXUI_EXITDIALOGOPTIONALCHECKBOX=1" />
     </UI>
-    <CustomAction Id="LaunchCircle" FileRef="Circle.exe" ExeCommand="" Return="asyncNoWait" />
-    <InstallExecuteSequence>
-      <Custom Action="LaunchCircle" After="InstallFinalize">NOT Installed</Custom>
-    </InstallExecuteSequence>
+    <CustomAction Id="LaunchCircle" Directory="INSTALLFOLDER" ExeCommand="&quot;[INSTALLFOLDER]Circle.exe&quot;" Return="asyncNoWait" Impersonate="yes" />
 
     <!-- 卸载注册信息 -->
     <Property Id="ARPCONTACT" Value="qingshanfeihu" />
@@ -151,6 +149,7 @@ export function wixBuildArgs(options: {
   wxs: string;
   app: string;
   icon: string;
+  license: string;
   version: string;
   output: string;
   work: string;
@@ -160,10 +159,14 @@ export function wixBuildArgs(options: {
     options.wxs,
     '-arch',
     ARCH,
+    '-ext',
+    UI_EXTENSION,
     '-d',
     `Version=${msiVersion(options.version)}`,
     '-d',
     `Icon=${options.icon}`,
+    '-d',
+    `License=${options.license}`,
     '-bindpath',
     `App=${options.app}`,
     '-intermediatefolder',
@@ -174,6 +177,19 @@ export function wixBuildArgs(options: {
     '-o',
     options.output,
   ];
+}
+
+/** The repository's license shown by WixUI, escaped as literal RTF text. */
+export function licenseRtf(text: string): string {
+  const body = text
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\\{}\n\u0080-\uffff]/g, (character) => {
+      if (character === '\n') return '\\par\n';
+      if ('\\{}'.includes(character)) return '\\' + character;
+      const value = character.charCodeAt(0);
+      return `\\u${value > 32767 ? value - 65536 : value}?`;
+    });
+  return `{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Segoe UI;}}\\f0\\fs18\n${body}}`;
 }
 
 /** ICE validation, with the build's .wixpdb for source lines. */
@@ -284,8 +300,13 @@ export async function buildMsi(): Promise<string> {
   const work = await mkdtemp(join(tmpdir(), 'circle-msi-'));
   try {
     const wxs = join(work, 'Circle.wxs');
+    const license = join(work, 'LICENSE.rtf');
+    await writeFile(
+      license,
+      licenseRtf(await readFile(join(root, '../../LICENSE'), 'utf8')),
+    );
     await writeFile(wxs, PACKAGE_SOURCE);
-    wix(wixBuildArgs({ wxs, app, icon, version, output, work }));
+    wix(wixBuildArgs({ wxs, app, icon, license, version, output, work }));
     wix(wixValidateArgs({ msi: output, work }));
   } catch (error) {
     await rm(output, { force: true });

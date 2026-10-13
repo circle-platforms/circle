@@ -2,13 +2,18 @@ import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
-const root = fileURLToPath(new URL('..', import.meta.url));
+import {
+  assertViewport,
+  readViewport,
+  setViewport,
+} from './helpers/viewport.mjs';
+const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
 const output = join(root, 'artifacts/live');
 await mkdir(output, { recursive: true });
@@ -16,7 +21,7 @@ const temp = await mkdtemp(join(tmpdir(), 'circle-native-live-'));
 const fixturePath = join(temp, 'model.json');
 const requestsPath = join(temp, 'requests.jsonl');
 const exportPath = join(temp, 'export.jsonl');
-const appPath = process.env.CIRCLE_DESKTOP_APP_PATH ?? root;
+const appPath = resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? root);
 const fixture = {
   requestsPath,
   replies: [
@@ -93,6 +98,7 @@ const errors = [];
 let app;
 let page;
 let gateway;
+let viewportSizing;
 const state = () =>
   page
     .evaluate(() => window.circleDesktop.runtimeState())
@@ -135,14 +141,11 @@ try {
   page.on('pageerror', (error) => errors.push(String(error)));
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   if (process.env.CIRCLE_DESKTOP_TEST_WIDTH) {
-    await app.evaluate(({ BrowserWindow }, width) => {
-      const window = BrowserWindow.getAllWindows()[0];
-      window.show();
-      window.setContentSize(width, 768);
-    }, Number(process.env.CIRCLE_DESKTOP_TEST_WIDTH));
-    await page.waitForFunction(
-      (width) => innerWidth === width,
-      Number(process.env.CIRCLE_DESKTOP_TEST_WIDTH),
+    viewportSizing = await setViewport(
+      app,
+      page,
+      { width: Number(process.env.CIRCLE_DESKTOP_TEST_WIDTH), height: 768 },
+      { show: true },
     );
   }
   const info = await page.evaluate(() => window.circleDesktop.info());
@@ -195,9 +198,10 @@ try {
     process.env.CIRCLE_DESKTOP_TEST_WIDTH &&
     Number(process.env.CIRCLE_DESKTOP_TEST_WIDTH) <= 1050
   ) {
-    assert.equal(
-      await page.evaluate(() => innerWidth),
-      Number(process.env.CIRCLE_DESKTOP_TEST_WIDTH),
+    assertViewport(
+      await readViewport(page),
+      viewportSizing.target,
+      viewportSizing.scaleFactor,
     );
     await page
       .getByRole('dialog', { name: 'inspector', exact: true })
@@ -598,6 +602,7 @@ try {
         mode: 'live',
         packaged: info.packaged,
         appPath,
+        viewportSizing,
         dataIsolation: true,
         scriptedModel: true,
         externalNodeRequired: false,

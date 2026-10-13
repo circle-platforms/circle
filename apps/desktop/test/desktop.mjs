@@ -1,15 +1,17 @@
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
 import { observePage, captureFailure } from './helpers/diagnostics.mjs';
+import { readViewport, setViewport } from './helpers/viewport.mjs';
 import { createServer } from 'node:http';
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-const root = fileURLToPath(new URL('..', import.meta.url));
+const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
+const appPath = resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? root);
 const require = createRequire(import.meta.url);
 const output = join(root, 'artifacts/desktop');
 await mkdir(output, { recursive: true });
@@ -47,6 +49,7 @@ const errors = [];
 let app;
 let page;
 let originalClipboard;
+let viewportSizing;
 const route = async (path) => {
   await page.evaluate((value) => {
     location.hash = value;
@@ -58,7 +61,7 @@ try {
     chromiumSandbox: true,
     executablePath:
       process.env.CIRCLE_DESKTOP_EXECUTABLE ?? require('electron'),
-    args: [process.env.CIRCLE_DESKTOP_APP_PATH ?? root],
+    args: [appPath],
     cwd: root,
     env,
     timeout: 60000,
@@ -71,10 +74,7 @@ try {
     .waitFor({ timeout: 30000 });
   if (process.env.CIRCLE_DESKTOP_CHECK_NARROW) {
     await page.waitForURL(/^circle:\/\/workbench/);
-    await app.evaluate(({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows()[0].setContentSize(1024, 650),
-    );
-    await page.waitForFunction(() => innerWidth <= 1024 && innerHeight <= 650);
+    viewportSizing = await setViewport(app, page, { width: 1024, height: 650 });
     await page.reload();
   }
   await page
@@ -82,10 +82,7 @@ try {
     .waitFor({ timeout: 30000 });
   assert.ok(page.url().startsWith('circle://workbench/index.html'));
   const info = await page.evaluate(() => window.circleDesktop.info());
-  const viewport = await page.evaluate(() => ({
-    width: innerWidth,
-    height: innerHeight,
-  }));
+  const viewport = await readViewport(page);
   assert.equal(info.kind, 'desktop');
   assert.equal(info.frontendOnly, true);
   assert.equal(info.runtimeConnected, false);
@@ -367,7 +364,7 @@ try {
     chromiumSandbox: true,
     executablePath:
       process.env.CIRCLE_DESKTOP_EXECUTABLE ?? require('electron'),
-    args: [process.env.CIRCLE_DESKTOP_APP_PATH ?? root],
+    args: [appPath],
     cwd: root,
     env,
     timeout: 60000,
@@ -399,6 +396,7 @@ try {
         platform: process.platform,
         appPackaged: info.packaged,
         viewport,
+        viewportSizing,
         sourceFiles: await sourceEvidence(),
         buildFiles: await rendererEvidence(root),
         packagedAsarSha256: process.env.CIRCLE_DESKTOP_APP_PATH
