@@ -136,6 +136,8 @@ export function App() {
   };
   // When Circle starts using this conversation's browser, its panel opens so the person
   // sees it work: once per start, and never by taking the person away from another page.
+  // A narrow window lays the panel over the conversation, where Circle's cards and the
+  // input box are: there it stays closed until the person opens it.
   const browserOperating = useRef(false);
   const onPage = location.pathname.startsWith('/page/');
   useEffect(() => {
@@ -146,13 +148,13 @@ export function App() {
       if (!isSessionBrowser(state, session.id)) return;
       const started = !!state.operating && !browserOperating.current;
       browserOperating.current = !!state.operating;
-      if (started && !onPage) {
+      if (started && !onPage && !narrow) {
         setPanel('browser');
         setInspectorOpen(true);
       }
     };
     return host.onBrowserEvent(show);
-  }, [session.id, onPage]);
+  }, [session.id, onPage, narrow]);
   const onFile = async (path: string) => {
     try {
       await readNativeFile(runtime, path);

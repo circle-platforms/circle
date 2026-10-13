@@ -383,32 +383,6 @@ test(
       ),
       twice.text,
     );
-    // Another conversation is asked again; a download it does not keep is discarded
-    const elsewhere = await chrome.request(
-      'conversation-2',
-      'navigate',
-      { url: `${http}/download` },
-      signal,
-    );
-    assert.equal(elsewhere.approval?.kind, 'download');
-    const discarded = await chrome.request(
-      'conversation-2',
-      'navigate',
-      {
-        url: `${http}/download`,
-        approval: {
-          token: (elsewhere.approval as { token: string }).token,
-          scope: 'reject',
-        },
-      },
-      signal,
-    );
-    assert.equal(
-      discarded.text,
-      '### Download\nThe user did not keep the download; it was discarded.\n- download dl1 was not kept',
-    );
-    assert.equal(existsSync(join(downloads, 'report (2).bin')), false);
-
     // ---- an HTTP sign-in Circle's action meets waits for the model, as a dialog
     const auth = await act('navigate', { url: `${http}/auth` });
     assert.match(
@@ -945,5 +919,63 @@ test(
       alone.request('c', 'handoff', { reason: 'x' }, signal),
       /no one to hand the browser to/,
     );
+  },
+);
+
+test(
+  "a download the model's action starts is discarded when the person does not keep it, and the next one from the site is asked about again",
+  { skip },
+  async (t) => {
+    const temp = mkdtempSync(join(tmpdir(), 'circle-chrome-download-'));
+    t.after(() => rmSync(temp, { recursive: true, force: true }));
+    const site = createHttp((_req, res) => {
+      res.writeHead(200, {
+        'content-type': 'application/octet-stream',
+        'content-disposition': 'attachment; filename="report.bin"',
+      });
+      res.end('data');
+    });
+    const url = `http://127.0.0.1:${await listen(site)}/download`;
+    t.after(() => site.close());
+    const downloads = join(temp, 'downloads');
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads,
+    });
+    t.after(() => chrome.close());
+    const signal = new AbortController().signal;
+    const asked = await chrome.request(
+      'conversation',
+      'navigate',
+      { url },
+      signal,
+    );
+    assert.equal(asked.approval?.kind, 'download');
+    const discarded = await chrome.request(
+      'conversation',
+      'navigate',
+      {
+        url,
+        approval: {
+          token: (asked.approval as { token: string }).token,
+          scope: 'reject',
+        },
+      },
+      signal,
+    );
+    assert.equal(
+      discarded.text,
+      '### Download\nThe user did not keep the download; it was discarded.\n- download dl1 was not kept',
+    );
+    assert.equal(existsSync(join(downloads, 'report.bin')), false);
+    // Not kept is not allowed: the next download from the site is asked about again
+    const again = await chrome.request(
+      'conversation',
+      'navigate',
+      { url },
+      signal,
+    );
+    assert.equal(again.approval?.kind, 'download');
   },
 );
