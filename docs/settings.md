@@ -23,6 +23,7 @@ Read [Before you edit by hand](#before-you-edit-by-hand) first.
   "mcp_servers": [],
   "extensions": {},
   "credential_files": [],
+  "trust_cert_files": [],
   "update_check": true
 }
 ```
@@ -48,6 +49,7 @@ Read [Before you edit by hand](#before-you-edit-by-hand) first.
 | `extensions` | object | `{}` | `{"name": {"enabled": false}}` turns an extension off. See [Extensions](extensions.md). |
 | `credential_files` | list of strings | `[]` | More file name patterns the model may not touch, on top of Circle's own list. See [Security](security.md#credential-files). |
 | `variables` | object | `{}` | Named values, such as `{"BASE_URL": "https://example.test"}`, written as Windows writes environment variables: `%BASE_URL%` in a tool's arguments takes the value when the tool runs. The model is told the names and the values. Names are capital letters, digits and `_`, from a letter; values up to 2,000 characters. Keep passwords as [secrets](security.md#secrets-by-name) instead. The desktop settings and [`/variables`](slash-commands.md) edit them. |
+| `trust_cert_files` | list of strings | `[]` | PEM files whose certificate authorities Circle trusts on top of the system ones, for its own requests and for the commands and tools it starts, which get a merged bundle through `SSL_CERT_FILE`. `~/` is your home folder. See [Security](security.md#the-shell-environment). |
 | `allowed_commands` | list of strings | `[]` | Wildcard patterns (`*`, `?`); a command runs without asking when every segment of it matches one. `/approvals add <pattern>` writes here; a project's settings add to the list. Read [Security](security.md#command-patterns-in-settings) first. |
 | `models` | object | `{}` | Per model: `{"glm-5.3": {"context_window": 1000000}}` sets the context window the footer shows and the automatic compaction uses, in place of the one from models.dev. On the Anthropic protocol the answer limit is at most a quarter of it; [Models](models.md#cost-and-context-in-the-footer) says where compaction starts. `CIRCLE_MODEL_CTX` sets one window for every model. `{"my-model": {"images": true}}` says whether the model reads images, where models.dev does not know it or is wrong; see [Images and screenshots](usage.md#images-and-screenshots). |
 | `update_check` | boolean | `true` | Once a day, when the full-screen interface starts, ask GitHub whether a newer release exists and say so in one line. `false` turns it off. See [Updating](cli.md#updating). |
