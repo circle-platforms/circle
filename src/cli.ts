@@ -28,7 +28,7 @@ import { mediaType } from './media.js';
 import { mention } from './mentions.js';
 import { EFFORT_LEVELS } from './model.js';
 import { installExitGuard } from './exit_guard.js';
-import { configureNetwork } from './net.js';
+import { configureNetwork, toolTrustBundle } from './net.js';
 import { VERSION } from './version.js';
 export { VERSION } from './version.js';
 export class UsageError extends Error {}
@@ -456,11 +456,28 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   let runtime: import('./runtime.js').AgentRuntime | undefined;
   let offSignals: (() => void) | undefined;
   try {
-    // HTTPS_PROXY, NO_PROXY, SSL_CERT_FILE and SSL_CERT_DIR, before the first request
+    // HTTPS_PROXY, NO_PROXY, SSL_CERT_FILE and SSL_CERT_DIR, and trust_cert_files from
+    // settings, before the first request (the update check and `circle update` need them too)
     if (!networkConfigured) {
       networkConfigured = true;
-      for (const problem of configureNetwork().problems)
+      const trustHome = circleHome();
+      let trustFiles: string[] = [];
+      try {
+        trustFiles = loadSettings(trustHome).trust_cert_files;
+      } catch (error) {
+        process.stderr.write(
+          `settings.json could not be read; trust_cert_files ignored: ${
+            error instanceof Error ? error.message : String(error)
+          }\n`,
+        );
+      }
+      for (const problem of configureNetwork(process.env, trustFiles).problems)
         process.stderr.write(problem + '\n');
+      const tool = toolTrustBundle(process.env, trustFiles, trustHome);
+      if (tool)
+        process.stderr.write(
+          `trust: ${tool.authorities} authorities (system, SSL_CERT_FILE and SSL_CERT_DIR, trust_cert_files) for requests and the tools Circle starts: ${tool.bundle}\n`,
+        );
     }
     if (argv[0] === 'update') {
       const { updateInstalled } = await import('./update.js');
