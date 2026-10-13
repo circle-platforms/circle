@@ -47,7 +47,6 @@ const MAC_WINDOWS = `function run(argv) {
   });
 }`;
 
-// One line, as Circle's other PowerShell commands: run with -Command, not as a script file
 // One line, as Circle's other PowerShell commands: run with -Command, not as a script file.
 // A named window draws itself into the picture (PrintWindow), so a window over it is not in
 // it; the main screen is copied as it shows.
@@ -61,6 +60,7 @@ const WINDOWS_SHOT = [
   '$bitmap.Save($env:CIRCLE_SCREENSHOT, [Drawing.Imaging.ImageFormat]::Png)',
   "'png'",
 ].join('; ');
+const WINDOWS_TIMEOUT = 60_000;
 
 // The first of these that is installed takes the screen
 const LINUX_TOOLS = (wayland: boolean, target: string): [string, string[]][] =>
@@ -148,11 +148,13 @@ async function capture(options: ScreenshotOptions): Promise<string> {
     return windows.allowed ? '' : MAC_PERMISSION;
   }
   if (platform === 'win32') {
+    // PowerShell builds the window helper each time, which has taken over 20 seconds on a
+    // busy machine
     const shot = await run(
       'powershell',
       ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_SHOT],
       {
-        timeout: 20_000,
+        timeout: WINDOWS_TIMEOUT,
         env: {
           ...env,
           CIRCLE_SCREENSHOT: target,
@@ -160,6 +162,10 @@ async function capture(options: ScreenshotOptions): Promise<string> {
         },
       },
     );
+    if (shot.timedOut)
+      throw new Error(
+        `PowerShell did not finish the screenshot in ${WINDOWS_TIMEOUT / 1000} seconds`,
+      );
     const said = shot.stdout.toString('utf8').trim();
     if (said.startsWith('apps:'))
       throw new Error(

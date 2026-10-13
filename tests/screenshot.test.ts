@@ -3,7 +3,7 @@ import { existsSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { PNG } from 'pngjs';
-import type { OutputRunner } from '../src/ink/clipboard.js';
+import { runOutput, type OutputRunner } from '../src/ink/clipboard.js';
 import { fitPng, MAX_EDGE, MAX_PIXELS, pngSize } from '../src/image_fit.js';
 import { readMedia } from '../src/media.js';
 import { nextMediaState } from '../src/context_middleware.js';
@@ -423,6 +423,46 @@ test('esc stops a screenshot under way and leaves no file; a minimized Windows w
       run: async () => ({ code: 0, stdout: Buffer.from('minimized\r\n') }),
     }),
     /the window of "code" is minimized; ask the user to restore it/,
+  );
+});
+
+test('Windows gives PowerShell a minute for a screenshot and says when it ran out of time', async (t) => {
+  const root = realpathSync(scratch(t));
+  const target = join(root, 'shot.png');
+  const timeouts: number[] = [];
+  await assert.rejects(
+    takeScreenshot({
+      target,
+      platform: 'win32',
+      env: {},
+      run: async (_command, _args, options) => {
+        timeouts.push(options.timeout);
+        // part of a picture, then the time is up
+        writeFileSync(options.env!.CIRCLE_SCREENSHOT!, 'partial');
+        return { code: -1, stdout: Buffer.alloc(0), timedOut: true };
+      },
+    }),
+    /^Error: PowerShell did not finish the screenshot in 60 seconds$/,
+  );
+  assert.deepEqual(timeouts, [60_000]);
+  assert.equal(existsSync(target), false);
+  // A real program that outlives its time is stopped and reported as timed out; one that
+  // is stopped by its signal is not
+  const sleeper = ['-e', 'setTimeout(() => {}, 20000)'];
+  const started = Date.now();
+  assert.deepEqual(
+    await runOutput(process.execPath, sleeper, { timeout: 200 }),
+    { code: -1, stdout: Buffer.alloc(0), timedOut: true },
+  );
+  assert.ok(Date.now() - started < 10_000);
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 200);
+  assert.deepEqual(
+    await runOutput(process.execPath, sleeper, {
+      timeout: 20_000,
+      signal: controller.signal,
+    }),
+    { code: -1, stdout: Buffer.alloc(0) },
   );
 });
 

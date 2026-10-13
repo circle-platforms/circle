@@ -48,7 +48,7 @@ export const runCommand: CommandRunner = (command, args, input, timeout) =>
 
 /** Runs a program and collects what it prints, up to `limit` bytes. `code` is null when it
  * could not be started and -1 when it was stopped (also by `signal`), ran past `timeout` or
- * printed too much. */
+ * printed too much; `timedOut` says it was the timeout. */
 export type OutputRunner = (
   command: string,
   args: string[],
@@ -58,7 +58,7 @@ export type OutputRunner = (
     limit?: number;
     signal?: AbortSignal;
   },
-) => Promise<{ code: number | null; stdout: Buffer }>;
+) => Promise<{ code: number | null; stdout: Buffer; timedOut?: boolean }>;
 
 export const runOutput: OutputRunner = (command, args, options) =>
   new Promise((resolve) => {
@@ -66,11 +66,15 @@ export const runOutput: OutputRunner = (command, args, options) =>
     let size = 0;
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
-    const finish = (code: number | null): void => {
+    const finish = (code: number | null, timedOut = false): void => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      resolve({ code, stdout: Buffer.concat(chunks) });
+      resolve({
+        code,
+        stdout: Buffer.concat(chunks),
+        ...(timedOut ? { timedOut } : {}),
+      });
     };
     let child: ReturnType<typeof spawn>;
     try {
@@ -87,7 +91,10 @@ export const runOutput: OutputRunner = (command, args, options) =>
       child.kill();
       finish(-1);
     };
-    timer = setTimeout(stop, options.timeout);
+    timer = setTimeout(() => {
+      child.kill();
+      finish(-1, true);
+    }, options.timeout);
     if (options.signal?.aborted) stop();
     options.signal?.addEventListener('abort', stop, { once: true });
     child.once('close', () =>
