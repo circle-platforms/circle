@@ -1270,8 +1270,20 @@ export class ChromeBrowser implements BrowserPort {
       signal,
     );
     tab.lastNetwork = Date.now();
-    await delay(200, undefined, { signal });
+    await this.proceeded(tab, signal);
     await this.idle(tab, signal);
+  }
+  /** Waits for the navigation the warning's proceed link starts, which clears the warning. */
+  private async proceeded(tab: Tab, signal?: AbortSignal) {
+    const end = Date.now() + 10000;
+    while (
+      tab.warning &&
+      tab.proceeding &&
+      !tab.closed &&
+      !tab.dialogs.length &&
+      Date.now() < end
+    )
+      await delay(50, undefined, { signal });
   }
   private async history(tab: Tab, which: string, signal?: AbortSignal) {
     tab.failure = undefined;
@@ -1939,6 +1951,9 @@ export class ChromeBrowser implements BrowserPort {
             },
             signal,
           );
+        // Past the warning, the site's page follows: a slow machine takes a moment to
+        // start it, and the result must show that page, not the warning
+        if (trust) await this.proceeded(tab, signal);
         text = `Clicked ${args.ref} ${quote(element)}.`;
       } else if (action === 'type') {
         await this.js(
