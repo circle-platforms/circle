@@ -99,7 +99,7 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 
 ## The terminal interface
 
-`src/ink/` draws: it reads keys and terminal reports, builds the palette, and turns state into rows. `src/tui/` decides what is on screen and what a key does. The rules for both are in [The TUI contract](https://github.com/qingshanfeihu/circle/blob/main/docs/development/tui-contract.md).
+`src/ink/` draws: it reads keys and terminal reports, builds the palette, and turns state into rows. `src/tui/` decides what is on screen and what a key does. The rules for both are in [The TUI contract](https://github.com/circle-platforms/circle/blob/main/docs/development/tui-contract.md).
 
 | Module | What it does |
 |---|---|
@@ -159,4 +159,4 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 
 ---
 
-This document is one of Circle's design specifications, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/): quote or build on it with attribution to Circle and qingshanfeihu and a link to the original. See the [design specifications index](https://github.com/qingshanfeihu/circle/blob/main/docs/design/README.md).
+This document is one of Circle's design specifications, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/): quote or build on it with attribution to Circle and qingshanfeihu and a link to the original. See the [design specifications index](https://github.com/circle-platforms/circle/blob/main/docs/design/README.md).

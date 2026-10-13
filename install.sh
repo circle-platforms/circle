@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo="${CIRCLE_REPO:-qingshanfeihu/circle}"
+repo="${CIRCLE_REPO:-circle-platforms/circle}"
 temporary=""
 cleanup() { [[ -z "$temporary" ]] || rm -rf -- "$temporary"; }
 trap cleanup EXIT

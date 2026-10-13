@@ -31,7 +31,7 @@ New here? Start with the [Quickstart](quickstart.md). Coming from Circle 0.5.0? 
 | Save a prompt as a command | [Custom commands](custom-commands.md) |
 | Add tools from other programs | [MCP servers](mcp.md) |
 | Add tools, commands or checks in JavaScript or TypeScript | [Build extensions](extensions.md) |
-| Work on Circle itself | [Contributing](https://github.com/qingshanfeihu/circle/blob/main/CONTRIBUTING.md) and [Architecture](development/architecture.md) |
+| Work on Circle itself | [Contributing](https://github.com/circle-platforms/circle/blob/main/CONTRIBUTING.md) and [Architecture](development/architecture.md) |
 | See what does not work yet | [Known issues](known-issues.md) |
 
 ## Upgrading from 0.5.0
@@ -80,12 +80,12 @@ What you may notice afterwards:
 
 ## Development
 
-- [Contributing](https://github.com/qingshanfeihu/circle/blob/main/CONTRIBUTING.md)
+- [Contributing](https://github.com/circle-platforms/circle/blob/main/CONTRIBUTING.md)
 - [Architecture](development/architecture.md)
 - [Releasing](development/releasing.md)
-- [The TUI contract](https://github.com/qingshanfeihu/circle/blob/main/docs/development/tui-contract.md) (in the repository, in Chinese)
-- [Desktop application, from a checkout](https://github.com/qingshanfeihu/circle/blob/main/apps/desktop/README.md)
-- [Desktop working notes](https://github.com/qingshanfeihu/circle/tree/main/docs/workbench) (in the repository)
+- [The TUI contract](https://github.com/circle-platforms/circle/blob/main/docs/development/tui-contract.md) (in the repository, in Chinese)
+- [Desktop application, from a checkout](https://github.com/circle-platforms/circle/blob/main/apps/desktop/README.md)
+- [Desktop working notes](https://github.com/circle-platforms/circle/tree/main/docs/workbench) (in the repository)
 - [Registering Circle in skills.sh](development/skills-registry.md)
-- [Security policy](https://github.com/qingshanfeihu/circle/blob/main/SECURITY.md)
-- [Changelog](https://github.com/qingshanfeihu/circle/blob/main/CHANGELOG.md)
+- [Security policy](https://github.com/circle-platforms/circle/blob/main/SECURITY.md)
+- [Changelog](https://github.com/circle-platforms/circle/blob/main/CHANGELOG.md)

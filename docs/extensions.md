@@ -78,7 +78,7 @@ What these pages show is what the server last returned to `/server refresh`, whi
 
 ### circle-server
 
-Connects Circle to a [circle-server](https://github.com/qingshanfeihu/circle-server), which keeps work for a team: it takes a task with your files, runs it on its own, and delivers results. Turn it on with `/extensions enable circle-server`.
+Connects Circle to a [circle-server](https://github.com/circle-platforms/circle-server), which keeps work for a team: it takes a task with your files, runs it on its own, and delivers results. Turn it on with `/extensions enable circle-server`.
 
 | Command | What it does |
 |---|---|

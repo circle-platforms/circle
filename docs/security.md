@@ -184,4 +184,4 @@ Circle makes two kinds of request of its own that have nothing to do with your m
 
 ## Report a vulnerability
 
-See [SECURITY.md](https://github.com/qingshanfeihu/circle/blob/main/SECURITY.md).
+See [SECURITY.md](https://github.com/circle-platforms/circle/blob/main/SECURITY.md).

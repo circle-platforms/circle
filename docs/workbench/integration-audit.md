@@ -30,7 +30,7 @@ The native application, named host capabilities and bundled UI components are im
 
 The full goal is therefore incomplete. Installing a bundled page is not proof that its runtime capability or authoritative service is available.
 
-The complete runtime/plugin work is tracked separately in [issue #25](https://github.com/qingshanfeihu/circle/issues/25). The earlier frontend-only scope remains in force until the user expands it; this audit and issue do not authorize production access, deployment or real-model spending.
+The complete runtime/plugin work is tracked separately in [issue #25](https://github.com/circle-platforms/circle/issues/25). The earlier frontend-only scope remains in force until the user expands it; this audit and issue do not authorize production access, deployment or real-model spending.
 
 ## Existing core interfaces that can be reused
 

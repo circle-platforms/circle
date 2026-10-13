@@ -77,7 +77,7 @@ Commands the model runs, your own `!` commands and MCP servers Circle starts get
 
 | Variable | Read by | Effect |
 |---|---|---|
-| `CIRCLE_REPO` | `install.sh`, `install.ps1`, the update reminder | The GitHub repository to take releases from. Default `qingshanfeihu/circle`. `circle update` uses the one recorded at install time. |
+| `CIRCLE_REPO` | `install.sh`, `install.ps1`, the update reminder | The GitHub repository to take releases from. Default `circle-platforms/circle`. `circle update` uses the one recorded at install time. |
 | `CIRCLE_VERSION` | `install.sh`, `install.ps1` | Install this version instead of the newest, for example `1.0.0`. |
 | `CIRCLE_PREFIX` | `install.sh`, `install.ps1` | Where versions are kept. Default `~/.local/share/circle`, or `%LOCALAPPDATA%\circle` on Windows. |
 | `CIRCLE_BIN_DIR` | `install.sh`, `install.ps1` | Where the `circle` launcher goes. Default `~/.local/bin`, or `bin` under the prefix on Windows. |

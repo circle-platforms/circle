@@ -15,7 +15,7 @@ import {
 import { join, relative, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { compareVersions, validVersion } from './version.js';
-export const DEFAULT_REPO = 'qingshanfeihu/circle';
+export const DEFAULT_REPO = 'circle-platforms/circle';
 export const RELEASE_SCHEMA = 'circle-release/v1';
 export const INSTALL_SCHEMA = 'circle-install/v1';
 // The folder at the top of every release archive.

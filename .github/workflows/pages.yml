@@ -1,6 +1,6 @@
 name: pages
 
-# Publishes docs/ to https://qingshanfeihu.github.io/circle/.
+# Publishes docs/ to https://circle-platforms.github.io/circle/.
 # Pull requests that change the docs build the site and stop there.
 # A push to main also deploys it, once Pages is set to GitHub Actions
 # in the repository settings. A manual run deploys from main too.

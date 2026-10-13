@@ -13,7 +13,7 @@ Thanks for helping. This page is what you need to make a change that can be merg
 Circle needs Node.js 24 or newer. The TypeScript compiler and every tool are installed into the checkout.
 
 ```bash
-git clone https://github.com/qingshanfeihu/circle
+git clone https://github.com/circle-platforms/circle
 cd circle
 npm ci
 ```

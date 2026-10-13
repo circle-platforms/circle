@@ -6,20 +6,20 @@ nav_order: 3
 
 A release of Circle carries everything it needs, including its own Node.js: nothing else has to be installed first. Releases are built for macOS, Linux and Windows, each on x64 and arm64, as `circle-<version>-<os>-<arch>.tar.gz` (`.zip` on Windows) with a `.sha256` file beside each. The same release has [the desktop application](#the-desktop-application).
 
-The commands below install the newest release on the [Releases page](https://github.com/qingshanfeihu/circle/releases). They need a release of 1.0.0 or later; until one is published there, they stop with an error and change nothing.
+The commands below install the newest release on the [Releases page](https://github.com/circle-platforms/circle/releases). They need a release of 1.0.0 or later; until one is published there, they stop with an error and change nothing.
 
 ## Install
 
 On macOS and Linux (needs `bash`, `curl`, `tar`, and `sha256sum` or `shasum`):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/qingshanfeihu/circle/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/circle-platforms/circle/main/install.sh | bash
 ```
 
 On Windows, in PowerShell 5.1 or newer:
 
 ```powershell
-irm https://raw.githubusercontent.com/qingshanfeihu/circle/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/circle-platforms/circle/main/install.ps1 | iex
 ```
 
 If `install.sh` runs in a Windows shell (Git Bash, MSYS2, Cygwin), it hands over to PowerShell and installs the Windows program.
@@ -29,7 +29,7 @@ The installer downloads the release for your system, checks its sha256, refuses 
 | Variable | Effect |
 |---|---|
 | `CIRCLE_VERSION` | Install this version instead of the newest, for example `CIRCLE_VERSION=1.0.0`. |
-| `CIRCLE_REPO` | The GitHub repository to take releases from. Default `qingshanfeihu/circle`. |
+| `CIRCLE_REPO` | The GitHub repository to take releases from. Default `circle-platforms/circle`. |
 | `CIRCLE_PREFIX` | Where versions are kept. Default `~/.local/share/circle`, or `%LOCALAPPDATA%\circle` on Windows. |
 | `CIRCLE_BIN_DIR` | Where the `circle` launcher goes. Default `~/.local/bin`, or `%LOCALAPPDATA%\circle\bin` on Windows. |
 | `CIRCLE_NO_PATH` | `1` leaves your `PATH` alone. |
@@ -69,7 +69,7 @@ The data folder is shared and not touched. Settings, keys, MCP servers, skills, 
 
 ## The desktop application
 
-Each release also has the Circle desktop application: a window of its own around the same Circle. Take the file for your system from the [Releases page](https://github.com/qingshanfeihu/circle/releases):
+Each release also has the Circle desktop application: a window of its own around the same Circle. Take the file for your system from the [Releases page](https://github.com/circle-platforms/circle/releases):
 
 | System | File |
 |---|---|
@@ -102,7 +102,7 @@ It keeps its settings, key and sessions in a data folder of its own, apart from 
 A checkout runs on Node.js 24 or newer:
 
 ```sh
-git clone https://github.com/qingshanfeihu/circle
+git clone https://github.com/circle-platforms/circle
 cd circle
 npm ci
 npm run build

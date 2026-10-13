@@ -1,9 +1,9 @@
 title: Circle
 description: A coding agent for your own model endpoint, in the terminal and in its own window
 lang: en-US
-url: https://qingshanfeihu.github.io
+url: https://circle-platforms.github.io
 baseurl: /circle
-repository: qingshanfeihu/circle
+repository: circle-platforms/circle
 
 theme: just-the-docs
 permalink: pretty
@@ -50,18 +50,18 @@ exclude:
 
 aux_links:
   GitHub:
-    - https://github.com/qingshanfeihu/circle
+    - https://github.com/circle-platforms/circle
   Releases:
-    - https://github.com/qingshanfeihu/circle/releases
+    - https://github.com/circle-platforms/circle/releases
 aux_links_new_tab: true
 
 nav_external_links:
   - title: Contributing
-    url: https://github.com/qingshanfeihu/circle/blob/main/CONTRIBUTING.md
+    url: https://github.com/circle-platforms/circle/blob/main/CONTRIBUTING.md
   - title: Security policy
-    url: https://github.com/qingshanfeihu/circle/blob/main/SECURITY.md
+    url: https://github.com/circle-platforms/circle/blob/main/SECURITY.md
   - title: Changelog
-    url: https://github.com/qingshanfeihu/circle/blob/main/CHANGELOG.md
+    url: https://github.com/circle-platforms/circle/blob/main/CHANGELOG.md
 nav_external_links_new_tab: true
 
 back_to_top: true
@@ -69,7 +69,7 @@ back_to_top_text: Back to top
 
 gh_edit_link: true
 gh_edit_link_text: Edit this page on GitHub
-gh_edit_repository: https://github.com/qingshanfeihu/circle
+gh_edit_repository: https://github.com/circle-platforms/circle
 gh_edit_branch: main
 gh_edit_source: docs
 gh_edit_view_mode: blob

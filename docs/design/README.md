@@ -15,8 +15,8 @@ Each of these documents ends with a line that names this license. The rest of `d
 
 The architecture standards, design diagrams and terminology in the documents listed above are licensed under the [Creative Commons Attribution 4.0 International License (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/).
 
-Copyright (c) 2026 qingshanfeihu. Anyone who quotes, reuses, adapts or builds on these specifications, in a document, a product or another project, must keep a clear attribution to Circle and qingshanfeihu, a link to the original at <https://github.com/qingshanfeihu/circle/tree/main/docs/design>, a link to the CC BY 4.0 license, and a note of any changes made, as the license requires. A suitable attribution:
+Copyright (c) 2026 qingshanfeihu. Anyone who quotes, reuses, adapts or builds on these specifications, in a document, a product or another project, must keep a clear attribution to Circle and qingshanfeihu, a link to the original at <https://github.com/circle-platforms/circle/tree/main/docs/design>, a link to the CC BY 4.0 license, and a note of any changes made, as the license requires. A suitable attribution:
 
-> Based on the Circle design specifications by qingshanfeihu, <https://github.com/qingshanfeihu/circle/tree/main/docs/design>, licensed under CC BY 4.0.
+> Based on the Circle design specifications by qingshanfeihu, <https://github.com/circle-platforms/circle/tree/main/docs/design>, licensed under CC BY 4.0.
 
 The license covers the specifications as texts and drawings. It grants no right to the Circle or Circle Hub names, the Circle logo or the application icons; see [NOTICE](../../NOTICE).

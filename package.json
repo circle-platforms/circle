@@ -34,7 +34,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/qingshanfeihu/circle.git"
+    "url": "https://github.com/circle-platforms/circle.git"
   },
   "devDependencies": {
     "@types/node": "24.19.1",

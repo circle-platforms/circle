@@ -93,4 +93,4 @@ The full-screen interface is the main way to use Circle. `circle -p` runs one pr
 
 ---
 
-This document is one of Circle's design specifications, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/): quote or build on it with attribution to Circle and qingshanfeihu and a link to the original. See the [design specifications index](https://github.com/qingshanfeihu/circle/blob/main/docs/design/README.md).
+This document is one of Circle's design specifications, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/): quote or build on it with attribution to Circle and qingshanfeihu and a link to the original. See the [design specifications index](https://github.com/circle-platforms/circle/blob/main/docs/design/README.md).

@@ -221,16 +221,16 @@ test('Installed apps shows the icon and the project page', () => {
   assert.equal(properties.ARPPRODUCTICON, icon.attributes.Id);
   assert.equal(
     properties.ARPURLINFOABOUT,
-    'https://github.com/qingshanfeihu/circle',
+    'https://github.com/circle-platforms/circle',
   );
   assert.equal(properties.ARPCONTACT, 'qingshanfeihu');
   assert.equal(
     properties.ARPHELPLINK,
-    'https://github.com/qingshanfeihu/circle/issues',
+    'https://github.com/circle-platforms/circle/issues',
   );
   assert.equal(
     properties.ARPURLUPDATEINFO,
-    'https://github.com/qingshanfeihu/circle/releases',
+    'https://github.com/circle-platforms/circle/releases',
   );
   assert.equal(properties.ARPNOREPAIR, '1');
 });

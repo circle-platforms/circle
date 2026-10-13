@@ -3,7 +3,7 @@
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
-    $repo = if ($env:CIRCLE_REPO) { $env:CIRCLE_REPO } else { 'qingshanfeihu/circle' }
+    $repo = if ($env:CIRCLE_REPO) { $env:CIRCLE_REPO } else { 'circle-platforms/circle' }
     if ($repo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw 'Invalid repository' }
     $architecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
     $arch = switch ($architecture) { 'AMD64' { 'x64' } 'ARM64' { 'arm64' } default { throw "Unsupported architecture: $architecture" } }

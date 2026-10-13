@@ -4,6 +4,10 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Changed
+
+- **Circle moved to the circle-platforms organization**, with circle-hub and circle-packs. The repository is <https://github.com/circle-platforms/circle> and the documentation is at <https://circle-platforms.github.io/circle/>. The old repository address redirects; the old documentation address does not. Installed copies keep updating: the installer and `circle update` follow the redirect, and new installations record the new repository.
+
 ### Added
 
 - **Extensions can keep secrets.** `api.secrets` keeps values in `extension_secrets/<extension>.secrets.json`, readable only by you, and `api.askSecret` asks for one on a masked card in the terminal and in the desktop application. A secret an extension holds is masked in its tool results, command lines and errors, and the file tools refuse `*.secrets.json`. See [Extensions](docs/extensions.md#secrets).
@@ -94,7 +98,7 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 - **Large PNG pictures are scaled down** to at most 1,568 pixels on the long side and 1.15 million pixels before they are sent, and the model is told both sizes. A conversation that collects more than 8 pictures or PDFs (or 16 MB of them) leaves the older ones out of its requests down to the newest 3; the conversation keeps them all.
 - **A model known not to read images gets the paths only**, and the screen says so. Whether a model reads images comes from models.dev.
 - **The prompts taken from OpenCode carry its MIT notice** in `THIRD_PARTY_NOTICES.md`.
-- **The documentation is published at <https://qingshanfeihu.github.io/circle/>.** The guides and reference in `docs/` are that site. Contributing, the security policy and this changelog stay in the repository.
+- **The documentation is published at <https://circle-platforms.github.io/circle/>.** The guides and reference in `docs/` are that site. Contributing, the security policy and this changelog stay in the repository.
 - **Circle is open source under the MIT License.** The release package carries `LICENSE` next to `README.md`.
 - **`/login` asks for the URL straight away.** Circle signs in only with an API URL and key, so the first list, where OAuth sign-in was marked `not available yet`, is gone. `esc` on the key goes back to the URL, and `esc` on the URL leaves. `/login anthropic` and `/login openai` open the same questions as `/login`.
 - **`settings.json` no longer has `auth.mode` or `auth.oauth_provider`.** Circle drops them the next time it saves the settings; the Python releases read a missing `mode` as `api_key`.

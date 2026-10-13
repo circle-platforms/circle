@@ -13,13 +13,13 @@ Circle runs on macOS, Linux and Windows 10 or newer, on x64 and arm64. A release
 On macOS and Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/qingshanfeihu/circle/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/circle-platforms/circle/main/install.sh | bash
 ```
 
 On Windows, in PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/qingshanfeihu/circle/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/circle-platforms/circle/main/install.ps1 | iex
 ```
 
 The installer downloads the release for your system, checks it, puts `circle` on your `PATH`, and adds that folder to your shell's startup file if needed. Open a new terminal afterwards. To pin a version, set `CIRCLE_VERSION`, for example `CIRCLE_VERSION=1.0.0`. If it stops with a certificate error, or you want to install from source, see [Installation and updates](installation.md).

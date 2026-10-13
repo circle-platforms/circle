@@ -2,7 +2,7 @@ Circle
 Copyright (c) 2026 qingshanfeihu
 
 This product is developed by qingshanfeihu and the Circle contributors
-(https://github.com/qingshanfeihu/circle).
+(https://github.com/circle-platforms/circle).
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not
 use this product except in compliance with the License. A copy of the License
@@ -24,7 +24,7 @@ The architecture and design specifications listed in docs/design/README.md
 are licensed under the Creative Commons Attribution 4.0 International License
 (CC BY 4.0, https://creativecommons.org/licenses/by/4.0/). Quoting, reusing
 or adapting them requires a clear attribution to Circle and qingshanfeihu and
-a link to the original at https://github.com/qingshanfeihu/circle.
+a link to the original at https://github.com/circle-platforms/circle.
 
 Trademarks
 ----------

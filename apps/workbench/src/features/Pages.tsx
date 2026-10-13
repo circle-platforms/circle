@@ -1492,7 +1492,7 @@ function HelpPage({ onDialog }: { onDialog: Props['onDialog'] }) {
       </div>
       <div className="help-links">
         <a
-          href="https://github.com/qingshanfeihu/circle/tree/main/docs"
+          href="https://github.com/circle-platforms/circle/tree/main/docs"
           target="_blank"
           rel="noreferrer"
         >

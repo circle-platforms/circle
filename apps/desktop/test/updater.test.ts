@@ -82,7 +82,7 @@ test('an installation is found from where the application runs', () => {
 test('releases come from GitHub unless a local or https copy is named', () => {
   assert.equal(
     releasesUrl(''),
-    'https://github.com/qingshanfeihu/circle/releases',
+    'https://github.com/circle-platforms/circle/releases',
   );
   assert.equal(
     releasesUrl('http://127.0.0.1:4000/releases/'),

@@ -45,7 +45,7 @@ export const PACKAGE_SOURCE = String.raw`<?xml version="1.0" encoding="utf-8"?>
 
     <Icon Id="circle.ico" SourceFile="$(var.Icon)" />
     <Property Id="ARPPRODUCTICON" Value="circle.ico" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/qingshanfeihu/circle" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/circle-platforms/circle" />
 
     <ui:WixUI Id="WixUI_Minimal" />
     <WixVariable Id="WixUILicenseRtf" Value="$(var.License)" />
@@ -57,8 +57,8 @@ export const PACKAGE_SOURCE = String.raw`<?xml version="1.0" encoding="utf-8"?>
 
     <!-- 卸载注册信息 -->
     <Property Id="ARPCONTACT" Value="qingshanfeihu" />
-    <Property Id="ARPHELPLINK" Value="https://github.com/qingshanfeihu/circle/issues" />
-    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/qingshanfeihu/circle/releases" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/circle-platforms/circle/issues" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/circle-platforms/circle/releases" />
     <Property Id="ARPNOREPAIR" Value="1" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
