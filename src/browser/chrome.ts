@@ -220,6 +220,7 @@ const originOf = (url: string) => {
 export class ChromeBrowser implements BrowserPort {
   private child?: ChildProcess;
   private cdp?: CdpPipe;
+  private stderr: string[] = [];
   private starting?: Promise<CdpPipe>;
   private conversations = new Map<string, Conversation>();
   /** The conversation that acted last: tabs the person opens join it. */
@@ -254,14 +255,34 @@ export class ChromeBrowser implements BrowserPort {
         `--user-data-dir=${profile}`,
         '--no-first-run',
         '--no-default-browser-check',
+        '--disable-search-engine-choice-screen',
+        // A page behind another tab, or in a window the system reports as covered, keeps
+        // running and answering: Circle acts on tabs the window does not show
+        '--disable-renderer-backgrounding',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-background-timer-throttling',
         '--window-size=1280,900',
         ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
         ...(process.platform === 'linux' ? ['--password-store=basic'] : []),
         ...(this.options.headless ? ['--headless=new'] : []),
         BLANK,
       ],
-      { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] },
+      { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] },
     );
+    // The browser's last words, for a start that fails. A message it repeats (a headless
+    // browser's display errors, many a second) is kept once.
+    this.stderr = [];
+    const plain = (line: string) => line.replace(/^\[[\d:./]+/, '');
+    child.stderr?.on('data', (chunk: Buffer) => {
+      for (const line of chunk.toString('utf8').split('\n')) {
+        if (!line.trim()) continue;
+        const last = this.stderr.at(-1);
+        if (last && plain(last) === plain(line)) continue;
+        this.stderr.push(line.slice(0, 300));
+      }
+      if (this.stderr.length > 40)
+        this.stderr.splice(0, this.stderr.length - 40);
+    });
     const cdp = new CdpPipe(
       child.stdio[3] as Writable,
       child.stdio[4] as Readable,
@@ -296,7 +317,10 @@ export class ChromeBrowser implements BrowserPort {
       });
     } catch (error) {
       child.kill();
-      throw error;
+      const said = this.stderr.slice(-3).join(' / ');
+      throw Error(
+        `${error instanceof Error ? error.message : String(error)}${said ? ` (the browser said: ${said})` : ''}`,
+      );
     }
     return cdp;
   }
@@ -938,6 +962,7 @@ export class ChromeBrowser implements BrowserPort {
     tab: Tab,
     expression: string,
     signal?: AbortSignal,
+    what = 'Runtime.evaluate',
   ): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       const world = await this.world(tab);
@@ -958,7 +983,7 @@ export class ChromeBrowser implements BrowserPort {
           ),
           signal,
           5000,
-          'Runtime.evaluate',
+          what,
         );
         if (exceptionDetails)
           throw Error(exceptionDetails.text || 'browser page action failed');
@@ -991,7 +1016,7 @@ export class ChromeBrowser implements BrowserPort {
       ok: boolean;
       value: T;
       error?: string;
-    }>(tab, pageCall(command, args), signal);
+    }>(tab, pageCall(command, args), signal, `page ${command}`);
     if (!result?.ok) throw Error(result?.error || 'browser page action failed');
     return result.value;
   }

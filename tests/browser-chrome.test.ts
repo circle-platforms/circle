@@ -233,11 +233,92 @@ test(
     cleanup(t, () => chrome.close());
     const signal = new AbortController().signal;
     // A failure names the step it happened at
+    // A failure names the step it happened at, and what the browser was in: a failure
+    // seen only in a CI log has to say enough
+    const internals = chrome as unknown as {
+      cdp: {
+        send: (
+          method: string,
+          params?: Record<string, unknown>,
+          session?: string,
+        ) => Promise<any>;
+      };
+      conversations: Map<
+        string,
+        {
+          active?: string;
+          tabs: Map<
+            string,
+            { session: string; interceptFailure?: string; dialogs: unknown[] }
+          >;
+        }
+      >;
+      stderr: string[];
+    };
+    const diagnose = async () => {
+      const within = (promise: Promise<unknown>) =>
+        Promise.race([
+          promise.then(
+            (value) => JSON.stringify(value) ?? 'ok',
+            (error: Error) => `error: ${error.message}`,
+          ),
+          new Promise<string>((resolve) =>
+            setTimeout(() => resolve('no answer in 2 s'), 2000),
+          ),
+        ]);
+      const lines: string[] = [];
+      const conversation = internals.conversations.get('conversation-1');
+      const shown = conversation?.active
+        ? conversation.tabs.get(conversation.active)
+        : undefined;
+      lines.push(
+        `tabs ${[...(conversation?.tabs.keys() ?? [])].join(',')}; shown ${conversation?.active}`,
+      );
+      if (shown) {
+        const see = (expression: string) =>
+          within(
+            internals.cdp
+              .send(
+                'Runtime.evaluate',
+                { expression, returnByValue: true },
+                shown.session,
+              )
+              .then((reply) => reply.result?.value),
+          );
+        lines.push(
+          `interception ${shown.interceptFailure ?? 'taken'}; dialogs ${shown.dialogs.length}`,
+        );
+        lines.push(
+          `visibility ${await see('document.visibilityState + " focus " + document.hasFocus()')}`,
+        );
+        lines.push(
+          `bringToFront ${await within(internals.cdp.send('Page.bringToFront', {}, shown.session))}`,
+        );
+        lines.push(`visibility then ${await see('document.visibilityState')}`);
+        lines.push(
+          `mouse ${await within(internals.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 }, shown.session))}`,
+        );
+      }
+      lines.push(
+        `targets ${await within(
+          internals.cdp
+            .send('Target.getTargets')
+            .then((reply) =>
+              reply.targetInfos?.map(
+                (info: { type: string; url: string; attached: boolean }) =>
+                  `${info.type} ${info.url} ${info.attached ? 'attached' : ''}`,
+              ),
+            ),
+        )}`,
+      );
+      lines.push(`browser said ${internals.stderr.slice(-8).join(' | ')}`);
+      return lines.join('\n');
+    };
     const act = (action: BrowserAction, args: Record<string, unknown> = {}) =>
       chrome
         .request('conversation-1', action, args, signal)
-        .catch((error: Error) => {
-          error.message = `${action} ${JSON.stringify(args)}: ${error.message}`;
+        .catch(async (error: Error) => {
+          error.message = `${action} ${JSON.stringify(args)}: ${error.message}\n${await diagnose()}`;
           throw error;
         });
     const ref = (text: string, pattern: RegExp) => {
