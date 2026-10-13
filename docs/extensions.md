@@ -127,6 +127,8 @@ Circle 0.5.0 and older loaded `extension.py`. This version does not run Python, 
 | `api.dataDir` | A folder of the extension's own, `~/.circle/extension_data/<name>/` (`0700`), made the first time it is read. For what the extension keeps that is not secret. |
 | `api.secrets` | Values the extension keeps between runs, such as a token. See [Secrets](#secrets). |
 | `api.askSecret(question, options)` | Ask you for a value on a masked card; it goes back to the extension only. See [Secrets](#secrets). |
+| `api.signal` | An `AbortSignal` that fires when Circle closes the extension: when Circle leaves, and before extensions are loaded again. Pass it to requests and timers, and end loops on it. |
+| `api.background(promise)` | Work that goes on after a tool or command returned, such as following something until it ends. Circle waits for it when it closes the extension, after `api.signal` fired, for up to two seconds; an error in it is shown under the extension in `/extensions`. |
 | `registerTool(name, description, parameters, execute, options)` | Add a tool. |
 | `registerCommand(name, description, handler)` | Add a slash command. |
 | `registerMiddleware(handler, slot)` | Wrap model calls or tool calls. `slot` defaults to `tool_boundary`. |
@@ -172,13 +174,13 @@ An extension that signs in somewhere needs to keep a token, and sometimes to ask
 
 - `await api.secrets.set(name, value)` keeps a value, `await api.secrets.get(name)` returns it (or `undefined`), `await api.secrets.delete(name)` removes it and says whether there was one, and `await api.secrets.names()` lists the names. A name uses letters, digits, `_`, `.` and `-`, up to 64 characters; a value is a non-empty string of up to 4096 bytes without NUL.
 - Each extension's values are in `~/.circle/extension_secrets/<extension>.secrets.json`, readable only by you (`0600`, in a `0700` folder). They are not in `settings.json` or `credentials.json`, another extension's `api.secrets` does not see them, and `*.secrets.json` is a [credential file](security.md#credential-files) name, so the model's file tools and commands refuse it.
-- `await api.askSecret(question, { mask, signal })` shows the card a secret question from the model shows (`ctrl+s` in the terminal, a card in the desktop application), saying the value goes to your extension. The value is returned to the extension and goes nowhere else: not into the conversation, the session or a file. It returns `null` when you cancel or enter nothing within ten minutes. `signal` stops it; `mask: false` shows what you type. It throws where no card can be shown.
+- `await api.askSecret(question, { mask, signal })` shows the card a secret question from the model shows (`ctrl+s` in the terminal, a card in the desktop application), saying the value goes to your extension. The value is returned to the extension and goes nowhere else: not into the conversation, the session or a file. It returns `null` when you cancel or enter nothing within ten minutes. `signal` stops it, and so does Circle closing the extension, which the extension sees as an error; `mask: false` shows what you type. It throws where no card can be shown.
 - Values that passed through `api.secrets` or `api.askSecret` are replaced with `***` in what the extension hands Circle: tool results and errors, watch results, and the text of `ctx.toast`, `ctx.append` and `ctx.sendUserMessage`. Values shorter than four characters are left. This guards against accidents only: an extension runs with your rights and can still send a value anywhere.
 
 ### Commands
 
 - `name` uses lowercase letters, digits, `_` and `-`, up to 32 characters, starting with a letter or digit, and must not be a built-in command or alias, a custom command, or another extension's.
-- `handler(args, ctx)` gets the argument text and a context with `ctx.workspace`, `ctx.toast(text)` and `ctx.append(text)` (a line in the conversation that the model does not see), and `ctx.sendUserMessage(text)` (send a message as if you had typed it). It may be `async`.
+- `handler(args, ctx)` gets the argument text and a context with `ctx.workspace`, `ctx.toast(text)` and `ctx.append(text)` (a line in the conversation that the model does not see), and `ctx.sendUserMessage(text)` (send a message as if you had typed it). It may be `async`. Something it starts and does not wait for, such as following a task after the command returned, goes to `api.background(promise)`, so that Circle can wait for it when it leaves.
 - Extension commands do not run while a turn is running, are listed in `/help`, and are completed in the command list. An exception in the handler shows as `✖ /name failed: …`.
 
 ### Middleware

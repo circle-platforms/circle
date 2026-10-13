@@ -292,7 +292,7 @@ export function register(api: ExtensionAPI): void {
       knowledge,
       methods,
     };
-    void showStatus();
+    api.background(showStatus());
     return { tasks: tasks.length, packs: methods.length };
   }
   // A context whose lines are also kept for the view.
@@ -300,7 +300,7 @@ export function register(api: ExtensionAPI): void {
     const keep = (line: string): void => {
       recent.push(...String(line).split('\n'));
       recent.splice(0, Math.max(0, recent.length - 30));
-      void showStatus();
+      api.background(showStatus());
     };
     return {
       workspace: context.workspace,
@@ -319,6 +319,8 @@ export function register(api: ExtensionAPI): void {
   // The footer line: where you are signed in, and how many tasks this window follows.
   let statusRun = 0;
   async function showStatus(): Promise<void> {
+    // Nobody looks once the extension is closed, and its files may be going.
+    if (api.signal.aborted) return;
     // Several refreshes may overlap; only the latest one draws.
     const run = ++statusRun;
     const config = readConfig();
@@ -386,7 +388,11 @@ export function register(api: ExtensionAPI): void {
         method,
         headers,
         body,
-        signal: AbortSignal.timeout(options.timeoutMs ?? 60_000),
+        // Ends with the extension: a reload or leaving does not wait out a long poll.
+        signal: AbortSignal.any([
+          AbortSignal.timeout(options.timeoutMs ?? 60_000),
+          api.signal,
+        ]),
       });
     } catch (error) {
       throw new ServerError(`cannot reach ${config.url}: ${reason(error)}`);
@@ -435,7 +441,7 @@ export function register(api: ExtensionAPI): void {
       : [];
     writeJson('config.json', { url, username, scopeId: scopes[0] });
     failure = '';
-    void showStatus();
+    api.background(showStatus());
     return scopes;
   }
 
@@ -444,7 +450,7 @@ export function register(api: ExtensionAPI): void {
   async function reauthorize(): Promise<void> {
     reauthorizing ??= (async () => {
       await api.secrets.delete('token');
-      void showStatus();
+      api.background(showStatus());
       const config = readConfig();
       if (!config?.username)
         throw new ServerError('signed out: /server login <url> <user>');
@@ -585,7 +591,8 @@ export function register(api: ExtensionAPI): void {
   }
 
   // Follow a task from the last event this window showed until it ends, writing each event
-  // as a line. Runs in the background: the command that started it has already returned.
+  // as a line. Runs in the background: the command that started it has already returned,
+  // and Circle waits for it when it closes the extension.
   async function follow(
     taskId: string,
     context: CommandContext,
@@ -594,11 +601,11 @@ export function register(api: ExtensionAPI): void {
     const controller = new AbortController();
     following.set(taskId, controller);
     failure = '';
-    void showStatus();
+    api.background(showStatus());
     let cursor = followed()[taskId]?.seq ?? 0;
     let ended = false;
     try {
-      while (!controller.signal.aborted) {
+      while (!controller.signal.aborted && !api.signal.aborted) {
         // The task's state first: a task that has ended has only its missed events left,
         // so there is nothing to wait for.
         const current = await status(taskId);
@@ -648,15 +655,17 @@ export function register(api: ExtensionAPI): void {
         if (open.length) return;
       }
     } catch (error) {
+      // Closed under it: the task goes on on the server, and /server task picks it up.
+      if (api.signal.aborted) return;
       failure = `${taskId} stopped following`;
       context.append(
         `✖ ${taskId}: ${reason(error)} · /server task ${taskId} picks it up again`,
       );
     } finally {
       following.delete(taskId);
-      void showStatus();
+      api.background(showStatus());
       // Read the objects again once it has ended, after it stopped counting as followed.
-      if (ended) void collectObjects().catch(() => {});
+      if (ended && !api.signal.aborted) api.background(collectObjects());
     }
   }
 
@@ -785,7 +794,7 @@ export function register(api: ExtensionAPI): void {
     },
     async logout(_rest, context) {
       const removed = await api.secrets.delete('token');
-      void showStatus();
+      api.background(showStatus());
       context.append(removed ? 'Signed out' : 'Not signed in');
     },
     async packs(_rest, context) {
@@ -811,7 +820,7 @@ export function register(api: ExtensionAPI): void {
       context.append(
         `✓ accepted ${task.taskId} · ${task.phase} · input ${task.inputRevisionId}${task.deduplicated ? ' · the same request as before, no new task' : ''} · following it; closing Circle does not stop it`,
       );
-      void follow(task.taskId, context);
+      api.background(follow(task.taskId, context));
     },
     async tasks(_rest, context) {
       const known = Object.entries(followed());
@@ -841,7 +850,7 @@ export function register(api: ExtensionAPI): void {
       context.append(
         `  ${taskId} · ${String(current.phase)} · ${String(current.title ?? '')} · input ${String(current.inputRevisionId)}`,
       );
-      void follow(taskId, context);
+      api.background(follow(taskId, context));
     },
     async respond([taskId, ...answer], context) {
       if (!taskId || !answer.length)
@@ -865,7 +874,7 @@ export function register(api: ExtensionAPI): void {
         },
       });
       context.append(`✓ answered ${taskId} (${String(open.requestId)})`);
-      void follow(taskId, context);
+      api.background(follow(taskId, context));
     },
     async get([taskId], context) {
       if (!taskId) throw new ServerError('usage: /server get <id>');
@@ -1004,7 +1013,7 @@ export function register(api: ExtensionAPI): void {
       );
     },
   );
-  void showStatus();
+  api.background(showStatus());
   api.registerCommand(
     'server',
     'Work with a circle-server: /server [login | logout | packs | submit | tasks | task | respond | get]',

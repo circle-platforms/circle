@@ -852,7 +852,11 @@ export class AgentRuntime {
           new Set([...base, ...this.mcp.tools].map((tool) => tool.name)),
         );
         await host.load();
-        signal?.throwIfAborted();
+        if (signal?.aborted) {
+          await host.close(2000);
+          signal.throwIfAborted();
+        }
+        const previous = this.extensions;
         this.extensions = host;
         this.harness.tools = this.withIntegrationTools(
           base.filter((tool) => tool.name !== 'wait_jobs'),
@@ -864,6 +868,9 @@ export class AgentRuntime {
           workspace: this.options.workspace,
           session_id: this.session.id,
         });
+        // The extensions loaded before end: what they still did on their own stops, and the
+        // old host is waited for up to two seconds, as a watch's on_stop is.
+        await previous.close(2000);
       })().catch((error) => {
         this.integrationsReady = undefined;
         throw error;
@@ -1136,6 +1143,7 @@ export class AgentRuntime {
         this.store.append(sessionId, notices);
     }
     await this.integrationsReady?.catch(() => {});
+    await this.extensions.close(2000);
     await this.mcp.close();
     await this.lsp.close();
     this.store.close();
