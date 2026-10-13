@@ -18,38 +18,68 @@ export function assertViewport(actual, target, scaleFactor) {
   }
 }
 
+// A display shorter than the request (a CI runner's 1024×768 screen holds 677 CSS pixels
+// of content under the menu bar, the Dock and the title bar) keeps the window within its
+// work area: the height asked for is what fits, and the width is what the checks are about.
 export async function setViewport(app, page, target, { show = false } = {}) {
   for (const dimension of ['width', 'height'])
     assert.ok(Number.isSafeInteger(target[dimension]) && target[dimension] > 0);
+  let fitted;
   let requested = { ...target };
   for (let attempt = 1; attempt <= 3; attempt++) {
-    const scaleFactor = await app.evaluate(
+    const { scaleFactor, room } = await app.evaluate(
       ({ BrowserWindow, screen }, { requested, show }) => {
         const window = BrowserWindow.getAllWindows()[0];
         if (show) window.show();
-        window.setContentSize(requested.width, requested.height);
-        return screen.getDisplayMatching(window.getBounds()).scaleFactor;
+        const display = screen.getDisplayMatching(window.getBounds());
+        const [outerWidth, outerHeight] = window.getSize();
+        const [contentWidth, contentHeight] = window.getContentSize();
+        // What the display's work area leaves for content beside the window's frame
+        const room = {
+          width: display.workAreaSize.width - (outerWidth - contentWidth),
+          height: display.workAreaSize.height - (outerHeight - contentHeight),
+        };
+        window.setContentSize(
+          requested.width,
+          Math.min(requested.height, room.height),
+        );
+        return { scaleFactor: display.scaleFactor, room };
       },
       { requested, show },
     );
     assert.ok(Number.isFinite(scaleFactor) && scaleFactor > 0);
+    fitted ??= {
+      width: target.width,
+      height: Math.min(target.height, room.height),
+    };
+    const expected = {
+      width: requested.width,
+      height: Math.min(requested.height, room.height),
+    };
     const rounding = Math.ceil(1 / scaleFactor);
     const settled = await page.waitForFunction(
-      ({ requested, rounding }) =>
-        Math.abs(innerWidth - requested.width) <= rounding &&
-        Math.abs(innerHeight - requested.height) <= rounding,
-      { requested, rounding },
+      ({ expected, rounding }) =>
+        Math.abs(innerWidth - expected.width) <= rounding &&
+        Math.abs(innerHeight - expected.height) <= rounding,
+      { expected, rounding },
     );
     await settled.dispose();
     const actual = await readViewport(page);
-    if (actual.width <= target.width && actual.height <= target.height) {
-      assertViewport(actual, target, scaleFactor);
-      return { target, actual, scaleFactor, attempts: attempt };
+    if (actual.width <= fitted.width && actual.height <= fitted.height) {
+      assertViewport(actual, fitted, scaleFactor);
+      return {
+        requested: target,
+        target: fitted,
+        actual,
+        scaleFactor,
+        room,
+        attempts: attempt,
+      };
     }
     // Compensate only for the measured rounding overshoot, then verify again.
     requested = {
-      width: requested.width - Math.max(0, actual.width - target.width),
-      height: requested.height - Math.max(0, actual.height - target.height),
+      width: requested.width - Math.max(0, actual.width - fitted.width),
+      height: requested.height - Math.max(0, actual.height - fitted.height),
     };
   }
   throw Error(`native viewport did not fit ${target.width}×${target.height}`);
