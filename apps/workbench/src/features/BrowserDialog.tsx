@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
-import { Globe } from 'lucide-react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { Globe, KeyRound } from 'lucide-react';
 import { desktopHost } from '../host';
 import { useRuntime } from '../app/context';
 import { Button } from '../components/common';
 import { dialogSource } from '../model/browser';
-import type { BrowserDialog } from '../../../desktop/src/contracts';
+import type {
+  BrowserCertificateChoice,
+  BrowserDialog,
+} from '../../../desktop/src/contracts';
 import { t } from '../i18n';
 
 const title = (dialog: BrowserDialog) =>
@@ -321,6 +324,139 @@ export function BrowserHandoffRequest({
           {t('hand back')}
         </Button>
       </div>
+    </section>
+  );
+}
+
+/** One answer per certificate request: the certificate picked, or none. */
+function useChoice(sessionId: string, choice: BrowserCertificateChoice) {
+  const { notify } = useRuntime();
+  const [picked, setPicked] = useState(0);
+  const [sent, setSent] = useState(false);
+  useEffect(() => {
+    setPicked(0);
+    setSent(false);
+  }, [choice.id]);
+  const answer = (index: number | null) => {
+    if (sent) return;
+    setSent(true);
+    void desktopHost()!
+      .browserCertificate(sessionId, choice.id, index)
+      .catch(() => {
+        setSent(false);
+        notify(t('the certificate request was already answered'));
+      });
+  };
+  return { picked, setPicked, answer, busy: sent };
+}
+
+/** The certificates the person can identify themselves with, one to pick. */
+function CertificateChoiceBody({
+  choice,
+  form,
+}: {
+  choice: BrowserCertificateChoice;
+  form: ReturnType<typeof useChoice>;
+}) {
+  const { picked, setPicked, answer, busy } = form;
+  // The panel and the conversation show the same request: each its own group
+  const group = useId();
+  return (
+    <>
+      <p className="browser-dialog-message">
+        {t('{host} asks for a certificate to identify you', {
+          host: choice.origin,
+        })}
+      </p>
+      <div
+        className="browser-certificates"
+        role="radiogroup"
+        aria-label={t('certificates')}
+      >
+        {choice.certificates.map((certificate, index) => (
+          <label key={index} className="browser-certificate-option">
+            <input
+              type="radio"
+              name={group}
+              checked={picked === index}
+              disabled={busy}
+              onChange={() => setPicked(index)}
+            />
+            <span>
+              <strong>{certificate.subject}</strong>
+              <small>
+                {t('issued by')} {certificate.issuer} · {t('valid until')}{' '}
+                {new Date(certificate.validExpiry * 1000)
+                  .toISOString()
+                  .slice(0, 10)}
+              </small>
+            </span>
+          </label>
+        ))}
+      </div>
+      <div className="browser-dialog-actions">
+        <Button disabled={busy} onClick={() => answer(null)}>
+          {t('send none')}
+        </Button>
+        <Button
+          className="primary"
+          disabled={busy}
+          onClick={() => answer(picked)}
+        >
+          {t('OK')}
+        </Button>
+      </div>
+    </>
+  );
+}
+
+/** A site's request for a client certificate, in the panel in the page's place. */
+export function CertificateChoicePanel({
+  sessionId,
+  choice,
+}: {
+  sessionId: string;
+  choice: BrowserCertificateChoice;
+}) {
+  const form = useChoice(sessionId, choice);
+  return (
+    <div
+      className="browser-dialog-layer"
+      data-testid="browser-certificate-choice"
+    >
+      <div
+        className="browser-dialog-box"
+        role="dialog"
+        aria-label={t('select a certificate')}
+      >
+        <strong>{t('select a certificate')}</strong>
+        <CertificateChoiceBody choice={choice} form={form} />
+      </div>
+    </div>
+  );
+}
+
+/** The same request in the conversation while Circle works: it waits for the choice. */
+export function CertificateChoiceRequest({
+  sessionId,
+  choice,
+}: {
+  sessionId: string;
+  choice: BrowserCertificateChoice;
+}) {
+  const form = useChoice(sessionId, choice);
+  return (
+    <section
+      className="inline-request"
+      data-kind="browser-dialog"
+      data-testid="browser-certificate-request"
+    >
+      <header>
+        <KeyRound size={14} />
+        <strong>{t('select a certificate')}</strong>
+        <span>{t('Circle waits for your choice')}</span>
+      </header>
+      <CertificateChoiceBody choice={choice} form={form} />
     </section>
   );
 }

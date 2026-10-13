@@ -51,6 +51,34 @@ await promisify(execFile)('openssl', [
   '/CN=Circle Fixture Device/O=Circle browser fixture',
 ]);
 
+// Two client certificates a site could ask for, as the system's store would list them
+const clientCertificates = [];
+for (const name of ['Circle Fixture Operator', 'Circle Fixture Admin']) {
+  const path = join(temp, `${name.replaceAll(' ', '-')}.pem`);
+  await promisify(execFile)('openssl', [
+    'req',
+    '-x509',
+    '-newkey',
+    'rsa:2048',
+    '-nodes',
+    '-keyout',
+    join(temp, 'client-key.pem'),
+    '-out',
+    path,
+    '-days',
+    '1',
+    '-subj',
+    `/CN=${name}/O=Circle client fixture`,
+  ]);
+  clientCertificates.push({
+    data: await readFile(path, 'utf8'),
+    subjectName: name,
+    issuerName: name,
+    validStart: Math.floor(Date.now() / 1000),
+    validExpiry: Math.floor(Date.now() / 1000) + 86400,
+  });
+}
+
 const document = `<!doctype html>
 <html><head><title>Circle HTTPS browser fixture</title>
 <style>
@@ -101,6 +129,7 @@ const document = `<!doctype html>
 
 // What each request for the admin page sent to sign in, decoded
 const authorizations = [];
+let releaseHeld = () => {};
 const handler = async (request, response) => {
   if (request.url === '/auth') {
     const sent = request.headers.authorization ?? '';
@@ -122,6 +151,13 @@ const handler = async (request, response) => {
       'Content-Type': 'text/html',
     });
     response.end('<!doctype html><title>401</title><p>sign in first</p>');
+    return;
+  }
+  if (request.url === '/held') {
+    // Answers once the test lets it, as a handshake goes on once a certificate is chosen
+    await new Promise((resolve) => (releaseHeld = resolve));
+    response.writeHead(200, { 'Content-Type': 'text/html' });
+    response.end('<!doctype html><title>Identified</title><p>identified</p>');
     return;
   }
   if (request.url === '/permission') {
@@ -334,6 +370,14 @@ await script([
   answer('permission-seen', 'permission waiting'),
   calls('permission-after', [call('permission-after', 'browser_snapshot', {})]),
   answer('permission-done', 'permission answered'),
+  calls('certificate-nav', [
+    call('certificate-nav', 'browser_navigate', { url: url + 'held' }),
+  ]),
+  answer('certificate-done', 'certificate chosen'),
+  calls('certificate-after', [
+    call('certificate-after', 'browser_snapshot', {}),
+  ]),
+  answer('certificate-after-done', 'certificate request seen'),
 ]);
 const env = {
   ...process.env,
@@ -944,6 +988,113 @@ try {
   assert.match(afterPermission, /notifications: granted/);
   checks.push(
     "a page's permission request waits in the panel for the person alone; the model sees it waiting and then the answer, and the page gets it",
+  );
+
+  // ---- a site's request for a client certificate waits for the person's choice. The
+  // system's store is not touched: the request is raised on the tab as Electron raises it.
+  const askCertificate = () =>
+    app.evaluate(
+      ({ BrowserWindow }, [address, list]) => {
+        const view = BrowserWindow.getAllWindows()[0].contentView.children.find(
+          (entry) =>
+            entry.getVisible() &&
+            entry.webContents.getURL().startsWith('https:'),
+        );
+        globalThis.chosenCertificate = undefined;
+        view.webContents.emit(
+          'select-client-certificate',
+          { preventDefault() {} },
+          address,
+          list,
+          (certificate) => {
+            globalThis.chosenCertificate = certificate
+              ? certificate.subjectName
+              : 'none';
+          },
+        );
+      },
+      [url, clientCertificates],
+    );
+  const chosenCertificate = () =>
+    app.evaluate(() => globalThis.chosenCertificate);
+  await send('open the device page and identify yourself');
+  await page.getByTestId('browser-operating').waitFor();
+  await askCertificate();
+  const choicePanel = page.getByTestId('browser-certificate-choice');
+  await choicePanel.waitFor();
+  // Circle's action waits for the person; nothing covers the choice in the panel
+  await page.getByTestId('browser-certificate-request').waitFor();
+  assert.match(
+    await choicePanel.innerText(),
+    new RegExp(`${origin} asks for a certificate to identify you`),
+  );
+  assert.match(
+    await choicePanel.innerText(),
+    /CN=Circle Fixture Operator, O=Circle client fixture/,
+  );
+  // Each place has its own choice, the first certificate to begin with
+  for (const place of [
+    choicePanel,
+    page.getByTestId('browser-certificate-request'),
+  ])
+    assert.equal(await place.getByRole('radio').first().isChecked(), true);
+  assert.equal(
+    await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0]
+        .contentView.children.find((view) =>
+          view.webContents.getURL().includes('circle-mask'),
+        )
+        ?.getVisible(),
+    ),
+    false,
+  );
+  await page.waitForTimeout(1000);
+  assert.equal(
+    await page.getByText('certificate chosen', { exact: true }).count(),
+    0,
+  );
+  await page.screenshot({ path: join(output, 'browser-certificate.png') });
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: join(output, 'browser-certificate-dark.png') });
+  await page.emulateMedia({ colorScheme: null });
+  await choicePanel
+    .getByText('CN=Circle Fixture Admin, O=Circle client fixture', {
+      exact: true,
+    })
+    .click();
+  await choicePanel.getByRole('button', { name: 'OK', exact: true }).click();
+  await waitFor(
+    async () => (await chosenCertificate()) === 'Circle Fixture Admin',
+    'the chosen certificate reaches the site',
+  );
+  releaseHeld();
+  await page.getByText('certificate chosen', { exact: true }).waitFor();
+  const certificateNav = await textOf('certificate-nav');
+  assert(
+    certificateNav.includes(
+      `client certificate request c1 from ${origin}: the user chose "CN=Circle Fixture Admin, O=Circle client fixture", issued by "CN=Circle Fixture Admin, O=Circle client fixture"`,
+    ),
+    certificateNav,
+  );
+  assert.match(certificateNav, /### Result\nLoaded\./);
+  // Asked while Circle does not act: the person sends none, and the model learns it
+  await askCertificate();
+  await choicePanel.waitFor();
+  await choicePanel
+    .getByRole('button', { name: 'send none', exact: true })
+    .click();
+  await choicePanel.waitFor({ state: 'hidden' });
+  assert.equal(await chosenCertificate(), 'none');
+  await send('look again');
+  await page.getByText('certificate request seen', { exact: true }).waitFor();
+  assert(
+    (await textOf('certificate-after')).includes(
+      `client certificate request c2 from ${origin}: the user sent no certificate`,
+    ),
+  );
+  checks.push(
+    "a site's request for a client certificate waits in the panel and the conversation for the person alone, with nothing over it; Circle's action waits for the choice, which the site gets, and the model learns only which certificate or none",
   );
 
   // ---- the person's own click on proceed needs no approval, on another port

@@ -154,6 +154,13 @@ export const panels: Record<string, string> = {
   'know when you are using this device': '了解你何时在使用此设备',
   'manage windows on all your displays': '管理你所有显示器上的窗口',
   block: '阻止',
+  'select a certificate': '选择证书',
+  '{host} asks for a certificate to identify you':
+    '{host} 要求用证书确认你的身份',
+  certificates: '证书',
+  'send none': '不发送',
+  'Circle waits for your choice': 'Circle 等你选择',
+  'the certificate request was already answered': '这个证书请求已经有人回答了',
   allow: '允许',
   'new tab': '新标签页',
   'close tab': '关闭标签页',

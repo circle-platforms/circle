@@ -24,6 +24,7 @@ import { captureFrame } from './capture';
 import type {
   BrowserBounds,
   BrowserCertificate,
+  BrowserCertificateChoice,
   BrowserControl,
   BrowserDialog,
   BrowserDownload,
@@ -120,6 +121,10 @@ const permissionText = (kinds: PermissionKind[]) =>
         })[kind],
     )
     .join(' and ');
+/** A site's request for a client certificate, which only the person answers. */
+interface Choice extends BrowserCertificateChoice {
+  answer: (index?: number) => void;
+}
 interface Dialog extends BrowserDialog {
   // A sign-in's answer carries the password too
   answer: (accept: boolean, text: string, password?: string) => void;
@@ -160,6 +165,8 @@ interface Tab {
   chooser?: { id: string; multiple: boolean; backendNodeId?: number };
   // The files Circle asked the person about, by the token their approval carries
   upload?: { token: string; key: string };
+  // The site asks for a client certificate: the page waits for the person's choice
+  choice?: Choice;
 }
 interface Conversation {
   id: string;
@@ -167,6 +174,7 @@ interface Conversation {
   active?: string;
   nextTab: number;
   nextDialog: number;
+  nextChoice: number;
   wantedVisible: boolean;
   bounds: Rectangle;
   // What happened since the model last looked, told once in its next result.
@@ -288,6 +296,7 @@ export class BrowserSessions {
         tabs: new Map(),
         nextTab: 0,
         nextDialog: 0,
+        nextChoice: 0,
         wantedVisible: false,
         // A tool can open a page before the panel has measured a viewport.
         bounds: { x: 0, y: 0, width: 1000, height: 700 },
@@ -324,11 +333,18 @@ export class BrowserSessions {
         conversation.wantedVisible &&
         tab.id === conversation.active &&
         !tab.failure &&
-        !tab.dialogs.length;
+        !tab.dialogs.length &&
+        !tab.choice;
       tab.view.setVisible(shown);
     }
+    // The person chooses a certificate in the panel while Circle's action waits for it
+    const shown = conversation.active
+      ? conversation.tabs.get(conversation.active)
+      : undefined;
     conversation.mask?.setVisible(
-      conversation.wantedVisible && conversation.control === 'agent',
+      conversation.wantedVisible &&
+        conversation.control === 'agent' &&
+        !shown?.choice,
     );
   }
   private prepareSession(conversation: Conversation, session: Session) {
@@ -604,11 +620,67 @@ export class BrowserSessions {
     }
     this.publish(conversation.id);
   }
+  /** The person's choice of a client certificate (an index), or none. */
+  certificate(idValue: unknown, choiceValue: unknown, index: unknown) {
+    const id = this.validId(idValue);
+    const conversation = this.conversations.get(id);
+    const tab = [...(conversation?.tabs.values() ?? [])].find(
+      (entry) => entry.choice && entry.choice.id === choiceValue,
+    );
+    const choice = tab?.choice;
+    if (
+      !conversation ||
+      !tab ||
+      !choice ||
+      (index !== null &&
+        (typeof index !== 'number' ||
+          !Number.isInteger(index) ||
+          index < 0 ||
+          index >= choice.certificates.length))
+    )
+      throw Error('no such certificate request');
+    this.answerChoice(
+      conversation,
+      tab,
+      index === null ? undefined : (index as number),
+      'user',
+    );
+    return this.state(id);
+  }
+  private answerChoice(
+    conversation: Conversation,
+    tab: Tab,
+    index: number | undefined,
+    by: 'user' | 'gone',
+  ) {
+    const choice = tab.choice;
+    if (!choice) return;
+    tab.choice = undefined;
+    choice.answer(index);
+    const picked = index === undefined ? undefined : choice.certificates[index];
+    conversation.events.push(
+      `client certificate request ${choice.id} from ${choice.origin}: ${
+        by === 'gone'
+          ? 'ended, as the page went away'
+          : picked
+            ? `the user chose ${quote(picked.subject)}, issued by ${quote(picked.issuer)}`
+            : 'the user sent no certificate'
+      }`,
+    );
+    this.visibility(conversation);
+    this.publish(conversation.id);
+  }
+  /** Only the person chooses a client certificate: the model's action waits for them. */
+  private async chosen(tab: Tab, signal?: AbortSignal) {
+    while (tab.choice && !tab.closed) await delay(100, undefined, { signal });
+  }
   private closeTab(conversation: Conversation, tab: Tab, reason: string) {
     if (tab.closed) return;
     tab.closed = true;
     for (const dialog of tab.dialogs) dialog.answer(false, '');
     tab.dialogs = [];
+    tab.choice?.answer();
+    tab.choice = undefined;
     this.dropPermissions(conversation, tab);
     conversation.tabs.delete(tab.id);
     if (!this.window.isDestroyed())
@@ -656,6 +728,46 @@ export class BrowserSessions {
     });
     contents.on('will-redirect', (event, url) => {
       if (!safeExternalUrl(url)) event.preventDefault();
+    });
+    // A site asks for a client certificate, which tells it who the person is: only they
+    // choose one, or none. Electron would send the first one there is.
+    contents.on('select-client-certificate', (event, url, list, give) => {
+      event.preventDefault();
+      // The app's event types this callback's certificate as optional, as it is: none
+      const callback = give as (certificate?: Certificate) => void;
+      if (!list.length) return callback();
+      tab.choice?.answer();
+      tab.choice = {
+        id: `c${++conversation.nextChoice}`,
+        tab: tab.id,
+        origin: siteOf(url) || url,
+        certificates: list.map((certificate) => {
+          let subject = certificate.subjectName;
+          let issuer = certificate.issuerName;
+          let sha256 = '';
+          try {
+            const parsed = new X509Certificate(certificate.data);
+            subject = parsed.subject.split('\n').join(', ');
+            issuer = parsed.issuer.split('\n').join(', ');
+            sha256 = parsed.fingerprint256;
+          } catch {
+            /* the names Electron gives */
+          }
+          return {
+            subject,
+            issuer,
+            validExpiry: certificate.validExpiry,
+            fingerprint: sha256,
+          };
+        }),
+        answer: (index) => {
+          if (!contents.isDestroyed())
+            callback(index === undefined ? undefined : list[index]);
+        },
+      };
+      this.visibility(conversation);
+      for (const wake of tab.wake) wake();
+      this.publish(id);
     });
     contents.on(
       'certificate-error',
@@ -878,6 +990,8 @@ export class BrowserSessions {
         tab.chooser = undefined;
         tab.upload = undefined;
         this.dropPermissions(conversation, tab);
+        // The tab went elsewhere: the site that asked for a certificate gets none
+        if (tab.choice) this.answerChoice(conversation, tab, undefined, 'gone');
         // Where the tab went while Circle was not acting: the person, or the page itself.
         // What they typed or saw is never told.
         const address = String(params.frame.url ?? '');
@@ -1150,6 +1264,21 @@ export class BrowserSessions {
       ...(tab?.chooser?.backendNodeId
         ? { chooser: { id: tab.chooser.id, multiple: tab.chooser.multiple } }
         : {}),
+      certificateChoices: [...(conversation?.tabs.values() ?? [])].flatMap(
+        (entry) =>
+          entry.choice
+            ? [
+                {
+                  id: entry.choice.id,
+                  tab: entry.choice.tab,
+                  origin: entry.choice.origin,
+                  certificates: entry.choice.certificates.map((item) => ({
+                    ...item,
+                  })),
+                },
+              ]
+            : [],
+      ),
       permissions: (conversation?.permissions ?? [])
         .filter((request) => request.tab === tab?.id)
         .map(({ id, origin, kinds }) => ({ id, origin, kinds: [...kinds] })),
@@ -1427,13 +1556,18 @@ export class BrowserSessions {
     const contents = tab.view.webContents;
     const abort = () => contents.stop();
     signal?.addEventListener('abort', abort, { once: true });
-    const dialog = this.dialogOpens(tab);
+    const loading = contents.loadURL(url);
+    loading.catch(() => {});
+    let dialog = this.dialogOpens(tab);
     try {
-      await this.limit(
-        Promise.race([contents.loadURL(url), dialog.opened]),
-        signal,
-        30000,
-      );
+      for (;;) {
+        await this.limit(Promise.race([loading, dialog.opened]), signal, 30000);
+        if (!tab.choice) break;
+        // The site waits for a client certificate, which only the person chooses
+        await this.chosen(tab, signal);
+        dialog.stop();
+        dialog = this.dialogOpens(tab);
+      }
     } catch (error) {
       signal?.throwIfAborted();
       if (!tab.warning && !tab.failure && !tab.dialogs.length) {
@@ -1487,7 +1621,7 @@ export class BrowserSessions {
     await delay(60, undefined, { signal });
     while (Date.now() < end) {
       signal?.throwIfAborted();
-      if (tab.closed || tab.failure || tab.dialogs.length) return;
+      if (tab.closed || tab.failure || tab.dialogs.length || tab.choice) return;
       if (
         !tab.view.webContents.isLoading() &&
         !tab.network.size &&
@@ -1738,6 +1872,11 @@ export class BrowserSessions {
     signal: AbortSignal,
   ): Promise<string> {
     const tab = this.activeTab(conversation);
+    // A page that waits for the person's certificate goes on once they choose
+    if (tab.choice) {
+      await this.chosen(tab, signal);
+      await this.idle(tab, signal);
+    }
     const dialogs = [...conversation.tabs.values()].flatMap(
       (entry) => entry.dialogs,
     );
@@ -1758,6 +1897,19 @@ export class BrowserSessions {
             .map(
               (entry) =>
                 `- [${entry.chooser!.id}] tab ${entry.id} · ${entry.chooser!.multiple ? 'several files' : 'one file'}${entry.chooser!.backendNodeId ? ' → browser_upload' : ': a picker Circle cannot answer; the user can choose in the panel'}`,
+            )
+            .join('\n'),
+      );
+    const choices = [...conversation.tabs.values()].filter(
+      (entry) => entry.choice,
+    );
+    if (choices.length)
+      sections.push(
+        '### Certificate requests waiting\n' +
+          choices
+            .map(
+              (entry) =>
+                `- [${entry.choice!.id}] tab ${entry.id} · ${entry.choice!.origin} asks for a client certificate: only the user chooses, in the browser panel`,
             )
             .join('\n'),
       );

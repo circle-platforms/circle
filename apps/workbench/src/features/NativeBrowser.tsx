@@ -30,7 +30,7 @@ import type {
   BrowserPermission,
 } from '../../../desktop/src/contracts';
 import { Button, IconButton, Status } from '../components/common';
-import { BrowserDialogPanel } from './BrowserDialog';
+import { BrowserDialogPanel, CertificateChoicePanel } from './BrowserDialog';
 import { t } from '../i18n';
 
 const PERMISSIONS: Record<BrowserPermission['kinds'][number], () => string> = {
@@ -63,6 +63,10 @@ export function NativeBrowser() {
   const host = desktopHost()!;
   const opened = browserOpened(state);
   const dialog = shownDialog(state);
+  // The shown tab's site waits for a client certificate
+  const choice = state?.certificateChoices?.find(
+    (entry) => entry.tab === state.tab,
+  );
   useEffect(() => {
     active.current = false;
     wasOpened.current = false;
@@ -248,6 +252,8 @@ export function NativeBrowser() {
       <div className="native-browser-viewport" ref={viewport}>
         {dialog ? (
           <BrowserDialogPanel sessionId={id} dialog={dialog} />
+        ) : choice ? (
+          <CertificateChoicePanel sessionId={id} choice={choice} />
         ) : failure ? (
           <div
             className="browser-error-page"

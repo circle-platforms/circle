@@ -102,6 +102,12 @@ export interface DesktopBridge {
   ) => Promise<string | null>;
   /** The person chooses the files for the file chooser a click of Circle's opened. */
   browserChoose: (sessionId: string, chooser: string) => Promise<BrowserState>;
+  /** The person's client certificate for a site that asks (an index), or none (null). */
+  browserCertificate: (
+    sessionId: string,
+    choice: string,
+    index: number | null,
+  ) => Promise<BrowserState>;
   /** The person allows or blocks what a page asked permission for. */
   browserPermission: (
     sessionId: string,
@@ -150,6 +156,8 @@ export interface BrowserState {
   chooser?: { id: string; multiple: boolean };
   /** The conversation's latest downloads, newest last. */
   downloads?: BrowserDownload[];
+  /** Sites in this conversation's tabs that wait for the person's client certificate. */
+  certificateChoices?: BrowserCertificateChoice[];
   /** What the shown tab's page asks permission for, waiting for the person. */
   permissions?: BrowserPermission[];
   /**
@@ -162,6 +170,20 @@ export interface BrowserState {
   handoff?: string;
 }
 export type BrowserControl = 'shared' | 'agent' | 'user_pending' | 'user';
+/** A site asks for a client certificate: only the person chooses one, or none. */
+export interface BrowserCertificateChoice {
+  id: string;
+  tab: string;
+  origin: string;
+  certificates: {
+    subject: string;
+    issuer: string;
+    /** Seconds since 1970. */
+    validExpiry: number;
+    /** SHA-256, as the certificate warning shows it. */
+    fingerprint: string;
+  }[];
+}
 /** A page's request for a permission, which only the person answers. */
 export interface BrowserPermission {
   id: string;

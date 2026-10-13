@@ -3207,6 +3207,29 @@ pre {
   display: grid;
   gap: 8px;
 }
+.browser-certificates {
+  display: grid;
+  gap: 6px;
+  max-height: 240px;
+  overflow: auto;
+}
+.browser-certificate-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.browser-certificate-option strong,
+.browser-certificate-option small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.browser-certificate-option small {
+  color: var(--muted);
+}
 .browser-dialog-note {
   color: var(--accent);
 }

@@ -629,6 +629,10 @@ app
       if (!browsers) throw Error('window not ready');
       return browsers.choose(id, chooser);
     });
+    handle('circle:browser-certificate', (id, choice, index) => {
+      if (!browsers) throw Error('window not ready');
+      return browsers.certificate(id, choice, index);
+    });
     handle('circle:browser-permission', (id, request, allow) => {
       if (!browsers) throw Error('window not ready');
       return browsers.permission(id, request, allow);

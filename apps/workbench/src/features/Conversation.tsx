@@ -31,7 +31,11 @@ import { Button, IconButton, FileChip, Status } from '../components/common';
 import { Markdown } from '../components/Markdown';
 import { ToolGroup, TurnRow } from '../components/ToolGroup';
 import { MessageView } from '../components/MessageView';
-import { BrowserDialogRequest, BrowserHandoffRequest } from './BrowserDialog';
+import {
+  BrowserDialogRequest,
+  BrowserHandoffRequest,
+  CertificateChoiceRequest,
+} from './BrowserDialog';
 import { useBrowserState } from './useBrowserState';
 import { InlineRequest } from './InlineRequest';
 import {
@@ -615,6 +619,14 @@ export function Conversation({
                 key={dialog.id}
                 sessionId={session.id}
                 dialog={dialog}
+              />
+            ))}
+          {session.turn &&
+            browser?.certificateChoices?.map((choice) => (
+              <CertificateChoiceRequest
+                key={choice.id}
+                sessionId={session.id}
+                choice={choice}
               />
             ))}
           {session.turn && browser?.control === 'user' && (
