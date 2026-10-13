@@ -13,7 +13,12 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { cp, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
-import { existsSync, createReadStream, openSync } from 'node:fs';
+import {
+  appendFileSync,
+  createReadStream,
+  existsSync,
+  openSync,
+} from 'node:fs';
 import { join, relative, basename, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -51,6 +56,7 @@ const msiexec = (...args) => {
 let lastStage = Date.now();
 const stage = (text) => {
   lastStage = Date.now();
+  note(text);
   console.log(`-- ${text}`);
 };
 const { version } = JSON.parse(
@@ -58,7 +64,24 @@ const { version } = JSON.parse(
 );
 const [major, minor, patch] = version.split(/[.-]/).map(Number);
 const next = `${major}.${minor}.${patch + 1}`;
-const temp = await mkdtemp(join(tmpdir(), 'circle-desktop-update-'));
+// A folder CI can collect when the check hangs (CIRCLE_DESKTOP_TEST_TEMP), else the system's
+const temp = await mkdtemp(
+  join(
+    process.env.CIRCLE_DESKTOP_TEST_TEMP || tmpdir(),
+    'circle-desktop-update-',
+  ),
+);
+// Every step, written at once: a check that stops answering still says where it was
+const note = (text) => {
+  try {
+    appendFileSync(
+      join(temp, 'progress.log'),
+      `${new Date().toISOString()} ${text}\n`,
+    );
+  } catch {
+    /* the folder may be gone */
+  }
+};
 // An application that no longer answers must not hold a check for good
 const within = (promise, ms) =>
   Promise.race([
@@ -70,6 +93,7 @@ const within = (promise, ms) =>
 const checks = [];
 const check = (name) => {
   checks.push(name);
+  note(`ok ${name}`);
   console.log('ok', name);
 };
 // What the installer did, what the application wrote and what is left: shown when a check
@@ -268,6 +292,7 @@ try {
     new Promise((resolve) => setTimeout(() => resolve(false), 120000)),
   ]);
   clearInterval(beat);
+  note(`the application ${left ? 'quit' : 'did not quit in 120 s'}`);
   if (!left)
     throw Error(
       `the application did not quit for the installer: ${JSON.stringify(
@@ -277,7 +302,9 @@ try {
         ).catch((error) => String(error)),
       )}`,
     );
-  await within(browser.close(), 10000).catch(() => {});
+  await within(browser.close(), 10000).catch((error) =>
+    note(`closing the connection: ${error}`),
+  );
   check('the application quits for the installer');
 
   stage('waiting for the new version to start');
