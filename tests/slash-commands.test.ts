@@ -209,6 +209,9 @@ test('while a turn runs, commands that change it wait; the listed ones still wor
   );
   await app.submit('/session');
   assert.match(app.state.notices.at(-1)!, new RegExp(`^session  ${id}`));
+  // /mode joins /yolo: the mode may change while the turn runs.
+  await app.submit('/mode');
+  await until(() => runtime.mode === 'accept-edits');
   await app.submit('/yolo');
   assert.ok(runtime.policy.yoloEnabled(id));
   release();
@@ -244,6 +247,7 @@ test('/settings changes the marked setting and saves only that key', async (t) =
       ['esc esc opens', 'tree'],
       ['model', 'scripted · /models'],
       ['thinking depth', 'default · /effort'],
+      ['default mode', 'manual'],
       ['endpoint', 'openai · http://127.0.0.1:9/v1'],
       ['trusted folders', '1'],
       ['mcp servers', '0 · /mcp'],
@@ -667,16 +671,179 @@ test('/name, /session, /approvals, /themes and /effort answer as 0.5.0 did', asy
     "✖ Unknown depth 'huge' · choose minimal, low, medium, high, xhigh, max",
   );
   const notes = app.state.notices.length;
+  // shift+tab cycles the session mode; the notice lands in the transcript.
   await key('shift+tab');
+  await until(() => runtime.mode === 'accept-edits');
+  assert.equal(
+    app.state.notices.at(-1),
+    'Accept edits · workspace file edits run without asking, commands and deletes still ask',
+  );
+  // alt+t cycles the thinking depth, for this session only.
+  await key('alt+t');
   assert.equal(runtime.thinkingLevel, 'minimal');
   assert.equal(app.state.flash, 'Thinking depth → minimal');
-  assert.equal(app.state.notices.length, notes);
+  assert.equal(app.state.notices.length, notes + 1);
+  await key('shift+tab');
+  await until(() => runtime.mode === 'plan');
+  await key('shift+tab');
+  await until(() => runtime.mode === 'auto');
+  await key('shift+tab');
+  await until(() => runtime.mode === 'manual');
   await app.submit('/thinking HIGH');
   assert.equal(runtime.thinkingLevel, 'high');
   assert.equal(app.state.notices.at(-1), 'Thinking depth → high');
   await app.submit('/thinking');
   assert.equal(app.state.showThinking, false);
   assert.equal(app.state.flash, 'Thinking hidden');
+});
+
+test('/approvals add and remove keep command patterns in the settings and on the policy', async (t) => {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const saved = trustFolder(defaultSettings(), workspace);
+  saved.initialized = true;
+  saveSettings(saved, home);
+  const { app, runtime, key } = await session(t, [], {
+    home,
+    workspace,
+    settings: loadSettings(home),
+  });
+  await app.submit('/approvals add');
+  assert.equal(app.state.flash, 'Usage: /approvals add <pattern>');
+  await app.submit('/approvals add npm *');
+  assert.deepEqual(loadSettings(home).allowed_commands, ['npm *']);
+  assert.deepEqual(runtime.policy.allowedCommands, ['npm *']);
+  assert.equal(
+    app.state.notices.at(-1),
+    'Allowed · commands matching "npm *" run without asking',
+  );
+  // the pattern answers for matching commands only
+  assert.equal(
+    runtime.policy.needsApproval(
+      'execute',
+      { command: 'npm run build' },
+      runtime.session.id,
+    ),
+    false,
+  );
+  assert.equal(
+    runtime.policy.needsApproval(
+      'execute',
+      { command: 'make build' },
+      runtime.session.id,
+    ),
+    true,
+  );
+  await app.submit('/approvals add npm *');
+  assert.equal(app.state.flash, '"npm *" is already allowed');
+  await app.submit('/approvals list');
+  assert.equal(
+    app.state.notices.at(-1),
+    'No always-allow rules this session.\nCommand patterns from settings:\n  1. npm *\nRemove one: /approvals remove <pattern|number>',
+  );
+  await app.submit('/approvals');
+  assert.deepEqual(
+    app.state.picker!.items.map((item) => item.label),
+    ['1. Allow: npm *', '2. Close'],
+  );
+  await key('escape');
+  await app.submit('/approvals remove 1');
+  assert.deepEqual(loadSettings(home).allowed_commands, []);
+  assert.deepEqual(runtime.policy.allowedCommands, []);
+  assert.equal(
+    app.state.notices.at(-1),
+    'Removed · commands matching "npm *" ask again',
+  );
+  await app.submit('/approvals remove npm *');
+  assert.equal(app.state.flash, 'No pattern "npm *"');
+  await app.submit('/approvals remove 3');
+  assert.equal(app.state.flash, 'No pattern number 3');
+  await app.submit('/approvals remove');
+  assert.equal(app.state.flash, 'Usage: /approvals remove <pattern|number>');
+});
+
+test("/approvals remove keeps a trusted project's copy of the same pattern", async (t) => {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const saved = trustFolder(defaultSettings(), workspace);
+  saved.initialized = true;
+  saveSettings(saved, home);
+  const { app, runtime } = await session(t, [], {
+    home,
+    workspace,
+    settings: loadSettings(home),
+  });
+  await app.submit('/approvals add npm *');
+  mkdirSync(join(workspace, '.circle'), { recursive: true });
+  writeFileSync(
+    join(workspace, '.circle', 'settings.json'),
+    JSON.stringify({ allowed_commands: ['npm *'] }),
+  );
+  await app.submit('/approvals remove npm *');
+  assert.deepEqual(loadSettings(home).allowed_commands, []);
+  assert.deepEqual(runtime.policy.allowedCommands, ['npm *']);
+  assert.equal(
+    app.state.notices.at(-1),
+    'Removed from your settings · the project still allows "npm *"',
+  );
+});
+
+test('/settings picks the mode new sessions start in, and ctrl+s saves it', async (t) => {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const saved = trustFolder(defaultSettings(), workspace);
+  saved.initialized = true;
+  saveSettings(saved, home);
+  const { app, runtime, key } = await session(t, [], {
+    home,
+    workspace,
+    settings: loadSettings(home),
+  });
+  const choose = async (label: string): Promise<void> => {
+    const list = app.state.picker!;
+    list.focus = list.items.findIndex((item) => item.label === label);
+    await key('enter');
+  };
+  await app.submit('/settings');
+  await choose('default mode');
+  assert.equal(app.state.picker!.title, 'Session mode');
+  assert.deepEqual(
+    app.state.picker!.items.map((item) => [item.label, item.meta]),
+    [
+      ['manual', 'asking before each change and command'],
+      ['accept edits', 'workspace edits run without asking'],
+      ['read-only', 'writes and shell are blocked · plan.md is allowed'],
+      ['auto', 'tool calls run without asking'],
+    ],
+  );
+  // enter changes this session only
+  await choose('accept edits');
+  assert.equal(app.state.picker, undefined);
+  assert.equal(runtime.mode, 'accept-edits');
+  assert.equal(loadSettings(home).default_mode, '');
+  assert.equal(
+    app.state.notices.at(-1),
+    'Accept edits · workspace file edits run without asking, commands and deletes still ask',
+  );
+  // ctrl+s writes default_mode and takes the session with it
+  await app.submit('/settings');
+  await choose('default mode');
+  const list = app.state.picker!;
+  list.focus = list.items.findIndex((item) => item.label === 'auto');
+  await key('ctrl+s');
+  assert.equal(loadSettings(home).default_mode, 'auto');
+  assert.equal(runtime.mode, 'auto');
+  assert.equal(
+    app.state.notices.at(-1),
+    'Auto on · tool calls run without asking · saved as the default',
+  );
+  // /new starts in the saved default, and the list marks it
+  await app.submit('/new');
+  assert.equal(runtime.mode, 'auto');
+  await app.submit('/settings');
+  await choose('default mode');
+  assert.match(app.state.picker!.items[3]!.meta!, /· default$/);
+  await key('escape');
 });
 
 test('/logout clears the key and the connection and keeps the session open', async (t) => {

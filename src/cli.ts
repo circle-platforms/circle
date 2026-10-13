@@ -602,7 +602,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       process.stderr.write(
         `Could not migrate ${error.thread || 'legacy data'}: ${error.message}\n`,
       );
-    runtime.policy.setYolo(runtime.session.id, options.yolo);
+    // Only --yolo turns auto on here; without it a saved default_mode stays.
+    if (options.yolo) runtime.policy.setYolo(runtime.session.id, true);
     if (options.mode === 'rpc') {
       const { runRpc } = await import('./rpc.js');
       return await runRpc(runtime);

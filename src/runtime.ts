@@ -191,6 +191,7 @@ export class AgentRuntime {
       options.home,
       this.sandbox.credentialFiles,
       (path) => this.sandbox.resolvePath(path),
+      options.settings.allowed_commands,
     );
     this.jobs = new JobRegistry(this.sandbox, (kind, job) => {
       if (kind === 'job_ended') this.userShells?.ended(job);
@@ -249,6 +250,7 @@ export class AgentRuntime {
       this.store.rename(this.session.id, this.runOptions.session_name);
     this.harness = this.createHarness(options.model);
     this.todos = restoredTodos(this.harness.messages);
+    this.applyDefaultMode();
     this.bus.setRunId(this.session.id);
     if (!options.model)
       void this.catalog.refreshIfStale(() =>
@@ -809,6 +811,7 @@ export class AgentRuntime {
       this.options.workspace,
       this.options.modelOverride,
     ).settings;
+    this.policy.setAllowedCommands(this.options.settings.allowed_commands);
     this.integrationsReady = undefined;
     await this.initialize();
   }
@@ -835,6 +838,14 @@ export class AgentRuntime {
   setMode(mode: SessionMode): void {
     this.setPlanMode(mode === 'plan');
     this.policy.setMode(this.session.id, mode === 'plan' ? 'manual' : mode);
+  }
+  // A saved default_mode starts each session. A plan mode restored from the
+  // transcript wins over it, and --yolo, applied after construction, wins
+  // over both.
+  private applyDefaultMode(): void {
+    const wanted = this.options.settings.default_mode;
+    if (!wanted || this.harness.planMode || this.mode === wanted) return;
+    this.setMode(wanted);
   }
   setModel(model: string): void {
     if (this.busy) throw new Error('a turn is running');
@@ -976,6 +987,7 @@ export class AgentRuntime {
     this.todos = [];
     this.harness = this.createHarness(this.options.model);
     this.todos = restoredTodos(this.harness.messages);
+    this.applyDefaultMode();
     this.bus.setRunId(this.session.id);
     this.extensions.emit('session_start', {
       workspace: this.options.workspace,
@@ -991,6 +1003,7 @@ export class AgentRuntime {
     this.session = session;
     this.harness = this.createHarness(this.options.model);
     this.todos = restoredTodos(this.harness.messages);
+    this.applyDefaultMode();
     this.bus.setRunId(session.id);
   }
   async importSession(text: string): Promise<void> {
@@ -1001,6 +1014,7 @@ export class AgentRuntime {
       this.session = session;
       this.harness = this.createHarness(this.options.model);
       this.todos = restoredTodos(this.harness.messages);
+      this.applyDefaultMode();
       this.bus.setRunId(session.id);
       this.extensions.emit('session_start', {
         workspace: this.options.workspace,
@@ -1010,7 +1024,13 @@ export class AgentRuntime {
     }
     await this.newSession();
     this.store.append(this.session.id, messages);
-    this.harness.planMode = restoredPlanMode(messages);
+    const restored = restoredPlanMode(messages);
+    // The imported transcript decides plan mode. A saved default_mode may
+    // have turned plan on inside newSession; setPlanMode(false) then records
+    // the correction, so resuming this session reads the same state. Without
+    // that it is a no-op and the assignment behaves as before.
+    if (restored) this.harness.planMode = true;
+    else this.setPlanMode(false);
     this.todos = restoredTodos(messages);
     if (typeof header.title === 'string')
       this.store.rename(this.session.id, header.title);

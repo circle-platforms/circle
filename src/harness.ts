@@ -485,7 +485,15 @@ export class Harness {
       const found = this.options.policy.review(call.name, call.args);
       if (found.verdict === 'DENY')
         throw new Error(found.message || found.reason);
+      // A command the settings' allowed_commands patterns cover runs without
+      // asking: in every mode, including the always-asking calls and the
+      // headless run that cannot show a card.
+      const settingsAllowed = this.options.policy.allowedBySettings(
+        call.name,
+        call.args,
+      );
       if (
+        !settingsAllowed &&
         tool.effect !== 'read' &&
         tool.approval !== false &&
         (this.options.policy.needsApproval(

@@ -12,6 +12,7 @@ import {
   loadSettings,
   saveCredentials,
   saveSettings,
+  settingsForRun,
   trustFolder,
 } from '../src/settings.js';
 import { cleanup, scratch } from './helpers.js';
@@ -32,6 +33,7 @@ test('the terminal applies project settings and --model for the run only; saving
   saved.auth.base_url = 'http://127.0.0.1:9/v1';
   saved.auth.model = 'saved-model';
   saved.theme = 'dark';
+  saved.allowed_commands = ['npm *'];
   saved = trustFolder(saved, workspace);
   saveSettings(saved, home);
   project(workspace, {
@@ -39,6 +41,7 @@ test('the terminal applies project settings and --model for the run only; saving
     theme: 'light',
     hide_thinking: true,
     default_thinking: 'low',
+    allowed_commands: ['git *'],
   });
   const app = new SessionApp(workspace, home, loadSettings(home));
   const ui = app as any;
@@ -53,6 +56,8 @@ test('the terminal applies project settings and --model for the run only; saving
   assert.equal(app.settings.theme, 'light');
   assert.equal(app.settings.default_thinking, 'low');
   assert.equal(app.state.showThinking, false);
+  // the project's command patterns come on top of the user's
+  assert.deepEqual(app.settings.allowed_commands, ['npm *', 'git *']);
   const runtime = new AgentRuntime({
     workspace,
     home,
@@ -63,6 +68,7 @@ test('the terminal applies project settings and --model for the run only; saving
   });
   cleanup(t, () => runtime.close());
   app.runtime = runtime;
+  assert.deepEqual(runtime.policy.allowedCommands, ['npm *', 'git *']);
   await app.command('themes', 'auto');
   await app.command('trust', '');
   const file = loadSettings(home);
@@ -70,9 +76,54 @@ test('the terminal applies project settings and --model for the run only; saving
   assert.equal(file.auth.model, 'saved-model');
   assert.equal(file.hide_thinking, false);
   assert.equal(file.default_thinking, '');
+  assert.deepEqual(file.allowed_commands, ['npm *']);
+  project(workspace, {
+    model: 'project-model',
+    theme: 'light',
+    hide_thinking: true,
+    default_thinking: 'low',
+    allowed_commands: ['git *', 'make *'],
+  });
   await runtime.reloadIntegrations();
   assert.equal(runtime.options.settings.auth.model, 'flag-model');
   assert.equal(runtime.options.settings.hide_thinking, true);
+  // a reload hands the policy the fresh pattern list
+  assert.deepEqual(runtime.policy.allowedCommands, [
+    'npm *',
+    'git *',
+    'make *',
+  ]);
+});
+
+test("a project's command patterns wait for the folder to be trusted", async (t) => {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  let saved = defaultSettings();
+  saved.initialized = true;
+  saved.auth.base_url = 'http://127.0.0.1:9/v1';
+  saved.auth.model = 'saved-model';
+  saveSettings(saved, home);
+  project(workspace, { allowed_commands: ['git *'] });
+  const runtime = new AgentRuntime({
+    workspace,
+    home,
+    settings: settingsForRun(home, workspace).settings,
+    model: new ScriptedModel(),
+    headless: true,
+  });
+  cleanup(t, () => runtime.close());
+  assert.deepEqual(runtime.policy.allowedCommands, []);
+  // trusting the folder lets them in on the next run's settings
+  saveSettings(trustFolder(loadSettings(home), workspace), home);
+  const trusted = new AgentRuntime({
+    workspace,
+    home,
+    settings: settingsForRun(home, workspace).settings,
+    model: new ScriptedModel(),
+    headless: true,
+  });
+  cleanup(t, () => trusted.close());
+  assert.deepEqual(trusted.policy.allowedCommands, ['git *']);
 });
 
 test('print mode sends --model over the project model and --thinking over the variable, and saves neither', async (t) => {

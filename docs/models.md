@@ -57,7 +57,7 @@ Circle asks models for extended thinking when the protocol supports it. The dept
 
 - `/effort` lists the depths. `enter` uses one for the rest of this run; `ctrl+s` also saves it as `default_thinking` in `settings.json`.
 - `/effort <level>` and `/thinking <level>` set it for the rest of this run.
-- `shift+tab` switches to the next depth.
+- `alt+t` switches to the next depth.
 - `--thinking <level>` sets it for one run and is never saved.
 - `CIRCLE_REASONING_EFFORT` sets it for a run and wins over `default_thinking`.
 
