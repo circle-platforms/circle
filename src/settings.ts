@@ -33,6 +33,7 @@ export interface CircleSettings {
   mcp_servers: Record<string, unknown>[];
   extensions: Record<string, Record<string, unknown>>;
   credential_files: string[];
+  trust_cert_files: string[];
   // Wildcard patterns; a command every segment of which matches one runs
   // without asking (src/approvals.ts commandAllowed)
   allowed_commands: string[];
@@ -61,6 +62,7 @@ export const defaultSettings = (): CircleSettings => ({
   mcp_servers: [],
   extensions: {},
   credential_files: [],
+  trust_cert_files: [],
   allowed_commands: [],
   default_mode: '',
   update_check: true,
@@ -119,6 +121,7 @@ export function loadSettingsFromDict(
       ) as Record<string, Record<string, unknown>>)
     : {};
   settings.credential_files = strings(raw.credential_files);
+  settings.trust_cert_files = strings(raw.trust_cert_files);
   settings.allowed_commands = strings(raw.allowed_commands);
   settings.default_mode = modeName(raw.default_mode);
   settings.enabled_models = strings(raw.enabled_models);

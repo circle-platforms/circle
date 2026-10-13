@@ -1,4 +1,4 @@
-import { isCertificateError, TLS_HINT } from './net.js';
+import { certificateHint, isCertificateError } from './net.js';
 export interface ProbeResult {
   protocol: string;
   models: string[];
@@ -131,7 +131,7 @@ export async function resolveEndpoint(
       } catch (error) {
         failures.push(
           isCertificateError(error)
-            ? TLS_HINT
+            ? certificateHint()
             : 'connection failed or invalid JSON',
         );
       }

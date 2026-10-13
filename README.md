@@ -59,6 +59,8 @@ On macOS and Windows the application updates itself: settings → about → chec
 
 The window follows the system language the first time, and can be English or 简体中文. The terminal stays English. To run it from a checkout, see [apps/desktop](apps/desktop/README.md).
 
+**Does your organization sign its own certificates?** Put the CA's PEM file somewhere readable and list it under `trust_cert_files` in `~/.circle/settings.json`. Start `circle` with no environment variables: it adds those authorities to the ones it trusts, and the commands and tools it starts get one merged bundle through `SSL_CERT_FILE`, the system store included. See [Settings](https://qingshanfeihu.github.io/circle/settings/) and [Security](https://qingshanfeihu.github.io/circle/security/).
+
 ## Run
 
 ```bash
