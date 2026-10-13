@@ -490,7 +490,27 @@ test(
     );
     // A hidden input behind a button: Circle's click brings its chooser to the result
     const addLogs = ref(given.text, /\[(e\d+)\] button "Add logs"/);
-    const opened2 = await act('click', { ref: addLogs, element: 'add logs' });
+    // A failure here says which browser it was and whether its chooser reached Circle
+    const browser = chrome as unknown as {
+      cdp: {
+        send: (method: string) => Promise<{ product?: string }>;
+        on: (listener: (event: { method: string }) => void) => () => void;
+      };
+    };
+    const choosers: string[] = [];
+    const stop = browser.cdp.on((event) => {
+      if (event.method === 'Page.fileChooserOpened')
+        choosers.push(event.method);
+    });
+    const product = (await browser.cdp.send('Browser.getVersion')).product;
+    const opened2 = await act('click', {
+      ref: addLogs,
+      element: 'add logs',
+    }).catch((error: Error) => {
+      error.message += ` (${product}; chooser events: ${choosers.length})`;
+      throw error;
+    });
+    stop();
     assert.match(
       opened2.text,
       /It opened file chooser f1: answer it with browser_upload\./,
