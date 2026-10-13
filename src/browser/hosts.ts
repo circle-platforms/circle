@@ -54,3 +54,13 @@ export function webUrl(value: string): string | undefined {
     return undefined;
   }
 }
+
+/** A page's site: `https://host:port` for a web address, else nothing. */
+export const siteOf = (url: string): string => {
+  try {
+    const parsed = new URL(url);
+    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.origin : '';
+  } catch {
+    return '';
+  }
+};

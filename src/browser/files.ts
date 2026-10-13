@@ -1,4 +1,11 @@
-import { existsSync, realpathSync, statSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, extname, isAbsolute, join } from 'node:path';
 
@@ -57,6 +64,15 @@ export function freePath(folder: string, name: string): string {
   for (let n = 0; ; n++) {
     const candidate = join(folder, n ? `${stem} (${n})${ext}` : name);
     if (!existsSync(candidate)) return candidate;
+  }
+}
+/** Moves a file, by copying it when the target is on another disk. */
+export function moveFile(source: string, target: string) {
+  try {
+    renameSync(source, target);
+  } catch {
+    copyFileSync(source, target);
+    rmSync(source, { force: true });
   }
 }
 export const sizeText = (bytes: number) =>

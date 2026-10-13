@@ -37,7 +37,9 @@ if (fixturePath) {
               JSON.stringify({
                 system: request.system,
                 messages: request.messages,
-                tools: request.tools.map(({ run: _run, ...tool }) => tool),
+                tools: request.tools.map(
+                  ({ run: _run, approvalFacts: _facts, ...tool }) => tool,
+                ),
               }) + '\n',
               { mode: 0o600 },
             );

@@ -50,6 +50,15 @@ export interface Tool {
    * disk keeps the reference and never a secret's value.
    */
   variables?: boolean;
+  /**
+   * What the tool knows of a call that the model did not say, such as the site a browser
+   * action acts on: added to the call's arguments before the approval, so the rules and
+   * the card go by it, and checked again by the tool when it runs.
+   */
+  approvalFacts?: (
+    args: Record<string, unknown>,
+    sessionId: string,
+  ) => Record<string, unknown> | undefined;
   run(args: Record<string, unknown>, context: ToolContext): Promise<string>;
 }
 export interface ToolContext {

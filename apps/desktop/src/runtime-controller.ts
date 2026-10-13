@@ -45,6 +45,7 @@ import { toMarkdown, toHtml } from '../../../src/session_export.js';
 import { browserTools, type BrowserPort } from '../../../src/browser/tools.js';
 import type {
   CertificateApproval,
+  DownloadApproval,
   UploadApproval,
 } from '../../../src/browser/protocol.js';
 import { sizeText } from '../../../src/browser/files.js';
@@ -280,7 +281,14 @@ export class RuntimeController {
               confirm: (_sessionId, approval, signal, callId) =>
                 approval.kind === 'upload'
                   ? this.confirmUpload(runtime, approval, signal, callId)
-                  : this.confirmCertificate(runtime, approval, signal, callId),
+                  : approval.kind === 'download'
+                    ? this.confirmDownload(runtime, approval, signal, callId)
+                    : this.confirmCertificate(
+                        runtime,
+                        approval,
+                        signal,
+                        callId,
+                      ),
               // Paths as the file tools take them; a credential file never goes
               files: (path) => {
                 const full = runtime.sandbox.resolvePath(path);
@@ -1145,6 +1153,42 @@ export class RuntimeController {
       signal,
     );
     return answer === 'approve' ? 'once' : 'reject';
+  }
+  /**
+   * The model's action downloaded files from a site not allowed yet: auto mode keeps them,
+   * the other modes ask once for each site.
+   */
+  private async confirmDownload(
+    runtime: AgentRuntime,
+    approval: DownloadApproval,
+    signal: AbortSignal,
+    callId?: string,
+  ): Promise<'once' | 'always' | 'reject'> {
+    if (runtime.policy.mode(runtime.session.id) === 'auto') return 'once';
+    const answer = await this.wait(
+      runtime,
+      {
+        kind: 'approval',
+        callId,
+        tool: 'browser_download',
+        title: 'browser_download · keeps a download',
+        reason: 'keeps a download',
+        target: approval.site,
+        input: {
+          site: approval.site,
+          files: approval.files
+            .map((file) => `${file.name} (${sizeText(file.size)})`)
+            .join('\n'),
+        },
+        choices: ['approve', 'always', 'reject'],
+      },
+      signal,
+    );
+    return answer === 'approve'
+      ? 'once'
+      : answer === 'always'
+        ? 'always'
+        : 'reject';
   }
   private async question(
     runtime: AgentRuntime,

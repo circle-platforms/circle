@@ -293,7 +293,11 @@ export class ContextManager {
       (Number.isFinite(parsed) && parsed > 0 ? parsed : 128000);
     const estimate =
       tokenLen(system) +
-      tokenLen(JSON.stringify(tools.map(({ run: _run, ...tool }) => tool))) +
+      tokenLen(
+        JSON.stringify(
+          tools.map(({ run: _run, approvalFacts: _facts, ...tool }) => tool),
+        ),
+      ) +
       messageTokens(projected);
     const budget = window * 0.95 - (model.outputBudget ?? 0);
     if (
@@ -363,7 +367,9 @@ export class ContextManager {
       tokenLen(frame.system ?? '') +
       tokenLen(
         JSON.stringify(
-          (frame.tools ?? []).map(({ run: _run, ...tool }) => tool),
+          (frame.tools ?? []).map(
+            ({ run: _run, approvalFacts: _facts, ...tool }) => tool,
+          ),
         ),
       );
     const tokensBefore = overhead + messageTokens(visible);

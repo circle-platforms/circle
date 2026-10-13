@@ -25,6 +25,11 @@ export interface BrowserRequest {
 }
 export interface BrowserResult {
   text: string;
+  /**
+   * The site of the page shown after the action (`https://host:port`, or empty): the next
+   * action's approval goes by it, and the browser checks it before acting.
+   */
+  origin?: string;
   /** A PNG, base64, for `screenshot`. */
   image?: string;
   /**
@@ -34,7 +39,18 @@ export interface BrowserResult {
    */
   approval?: BrowserApproval;
 }
-export type BrowserApproval = CertificateApproval | UploadApproval;
+export type BrowserApproval =
+  CertificateApproval | UploadApproval | DownloadApproval;
+/**
+ * Files an action of the model's downloaded from a site not yet allowed to download in
+ * this conversation: kept only if the person says so.
+ */
+export interface DownloadApproval {
+  kind: 'download';
+  token: string;
+  site: string;
+  files: { name: string; size: number }[];
+}
 /** Files the model would give a page's file input, which only the person allows. */
 export interface UploadApproval {
   kind: 'upload';

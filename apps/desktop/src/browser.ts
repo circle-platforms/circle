@@ -15,8 +15,9 @@ import {
   randomUUID,
   X509Certificate,
 } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
-import { basename } from 'node:path';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { safeExternalUrl } from './policy';
 import { captureFrame } from './capture';
@@ -35,12 +36,18 @@ import {
   type BrowserResult,
 } from '../../../src/browser/protocol.js';
 import { pageCall } from '../../../src/browser/page.js';
-import { dialogLine, dialogSnapshot } from '../../../src/browser/format.js';
+import {
+  dialogLine,
+  dialogSnapshot,
+  downloadDecision,
+} from '../../../src/browser/format.js';
 import { TrustedCertificates } from '../../../src/browser/certificates.js';
+import { siteOf } from '../../../src/browser/hosts.js';
 import {
   downloadName,
   downloadsFolder,
   freePath,
+  moveFile,
   sizeText,
   uploadFiles,
 } from '../../../src/browser/files.js';
@@ -54,6 +61,15 @@ import {
   DEFAULT_LIGHT,
 } from '../../../src/ink/theme.js';
 
+/** A download, with what keeping it takes. */
+interface Arriving {
+  download: BrowserDownload & { path: string };
+  cancel: () => void;
+  running: boolean;
+  /** Waiting for the person: it stays outside the downloads folder until they keep it. */
+  held: boolean;
+  discarded?: boolean;
+}
 interface Dialog extends BrowserDialog {
   answer: (accept: boolean, text: string) => void;
   screen?: Promise<string | null>;
@@ -119,6 +135,10 @@ interface Conversation {
   nextChooser: number;
   // The latest downloads, newest last, with where each is kept
   downloads: (BrowserDownload & { path: string })[];
+  // Sites whose downloads the person allowed for this conversation
+  downloadSites: Set<string>;
+  // What an action of the model's downloaded from a site not yet allowed
+  hold?: { token: string; site: string; asked: boolean; downloads: Arriving[] };
   control: BrowserControl;
   handoff?: string;
   // Woken when the person hands the browser back
@@ -174,6 +194,8 @@ export class BrowserSessions {
   private trusted: TrustedCertificates;
   // Download paths taken by downloads still arriving
   private reserved = new Set<string>();
+  // Where downloads wait for the person, made when one first does
+  private held?: string;
   private closed = false;
   // The window's theme, which Circle's own pages and the pointer follow
   private dark = nativeTheme.shouldUseDarkColors;
@@ -222,6 +244,7 @@ export class BrowserSessions {
         nextDownload: 0,
         nextChooser: 0,
         downloads: [],
+        downloadSites: new Set(),
         control: 'shared',
         handedBack: new Set(),
       };
@@ -259,40 +282,71 @@ export class BrowserSessions {
     // A download goes to the downloads folder under its own name, as a browser keeps it; the
     // path is set here, or Electron would ask with a save dialog
     session.on('will-download', (_event, item) => {
-      mkdirSync(this.downloadsDir, { recursive: true });
-      let path = freePath(this.downloadsDir, downloadName(item.getFilename()));
-      while (this.reserved.has(path))
-        path = freePath(this.downloadsDir, '1 ' + basename(path));
-      this.reserved.add(path);
+      const shown = conversation.active
+        ? conversation.tabs.get(conversation.active)
+        : undefined;
+      // The download's own site, or the page's for one made in the page
+      const site = siteOf(item.getURL()) || (shown ? this.site(shown) : '');
+      // The model's action downloads from a site not allowed yet: the person decides
+      const held =
+        conversation.operating && !conversation.downloadSites.has(site);
+      let path: string;
+      if (held) {
+        this.held ??= mkdtempSync(join(tmpdir(), 'circle-downloads-'));
+        path = join(this.held, randomUUID());
+      } else {
+        mkdirSync(this.downloadsDir, { recursive: true });
+        path = freePath(this.downloadsDir, downloadName(item.getFilename()));
+        while (this.reserved.has(path))
+          path = freePath(this.downloadsDir, '1 ' + basename(path));
+        this.reserved.add(path);
+      }
       item.setSavePath(path);
       const download = {
         id: `dl${++conversation.nextDownload}`,
-        name: basename(path),
+        name: held ? downloadName(item.getFilename()) : basename(path),
         path,
-        state: 'progress' as BrowserDownload['state'],
+        state: (held ? 'waiting' : 'progress') as BrowserDownload['state'],
         received: 0,
         total: item.getTotalBytes(),
       };
+      const entry: Arriving = {
+        download,
+        cancel: () => item.cancel(),
+        running: true,
+        held,
+      };
+      if (held) {
+        conversation.hold ??= {
+          token: randomUUID(),
+          site,
+          asked: false,
+          downloads: [],
+        };
+        conversation.hold.downloads.push(entry);
+      }
       conversation.downloads = [...conversation.downloads, download].slice(-5);
       conversation.events.push(
-        `download ${download.id} of ${quote(download.name)} from ${item.getURL()} started`,
+        `download ${download.id} of ${quote(download.name)} from ${item.getURL()} ${held ? 'waits for approval to keep it' : 'started'}`,
       );
-      let shown = 0;
+      let shownAt = 0;
       item.on('updated', () => {
         download.received = item.getReceivedBytes();
-        if (Date.now() - shown < 250) return;
-        shown = Date.now();
+        if (Date.now() - shownAt < 250) return;
+        shownAt = Date.now();
         this.publish(conversation.id);
       });
       item.once('done', (_done, state) => {
         this.reserved.delete(path);
+        entry.running = false;
         download.received = item.getReceivedBytes();
-        download.state = state === 'completed' ? 'done' : 'failed';
-        conversation.events.push(
-          state === 'completed'
-            ? `download ${download.id} finished: ${path} (${sizeText(download.received)})`
-            : `download ${download.id} ${state === 'cancelled' ? 'was cancelled' : 'failed'}`,
-        );
+        if (entry.discarded) return;
+        if (state !== 'completed') {
+          download.state = 'failed';
+          conversation.events.push(
+            `download ${download.id} ${state === 'cancelled' ? 'was cancelled' : 'failed'}`,
+          );
+        } else if (!entry.held) this.finishDownload(conversation, entry);
         this.publish(conversation.id);
       });
       this.publish(conversation.id);
@@ -949,7 +1003,7 @@ export class BrowserSessions {
     const download = this.conversations
       .get(id)
       ?.downloads.find((entry) => entry.id === downloadValue);
-    if (!download) throw Error('no such download');
+    if (!download || download.state !== 'done') throw Error('no such download');
     return download.path;
   }
   bounds(idValue: unknown, value: unknown, visible: unknown) {
@@ -1299,9 +1353,67 @@ export class BrowserSessions {
     const end = Date.now() + 3000;
     while (
       Date.now() < end &&
-      conversation.downloads.some((download) => download.state === 'progress')
+      (conversation.downloads.some(
+        (download) => download.state === 'progress',
+      ) ||
+        conversation.hold?.downloads.some((entry) => entry.running))
     )
       await delay(100, undefined, { signal });
+  }
+  /** A finished download is in the downloads folder, and the model is told where. */
+  private finishDownload(conversation: Conversation, entry: Arriving) {
+    const { download } = entry;
+    try {
+      // One that waited for the person comes from where it waited
+      if (this.held && download.path.startsWith(this.held)) {
+        mkdirSync(this.downloadsDir, { recursive: true });
+        const target = freePath(this.downloadsDir, download.name);
+        moveFile(download.path, target);
+        download.path = target;
+        download.name = basename(target);
+      }
+      download.state = 'done';
+      conversation.events.push(
+        `download ${download.id} finished: ${download.path} (${sizeText(download.received)})`,
+      );
+    } catch (error) {
+      download.state = 'failed';
+      conversation.events.push(
+        `download ${download.id} could not be kept: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  /**
+   * The person's answer about held downloads: kept (and the site allowed for the session
+   * when they said so), or discarded with what is left of them.
+   */
+  private decideHold(
+    conversation: Conversation,
+    keep: boolean,
+    always: boolean,
+  ) {
+    const hold = conversation.hold;
+    if (!hold) return;
+    conversation.hold = undefined;
+    if (keep && always) conversation.downloadSites.add(hold.site);
+    for (const entry of hold.downloads) {
+      entry.held = false;
+      const { download } = entry;
+      if (download.state === 'failed') continue;
+      if (keep) {
+        if (entry.running) download.state = 'progress';
+        else this.finishDownload(conversation, entry);
+        continue;
+      }
+      entry.discarded = true;
+      if (entry.running) entry.cancel();
+      rmSync(download.path, { force: true });
+      conversation.downloads = conversation.downloads.filter(
+        (shown) => shown !== download,
+      );
+      conversation.events.push(`download ${download.id} was not kept`);
+    }
+    this.publish(conversation.id);
   }
   // ---- reaching into the page
   private async js<T = unknown>(
@@ -1499,8 +1611,20 @@ export class BrowserSessions {
   ): Promise<BrowserResult> {
     const request = validateBrowserRequest(value);
     const conversation = this.conversation(this.validId(request.sessionId));
-    const run = async () => {
+    const run = async (): Promise<BrowserResult> => {
       signal.throwIfAborted();
+      const approval = request.args.approval as
+        { token?: unknown; scope?: unknown } | undefined;
+      // The person's answer about downloads the action made: the action is not done again
+      if (conversation.hold && approval?.token === conversation.hold.token) {
+        const keep = approval.scope === 'once' || approval.scope === 'always';
+        this.decideHold(conversation, keep, approval.scope === 'always');
+        return {
+          text: downloadDecision(keep, conversation.events.splice(0)),
+        };
+      }
+      // Not kept when asked: a new action leaves them behind
+      if (conversation.hold?.asked) this.decideHold(conversation, false, false);
       // The person has the browser: Circle waits for it back, and acts on nothing it saw
       // before, since the page may be another by then
       if (conversation.control === 'user') {
@@ -1521,7 +1645,22 @@ export class BrowserSessions {
       this.mask(conversation);
       this.publish(conversation.id);
       try {
-        return await this.action(conversation, request, signal);
+        const result = await this.action(conversation, request, signal);
+        const hold = conversation.hold;
+        if (!hold || hold.asked || result.approval) return result;
+        hold.asked = true;
+        return {
+          ...result,
+          approval: {
+            kind: 'download',
+            token: hold.token,
+            site: hold.site,
+            files: hold.downloads.map((entry) => ({
+              name: entry.download.name,
+              size: entry.download.received,
+            })),
+          },
+        };
       } finally {
         conversation.agent = undefined;
         conversation.operating = false;
@@ -1535,9 +1674,25 @@ export class BrowserSessions {
         this.publish(conversation.id);
       }
     };
-    const result = conversation.queue.then(run, run);
+    const result = conversation.queue.then(run, run).then((done) => {
+      // The site shown now, for the next action's approval
+      const shown = conversation.active
+        ? conversation.tabs.get(conversation.active)
+        : undefined;
+      return { ...done, origin: shown ? this.site(shown) : '' };
+    });
     conversation.queue = result.catch(() => {});
     return result;
+  }
+  /** The site a tab shows: the warned site while its warning shows. */
+  private site(tab: Tab): string {
+    return siteOf(
+      tab.warning?.certificate.url ||
+        tab.failure?.url ||
+        (tab.view.webContents.isDestroyed()
+          ? ''
+          : tab.view.webContents.getURL()),
+    );
   }
   private overlayColors() {
     setPalette(buildPalette(...(this.dark ? DEFAULT_DARK : DEFAULT_LIGHT)));
@@ -1683,6 +1838,21 @@ export class BrowserSessions {
                 : 'Loaded.';
       return { text: await this.result(conversation, text, signal) };
     }
+    // Allowed on one site, an action does nothing on another: the page went elsewhere since
+    // the model looked (the person, a redirect, a script)
+    if (
+      ['click', 'type', 'select', 'press', 'upload'].includes(action) &&
+      typeof args.site === 'string' &&
+      args.site &&
+      this.site(tab) !== args.site
+    )
+      return {
+        text: await this.result(
+          conversation,
+          `Nothing was done: the page is now on ${this.site(tab) || 'no site'}, not ${args.site}, which the action was allowed on. This is the page now.`,
+          signal,
+        ),
+      };
     if (action === 'upload')
       return this.upload(conversation, tab, args, signal);
     // A file chooser a click of Circle's opens comes to the model, not as a system dialog
@@ -2020,6 +2190,8 @@ export class BrowserSessions {
   }
   close() {
     this.closed = true;
+    // Downloads no one kept go with Circle
+    if (this.held) rmSync(this.held, { recursive: true, force: true });
     for (const conversation of this.conversations.values()) {
       const mask = conversation.mask;
       if (mask && !mask.webContents.isDestroyed()) mask.webContents.close();

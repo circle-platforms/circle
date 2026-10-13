@@ -1039,13 +1039,36 @@ export class SessionApp {
       signal,
     );
   }
-  /** What only the person decides in the browser: files for a page, or passing a warning. */
+  /** What only the person decides in the browser: files for a page or from it, or passing a warning. */
   private async confirmBrowser(
     approval: BrowserApproval,
     signal: AbortSignal,
   ): Promise<'once' | 'always' | 'reject'> {
     if (approval.kind === 'certificate')
       return this.confirmCertificate(approval, signal);
+    if (approval.kind === 'download') {
+      // auto mode keeps what the model downloads; the other modes ask once per site
+      if (this.runtime?.policy.mode(this.runtime.session.id) === 'auto')
+        return 'once';
+      const always = 'allow downloads from this site for this session';
+      const choice = await this.askChoice(
+        'download',
+        [
+          'Circle downloaded files: keep them?',
+          `site: ${approval.site || 'unknown'}`,
+          ...approval.files.map(
+            (file) => `${file.name} · ${sizeText(file.size)}`,
+          ),
+        ].join('\n'),
+        ['keep', always, 'discard'],
+        signal,
+      );
+      return choice === 'keep'
+        ? 'once'
+        : choice === always
+          ? 'always'
+          : 'reject';
+    }
     const choice = await this.askChoice(
       'upload',
       [

@@ -55,7 +55,7 @@ export function browserApprovalInput(input?: Record<string, unknown>) {
 }
 /** A download's size or progress, as a browser's download bar shows it. */
 export function downloadProgress(download: {
-  state: 'progress' | 'done' | 'failed';
+  state: 'progress' | 'waiting' | 'done' | 'failed';
   received: number;
   total: number;
 }): string {

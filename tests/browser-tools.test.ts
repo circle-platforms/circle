@@ -132,3 +132,171 @@ test('browser_upload takes paths as the file tools do, refuses credential files 
   assert.equal(handoff.subagents, false);
   assert.deepEqual((handoff.parameters as any).required, ['reason']);
 });
+
+test('browser control is allowed site by site: the site goes to the card and the rule, and the browser gets it to check', async (t) => {
+  const root = scratch(t);
+  // A browser that shows the last address it was sent to
+  let shown = '';
+  const requests: Record<string, unknown>[] = [];
+  const port: BrowserPort = {
+    async request(_session, action, args) {
+      requests.push({ action, ...structuredClone(args) });
+      if (action === 'navigate') shown = new URL(String(args.url)).origin;
+      return { text: `${action} done`, origin: shown };
+    },
+  };
+  const step = (id: string, name: string, args: Record<string, unknown>) => ({
+    message: {
+      id,
+      role: 'assistant' as const,
+      content: '',
+      tool_calls: [{ id, name, args }],
+    },
+  });
+  const model = new ScriptedModel([
+    step('a', 'browser_navigate', { url: 'https://device.lan:8443/login' }),
+    step('click-a', 'browser_click', { ref: 'e1', element: 'sign in' }),
+    step('b', 'browser_navigate', { url: 'https://other.example/' }),
+    step('click-b', 'browser_click', { ref: 'e2', element: 'link' }),
+    { message: { id: 'done', role: 'assistant', content: 'done' } },
+  ]);
+  const asked: { name: string; site: unknown }[] = [];
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: trustFolder(defaultSettings(), root),
+    model,
+    extraTools: browserTools(port),
+    // The person allows each site for the session
+    approve: async (call) => {
+      asked.push({ name: call.name, site: call.args.site });
+      return 'always';
+    },
+  });
+  t.after(() => runtime.close());
+  await runtime.harness.run('use the device');
+  // Asked once for each site, never again on a site already allowed
+  assert.deepEqual(asked, [
+    { name: 'browser_navigate', site: 'https://device.lan:8443' },
+    { name: 'browser_navigate', site: 'https://other.example' },
+  ]);
+  // The browser is told the site each action was allowed on
+  assert.deepEqual(
+    requests.map((request) => [request.action, request.site]),
+    [
+      ['navigate', 'https://device.lan:8443'],
+      ['click', 'https://device.lan:8443'],
+      ['navigate', 'https://other.example'],
+      ['click', 'https://other.example'],
+    ],
+  );
+  const review = runtime.policy.review('browser_click', {
+    ref: 'e1',
+    site: 'https://device.lan:8443',
+  });
+  assert.equal(review.scope, 'browser control on https://device.lan:8443');
+  assert.equal(review.pattern, 'site:https://device.lan:8443');
+  // A rule for every site, from before sites were told apart, still covers them all
+  const thread = 'older-session';
+  runtime.policy.remember(thread, 'browser_click', { ref: 'e1' }, 'always');
+  assert.equal(
+    runtime.policy.needsApproval(
+      'browser_type',
+      { ref: 'e1', text: 'x', site: 'https://anywhere.example' },
+      thread,
+    ),
+    false,
+  );
+  // The model cannot name a site itself: the schema refuses it
+  const click = runtime.allTools.find((tool) => tool.name === 'browser_click')!;
+  assert.equal((click.parameters as any).additionalProperties, false);
+  assert.equal('site' in (click.parameters as any).properties, false);
+});
+
+test('a download the model starts is kept or discarded by the person, and the model learns what its action did either way', async (t) => {
+  const root = scratch(t);
+  const requests: Record<string, unknown>[] = [];
+  // A browser whose clicks download from a site not allowed yet, as the real ones do
+  const port: BrowserPort = {
+    async request(_session, action, args) {
+      requests.push({ action, ...structuredClone(args) });
+      const approval = args.approval as
+        { token?: string; scope?: string } | undefined;
+      if (approval?.token === 'held')
+        return {
+          text:
+            approval.scope === 'reject'
+              ? '### Download\nThe user did not keep the download; it was discarded.'
+              : '### Download\nThe download was kept.',
+          origin: 'https://device.lan',
+        };
+      return {
+        text: '### Result\nClicked "export".',
+        origin: 'https://device.lan',
+        approval: {
+          kind: 'download',
+          token: 'held',
+          site: 'https://device.lan',
+          files: [{ name: 'config.bin', size: 12 }],
+        },
+      };
+    },
+  };
+  const answers: ('once' | 'always' | 'reject')[] = ['always', 'reject'];
+  const click = (id: string) => ({
+    message: {
+      id,
+      role: 'assistant' as const,
+      content: '',
+      tool_calls: [
+        { id, name: 'browser_click', args: { ref: 'e1', element: 'export' } },
+      ],
+    },
+  });
+  const model = new ScriptedModel([
+    click('kept'),
+    click('discarded'),
+    { message: { id: 'done', role: 'assistant', content: 'done' } },
+  ]);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: trustFolder(defaultSettings(), root),
+    model,
+    extraTools: browserTools(port, {
+      confirm: async (_session, approval) => {
+        assert.equal(approval.kind, 'download');
+        return answers.shift()!;
+      },
+    }),
+    approve: async () => 'always',
+  });
+  t.after(() => runtime.close());
+  await runtime.harness.run('export the configuration');
+  const results = Object.fromEntries(
+    model.requests
+      .at(-1)!
+      .messages.filter((message) => message.role === 'tool')
+      .map((message) => [message.tool_call_id, String(message.content)]),
+  );
+  // The click happened either way: its result is kept, and the answer follows it
+  assert.equal(
+    results.kept,
+    '### Result\nClicked "export".\n### Download\nThe download was kept.',
+  );
+  assert.equal(
+    results.discarded,
+    '### Result\nClicked "export".\n### Download\nThe user did not keep the download; it was discarded.',
+  );
+  // The click is not done again: the answer goes back with the token alone
+  assert.deepEqual(
+    requests.map((request) => [request.action, request.approval]),
+    [
+      ['click', undefined],
+      ['click', { token: 'held', scope: 'always' }],
+      ['click', undefined],
+      ['click', { token: 'held', scope: 'reject' }],
+    ],
+  );
+  assert.equal(JSON.stringify(model.requests).includes('"held"'), false);
+});

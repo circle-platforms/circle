@@ -1,6 +1,7 @@
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { createServer as createHttpServer } from 'node:http';
@@ -385,8 +386,12 @@ try {
   const control = approval(url);
   await control.waitFor();
   assert.match(await control.innerText(), /browser_navigate/);
+  // Control is allowed site by site
   await control
-    .getByRole('button', { name: 'allow for this session', exact: true })
+    .getByRole('button', {
+      name: `allow on ${new URL(url).origin} for this session`,
+      exact: true,
+    })
     .click();
   const certificate = approval('trusts an untrusted certificate');
   await certificate.waitFor();
@@ -611,6 +616,12 @@ try {
   );
 
   await send('open the unavailable local port');
+  // Another site: asked again
+  const elsewhere = approval(unavailableUrl);
+  await elsewhere.waitFor();
+  await elsewhere
+    .getByRole('button', { name: 'allow once', exact: true })
+    .click();
   await page
     .getByText('browser loading failure received', { exact: true })
     .waitFor();
@@ -620,7 +631,7 @@ try {
   assert.match(failure.failure.error, /ERR_CONNECTION_REFUSED/);
   assert.match(await textOf('unavailable'), /ERR_CONNECTION_REFUSED/);
   checks.push(
-    'an unavailable local port shows a load failure in the panel and tells the model',
+    'another site asks again before Circle acts there; an unavailable local port shows a load failure in the panel and tells the model',
   );
 
   await send('return to the HTTPS form');
@@ -639,8 +650,23 @@ try {
 
   // ---- downloads are kept where the result says; files reach a page only as allowed
   await send('download the report');
-  await page.getByText('browser download kept', { exact: true }).waitFor();
   const kept = join(dataPath, 'downloads', 'report.bin');
+  // The model's download waits outside the downloads folder until the person keeps it
+  const keep = approval('keeps a download');
+  await keep.waitFor();
+  assert.match(await keep.innerText(), /report\.bin \(12 B\)/);
+  await page
+    .getByTestId('browser-downloads')
+    .getByText('waiting for approval', { exact: true })
+    .waitFor();
+  assert.equal(existsSync(kept), false);
+  await keep
+    .getByRole('button', {
+      name: `allow downloads from ${new URL(url).origin} for this session`,
+      exact: true,
+    })
+    .click();
+  await page.getByText('browser download kept', { exact: true }).waitFor();
   assert.match(
     await textOf('download'),
     /The address started download dl1 instead of opening a page\./,
@@ -698,7 +724,7 @@ try {
   );
   assert.match(uploads[0], /name="logs"; filename="run\.log"[\s\S]*log line/);
   checks.push(
-    "a download goes to the downloads folder and the panel lists it; a file for a file input asks the person in the conversation; a chooser opened by Circle's click waits in the result and in the panel, where the person chooses; the site receives both files",
+    "a download Circle starts waits for the person, then goes to the downloads folder and the panel lists it; a file for a file input asks the person in the conversation; a chooser opened by Circle's click waits in the result and in the panel, where the person chooses; the site receives both files",
   );
 
   // ---- taking turns: Circle hands the person the browser, and the person takes it

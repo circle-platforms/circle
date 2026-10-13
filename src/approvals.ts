@@ -597,8 +597,9 @@ export const SESSION_MODES: readonly SessionMode[] = [
 export const isSessionMode = (value: unknown): value is SessionMode =>
   SESSION_MODES.includes(value as SessionMode);
 const EDIT_TOOLS = ['write_file', 'edit_file', 'apply_patch'];
-// The desktop application's browser tools that act on a page. One "allow for this session"
-// covers all of them: they are one browser, driven a step at a time.
+// The browser tools that act on a page. "Allow for this session" covers them on one site,
+// the one the action acts on (`site`, which the tools add): another site asks again. A rule
+// for every site, from before sites were told apart, still covers them all.
 const BROWSER_ACTIONS: Record<string, string> = {
   browser_navigate: 'opens a page in the browser',
   browser_click: 'clicks in the browser',
@@ -704,11 +705,14 @@ export class ApprovalPolicy {
           : 'shows the model the whole screen',
         { pattern: '*', scope: 'every screenshot' },
       );
-    if (Object.hasOwn(BROWSER_ACTIONS, tool))
+    if (Object.hasOwn(BROWSER_ACTIONS, tool)) {
+      const site = typeof args.site === 'string' ? args.site : '';
       return review('ASK', BROWSER_ACTIONS[tool]!, {
-        pattern: '*',
-        scope: 'browser control',
+        pattern: site ? 'site:' + site : '*',
+        scope: site ? `browser control on ${site}` : 'browser control',
+        covered_by: site ? ['*'] : [],
       });
+    }
     return review('ASK', `${tool} can change state`, {
       pattern: '*',
       scope: `every ${tool} call`,

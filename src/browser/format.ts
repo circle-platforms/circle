@@ -32,3 +32,14 @@ export function dialogSnapshot(dialog: PageDialog): string {
       : `  - button "Cancel" → browser_dialog accept: false\n`)
   );
 }
+
+/** What the model learns of the person's answer about the downloads its action made. */
+export function downloadDecision(keep: boolean, events: string[]): string {
+  return [
+    '### Download',
+    keep
+      ? 'The download was kept.'
+      : 'The user did not keep the download; it was discarded.',
+    ...events.map((event) => '- ' + event),
+  ].join('\n');
+}

@@ -324,7 +324,8 @@ test(
     assert.match(closed.text, /Closed tab t2\./);
     assert.doesNotMatch(closed.text, /t2 \(shown\)/);
 
-    // ---- a download lands in the downloads folder by its own name, and the model is told where
+    // ---- a download from a site not allowed yet waits for the person; once kept, it lands
+    // in the downloads folder by its own name, and the model is told where
     const download = await act('navigate', { url: `${http}/download` });
     assert.match(
       download.text,
@@ -332,22 +333,62 @@ test(
     );
     assert.match(
       download.text,
-      /- download dl1 of "report\.bin" from http:\/\/127\.0\.0\.1:\d+\/download started/,
+      /- download dl1 of "report\.bin" from http:\/\/127\.0\.0\.1:\d+\/download waits for approval to keep it/,
     );
-    assert(
-      download.text.includes(
-        `- download dl1 finished: ${join(downloads, 'report.bin')} (4 B)`,
-      ),
-      download.text,
+    assert.deepEqual(download.approval, {
+      kind: 'download',
+      token: (download.approval as { token: string }).token,
+      site: http,
+      files: [{ name: 'report.bin', size: 4 }],
+    });
+    assert.equal(existsSync(join(downloads, 'report.bin')), false);
+    const kept = await act('navigate', {
+      url: `${http}/download`,
+      approval: {
+        token: (download.approval as { token: string }).token,
+        scope: 'always',
+      },
+    });
+    assert.equal(kept.approval, undefined);
+    assert.equal(
+      kept.text,
+      `### Download\nThe download was kept.\n- download dl1 finished: ${join(downloads, 'report.bin')} (4 B)`,
     );
     assert.equal(readFileSync(join(downloads, 'report.bin'), 'utf8'), 'data');
+    // The site is allowed for the conversation now: no question
     const twice = await act('navigate', { url: `${http}/download` });
+    assert.equal(twice.approval, undefined);
     assert(
       twice.text.includes(
         `download dl2 finished: ${join(downloads, 'report (1).bin')}`,
       ),
       twice.text,
     );
+    // Another conversation is asked again; a download it does not keep is discarded
+    const elsewhere = await chrome.request(
+      'conversation-2',
+      'navigate',
+      { url: `${http}/download` },
+      signal,
+    );
+    assert.equal(elsewhere.approval?.kind, 'download');
+    const discarded = await chrome.request(
+      'conversation-2',
+      'navigate',
+      {
+        url: `${http}/download`,
+        approval: {
+          token: (elsewhere.approval as { token: string }).token,
+          scope: 'reject',
+        },
+      },
+      signal,
+    );
+    assert.equal(
+      discarded.text,
+      '### Download\nThe user did not keep the download; it was discarded.\n- download dl1 was not kept',
+    );
+    assert.equal(existsSync(join(downloads, 'report (2).bin')), false);
 
     // ---- files for a page, by a file input's ref or for the chooser a click opened,
     // each time with the person's approval
@@ -816,6 +857,21 @@ test(
       signal,
     );
     assert.doesNotMatch(own.text, /while Circle was not acting/);
+    // Every result names the site shown; an action allowed on another site does nothing
+    assert.equal(own.origin, base);
+    const elsewhere = await chrome.request(
+      'c',
+      'type',
+      { ref: 'e1', element: 'code', text: 'x', site: 'https://elsewhere.test' },
+      signal,
+    );
+    assert.match(
+      elsewhere.text,
+      new RegExp(
+        `Nothing was done: the page is now on ${base.replace(/[.]/g, '\\.')}, not https://elsewhere\\.test`,
+      ),
+    );
+    assert.match(elsewhere.text, /textbox "Code" value=""/);
     // Without anyone to hand it to, the model is told so
     const alone = new ChromeBrowser({
       executable: executable!,

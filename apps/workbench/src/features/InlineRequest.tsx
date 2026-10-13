@@ -34,6 +34,7 @@ const REASONS: Record<string, () => string> = {
   "manages the browser's tabs": () => t("manages the browser's tabs"),
   'trusts an untrusted certificate': () => t('trusts an untrusted certificate'),
   'gives the page files': () => t('gives the page files'),
+  'keeps a download': () => t('keeps a download'),
 };
 export const requestReason = (reason?: string) =>
   reason ? (REASONS[reason]?.() ?? reason) : '';
@@ -189,6 +190,8 @@ export function InlineRequest({
         </div>
       </section>
     );
+  // Files the model's action downloaded: kept or discarded
+  const download = item.reason === 'keeps a download';
   const allowed = (choice: string) =>
     runtime.mode !== 'live' || !!item.choices?.includes(choice);
   return (
@@ -219,7 +222,7 @@ export function InlineRequest({
           disabled={sent || !allowed('approve')}
           onClick={() => finish('allow once')}
         >
-          {t('allow once')}
+          {download ? t('keep') : t('allow once')}
         </Button>
         {allowed('always') && (
           <Button
@@ -228,7 +231,14 @@ export function InlineRequest({
           >
             {item.reason === 'trusts an untrusted certificate'
               ? t('always trust this certificate on this host')
-              : t('allow for this session')}
+              : typeof item.input?.site === 'string' && item.input.site
+                ? t(
+                    download
+                      ? 'allow downloads from {site} for this session'
+                      : 'allow on {site} for this session',
+                    { site: item.input.site },
+                  )
+                : t('allow for this session')}
           </Button>
         )}
         {runtime.mode === 'live' && item.choices?.includes('prefix') && (
@@ -239,7 +249,7 @@ export function InlineRequest({
           </Button>
         )}
         <Button disabled={sent} onClick={() => finish('reject')}>
-          {t('reject')}
+          {download ? t('discard') : t('reject')}
         </Button>
         {!explaining && (
           <button

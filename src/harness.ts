@@ -482,6 +482,9 @@ export class Harness {
       const prepared = prepareToolCall(call, this.tools);
       call = prepared.call;
       const tool = prepared.tool;
+      // After the arguments were checked: the model cannot give these itself
+      const facts = tool.approvalFacts?.(call.args, this.sessionId);
+      if (facts) call = { ...call, args: { ...call.args, ...facts } };
       if (
         this.readOnly &&
         tool.effect !== 'read' &&

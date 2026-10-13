@@ -114,6 +114,7 @@ export const panels: Record<string, string> = {
   'choose…': '选择…',
   'the files could not be given': '无法把文件交给网页',
   'show in folder': '在文件夹中显示',
+  'waiting for approval': '等待批准',
   'You control the browser. Circle is paused and does not see what you do.':
     '你在控制浏览器。Circle 已暂停，看不到你的操作。',
   'hand back': '交还',

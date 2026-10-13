@@ -1107,7 +1107,7 @@ test('/variables and /secrets keep values as Windows writes them, and the model 
   assert.match(screen(), /Removed secret API_TOKEN/);
 });
 
-test('the terminal asks for files a page would get, and for passing a certificate warning, on cards of their own', async (t) => {
+test('the terminal asks for files a page would get or gave, and for passing a certificate warning, on cards of their own', async (t) => {
   const { app, ui, key } = await session(t, []);
   const signal = new AbortController().signal;
   const upload = ui.confirmBrowser(
@@ -1157,6 +1157,34 @@ test('the terminal asks for files a page would get, and for passing a certificat
   await key('down');
   await key('enter');
   assert.equal(await certificate, 'always');
+  // A download the model started: kept, kept from the site for the session, or discarded
+  const download = {
+    kind: 'download' as const,
+    token: 'token',
+    site: 'https://device.lan',
+    files: [{ name: 'config.bin', size: 12 }],
+  };
+  const keep = ui.confirmBrowser(download, signal);
+  await until(() => Boolean(app.state.dialog));
+  assert.equal(app.state.dialog!.title, 'download');
+  assert.equal(
+    app.state.dialog!.body,
+    'Circle downloaded files: keep them?\nsite: https://device.lan\nconfig.bin · 12 B',
+  );
+  assert.deepEqual(app.state.dialog!.options, [
+    'keep',
+    'allow downloads from this site for this session',
+    'discard',
+  ]);
+  await key('down');
+  await key('down');
+  await key('enter');
+  assert.equal(await keep, 'reject');
+  // auto mode keeps them without a card
+  ui.runtime!.policy.setMode(ui.runtime!.session.id, 'auto');
+  assert.equal(await ui.confirmBrowser(download, signal), 'once');
+  assert.equal(app.state.dialog, undefined);
+  ui.runtime!.policy.setMode(ui.runtime!.session.id, 'manual');
   // Circle hands the person the browser: the card stays until they hand it back
   let handed = false;
   const handoff = ui

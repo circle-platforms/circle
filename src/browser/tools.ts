@@ -4,6 +4,7 @@ import { loadToolPrompt } from '../system_prompt.js';
 import { fitMedia } from '../media.js';
 import type { Effect, Tool } from '../types.js';
 import { onlyReferences } from '../secrets.js';
+import { siteOf } from './hosts.js';
 import {
   BROWSER_KEYS,
   type BrowserAction,
@@ -127,6 +128,27 @@ export function browserTools(
   options: BrowserToolOptions = {},
 ): Tool[] {
   const { confirm, files = full } = options;
+  // Each conversation's shown site, from the latest result
+  const sites = new Map<string, string>();
+  // The site an action acts on, for its approval: where a navigation goes, else the page's
+  const siteFor = (
+    action: BrowserAction,
+    args: Record<string, unknown>,
+    sessionId: string,
+  ): string => {
+    const shown = sites.get(sessionId) ?? '';
+    if (action === 'navigate' && typeof args.url === 'string')
+      return ['back', 'forward', 'reload'].includes(args.url)
+        ? shown
+        : siteOf(args.url);
+    if (action === 'tabs')
+      return args.action === 'new'
+        ? typeof args.url === 'string' && args.url
+          ? siteOf(args.url)
+          : ''
+        : shown;
+    return shown;
+  };
   const tool = (
     name: string,
     action: BrowserAction,
@@ -141,6 +163,14 @@ export function browserTools(
     effect,
     subagents: false,
     ...(approval === false ? { approval } : {}),
+    ...(effect === 'read'
+      ? {}
+      : {
+          approvalFacts: (args: Record<string, unknown>, sessionId: string) => {
+            const site = siteFor(action, args, sessionId);
+            return site ? { site } : undefined;
+          },
+        }),
     parameters: {
       type: 'object',
       properties,
@@ -180,20 +210,37 @@ export function browserTools(
         args,
         context.signal,
       );
-      if (result.approval) {
+      // An action can need the person more than once: past a warning, then a download
+      for (let round = 0; result.approval && round < 3; round++) {
+        const approval = result.approval;
         // The approval comes from the person, never from the model's arguments: the token
         // that carries it is not shown to the model and the schema refuses it.
         const decision = confirm
           ? await confirm(
               context.sessionId,
-              result.approval,
+              approval,
               context.signal,
               context.callId,
             )
           : 'reject';
+        // The action was done: a download the person does not keep is discarded, and the
+        // model still learns what the action did
+        if (approval.kind === 'download') {
+          const answer = await browser.request(
+            context.sessionId,
+            action,
+            {
+              ...args,
+              approval: { token: approval.token, scope: decision },
+            },
+            context.signal,
+          );
+          result = { ...answer, text: `${result.text}\n${answer.text}` };
+          continue;
+        }
         if (decision === 'reject')
           throw Error(
-            result.approval.kind === 'upload'
+            approval.kind === 'upload'
               ? 'the user did not allow giving the page these files'
               : 'the user did not approve proceeding past the certificate warning',
           );
@@ -203,13 +250,15 @@ export function browserTools(
           {
             ...args,
             approval: {
-              token: result.approval.token,
-              scope: result.approval.kind === 'upload' ? 'once' : decision,
+              token: approval.token,
+              scope: approval.kind === 'upload' ? 'once' : decision,
             },
           },
           context.signal,
         );
       }
+      if (typeof result.origin === 'string')
+        sites.set(context.sessionId, result.origin);
       if (!result.image) return result.text;
       if (!context.emitAttachments)
         throw Error('this caller does not accept media attachments');

@@ -313,7 +313,9 @@ export function NativeBrowser() {
               <span className="browser-download-state">
                 {download.state === 'failed'
                   ? t('failed')
-                  : downloadProgress(download)}
+                  : download.state === 'waiting'
+                    ? t('waiting for approval')
+                    : downloadProgress(download)}
               </span>
               {download.state === 'done' && (
                 <IconButton

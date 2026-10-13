@@ -153,7 +153,7 @@ export type BrowserControl = 'shared' | 'agent' | 'user_pending' | 'user';
 export interface BrowserDownload {
   id: string;
   name: string;
-  state: 'progress' | 'done' | 'failed';
+  state: 'progress' | 'waiting' | 'done' | 'failed';
   received: number;
   total: number;
 }
