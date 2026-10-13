@@ -99,7 +99,7 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 
 ## The terminal interface
 
-`src/ink/` draws: it reads keys and terminal reports, builds the palette, and turns state into rows. `src/tui/` decides what is on screen and what a key does. The rules for both are in [The TUI contract](tui-contract.md).
+`src/ink/` draws: it reads keys and terminal reports, builds the palette, and turns state into rows. `src/tui/` decides what is on screen and what a key does. The rules for both are in [The TUI contract](https://github.com/qingshanfeihu/circle/blob/main/docs/development/tui-contract.md).
 
 | Module | What it does |
 |---|---|

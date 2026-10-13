@@ -4,7 +4,7 @@
 
 <h1 align="center">Circle</h1>
 
-<p align="center">接你自己模型端点的终端编程助手。</p>
+<p align="center">接你自己模型端点的编程助手，在终端里用，也可以用它自己的窗口。</p>
 
 <p align="center">
   <a href="https://qingshanfeihu.github.io/circle/">文档</a> ·
@@ -16,7 +16,7 @@
 
 ---
 
-Circle 在你指定的目录里读代码、改文件、跑命令。任何兼容 OpenAI 或 Anthropic 接口的服务或网关都能接。运行命令和改文件之前它会先问你，屏幕上一眼能看出它是在干活，还是在等你。
+Circle 在你指定的目录里读代码、改文件、跑命令。任何兼容 OpenAI 或 Anthropic 接口的服务或网关都能接。运行命令和改文件之前它会先问你，屏幕上一眼能看出它是在干活，还是在等你。终端里的 Circle 和桌面应用是同一个助手。
 
 **Circle 还很早。** 没有操作系统级沙箱。把它用在重要的东西上之前，请先读[已知问题](https://qingshanfeihu.github.io/circle/known-issues/)和[安全使用](https://qingshanfeihu.github.io/circle/security/)。文档目前只有英文版。
 
@@ -40,7 +40,24 @@ irm https://raw.githubusercontent.com/qingshanfeihu/circle/main/install.ps1 | ie
 
 安装后重新打开终端，再运行 `circle`；以后用 `circle update` 升级。详见[安装与升级](https://qingshanfeihu.github.io/circle/installation/)和[发布页面](https://github.com/qingshanfeihu/circle/releases)。
 
-**从 Circle 0.5.0 或更早版本升级？** 那些版本是 Python 写的。运行上面的安装命令即可：它会卸载 Python 版，保留你的设置、密钥、技能和会话，再装上 1.0。旧版的 `circle update` 做不了这一步。Python 扩展需要重写，见[扩展](https://qingshanfeihu.github.io/circle/extensions/)。
+**从 Circle 0.5.0 或更早版本升级？** 那些版本是 Python 写的。运行上面的安装命令即可：它会卸载 Python 版，保留你的设置、密钥、技能和会话，再装上当前版本。旧版的 `circle update` 不能安装 1.0.0 及之后的版本。Python 扩展需要重写，见[扩展](https://qingshanfeihu.github.io/circle/extensions/)。
+
+## 桌面应用
+
+每个发布包里还有 Circle 的桌面应用：同一个助手，自己一个窗口，还有一个你和 Circle 共用的浏览器面板。窗口里有什么，见[桌面应用](https://qingshanfeihu.github.io/circle/desktop/)（英文）。它自带运行所需的全部文件，不使用 `circle` 命令。设置、密钥和会话放在它自己的数据目录里，和 `~/.circle` 分开。
+
+| 系统 | 文件 |
+|---|---|
+| macOS，Apple 芯片 | `circle-desktop-<version>-darwin-arm64.dmg` |
+| macOS，Intel | `circle-desktop-<version>-darwin-x64.dmg` |
+| Windows x64 | `circle-desktop-<version>-windows-x64.msi` |
+| Linux x64 | `circle-desktop-<version>-linux-x64.tar.gz` |
+
+文件在[发布页面](https://github.com/qingshanfeihu/circle/releases)。它不是 Apple 或 Microsoft 签名的，第一次打开需要你确认。Windows 安装器把它装到 `C:\Program Files\Circle`，并加到开始菜单。Linux 上沙箱助手要先做一次需要 root 的设置。步骤见[安装与升级](https://qingshanfeihu.github.io/circle/installation/#the-desktop-application)。
+
+macOS 和 Windows 上它可以自己更新：设置 → 关于 → 立即检查，然后更新并重启。Linux 上「立即检查」会打开发布页面，文件夹要自己替换。1.2.0 及更早的版本不会自己更新。
+
+窗口第一次打开时跟随系统语言，可以是英文或简体中文。终端界面仍是英文。从源码运行见 [apps/desktop](apps/desktop/README.md)。
 
 ## 运行
 
@@ -79,6 +96,7 @@ Circle 工作时可以继续打字：`enter` 会插话给正在进行的回合�
 | [选择模型](https://qingshanfeihu.github.io/circle/models/) | 网关、切换、思考深度 |
 | [浏览器](https://qingshanfeihu.github.io/circle/tools/#the-browser) | 你和 Circle 一起用的网页 |
 | [Skills](https://qingshanfeihu.github.io/circle/skills/)、[自定义命令](https://qingshanfeihu.github.io/circle/custom-commands/)、[MCP](https://qingshanfeihu.github.io/circle/mcp/)、[扩展](https://qingshanfeihu.github.io/circle/extensions/) | 让 Circle 适合你 |
+| [桌面应用](https://qingshanfeihu.github.io/circle/desktop/) | 同一个助手，自己一个窗口 |
 | [全部文档](https://qingshanfeihu.github.io/circle/) | 指南与参考 |
 
 ## 开发
@@ -96,19 +114,6 @@ CIRCLE_HOME=$(mktemp -d) npm run dev -- ~/code/my-project
 推送代码不会自动发布新版本：推送 `v*` 标签时发布流程才会运行。见[发布](https://qingshanfeihu.github.io/circle/development/releasing/)。
 
 参与开发见 [CONTRIBUTING.md](CONTRIBUTING.md)，编程助手见 [AGENTS.md](AGENTS.md)，结构见[架构](https://qingshanfeihu.github.io/circle/development/architecture/)。安全问题按 [SECURITY.md](SECURITY.md) 报告。参与者请遵守[行为准则](CODE_OF_CONDUCT.md)。
-
-## 桌面版
-
-Circle 也有桌面版：对话、会话历史、文件和改动、审批、后台任务、模型和扩展都在一个窗口里，还有一个你和 Circle 共用的浏览器面板。每个 Release 都附有 macOS、Windows 和 Linux 的桌面版，文件名是 `circle-desktop-<版本>-<系统>-<架构>`；第一次打开的方法见[安装](docs/installation.md#the-desktop-application)。从源码运行见 [apps/desktop](apps/desktop/README.md)：
-
-```bash
-npm ci
-npm --prefix apps/workbench ci
-npm --prefix apps/desktop ci
-npm --prefix apps/desktop run dev
-```
-
-桌面版在自己的原生进程里运行 Circle 的交互运行时，对话、工具、审批、提问、会话和 shell 命令都走 Circle 现有的核心。在应用里填 API URL、key 和模型即可连接。它的数据目录和 `~/.circle` 分开。
 
 ## 许可
 
