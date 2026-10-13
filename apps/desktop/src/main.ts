@@ -361,6 +361,11 @@ async function createWindow() {
     () => interfaceLocale,
     join(dataPath, 'browser-certificates.json'),
     browserCertificates,
+    // A browser keeps downloads in the system's Downloads folder; an isolated data folder
+    // (development, tests) keeps its own
+    process.env.CIRCLE_WORKBENCH_DATA_DIR
+      ? join(dataPath, 'downloads')
+      : app.getPath('downloads'),
   );
   runtime?.onBrowser((request, signal) => {
     if (!browsers) throw Error('the browser is closed');
@@ -619,6 +624,14 @@ app
     handle('circle:browser-dialog-screen', (id, dialog) => {
       if (!browsers) throw Error('window not ready');
       return browsers.dialogScreen(id, dialog);
+    });
+    handle('circle:browser-choose', (id, chooser) => {
+      if (!browsers) throw Error('window not ready');
+      return browsers.choose(id, chooser);
+    });
+    handle('circle:browser-reveal', (id, download) => {
+      if (!browsers) throw Error('window not ready');
+      shell.showItemInFolder(browsers.downloadPath(id, download));
     });
     updater.subscribe((state) =>
       window?.webContents.send('circle:update', state),

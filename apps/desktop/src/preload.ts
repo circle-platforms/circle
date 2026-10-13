@@ -46,6 +46,10 @@ const bridge: DesktopBridge = {
     ipcRenderer.invoke('circle:browser-dialog', id, dialog, accept, text),
   browserDialogScreen: (id, dialog) =>
     ipcRenderer.invoke('circle:browser-dialog-screen', id, dialog),
+  browserChoose: (id, chooser) =>
+    ipcRenderer.invoke('circle:browser-choose', id, chooser),
+  browserReveal: (id, download) =>
+    ipcRenderer.invoke('circle:browser-reveal', id, download),
   onBrowserEvent: (listener) => {
     const handler = (_event: unknown, state: Parameters<typeof listener>[0]) =>
       listener(state);

@@ -4458,3 +4458,41 @@ pre {
   margin: 18px 0 4px;
   font-size: var(--ui-size);
 }
+/* A file chooser a click of Circle's opened, and the conversation's downloads, under the page. */
+.browser-chooser {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: var(--ui-small);
+  color: var(--fg);
+}
+.browser-chooser span {
+  flex: 1;
+}
+.browser-downloads {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+  font-size: var(--ui-tiny);
+  color: var(--muted);
+}
+.browser-downloads li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.browser-download-name {
+  flex: 1;
+  overflow: hidden;
+  color: var(--fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

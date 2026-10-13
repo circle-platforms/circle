@@ -242,6 +242,18 @@ export const BUILTIN_TOOL_INFO = [
     kind: 'browser',
   },
   {
+    name: 'browser_upload',
+    get description() {
+      return t('Give a page files from this computer');
+    },
+    get detail() {
+      return t(
+        'For a file input, or for the file chooser one of its clicks opened. Circle asks you every time, with the files and the site.',
+      );
+    },
+    kind: 'browser',
+  },
+  {
     name: 'browser_tabs',
     get description() {
       return t('List, open, show or close browser tabs');

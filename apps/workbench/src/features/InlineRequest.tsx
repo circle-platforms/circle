@@ -33,6 +33,7 @@ const REASONS: Record<string, () => string> = {
   'answers a dialog in the browser': () => t('answers a dialog in the browser'),
   "manages the browser's tabs": () => t("manages the browser's tabs"),
   'trusts an untrusted certificate': () => t('trusts an untrusted certificate'),
+  'gives the page files': () => t('gives the page files'),
 };
 export const requestReason = (reason?: string) =>
   reason ? (REASONS[reason]?.() ?? reason) : '';
@@ -54,6 +55,10 @@ const BROWSER_FIELDS: Record<string, () => string> = {
   issued_by: () => t('issued by'),
   valid_until: () => t('valid until'),
   sha256: () => t('SHA-256 fingerprint'),
+  site: () => t('site'),
+  field: () => t('field'),
+  files: () => t('files'),
+  paths: () => t('files'),
 };
 export function BrowserApproval({
   input,

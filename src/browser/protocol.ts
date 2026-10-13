@@ -13,6 +13,7 @@ export const browserActions = [
   'screenshot',
   'dialog',
   'tabs',
+  'upload',
 ] as const;
 export type BrowserAction = (typeof browserActions)[number];
 export interface BrowserRequest {
@@ -27,9 +28,21 @@ export interface BrowserResult {
   image?: string;
   /**
    * The action needs the person's approval first: the model pressed "proceed" on a
-   * certificate warning. The runtime asks, then repeats the request with `args.approval`.
+   * certificate warning, or would give a page files. The runtime asks, then repeats the
+   * request with `args.approval`.
    */
-  approval?: CertificateApproval;
+  approval?: BrowserApproval;
+}
+export type BrowserApproval = CertificateApproval | UploadApproval;
+/** Files the model would give a page's file input, which only the person allows. */
+export interface UploadApproval {
+  kind: 'upload';
+  token: string;
+  /** Where the files would go: the site of the page that asks for them. */
+  origin: string;
+  /** The file input, as the model and the page name it. */
+  element: string;
+  files: { path: string; name: string; size: number }[];
 }
 export interface CertificateApproval {
   kind: 'certificate';

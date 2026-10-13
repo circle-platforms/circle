@@ -24,6 +24,9 @@ const certificatePath = join(temp, 'certificate.pem');
 const fixturePath = join(temp, 'model.json');
 const dataPath = join(temp, 'data');
 const posts = [];
+const uploads = [];
+const notesPath = join(temp, 'notes.txt');
+const logPath = join(temp, 'run.log');
 const checks = [];
 const errors = [];
 let app;
@@ -96,6 +99,29 @@ const document = `<!doctype html>
 </script></body></html>`;
 
 const handler = async (request, response) => {
+  if (request.url === '/files' && request.method === 'POST') {
+    let body = '';
+    for await (const chunk of request) body += chunk;
+    uploads.push(body);
+    response.writeHead(200, { 'Content-Type': 'text/html' });
+    response.end('<!doctype html><title>Sent</title><p>files received</p>');
+    return;
+  }
+  if (request.url === '/download') {
+    response.writeHead(200, {
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': 'attachment; filename="report.bin"',
+    });
+    response.end('report bytes');
+    return;
+  }
+  if (request.url === '/files') {
+    response.writeHead(200, { 'Content-Type': 'text/html' });
+    response.end(
+      '<!doctype html><title>Files</title><form method="post" action="/files" enctype="multipart/form-data"><label>Attachment <input type="file" name="attachment"></label><input id="logs" type="file" name="logs" style="display:none"><button type="button" onclick="document.getElementById(\'logs\').click()">Add logs</button><button>Send</button></form>',
+    );
+    return;
+  }
   if (request.url === '/submit' && request.method === 'POST') {
     let body = '';
     for await (const chunk of request) body += chunk;
@@ -218,6 +244,26 @@ await script([
   answer('failure-done', 'browser loading failure received'),
   calls('return', [call('return', 'browser_navigate', { url })]),
   answer('return-done', 'browser exception reused'),
+  calls('download', [
+    call('download', 'browser_navigate', { url: url + 'download' }),
+  ]),
+  answer('download-done', 'browser download kept'),
+  calls('files', [call('files', 'browser_navigate', { url: url + 'files' })]),
+  calls('upload-ref', [
+    call('upload-ref', 'browser_upload', {
+      ref: 'e1',
+      element: 'Attachment',
+      paths: [notesPath],
+    }),
+  ]),
+  calls('add-logs', [
+    call('add-logs', 'browser_click', { ref: 'e2', element: 'Add logs' }),
+  ]),
+  answer('chooser-waiting', 'file chooser waiting'),
+  calls('send-files', [
+    call('send-files', 'browser_click', { ref: 'e3', element: 'Send' }),
+  ]),
+  answer('files-sent', 'files sent'),
 ]);
 const env = {
   ...process.env,
@@ -572,6 +618,70 @@ try {
   );
   checks.push(
     'a certificate allowed once is not asked about again until Circle closes',
+  );
+
+  // ---- downloads are kept where the result says; files reach a page only as allowed
+  await send('download the report');
+  await page.getByText('browser download kept', { exact: true }).waitFor();
+  const kept = join(dataPath, 'downloads', 'report.bin');
+  assert.match(
+    await textOf('download'),
+    /The address started download dl1 instead of opening a page\./,
+  );
+  assert(
+    (await textOf('download')).includes(
+      `download dl1 finished: ${kept} (12 B)`,
+    ),
+  );
+  assert.equal(await readFile(kept, 'utf8'), 'report bytes');
+  await page
+    .getByTestId('browser-downloads')
+    .getByText('report.bin', { exact: true })
+    .waitFor();
+  await writeFile(notesPath, 'notes from circle');
+  await writeFile(logPath, 'log line');
+  // The person's file dialog is stubbed: it would choose run.log
+  await app.evaluate(({ dialog }, chosen) => {
+    globalThis.fileDialogs = 0;
+    dialog.showOpenDialog = async () => {
+      globalThis.fileDialogs++;
+      return { canceled: false, filePaths: [chosen] };
+    };
+  }, logPath);
+  await send('give the form the notes and the logs');
+  const files = approval('gives the page files');
+  await files.waitFor();
+  assert.match(await files.innerText(), /notes\.txt/);
+  await files.getByRole('button', { name: 'allow once', exact: true }).click();
+  await page.getByText('file chooser waiting', { exact: true }).waitFor();
+  assert.match(
+    await textOf('upload-ref'),
+    /Gave "notes\.txt" \(17 B\) to e1 "Attachment"\./,
+  );
+  assert.match(
+    await textOf('add-logs'),
+    /It opened file chooser f1: answer it with browser_upload\./,
+  );
+  // No system dialog opened for Circle's click; the person answers in the panel
+  assert.equal(await app.evaluate(() => globalThis.fileDialogs), 0);
+  const chooser = page.getByTestId('browser-chooser');
+  await chooser.getByRole('button', { name: 'choose…', exact: true }).click();
+  await chooser.waitFor({ state: 'hidden' });
+  assert.equal(await app.evaluate(() => globalThis.fileDialogs), 1);
+  await send('send the files');
+  await page.getByText('files sent', { exact: true }).waitFor();
+  assert.match(
+    await textOf('send-files'),
+    /file chooser f1 was answered by the user with "run\.log"/,
+  );
+  await waitFor(() => uploads.length === 1, 'multipart upload');
+  assert.match(
+    uploads[0],
+    /name="attachment"; filename="notes\.txt"[\s\S]*notes from circle/,
+  );
+  assert.match(uploads[0], /name="logs"; filename="run\.log"[\s\S]*log line/);
+  checks.push(
+    "a download goes to the downloads folder and the panel lists it; a file for a file input asks the person in the conversation; a chooser opened by Circle's click waits in the result and in the panel, where the person chooses; the site receives both files",
   );
 
   // ---- the person's own click on proceed needs no approval, on another port

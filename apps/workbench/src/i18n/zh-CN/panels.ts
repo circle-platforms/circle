@@ -109,6 +109,11 @@ export const panels: Record<string, string> = {
   'cannot reach this site': '无法访问此网站',
   'reload page': '重新加载页面',
   'Circle is operating': 'Circle 正在操作',
+  'The page asks for a file': '网页在请求一个文件',
+  'The page asks for files': '网页在请求文件',
+  'choose…': '选择…',
+  'the files could not be given': '无法把文件交给网页',
+  'show in folder': '在文件夹中显示',
   'browser capture failed': '截取浏览器画面失败',
   'The local operator controls this session. Agent control will use the same session identity when Circle is connected.':
     '目前由本地操作者控制这个会话。连接 Circle 后，代理控制会使用同一个会话身份。',

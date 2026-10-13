@@ -2,7 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { X509Certificate } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  linkSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createServer as createHttp, type Server } from 'node:http';
 import { createServer as createHttps } from 'node:https';
 import { tmpdir } from 'node:os';
@@ -13,7 +21,10 @@ import { saveSecret } from '../src/secrets.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { ScriptedModel } from '../src/testing.js';
 import { defaultSettings, trustFolder } from '../src/settings.js';
-import type { BrowserAction } from '../src/browser/protocol.js';
+import type {
+  BrowserAction,
+  CertificateApproval,
+} from '../src/browser/protocol.js';
 import { emptyUsage } from '../src/types.js';
 
 // The terminal's browser, driven for real: a Chrome or Edge without a window, local HTTP and
@@ -126,6 +137,7 @@ test(
     );
     const fingerprint = new X509Certificate(readFileSync(cert)).fingerprint256;
     const posts: Record<string, string>[] = [];
+    const uploads: string[] = [];
     const site = createHttp((req, res) => {
       const url = new URL(req.url ?? '/', 'http://local');
       const page = (body: string) => {
@@ -142,6 +154,19 @@ test(
         });
         return;
       }
+      if (req.method === 'POST' && url.pathname === '/files') {
+        let body = '';
+        req.on('data', (chunk) => (body += chunk));
+        req.on('end', () => {
+          uploads.push(body);
+          page(`<title>Sent</title><p>received ${body.length} bytes</p>`);
+        });
+        return;
+      }
+      if (url.pathname === '/files')
+        return page(
+          `<title>Files</title><form method="post" action="/files" enctype="multipart/form-data"><label>Attachment <input type="file" name="attachment" accept=".txt"></label><input id="logs" type="file" name="logs" multiple style="display:none"><button type="button" onclick="document.getElementById('logs').click()">Add logs</button><button>Send</button></form>`,
+        );
       if (url.pathname === '/form')
         return page(
           `<title>Form</title><form method="post" action="/submit"><label>User <input name="username"></label><label>Password <input name="password" type="password"></label><label>Role <select name="role"><option value="viewer">Viewer</option><option value="maintainer">Maintainer</option></select></label><button>Sign in</button></form>`,
@@ -186,8 +211,14 @@ test(
       for (const server of devices) server.close();
     });
     const trustFile = join(temp, 'browser-certificates.json');
+    const downloads = join(temp, 'downloads');
     const start = () =>
-      new ChromeBrowser({ executable: executable!, trustFile, headless: true });
+      new ChromeBrowser({
+        executable: executable!,
+        trustFile,
+        headless: true,
+        downloads,
+      });
     let chrome = start();
     t.after(() => chrome.close());
     const signal = new AbortController().signal;
@@ -293,9 +324,128 @@ test(
     assert.match(closed.text, /Closed tab t2\./);
     assert.doesNotMatch(closed.text, /t2 \(shown\)/);
 
-    // ---- a download is refused and the model told
+    // ---- a download lands in the downloads folder by its own name, and the model is told where
     const download = await act('navigate', { url: `${http}/download` });
-    assert.match(download.text, /the download of "report\.bin" .* was refused/);
+    assert.match(
+      download.text,
+      /The address started download dl1 instead of opening a page\./,
+    );
+    assert.match(
+      download.text,
+      /- download dl1 of "report\.bin" from http:\/\/127\.0\.0\.1:\d+\/download started/,
+    );
+    assert(
+      download.text.includes(
+        `- download dl1 finished: ${join(downloads, 'report.bin')} (4 B)`,
+      ),
+      download.text,
+    );
+    assert.equal(readFileSync(join(downloads, 'report.bin'), 'utf8'), 'data');
+    const twice = await act('navigate', { url: `${http}/download` });
+    assert(
+      twice.text.includes(
+        `download dl2 finished: ${join(downloads, 'report (1).bin')}`,
+      ),
+      twice.text,
+    );
+
+    // ---- files for a page, by a file input's ref or for the chooser a click opened,
+    // each time with the person's approval
+    const notes = join(temp, 'notes.txt');
+    writeFileSync(notes, 'notes from circle');
+    const log = join(temp, 'run.log');
+    writeFileSync(log, 'log line');
+    const filesPage = await act('navigate', { url: `${http}/files` });
+    const attachment = ref(
+      filesPage.text,
+      /\[(e\d+)\] file "Attachment" accepts "\.txt" no file chosen/,
+    );
+    const ask = await act('upload', {
+      ref: attachment,
+      element: 'attachment',
+      paths: [notes],
+    });
+    assert.equal(ask.text, 'Giving the page files needs the user’s approval.');
+    assert.deepEqual(
+      { ...ask.approval, token: typeof ask.approval?.token },
+      {
+        kind: 'upload',
+        token: 'string',
+        origin: http,
+        element: 'attachment',
+        files: [{ path: realpathSync(notes), name: 'notes.txt', size: 17 }],
+      },
+    );
+    // An approval is for its files only
+    const other = await act('upload', {
+      ref: attachment,
+      element: 'attachment',
+      paths: [log],
+      approval: { token: ask.approval!.token },
+    });
+    assert(other.approval, other.text);
+    const given = await act('upload', {
+      ref: attachment,
+      element: 'attachment',
+      paths: [log],
+      approval: { token: other.approval!.token },
+    });
+    assert.match(given.text, /Gave "run\.log" \(8 B\) to e\d+ "attachment"\./);
+    assert.match(
+      given.text,
+      /\[e\d+\] file "Attachment" accepts "\.txt" chosen "run\.log"/,
+    );
+    // What cannot go is refused before anyone is asked
+    await assert.rejects(
+      act('upload', { ref: attachment, paths: [temp] }),
+      /not a file/,
+    );
+    await assert.rejects(
+      act('upload', { ref: attachment, paths: [notes, log] }),
+      /takes one file/,
+    );
+    linkSync(notes, join(temp, 'second-name.txt'));
+    await assert.rejects(
+      act('upload', { ref: attachment, paths: [notes] }),
+      /other names on disk/,
+    );
+    await assert.rejects(
+      act('upload', { paths: [log] }),
+      /no file chooser is waiting/,
+    );
+    // A hidden input behind a button: Circle's click brings its chooser to the result
+    const addLogs = ref(given.text, /\[(e\d+)\] button "Add logs"/);
+    const opened2 = await act('click', { ref: addLogs, element: 'add logs' });
+    assert.match(
+      opened2.text,
+      /It opened file chooser f1: answer it with browser_upload\./,
+    );
+    assert.match(
+      opened2.text,
+      /### File chooser waiting\n- \[f1\] tab t1 · several files → browser_upload/,
+    );
+    const askLogs = await act('upload', { paths: [log] });
+    const chosen = await act('upload', {
+      paths: [log],
+      approval: { token: askLogs.approval!.token },
+    });
+    assert.match(chosen.text, /Gave "run\.log" \(8 B\) to "file chooser f1"\./);
+    assert.doesNotMatch(chosen.text, /File chooser waiting/);
+    // Closing a chooser without a file
+    await act('click', { ref: addLogs, element: 'add logs' });
+    const closedChooser = await act('upload', { paths: [] });
+    assert.match(closedChooser.text, /Closed file chooser f2 without a file\./);
+    const sent = await act('click', {
+      ref: ref(chosen.text, /\[(e\d+)\] button "Send"/),
+      element: 'send',
+    });
+    assert.match(sent.text, /received \d+ bytes/);
+    assert.equal(uploads.length, 1);
+    assert.match(
+      uploads[0]!,
+      /name="attachment"; filename="run\.log"[\s\S]*log line/,
+    );
+    assert.match(uploads[0]!, /name="logs"; filename="run\.log"/);
 
     // ---- the browser's own certificate warning, which only the person lets the model pass
     const host = `127.0.0.1:${ports[0]}`;
@@ -332,11 +482,13 @@ test(
         subject: 'Circle Fixture Device',
         issuer: 'Circle Fixture Device',
         fingerprint,
-        validExpiry: asked.approval!.validExpiry,
+        validExpiry: (asked.approval as CertificateApproval).validExpiry,
         privateHost: true,
       },
     );
-    assert(asked.approval!.validExpiry > Date.now() / 1000);
+    assert(
+      (asked.approval as CertificateApproval).validExpiry > Date.now() / 1000,
+    );
     // A made-up token is not an approval
     const forged = await act('click', {
       ref: proceed,
@@ -565,8 +717,9 @@ test(
       model,
       extraTools: browserTools(chrome, {
         confirm: async (_session, approval) => {
+          const certificate = approval as CertificateApproval;
           asked.push(
-            `${approval.host} ${approval.subject} ${approval.privateHost}`,
+            `${certificate.host} ${certificate.subject} ${certificate.privateHost}`,
           );
           return 'once';
         },

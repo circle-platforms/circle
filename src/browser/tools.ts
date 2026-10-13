@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
+import { isAbsolute } from 'node:path';
 import { loadToolPrompt } from '../system_prompt.js';
 import { fitMedia } from '../media.js';
 import type { Effect, Tool } from '../types.js';
 import { onlyReferences } from '../secrets.js';
 import {
   BROWSER_KEYS,
-  type CertificateApproval,
   type BrowserAction,
+  type BrowserApproval,
   type BrowserReply,
   type BrowserResult,
 } from './protocol.js';
@@ -96,17 +97,25 @@ const element = {
   description: 'What the element is, in a few words, for the user',
 };
 
-/** Asks the person whether the model may pass a certificate warning: once, for good, or not. */
-export type CertificateConfirm = (
+/**
+ * Asks the person whether the model may pass a certificate warning (once, for good, or not)
+ * or give a page files (once or not).
+ */
+export type BrowserConfirm = (
   sessionId: string,
-  approval: CertificateApproval,
+  approval: BrowserApproval,
   signal: AbortSignal,
   callId?: string,
 ) => Promise<'once' | 'always' | 'reject'>;
 
 /** What the tools need of the runtime that hosts them, beyond the browser itself. */
 export interface BrowserToolOptions {
-  confirm?: CertificateConfirm;
+  confirm?: BrowserConfirm;
+  /**
+   * A path the model gave, as the file tools read it: the full path, or an error for a
+   * credential file. Without it only full paths are taken.
+   */
+  files?: (path: string) => string;
 }
 
 /**
@@ -117,18 +126,21 @@ export function browserTools(
   browser: BrowserPort,
   options: BrowserToolOptions = {},
 ): Tool[] {
-  const { confirm } = options;
+  const { confirm, files = full } = options;
   const tool = (
     name: string,
     action: BrowserAction,
     effect: Effect,
     properties: Record<string, unknown>,
     required: string[] = [],
+    // False: the tool asks the person itself, every time
+    approval?: boolean,
   ): Tool => ({
     name,
     description: loadToolPrompt(name),
     effect,
     subagents: false,
+    ...(approval === false ? { approval } : {}),
     parameters: {
       type: 'object',
       properties,
@@ -154,6 +166,14 @@ export function browserTools(
           secret: true,
           secretName: context.secretNames.join(', '),
         };
+      if (action === 'upload') {
+        if (
+          !Array.isArray(args.paths) ||
+          !args.paths.every((path) => typeof path === 'string')
+        )
+          throw Error('invalid file paths');
+        args = { ...args, paths: args.paths.map((path) => files(path)) };
+      }
       let result = await browser.request(
         context.sessionId,
         action,
@@ -173,14 +193,19 @@ export function browserTools(
           : 'reject';
         if (decision === 'reject')
           throw Error(
-            'the user did not approve proceeding past the certificate warning',
+            result.approval.kind === 'upload'
+              ? 'the user did not allow giving the page these files'
+              : 'the user did not approve proceeding past the certificate warning',
           );
         result = await browser.request(
           context.sessionId,
           action,
           {
             ...args,
-            approval: { token: result.approval.token, scope: decision },
+            approval: {
+              token: result.approval.token,
+              scope: result.approval.kind === 'upload' ? 'once' : decision,
+            },
           },
           context.signal,
         );
@@ -301,5 +326,30 @@ export function browserTools(
       },
       ['action'],
     ),
+    tool(
+      'browser_upload',
+      'upload',
+      'unknown',
+      {
+        ref: {
+          ...ref,
+          description:
+            "A file input's ref from the latest snapshot; leave out to answer the file chooser waiting in the result",
+        },
+        element,
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'The files to give the page; an empty list closes the waiting file chooser without any',
+        },
+      },
+      ['paths'],
+      false,
+    ),
   ];
 }
+const full = (path: string) => {
+  if (!isAbsolute(path)) throw Error(`give the full path of ${path}`);
+  return path;
+};

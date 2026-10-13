@@ -121,7 +121,7 @@ test('browser tools are available only when a browser port is connected', async 
   const tools = connected.model.requests[0]!.tools.filter((tool) =>
     tool.name.startsWith('browser_'),
   );
-  assert.equal(tools.length, 9);
+  assert.equal(tools.length, 10);
   assert(tools.every((tool) => tool.subagents === false));
 });
 

@@ -1,6 +1,13 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID, X509Certificate } from 'node:crypto';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  renameSync,
+  rmSync,
+} from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { delimiter, join, win32 } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
@@ -15,6 +22,13 @@ import {
   type PageDialog,
 } from './format.js';
 import { privateHost, webUrl } from './hosts.js';
+import {
+  downloadName,
+  downloadsFolder,
+  freePath,
+  sizeText,
+  uploadFiles,
+} from './files.js';
 import { pageCall } from './page.js';
 import {
   BROWSER_KEYS,
@@ -82,6 +96,16 @@ export interface ChromeOptions {
   trustFile?: string;
   /** No window, for tests. */
   headless?: boolean;
+  /** Where downloads are kept: the system's Downloads folder unless given. */
+  downloads?: string;
+}
+interface Download {
+  id: string;
+  name: string;
+  url: string;
+  conversation: Conversation;
+  /** Still arriving: an action's result waits a moment for it. */
+  running: boolean;
 }
 interface Warning {
   token: string;
@@ -129,6 +153,12 @@ interface Tab {
     };
   };
   closed: boolean;
+  /** Circle's clicks get file choosers; turned off again once no dialog holds the page. */
+  intercepting?: boolean;
+  /** A file chooser a click of Circle's opened, which browser_upload answers. */
+  chooser?: { id: string; multiple: boolean; backendNodeId?: number };
+  /** The files Circle asked the person about, by the token their approval carries. */
+  upload?: { token: string; key: string };
 }
 interface Conversation {
   id: string;
@@ -136,6 +166,8 @@ interface Conversation {
   active?: string;
   nextTab: number;
   nextDialog: number;
+  nextDownload: number;
+  nextChooser: number;
   events: string[];
   tabsChanged: boolean;
   queue: Promise<unknown>;
@@ -161,6 +193,9 @@ export class ChromeBrowser implements BrowserPort {
   private byTarget = new Map<string, Tab>();
   private bySession = new Map<string, Tab>();
   private adopting = new Map<string, Promise<Tab | undefined>>();
+  private downloads = new Map<string, Download>();
+  /** Where the browser writes a download before Circle names it, in the start's profile. */
+  private staging = '';
   private trusted: TrustedCertificates;
   private closed = false;
   constructor(private options: ChromeOptions) {
@@ -199,6 +234,7 @@ export class ChromeBrowser implements BrowserPort {
     );
     this.child = child;
     this.cdp = cdp;
+    this.staging = join(profile, 'downloads');
     const failed = new Promise<never>((_resolve, reject) =>
       child.once('error', (error) =>
         reject(Error(`the browser could not start: ${error.message}`)),
@@ -218,12 +254,12 @@ export class ChromeBrowser implements BrowserPort {
         20000,
       );
       await cdp.send('Target.setDiscoverTargets', { discover: true });
-      await cdp
-        .send('Browser.setDownloadBehavior', {
-          behavior: 'deny',
-          eventsEnabled: true,
-        })
-        .catch(() => {});
+      // Downloads arrive under the browser's own id, and Circle names them when they are done
+      await cdp.send('Browser.setDownloadBehavior', {
+        behavior: 'allowAndName',
+        downloadPath: this.staging,
+        eventsEnabled: true,
+      });
     } catch (error) {
       child.kill();
       throw error;
@@ -235,6 +271,7 @@ export class ChromeBrowser implements BrowserPort {
     if (this.cdp !== cdp) return;
     this.cdp = undefined;
     this.child = undefined;
+    this.downloads.clear();
     for (const conversation of this.conversations.values()) {
       if (conversation.tabs.size)
         conversation.events.push(
@@ -273,6 +310,8 @@ export class ChromeBrowser implements BrowserPort {
         tabs: new Map(),
         nextTab: 0,
         nextDialog: 0,
+        nextDownload: 0,
+        nextChooser: 0,
         events: [],
         tabsChanged: false,
         queue: Promise.resolve(),
@@ -416,10 +455,41 @@ export class ChromeBrowser implements BrowserPort {
       return;
     }
     if (method === 'Browser.downloadWillBegin') {
-      const tab = this.byTarget.get(params.frameId);
-      (tab?.conversation ?? this.current)?.events.push(
-        `the download of ${quote(params.suggestedFilename ?? '')} from ${params.url} was refused: Circle does not download files yet`,
+      const conversation =
+        this.byTarget.get(params.frameId)?.conversation ?? this.current;
+      if (!conversation) return;
+      const download: Download = {
+        id: `dl${++conversation.nextDownload}`,
+        name: downloadName(params.suggestedFilename ?? ''),
+        url: params.url ?? '',
+        conversation,
+        running: true,
+      };
+      this.downloads.set(params.guid, download);
+      conversation.events.push(
+        `download ${download.id} of ${quote(download.name)} from ${download.url} started`,
       );
+      return;
+    }
+    if (method === 'Browser.downloadProgress') {
+      const download = this.downloads.get(params.guid);
+      if (!download || params.state === 'inProgress') return;
+      this.downloads.delete(params.guid);
+      download.running = false;
+      const events = download.conversation.events;
+      if (params.state !== 'completed') {
+        events.push(`download ${download.id} was cancelled`);
+        return;
+      }
+      try {
+        events.push(
+          `download ${download.id} finished: ${this.keep(params.guid, download.name)} (${sizeText(params.receivedBytes ?? 0)})`,
+        );
+      } catch (error) {
+        events.push(
+          `download ${download.id} could not be kept: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
       return;
     }
     const tab = sessionId ? this.bySession.get(sessionId) : undefined;
@@ -448,6 +518,7 @@ export class ChromeBrowser implements BrowserPort {
               `dialog ${dialog.id} (${dialog.type}) was ${params.result ? 'accepted' : 'dismissed'} by the user`,
             );
         }
+        this.release(tab);
         break;
       case 'Page.frameNavigated':
         if (!params.frame.parentId) {
@@ -464,6 +535,9 @@ export class ChromeBrowser implements BrowserPort {
                     : 'the user proceeded'
               }`,
             );
+          // A new document: a chooser or an approval for the old one is gone with it
+          tab.chooser = undefined;
+          tab.upload = undefined;
           if (!tab.frameUrl.startsWith('chrome-error:')) {
             tab.proceeding = undefined;
             tab.url = tab.frameUrl;
@@ -507,7 +581,96 @@ export class ChromeBrowser implements BrowserPort {
       case 'Security.visibleSecurityStateChanged':
         tab.security = params.visibleSecurityState;
         break;
+      // Only while Circle acts: a chooser the person opens is the browser's own
+      case 'Page.fileChooserOpened':
+        tab.chooser = {
+          id: `f${++tab.conversation.nextChooser}`,
+          multiple: params.mode === 'selectMultiple',
+          ...(params.backendNodeId
+            ? { backendNodeId: params.backendNodeId }
+            : {}),
+        };
+        break;
     }
+  }
+  /** Moves a finished download from the profile to the downloads folder, by its own name. */
+  private keep(guid: string, name: string): string {
+    const folder = this.options.downloads ?? downloadsFolder();
+    mkdirSync(folder, { recursive: true });
+    const target = freePath(folder, name);
+    const source = join(this.staging, guid);
+    try {
+      renameSync(source, target);
+    } catch {
+      // Another disk: copy, then let the profile go with the browser
+      copyFileSync(source, target);
+      rmSync(source, { force: true });
+    }
+    return target;
+  }
+  /**
+   * Whether a click of Circle's that opens a file chooser gets the chooser in the result.
+   * A page held by a dialog answers nothing: interception ends when the dialog does, so a
+   * chooser the person opens is the browser's own.
+   */
+  private async intercept(tab: Tab, enabled: boolean) {
+    if (tab.closed) return;
+    tab.intercepting = enabled;
+    if (!enabled && tab.dialogs.length) return;
+    await this.limit(
+      this.send('Page.setInterceptFileChooserDialog', { enabled }, tab.session),
+      undefined,
+      2000,
+    ).catch(() => {});
+  }
+  /** Ends interception left on while a dialog held the page. */
+  private release(tab: Tab) {
+    if (tab.intercepting && !tab.dialogs.length)
+      void this.intercept(tab, false);
+  }
+  /** The browser's own id for the element the page script marked with `token`. */
+  private async marked(tab: Tab, token: string): Promise<number> {
+    await this.send('DOM.getDocument', { depth: 0 }, tab.session);
+    const { searchId, resultCount } = await this.send<{
+      searchId: string;
+      resultCount: number;
+    }>(
+      'DOM.performSearch',
+      { query: `[data-circle-file="${token}"]` },
+      tab.session,
+    );
+    try {
+      if (!resultCount) throw Error('the file input could not be found');
+      const { nodeIds } = await this.send<{ nodeIds: number[] }>(
+        'DOM.getSearchResults',
+        { searchId, fromIndex: 0, toIndex: 1 },
+        tab.session,
+      );
+      const { node } = await this.send<{ node: { backendNodeId: number } }>(
+        'DOM.describeNode',
+        { nodeId: nodeIds[0] },
+        tab.session,
+      );
+      return node.backendNodeId;
+    } finally {
+      await this.send(
+        'DOM.discardSearchResults',
+        { searchId },
+        tab.session,
+      ).catch(() => {});
+    }
+  }
+  /** A download an action started has a moment to finish, so its result can say where it went. */
+  private async downloadsDone(conversation: Conversation, signal: AbortSignal) {
+    const end = Date.now() + 3000;
+    while (
+      Date.now() < end &&
+      [...this.downloads.values()].some(
+        (download) =>
+          download.conversation === conversation && download.running,
+      )
+    )
+      await delay(100, undefined, { signal });
   }
   // ---- waiting
   private async limit<T>(
@@ -869,6 +1032,19 @@ export class ChromeBrowser implements BrowserPort {
         '### Dialogs waiting\n' +
           dialogs.map((dialog) => dialogLine(dialog)).join('\n'),
       );
+    const choosers = [...conversation.tabs.values()].filter(
+      (entry) => entry.chooser,
+    );
+    if (choosers.length)
+      sections.push(
+        '### File chooser waiting\n' +
+          choosers
+            .map(
+              (entry) =>
+                `- [${entry.chooser!.id}] tab ${entry.id} · ${entry.chooser!.multiple ? 'several files' : 'one file'}${entry.chooser!.backendNodeId ? ' → browser_upload' : ': a picker Circle cannot answer; the user can choose in the browser window'}`,
+            )
+            .join('\n'),
+      );
     if (conversation.events.length)
       sections.push(
         '### Events\n' +
@@ -969,7 +1145,6 @@ export class ChromeBrowser implements BrowserPort {
       return { text: await this.result(conversation, text, signal) };
     }
     const tab = await this.activeTab(conversation);
-    const warningBefore = tab.warning?.token;
     if (action === 'snapshot')
       return { text: await this.result(conversation, '', signal) };
     if (action === 'dialog') {
@@ -1057,11 +1232,11 @@ export class ChromeBrowser implements BrowserPort {
           signal,
         ),
       };
-    let text = '';
     if (action === 'navigate') {
       const urlValue = args.url;
       if (typeof urlValue !== 'string' || urlValue.length > 4096)
         throw Error('invalid browser URL');
+      const downloads = conversation.nextDownload;
       if (['back', 'forward', 'reload'].includes(urlValue))
         await this.history(tab, urlValue, signal);
       else {
@@ -1069,15 +1244,174 @@ export class ChromeBrowser implements BrowserPort {
         if (!url) throw Error('only http or https navigation is supported');
         await this.load(tab, url, signal);
       }
-      text = tab.warning
-        ? `The site's certificate is not trusted: the tab shows the browser's certificate warning instead (${tab.warning.error}).`
-        : tab.failure
-          ? `The page could not be loaded: ${tab.failure.error}.`
-          : tab.dialogs.length
-            ? `The page opened dialog ${tab.dialogs[0]!.id}.`
-            : 'Loaded.';
+      await this.downloadsDone(conversation, signal);
+      const text =
+        conversation.nextDownload > downloads
+          ? `The address started download dl${conversation.nextDownload} instead of opening a page.`
+          : tab.warning
+            ? `The site's certificate is not trusted: the tab shows the browser's certificate warning instead (${tab.warning.error}).`
+            : tab.failure
+              ? `The page could not be loaded: ${tab.failure.error}.`
+              : tab.dialogs.length
+                ? `The page opened dialog ${tab.dialogs[0]!.id}.`
+                : 'Loaded.';
       return { text: await this.result(conversation, text, signal) };
     }
+    if (action === 'upload')
+      return this.upload(conversation, tab, args, signal);
+    // A file chooser a click of Circle's opens comes to the model, not as a system dialog
+    await this.intercept(tab, true);
+    try {
+      return await this.act(conversation, tab, action, args, signal);
+    } finally {
+      await this.intercept(tab, false);
+    }
+  }
+  /**
+   * Files for a page's file input, or for the file chooser a click of Circle's opened. The
+   * person sees which files go to which site and allows them first, every time.
+   */
+  private async upload(
+    conversation: Conversation,
+    tab: Tab,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<BrowserResult> {
+    const paths = args.paths;
+    if (
+      !Array.isArray(paths) ||
+      !paths.every((path): path is string => typeof path === 'string')
+    )
+      throw Error('invalid file paths');
+    let target: {
+      backendNodeId: number;
+      origin: string;
+      element: string;
+      multiple: boolean;
+      ref?: string;
+    };
+    const chooser = tab.chooser;
+    if (typeof args.ref === 'string') {
+      if (!/^e[1-9][0-9]*$/.test(args.ref)) throw Error('invalid element ref');
+      const token = randomUUID();
+      const input = await this.js<{
+        multiple: boolean;
+        name: string;
+        origin: string;
+      }>(tab, 'file-input', { ref: args.ref, token }, signal);
+      let backendNodeId: number;
+      try {
+        backendNodeId = await this.marked(tab, token);
+      } finally {
+        await this.js(tab, 'file-input', { ref: args.ref }).catch(() => {});
+      }
+      target = {
+        backendNodeId,
+        origin: input.origin,
+        element:
+          typeof args.element === 'string' && args.element
+            ? args.element
+            : input.name,
+        multiple: input.multiple,
+        ref: args.ref,
+      };
+    } else if (chooser) {
+      if (!chooser.backendNodeId)
+        throw Error(
+          'Circle cannot answer this file picker; the user can choose the files in the browser window',
+        );
+      target = {
+        backendNodeId: chooser.backendNodeId,
+        origin: originOf(tab.url),
+        element:
+          typeof args.element === 'string' && args.element
+            ? args.element
+            : `file chooser ${chooser.id}`,
+        multiple: chooser.multiple,
+      };
+    } else
+      throw Error(
+        "no file chooser is waiting: give a file input's ref, or click what opens the chooser first",
+      );
+    const which = target.ref
+      ? `${target.ref} ${quote(target.element)}`
+      : quote(target.element);
+    if (!paths.length) {
+      if (!target.ref && chooser) {
+        tab.chooser = undefined;
+        return {
+          text: await this.result(
+            conversation,
+            `Closed file chooser ${chooser.id} without a file.`,
+            signal,
+          ),
+        };
+      }
+      await this.send(
+        'DOM.setFileInputFiles',
+        { files: [], backendNodeId: target.backendNodeId },
+        tab.session,
+      );
+      return {
+        text: await this.result(conversation, `Cleared ${which}.`, signal),
+      };
+    }
+    if (!target.multiple && paths.length > 1)
+      throw Error('this input takes one file');
+    const files = uploadFiles(paths);
+    // The approval is for these files and this input only
+    const key = JSON.stringify([
+      target.backendNodeId,
+      files.map((file) => file.path),
+    ]);
+    const approval = args.approval as { token?: unknown } | undefined;
+    if (
+      !tab.upload ||
+      approval?.token !== tab.upload.token ||
+      tab.upload.key !== key
+    ) {
+      tab.upload = { token: randomUUID(), key };
+      return {
+        text: 'Giving the page files needs the user’s approval.',
+        approval: {
+          kind: 'upload',
+          token: tab.upload.token,
+          origin: target.origin,
+          element: target.element,
+          files,
+        },
+      };
+    }
+    tab.upload = undefined;
+    await this.send(
+      'DOM.setFileInputFiles',
+      {
+        files: files.map((file) => file.path),
+        backendNodeId: target.backendNodeId,
+      },
+      tab.session,
+    );
+    if (!target.ref) tab.chooser = undefined;
+    tab.lastNetwork = Date.now();
+    await this.idle(tab, signal);
+    return {
+      text: await this.result(
+        conversation,
+        `Gave ${files.map((file) => `${quote(file.name)} (${sizeText(file.size)})`).join(', ')} to ${which}.`,
+        signal,
+      ),
+    };
+  }
+  private async act(
+    conversation: Conversation,
+    tab: Tab,
+    action: BrowserAction,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<BrowserResult> {
+    const warningBefore = tab.warning?.token;
+    const choosersBefore = conversation.nextChooser;
+    let text = '';
     if (action === 'press') {
       if (typeof args.key !== 'string') throw Error('invalid browser key');
       await this.key(tab, args.key, signal);
@@ -1239,7 +1573,10 @@ export class ChromeBrowser implements BrowserPort {
     const shown = conversation.active
       ? conversation.tabs.get(conversation.active)
       : undefined;
+    await this.downloadsDone(conversation, signal);
     if (tab.dialogs.length) text += ` It opened dialog ${tab.dialogs[0]!.id}.`;
+    else if (conversation.nextChooser > choosersBefore && tab.chooser)
+      text += ` It opened file chooser ${tab.chooser.id}: answer it with browser_upload.`;
     else if (shown && shown !== tab) {
       await this.idle(shown, signal);
       text += ` It opened tab ${shown.id}, now shown.`;

@@ -53,3 +53,19 @@ export function browserApprovalInput(input?: Record<string, unknown>) {
     value: typeof value === 'string' ? value : JSON.stringify(value),
   }));
 }
+/** A download's size or progress, as a browser's download bar shows it. */
+export function downloadProgress(download: {
+  state: 'progress' | 'done' | 'failed';
+  received: number;
+  total: number;
+}): string {
+  const size = (bytes: number) =>
+    bytes < 1024
+      ? `${bytes} B`
+      : bytes < 1024 * 1024
+        ? `${(bytes / 1024).toFixed(1)} KB`
+        : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (download.state === 'progress' && download.total > 0)
+    return `${Math.floor((download.received * 100) / download.total)}%`;
+  return size(download.received);
+}

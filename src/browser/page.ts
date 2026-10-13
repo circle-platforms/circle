@@ -105,11 +105,13 @@ export function browserPage(command: string, args: Record<string, any>) {
       const type = (el as HTMLInputElement).type;
       return type === 'password'
         ? 'password'
-        : ['button', 'submit', 'reset', 'image'].includes(type)
-          ? 'button'
-          : ['checkbox', 'radio'].includes(type)
-            ? type
-            : 'textbox';
+        : type === 'file'
+          ? 'file'
+          : ['button', 'submit', 'reset', 'image'].includes(type)
+            ? 'button'
+            : ['checkbox', 'radio'].includes(type)
+              ? type
+              : 'textbox';
     }
     if (tag === 'a' && el.hasAttribute('href')) return 'link';
     if (tag === 'textarea' || (el as HTMLElement).isContentEditable)
@@ -310,13 +312,23 @@ export function browserPage(command: string, args: Record<string, any>) {
       const value = el as HTMLInputElement;
       if (isAction) {
         const password = value.type === 'password';
+        // A file input: what it takes and the names of the files chosen, never a path
+        const file = el.localName === 'input' && value.type === 'file';
         const content = password
           ? value.value
             ? ' filled'
             : ' empty'
-          : ['input', 'textarea', 'select'].includes(el.localName)
-            ? ` value=${JSON.stringify(clean(value.value))}`
-            : '';
+          : file
+            ? `${value.accept ? ` accepts ${JSON.stringify(value.accept)}` : ''}${value.multiple ? ' multiple' : ''}${
+                value.files?.length
+                  ? ` chosen ${Array.from(value.files)
+                      .map((chosen) => JSON.stringify(chosen.name))
+                      .join(', ')}`
+                  : ' no file chosen'
+              }`
+            : ['input', 'textarea', 'select'].includes(el.localName)
+              ? ` value=${JSON.stringify(clean(value.value))}`
+              : '';
         add(
           `${indent}[${ref}] ${role(el)} ${JSON.stringify(name(el))}${content}${value.disabled ? ' disabled' : ''}${value.checked ? ' checked' : ''}${added ? ' [new]' : ''}`,
         );
@@ -541,6 +553,24 @@ export function browserPage(command: string, args: Record<string, any>) {
         'to proceed past a certificate warning, click its link with browser_click',
       );
     return true;
+  }
+  // Marks a file input for the browser to find (`token`), or unmarks it: page scripts may
+  // see the attribute for a moment, never the files
+  if (command === 'file-input') {
+    const el = field() as HTMLInputElement;
+    if (el.localName !== 'input' || el.type !== 'file')
+      throw Error(
+        'the element is not a file input; click what opens the file chooser, then use browser_upload',
+      );
+    if (el.disabled) throw Error('the element is disabled');
+    if (args.token) el.setAttribute('data-circle-file', String(args.token));
+    else el.removeAttribute('data-circle-file');
+    return {
+      multiple: el.multiple,
+      accept: el.accept,
+      name: name(el),
+      origin: el.ownerDocument.location.origin,
+    };
   }
   if (command === 'select') {
     const el = field() as HTMLSelectElement;

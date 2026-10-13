@@ -96,6 +96,10 @@ export interface DesktopBridge {
     sessionId: string,
     dialog: string,
   ) => Promise<string | null>;
+  /** The person chooses the files for the file chooser a click of Circle's opened. */
+  browserChoose: (sessionId: string, chooser: string) => Promise<BrowserState>;
+  /** Shows a download in the system's file manager. */
+  browserReveal: (sessionId: string, download: string) => Promise<void>;
   onBrowserEvent: (listener: (state: BrowserState) => void) => () => void;
   /** Whether the window shows dark or light: the browser's own pages follow it. */
   setTheme: (dark: boolean) => Promise<void>;
@@ -127,6 +131,17 @@ export interface BrowserState {
   tabs?: BrowserTab[];
   /** Dialogs pages are waiting on, in every tab, oldest first. */
   dialogs?: BrowserDialog[];
+  /** The shown tab's page asks for files: a click of Circle's opened its file chooser. */
+  chooser?: { id: string; multiple: boolean };
+  /** The conversation's latest downloads, newest last. */
+  downloads?: BrowserDownload[];
+}
+export interface BrowserDownload {
+  id: string;
+  name: string;
+  state: 'progress' | 'done' | 'failed';
+  received: number;
+  total: number;
 }
 export interface BrowserTab {
   id: string;

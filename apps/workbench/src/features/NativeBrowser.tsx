@@ -4,6 +4,9 @@ import {
   ArrowRight,
   ArrowUpRight,
   Camera,
+  Download,
+  FileUp,
+  FolderOpen,
   Globe,
   Plus,
   RotateCw,
@@ -16,6 +19,7 @@ import { currentSession } from '../model/state';
 import {
   browserEventAddress,
   browserOpened,
+  downloadProgress,
   shownDialog,
 } from '../model/browser';
 import { useBrowserState } from './useBrowserState';
@@ -231,6 +235,26 @@ export function NativeBrowser() {
           </div>
         ) : null}
       </div>
+      {state?.chooser && (
+        // A click of Circle's opened the page's file chooser: either of you can answer it
+        <div className="browser-chooser" data-testid="browser-chooser">
+          <FileUp size={14} />
+          <span>
+            {state.chooser.multiple
+              ? t('The page asks for files')
+              : t('The page asks for a file')}
+          </span>
+          <Button
+            onClick={() =>
+              void host
+                .browserChoose(id, state.chooser!.id)
+                .catch(() => notify(t('the files could not be given')))
+            }
+          >
+            {t('choose…')}
+          </Button>
+        </div>
+      )}
       <div className="native-browser-footer">
         {state?.operating ? (
           <span className="browser-operating" data-testid="browser-operating">
@@ -257,6 +281,29 @@ export function NativeBrowser() {
           <Camera size={14} />
         </IconButton>
       </div>
+      {!!state?.downloads?.length && (
+        <ul className="browser-downloads" data-testid="browser-downloads">
+          {[...state.downloads].reverse().map((download) => (
+            <li key={download.id}>
+              <Download size={13} />
+              <span className="browser-download-name">{download.name}</span>
+              <span className="browser-download-state">
+                {download.state === 'failed'
+                  ? t('failed')
+                  : downloadProgress(download)}
+              </span>
+              {download.state === 'done' && (
+                <IconButton
+                  label={t('show in folder')}
+                  onClick={() => void host.browserReveal(id, download.id)}
+                >
+                  <FolderOpen size={13} />
+                </IconButton>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
       {capture && (
         <details className="context-source">
           <summary>{t('captured observation')}</summary>

@@ -43,7 +43,11 @@ import { attachmentFromBase64, MAX_MEDIA_BYTES } from '../../../src/media.js';
 import { readPrompt } from '../../../src/system_prompt.js';
 import { toMarkdown, toHtml } from '../../../src/session_export.js';
 import { browserTools, type BrowserPort } from '../../../src/browser/tools.js';
-import type { CertificateApproval } from '../../../src/browser/protocol.js';
+import type {
+  CertificateApproval,
+  UploadApproval,
+} from '../../../src/browser/protocol.js';
+import { sizeText } from '../../../src/browser/files.js';
 import {
   loadSecrets,
   removeSecret,
@@ -271,7 +275,15 @@ export class RuntimeController {
         extraTools: this.options.browser
           ? browserTools(this.options.browser, {
               confirm: (_sessionId, approval, signal, callId) =>
-                this.confirmCertificate(runtime, approval, signal, callId),
+                approval.kind === 'upload'
+                  ? this.confirmUpload(runtime, approval, signal, callId)
+                  : this.confirmCertificate(runtime, approval, signal, callId),
+              // Paths as the file tools take them; a credential file never goes
+              files: (path) => {
+                const full = runtime.sandbox.resolvePath(path);
+                runtime.sandbox.checkCredentialPath(full);
+                return full;
+              },
             })
           : undefined,
         approve: (call, signal, origin) =>
@@ -1074,6 +1086,35 @@ export class RuntimeController {
       : answer === 'always'
         ? 'always'
         : 'reject';
+  }
+  /** The model would give a page files: the person sees which and where, every time. */
+  private async confirmUpload(
+    runtime: AgentRuntime,
+    approval: UploadApproval,
+    signal: AbortSignal,
+    callId?: string,
+  ): Promise<'once' | 'reject'> {
+    const answer = await this.wait(
+      runtime,
+      {
+        kind: 'approval',
+        callId,
+        tool: 'browser_upload',
+        title: 'browser_upload · gives the page files',
+        reason: 'gives the page files',
+        target: approval.origin,
+        input: {
+          site: approval.origin,
+          field: approval.element,
+          files: approval.files
+            .map((file) => `${file.path} (${sizeText(file.size)})`)
+            .join('\n'),
+        },
+        choices: ['approve', 'reject'],
+      },
+      signal,
+    );
+    return answer === 'approve' ? 'once' : 'reject';
   }
   private async question(
     runtime: AgentRuntime,

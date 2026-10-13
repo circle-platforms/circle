@@ -110,7 +110,11 @@ import { modelScope } from '../model_scope.js';
 import { resumeHint, runningJobs, stoppedJobsLine } from './exit_lines.js';
 import { ChromeBrowser, findBrowser } from '../browser/chrome.js';
 import { browserTools } from '../browser/tools.js';
-import type { CertificateApproval } from '../browser/protocol.js';
+import type {
+  BrowserApproval,
+  CertificateApproval,
+} from '../browser/protocol.js';
+import { sizeText } from '../browser/files.js';
 export { VERSION } from '../version.js';
 interface DialogPending {
   complete: (answer: unknown) => void;
@@ -682,10 +686,15 @@ export class SessionApp {
           ? browserTools(this.browser, {
               confirm: (_session, approval, signal) =>
                 this.interactions.run(
-                  () => this.confirmCertificate(approval, signal),
+                  () => this.confirmBrowser(approval, signal),
                   signal,
                   false,
                 ),
+              files: (path) => {
+                const full = this.runtime!.sandbox.resolvePath(path);
+                this.runtime!.sandbox.checkCredentialPath(full);
+                return full;
+              },
             })
           : []),
       ],
@@ -1015,6 +1024,28 @@ export class SessionApp {
       signal?.addEventListener('abort', abort, { once: true });
       this.repaint();
     });
+  }
+  /** What only the person decides in the browser: files for a page, or passing a warning. */
+  private async confirmBrowser(
+    approval: BrowserApproval,
+    signal: AbortSignal,
+  ): Promise<'once' | 'always' | 'reject'> {
+    if (approval.kind === 'certificate')
+      return this.confirmCertificate(approval, signal);
+    const choice = await this.askChoice(
+      'upload',
+      [
+        'Circle wants to give the page these files',
+        `site: ${approval.origin || 'unknown'}`,
+        `field: ${approval.element}`,
+        ...approval.files.map(
+          (file) => `${file.name} · ${sizeText(file.size)} · ${file.path}`,
+        ),
+      ].join('\n'),
+      ['allow', 'reject'],
+      signal,
+    );
+    return choice === 'allow' ? 'once' : 'reject';
   }
   /** The model clicked proceed on the browser's certificate warning: only the person decides. */
   private async confirmCertificate(

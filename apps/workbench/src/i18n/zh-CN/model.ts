@@ -187,4 +187,7 @@ export const model: Record<string, string> = {
     '列出、打开、切换或关闭浏览器标签页',
   'Pages that open a new window or tab appear as tabs; you and Circle see the same shown tab.':
     '网页打开的新窗口或标签页会成为标签页；你和 Circle 看到的是同一个当前标签页。',
+  'Give a page files from this computer': '把这台电脑上的文件交给网页',
+  'For a file input, or for the file chooser one of its clicks opened. Circle asks you every time, with the files and the site.':
+    '用于文件输入框，或它的点击打开的文件选择框。Circle 每次都会问你，并列出文件和站点。',
 };

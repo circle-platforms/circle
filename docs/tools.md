@@ -4,7 +4,7 @@ nav_order: 20
 
 # Built-in tools
 
-The main agent has these twenty-one core tools. The desktop application adds the nine [browser tools](#the-browser) below, and so does the full-screen terminal interface when Chrome, Edge or Chromium is installed. MCP servers and [extensions](extensions.md) add more.
+The main agent has these twenty-one core tools. The desktop application adds the ten [browser tools](#the-browser) below, and so does the full-screen terminal interface when Chrome, Edge or Chromium is installed. MCP servers and [extensions](extensions.md) add more.
 
 "Asks" means Circle shows an approval card before the call runs. See [Security](security.md). In `read-only` mode the tools that do not ask keep working; the others are refused, except changes to a plan file (see [Read-only mode](security.md#read-only-mode)).
 
@@ -53,6 +53,7 @@ Every result has the same parts: what the action did; the dialogs pages are wait
 | `browser_screenshot` | Send a PNG of the shown page to the model. | no | Not while the page waits on a dialog or shows an error. The model must accept images. |
 | `browser_dialog` | Answer a page's dialog: `accept: true` presses OK (or leaves the page), `false` Cancel (or stays); `text` answers a prompt; `id` picks a dialog in another tab. | yes | |
 | `browser_tabs` | `list`, `new` (with an optional `url`), `select` or `close` a tab. | yes | |
+| `browser_upload` | Give `paths` to the file input at `ref`, or, without `ref`, to the file chooser one of Circle's clicks opened; an empty list closes that chooser. Paths are taken as the file tools take them. | always, also in `auto` mode | Up to 50 MB a file. Not a credential file, and not a file with other names on disk (hard links). |
 
 ### Dialogs, warnings and tabs
 
@@ -62,9 +63,13 @@ When a site's certificate is not trusted, as with the self-signed certificate of
 
 A link or script that opens a new window opens a new tab, shown to both of you; one that opens in the background stays behind. The result names new tabs.
 
-One **allow for this session** choice covers all browser actions in this conversation; passing a certificate warning is asked separately every time, also in `auto` mode, unless you trust the certificate for good. `read-only` mode allows snapshots and browser screenshots and refuses the other tools. See [The browser panel](desktop.md#the-browser-panel), [Browser safety](security.md#the-desktop-browser) and [The terminal's browser](security.md#the-terminals-browser).
+One **allow for this session** choice covers all browser actions in this conversation but two, which are asked every time, also in `auto` mode: passing a certificate warning (unless you trust the certificate for good) and giving a page files. `read-only` mode allows snapshots and browser screenshots and refuses the other tools. See [The browser panel](desktop.md#the-browser-panel), [Browser safety](security.md#the-desktop-browser) and [The terminal's browser](security.md#the-terminals-browser).
 
-A download is refused and the model is told.
+### Downloads and files
+
+A download is kept in the system's Downloads folder, under the name the site gives it, with ` (1)` and so on added when that name is taken, as browsers do. The result names it (`dl1`) when it starts and gives its path when it is done; an address that downloads a file instead of opening a page says so. The model can read a finished download with the file tools. The desktop panel lists the latest downloads, each with **show in folder**.
+
+A click of Circle's that opens a page's file chooser does not open the system's dialog: the result shows the chooser waiting, and the model answers it with `browser_upload`, or you do with **choose…** under the page in the desktop panel. A file chooser you open yourself is the system's own. Before a page gets files from the model, Circle asks you, showing the files, their sizes and the site.
 
 ## Working with you
 

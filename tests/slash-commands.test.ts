@@ -1106,3 +1106,55 @@ test('/variables and /secrets keep values as Windows writes them, and the model 
   assert.match(screen(), /Removed variable BASE_URL/);
   assert.match(screen(), /Removed secret API_TOKEN/);
 });
+
+test('the terminal asks for files a page would get, and for passing a certificate warning, on cards of their own', async (t) => {
+  const { app, ui, key } = await session(t, []);
+  const signal = new AbortController().signal;
+  const upload = ui.confirmBrowser(
+    {
+      kind: 'upload',
+      token: 'token',
+      origin: 'https://device.lan',
+      element: 'firmware',
+      files: [{ path: '/tmp/fw.bin', name: 'fw.bin', size: 2048 }],
+    },
+    signal,
+  );
+  await until(() => Boolean(app.state.dialog));
+  assert.equal(app.state.dialog!.title, 'upload');
+  assert.match(
+    app.state.dialog!.body,
+    /Circle wants to give the page these files\nsite: https:\/\/device\.lan\nfield: firmware\nfw\.bin · 2\.0 KB · \/tmp\/fw\.bin/,
+  );
+  assert.deepEqual(app.state.dialog!.options, ['allow', 'reject']);
+  await key('enter');
+  assert.equal(await upload, 'once');
+  const certificate = ui.confirmBrowser(
+    {
+      kind: 'certificate',
+      token: 'token',
+      url: 'https://172.16.6.215:8888/',
+      host: '172.16.6.215:8888',
+      subject: 'ProductWebUI',
+      issuer: 'RSAWebRoot',
+      fingerprint: 'AA:BB',
+      validExpiry: 2284329600,
+      privateHost: true,
+    },
+    signal,
+  );
+  await until(() => Boolean(app.state.dialog));
+  assert.equal(app.state.dialog!.title, 'certificate');
+  assert.match(
+    app.state.dialog!.body,
+    /issued to: ProductWebUI\nissued by: RSAWebRoot\nvalid until: 2042-05-22\nsha256: AA:BB/,
+  );
+  assert.deepEqual(app.state.dialog!.options, [
+    'allow once',
+    'always trust this certificate on this host',
+    'reject',
+  ]);
+  await key('down');
+  await key('enter');
+  assert.equal(await certificate, 'always');
+});

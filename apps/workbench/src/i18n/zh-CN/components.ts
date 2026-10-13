@@ -67,6 +67,8 @@ export const components: Record<string, string> = {
     '这个视图需要已连接的运行时提供访问权限。',
   "manages the browser's tabs": '管理浏览器标签页',
   'trusts an untrusted certificate': '信任不受信任的证书',
+  'gives the page files': '把文件交给网页',
+  field: '输入框',
   dialog: '对话框',
   action: '操作',
   tab: '标签页',

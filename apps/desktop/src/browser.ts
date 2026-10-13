@@ -1,13 +1,21 @@
 import {
   BrowserWindow,
   WebContentsView,
+  dialog as systemDialog,
   nativeTheme,
   type Certificate,
   type Rectangle,
   type Session,
   type WebContents,
 } from 'electron';
-import { createHash, randomBytes, X509Certificate } from 'node:crypto';
+import {
+  createHash,
+  randomBytes,
+  randomUUID,
+  X509Certificate,
+} from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import { basename } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { safeExternalUrl } from './policy';
 import { captureFrame } from './capture';
@@ -15,6 +23,7 @@ import type {
   BrowserBounds,
   BrowserCertificate,
   BrowserDialog,
+  BrowserDownload,
   BrowserState,
 } from './contracts';
 import {
@@ -26,6 +35,13 @@ import {
 import { pageCall } from '../../../src/browser/page.js';
 import { dialogLine, dialogSnapshot } from '../../../src/browser/format.js';
 import { TrustedCertificates } from '../../../src/browser/certificates.js';
+import {
+  downloadName,
+  downloadsFolder,
+  freePath,
+  sizeText,
+  uploadFiles,
+} from '../../../src/browser/files.js';
 import { privateHost, WARNING_SCHEME, warningPage } from './browser-warning';
 import { nativeText, type NativeLocale } from './native-text';
 import {
@@ -69,6 +85,12 @@ interface Tab {
   promptPath: string;
   // Dialogs as the debugger saw them open, oldest first, to pair with their closing
   opened: { type: string; message: string }[];
+  // Circle's clicks get file choosers; turned off again once no dialog holds the page
+  intercepting?: boolean;
+  // A file chooser a click of Circle's opened, which the model or the person answers
+  chooser?: { id: string; multiple: boolean; backendNodeId?: number };
+  // The files Circle asked the person about, by the token their approval carries
+  upload?: { token: string; key: string };
 }
 interface Conversation {
   id: string;
@@ -91,6 +113,10 @@ interface Conversation {
   // host + fingerprint the person let through, until Circle closes
   exceptions: Set<string>;
   insecureHosts: Set<string>;
+  nextDownload: number;
+  nextChooser: number;
+  // The latest downloads, newest last, with where each is kept
+  downloads: (BrowserDownload & { path: string })[];
 }
 const BLANK = 'about:blank';
 const fingerprint = (certificate: Certificate) =>
@@ -135,6 +161,8 @@ export class BrowserSessions {
   private conversations = new Map<string, Conversation>();
   private sessions = new WeakSet<Session>();
   private trusted: TrustedCertificates;
+  // Download paths taken by downloads still arriving
+  private reserved = new Set<string>();
   private closed = false;
   // The window's theme, which Circle's own pages and the pointer follow
   private dark = nativeTheme.shouldUseDarkColors;
@@ -145,6 +173,8 @@ export class BrowserSessions {
     // Certificates of hosts on this network the person trusted for good
     trustFile?: string,
     private exceptions = new Map<string, Set<string>>(),
+    // Where downloads are kept: the system's Downloads folder unless given
+    private downloadsDir = downloadsFolder(),
   ) {
     this.trusted = new TrustedCertificates(trustFile);
   }
@@ -178,6 +208,9 @@ export class BrowserSessions {
         operating: false,
         exceptions: this.exceptions.get(id) ?? new Set(),
         insecureHosts: new Set(),
+        nextDownload: 0,
+        nextChooser: 0,
+        downloads: [],
       };
       this.exceptions.set(id, conversation.exceptions);
       this.conversations.set(id, conversation);
@@ -207,11 +240,46 @@ export class BrowserSessions {
       callback(false),
     );
     session.setPermissionCheckHandler(() => false);
+    // A download goes to the downloads folder under its own name, as a browser keeps it; the
+    // path is set here, or Electron would ask with a save dialog
     session.on('will-download', (_event, item) => {
+      mkdirSync(this.downloadsDir, { recursive: true });
+      let path = freePath(this.downloadsDir, downloadName(item.getFilename()));
+      while (this.reserved.has(path))
+        path = freePath(this.downloadsDir, '1 ' + basename(path));
+      this.reserved.add(path);
+      item.setSavePath(path);
+      const download = {
+        id: `dl${++conversation.nextDownload}`,
+        name: basename(path),
+        path,
+        state: 'progress' as BrowserDownload['state'],
+        received: 0,
+        total: item.getTotalBytes(),
+      };
+      conversation.downloads = [...conversation.downloads, download].slice(-5);
       conversation.events.push(
-        `download of ${quote(item.getFilename())} was cancelled: this browser does not download files yet`,
+        `download ${download.id} of ${quote(download.name)} from ${item.getURL()} started`,
       );
-      item.cancel();
+      let shown = 0;
+      item.on('updated', () => {
+        download.received = item.getReceivedBytes();
+        if (Date.now() - shown < 250) return;
+        shown = Date.now();
+        this.publish(conversation.id);
+      });
+      item.once('done', (_done, state) => {
+        this.reserved.delete(path);
+        download.received = item.getReceivedBytes();
+        download.state = state === 'completed' ? 'done' : 'failed';
+        conversation.events.push(
+          state === 'completed'
+            ? `download ${download.id} finished: ${path} (${sizeText(download.received)})`
+            : `download ${download.id} ${state === 'cancelled' ? 'was cancelled' : 'failed'}`,
+        );
+        this.publish(conversation.id);
+      });
+      this.publish(conversation.id);
     });
     // Circle's certificate warning, served only for the warning a tab is showing
     session.protocol.handle(WARNING_SCHEME, (request) => {
@@ -541,6 +609,22 @@ export class BrowserSessions {
       }
       if (method === 'Page.javascriptDialogOpening')
         tab.opened.push({ type: params.type, message: params.message });
+      // Only while Circle acts: a chooser the person opens is the system's own
+      if (method === 'Page.fileChooserOpened') {
+        tab.chooser = {
+          id: `f${++conversation.nextChooser}`,
+          multiple: params.mode === 'selectMultiple',
+          ...(params.backendNodeId
+            ? { backendNodeId: params.backendNodeId }
+            : {}),
+        };
+        this.publish(id);
+      }
+      // A new document: a chooser or an approval for the old one is gone with it
+      if (method === 'Page.frameNavigated' && !params.frame?.parentId) {
+        tab.chooser = undefined;
+        tab.upload = undefined;
+      }
       // Answered by another debugger client (DevTools): Circle's record of it goes too
       if (method === 'Page.javascriptDialogClosed') {
         const closed = tab.opened.shift();
@@ -560,6 +644,7 @@ export class BrowserSessions {
           this.visibility(conversation);
           this.publish(id);
         }
+        this.release(tab);
       }
       if (
         method === 'Network.requestWillBeSent' &&
@@ -671,6 +756,7 @@ export class BrowserSessions {
       }
       tab.dialogs = tab.dialogs.filter((entry) => entry !== dialog);
       dialog.answer(accept, text);
+      this.release(tab);
       conversation.events.push(
         `dialog ${dialog.id} (${dialog.type}) ${accept ? 'accepted' : 'dismissed'} by ${by === 'model' ? 'Circle' : 'the user'}`,
       );
@@ -791,7 +877,51 @@ export class BrowserSessions {
             ),
           )
         : [],
+      ...(tab?.chooser?.backendNodeId
+        ? { chooser: { id: tab.chooser.id, multiple: tab.chooser.multiple } }
+        : {}),
+      downloads: (conversation?.downloads ?? []).map(
+        ({ path: _path, ...download }) => ({ ...download }),
+      ),
     };
+  }
+  /** The person chooses the files for the file chooser a click of Circle's opened. */
+  async choose(idValue: unknown, chooserValue: unknown) {
+    const id = this.validId(idValue);
+    const conversation = this.conversations.get(id);
+    const tab = [...(conversation?.tabs.values() ?? [])].find(
+      (entry) => entry.chooser && entry.chooser.id === chooserValue,
+    );
+    const chooser = tab?.chooser;
+    if (!conversation || !tab || !chooser?.backendNodeId)
+      throw Error('no such file chooser');
+    const picked = await systemDialog.showOpenDialog(this.window, {
+      properties: chooser.multiple
+        ? ['openFile', 'multiSelections']
+        : ['openFile'],
+    });
+    if (picked.canceled || !picked.filePaths.length) return this.state(id);
+    if (tab.chooser !== chooser)
+      throw Error('the file chooser was answered meanwhile');
+    await tab.view.webContents.debugger.sendCommand('DOM.setFileInputFiles', {
+      files: picked.filePaths,
+      backendNodeId: chooser.backendNodeId,
+    });
+    tab.chooser = undefined;
+    conversation.events.push(
+      `file chooser ${chooser.id} was answered by the user with ${picked.filePaths.length === 1 ? quote(basename(picked.filePaths[0]!)) : `${picked.filePaths.length} files`}`,
+    );
+    this.publish(id);
+    return this.state(id);
+  }
+  /** Where one of the conversation's downloads is kept. */
+  downloadPath(idValue: unknown, downloadValue: unknown): string {
+    const id = this.validId(idValue);
+    const download = this.conversations
+      .get(id)
+      ?.downloads.find((entry) => entry.id === downloadValue);
+    if (!download) throw Error('no such download');
+    return download.path;
   }
   bounds(idValue: unknown, value: unknown, visible: unknown) {
     const id = this.validId(idValue);
@@ -1018,6 +1148,61 @@ export class BrowserSessions {
       await delay(50, undefined, { signal });
     }
   }
+  /**
+   * Whether a click of Circle's that opens a file chooser gets the chooser in the result. A
+   * page held by a dialog answers nothing: interception ends when the dialog does, so a
+   * chooser the person opens is the system's own.
+   */
+  private async intercept(tab: Tab, enabled: boolean) {
+    if (tab.closed || tab.view.webContents.isDestroyed()) return;
+    tab.intercepting = enabled;
+    if (!enabled && tab.dialogs.length) return;
+    await this.limit(
+      tab.view.webContents.debugger.sendCommand(
+        'Page.setInterceptFileChooserDialog',
+        { enabled },
+      ),
+      undefined,
+      2000,
+    ).catch(() => {});
+  }
+  /** Ends interception left on while a dialog held the page. */
+  private release(tab: Tab) {
+    if (tab.intercepting && !tab.dialogs.length)
+      void this.intercept(tab, false);
+  }
+  /** The browser's own id for the element the page script marked with `token`. */
+  private async marked(tab: Tab, token: string): Promise<number> {
+    const send = (method: string, params: Record<string, unknown>) =>
+      tab.view.webContents.debugger.sendCommand(method, params);
+    await send('DOM.getDocument', { depth: 0 });
+    const { searchId, resultCount } = (await send('DOM.performSearch', {
+      query: `[data-circle-file="${token}"]`,
+    })) as { searchId: string; resultCount: number };
+    try {
+      if (!resultCount) throw Error('the file input could not be found');
+      const { nodeIds } = (await send('DOM.getSearchResults', {
+        searchId,
+        fromIndex: 0,
+        toIndex: 1,
+      })) as { nodeIds: number[] };
+      const { node } = (await send('DOM.describeNode', {
+        nodeId: nodeIds[0],
+      })) as { node: { backendNodeId: number } };
+      return node.backendNodeId;
+    } finally {
+      await send('DOM.discardSearchResults', { searchId }).catch(() => {});
+    }
+  }
+  /** A download an action started has a moment to finish, so its result can say where it went. */
+  private async downloadsDone(conversation: Conversation, signal: AbortSignal) {
+    const end = Date.now() + 3000;
+    while (
+      Date.now() < end &&
+      conversation.downloads.some((download) => download.state === 'progress')
+    )
+      await delay(100, undefined, { signal });
+  }
   // ---- reaching into the page
   private async js<T = unknown>(
     tab: Tab,
@@ -1155,6 +1340,19 @@ export class BrowserSessions {
       sections.push(
         '### Dialogs waiting\n' +
           dialogs.map((dialog) => dialogLine(dialog)).join('\n'),
+      );
+    const choosers = [...conversation.tabs.values()].filter(
+      (entry) => entry.chooser,
+    );
+    if (choosers.length)
+      sections.push(
+        '### File chooser waiting\n' +
+          choosers
+            .map(
+              (entry) =>
+                `- [${entry.chooser!.id}] tab ${entry.id} · ${entry.chooser!.multiple ? 'several files' : 'one file'}${entry.chooser!.backendNodeId ? ' → browser_upload' : ': a picker Circle cannot answer; the user can choose in the panel'}`,
+            )
+            .join('\n'),
       );
     if (conversation.events.length)
       sections.push(
@@ -1318,11 +1516,11 @@ export class BrowserSessions {
           signal,
         ),
       };
-    let text = '';
     if (action === 'navigate') {
       const urlValue = args.url;
       if (typeof urlValue !== 'string' || urlValue.length > 4096)
         throw Error('invalid browser URL');
+      const downloads = conversation.nextDownload;
       if (['back', 'forward', 'reload'].includes(urlValue))
         await this.history(conversation, tab, urlValue, signal);
       else {
@@ -1330,15 +1528,46 @@ export class BrowserSessions {
         if (!url) throw Error('only http or https navigation is supported');
         await this.load(conversation, tab, url, signal);
       }
-      text = tab.warning
-        ? `The site's certificate is not trusted: the tab shows Circle's certificate warning instead (${tab.warning.certificate.error}).`
-        : tab.failure
-          ? `The page could not be loaded: ${tab.failure.error}.`
-          : tab.dialogs.length
-            ? `The page opened dialog ${tab.dialogs[0]!.id}.`
-            : 'Loaded.';
+      await this.downloadsDone(conversation, signal);
+      const text =
+        conversation.nextDownload > downloads
+          ? `The address started download dl${conversation.nextDownload} instead of opening a page.`
+          : tab.warning
+            ? `The site's certificate is not trusted: the tab shows Circle's certificate warning instead (${tab.warning.certificate.error}).`
+            : tab.failure
+              ? `The page could not be loaded: ${tab.failure.error}.`
+              : tab.dialogs.length
+                ? `The page opened dialog ${tab.dialogs[0]!.id}.`
+                : 'Loaded.';
       return { text: await this.result(conversation, text, signal) };
     }
+    if (action === 'upload')
+      return this.upload(conversation, tab, args, signal);
+    // A file chooser a click of Circle's opens comes to the model, not as a system dialog
+    await this.intercept(tab, true);
+    try {
+      return await this.act(
+        conversation,
+        tab,
+        action,
+        args,
+        signal,
+        warningBefore,
+      );
+    } finally {
+      await this.intercept(tab, false);
+    }
+  }
+  private async act(
+    conversation: Conversation,
+    tab: Tab,
+    action: BrowserRequest['action'],
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+    warningBefore: string | undefined,
+  ): Promise<BrowserResult> {
+    const choosersBefore = conversation.nextChooser;
+    let text = '';
     if (action === 'press') {
       if (typeof args.key !== 'string') throw Error('invalid browser key');
       await this.key(tab, args.key, signal);
@@ -1497,12 +1726,155 @@ export class BrowserSessions {
     }
     tab.lastNetwork = Date.now();
     await this.idle(tab, signal);
+    await this.downloadsDone(conversation, signal);
     const shown = this.activeTab(conversation);
     if (tab.dialogs.length) text += ` It opened dialog ${tab.dialogs[0]!.id}.`;
+    else if (conversation.nextChooser > choosersBefore && tab.chooser)
+      text += ` It opened file chooser ${tab.chooser.id}: answer it with browser_upload.`;
     else if (shown !== tab) text += ` It opened tab ${shown.id}, now shown.`;
     else if (tab.warning && tab.warning.token !== warningBefore)
       text += ` The tab now shows Circle's certificate warning for ${tab.warning.certificate.host}.`;
     return { text: await this.result(conversation, text, signal) };
+  }
+  /**
+   * Files for a page's file input, or for the file chooser a click of Circle's opened. The
+   * person sees which files go to which site and allows them first, every time.
+   */
+  private async upload(
+    conversation: Conversation,
+    tab: Tab,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<BrowserResult> {
+    const paths = args.paths;
+    if (
+      !Array.isArray(paths) ||
+      !paths.every((path): path is string => typeof path === 'string')
+    )
+      throw Error('invalid file paths');
+    const send = (method: string, params: Record<string, unknown>) =>
+      tab.view.webContents.debugger.sendCommand(method, params);
+    let target: {
+      backendNodeId: number;
+      origin: string;
+      element: string;
+      multiple: boolean;
+      ref?: string;
+    };
+    const chooser = tab.chooser;
+    if (typeof args.ref === 'string') {
+      if (!/^e[1-9][0-9]*$/.test(args.ref)) throw Error('invalid element ref');
+      const token = randomUUID();
+      const input = await this.js<{
+        multiple: boolean;
+        name: string;
+        origin: string;
+      }>(tab, 'file-input', { ref: args.ref, token }, signal);
+      let backendNodeId: number;
+      try {
+        backendNodeId = await this.marked(tab, token);
+      } finally {
+        await this.js(tab, 'file-input', { ref: args.ref }).catch(() => {});
+      }
+      target = {
+        backendNodeId,
+        origin: input.origin,
+        element:
+          typeof args.element === 'string' && args.element
+            ? args.element
+            : input.name,
+        multiple: input.multiple,
+        ref: args.ref,
+      };
+    } else if (chooser) {
+      if (!chooser.backendNodeId)
+        throw Error(
+          'Circle cannot answer this file picker; the user can choose the files in the panel',
+        );
+      let origin = '';
+      try {
+        origin = new URL(tab.view.webContents.getURL()).origin;
+      } catch {
+        /* a page without an address */
+      }
+      target = {
+        backendNodeId: chooser.backendNodeId,
+        origin,
+        element:
+          typeof args.element === 'string' && args.element
+            ? args.element
+            : `file chooser ${chooser.id}`,
+        multiple: chooser.multiple,
+      };
+    } else
+      throw Error(
+        "no file chooser is waiting: give a file input's ref, or click what opens the chooser first",
+      );
+    const which = target.ref
+      ? `${target.ref} ${quote(target.element)}`
+      : quote(target.element);
+    if (!paths.length) {
+      if (!target.ref && chooser) {
+        tab.chooser = undefined;
+        this.publish(conversation.id);
+        return {
+          text: await this.result(
+            conversation,
+            `Closed file chooser ${chooser.id} without a file.`,
+            signal,
+          ),
+        };
+      }
+      await send('DOM.setFileInputFiles', {
+        files: [],
+        backendNodeId: target.backendNodeId,
+      });
+      return {
+        text: await this.result(conversation, `Cleared ${which}.`, signal),
+      };
+    }
+    if (!target.multiple && paths.length > 1)
+      throw Error('this input takes one file');
+    const files = uploadFiles(paths);
+    // The approval is for these files and this input only
+    const key = JSON.stringify([
+      target.backendNodeId,
+      files.map((file) => file.path),
+    ]);
+    const approval = args.approval as { token?: unknown } | undefined;
+    if (
+      !tab.upload ||
+      approval?.token !== tab.upload.token ||
+      tab.upload.key !== key
+    ) {
+      tab.upload = { token: randomUUID(), key };
+      return {
+        text: 'Giving the page files needs the user’s approval.',
+        approval: {
+          kind: 'upload',
+          token: tab.upload.token,
+          origin: target.origin,
+          element: target.element,
+          files,
+        },
+      };
+    }
+    tab.upload = undefined;
+    await send('DOM.setFileInputFiles', {
+      files: files.map((file) => file.path),
+      backendNodeId: target.backendNodeId,
+    });
+    if (!target.ref) tab.chooser = undefined;
+    this.publish(conversation.id);
+    tab.lastNetwork = Date.now();
+    await this.idle(tab, signal);
+    return {
+      text: await this.result(
+        conversation,
+        `Gave ${files.map((file) => `${quote(file.name)} (${sizeText(file.size)})`).join(', ')} to ${which}.`,
+        signal,
+      ),
+    };
   }
   close() {
     this.closed = true;
