@@ -5,7 +5,7 @@ permalink: /
 
 # Circle documentation
 
-Circle is a terminal coding agent. You describe a task, and Circle reads your code, runs commands and edits files in your project, asking before it does anything that changes something.
+Circle is a coding agent. You describe a task, and Circle reads your code, runs commands and edits files in your project, asking before it does anything that changes something. It runs in the terminal, and as a [desktop application](desktop.md).
 
 New here? Start with the [Quickstart](quickstart.md). Coming from Circle 0.5.0? Read [Upgrading from 0.5.0](#upgrading-from-050) first.
 
@@ -15,11 +15,11 @@ New here? Start with the [Quickstart](quickstart.md). Coming from Circle 0.5.0? 
 |---|---|
 | Install Circle and run my first task | [Quickstart](quickstart.md) |
 | Install, update or move from the Python version | [Installation and updates](installation.md) |
+| Use Circle in its own window | [The desktop application](desktop.md) |
 | Understand what Circle does and why | [How Circle works](how-circle-works.md) |
 | Connect a model or switch to another | [Choose a model](models.md) |
 | Know what it may do to my machine | [Run Circle safely](security.md) |
 | Find out what the screen is telling me | [The interface](interface.md) |
-| Use the desktop application | [The desktop application](desktop.md) |
 | Steer, stop, copy, find | [Use Circle in the terminal](usage.md) |
 | Keep, reopen or branch a conversation | [Sessions and context](sessions.md) |
 | Run a server, a watcher or a subagent while I keep working | [Background jobs](background-jobs.md) |
@@ -81,15 +81,9 @@ What you may notice afterwards:
 - [Contributing](https://github.com/qingshanfeihu/circle/blob/main/CONTRIBUTING.md)
 - [Architecture](development/architecture.md)
 - [Releasing](development/releasing.md)
-- [The TUI contract](development/tui-contract.md)
+- [The TUI contract](https://github.com/qingshanfeihu/circle/blob/main/docs/development/tui-contract.md) (in the repository, in Chinese)
+- [Desktop application, from a checkout](https://github.com/qingshanfeihu/circle/blob/main/apps/desktop/README.md)
+- [Desktop working notes](https://github.com/qingshanfeihu/circle/tree/main/docs/workbench) (in the repository)
 - [Registering Circle in skills.sh](development/skills-registry.md)
 - [Security policy](https://github.com/qingshanfeihu/circle/blob/main/SECURITY.md)
 - [Changelog](https://github.com/qingshanfeihu/circle/blob/main/CHANGELOG.md)
-
-## Desktop frontend
-
-- [Run and package the native workbench](https://github.com/qingshanfeihu/circle/blob/main/apps/desktop/README.md)
-- [Frontend coverage and runtime limits](workbench/coverage.md)
-- [Application and plugin architecture](workbench/architecture.md)
-- [Native checks and application receipts](workbench/validation.md)
-- [Full runtime and plugin integration gaps](workbench/integration-audit.md)
