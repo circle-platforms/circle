@@ -816,6 +816,8 @@ export class ChromeBrowser implements BrowserPort {
     promise: Promise<T>,
     signal?: AbortSignal,
     ms = 5000,
+    // What was waited for, named in the error
+    what = '',
   ): Promise<T> {
     signal?.throwIfAborted();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -825,7 +827,10 @@ export class ChromeBrowser implements BrowserPort {
         promise,
         new Promise<never>((_resolve, reject) => {
           timer = setTimeout(
-            () => reject(Error('browser action timed out')),
+            () =>
+              reject(
+                Error(`browser action timed out${what ? ` (${what})` : ''}`),
+              ),
             ms,
           );
           abort = () =>
@@ -902,6 +907,8 @@ export class ChromeBrowser implements BrowserPort {
             tab.session,
           ),
           signal,
+          5000,
+          'Runtime.evaluate',
         );
         if (exceptionDetails)
           throw Error(exceptionDetails.text || 'browser page action failed');
@@ -950,17 +957,22 @@ export class ChromeBrowser implements BrowserPort {
       signal,
     ).catch(() => 'visible');
     if (state !== 'hidden') return;
-    await this.send('Target.activateTarget', { targetId: tab.targetId }).catch(
-      () => {},
-    );
-    for (let tries = 0; tries < 20; tries++) {
-      const now = await this.evaluate<string>(
-        tab,
-        'document.visibilityState',
-        signal,
-      ).catch(() => 'visible');
-      if (now !== 'hidden') return;
-      await delay(50, undefined, { signal });
+    // The tab is chosen in its window; a browser that does not show it then is asked to
+    // bring the page itself to the front
+    for (const front of [
+      () => this.send('Target.activateTarget', { targetId: tab.targetId }),
+      () => this.send('Page.bringToFront', {}, tab.session),
+    ]) {
+      await front().catch(() => {});
+      for (let tries = 0; tries < 10; tries++) {
+        const now = await this.evaluate<string>(
+          tab,
+          'document.visibilityState',
+          signal,
+        ).catch(() => 'visible');
+        if (now !== 'hidden') return;
+        await delay(50, undefined, { signal });
+      }
     }
   }
   /** The model's answer to a sign-in: the user name and a secret's value, or cancel. */
@@ -1022,7 +1034,7 @@ export class ChromeBrowser implements BrowserPort {
     try {
       if (tab.dialogs.length) return;
       await Promise.race([
-        this.limit(this.send(method, args, tab.session), signal),
+        this.limit(this.send(method, args, tab.session), signal, 5000, method),
         dialog.opened,
       ]);
       signal.throwIfAborted();
@@ -1520,6 +1532,7 @@ export class ChromeBrowser implements BrowserPort {
           ),
           signal,
           10000,
+          'Page.captureScreenshot',
         );
         return {
           text: `tab ${tab.id} · ${quote(tab.title)} · ${tab.url}\nbrowser screenshot`,

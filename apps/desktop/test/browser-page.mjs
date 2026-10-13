@@ -8,6 +8,14 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { _electron as electron } from 'playwright';
 
+// The check runs its own main script, which only the development Electron runs: a
+// packaged application starts itself. The page script is the same in both.
+if (process.env.CIRCLE_DESKTOP_EXECUTABLE) {
+  console.log(
+    'SKIP browser page: it runs with the development Electron; the packaged app runs browser-live',
+  );
+  process.exit(0);
+}
 const require = createRequire(import.meta.url);
 const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'circle-browser-page-'));

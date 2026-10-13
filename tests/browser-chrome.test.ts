@@ -235,8 +235,14 @@ test(
     let chrome = start();
     t.after(() => chrome.close());
     const signal = new AbortController().signal;
+    // A failure names the step it happened at
     const act = (action: BrowserAction, args: Record<string, unknown> = {}) =>
-      chrome.request('conversation-1', action, args, signal);
+      chrome
+        .request('conversation-1', action, args, signal)
+        .catch((error: Error) => {
+          error.message = `${action} ${JSON.stringify(args)}: ${error.message}`;
+          throw error;
+        });
     const ref = (text: string, pattern: RegExp) => {
       const match = text.match(pattern);
       assert(match, `no ${pattern} in:\n${text}`);
