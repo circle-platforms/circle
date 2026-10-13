@@ -1157,4 +1157,20 @@ test('the terminal asks for files a page would get, and for passing a certificat
   await key('down');
   await key('enter');
   assert.equal(await certificate, 'always');
+  // Circle hands the person the browser: the card stays until they hand it back
+  let handed = false;
+  const handoff = ui
+    .handBrowser('sign in with your security key', signal)
+    .then(() => (handed = true));
+  await until(() => Boolean(app.state.dialog));
+  assert.equal(app.state.dialog!.title, 'browser');
+  assert.match(
+    app.state.dialog!.body,
+    /^Circle hands you the browser: sign in with your security key\nUse the browser window\. Circle does not see what you do there/,
+  );
+  assert.deepEqual(app.state.dialog!.options, ['hand back']);
+  assert.equal(handed, false);
+  await key('enter');
+  await handoff;
+  assert.equal(handed, true);
 });

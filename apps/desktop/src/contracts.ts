@@ -100,6 +100,11 @@ export interface DesktopBridge {
   browserChoose: (sessionId: string, chooser: string) => Promise<BrowserState>;
   /** Shows a download in the system's file manager. */
   browserReveal: (sessionId: string, download: string) => Promise<void>;
+  /** The person takes the browser from Circle, or hands it back. */
+  browserControl: (
+    sessionId: string,
+    action: 'take' | 'return',
+  ) => Promise<BrowserState>;
   onBrowserEvent: (listener: (state: BrowserState) => void) => () => void;
   /** Whether the window shows dark or light: the browser's own pages follow it. */
   setTheme: (dark: boolean) => Promise<void>;
@@ -135,7 +140,16 @@ export interface BrowserState {
   chooser?: { id: string; multiple: boolean };
   /** The conversation's latest downloads, newest last. */
   downloads?: BrowserDownload[];
+  /**
+   * Who has the browser: no one in particular (`shared`), Circle in the middle of an action
+   * (`agent`), the person waiting for that action to end (`user_pending`), or the person
+   * (`user`), with Circle paused until they hand it back.
+   */
+  control?: BrowserControl;
+  /** Why Circle handed the person the browser, in its words. */
+  handoff?: string;
 }
+export type BrowserControl = 'shared' | 'agent' | 'user_pending' | 'user';
 export interface BrowserDownload {
   id: string;
   name: string;

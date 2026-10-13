@@ -2665,7 +2665,7 @@ pre {
   }
   .composer textarea {
     font-size: 16px;
-    min-height: 70px;
+    min-height: 50px;
   }
   .composer-toolbar {
     gap: 5px;
@@ -3227,13 +3227,8 @@ pre {
   padding: 10px 0 4px;
 }
 
-/* The composer frame, as the terminal's: the rainbow turns while the model works, it is
-   orange and still while Circle waits for you, faint and still when idle. */
-@property --frame-angle {
-  syntax: '<angle>';
-  inherits: false;
-  initial-value: 0deg;
-}
+/* The composer frame takes the approval mode's colour, as the mode word in the terminal's
+   frame does: blue to accept edits, violet to plan, orange for auto; manual keeps the border. */
 .composer::before {
   content: '';
   position: absolute;
@@ -3249,40 +3244,38 @@ pre {
   -webkit-mask-composite: xor;
   mask-composite: exclude;
 }
-.composer[data-frame='busy']::before {
+.composer[data-mode='accept-edits']::before {
   opacity: 1;
-  background: conic-gradient(from var(--frame-angle), var(--rainbow-stops));
-  animation: frame-turn 8.33s linear infinite;
+  background: var(--accent);
 }
-.composer[data-frame='waiting']::before {
+.composer[data-mode='plan']::before {
+  opacity: 1;
+  background: var(--violet);
+}
+.composer[data-mode='auto']::before {
   opacity: 1;
   background: var(--attention);
 }
-@keyframes frame-turn {
-  to {
-    --frame-angle: 360deg;
-  }
+/* The turn's clock on its tools' row. */
+.turn-clock {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+/* Before the turn's first tool: Circle's ring turns beside the clock. */
+.turn-ring {
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--logo-gradient);
+  -webkit-mask: radial-gradient(circle, transparent 3.5px, var(--fg) 4px);
+  mask: radial-gradient(circle, transparent 3.5px, var(--fg) 4px);
+  animation: spin 1.2s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) {
-  .composer[data-frame='busy']::before {
+  .turn-ring {
     animation: none;
   }
-}
-.busy-label {
-  position: absolute;
-  top: -0.75em;
-  left: 14px;
-  z-index: 1;
-  padding: 0 6px;
-  background: var(--bg);
-  font-family: var(--mono);
-  font-size: var(--ui-tiny);
-  line-height: 1.5;
-  color: var(--secondary);
-  white-space: nowrap;
-  max-width: calc(100% - 28px);
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* The approval mode in the composer and its menu. */
@@ -3846,6 +3839,12 @@ pre {
 .message-meta footer {
   margin: 0;
 }
+.turn-summary {
+  margin: 4px 0 0;
+  font-size: var(--ui-tiny);
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
 .message-meta .icon-button {
   width: 24px;
   height: 24px;
@@ -3960,9 +3959,10 @@ pre {
 .composer::before {
   border-radius: 17px;
 }
+/* One line, with the buttons beside it; it grows as lines are typed. */
 .composer textarea {
-  min-height: 56px;
-  padding: 15px 96px 15px 18px;
+  min-height: 46px;
+  padding: 11px 96px 11px 18px;
   border-radius: 16px;
 }
 .composer .attachment-strip {
@@ -3970,8 +3970,8 @@ pre {
 }
 .composer-send {
   position: absolute;
-  right: 10px;
-  bottom: 10px;
+  right: 8px;
+  bottom: 7px;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -4035,7 +4035,7 @@ pre {
   color: var(--attention);
 }
 .composer-footbar .mode-button[data-mode='plan'] {
-  color: var(--fg);
+  color: var(--violet);
 }
 .composer-footbar .mode-button[data-mode] svg {
   color: inherit;
@@ -4495,4 +4495,31 @@ pre {
   color: var(--fg);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* The person has the conversation's browser: a band over the page with the way back. */
+.browser-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--attention);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: var(--ui-small);
+  color: var(--fg);
+}
+.browser-control span {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+.browser-control small {
+  color: var(--secondary);
+}
+.browser-operating .button {
+  margin-left: 6px;
+  padding: 2px 8px;
+  font-size: var(--ui-tiny);
 }

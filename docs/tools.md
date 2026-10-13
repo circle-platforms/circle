@@ -4,7 +4,7 @@ nav_order: 20
 
 # Built-in tools
 
-The main agent has these twenty-one core tools. The desktop application adds the ten [browser tools](#the-browser) below, and so does the full-screen terminal interface when Chrome, Edge or Chromium is installed. MCP servers and [extensions](extensions.md) add more.
+The main agent has these twenty-one core tools. The desktop application adds the eleven [browser tools](#the-browser) below, and so does the full-screen terminal interface when Chrome, Edge or Chromium is installed. MCP servers and [extensions](extensions.md) add more.
 
 "Asks" means Circle shows an approval card before the call runs. See [Security](security.md). In `read-only` mode the tools that do not ask keep working; the others are refused, except changes to a plan file (see [Read-only mode](security.md#read-only-mode)).
 
@@ -53,6 +53,7 @@ Every result has the same parts: what the action did; the dialogs pages are wait
 | `browser_screenshot` | Send a PNG of the shown page to the model. | no | Not while the page waits on a dialog or shows an error. The model must accept images. |
 | `browser_dialog` | Answer a page's dialog: `accept: true` presses OK (or leaves the page), `false` Cancel (or stays); `text` answers a prompt; `id` picks a dialog in another tab. | yes | |
 | `browser_tabs` | `list`, `new` (with an optional `url`), `select` or `close` a tab. | yes | |
+| `browser_handoff` | Hand you the browser, saying in `reason` what for, and wait until you hand it back; the result then lists where the tabs went meanwhile and shows the page. | no | The model sees nothing of the page until you hand it back. |
 | `browser_upload` | Give `paths` to the file input at `ref`, or, without `ref`, to the file chooser one of Circle's clicks opened; an empty list closes that chooser. Paths are taken as the file tools take them. | always, also in `auto` mode | Up to 50 MB a file. Not a credential file, and not a file with other names on disk (hard links). |
 
 ### Dialogs, warnings and tabs
@@ -64,6 +65,15 @@ When a site's certificate is not trusted, as with the self-signed certificate of
 A link or script that opens a new window opens a new tab, shown to both of you; one that opens in the background stays behind. The result names new tabs.
 
 One **allow for this session** choice covers all browser actions in this conversation but two, which are asked every time, also in `auto` mode: passing a certificate warning (unless you trust the certificate for good) and giving a page files. `read-only` mode allows snapshots and browser screenshots and refuses the other tools. See [The browser panel](desktop.md#the-browser-panel), [Browser safety](security.md#the-desktop-browser) and [The terminal's browser](security.md#the-terminals-browser).
+
+### Taking turns
+
+You and Circle share the browser.
+
+- In the desktop application, while Circle performs an action a clear layer over the page takes your clicks: a click there, or **take over** under the page, gives you the browser as soon as that action ends (meanwhile **waiting for Circle to stop…**).
+- While you have it, a band over the page says so and Circle's browser tools wait. When you **hand back**, in the band or on the card in the conversation, the tool that waited does nothing and shows the model the page as you left it.
+- The model can hand you the browser itself with `browser_handoff`, for a security key, a CAPTCHA or a choice that is yours. In the terminal the browser window comes to the front and a card waits for **hand back**; to take the browser there yourself, stop the turn with `esc`.
+- Either way the model learns where the tabs went while it did not act (`tab t1 went to … while Circle was not acting`), which dialogs and file choosers you answered and what was downloaded; never what you typed, and no picture of the page.
 
 ### Downloads and files
 

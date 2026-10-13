@@ -98,6 +98,11 @@ export interface ChromeOptions {
   headless?: boolean;
   /** Where downloads are kept: the system's Downloads folder unless given. */
   downloads?: string;
+  /**
+   * Hands the person the browser for `reason` and settles when they hand it back: the
+   * terminal asks on a card. Without it the model cannot hand the browser over.
+   */
+  handoff?: (reason: string, signal: AbortSignal) => Promise<void>;
 }
 interface Download {
   id: string;
@@ -171,6 +176,8 @@ interface Conversation {
   events: string[];
   tabsChanged: boolean;
   queue: Promise<unknown>;
+  /** An action of Circle's is under way: navigations then are its own. */
+  acting: boolean;
 }
 const BLANK = 'about:blank';
 const CERTIFICATE_ERROR = /^ERR_(CERT_|SSL_PINNED|BAD_SSL)/;
@@ -312,6 +319,7 @@ export class ChromeBrowser implements BrowserPort {
         nextDialog: 0,
         nextDownload: 0,
         nextChooser: 0,
+        acting: false,
         events: [],
         tabsChanged: false,
         queue: Promise.resolve(),
@@ -538,6 +546,16 @@ export class ChromeBrowser implements BrowserPort {
           // A new document: a chooser or an approval for the old one is gone with it
           tab.chooser = undefined;
           tab.upload = undefined;
+          // Where the tab went while Circle was not acting: the person, or the page itself.
+          // What they typed or saw is never told.
+          if (
+            !tab.conversation.acting &&
+            tab.frameUrl !== BLANK &&
+            !tab.frameUrl.startsWith('chrome-error:')
+          )
+            tab.conversation.events.push(
+              `tab ${tab.id} went to ${tab.frameUrl} while Circle was not acting`,
+            );
           if (!tab.frameUrl.startsWith('chrome-error:')) {
             tab.proceeding = undefined;
             tab.url = tab.frameUrl;
@@ -1103,7 +1121,12 @@ export class ChromeBrowser implements BrowserPort {
     const run = async () => {
       signal.throwIfAborted();
       this.current = conversation;
-      return this.action(conversation, action, args, signal);
+      conversation.acting = true;
+      try {
+        return await this.action(conversation, action, args, signal);
+      } finally {
+        conversation.acting = false;
+      }
     };
     const result = conversation.queue.then(run, run);
     conversation.queue = result.catch(() => {});
@@ -1145,6 +1168,29 @@ export class ChromeBrowser implements BrowserPort {
       return { text: await this.result(conversation, text, signal) };
     }
     const tab = await this.activeTab(conversation);
+    if (action === 'handoff') {
+      if (!this.options.handoff)
+        throw Error('there is no one to hand the browser to here');
+      // The window comes to the front for the person, who has it until they hand it back
+      await this.send('Page.bringToFront', {}, tab.session).catch(() => {});
+      conversation.acting = false;
+      try {
+        await this.options.handoff(
+          typeof args.reason === 'string' ? args.reason.slice(0, 500) : '',
+          signal,
+        );
+      } finally {
+        conversation.acting = true;
+      }
+      conversation.events.push('the user handed the browser back');
+      return {
+        text: await this.result(
+          conversation,
+          'The user handed the browser back.',
+          signal,
+        ),
+      };
+    }
     if (action === 'snapshot')
       return { text: await this.result(conversation, '', signal) };
     if (action === 'dialog') {

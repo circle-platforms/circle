@@ -29,13 +29,12 @@ import { fullTime, shownTime } from '../model/time';
 import type { Attachment, DialogId, Message, PanelId } from '../model/types';
 import { Button, IconButton, FileChip, Status } from '../components/common';
 import { Markdown } from '../components/Markdown';
-import { ToolGroup } from '../components/ToolGroup';
+import { ToolGroup, TurnRow } from '../components/ToolGroup';
 import { MessageView } from '../components/MessageView';
-import { BrowserDialogRequest } from './BrowserDialog';
+import { BrowserDialogRequest, BrowserHandoffRequest } from './BrowserDialog';
 import { useBrowserState } from './useBrowserState';
 import { InlineRequest } from './InlineRequest';
 import {
-  BusyLabel,
   ContextRing,
   EffortMenu,
   ModeMenu,
@@ -460,7 +459,16 @@ export function Conversation({
     act(() => runtime.command('mode', mode));
     notify(MODE_TEXT[mode].detail());
   };
-  const frame = pending.length ? 'waiting' : session.turn ? 'busy' : 'idle';
+  // The turn's clock goes on the row of its latest tools, as Claude's does; before any, on
+  // a row of its own. Waiting for you, it stops.
+  const items = groupMessages(messages);
+  const clock = pending.length ? undefined : session.turn;
+  const asked = items.findLastIndex(
+    (item) => item.kind !== 'tools' && item.message.role === 'user',
+  );
+  const clockAt = items.findLastIndex(
+    (item, index) => index > asked && item.kind === 'tools',
+  );
   const showRequest = () =>
     scroller.current
       ?.querySelector('.inline-request')
@@ -535,7 +543,7 @@ export function Conversation({
               </div>
             </div>
           ) : (
-            groupMessages(messages).map((item) =>
+            items.map((item, index) =>
               item.kind === 'tools' ? (
                 <div key={item.id} data-message-id={item.rows[0]!.id}>
                   <ToolGroup
@@ -550,6 +558,7 @@ export function Conversation({
                     }
                     onAgent={onAgent}
                     onFile={onFile}
+                    turn={index === clockAt ? clock : undefined}
                   >
                     {pending
                       .filter(
@@ -608,6 +617,13 @@ export function Conversation({
                 dialog={dialog}
               />
             ))}
+          {session.turn && browser?.control === 'user' && (
+            <BrowserHandoffRequest
+              sessionId={session.id}
+              reason={browser.handoff}
+            />
+          )}
+          {clock && clockAt < 0 && <TurnRow turn={clock} />}
           {session.state === 'waiting' && runtime.mode !== 'live' && (
             <div className="pending-message">
               <i />
@@ -726,7 +742,7 @@ export function Conversation({
         )}
         <div
           className="composer"
-          data-frame={frame}
+          data-mode={sessionMode(session)}
           data-state={session.state}
           onDragOver={(event) => {
             if (Array.from(event.dataTransfer.types).includes('Files'))
@@ -739,9 +755,6 @@ export function Conversation({
             void addMedia(files);
           }}
         >
-          {frame === 'busy' && session.turn && (
-            <BusyLabel turn={session.turn} />
-          )}
           {!dismissed && completions.length > 0 && (
             <div
               className="completion-list"
@@ -765,6 +778,7 @@ export function Conversation({
           )}
           <textarea
             ref={input}
+            rows={1}
             aria-label={t('message')}
             placeholder={t('Ask anything, or describe a change…')}
             value={session.draft}

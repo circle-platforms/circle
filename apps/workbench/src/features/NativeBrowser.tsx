@@ -8,6 +8,7 @@ import {
   FileUp,
   FolderOpen,
   Globe,
+  Hand,
   Plus,
   RotateCw,
   ShieldAlert,
@@ -209,6 +210,21 @@ export function NativeBrowser() {
           <ArrowUpRight size={14} />
         </IconButton>
       </div>
+      {state?.control === 'user' && (
+        // The person has the browser: Circle is paused until they hand it back
+        <div className="browser-control" data-testid="browser-control">
+          <Hand size={14} />
+          <span>
+            {t(
+              'You control the browser. Circle is paused and does not see what you do.',
+            )}
+            {state.handoff && <small>{state.handoff}</small>}
+          </span>
+          <Button onClick={() => void host.browserControl(id, 'return')}>
+            {t('hand back')}
+          </Button>
+        </div>
+      )}
       <div className="native-browser-viewport" ref={viewport}>
         {dialog ? (
           <BrowserDialogPanel sessionId={id} dialog={dialog} />
@@ -256,10 +272,17 @@ export function NativeBrowser() {
         </div>
       )}
       <div className="native-browser-footer">
-        {state?.operating ? (
+        {state?.control === 'user_pending' ? (
+          <span className="browser-operating" data-testid="browser-pending">
+            {t('Waiting for Circle to stop…')}
+          </span>
+        ) : state?.operating ? (
           <span className="browser-operating" data-testid="browser-operating">
             <span className="browser-operation-dot" />
             {t('Circle is operating')}
+            <Button onClick={() => void host.browserControl(id, 'take')}>
+              {t('take over')}
+            </Button>
           </span>
         ) : (
           <Status value={opened ? 'native browser' : 'not opened'} />

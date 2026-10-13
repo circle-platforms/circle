@@ -6,6 +6,7 @@ import {
   type Certificate,
   type Rectangle,
   type Session,
+  webContents as allContents,
   type WebContents,
 } from 'electron';
 import {
@@ -22,6 +23,7 @@ import { captureFrame } from './capture';
 import type {
   BrowserBounds,
   BrowserCertificate,
+  BrowserControl,
   BrowserDialog,
   BrowserDownload,
   BrowserState,
@@ -117,8 +119,17 @@ interface Conversation {
   nextChooser: number;
   // The latest downloads, newest last, with where each is kept
   downloads: (BrowserDownload & { path: string })[];
+  control: BrowserControl;
+  handoff?: string;
+  // Woken when the person hands the browser back
+  handedBack: Set<() => void>;
+  // Over the shown tab while Circle acts: the person's click there takes the browser
+  mask?: WebContentsView;
 }
 const BLANK = 'about:blank';
+// The clear layer over a tab while Circle acts
+const MASK_PAGE =
+  'data:text/html,<!doctype html><title>circle-mask</title><style>html,body{background:transparent;margin:0;height:100%25}</style>';
 const fingerprint = (certificate: Certificate) =>
   new X509Certificate(certificate.data).fingerprint256;
 const certificateKey = (host: string, fingerprint: string) =>
@@ -211,6 +222,8 @@ export class BrowserSessions {
         nextDownload: 0,
         nextChooser: 0,
         downloads: [],
+        control: 'shared',
+        handedBack: new Set(),
       };
       this.exceptions.set(id, conversation.exceptions);
       this.conversations.set(id, conversation);
@@ -232,6 +245,9 @@ export class BrowserSessions {
         !tab.dialogs.length;
       tab.view.setVisible(shown);
     }
+    conversation.mask?.setVisible(
+      conversation.wantedVisible && conversation.control === 'agent',
+    );
   }
   private prepareSession(conversation: Conversation, session: Session) {
     if (this.sessions.has(session)) return;
@@ -624,6 +640,17 @@ export class BrowserSessions {
       if (method === 'Page.frameNavigated' && !params.frame?.parentId) {
         tab.chooser = undefined;
         tab.upload = undefined;
+        // Where the tab went while Circle was not acting: the person, or the page itself.
+        // What they typed or saw is never told.
+        const address = String(params.frame.url ?? '');
+        if (
+          !conversation.operating &&
+          address !== BLANK &&
+          !address.startsWith(WARNING_SCHEME + ':')
+        )
+          conversation.events.push(
+            `tab ${tab.id} went to ${address} while Circle was not acting`,
+          );
       }
       // Answered by another debugger client (DevTools): Circle's record of it goes too
       if (method === 'Page.javascriptDialogClosed') {
@@ -855,6 +882,8 @@ export class BrowserSessions {
         url.startsWith('https:') &&
         !!conversation?.insecureHosts.has(hostOf(url)),
       operating: conversation?.operating ?? false,
+      control: conversation?.control ?? 'shared',
+      ...(conversation?.handoff ? { handoff: conversation.handoff } : {}),
       tab: tab?.id,
       tabs: conversation
         ? [...conversation.tabs.values()].map((entry) => ({
@@ -951,6 +980,7 @@ export class BrowserSessions {
     };
     for (const tab of conversation.tabs.values())
       tab.view.setBounds(conversation.bounds);
+    conversation.mask?.setBounds(conversation.bounds);
     conversation.wantedVisible = visible === true;
     this.visibility(conversation);
     return this.state(id);
@@ -1018,6 +1048,76 @@ export class BrowserSessions {
       if (dialog) return (await dialog.screen) ?? null;
     }
     return null;
+  }
+  /**
+   * The person takes the browser (while Circle acts, once its action ends) or hands it
+   * back; Circle is told either way, and never what they did in between beyond addresses.
+   */
+  control(idValue: unknown, action: unknown) {
+    const id = this.validId(idValue);
+    const conversation = this.conversation(id);
+    if (action === 'take') {
+      if (conversation.control === 'agent')
+        conversation.control = 'user_pending';
+      else if (conversation.control === 'shared') conversation.control = 'user';
+      else return this.state(id);
+      conversation.events.push('the user took over the browser');
+    } else if (action === 'return') {
+      if (!['user', 'user_pending'].includes(conversation.control))
+        return this.state(id);
+      conversation.control = conversation.operating ? 'agent' : 'shared';
+      conversation.handoff = undefined;
+      conversation.events.push('the user handed the browser back');
+      for (const wake of conversation.handedBack) wake();
+    } else throw Error('invalid browser control');
+    this.visibility(conversation);
+    this.publish(id);
+    return this.state(id);
+  }
+  private handedBack(conversation: Conversation, signal: AbortSignal) {
+    return new Promise<void>((resolve, reject) => {
+      const done = () => {
+        conversation.handedBack.delete(done);
+        signal.removeEventListener('abort', stop);
+        resolve();
+      };
+      const stop = () => {
+        conversation.handedBack.delete(done);
+        reject(signal.reason ?? Error('browser action stopped'));
+      };
+      if (signal.aborted) return stop();
+      conversation.handedBack.add(done);
+      signal.addEventListener('abort', stop, { once: true });
+    });
+  }
+  /**
+   * A clear view over the shown tab while Circle acts. Circle's input goes to the tab
+   * itself; the person's mouse lands here and asks for the browser instead of racing it.
+   */
+  private mask(conversation: Conversation) {
+    let mask = conversation.mask;
+    if (!mask) {
+      mask = new WebContentsView({
+        webPreferences: {
+          sandbox: true,
+          contextIsolation: true,
+          nodeIntegration: false,
+          javascript: false,
+        },
+      });
+      // AARRGGBB: fully clear, so the page shows through
+      mask.setBackgroundColor('#00000000');
+      // A page of its own, clear: without one there is nothing to take the person's click
+      void mask.webContents.loadURL(MASK_PAGE);
+      mask.webContents.on('input-event', (_event, input) => {
+        if (input.type === 'mouseDown') this.control(conversation.id, 'take');
+      });
+      conversation.mask = mask;
+    }
+    // Added again, it is the topmost view
+    this.window.contentView.addChildView(mask);
+    mask.setBounds(conversation.bounds);
+    mask.setVisible(conversation.wantedVisible);
   }
   hide(idValue: unknown) {
     const conversation = this.conversations.get(this.validId(idValue));
@@ -1401,13 +1501,37 @@ export class BrowserSessions {
     const conversation = this.conversation(this.validId(request.sessionId));
     const run = async () => {
       signal.throwIfAborted();
+      // The person has the browser: Circle waits for it back, and acts on nothing it saw
+      // before, since the page may be another by then
+      if (conversation.control === 'user') {
+        await this.handedBack(conversation, signal);
+        return {
+          text: await this.result(
+            conversation,
+            'Nothing was done: the user had the browser and has handed it back. This is the page now.',
+            signal,
+          ),
+        };
+      }
+      // The person's typing stays in the conversation's input box, wherever Circle clicks
+      const composer =
+        allContents.getFocusedWebContents() === this.window.webContents;
       conversation.operating = true;
+      conversation.control = 'agent';
+      this.mask(conversation);
       this.publish(conversation.id);
       try {
         return await this.action(conversation, request, signal);
       } finally {
         conversation.agent = undefined;
         conversation.operating = false;
+        // The person may have asked for the browser meanwhile
+        const control = conversation.control as BrowserControl;
+        if (control === 'user_pending') conversation.control = 'user';
+        else if (control === 'agent') conversation.control = 'shared';
+        this.visibility(conversation);
+        if (composer && !this.window.isDestroyed())
+          this.window.webContents.focus();
         this.publish(conversation.id);
       }
     };
@@ -1431,6 +1555,24 @@ export class BrowserSessions {
     signal: AbortSignal,
   ): Promise<BrowserResult> {
     const { action, args } = request;
+    if (action === 'handoff') {
+      // Circle hands the person the browser, and waits until they hand it back
+      conversation.control = 'user';
+      conversation.operating = false;
+      conversation.handoff =
+        typeof args.reason === 'string' ? args.reason.slice(0, 500) : '';
+      this.visibility(conversation);
+      this.publish(conversation.id);
+      await this.handedBack(conversation, signal);
+      conversation.operating = true;
+      return {
+        text: await this.result(
+          conversation,
+          'The user handed the browser back.',
+          signal,
+        ),
+      };
+    }
     if (action === 'tabs') {
       const which = args.action;
       let text = '';
@@ -1878,7 +2020,9 @@ export class BrowserSessions {
   }
   close() {
     this.closed = true;
-    for (const conversation of this.conversations.values())
+    for (const conversation of this.conversations.values()) {
+      const mask = conversation.mask;
+      if (mask && !mask.webContents.isDestroyed()) mask.webContents.close();
       for (const tab of [...conversation.tabs.values()]) {
         tab.closed = true;
         for (const dialog of tab.dialogs) dialog.answer(false, '');
@@ -1886,6 +2030,7 @@ export class BrowserSessions {
           this.window.contentView.removeChildView(tab.view);
         if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
       }
+    }
     this.conversations.clear();
   }
 }

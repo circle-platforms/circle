@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Brain, ChevronDown, ChevronRight, LoaderCircle } from 'lucide-react';
-import type { Message } from '../model/types';
+import type { Message, Session } from '../model/types';
+import { TurnClock } from './TurnClock';
 import { ToolMessage } from './ToolMessage';
 import { locale, t, tn } from '../i18n';
 
@@ -83,12 +84,15 @@ export function ToolGroup({
   expanded,
   onFile,
   onAgent,
+  turn,
   children,
 }: {
   rows: Message[];
   expanded: boolean;
   onFile: (path: string) => void;
   onAgent: (id: string) => void;
+  /** The turn under way, when these are its latest tools: its clock goes on their row. */
+  turn?: NonNullable<Session['turn']>;
   children?: ReactNode;
 }) {
   const tools = rows.flatMap((row) => (row.tool ? [row.tool] : []));
@@ -108,7 +112,7 @@ export function ToolGroup({
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
-        {busy && <LoaderCircle size={13} className="spin" />}
+        {(busy || turn) && <LoaderCircle size={13} className="spin" />}
         <span>{summary.text}</span>
         {(summary.added > 0 || summary.removed > 0) && (
           <span className="diff-count">
@@ -131,6 +135,7 @@ export function ToolGroup({
             )}
           </code>
         )}
+        {turn && <TurnClock turn={turn} />}
         {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
       </button>
       {open && (
@@ -165,6 +170,18 @@ export function ToolGroup({
         </div>
       )}
       {children}
+    </div>
+  );
+}
+
+/** The turn under way before its first tool: Circle's turning ring and the clock. */
+export function TurnRow({ turn }: { turn: NonNullable<Session['turn']> }) {
+  return (
+    <div className="tool-group" data-busy>
+      <div className="tool-summary">
+        <span className="turn-ring" />
+        <TurnClock turn={turn} />
+      </div>
     </div>
   );
 }

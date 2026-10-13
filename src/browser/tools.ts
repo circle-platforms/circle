@@ -327,6 +327,19 @@ export function browserTools(
       ['action'],
     ),
     tool(
+      'browser_handoff',
+      'handoff',
+      'read',
+      {
+        reason: {
+          type: 'string',
+          description:
+            'What the user should do in the browser, in a sentence, such as "sign in with your security key"',
+        },
+      },
+      ['reason'],
+    ),
+    tool(
       'browser_upload',
       'upload',
       'unknown',

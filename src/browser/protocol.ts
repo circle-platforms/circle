@@ -14,6 +14,7 @@ export const browserActions = [
   'dialog',
   'tabs',
   'upload',
+  'handoff',
 ] as const;
 export type BrowserAction = (typeof browserActions)[number];
 export interface BrowserRequest {

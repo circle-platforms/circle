@@ -107,6 +107,12 @@ const handler = async (request, response) => {
     response.end('<!doctype html><title>Sent</title><p>files received</p>');
     return;
   }
+  if (request.url === '/slow') {
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    response.writeHead(200, { 'Content-Type': 'text/html' });
+    response.end('<!doctype html><title>Slow page</title><p>slow</p>');
+    return;
+  }
   if (request.url === '/download') {
     response.writeHead(200, {
       'Content-Type': 'application/octet-stream',
@@ -264,6 +270,17 @@ await script([
     call('send-files', 'browser_click', { ref: 'e3', element: 'Send' }),
   ]),
   answer('files-sent', 'files sent'),
+  calls('handoff', [
+    call('handoff', 'browser_handoff', {
+      reason: 'sign in with your security key',
+    }),
+  ]),
+  answer('handed', 'browser handed back'),
+  calls('slow-nav', [
+    call('slow-nav', 'browser_navigate', { url: url + 'slow' }),
+  ]),
+  calls('after-takeover', [call('after-takeover', 'browser_snapshot', {})]),
+  answer('takeover-done', 'takeover checked'),
 ]);
 const env = {
   ...process.env,
@@ -682,6 +699,75 @@ try {
   assert.match(uploads[0], /name="logs"; filename="run\.log"[\s\S]*log line/);
   checks.push(
     "a download goes to the downloads folder and the panel lists it; a file for a file input asks the person in the conversation; a chooser opened by Circle's click waits in the result and in the panel, where the person chooses; the site receives both files",
+  );
+
+  // ---- taking turns: Circle hands the person the browser, and the person takes it
+  await send('hand me the browser');
+  const handoffCard = page.getByTestId('browser-handoff-request');
+  await handoffCard.waitFor();
+  const band = page.getByTestId('browser-control');
+  await band.waitFor();
+  assert.match(await band.innerText(), /sign in with your security key/);
+  assert.equal((await browserState(sessionId)).control, 'user');
+  const bar = page.getByRole('textbox', {
+    name: 'browser address',
+    exact: true,
+  });
+  await bar.fill(url + 'status');
+  await bar.press('Enter');
+  await waitFor(
+    async () => (await browserState(sessionId)).url === url + 'status',
+    'the person goes elsewhere',
+  );
+  await handoffCard
+    .getByRole('button', { name: 'hand back', exact: true })
+    .click();
+  await page.getByText('browser handed back', { exact: true }).waitFor();
+  assert.match(
+    await textOf('handoff'),
+    /### Result\nThe user handed the browser back\./,
+  );
+  assert(
+    (await textOf('handoff')).includes(
+      `tab t1 went to ${url}status while Circle was not acting`,
+    ),
+  );
+  assert.equal((await browserState(sessionId)).control, 'shared');
+  await send('open the slow page');
+  await page.getByTestId('browser-operating').waitFor();
+  // A click on the clear layer over the page while Circle acts
+  const masked = await app.evaluate(async ({ BrowserWindow }) => {
+    const views = BrowserWindow.getAllWindows()[0].contentView.children;
+    const mask = views.at(-1);
+    if (!mask?.webContents.getURL().includes('circle-mask')) return 'no layer';
+    // The layer is clear: the page shows through it
+    const image = await mask.webContents.capturePage();
+    const alpha = image.toBitmap()[3];
+    for (const type of ['mouseDown', 'mouseUp'])
+      mask.webContents.sendInputEvent({
+        type,
+        x: 20,
+        y: 20,
+        button: 'left',
+        clickCount: 1,
+      });
+    return alpha;
+  });
+  assert.equal(masked, 0);
+  await page.getByTestId('browser-pending').waitFor();
+  await band.waitFor();
+  // The model's next look waits for the browser back, then shows the page as it is
+  await handoffCard.waitFor();
+  await band.getByRole('button', { name: 'hand back', exact: true }).click();
+  await page.getByText('takeover checked', { exact: true }).waitFor();
+  assert.match(await textOf('slow-nav'), /the user took over the browser/);
+  assert.match(
+    await textOf('after-takeover'),
+    /Nothing was done: the user had the browser and has handed it back\./,
+  );
+  assert.equal((await browserState(sessionId)).control, 'shared');
+  checks.push(
+    "the model hands the person the browser and learns only where the tabs went; the person's click on the layer over the page takes it once Circle's action ends, and Circle's next look waits for it back",
   );
 
   // ---- the person's own click on proceed needs no approval, on another port

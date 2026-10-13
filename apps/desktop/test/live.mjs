@@ -543,10 +543,11 @@ try {
   const stamp = page.locator('article.message time').last();
   assert.match(await stamp.innerText(), /^\d{2}:\d{2}$/);
   assert.ok(await stamp.getAttribute('title'));
+  // The turn's last answer shows the whole turn: its time, then its tokens
   const usage = await page.locator('article.message footer').last().innerText();
-  assert.match(usage, /^↑ \d/);
+  assert.match(usage, /^\d+s · ↑ \d+ · ↓ \d+ · /);
   checks.push(
-    'message times show as the local clock and usage rows have no empty part',
+    'message times show as the local clock, and the turn line under the last answer gives its time and tokens with no empty part',
   );
   // A picture pasted in the box goes to the model as an image
   await page.evaluate((base64) => {

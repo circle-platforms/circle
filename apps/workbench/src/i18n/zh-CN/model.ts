@@ -188,6 +188,9 @@ export const model: Record<string, string> = {
   'Pages that open a new window or tab appear as tabs; you and Circle see the same shown tab.':
     '网页打开的新窗口或标签页会成为标签页；你和 Circle 看到的是同一个当前标签页。',
   'Give a page files from this computer': '把这台电脑上的文件交给网页',
+  'Hand you the browser and wait for it back': '把浏览器交给你，等你交还',
+  'For what only you should do in the page, such as a security key or a CAPTCHA. Circle sees nothing while you have it, and learns only where the tabs went.':
+    '用于只该由你在网页上完成的事，比如安全密钥或验证码。浏览器在你手上时 Circle 什么也看不到，只会知道标签页去了哪些地址。',
   'For a file input, or for the file chooser one of its clicks opened. Circle asks you every time, with the files and the site.':
     '用于文件输入框，或它的点击打开的文件选择框。Circle 每次都会问你，并列出文件和站点。',
 };

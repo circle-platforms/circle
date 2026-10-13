@@ -114,6 +114,13 @@ export const panels: Record<string, string> = {
   'choose…': '选择…',
   'the files could not be given': '无法把文件交给网页',
   'show in folder': '在文件夹中显示',
+  'You control the browser. Circle is paused and does not see what you do.':
+    '你在控制浏览器。Circle 已暂停，看不到你的操作。',
+  'hand back': '交还',
+  'Waiting for Circle to stop…': '等待 Circle 停下…',
+  'take over': '接管',
+  'you have the browser': '浏览器在你手上',
+  'Circle waits until you hand it back': 'Circle 等你交还后继续',
   'browser capture failed': '截取浏览器画面失败',
   'The local operator controls this session. Agent control will use the same session identity when Circle is connected.':
     '目前由本地操作者控制这个会话。连接 Circle 后，代理控制会使用同一个会话身份。',

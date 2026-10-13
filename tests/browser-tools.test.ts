@@ -124,4 +124,11 @@ test('browser_upload takes paths as the file tools do, refuses credential files 
     'element',
     'paths',
   ]);
+  // Handing the person the browser changes nothing: it never asks, and works in plan mode
+  const handoff = runtime.allTools.find(
+    (entry) => entry.name === 'browser_handoff',
+  )!;
+  assert.equal(handoff.effect, 'read');
+  assert.equal(handoff.subagents, false);
+  assert.deepEqual((handoff.parameters as any).required, ['reason']);
 });

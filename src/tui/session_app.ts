@@ -677,6 +677,8 @@ export class SessionApp {
         executable,
         trustFile: join(this.home, 'browser-certificates.json'),
         headless: process.env.CIRCLE_BROWSER_HEADLESS === '1',
+        handoff: (reason, signal) =>
+          this.interactions.run(() => this.handBrowser(reason, signal), signal),
       });
     this.runtime = new AgentRuntime({
       ...options,
@@ -1024,6 +1026,18 @@ export class SessionApp {
       signal?.addEventListener('abort', abort, { once: true });
       this.repaint();
     });
+  }
+  /** Circle hands the person the browser window; the card stays until they hand it back. */
+  private async handBrowser(reason: string, signal: AbortSignal) {
+    await this.askChoice(
+      'browser',
+      [
+        `Circle hands you the browser${reason ? `: ${reason}` : ''}`,
+        'Use the browser window. Circle does not see what you do there; when you hand it back it learns where the tabs went, never what you typed.',
+      ].join('\n'),
+      ['hand back'],
+      signal,
+    );
   }
   /** What only the person decides in the browser: files for a page, or passing a warning. */
   private async confirmBrowser(

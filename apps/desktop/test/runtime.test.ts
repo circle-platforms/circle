@@ -121,7 +121,7 @@ test('browser tools are available only when a browser port is connected', async 
   const tools = connected.model.requests[0]!.tools.filter((tool) =>
     tool.name.startsWith('browser_'),
   );
-  assert.equal(tools.length, 10);
+  assert.equal(tools.length, 11);
   assert(tools.every((tool) => tool.subagents === false));
 });
 
@@ -2221,6 +2221,14 @@ test('accept-edits edits without asking, keeps call order, and shows the diff an
   // The scripted model has no price: as the terminal says it.
   assert.equal(done.meters?.cost, 'N/A');
   assert.equal(done.meters?.contextInput, 150, 'the last answer, not a sum');
+  // The turn's last answer shows the whole turn: its time and every request's tokens
+  const last = done.messages.find(
+    (row) => row.role === 'assistant' && row.text === 'done',
+  )!;
+  assert.deepEqual(
+    { ...last.usage, elapsed: last.usage?.elapsed.replace(/\d+/, 'N') },
+    { input: 270, output: 35, cost: null, elapsed: 'Ns' },
+  );
 });
 
 test('an approval for a new file carries its diff', async (t) => {

@@ -744,3 +744,87 @@ test(
     assert.match(String(results.at(-1)!.content), /"Home"/);
   },
 );
+
+test(
+  'the terminal browser hands the person the browser and tells the model only where the tabs went',
+  { skip },
+  async (t) => {
+    const temp = mkdtempSync(join(tmpdir(), 'circle-chrome-handoff-'));
+    t.after(() => rmSync(temp, { recursive: true, force: true }));
+    const site = createHttp((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(
+        `<!doctype html><title>${req.url === '/b' ? 'Signed in' : 'Sign in'}</title><input aria-label="Code">`,
+      );
+    });
+    const base = `http://127.0.0.1:${await listen(site)}`;
+    t.after(() => site.close());
+    const reasons: string[] = [];
+    const chrome: ChromeBrowser = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: temp,
+      // The person types a code and goes on, in the window: Circle sees none of it
+      handoff: async (reason) => {
+        reasons.push(reason);
+        const internals = chrome as unknown as {
+          conversations: Map<
+            string,
+            { tabs: Map<string, { session: string }> }
+          >;
+          send: (
+            method: string,
+            params: Record<string, unknown>,
+            session?: string,
+          ) => Promise<unknown>;
+        };
+        const tab = internals.conversations.get('c')!.tabs.get('t1')!;
+        await internals.send(
+          'Runtime.evaluate',
+          {
+            expression: `document.querySelector('input').value = 'typed-by-the-person'; location.href = '/b'`,
+          },
+          tab.session,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 800));
+      },
+    });
+    t.after(() => chrome.close());
+    const signal = new AbortController().signal;
+    await chrome.request('c', 'navigate', { url: `${base}/a` }, signal);
+    const back = await chrome.request(
+      'c',
+      'handoff',
+      { reason: 'enter the code from your phone' },
+      signal,
+    );
+    assert.deepEqual(reasons, ['enter the code from your phone']);
+    assert.match(back.text, /### Result\nThe user handed the browser back\./);
+    assert(
+      back.text.includes(
+        `- tab t1 went to ${base}/b while Circle was not acting\n- the user handed the browser back`,
+      ),
+      back.text,
+    );
+    assert.match(back.text, /tab t1 · "Signed in"/);
+    assert.equal(back.text.includes('typed-by-the-person'), false);
+    // Circle's own navigations are not told as the person's
+    const own = await chrome.request(
+      'c',
+      'navigate',
+      { url: `${base}/a` },
+      signal,
+    );
+    assert.doesNotMatch(own.text, /while Circle was not acting/);
+    // Without anyone to hand it to, the model is told so
+    const alone = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+    });
+    t.after(() => alone.close());
+    await assert.rejects(
+      alone.request('c', 'handoff', { reason: 'x' }, signal),
+      /no one to hand the browser to/,
+    );
+  },
+);

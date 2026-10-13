@@ -44,6 +44,12 @@ export function MessageView({
           </div>
         ) : null}
       </div>
+      {message.usage?.elapsed && (
+        // The turn's last answer: the whole turn, shown without hovering
+        <footer className="turn-summary" data-testid="turn-summary">
+          {usageText(message.usage)}
+        </footer>
+      )}
       <div className="message-meta">
         {message.label && <span className="label">{message.label}</span>}
         <time
@@ -52,19 +58,8 @@ export function MessageView({
         >
           {shownTime(message.at)}
         </time>
-        {message.usage && (
-          <footer>
-            {[
-              message.usage.elapsed,
-              `↑ ${message.usage.input.toLocaleString()}`,
-              `↓ ${message.usage.output.toLocaleString()}`,
-              message.usage.cost === null
-                ? t('cost N/A')
-                : '$' + message.usage.cost.toFixed(4),
-            ]
-              .filter(Boolean)
-              .join(' · ')}
-          </footer>
+        {message.usage && !message.usage.elapsed && (
+          <footer>{usageText(message.usage)}</footer>
         )}
         {message.text && (
           <IconButton
@@ -83,3 +78,13 @@ export function MessageView({
     </article>
   );
 }
+
+const usageText = (usage: NonNullable<Message['usage']>) =>
+  [
+    usage.elapsed,
+    `↑ ${usage.input.toLocaleString()}`,
+    `↓ ${usage.output.toLocaleString()}`,
+    usage.cost === null ? t('cost N/A') : '$' + usage.cost.toFixed(4),
+  ]
+    .filter(Boolean)
+    .join(' · ');

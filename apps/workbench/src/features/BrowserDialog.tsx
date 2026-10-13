@@ -223,3 +223,45 @@ export function BrowserDialogRequest({
     </section>
   );
 }
+
+/**
+ * The person has the browser while the turn runs: Circle waits for it back, whether it
+ * asked for help or the person took over.
+ */
+export function BrowserHandoffRequest({
+  sessionId,
+  reason,
+}: {
+  sessionId: string;
+  reason?: string;
+}) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <section
+      className="inline-request"
+      data-kind="browser-handoff"
+      data-testid="browser-handoff-request"
+    >
+      <header>
+        <Globe size={14} />
+        <strong>{t('you have the browser')}</strong>
+        <span>{t('Circle waits until you hand it back')}</span>
+      </header>
+      {reason && <p className="browser-dialog-message">{reason}</p>}
+      <div className="request-actions">
+        <Button
+          className="primary"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            void desktopHost()
+              ?.browserControl(sessionId, 'return')
+              .finally(() => setBusy(false));
+          }}
+        >
+          {t('hand back')}
+        </Button>
+      </div>
+    </section>
+  );
+}

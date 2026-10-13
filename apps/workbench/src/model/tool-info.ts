@@ -242,6 +242,18 @@ export const BUILTIN_TOOL_INFO = [
     kind: 'browser',
   },
   {
+    name: 'browser_handoff',
+    get description() {
+      return t('Hand you the browser and wait for it back');
+    },
+    get detail() {
+      return t(
+        'For what only you should do in the page, such as a security key or a CAPTCHA. Circle sees nothing while you have it, and learns only where the tabs went.',
+      );
+    },
+    kind: 'browser',
+  },
+  {
     name: 'browser_upload',
     get description() {
       return t('Give a page files from this computer');

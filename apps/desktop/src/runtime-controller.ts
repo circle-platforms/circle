@@ -67,6 +67,7 @@ import { isSessionMode } from '../../../src/approvals.js';
 import { currentBranch } from '../../../src/git_info.js';
 import { formatCosts } from '../../../src/pricing.js';
 import { TurnStatus } from '../../../src/tui/turn_status.js';
+import { formatElapsed, type TurnUsage } from '../../../src/tui/status_rows.js';
 import {
   approvalPreview,
   fileChange,
@@ -199,6 +200,8 @@ export class RuntimeController {
     string,
     Map<string, { original: string | undefined; diff?: DiffView; at: string }>
   >();
+  // Each session's finished turns, by their last message: time and tokens, in memory only
+  private turnUsage = new Map<string, Record<string, TurnUsage>>();
   private turns = new Map<
     string,
     { status: TurnStatus; started: number; waited: number; since?: number }
@@ -315,6 +318,7 @@ export class RuntimeController {
   private projectMessages(runtime: AgentRuntime, id: string): Message[] {
     const nodes = runtime.store.tree(id);
     const labels = runtime.store.labels(id);
+    const turns = this.turnUsage.get(id) ?? {};
     const result: Message[] = [];
     const calls = new Map<string, Message>();
     for (const node of nodes) {
@@ -359,16 +363,26 @@ export class RuntimeController {
           content: a.data,
           mime: a.mime_type,
         })),
-        usage: raw.usage
+        // The last message of a finished turn shows the whole turn: its time and tokens
+        usage: turns[raw.id]
           ? {
-              input: raw.usage.input_tokens,
-              output: raw.usage.output_tokens,
-              // The workbench shows dollars; another currency is not converted
-              cost:
-                raw.cost?.currency === 'USD' ? (raw.cost.amount ?? null) : null,
-              elapsed: '',
+              input: turns[raw.id]!.input,
+              output: turns[raw.id]!.output,
+              cost: turns[raw.id]!.cost ?? null,
+              elapsed: formatElapsed(turns[raw.id]!.seconds),
             }
-          : undefined,
+          : raw.usage
+            ? {
+                input: raw.usage.input_tokens,
+                output: raw.usage.output_tokens,
+                // The workbench shows dollars; another currency is not converted
+                cost:
+                  raw.cost?.currency === 'USD'
+                    ? (raw.cost.amount ?? null)
+                    : null,
+                elapsed: '',
+              }
+            : undefined,
       };
       if (
         raw.role !== 'assistant' ||
@@ -882,7 +896,15 @@ export class RuntimeController {
         });
       const turn = this.turns.get(id);
       if (turn) {
-        turn.status.apply(event, () => undefined, now);
+        // The turn's line goes under its last message, as in the terminal
+        turn.status.apply(
+          event,
+          () =>
+            id === runtime.session.id
+              ? runtime.harness.messages.at(-1)?.id
+              : undefined,
+          now,
+        );
         // Time spent waiting for a person is not the model's: the busy clock leaves it out.
         if (event.kind === 'tool_waiting') turn.since ??= now;
         if (
@@ -893,7 +915,15 @@ export class RuntimeController {
           turn.since = undefined;
         }
       }
-      if (['run_end', 'run_error'].includes(event.kind)) this.turns.delete(id);
+      if (['run_end', 'run_error'].includes(event.kind)) {
+        // What each finished turn took, kept while Circle runs, as the terminal keeps it
+        if (turn)
+          this.turnUsage.set(id, {
+            ...this.turnUsage.get(id),
+            ...turn.status.usage,
+          });
+        this.turns.delete(id);
+      }
     }
     try {
       this.fileEvent(runtime, id, event);
