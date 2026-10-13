@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   assetPath,
@@ -23,9 +23,10 @@ test('only the application frame URL is trusted', () => {
     assert.equal(trustedAppUrl(value), false);
 });
 test('local protocol assets cannot escape the bundled renderer', () => {
+  const renderer = resolve('app', 'renderer');
   assert.equal(
-    assetPath('/app/renderer', 'circle://workbench/assets/app.js'),
-    '/app/renderer/assets/app.js',
+    assetPath(renderer, 'circle://workbench/assets/app.js'),
+    join(renderer, 'assets', 'app.js'),
   );
   for (const url of [
     'circle://other/index.html',
@@ -33,7 +34,7 @@ test('local protocol assets cannot escape the bundled renderer', () => {
     'circle://workbench/%5csecret',
     'circle://workbench/%00secret',
   ])
-    assert.throws(() => assetPath('/app/renderer', url));
+    assert.throws(() => assetPath(renderer, url));
 });
 test('exports require a filename and bounded content', () => {
   assert.equal(validSaveName('session.md'), 'session.md');
@@ -56,7 +57,7 @@ test('external links only admit ordinary HTTP URLs', () => {
   ])
     assert.equal(safeExternalUrl(url), undefined);
 });
-test('workspace grants reject unknown, cross-workspace and escaped handles', async () => {
+test('workspace grants reject unknown, cross-workspace and forged handles', async () => {
   const root = await mkdtemp(join(tmpdir(), 'circle-grants-'));
   try {
     const a = join(root, 'a'),
@@ -65,7 +66,6 @@ test('workspace grants reject unknown, cross-workspace and escaped handles', asy
     await mkdir(b);
     await writeFile(join(a, 'note.md'), '# granted content');
     await writeFile(join(b, 'outside.md'), 'outside');
-    await symlink(join(b, 'outside.md'), join(a, 'outside-link.md'));
     const grants = new WorkspaceGrants();
     const first = await grants.open(a),
       second = await grants.open(b);
@@ -77,14 +77,76 @@ test('workspace grants reject unknown, cross-workspace and escaped handles', asy
       /not granted/,
     );
     await assert.rejects(
+      () => grants.read('unknown', first.files[0]!.id),
+      /not granted/,
+    );
+    await assert.rejects(
       () => grants.read(first.id, '../../outside.md'),
       /not granted/,
     );
-    await rm(join(a, 'note.md'));
-    await symlink(join(b, 'outside.md'), join(a, 'note.md'));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('workspace grants reject a granted path replaced by a filesystem link', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-grant-link-'));
+  try {
+    const selected = join(root, 'selected');
+    const outside = join(root, 'outside');
+    await mkdir(selected);
+    await mkdir(outside);
+    const note = join(selected, 'note.md');
+    const outsideNote = join(outside, 'note.md');
+    await writeFile(note, 'selected');
+    await writeFile(outsideNote, 'outside');
+    const grants = new WorkspaceGrants();
+    const workspace = await grants.open(selected);
+    await rm(note);
+    // Junctions do not need Windows symlink privileges. Both are genuine
+    // filesystem links and must be refused before the replacement is read.
+    await symlink(
+      process.platform === 'win32' ? outside : outsideNote,
+      note,
+      process.platform === 'win32' ? 'junction' : 'file',
+    );
     await assert.rejects(
-      () => grants.read(first.id, first.files[0]!.id),
+      () => grants.read(workspace.id, workspace.files[0]!.id),
       /symbolic link/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('workspace grants exclude directory links and reject replaced parent directories', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-grant-escape-'));
+  try {
+    const selected = join(root, 'selected');
+    const nested = join(selected, 'nested');
+    const outside = join(root, 'outside');
+    await mkdir(nested, { recursive: true });
+    await mkdir(outside);
+    await writeFile(join(nested, 'note.md'), 'selected');
+    await writeFile(join(outside, 'note.md'), 'outside');
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+    await symlink(outside, join(selected, 'outside-link'), linkType);
+    const grants = new WorkspaceGrants();
+    const workspace = await grants.open(selected);
+    assert.deepEqual(
+      workspace.files.map((file) => file.path),
+      ['nested/note.md'],
+    );
+    const granted = workspace.files[0]!;
+    assert.equal(
+      (await grants.read(workspace.id, granted.id)).content,
+      'selected',
+    );
+    await rm(nested, { recursive: true });
+    await symlink(outside, nested, linkType);
+    await assert.rejects(
+      () => grants.read(workspace.id, granted.id),
+      /outside the selected workspace/,
     );
   } finally {
     await rm(root, { recursive: true, force: true });

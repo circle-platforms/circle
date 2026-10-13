@@ -4,6 +4,7 @@ import {
   existsSync,
   readFileSync,
   realpathSync,
+  statSync,
   writeFileSync,
   unlinkSync,
 } from 'node:fs';
@@ -26,9 +27,11 @@ import {
   isFolderTrusted,
   trustFolder,
   isReady,
+  keepsSavedKey,
   writePrivateJson,
   loadCredentials,
   type CircleSettings,
+  VARIABLE_NAME,
 } from '../../../src/settings.js';
 import {
   discoverCustomCommands,
@@ -39,11 +42,38 @@ import { loadSkillBody } from '../../../src/skills.js';
 import { attachmentFromBase64, MAX_MEDIA_BYTES } from '../../../src/media.js';
 import { readPrompt } from '../../../src/system_prompt.js';
 import { toMarkdown, toHtml } from '../../../src/session_export.js';
-import { normalizeBaseUrl, resolveEndpoint } from '../../../src/probe.js';
+import { browserTools, type BrowserPort } from '../../../src/browser/tools.js';
+import type {
+  CertificateApproval,
+  DownloadApproval,
+  UploadApproval,
+} from '../../../src/browser/protocol.js';
+import { sizeText } from '../../../src/browser/files.js';
+import {
+  loadSecrets,
+  removeSecret,
+  saveSecret,
+  secretNames,
+} from '../../../src/secrets.js';
+import {
+  normalizeBaseUrl,
+  probeSummary,
+  resolveEndpoint,
+} from '../../../src/probe.js';
 import { availableUpdate } from '../../../src/update.js';
 import { BUILTIN_SLASH } from '../../../src/tui/slash_commands.js';
 import { ModelCatalog } from '../../../src/model_catalog.js';
 import { VERSION } from '../../../src/version.js';
+import { isSessionMode } from '../../../src/approvals.js';
+import { currentBranch } from '../../../src/git_info.js';
+import { formatCosts } from '../../../src/pricing.js';
+import { TurnStatus } from '../../../src/tui/turn_status.js';
+import { formatElapsed, type TurnUsage } from '../../../src/tui/status_rows.js';
+import {
+  approvalPreview,
+  fileChange,
+} from '../../../src/tui/approval_preview.js';
+import type { CardLine } from '../../../src/ink/components/dialog_card.js';
 class DisconnectedModel implements ChatModel {
   model = 'not connected';
   async complete(): Promise<never> {
@@ -63,6 +93,7 @@ import type {
   Message,
   Interaction,
   Effort,
+  DiffView,
 } from '../../workbench/src/model/types';
 import {
   validateRuntimeCommand,
@@ -82,6 +113,42 @@ const flag = (value: unknown) => {
   if (typeof value !== 'boolean') throw Error('boolean required');
   return value;
 };
+// The app has room for longer diffs than the terminal's card.
+const DIFF_ROWS = 400;
+const FILE_TOOLS = ['write_file', 'edit_file', 'apply_patch', 'delete'];
+const diffView = (lines: CardLine[]): DiffView | undefined =>
+  lines.length
+    ? {
+        summary: lines[0]!.text,
+        rows: lines
+          .slice(1)
+          .map((line) =>
+            line.tone === 'added' || line.tone === 'removed'
+              ? { text: line.text, tone: line.tone }
+              : { text: line.text },
+          ),
+      }
+    : undefined;
+// The paths a file tool call changes: a patch names its own.
+function changedPaths(name: string, args: Record<string, unknown>): string[] {
+  if (name === 'apply_patch')
+    return [
+      ...String(args.patchText ?? '').matchAll(
+        /^\*\*\* (?:Add File|Update File|Delete File|Move to):\s*(.+)$/gm,
+      ),
+    ].map((match) => match[1]!.trim());
+  const path = String(args.file_path ?? args.path ?? '');
+  return path ? [path] : [];
+}
+// A file's text, or undefined when it is missing, too large or not text.
+function readText(path: string): string | undefined {
+  try {
+    if (!existsSync(path) || statSync(path).size > 256 * 1024) return undefined;
+    return new TextDecoder('utf-8', { fatal: true }).decode(readFileSync(path));
+  } catch {
+    return undefined;
+  }
+}
 interface Pending {
   row: Interaction;
   signal: AbortSignal;
@@ -104,6 +171,8 @@ export interface ControllerOptions {
   /** A link an extension asked for: the window opens it in its browser panel; with no
    * window the main process opens it in the system browser. */
   openUrl?: (url: string) => void;
+  /** The conversation browsers in the main process; without it there are no browser tools. */
+  browser?: BrowserPort;
 }
 
 /** The IPC adapter delegates execution and persistence to the existing Circle core. */
@@ -129,6 +198,20 @@ export class RuntimeController {
     string,
     { status: 'running' | 'waiting' | 'error' | 'success'; output?: string }
   >();
+  // Per `${session}:${call}`: the diff a file tool showed before it ran.
+  private diffs = new Map<string, DiffView>();
+  // Per session and resolved path: the file before this session's first change to it
+  // (undefined: it did not exist), and how it differs now.
+  private changes = new Map<
+    string,
+    Map<string, { original: string | undefined; diff?: DiffView; at: string }>
+  >();
+  // Each session's finished turns, by their last message: time and tokens, in memory only
+  private turnUsage = new Map<string, Record<string, TurnUsage>>();
+  private turns = new Map<
+    string,
+    { status: TurnStatus; started: number; waited: number; since?: number }
+  >();
   private error?: string;
   private closing = false;
   private mutation = Promise.resolve();
@@ -138,6 +221,20 @@ export class RuntimeController {
   >();
   private tasks = new Set<Promise<unknown>>();
   private discoveredModels: string[] = [];
+  // What the connection form's last probe found, so that saving that endpoint lists its
+  // models. Never the key.
+  private probed?: { baseUrl: string; protocol: string; models: string[] };
+  // Whether a key is saved, read once and again after configure or logout.
+  private keySaved?: boolean;
+  // A workspace's git branch, read at most every two seconds: snapshots follow tokens.
+  private branches = new Map<string, { branch: string; at: number }>();
+  private branch(path: string): string {
+    const cached = this.branches.get(path);
+    if (cached && Date.now() - cached.at < 2000) return cached.branch;
+    const branch = currentBranch(path);
+    this.branches.set(path, { branch, at: Date.now() });
+    return branch;
+  }
   constructor(readonly options: ControllerOptions) {
     this.home = options.home;
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
@@ -184,6 +281,27 @@ export class RuntimeController {
           (isReady(settings) ? undefined : new DisconnectedModel()),
         catalog: this.options.catalog?.(this.home),
         session,
+        extraTools: this.options.browser
+          ? browserTools(this.options.browser, {
+              confirm: (_sessionId, approval, signal, callId) =>
+                approval.kind === 'upload'
+                  ? this.confirmUpload(runtime, approval, signal, callId)
+                  : approval.kind === 'download'
+                    ? this.confirmDownload(runtime, approval, signal, callId)
+                    : this.confirmCertificate(
+                        runtime,
+                        approval,
+                        signal,
+                        callId,
+                      ),
+              // Paths as the file tools take them; a credential file never goes
+              files: (path) => {
+                const full = runtime.sandbox.resolvePath(path);
+                runtime.sandbox.checkCredentialPath(full);
+                return full;
+              },
+            })
+          : undefined,
         approve: (call, signal, origin) =>
           this.approve(runtime, call, signal, origin),
         question: (args, signal, origin) =>
@@ -223,6 +341,7 @@ export class RuntimeController {
   private projectMessages(runtime: AgentRuntime, id: string): Message[] {
     const nodes = runtime.store.tree(id);
     const labels = runtime.store.labels(id);
+    const turns = this.turnUsage.get(id) ?? {};
     const result: Message[] = [];
     const calls = new Map<string, Message>();
     for (const node of nodes) {
@@ -231,8 +350,8 @@ export class RuntimeController {
       if (raw.role === 'tool') {
         const call = calls.get(raw.tool_call_id ?? '');
         if (call?.tool) {
-          result.splice(result.indexOf(call), 1);
-          result.push({
+          // In place: a finished call keeps its position among its turn's calls.
+          result[result.indexOf(call)] = {
             ...call,
             id: node.id,
             parentId: node.parent,
@@ -241,7 +360,7 @@ export class RuntimeController {
               output: raw.content,
               status: raw.status ?? 'success',
             },
-          });
+          };
         } else
           result.push({
             id: node.id,
@@ -267,16 +386,26 @@ export class RuntimeController {
           content: a.data,
           mime: a.mime_type,
         })),
-        usage: raw.usage
+        // The last message of a finished turn shows the whole turn: its time and tokens
+        usage: turns[raw.id]
           ? {
-              input: raw.usage.input_tokens,
-              output: raw.usage.output_tokens,
-              // The workbench shows dollars; another currency is not converted
-              cost:
-                raw.cost?.currency === 'USD' ? (raw.cost.amount ?? null) : null,
-              elapsed: '',
+              input: turns[raw.id]!.input,
+              output: turns[raw.id]!.output,
+              cost: turns[raw.id]!.cost ?? null,
+              elapsed: formatElapsed(turns[raw.id]!.seconds),
             }
-          : undefined,
+          : raw.usage
+            ? {
+                input: raw.usage.input_tokens,
+                output: raw.usage.output_tokens,
+                // The workbench shows dollars; another currency is not converted
+                cost:
+                  raw.cost?.currency === 'USD'
+                    ? (raw.cost.amount ?? null)
+                    : null,
+                elapsed: '',
+              }
+            : undefined,
       };
       if (
         raw.role !== 'assistant' ||
@@ -301,6 +430,7 @@ export class RuntimeController {
             status: state?.status ?? 'unknown',
             filePath:
               String(call.args.file_path ?? call.args.path ?? '') || undefined,
+            diff: this.diffs.get(`${id}:${call.id}`),
           },
         };
         calls.set(call.id, row);
@@ -398,6 +528,10 @@ export class RuntimeController {
         state: selected && owner.busy ? 'waiting' : 'idle',
         readOnly: selected ? owner.harness.planMode : false,
         auto: selected ? owner.policy.yoloEnabled(row.id) : false,
+        mode: selected ? owner.mode : 'manual',
+        meters: selected ? this.meters(owner) : undefined,
+        turn: this.turn(row.id),
+        changes: this.changeList(row.id),
         showThinking: !settings.hide_thinking,
         expandTools: false,
         todos: selected
@@ -443,13 +577,14 @@ export class RuntimeController {
         coreVersion: VERSION,
         observedAt: new Date().toISOString(),
         configured: !!this.options.model || isReady(settings),
+        hasKey: (this.keySaved ??= Boolean(this.savedKey())),
         error: this.error,
       },
       workspaces: paths.map((path) => ({
         id: identity(path),
         name: path === join(this.home, 'workspace') ? 'circle' : basename(path),
         path,
-        branch: 'local workspace',
+        branch: this.branch(path),
         trusted: isFolderTrusted(settings, path),
         origin: 'native',
         instructions: [],
@@ -622,12 +757,144 @@ export class RuntimeController {
         endpoint: settings.auth.base_url,
         protocol: settings.auth.protocol as 'openai' | 'anthropic',
         credentialFiles: settings.credential_files,
+        variables: { ...settings.variables },
+        // Names only: a saved value never leaves the runtime
+        secrets: secretNames(this.home),
         updateCheck: settings.update_check,
-        uiFontSize: 13,
-        codeFontSize: 12,
+        textSize: 'default',
         keybindings: {},
       },
     };
+  }
+  // The terminal footer's numbers (src/tui/session_app.ts): usage over the whole session,
+  // cost as formatCosts writes it, and the context of the last answer from this model.
+  private meters(runtime: AgentRuntime): NonNullable<Session['meters']> {
+    const stats = runtime.stats();
+    const facts =
+      runtime.harness.model.modelFacts ??
+      runtime.catalog.facts(
+        runtime.harness.model.model,
+        runtime.options.settings,
+        runtime.harness.model.contextWindow,
+      );
+    const last = runtime.harness.messages
+      .filter((message) => message.role === 'assistant' && message.usage)
+      .at(-1);
+    return {
+      input: stats.usage.input_tokens,
+      output: stats.usage.output_tokens,
+      cacheRead: stats.usage.cache_read_tokens,
+      cost: formatCosts(
+        [stats.costs],
+        facts.rates?.input !== undefined && facts.rates.output !== undefined,
+      ),
+      contextInput:
+        !last?.request_model ||
+        last.request_model === runtime.harness.model.model
+          ? (last?.usage?.input_tokens ?? null)
+          : null,
+      contextWindow: facts.windowKnown ? facts.contextWindow : null,
+    };
+  }
+  private turn(id: string): Session['turn'] {
+    const turn = this.turns.get(id);
+    if (!turn) return undefined;
+    return {
+      verb: turn.status.verb,
+      startedAt: turn.started,
+      waited:
+        turn.waited + (turn.since === undefined ? 0 : Date.now() - turn.since),
+      tokens: turn.status.tokens,
+      retry: turn.status.retry,
+    };
+  }
+  private changeList(id: string): Session['changes'] {
+    const files = this.changes.get(id);
+    if (!files) return undefined;
+    return [...files]
+      .filter(([, file]) => file.diff)
+      .map(([path, file]) => ({
+        path,
+        kind:
+          file.original === undefined
+            ? ('added' as const)
+            : file.diff!.summary.startsWith('deleted')
+              ? ('deleted' as const)
+              : ('modified' as const),
+        diff: file.diff!,
+        at: file.at,
+      }));
+  }
+  // Before a file tool runs: its diff against the file as it is, and the file's first
+  // version for the session's changes. After it ran: how the file differs from that.
+  private fileEvent(runtime: AgentRuntime, id: string, event: CircleEvent) {
+    const name = String(event.payload.name ?? '');
+    const args = (event.payload.args ?? {}) as Record<string, unknown>;
+    const callId = String(event.payload.id ?? '');
+    if (!FILE_TOOLS.includes(name) || !callId) return;
+    const resolve = (path: string) => runtime.sandbox.resolvePath(path);
+    if (event.kind === 'tool_waiting' || event.kind === 'tool_start') {
+      const diff = diffView(approvalPreview(name, args, resolve, DIFF_ROWS));
+      if (diff) this.diffs.set(`${id}:${callId}`, diff);
+      if (event.kind !== 'tool_start') return;
+      const files = this.changes.get(id) ?? new Map();
+      this.changes.set(id, files);
+      for (const path of changedPaths(name, args)) {
+        let target: string;
+        try {
+          target = resolve(path);
+        } catch {
+          continue;
+        }
+        if (!files.has(target))
+          files.set(target, { original: readText(target), at: event.ts });
+      }
+      return;
+    }
+    if (event.kind !== 'tool_result') return;
+    for (const [target, file] of this.changes.get(id) ?? []) {
+      const now = existsSync(target) ? readText(target) : undefined;
+      const diff = diffView(fileChange(file.original, now, DIFF_ROWS));
+      file.diff = diff;
+      if (diff) file.at = event.ts;
+    }
+  }
+  private savedKey(): string {
+    try {
+      const settings = loadSettings(this.home);
+      const credentials = loadCredentials(this.home);
+      return (
+        credentials[settings.auth.api_key_ref] ||
+        credentials.api_key ||
+        ''
+      ).trim();
+    } catch {
+      return '';
+    }
+  }
+  // The key for `url`: the one typed, or else the saved one while `url` stays on the saved
+  // endpoint's host (keepsSavedKey). A key saved for one provider is never sent to another.
+  private keyFor(url: string, typed: unknown): string {
+    const key = text(typed, 'API key', 4096).trim();
+    if (key) return key;
+    let saved: CircleSettings;
+    try {
+      saved = loadSettings(this.home);
+    } catch {
+      return '';
+    }
+    return keepsSavedKey(saved, url) ? this.savedKey() : '';
+  }
+  // An API URL the connection form may use: http(s), without credentials, query or fragment.
+  private endpointOf(value: unknown): string {
+    const endpoint = new URL(text(value, 'endpoint', 2000).trim());
+    if (
+      !['http:', 'https:'].includes(endpoint.protocol) ||
+      endpoint.username ||
+      endpoint.password
+    )
+      throw Error('invalid API endpoint');
+    return normalizeBaseUrl(endpoint.href, 'openai');
   }
   publish(event?: RuntimeUpdate['event']) {
     if (this.closing) return;
@@ -647,6 +914,50 @@ export class RuntimeController {
     if (event.kind === 'run_start') this.activeRuns.add(id);
     if (['run_end', 'run_error'].includes(event.kind))
       this.activeRuns.delete(id);
+    if (!event.tags?.subagent) {
+      const now = Date.now();
+      if (event.kind === 'run_start')
+        this.turns.set(id, {
+          status: new TurnStatus(),
+          started: now,
+          waited: 0,
+        });
+      const turn = this.turns.get(id);
+      if (turn) {
+        // The turn's line goes under its last message, as in the terminal
+        turn.status.apply(
+          event,
+          () =>
+            id === runtime.session.id
+              ? runtime.harness.messages.at(-1)?.id
+              : undefined,
+          now,
+        );
+        // Time spent waiting for a person is not the model's: the busy clock leaves it out.
+        if (event.kind === 'tool_waiting') turn.since ??= now;
+        if (
+          ['tool_start', 'tool_result'].includes(event.kind) &&
+          turn.since !== undefined
+        ) {
+          turn.waited += now - turn.since;
+          turn.since = undefined;
+        }
+      }
+      if (['run_end', 'run_error'].includes(event.kind)) {
+        // What each finished turn took, kept while Circle runs, as the terminal keeps it
+        if (turn)
+          this.turnUsage.set(id, {
+            ...this.turnUsage.get(id),
+            ...turn.status.usage,
+          });
+        this.turns.delete(id);
+      }
+    }
+    try {
+      this.fileEvent(runtime, id, event);
+    } catch {
+      /* A diff is a view; failing to draw one never stops the turn. */
+    }
     if (event.kind === 'run_error' && !event.payload.interrupted) {
       const rows = this.failures.get(id) ?? [];
       rows.push({
@@ -759,12 +1070,22 @@ export class RuntimeController {
         callId: call.id,
         input: structuredClone(call.args),
         title: `${call.name} · ${review.reason}`,
+        reason: review.reason,
+        prefix: review.prefix.length ? review.prefix.join(' ') : undefined,
         tool: call.name,
         command:
           typeof call.args.command === 'string' ? call.args.command : undefined,
         target: String(call.args.file_path ?? call.args.path ?? ''),
-        after:
-          typeof call.args.content === 'string' ? call.args.content : undefined,
+        diff:
+          this.diffs.get(`${runtime.session.id}:${call.id}`) ??
+          diffView(
+            approvalPreview(
+              call.name,
+              call.args,
+              (path) => runtime.sandbox.resolvePath(path),
+              DIFF_ROWS,
+            ),
+          ),
         choices: [
           'approve',
           ...(review.verdict === 'ASK' && review.pattern ? ['always'] : []),
@@ -778,6 +1099,116 @@ export class RuntimeController {
     return answer.startsWith('reject: ')
       ? { decision: 'reject', message: answer.slice(8) }
       : (answer as ApprovalDecision);
+  }
+  /** The variables or saved secrets changed: every conversation's model is told anew. */
+  private secretsChanged() {
+    for (const runtime of this.runtimes.values()) runtime.refreshPrompt();
+    this.publish();
+  }
+  /** The model pressed "proceed" on a certificate warning: only the person decides. */
+  private async confirmCertificate(
+    runtime: AgentRuntime,
+    approval: CertificateApproval,
+    signal: AbortSignal,
+    callId?: string,
+  ): Promise<'once' | 'always' | 'reject'> {
+    const answer = await this.wait(
+      runtime,
+      {
+        kind: 'approval',
+        callId,
+        tool: 'browser_click',
+        title: `browser_click · trusts an untrusted certificate`,
+        reason: 'trusts an untrusted certificate',
+        target: approval.url,
+        input: {
+          host: approval.host,
+          issued_to: approval.subject,
+          issued_by: approval.issuer,
+          valid_until: new Date(approval.validExpiry * 1000)
+            .toISOString()
+            .slice(0, 10),
+          sha256: approval.fingerprint,
+        },
+        // Only a host on this network can be trusted for good.
+        choices: [
+          'approve',
+          ...(approval.privateHost ? ['always'] : []),
+          'reject',
+        ],
+      },
+      signal,
+    );
+    return answer === 'approve'
+      ? 'once'
+      : answer === 'always'
+        ? 'always'
+        : 'reject';
+  }
+  /** The model would give a page files: the person sees which and where, every time. */
+  private async confirmUpload(
+    runtime: AgentRuntime,
+    approval: UploadApproval,
+    signal: AbortSignal,
+    callId?: string,
+  ): Promise<'once' | 'reject'> {
+    const answer = await this.wait(
+      runtime,
+      {
+        kind: 'approval',
+        callId,
+        tool: 'browser_upload',
+        title: 'browser_upload · gives the page files',
+        reason: 'gives the page files',
+        target: approval.origin,
+        input: {
+          site: approval.origin,
+          field: approval.element,
+          files: approval.files
+            .map((file) => `${file.path} (${sizeText(file.size)})`)
+            .join('\n'),
+        },
+        choices: ['approve', 'reject'],
+      },
+      signal,
+    );
+    return answer === 'approve' ? 'once' : 'reject';
+  }
+  /**
+   * The model's action downloaded files from a site not allowed yet: auto mode keeps them,
+   * the other modes ask once for each site.
+   */
+  private async confirmDownload(
+    runtime: AgentRuntime,
+    approval: DownloadApproval,
+    signal: AbortSignal,
+    callId?: string,
+  ): Promise<'once' | 'always' | 'reject'> {
+    if (runtime.policy.mode(runtime.session.id) === 'auto') return 'once';
+    const answer = await this.wait(
+      runtime,
+      {
+        kind: 'approval',
+        callId,
+        tool: 'browser_download',
+        title: 'browser_download · keeps a download',
+        reason: 'keeps a download',
+        target: approval.site,
+        input: {
+          site: approval.site,
+          files: approval.files
+            .map((file) => `${file.name} (${sizeText(file.size)})`)
+            .join('\n'),
+        },
+        choices: ['approve', 'always', 'reject'],
+      },
+      signal,
+    );
+    return answer === 'approve'
+      ? 'once'
+      : answer === 'always'
+        ? 'always'
+        : 'reject';
   }
   private async question(
     runtime: AgentRuntime,
@@ -826,9 +1257,10 @@ export class RuntimeController {
       {
         kind: 'secret',
         title: request.question,
+        // An extension's secret goes to it; a value with no file is kept as a Circle secret
         target: request.extension
           ? `extension ${request.extension}`
-          : request.target_file,
+          : request.target_file || `%${request.key}%`,
       },
       signal,
       origin,
@@ -1096,6 +1528,10 @@ export class RuntimeController {
       case 'set-auto':
         runtime.policy.setYolo(runtime.session.id, flag(p.enabled));
         return {};
+      case 'set-mode':
+        if (!isSessionMode(p.mode)) throw Error('invalid mode');
+        runtime.setMode(p.mode);
+        return {};
       case 'configure': {
         if (
           [...this.runtimes.values()].some(
@@ -1109,39 +1545,71 @@ export class RuntimeController {
           )
         )
           throw Error('finish the current turn before changing connection');
-        const endpoint = new URL(text(p.endpoint, 'endpoint', 2000));
-        if (
-          !['http:', 'https:'].includes(endpoint.protocol) ||
-          endpoint.username ||
-          endpoint.password
-        )
-          throw Error('invalid API endpoint');
+        const endpoint = this.endpointOf(p.endpoint);
         const protocol = text(p.protocol, 'protocol', 20);
         if (!['openai', 'anthropic'].includes(protocol))
           throw Error('invalid protocol');
-        const baseUrl = normalizeBaseUrl(endpoint.href, protocol);
+        const baseUrl = normalizeBaseUrl(endpoint, protocol);
         const model = text(p.model, 'model', 500);
         if (!model.trim()) throw Error('model required');
-        const secret = text(p.apiKey, 'API key', 4096);
-        if (!secret.trim()) throw Error('API key required');
+        // An empty key keeps the saved one on the same host, so the path or the model can
+        // change alone; another host needs its own key.
+        const secret = this.keyFor(baseUrl, p.apiKey);
+        if (!secret) throw Error('enter the API key for this endpoint');
         saveCredentials({ api_key: secret }, this.home);
+        this.keySaved = true;
         const settings = withConnection(
           { protocol, base_url: baseUrl, model, api_key_ref: 'api_key' },
           this.home,
         );
         saveSettings(settings, this.home);
+        // The models listed are this endpoint's: what the form's probe found at the URL and
+        // kind of API being saved, or none until they are asked for.
+        const probed = this.probed;
+        this.discoveredModels =
+          probed &&
+          probed.protocol === protocol &&
+          normalizeBaseUrl(probed.baseUrl, protocol) === baseUrl
+            ? [...probed.models]
+            : [];
         for (const owner of this.runtimes.values()) {
           owner.options.settings = {
             ...owner.options.settings,
             auth: structuredClone(settings.auth),
             initialized: settings.initialized,
+            // withConnection empties it when the endpoint changes: it named the old one's models
+            enabled_models: [...settings.enabled_models],
           };
           owner.options.model = undefined;
           owner.setModel(model);
         }
         return {};
       }
+      case 'probe-connection': {
+        // Setup's discovery (src/probe.ts): which kind of API answers at the URL, or its /v1,
+        // and what models it lists. Nothing is saved; the key is neither returned nor kept.
+        const endpoint = this.endpointOf(p.endpoint);
+        const key = this.keyFor(endpoint, p.apiKey);
+        if (!key) throw Error('enter the API key for this endpoint');
+        const found = await resolveEndpoint(endpoint, key);
+        const baseUrl = found.base_url || endpoint;
+        this.probed = {
+          baseUrl,
+          protocol: found.protocol,
+          models: [...found.models],
+        };
+        return {
+          status: found.status,
+          protocol: found.protocol,
+          models: found.models,
+          baseUrl,
+          inferred: found.inferred,
+          summary: probeSummary(found),
+          detail: found.detail,
+        };
+      }
       case 'logout': {
+        this.keySaved = undefined;
         if (
           [...this.runtimes.values()].some(
             (owner) =>
@@ -1229,6 +1697,26 @@ export class RuntimeController {
               throw Error('invalid settings list');
             settings[core] = data[ui] as string[];
           }
+        if (data.variables !== undefined) {
+          if (
+            !data.variables ||
+            typeof data.variables !== 'object' ||
+            Array.isArray(data.variables)
+          )
+            throw Error('invalid variables');
+          const variables: Record<string, string> = {};
+          for (const [name, value] of Object.entries(data.variables)) {
+            if (!VARIABLE_NAME.test(name))
+              throw Error(
+                'a variable name is capital letters, digits and _, starting with a letter',
+              );
+            // One name, one value: %NAME% must not mean two things
+            if (secretNames(this.home).includes(name))
+              throw Error(`${name} is already a secret`);
+            variables[name] = text(value, 'variable value', 2000);
+          }
+          settings.variables = variables;
+        }
         if (p.mcp !== undefined) {
           if (!Array.isArray(p.mcp)) throw Error('invalid MCP settings');
           settings.mcp_servers = p.mcp.map((entry) => {
@@ -1276,7 +1764,13 @@ export class RuntimeController {
           update_check: settings.update_check,
           enabled_models: settings.enabled_models,
           credential_files: settings.credential_files,
+          variables: settings.variables,
         });
+        if (data.variables !== undefined)
+          for (const owner of this.runtimes.values()) {
+            owner.options.settings.variables = { ...settings.variables };
+            owner.refreshPrompt();
+          }
         return {};
       }
       case 'reload': {
@@ -1566,6 +2060,49 @@ export class RuntimeController {
         writeFileSync(path, reply.content, { mode: 0o600 });
         return { path };
       }
+      case 'save-secret': {
+        const name = text(p.name, 'secret name', 64);
+        const previous =
+          p.previous === undefined
+            ? undefined
+            : text(p.previous, 'secret name', 64);
+        // A plain variable made secret leaves settings in the same step, so the model is
+        // never told its value again
+        const replaces =
+          p.replaces === undefined
+            ? undefined
+            : text(p.replaces, 'variable name', 64);
+        const settings = loadSettings(this.home);
+        if (replaces !== undefined && !(replaces in settings.variables))
+          throw Error(`no variable named ${replaces}`);
+        const variables = Object.fromEntries(
+          Object.entries(settings.variables).filter(
+            ([key]) => key !== replaces,
+          ),
+        );
+        if (name in variables) throw Error(`${name} is already a variable`);
+        // Renamed without a new value: the saved value moves to the new name
+        const value =
+          p.value === undefined || p.value === ''
+            ? previous && loadSecrets(this.home)[previous]
+            : text(p.value, 'value', 4096);
+        if (!value) throw Error('enter the value');
+        saveSecret(this.home, name, value);
+        if (previous && previous !== name) removeSecret(this.home, previous);
+        if (replaces !== undefined) {
+          settings.variables = variables;
+          saveSettings(settings, this.home);
+          for (const owner of this.runtimes.values())
+            owner.options.settings.variables = { ...variables };
+        }
+        this.secretsChanged();
+        return {};
+      }
+      case 'remove-secret':
+        if (!removeSecret(this.home, text(p.name, 'secret name', 64)))
+          throw Error('no such secret');
+        this.secretsChanged();
+        return {};
       case 'discover-models': {
         const settings = loadSettings(this.home);
         if (!isReady(settings)) throw Error('connect an endpoint first');
@@ -1574,10 +2111,20 @@ export class RuntimeController {
           loadCredentials(this.home)[settings.auth.api_key_ref] ?? '',
           { protocol: settings.auth.protocol },
         );
+        // An endpoint that does not list its models (an Anthropic-style path without
+        // GET /v1/models) is not an error: its model ids are typed instead.
         if (found.status === 'failed')
-          throw Error(found.detail || 'model discovery failed');
+          return {
+            status: 'failed',
+            models: [],
+            detail: found.detail || 'model discovery failed',
+          };
         this.discoveredModels = found.models;
-        return { models: found.models, detail: found.detail };
+        return {
+          status: found.status,
+          models: found.models,
+          detail: found.detail,
+        };
       }
       case 'check-update':
         return {

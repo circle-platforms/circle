@@ -26,19 +26,26 @@ import {
 import type { WorkbenchPlugin } from './types';
 import { serverPlugin } from './server';
 import { livePlatformPlugins } from './platform/live';
+import { t } from '../i18n';
+// Titles and descriptions are getters so they follow the interface language when it changes.
 export const circlePlugins: WorkbenchPlugin[] = [
   {
     id: 'files',
     apiVersion: 1,
     version: '0.1.0',
-    title: 'file and diff inspector',
-    description:
-      'Workspace files, local preview buffers and change comparison.',
+    get title() {
+      return t('file and diff inspector');
+    },
+    get description() {
+      return t('Workspace files, local preview buffers and change comparison.');
+    },
     icon: Folder,
     panels: [
       {
         id: 'files',
-        title: 'files',
+        get title() {
+          return t('files');
+        },
         icon: Folder,
         component: (props) => (
           <FilesPanel selection={props.selection} onFile={props.onFile} />
@@ -46,7 +53,9 @@ export const circlePlugins: WorkbenchPlugin[] = [
       },
       {
         id: 'changes',
-        title: 'changes',
+        get title() {
+          return t('changes');
+        },
         icon: FileDiff,
         component: (props) => <ChangesPanel onFile={props.onFile} />,
       },
@@ -56,13 +65,19 @@ export const circlePlugins: WorkbenchPlugin[] = [
     id: 'activity',
     apiVersion: 1,
     version: '0.1.0',
-    title: 'activity inspector',
-    description: 'Circle background jobs, subagents and pending interactions.',
+    get title() {
+      return t('activity inspector');
+    },
+    get description() {
+      return t('Circle background jobs, subagents and pending interactions.');
+    },
     icon: Activity,
     panels: [
       {
         id: 'activity',
-        title: 'activity',
+        get title() {
+          return t('activity');
+        },
         icon: Activity,
         component: (props) => <ActivityPanel {...props} />,
       },
@@ -72,12 +87,22 @@ export const circlePlugins: WorkbenchPlugin[] = [
     id: 'browser',
     apiVersion: 1,
     version: '0.1.0',
-    title: 'browser pane',
-    description:
-      'The same browser session shared with the future desktop host.',
+    get title() {
+      return t('browser pane');
+    },
+    get description() {
+      return t('The same browser session shared with the future desktop host.');
+    },
     icon: Globe,
     panels: [
-      { id: 'browser', title: 'browser', icon: Globe, component: BrowserPanel },
+      {
+        id: 'browser',
+        get title() {
+          return t('browser');
+        },
+        icon: Globe,
+        component: BrowserPanel,
+      },
     ],
   },
   serverPlugin,

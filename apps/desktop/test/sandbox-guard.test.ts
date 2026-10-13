@@ -18,7 +18,7 @@ async function bundleMain(appDir: string) {
     platform: 'node',
     target: 'node24',
     format: 'cjs',
-    external: ['electron'],
+    external: ['electron', 'original-fs'],
   });
   await writeFile(
     join(appDir, 'package.json'),

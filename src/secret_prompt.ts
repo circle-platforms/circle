@@ -18,6 +18,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import lockfile from 'proper-lockfile';
 import { expandUser } from './paths.js';
 import { isRecord } from './settings.js';
+import { saveSecret } from './secrets.js';
 export const SCHEMA = 'circle.secret-request.v1';
 export interface SecretRequest {
   schema: typeof SCHEMA;
@@ -37,7 +38,7 @@ const EXTENSION_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 export function secretDestination(request: SecretRequest): string {
   return request.extension
     ? `→ extension ${request.extension}`
-    : `${request.key} → ${request.target_file}`;
+    : `${request.key} → ${request.target_file || `Circle secret %${request.key}%`}`;
 }
 export class SecretPromptError extends Error {}
 export class SecretPromptTimeout extends SecretPromptError {}
@@ -96,8 +97,7 @@ export function createRequest(
     );
   if (!input.question.trim())
     throw new SecretPromptError('the question is empty');
-  if (!input.target_file.trim())
-    throw new SecretPromptError('the request names no target_file to write to');
+  // No target file: the value is kept as a Circle secret under the key
   return writeRequest(home, {
     schema: SCHEMA,
     id: randomUUID().replaceAll('-', ''),
@@ -329,10 +329,17 @@ export async function collect(
       const fulfilled = await Promise.all([answering, presentation]);
       value = fulfilled[0] as string;
       combined.throwIfAborted();
-      const path = await applyToTarget(request, value, combined);
-      results.push(
-        `  - ${request.key} → collected and written to ${path} (the value is not in the conversation)`,
-      );
+      if (!request.target_file) {
+        saveSecret(home, request.key, value);
+        results.push(
+          `  - ${request.key} → collected and kept as a Circle secret; write %${request.key}% where a tool needs it (the value is not in the conversation)`,
+        );
+      } else {
+        const path = await applyToTarget(request, value, combined);
+        results.push(
+          `  - ${request.key} → collected and written to ${path} (the value is not in the conversation)`,
+        );
+      }
     } catch (error) {
       if (!controller.signal.aborted) controller.abort();
       await Promise.allSettled([answering, presentation]);

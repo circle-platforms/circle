@@ -30,16 +30,23 @@ export function updateCheckEnabled(settings: {
   return settings.update_check !== false;
 }
 // The newest published release, from where github.com/<repo>/releases/latest redirects.
+// `releases` is that page's folder, which a check of the desktop update points elsewhere.
 export async function latestRelease(
   repo = process.env.CIRCLE_REPO || DEFAULT_REPO,
   request: typeof fetch = fetch,
+  releases = `https://github.com/${repo}/releases`,
 ): Promise<string> {
-  const response = await request(`https://github.com/${repo}/releases/latest`, {
+  const response = await request(`${releases}/latest`, {
     method: 'HEAD',
     signal: AbortSignal.timeout(5000),
   });
-  const tag = /\/releases\/tag\/v?([^/?#]+)$/.exec(response.url)?.[1];
-  if (!response.ok || !tag || !validVersion(tag))
+  if (!response.ok) throw new Error(`${repo} has not published a release yet`);
+  return releaseTag(response.url, repo);
+}
+// The version in a release's address, .../releases/tag/v<version>.
+export function releaseTag(url: string, repo = DEFAULT_REPO): string {
+  const tag = /\/releases\/tag\/v?([^/?#]+)$/.exec(url)?.[1];
+  if (!tag || !validVersion(tag))
     throw new Error(`${repo} has not published a release yet`);
   return tag;
 }
@@ -71,19 +78,27 @@ export async function availableUpdate(
     } catch {
       // Offline or rate limited: try again tomorrow.
     }
-    try {
-      mkdirSync(home, { recursive: true });
-      writeFileSync(
-        path,
-        JSON.stringify({ checked_at: now, latest: known }) + '\n',
-      );
-    } catch {
-      // A read-only data folder only means asking again next start.
-    }
+    rememberLatest(home, known, now);
   }
   return known && validVersion(known) && compareVersions(known, current) > 0
     ? known
     : undefined;
+}
+// Writes what a check found, so that the daily check does not ask again today.
+export function rememberLatest(
+  home: string,
+  latest: string,
+  now = Date.now() / 1000,
+): void {
+  try {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      join(home, CACHE_FILE),
+      JSON.stringify({ checked_at: now, latest }) + '\n',
+    );
+  } catch {
+    // A read-only data folder only means asking again next start.
+  }
 }
 export const updateNotice = (latest: string, current = VERSION): string =>
   `Circle ${latest} is available (you have ${current}) · run \`circle update\``;
@@ -97,7 +112,8 @@ export interface UpdateOutput {
 const megabytes = (bytes: number): string => (bytes / 1e6).toFixed(1);
 // Downloads `url` to `path`. On a terminal one line shows how far it has got and redraws
 // itself; elsewhere one line says what is downloading. Stops when no data has come for
-// `idleMs`, or when `signal` aborts.
+// `idleMs`, or when `signal` aborts. `progress` hears the bytes so far and the size (0 when
+// the answer gives none).
 export async function downloadFile(
   url: string,
   path: string,
@@ -106,11 +122,13 @@ export async function downloadFile(
     out = process.stdout,
     signal,
     idleMs = 60_000,
+    progress,
   }: {
     request?: typeof fetch;
     out?: UpdateOutput;
     signal?: AbortSignal;
     idleMs?: number;
+    progress?: (done: number, total: number) => void;
   } = {},
 ): Promise<void> {
   const label = basename(path);
@@ -175,6 +193,7 @@ export async function downloadFile(
         await file.write(chunk);
         done += chunk.length;
         timer.refresh();
+        progress?.(done, total);
         if (out.isTTY) draw(false);
       }
     } finally {

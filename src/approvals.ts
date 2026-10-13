@@ -38,6 +38,7 @@ export const DEFAULT_CREDENTIAL_FILES = [
   '.pgpass',
   '.git-credentials',
   'credentials.json',
+  'secrets.json',
   '*.secrets.json',
   'token.json',
   'id_rsa',
@@ -501,6 +502,41 @@ export function commandPrefix(command: string): string[] {
     return [];
   return words.slice(0, 1);
 }
+// The leading `cd <folder> &&` (or `;`) of a command, when the folder is the
+// workspace itself; what remains is the command that rules and hashes see.
+function stripLeadingCd(command: string, workspace: string): string {
+  const leading = command.match(
+    /^\s*cd\s+(?:--\s+)?("[^"$`]*"|'[^']*'|[^\s;&|<>()$`'"]+)\s*(?:&&|;)\s*/,
+  );
+  if (
+    leading &&
+    normalizeWorkspace(
+      resolve(workspace, leading[1]!.replace(/^['"]|['"]$/g, '')),
+    ) === normalizeWorkspace(workspace)
+  )
+    return command.slice(leading[0].length);
+  return command;
+}
+/**
+ * Whether `allowed_commands` patterns from the settings cover a command:
+ * every segment of it, after a leading workspace `cd` is stripped, matches
+ * one of the patterns as a wildcard. A command that does not parse, or parses
+ * to nothing, is never covered.
+ */
+export function commandAllowed(
+  command: string,
+  patterns: readonly string[],
+  workspace: string,
+): boolean {
+  if (!patterns.length) return false;
+  const tokens = commandTokens(stripLeadingCd(command, workspace));
+  if (!tokens) return false;
+  const parts = segments(tokens);
+  if (!parts.length) return false;
+  return parts.every((words) =>
+    patterns.some((pattern) => wildcard(pattern, words.join(' '))),
+  );
+}
 interface Rule {
   tool: string;
   pattern: string;
@@ -524,7 +560,12 @@ export class ApprovalStore {
       const raw = readJson(this.path(thread));
       if (isRecord(raw))
         return {
-          rules: Array.isArray(raw.rules) ? (raw.rules as Rule[]) : [],
+          // Python 0.5.0 revoked a rule by marking it instead of removing
+          // it; a marked rule stays revoked here, and the next save drops it.
+          rules: (Array.isArray(raw.rules) ? (raw.rules as Rule[]) : []).filter(
+            (rule) =>
+              isRecord(rule) && !(rule as { revoked?: unknown }).revoked,
+          ),
           log: Array.isArray(raw.log) ? (raw.log as StoreData['log']) : [],
         };
     } catch {
@@ -578,20 +619,75 @@ export class ApprovalStore {
     return entry;
   }
 }
+// How a session answers approvals. Plan mode is not one of these: it lives
+// on the harness, because it removes tools rather than answering for them.
+export type ApprovalMode = 'manual' | 'accept-edits' | 'auto';
+export const APPROVAL_MODES: readonly ApprovalMode[] = [
+  'manual',
+  'accept-edits',
+  'auto',
+];
+// What a person picks: the approval modes plus plan, in cycling order.
+export type SessionMode = ApprovalMode | 'plan';
+export const SESSION_MODES: readonly SessionMode[] = [
+  'manual',
+  'accept-edits',
+  'plan',
+  'auto',
+];
+export const isSessionMode = (value: unknown): value is SessionMode =>
+  SESSION_MODES.includes(value as SessionMode);
+const EDIT_TOOLS = ['write_file', 'edit_file', 'apply_patch'];
+// The browser tools that act on a page. "Allow for this session" covers them on one site,
+// the one the action acts on (`site`, which the tools add): another site asks again. A rule
+// for every site, from before sites were told apart, still covers them all.
+const BROWSER_ACTIONS: Record<string, string> = {
+  browser_navigate: 'opens a page in the browser',
+  browser_click: 'clicks in the browser',
+  browser_type: 'types in the browser',
+  browser_select: 'chooses an option in the browser',
+  browser_press: 'presses a key in the browser',
+  browser_dialog: 'answers a dialog in the browser',
+  browser_tabs: "manages the browser's tabs",
+};
+/** The tool name an approval rule is kept under: `browser` for every browser action. */
+export const ruleTool = (tool: string): string =>
+  Object.hasOwn(BROWSER_ACTIONS, tool) ? 'browser' : tool;
 export class ApprovalPolicy {
-  private yolo = new Set<string>();
+  private modes = new Map<string, ApprovalMode>();
   constructor(
     readonly store: ApprovalStore,
     readonly workspace: string,
     readonly credentialFiles = DEFAULT_CREDENTIAL_FILES,
     private readonly resolvePath?: (path: string) => string,
+    private allowed: readonly string[] = [],
   ) {}
+  get allowedCommands(): readonly string[] {
+    return this.allowed;
+  }
+  setAllowedCommands(patterns: readonly string[]): void {
+    this.allowed = patterns;
+  }
+  // A command the settings' patterns cover runs without asking, in every mode
+  // and even when it always asks; a DENY still wins, decided before this.
+  allowedBySettings(tool: string, args: Record<string, unknown>): boolean {
+    return (
+      tool === 'execute' &&
+      commandAllowed(String(args.command || ''), this.allowed, this.workspace)
+    );
+  }
+  setMode(thread: string, mode: ApprovalMode): void {
+    if (mode === 'manual') this.modes.delete(thread);
+    else this.modes.set(thread, mode);
+  }
+  mode(thread: string): ApprovalMode {
+    return this.modes.get(thread) ?? 'manual';
+  }
   setYolo(thread: string, enabled: boolean): void {
-    if (enabled) this.yolo.add(thread);
-    else this.yolo.delete(thread);
+    this.setMode(thread, enabled ? 'auto' : 'manual');
   }
   yoloEnabled(thread: string): boolean {
-    return this.yolo.has(thread);
+    return this.mode(thread) === 'auto';
   }
   review(tool: string, args: Record<string, unknown>): Review {
     if (tool === 'execute') {
@@ -599,16 +695,7 @@ export class ApprovalPolicy {
       const found = classifyCommand(command, this.credentialFiles);
       if (found.verdict !== 'ASK' || found.pattern === 'read-only')
         return found;
-      const leading = command.match(
-        /^\s*cd\s+(?:--\s+)?("[^"$`]*"|'[^']*'|[^\s;&|<>()$`'"]+)\s*(?:&&|;)\s*/,
-      );
-      if (
-        leading &&
-        normalizeWorkspace(
-          resolve(this.workspace, leading[1]!.replace(/^['"]|['"]$/g, '')),
-        ) === normalizeWorkspace(this.workspace)
-      )
-        command = command.slice(leading[0].length);
+      command = stripLeadingCd(command, this.workspace);
       const prefix = commandPrefix(command);
       const words = prefix.length ? (commandTokens(command) ?? []) : [];
       return {
@@ -627,7 +714,7 @@ export class ApprovalPolicy {
         /^\*\*\* Delete File:/m.test(String(args.patchText || '')))
     )
       return review('ASK_FORCED', 'deletes files', { warn_delete: true });
-    if (['write_file', 'edit_file', 'apply_patch'].includes(tool)) {
+    if (EDIT_TOOLS.includes(tool)) {
       const paths =
         tool === 'apply_patch'
           ? [
@@ -665,6 +752,14 @@ export class ApprovalPolicy {
           : 'shows the model the whole screen',
         { pattern: '*', scope: 'every screenshot' },
       );
+    if (Object.hasOwn(BROWSER_ACTIONS, tool)) {
+      const site = typeof args.site === 'string' ? args.site : '';
+      return review('ASK', BROWSER_ACTIONS[tool]!, {
+        pattern: site ? 'site:' + site : '*',
+        scope: site ? `browser control on ${site}` : 'browser control',
+        covered_by: site ? ['*'] : [],
+      });
+    }
     return review('ASK', `${tool} can change state`, {
       pattern: '*',
       scope: `every ${tool} call`,
@@ -678,9 +773,20 @@ export class ApprovalPolicy {
   ): boolean {
     const found = this.review(tool, args);
     if (found.verdict === 'DENY') return false;
-    if (allowYolo && this.yolo.has(thread)) return false;
+    if (this.allowedBySettings(tool, args)) return false;
+    const mode = this.mode(thread);
+    if (allowYolo && mode === 'auto') return false;
     if (found.verdict === 'ASK_FORCED') return true;
-    return !this.store.matchesAny(thread, tool, [
+    // accept-edits answers only for file changes that stay in the workspace;
+    // deletes are ASK_FORCED above, and commands still ask.
+    if (
+      allowYolo &&
+      mode === 'accept-edits' &&
+      EDIT_TOOLS.includes(tool) &&
+      found.pattern === 'workspace'
+    )
+      return false;
+    return !this.store.matchesAny(thread, ruleTool(tool), [
       found.pattern,
       ...found.covered_by,
     ]);
@@ -698,7 +804,7 @@ export class ApprovalPolicy {
         : found.pattern;
     if (['always', 'prefix'].includes(decision)) {
       if (found.verdict !== 'ASK' || !pattern) return false;
-      this.store.record(thread, 'always', tool, pattern, found.scope);
+      this.store.record(thread, 'always', ruleTool(tool), pattern, found.scope);
       return true;
     }
     this.store.record(
@@ -716,11 +822,13 @@ export function defaultPolicy(
   home = circleHome(),
   credentials = DEFAULT_CREDENTIAL_FILES,
   resolvePath?: (path: string) => string,
+  allowedCommands: readonly string[] = [],
 ): ApprovalPolicy {
   return new ApprovalPolicy(
     new ApprovalStore(join(home, 'approvals')),
     workspace,
     credentials,
     resolvePath,
+    allowedCommands,
   );
 }

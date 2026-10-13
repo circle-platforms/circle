@@ -1,7 +1,18 @@
 export type Theme = 'auto' | 'light' | 'dark';
+export type TextSize = 'small' | 'default' | 'large' | 'larger';
 export type Effort =
   'default' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type PanelId = string;
+export type SessionMode = 'manual' | 'accept-edits' | 'plan' | 'auto';
+/** A diff as the core draws it: a summary row, then rows; `@@` rows start a hunk. */
+export interface DiffRow {
+  text: string;
+  tone?: 'added' | 'removed';
+}
+export interface DiffView {
+  summary: string;
+  rows: DiffRow[];
+}
 export type PageId =
   | 'sessions'
   | 'models'
@@ -49,6 +60,7 @@ export interface ToolCall {
   before?: string;
   after?: string;
   agentId?: string;
+  diff?: DiffView;
 }
 export interface Message {
   id: string;
@@ -89,6 +101,31 @@ export interface Session {
   state: 'idle' | 'waiting' | 'paused';
   readOnly: boolean;
   auto: boolean;
+  mode?: SessionMode;
+  /** The footer, as the terminal's: whole-session usage and the last answer's context. */
+  meters?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cost: string;
+    contextInput: number | null;
+    contextWindow: number | null;
+  };
+  /** The running turn: its busy word, start, tokens written, and a retry in progress. */
+  turn?: {
+    verb: string;
+    startedAt: number;
+    waited: number;
+    tokens: number;
+    retry?: string;
+  };
+  /** Files this session changed while the app ran, each against its first version. */
+  changes?: {
+    path: string;
+    kind: 'added' | 'modified' | 'deleted';
+    diff: DiffView;
+    at: string;
+  }[];
   showThinking: boolean;
   expandTools: boolean;
   todos: Todo[];
@@ -153,6 +190,11 @@ export interface Interaction {
   command?: string;
   before?: string;
   after?: string;
+  diff?: DiffView;
+  /** The words an 'allow command prefix' answer would allow, for a command. */
+  prefix?: string;
+  /** Why the core asks, in its words. */
+  reason?: string;
   choices?: string[];
   multiple?: boolean;
   status: 'pending' | 'recorded';
@@ -234,9 +276,12 @@ export interface Settings {
   endpoint: string;
   protocol: 'openai' | 'anthropic';
   credentialFiles: string[];
+  /** Values the model may use by name, as `settings.json` keeps them. */
+  variables: Record<string, string>;
+  /** Names of the saved secrets, used as %NAME%: never a value. */
+  secrets: string[];
   updateCheck: boolean;
-  uiFontSize: number;
-  codeFontSize: number;
+  textSize: TextSize;
   keybindings: Record<string, string | string[]>;
 }
 export interface WorkbenchSnapshot {
@@ -250,6 +295,8 @@ export interface WorkbenchSnapshot {
   runtime?: {
     connected: boolean;
     configured: boolean;
+    /** Whether a key is saved; the key itself never reaches the window. */
+    hasKey?: boolean;
     error?: string;
     processId?: number;
     observedAt?: string;

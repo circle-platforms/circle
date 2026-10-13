@@ -1,3 +1,4 @@
+import { dateLocale } from '../i18n/index.ts';
 /**
  * A time as people read it. The core sends ISO times: today's show as `14:05`, earlier ones
  * as `10 Oct 14:05` (with the year when it is not this one). Anything else, such as the
@@ -7,12 +8,12 @@ export function shownTime(at: string, now = new Date()): string {
   if (!/^\d{4}-\d{2}-\d{2}T/.test(at)) return at;
   const date = new Date(at);
   if (Number.isNaN(date.getTime())) return at;
-  const time = date.toLocaleTimeString('en-GB', {
+  const time = date.toLocaleTimeString(dateLocale(), {
     hour: '2-digit',
     minute: '2-digit',
   });
   if (date.toDateString() === now.toDateString()) return time;
-  const day = date.toLocaleDateString('en-GB', {
+  const day = date.toLocaleDateString(dateLocale(), {
     day: 'numeric',
     month: 'short',
     ...(date.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }),
@@ -25,5 +26,5 @@ export function fullTime(at: string): string | undefined {
   const date = new Date(at);
   return Number.isNaN(date.getTime())
     ? undefined
-    : date.toLocaleString('en-GB');
+    : date.toLocaleString(dateLocale());
 }

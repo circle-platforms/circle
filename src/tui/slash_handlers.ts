@@ -18,8 +18,11 @@ import {
   isFolderTrusted,
   loadSettings,
   saveSettingsChange,
+  VARIABLE_NAME,
+  settingsForRun,
   type CircleSettings,
 } from '../settings.js';
+import { removeSecret, saveSecret, secretNames } from '../secrets.js';
 import type {
   Picker,
   PickerItem,
@@ -27,6 +30,11 @@ import type {
 } from '../ink/components/picker.js';
 import { palette } from '../ink/theme.js';
 import { stripAnsi } from '../ink/string_width.js';
+import {
+  isSessionMode,
+  SESSION_MODES,
+  type SessionMode,
+} from '../approvals.js';
 import { transcriptRows, type ScreenState } from './render.js';
 import { elapsed, type Job } from '../jobs.js';
 import { emptyUsage } from '../types.js';
@@ -80,6 +88,8 @@ export interface CommandHost {
   followJobs(list: Picker, rows: () => PickerItem[]): void;
   // The footer's ctx is unknown until the next answer (after /undo and /redo, as in 0.5.0).
   clearContextMeter(): void;
+  // A value typed on a masked card, never in the input box; null when cancelled.
+  secretValue(body: string): Promise<string | null>;
 }
 type Handler = (host: CommandHost, args: string) => Promise<void> | void;
 
@@ -87,6 +97,7 @@ type Handler = (host: CommandHost, args: string) => Promise<void> | void;
 // credentials and busy-aware toggles are in: they touch neither the session nor the model.
 const BUSY_OK = new Set([
   'yolo',
+  'mode',
   'approvals',
   'settings',
   'session',
@@ -298,6 +309,105 @@ function yolo(host: CommandHost, args: string): void {
   );
 }
 
+const MODE_NOTICES: Record<SessionMode, string> = {
+  manual: 'Manual · asking before each change and command',
+  'accept-edits':
+    'Accept edits · workspace file edits run without asking, commands and deletes still ask',
+  plan: 'Read-only on · writes and shell are blocked, /plan.md is allowed',
+  auto: 'Auto on · tool calls run without asking',
+};
+// The modes as the frame's corner word spells them.
+const MODE_WORDS: Record<SessionMode, string> = {
+  manual: 'manual',
+  'accept-edits': 'accept edits',
+  plan: 'read-only',
+  auto: 'auto',
+};
+const MODE_META: Record<SessionMode, string> = {
+  manual: 'asking before each change and command',
+  'accept-edits': 'workspace edits run without asking',
+  plan: 'writes and shell are blocked · plan.md is allowed',
+  auto: 'tool calls run without asking',
+};
+
+// /mode with no argument moves to the next mode; shift+tab does the same.
+function mode(host: CommandHost, args: string): void {
+  const runtime = host.runtime;
+  const token = args
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, '-');
+  const current = runtime.mode;
+  let want: SessionMode;
+  if (!token)
+    want =
+      SESSION_MODES[
+        (SESSION_MODES.indexOf(current) + 1) % SESSION_MODES.length
+      ]!;
+  else if (isSessionMode(token)) want = token;
+  else if (token === 'yolo') want = 'auto';
+  else {
+    host.flash(`Usage: /mode [${SESSION_MODES.join('|')}]`);
+    return;
+  }
+  if (want === current) {
+    host.flash(`Mode is already ${want.replace('-', ' ')}`);
+    return;
+  }
+  runtime.setMode(want);
+  host.notice(MODE_NOTICES[want]);
+}
+// The mode list from /settings: enter uses a mode in this session, ctrl+s
+// also writes default_mode, as /effort does for the thinking depth.
+function modePicker(host: CommandHost): void {
+  const now = host.runtime.mode;
+  let saved: SessionMode | '' = '';
+  try {
+    saved = loadSettings(host.home).default_mode;
+  } catch {
+    /* An unreadable settings.json marks no default. */
+  }
+  const apply = (want: SessionMode, asDefault: boolean): void => {
+    if (asDefault) {
+      saveSettingsChange(host.home, (file) => {
+        file.default_mode = want;
+      });
+      host.settings.default_mode = want;
+    }
+    if (!asDefault && host.runtime.mode === want) {
+      host.flash(`Mode is already ${MODE_WORDS[want]}`);
+      return;
+    }
+    host.runtime.setMode(want);
+    host.notice(
+      MODE_NOTICES[want] + (asDefault ? ' · saved as the default' : ''),
+    );
+  };
+  host.picker(
+    'Session mode',
+    SESSION_MODES.map((mode) => ({
+      key: mode,
+      label: MODE_WORDS[mode],
+      current: mode === now,
+      meta: [MODE_META[mode], mode === saved ? 'default' : '']
+        .filter(Boolean)
+        .join(' · '),
+    })),
+    (item) => apply(item.key as SessionMode, false),
+    {
+      hint: 'enter uses it in this session · ctrl+s also makes it the default',
+      focusKey: now,
+      keys: {
+        'ctrl+s': (item) => {
+          if (!item) return;
+          host.closePicker();
+          apply(item.key as SessionMode, true);
+        },
+      },
+    },
+  );
+}
+
 function thinking(host: CommandHost, args: string): void {
   if (args.trim()) {
     effort(host, args);
@@ -397,13 +507,79 @@ const APPROVAL_WORDS: Record<string, string> = {
   reject: 'rejected',
   revoke: 'revoked',
 };
+// The merged pattern list from disk (the user's file plus a trusted
+// project's), live on the policy at once; /reload refreshes it too.
+function refreshAllowedPatterns(host: CommandHost): void {
+  const merged = settingsForRun(host.home, host.workspace).settings
+    .allowed_commands;
+  host.settings.allowed_commands = merged;
+  host.runtime.policy.setAllowedCommands(merged);
+}
+// /approvals add <pattern>: a wildcard rule in the user's settings.json;
+// matching commands run without asking, in every session.
+function approvalsAdd(host: CommandHost, pattern: string): void {
+  if (!pattern) {
+    host.flash('Usage: /approvals add <pattern>');
+    return;
+  }
+  if (host.settings.allowed_commands.includes(pattern)) {
+    host.flash(`"${pattern}" is already allowed`);
+    return;
+  }
+  saveSettingsChange(host.home, (file) => {
+    file.allowed_commands = [...new Set([...file.allowed_commands, pattern])];
+  });
+  refreshAllowedPatterns(host);
+  host.notice(`Allowed · commands matching "${pattern}" run without asking`);
+}
+// /approvals remove <pattern|number>: drops it from the user's settings; a
+// trusted project's copy of the same pattern survives, and says so.
+function approvalsRemove(host: CommandHost, target: string): void {
+  if (!target) {
+    host.flash('Usage: /approvals remove <pattern|number>');
+    return;
+  }
+  const merged = host.settings.allowed_commands;
+  let pattern = target;
+  if (/^\d+$/.test(target)) {
+    const found = merged[Number(target) - 1];
+    if (!found) {
+      host.flash(`No pattern number ${target}`);
+      return;
+    }
+    pattern = found;
+  } else if (!merged.includes(pattern)) {
+    host.flash(`No pattern "${pattern}"`);
+    return;
+  }
+  saveSettingsChange(host.home, (file) => {
+    file.allowed_commands = file.allowed_commands.filter(
+      (entry) => entry !== pattern,
+    );
+  });
+  refreshAllowedPatterns(host);
+  host.notice(
+    host.settings.allowed_commands.includes(pattern)
+      ? `Removed from your settings · the project still allows "${pattern}"`
+      : `Removed · commands matching "${pattern}" ask again`,
+  );
+}
 function approvals(host: CommandHost, args: string): void {
   const runtime = host.runtime;
   const store = runtime.policy.store;
   const thread = runtime.session.id;
-  const parts = args.split(/\s+/).filter(Boolean);
+  const trimmed = args.trim();
+  const parts = trimmed.split(/\s+/).filter(Boolean);
   if (!parts.length) {
     approvalsList(host);
+    return;
+  }
+  if (parts[0] === 'add') {
+    approvalsAdd(host, trimmed.slice(3).trim());
+    return;
+  }
+  if (parts[0] === 'remove') {
+    approvalsRemove(host, trimmed.slice(6).trim());
     return;
   }
   if (parts[0] === 'revoke') {
@@ -428,6 +604,12 @@ function approvals(host: CommandHost, args: string): void {
         `  ${index + 1}. ${rule.tool} · ${rule.label || rule.pattern}`,
     ),
   ];
+  const patterns = host.settings.allowed_commands;
+  if (patterns.length)
+    lines.push(
+      'Command patterns from settings:',
+      ...patterns.map((pattern, index) => `  ${index + 1}. ${pattern}`),
+    );
   const recent = store.log(thread).slice(-5);
   if (recent.length)
     lines.push(
@@ -438,6 +620,8 @@ function approvals(host: CommandHost, args: string): void {
       ),
     );
   if (rules.length) lines.push('Revoke one: /approvals revoke <number>');
+  if (patterns.length)
+    lines.push('Remove one: /approvals remove <pattern|number>');
   host.notice(lines.join('\n'));
 }
 // /approvals with nothing after it: the rules as a list; enter on one revokes it.
@@ -447,6 +631,7 @@ function approvalsList(host: CommandHost): void {
   const thread = runtime.session.id;
   const rules = store.rules(thread);
   const recent = store.log(thread).slice(-5);
+  const patterns = host.settings.allowed_commands;
   const items: PickerItem[] = rules.map((rule, index) => {
     const label = rule.label || rule.pattern;
     return {
@@ -455,14 +640,27 @@ function approvalsList(host: CommandHost): void {
       meta: `always · ${rule.tool}`,
     };
   });
+  patterns.forEach((pattern, index) => {
+    items.push({
+      key: `pattern:${index}`,
+      label: `${rules.length + index + 1}. Allow: ${pattern}`,
+      meta: 'settings · execute',
+    });
+  });
   items.push({ key: 'close', label: `${items.length + 1}. Close` });
   const choose = (item: PickerItem): void => {
-    if (!item.key.startsWith('revoke:')) return;
-    const rule = store.revoke(thread, Number(item.key.slice(7)));
-    if (rule)
-      host.notice(
-        `Revoked · ${rule.tool} · ${rule.label || rule.pattern} · the next call like it will ask again`,
-      );
+    if (item.key.startsWith('revoke:')) {
+      const rule = store.revoke(thread, Number(item.key.slice(7)));
+      if (rule)
+        host.notice(
+          `Revoked · ${rule.tool} · ${rule.label || rule.pattern} · the next call like it will ask again`,
+        );
+      return;
+    }
+    if (item.key.startsWith('pattern:')) {
+      const pattern = patterns[Number(item.key.slice(8))];
+      if (pattern) approvalsRemove(host, pattern);
+    }
   };
   const move = (step: number) => (): void => {
     const picker = host.state.picker;
@@ -490,6 +688,7 @@ function approvalsList(host: CommandHost): void {
             )
             .join(' · ')
         : '',
+      '/approvals add <pattern> allows commands by pattern',
     ]
       .filter(Boolean)
       .join(' · '),
@@ -856,6 +1055,11 @@ function settingsList(host: CommandHost, focusKey?: string): void {
       meta: `${runtime.thinkingLevel || 'default'} · /effort`,
     },
     {
+      key: 'default_mode',
+      label: 'default mode',
+      meta: MODE_WORDS[host.settings.default_mode || 'manual'],
+    },
+    {
       key: 'endpoint',
       label: 'endpoint',
       meta: `${auth.protocol} · ${auth.base_url || '—'}`,
@@ -881,6 +1085,10 @@ function settingsList(host: CommandHost, focusKey?: string): void {
     };
     if (opens[item.key]) {
       await host.command(...opens[item.key]!);
+      return;
+    }
+    if (item.key === 'default_mode') {
+      modePicker(host);
       return;
     }
     if (item.key === 'theme')
@@ -920,7 +1128,7 @@ function setThinking(host: CommandHost, level: string, saved = false): void {
     3000,
   );
 }
-// shift+tab: the next depth, for this session.
+// alt+t: the next depth, for this session.
 export function cycleThinking(host: CommandHost): void {
   if (host.runtime.busy) {
     host.flash(BUSY_WORDS.effort!);
@@ -963,7 +1171,7 @@ function effort(host: CommandHost, args: string): void {
     })),
     (item) => setThinking(host, item.key),
     {
-      hint: 'enter uses it in this session · ctrl+s also makes it the default · shift+tab cycles',
+      hint: 'enter uses it in this session · ctrl+s also makes it the default · alt+t cycles',
       focusKey: now || undefined,
       keys: {
         'ctrl+s': (item) => {
@@ -1406,6 +1614,145 @@ async function tree(
   });
   if (args.trim() && host.state.picker) host.state.picker.query = args.trim();
 }
+// Variables as Windows writes them: `NAME=value` sets one, `NAME=` removes it, and the model
+// writes %NAME% in a tool's arguments. A secret is a variable whose value it never sees.
+const MAX_VARIABLE = 2000;
+const assignment = (text: string) => {
+  const match = text.match(/^([^=\s]+)\s*(?:=(.*))?$/s);
+  return match ? { name: match[1]!.toUpperCase(), value: match[2] } : undefined;
+};
+const NAME_RULE =
+  'a name is capital letters, digits and _, starting with a letter';
+function variablesList(host: CommandHost): void {
+  const saved = host.settings.variables;
+  host.picker(
+    'Variables',
+    [
+      ...Object.entries(saved).map(([name, value]) => ({
+        key: 'variable:' + name,
+        label: `${name}=${value}`,
+        meta: 'variable',
+      })),
+      ...secretNames(host.home).map((name) => ({
+        key: 'secret:' + name,
+        label: `${name}=••••••••`,
+        meta: 'secret',
+      })),
+      {
+        key: 'new-variable',
+        label: 'new variable',
+        meta: '/variables NAME=value',
+      },
+      { key: 'new-secret', label: 'new secret', meta: '/secrets NAME' },
+    ],
+    (item) => {
+      const [kind, name = ''] = item.key.split(':');
+      host.setDraft(
+        kind === 'variable'
+          ? `/variables ${name}=${saved[name] ?? ''}`
+          : kind === 'secret'
+            ? `/secrets ${name}`
+            : item.key === 'new-variable'
+              ? '/variables '
+              : '/secrets ',
+      );
+    },
+    {
+      hint: 'enter puts the command in the input box · NAME= removes',
+      empty: 'no variables',
+    },
+  );
+}
+/** The model's next request is told the variables and the secrets' names anew. */
+function variablesChanged(host: CommandHost, next: Record<string, string>) {
+  host.settings.variables = next;
+  host.runtime.options.settings.variables = next;
+  saveSettingsChange(host.home, (saved) => {
+    saved.variables = next;
+  });
+  host.runtime.refreshPrompt();
+}
+function variables(host: CommandHost, args: string): void {
+  const text = args.trim();
+  if (!text) return variablesList(host);
+  const parsed = assignment(text);
+  if (!parsed || !VARIABLE_NAME.test(parsed.name)) {
+    host.fail(`Usage: /variables NAME=value · ${NAME_RULE}`);
+    return;
+  }
+  const { name, value } = parsed;
+  const saved = host.settings.variables;
+  if (value === undefined) {
+    host.notice(
+      name in saved
+        ? `${name}=${saved[name]}`
+        : secretNames(host.home).includes(name)
+          ? `${name} is a secret · /secrets ${name} sets it`
+          : `No variable ${name}`,
+    );
+    return;
+  }
+  if (secretNames(host.home).includes(name)) {
+    host.fail(`${name} is a secret · /secrets ${name} sets it`);
+    return;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    if (!(name in saved)) {
+      host.flash(`No variable ${name}`);
+      return;
+    }
+    const { [name]: _removed, ...rest } = saved;
+    variablesChanged(host, rest);
+    host.notice(`Removed variable ${name}`);
+    return;
+  }
+  if (trimmed.length > MAX_VARIABLE) {
+    host.fail('A variable is at most 2,000 characters');
+    return;
+  }
+  variablesChanged(host, { ...saved, [name]: trimmed });
+  host.notice(`${name}=${trimmed} · the model writes %${name}% to use it`);
+}
+async function secrets(host: CommandHost, args: string): Promise<void> {
+  const text = args.trim();
+  if (!text) return variablesList(host);
+  const parsed = assignment(text);
+  if (!parsed || !VARIABLE_NAME.test(parsed.name)) {
+    host.fail(`Usage: /secrets NAME · ${NAME_RULE}`);
+    return;
+  }
+  const { name, value } = parsed;
+  if (value !== undefined) {
+    if (value.trim()) {
+      // The value would be on the screen and in the input box's history
+      host.fail(
+        `Type a secret's value on its masked card: /secrets ${name}, then enter`,
+      );
+      return;
+    }
+    if (!removeSecret(host.home, name)) host.flash(`No secret ${name}`);
+    else {
+      host.runtime.refreshPrompt();
+      host.notice(`Removed secret ${name}`);
+    }
+    return;
+  }
+  if (name in host.settings.variables) {
+    host.fail(`${name} is a variable · /variables ${name}= removes it first`);
+    return;
+  }
+  const typed = await host.secretValue(
+    `${name}\nThe model knows only the name and writes %${name}% in a tool's arguments; Circle puts this value in when the tool runs.`,
+  );
+  if (!typed) {
+    host.flash('No secret saved');
+    return;
+  }
+  saveSecret(host.home, name, typed);
+  host.runtime.refreshPrompt();
+  host.notice(`Saved secret ${name} · the model writes %${name}% to use it`);
+}
 async function clone(host: CommandHost): Promise<void> {
   const runtime = host.runtime;
   const session = runtime.store.fork(runtime.session.id, host.workspace);
@@ -1425,6 +1772,7 @@ const HANDLERS: Record<string, Handler> = {
   hotkeys: (host) => host.notice(hotkeysText()),
   plan,
   yolo,
+  mode,
   thinking,
   details,
   themes,
@@ -1443,6 +1791,8 @@ const HANDLERS: Record<string, Handler> = {
   import: importSession,
   copy,
   settings: (host) => settingsList(host),
+  variables,
+  secrets,
   effort,
   logout,
   jobs,

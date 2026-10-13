@@ -18,6 +18,13 @@ The endpoint key is **not** read from the environment. Circle reads it only from
 | `CIRCLE_NO_UPDATE_CHECK` | `1`, `true`, `yes` or `on` turns off the daily [update reminder](cli.md#the-reminder). | unset |
 | `VISUAL`, `EDITOR` | Used by `ctrl+g` and `/editor`, in that order. May include arguments, such as `code --wait`. | `vi`, or `notepad` on Windows |
 
+## Browser
+
+| Variable | Effect | Default |
+|---|---|---|
+| `CIRCLE_BROWSER` | The Chrome, Edge or other Chromium-based browser the terminal's [browser tools](tools.md#the-browser) start, by the path of its program. | Chrome, then Edge, then Chromium where they are usually installed |
+| `CIRCLE_BROWSER_HEADLESS` | `1` starts that browser without a window, for tests. | unset |
+
 ## Background jobs
 
 | Variable | Effect | Default |

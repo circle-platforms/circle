@@ -76,6 +76,7 @@ export interface ScreenState {
   waiting: boolean;
   planMode: boolean;
   autoMode: boolean;
+  acceptEdits?: boolean;
   todos: Todo[];
   planStart?: number;
   queue?: { steering: string[]; followUp: string[] };
@@ -572,8 +573,14 @@ export function renderScreen(
           p.reset,
       );
   }
-  const mode = state.planMode ? 'read-only' : state.autoMode ? 'auto' : '';
-  const modeSgr = state.planMode ? p.green : p.yellow;
+  const mode = state.planMode
+    ? 'read-only'
+    : state.autoMode
+      ? 'auto'
+      : state.acceptEdits
+        ? 'accept edits'
+        : '';
+  const modeSgr = state.planMode ? p.green : state.autoMode ? p.yellow : p.blue;
   if (state.dialog)
     bottom.push(
       ...dialogRows(

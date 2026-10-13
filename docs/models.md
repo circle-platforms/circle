@@ -14,11 +14,11 @@ The first time you run `circle`, setup asks three questions:
 2. The key. It shows as dots.
 3. The model.
 
-When Circle was set up before, an empty `enter` keeps the saved URL or key.
+When Circle was set up before, an empty `enter` keeps the saved URL. It keeps the saved key only while the URL stays on the saved endpoint's host and port, such as another path on the same gateway; a URL on another host needs its key typed, so a key is never sent to a provider it was not given for.
 
 Between the key and the model, Circle asks the endpoint for its model list, with a two-and-a-half-second timeout per request. OpenAI discovery tries `<base>/models` with a bearer token, then `<base>/v1/models` if the base has no version suffix. Anthropic discovery uses `<base>/v1/models` with `x-api-key`, without doubling an existing `/v1`. A URL containing `anthropic` makes Anthropic the first protocol tried; otherwise OpenAI is first. The URL that answered is the one saved. When the endpoint lists its models, the model question is that list: type to search it, and a model it does not list can still be used, from the row `use "…"`. When it cannot be asked, Circle asks whether the API is OpenAI-style or Anthropic-style, and you type the model id your provider documents. A typed id is not checked, and no model list is ever made up.
 
-Without the full-screen interface (`-p` or `--line` in a terminal before Circle is set up), the same questions are asked line by line, and the listed models are numbered to pick from.
+Without the full-screen interface (`-p` or `--line` in a terminal before Circle is set up), the same questions are asked line by line, and the listed models are numbered to pick from. The desktop application asks them in its connection form; see [The desktop application](desktop.md#first-start).
 
 The key is saved in `credentials.json` and the rest in `settings.json`. See [Settings](settings.md). `circle -m <id>` tries a model for one run without saving it.
 
@@ -41,7 +41,7 @@ A model cannot be switched while a turn runs. The footer shows cost and context 
 
 ## Change the endpoint or the key
 
-Type `/login` in a session. It asks the same questions as setup, on its list's own line, with the saved URL filled in to keep or edit and an empty `enter` keeping the saved key. The session switches to the new model at once, and the connection is saved as with setup. `esc` on the key goes back to the URL; anywhere else it leaves `/login`. Nothing is saved before a model is given.
+Type `/login` in a session. It asks the same questions as setup, on its list's own line, with the saved URL filled in to keep or edit. An empty `enter` on the key keeps the saved key while the URL stays on the saved host; for another host it asks for the key. The session switches to the new model at once, and the connection is saved as with setup. `esc` on the key goes back to the URL; anywhere else it leaves `/login`. Nothing is saved before a model is given.
 
 Outside a session, `circle --init` runs the same setup. Both keep your other settings. See [CLI](cli.md#setting-up-again).
 
@@ -57,7 +57,7 @@ Circle asks models for extended thinking when the protocol supports it. The dept
 
 - `/effort` lists the depths. `enter` uses one for the rest of this run; `ctrl+s` also saves it as `default_thinking` in `settings.json`.
 - `/effort <level>` and `/thinking <level>` set it for the rest of this run.
-- `shift+tab` switches to the next depth.
+- `alt+t` switches to the next depth.
 - `--thinking <level>` sets it for one run and is never saved.
 - `CIRCLE_REASONING_EFFORT` sets it for a run and wins over `default_thinking`.
 

@@ -14,6 +14,7 @@ import { CheckpointStore, type Session } from './checkpoint_store.js';
 import { attachPrompt } from './mentions.js';
 import { prepareToolCall, RecoverableToolError } from './tool_call_compat.js';
 import { redact } from './redact.js';
+import { expandVariables, secretRedactor } from './secrets.js';
 import { httpStatus } from './model_guard.js';
 import { validateAttachments } from './media.js';
 export type ApprovalDecision =
@@ -24,6 +25,15 @@ export type ApprovalDecision =
   // a rejection with the user's reason, which the model reads in the tool result
   | { decision: 'reject'; message: string };
 export interface HarnessOptions {
+  /** The variables, read for each call: %NAME% in arguments becomes the value. */
+  variables?: () => Record<string, string>;
+  /** The saved secrets, read for each call: variables whose values the model never sees. */
+  secrets?: () => Record<string, string>;
+  /**
+   * Hides secrets' values in text the model reads, given the values a call used. One shared
+   * with the runtime's background jobs knows every value a secret had.
+   */
+  redact?: (text: string, used?: Record<string, string>) => string;
   model: ChatModel;
   tools: Tool[];
   store: CheckpointStore;
@@ -84,7 +94,15 @@ export class Harness {
     }
   >();
   private active?: Promise<{ answer: string; usage: Usage }>;
+  /** Secrets' values hidden as %NAME% in text the model reads. */
+  readonly redact: (text: string, used?: Record<string, string>) => string;
   constructor(readonly options: HarnessOptions) {
+    this.redact =
+      options.redact ??
+      secretRedactor(
+        () => options.secrets?.() ?? {},
+        () => options.variables?.() ?? {},
+      );
     this.sessionId = options.session.id;
     this.bus = options.bus ?? new EventBus(this.sessionId);
     this.tools = options.tools;
@@ -465,6 +483,7 @@ export class Harness {
     signal: AbortSignal,
   ): Promise<Message> {
     let call = original;
+    let secrets: Record<string, string> = {};
     let content = '';
     let status: 'success' | 'error' = 'success';
     let recoverable = false;
@@ -476,21 +495,49 @@ export class Harness {
       const prepared = prepareToolCall(call, this.tools);
       call = prepared.call;
       const tool = prepared.tool;
+      // The values go in once, before anything is decided: what is checked and approved is
+      // what runs. The call the person sees and a rule keeps has plain variables' values and
+      // secrets' names; a tool whose arguments a model reads keeps the names when it runs.
+      const variables =
+        tool.variables === false ? {} : (this.options.variables?.() ?? {});
+      secrets =
+        tool.variables === false || tool.variables === 'plain'
+          ? {}
+          : (this.options.secrets?.() ?? {});
+      const used = new Set<string>();
+      const raw = call.args;
+      let resolved = expandVariables(raw, { ...variables, ...secrets }, used);
+      call = { ...call, args: expandVariables(raw, variables) };
+      // After the arguments were checked, from the values: the model cannot give these itself
+      const facts = tool.approvalFacts?.(resolved, this.sessionId);
+      if (facts) {
+        call = { ...call, args: { ...call.args, ...facts } };
+        resolved = { ...resolved, ...facts };
+      }
       if (
         this.readOnly &&
         tool.effect !== 'read' &&
         !this.options.planFileMutation?.(call)
       )
         throw new Error('read-only mode: this tool cannot run');
-      const found = this.options.policy.review(call.name, call.args);
+      // A command's effects are those of what it runs: a value can make it delete
+      const found = this.options.policy.review(call.name, resolved);
       if (found.verdict === 'DENY')
         throw new Error(found.message || found.reason);
+      // A command the settings' allowed_commands patterns cover runs without
+      // asking: in every mode, including the always-asking calls and the
+      // headless run that cannot show a card.
+      const settingsAllowed = this.options.policy.allowedBySettings(
+        call.name,
+        call.args,
+      );
       if (
+        !settingsAllowed &&
         tool.effect !== 'read' &&
         tool.approval !== false &&
         (this.options.policy.needsApproval(
           call.name,
-          call.args,
+          resolved,
           this.options.approvalSessionId ?? this.sessionId,
         ) ||
           (this.options.headless && found.verdict === 'ASK_FORCED'))
@@ -529,9 +576,16 @@ export class Harness {
       )
         throw new Error('read-only mode: this tool cannot run');
       this.bus.emit('tool_start', { payload: { ...call } });
+      const args = resolved;
+      const usedSecrets = [...used].filter((name) =>
+        Object.hasOwn(secrets, name),
+      );
       const context = {
         signal,
         sessionId: this.sessionId,
+        callId: call.id,
+        ...(used.size ? { rawArgs: structuredClone(raw) } : {}),
+        ...(usedSecrets.length ? { secretNames: usedSecrets } : {}),
         imageInput: this.model.imageInput,
         emitAttachments: (items: MediaAttachment[]) => {
           if (!acceptingAttachments)
@@ -561,8 +615,8 @@ export class Harness {
         },
       };
       content = this.options.toolBoundary
-        ? await this.options.toolBoundary(guardedTool, call.args, context)
-        : await guardedTool.run(call.args, context);
+        ? await this.options.toolBoundary(guardedTool, args, context)
+        : await guardedTool.run(args, context);
       if (typeof content !== 'string') throw new Error('tool must return text');
       signal.throwIfAborted();
     } catch (error) {
@@ -573,6 +627,9 @@ export class Harness {
     } finally {
       acceptingAttachments = false;
     }
+    // A command or a page may show a secret back: the model reads its name instead, for the
+    // values the call used and the ones saved now
+    content = this.redact(content, secrets);
     return {
       id: randomUUID(),
       role: 'tool',

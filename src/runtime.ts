@@ -4,9 +4,19 @@ import { readFileSync } from 'node:fs';
 import type { ChatModel, Message, ToolCall } from './types.js';
 import { GatewayModel, EFFORT_LEVELS } from './model.js';
 import { CheckpointStore, type Session } from './checkpoint_store.js';
-import { defaultPolicy, DEFAULT_CREDENTIAL_FILES } from './approvals.js';
+import {
+  defaultPolicy,
+  DEFAULT_CREDENTIAL_FILES,
+  type SessionMode,
+} from './approvals.js';
 import { Sandbox } from './sandbox.js';
 import { buildTools, type Todo } from './tools.js';
+import {
+  loadSecrets,
+  MAX_SECRET,
+  secretNames,
+  secretRedactor,
+} from './secrets.js';
 import { buildSystemPrompt } from './system_prompt.js';
 import { Harness, type ApprovalDecision } from './harness.js';
 import { EventBus } from './events.js';
@@ -17,7 +27,12 @@ import { fromJsonl, toSessionBundle } from './session_export.js';
 import { projectDataDir, circleHome, normalizeWorkspace } from './paths.js';
 import { McpManager } from './mcp_loader.js';
 import { ExtensionHost } from './extensions.js';
-import { isFolderTrusted, settingsForRun } from './settings.js';
+import {
+  isFolderTrusted,
+  saveSettingsChange,
+  settingsForRun,
+  VARIABLE_NAME,
+} from './settings.js';
 import { BUILTIN_SLASH } from './tui/slash_commands.js';
 import { discoverCustomCommands } from './commands.js';
 import { LspManager } from './lsp_tool.js';
@@ -135,6 +150,8 @@ export class AgentRuntime {
   readonly bus = new EventBus();
   readonly sandbox: Sandbox;
   readonly jobs: JobRegistry;
+  /** Hides secrets' values in what the model reads, from calls and background jobs. */
+  readonly redact: (text: string, used?: Record<string, string>) => string;
   readonly catalog: ModelCatalog;
   private childJobOwners = new Map<string, import('./jobs.js').JobOwner>();
   private closing = false;
@@ -193,6 +210,7 @@ export class AgentRuntime {
       options.home,
       this.sandbox.credentialFiles,
       (path) => this.sandbox.resolvePath(path),
+      options.settings.allowed_commands,
     );
     this.jobs = new JobRegistry(this.sandbox, (kind, job) => {
       if (kind === 'job_ended') this.userShells?.ended(job);
@@ -201,6 +219,13 @@ export class AgentRuntime {
         tags: { session_id: job.sessionId },
       });
     });
+    // A background command can print a secret: its notice reaches the model and history.
+    // Calls and notices share what values each secret had.
+    this.redact = secretRedactor(
+      () => loadSecrets(this.options.home),
+      () => this.options.settings.variables ?? {},
+    );
+    this.jobs.redact = this.redact;
     this.userShells = new UserShells(this.jobs, this.store, {
       sessionId: () => this.session.id,
       busy: () => this.busy,
@@ -251,6 +276,7 @@ export class AgentRuntime {
       this.store.rename(this.session.id, this.runOptions.session_name);
     this.harness = this.createHarness(options.model);
     this.todos = restoredTodos(this.harness.messages);
+    this.applyDefaultMode();
     this.bus.setRunId(this.session.id);
     if (!options.model)
       void this.catalog.refreshIfStale(() =>
@@ -303,6 +329,7 @@ export class AgentRuntime {
         askQuestions(this.options.home, this.sandbox, args, context.signal, {
           ask: this.options.question,
           secret: this.options.secret,
+          keep: (name, value) => this.keepVariable(name, value),
         }),
       plan: async (enabled, context) => {
         if (!enabled && !this.options.question)
@@ -317,7 +344,12 @@ export class AgentRuntime {
                   options: [
                     {
                       label: 'implement plan',
-                      description: 'Leave read-only mode',
+                      description: 'Leave read-only mode, ask before edits',
+                    },
+                    {
+                      label: 'implement plan, accept edits',
+                      description:
+                        'Leave read-only mode, edit workspace files without asking',
                     },
                     {
                       label: 'continue planning',
@@ -339,8 +371,14 @@ export class AgentRuntime {
             answers = undefined;
           }
           const chosen = Array.isArray(answers) ? answers.flat() : [];
+          if (chosen.includes('implement plan, accept edits')) {
+            this.setMode('accept-edits');
+            return 'Read-only mode disabled. File edits inside the workspace are accepted without asking.';
+          }
           if (!chosen.includes('implement plan'))
             return 'The user kept read-only mode active. Continue planning.';
+          this.setMode('manual');
+          return 'Read-only mode disabled.';
         }
         this.setPlanMode(enabled);
         return enabled ? 'Read-only mode enabled.' : 'Read-only mode disabled.';
@@ -439,6 +477,7 @@ export class AgentRuntime {
         });
         const childTools = (custom?.tools ?? this.allTools).filter(
           (tool) =>
+            tool.subagents !== false &&
             tool.name !== 'task' &&
             tool.name !== 'compact_conversation' &&
             tool.name !== 'plan_enter' &&
@@ -473,6 +512,7 @@ export class AgentRuntime {
                         this.options.secret!(request, signal, origin),
                       )
                   : undefined,
+                keep: (name, value) => this.keepVariable(name, value),
               },
             ),
         });
@@ -498,6 +538,9 @@ export class AgentRuntime {
               : tool,
         );
         const child: Harness = new Harness({
+          variables: () => this.options.settings.variables,
+          secrets: () => loadSecrets(this.options.home),
+          redact: this.redact,
           model: childModel,
           tools: ownedChildTools,
           store: this.store,
@@ -584,6 +627,9 @@ export class AgentRuntime {
     // A new or resumed session after the integrations loaded keeps their subagents.
     if (this.integrationsReady) this.describeSubagents(tools);
     const harness = new Harness({
+      variables: () => this.options.settings.variables,
+      secrets: () => loadSecrets(this.options.home),
+      redact: this.redact,
       model: this.extensions.model(model),
       tools,
       store: this.store,
@@ -700,8 +746,34 @@ export class AgentRuntime {
         extensionTools: this.extensions.tools(),
         userHome: this.options.userHome,
         localContext: this.options.localContext,
+        variables: this.options.settings.variables,
+        secrets: secretNames(this.options.home),
       },
     );
+  }
+  /** The variables or the secrets changed: the next request tells the model. */
+  refreshPrompt(): void {
+    this.refreshSystemPrompt();
+  }
+  /**
+   * Keeps a value the person gave as a Circle variable, in the settings and for this run;
+   * the model's next request lists it.
+   */
+  keepVariable(name: string, value: string): void {
+    if (!VARIABLE_NAME.test(name))
+      throw new Error(
+        'a variable name is capital letters, digits and _, starting with a letter',
+      );
+    if (secretNames(this.options.home).includes(name))
+      throw new Error(`${name} is a secret; it keeps its own value`);
+    if (value.length > MAX_SECRET || /[\r\n]/.test(value))
+      throw new Error('a variable is one line of at most 4,096 characters');
+    const next = { ...(this.options.settings.variables ?? {}), [name]: value };
+    this.options.settings.variables = next;
+    saveSettingsChange(this.options.home, (saved) => {
+      saved.variables = { ...(saved.variables ?? {}), [name]: value };
+    });
+    this.refreshSystemPrompt();
   }
   private refreshSystemPrompt(): void {
     this.harness.system = this.systemPrompt(this.harness.model.model);
@@ -806,6 +878,7 @@ export class AgentRuntime {
       this.options.workspace,
       this.options.modelOverride,
     ).settings;
+    this.policy.setAllowedCommands(this.options.settings.allowed_commands);
     this.integrationsReady = undefined;
     await this.initialize();
   }
@@ -824,6 +897,22 @@ export class AgentRuntime {
           : '[Circle system] Plan mode is now OFF. Previous plan-mode constraints no longer apply. Implement changes subject to normal approval.',
       },
     ]);
+  }
+  get mode(): SessionMode {
+    return this.harness.planMode ? 'plan' : this.policy.mode(this.session.id);
+  }
+  // Plan leaves the approval mode at manual, so leaving plan asks again.
+  setMode(mode: SessionMode): void {
+    this.setPlanMode(mode === 'plan');
+    this.policy.setMode(this.session.id, mode === 'plan' ? 'manual' : mode);
+  }
+  // A saved default_mode starts each session. A plan mode restored from the
+  // transcript wins over it, and --yolo, applied after construction, wins
+  // over both.
+  private applyDefaultMode(): void {
+    const wanted = this.options.settings.default_mode;
+    if (!wanted || this.harness.planMode || this.mode === wanted) return;
+    this.setMode(wanted);
   }
   setModel(model: string): void {
     if (this.busy) throw new Error('a turn is running');
@@ -965,6 +1054,7 @@ export class AgentRuntime {
     this.todos = [];
     this.harness = this.createHarness(this.options.model);
     this.todos = restoredTodos(this.harness.messages);
+    this.applyDefaultMode();
     this.bus.setRunId(this.session.id);
     this.extensions.emit('session_start', {
       workspace: this.options.workspace,
@@ -980,6 +1070,7 @@ export class AgentRuntime {
     this.session = session;
     this.harness = this.createHarness(this.options.model);
     this.todos = restoredTodos(this.harness.messages);
+    this.applyDefaultMode();
     this.bus.setRunId(session.id);
   }
   async importSession(text: string): Promise<void> {
@@ -990,6 +1081,7 @@ export class AgentRuntime {
       this.session = session;
       this.harness = this.createHarness(this.options.model);
       this.todos = restoredTodos(this.harness.messages);
+      this.applyDefaultMode();
       this.bus.setRunId(session.id);
       this.extensions.emit('session_start', {
         workspace: this.options.workspace,
@@ -999,7 +1091,13 @@ export class AgentRuntime {
     }
     await this.newSession();
     this.store.append(this.session.id, messages);
-    this.harness.planMode = restoredPlanMode(messages);
+    const restored = restoredPlanMode(messages);
+    // The imported transcript decides plan mode. A saved default_mode may
+    // have turned plan on inside newSession; setPlanMode(false) then records
+    // the correction, so resuming this session reads the same state. Without
+    // that it is a no-op and the assignment behaves as before.
+    if (restored) this.harness.planMode = true;
+    else this.setPlanMode(false);
     this.todos = restoredTodos(messages);
     if (typeof header.title === 'string')
       this.store.rename(this.session.id, header.title);

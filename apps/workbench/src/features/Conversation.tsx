@@ -22,13 +22,32 @@ import {
 } from 'lucide-react';
 import { DropdownMenu } from 'radix-ui';
 import { BUILTIN_SLASH } from '../../../../src/tui/slash_commands';
+import { slashText } from '../model/slash-text';
 import { useRuntime } from '../app/context';
 import { currentSession, visibleMessages, EFFORTS } from '../model/state';
 import { fullTime, shownTime } from '../model/time';
-import type { Attachment, DialogId, PanelId } from '../model/types';
+import type { Attachment, DialogId, Message, PanelId } from '../model/types';
 import { Button, IconButton, FileChip, Status } from '../components/common';
 import { Markdown } from '../components/Markdown';
-import { ToolMessage } from '../components/ToolMessage';
+import { ToolGroup, TurnRow } from '../components/ToolGroup';
+import { MessageView } from '../components/MessageView';
+import {
+  BrowserDialogRequest,
+  BrowserHandoffRequest,
+  CertificateChoiceRequest,
+} from './BrowserDialog';
+import { useBrowserState } from './useBrowserState';
+import { InlineRequest } from './InlineRequest';
+import {
+  ContextRing,
+  EffortMenu,
+  ModeMenu,
+  ModelMenu,
+  MODE_TEXT,
+} from './Composer';
+import { nextMode, sessionMode } from '../model/state';
+import type { SessionMode } from '../model/types';
+import { t, tn } from '../i18n';
 interface Props {
   onDialog: (dialog: DialogId, selection?: string) => void;
   onPanel: (panel: PanelId, selection?: string) => void;
@@ -36,6 +55,8 @@ interface Props {
   onFile: (path: string) => void;
   onAttach: () => void;
   onCommand: () => void;
+  finding: boolean;
+  setFinding: (value: boolean | ((value: boolean) => boolean)) => void;
 }
 const MEDIA_TYPES = new Set([
   'image/png',
@@ -47,6 +68,39 @@ const MEDIA_TYPES = new Set([
 const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
 const mediaFiles = (files: FileList): File[] =>
   Array.from(files).filter((file) => MEDIA_TYPES.has(file.type));
+// A transcript item: a message, or the tool calls between two messages, folded together.
+type TranscriptItem =
+  | { kind: 'message'; message: Message }
+  | { kind: 'tools'; id: string; rows: Message[] };
+function groupMessages(messages: Message[]): TranscriptItem[] {
+  const items: TranscriptItem[] = [];
+  // An answer with no words of its own, only thinking before its calls, folds in with
+  // them: a turn reads as your message, a few folded lines, and the answer.
+  const quiet = (message: Message) =>
+    message.role === 'assistant' &&
+    message.at !== 'streaming' &&
+    !message.text.trim() &&
+    !message.attachments?.length;
+  for (const message of messages) {
+    const last = items.at(-1);
+    if ((message.role === 'tool' && message.tool) || quiet(message)) {
+      if (last?.kind === 'tools') last.rows.push(message);
+      // Keyed by the message the calls follow, which stays when a call's result arrives.
+      else
+        items.push({
+          kind: 'tools',
+          id: 'tools-' + (message.parentId ?? message.id),
+          rows: [message],
+        });
+    } else items.push({ kind: 'message', message });
+  }
+  return items;
+}
+// How a queued message goes: steering joins the running turn, a follow-up waits for its end.
+const QUEUE_KIND: Record<string, () => string> = {
+  steering: () => t('steering'),
+  'follow-up': () => t('follow-up'),
+};
 export function Conversation({
   onDialog,
   onPanel,
@@ -54,6 +108,8 @@ export function Conversation({
   onFile,
   onAttach,
   onCommand,
+  finding,
+  setFinding,
 }: Props) {
   const { snapshot, runtime, perform, act, notify } = useRuntime();
   const session = currentSession(snapshot);
@@ -67,7 +123,6 @@ export function Conversation({
   const scroller = useRef<HTMLDivElement>(null);
   const column = useRef<HTMLDivElement>(null);
   const [find, setFind] = useState('');
-  const [finding, setFinding] = useState(false);
   const [findIndex, setFindIndex] = useState(0);
   const [completionIndex, setCompletionIndex] = useState(0);
   const [dismissed, setDismissed] = useState(false);
@@ -78,7 +133,7 @@ export function Conversation({
   const addMedia = async (files: File[]) => {
     for (const file of files) {
       if (file.size > MAX_MEDIA_BYTES) {
-        notify(`${file.name || 'picture'} is over 20 MB`);
+        notify(t('{name} is over 20 MB', { name: file.name || t('picture') }));
         continue;
       }
       const content = await new Promise<string>((resolve, reject) => {
@@ -125,7 +180,7 @@ export function Conversation({
     ? [
         ...BUILTIN_SLASH.map((item) => ({
           name: '/' + item.name,
-          description: item.description,
+          description: slashText(item.name, item.description),
           kind: 'command',
         })),
         ...snapshot.skills.map((item) => ({
@@ -260,7 +315,7 @@ export function Conversation({
         else if (mapped === 'secret.enter') onDialog('secret');
         else if (mapped === 'suspend' || mapped === 'job.background') {
           runtime.request(mapped === 'suspend' ? 'suspend' : 'background');
-          notify('host request recorded; no process changed');
+          notify(t('host request recorded; no process changed'));
         } else if (mapped === 'message.followup')
           act(() => runtime.send('follow-up'));
         else if (mapped === 'message.dequeue')
@@ -291,6 +346,9 @@ export function Conversation({
                 EFFORTS[(EFFORTS.indexOf(target.effort) + 1) % EFFORTS.length]!;
             }),
           );
+        // The input box takes shift+tab itself; this is the key elsewhere, or another key
+        else if (mapped === 'mode.cycle')
+          setMode(nextMode(sessionMode(current)));
         else if (mapped === 'model.cycle') {
           const next =
             snapshot.models[
@@ -360,7 +418,7 @@ export function Conversation({
       if (control && event.key.toLowerCase() === 'b') {
         event.preventDefault();
         runtime.request('background');
-        notify('background request recorded; no process was changed');
+        notify(t('background request recorded; no process was changed'));
       }
       if (
         control &&
@@ -390,77 +448,44 @@ export function Conversation({
   const pending = snapshot.interactions.filter(
     (item) => item.sessionId === session.id && item.status === 'pending',
   );
-  const model = snapshot.models.find((item) => item.id === session.model);
-  const stats = messages.reduce(
-    (sum, message) => ({
-      input: sum.input + (message.usage?.input ?? 0),
-      output: sum.output + (message.usage?.output ?? 0),
-    }),
-    { input: 0, output: 0 },
+  // A page's dialog while Circle works also waits here, to be answered from the conversation.
+  const browser = useBrowserState(session.id);
+  // Approvals sit under the call they wait for; the rest after the last message.
+  const toolIds = new Set(
+    messages.flatMap((message) => (message.tool ? [message.tool.id] : [])),
   );
+  const loose = pending.filter(
+    (item) =>
+      !(item.kind === 'approval' && item.callId && toolIds.has(item.callId)),
+  );
+  const setMode = (mode: SessionMode) => {
+    if (mode === sessionMode(session)) return;
+    act(() => runtime.command('mode', mode));
+    notify(MODE_TEXT[mode].detail());
+  };
+  // The turn's clock goes on the row of its latest tools, as Claude's does; before any, on
+  // a row of its own. Waiting for you, it stops.
+  const items = groupMessages(messages);
+  const clock = pending.length ? undefined : session.turn;
+  const asked = items.findLastIndex(
+    (item) => item.kind !== 'tools' && item.message.role === 'user',
+  );
+  const clockAt = items.findLastIndex(
+    (item, index) => index > asked && item.kind === 'tools',
+  );
+  const showRequest = () =>
+    scroller.current
+      ?.querySelector('.inline-request')
+      ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   return (
     <section className="conversation">
-      <header className="conversation-heading">
-        <div>
-          <h1>{session.title}</h1>
-          <span>
-            {workspace.name}
-            <i />
-            {runtime.mode === 'live'
-              ? snapshot.runtime?.connected
-                ? 'connected'
-                : 'disconnected'
-              : 'sample session'}
-          </span>
-        </div>
-        <div className="heading-actions">
-          <IconButton
-            label="find in conversation"
-            onClick={() => setFinding(!finding)}
-          >
-            <Search size={15} />
-          </IconButton>
-          <IconButton label="session tree" onClick={() => onDialog('tree')}>
-            <GitBranch size={15} />
-          </IconButton>
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger asChild>
-              <button className="icon-button" aria-label="session actions">
-                <MoreHorizontal size={17} />
-              </button>
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content className="dropdown" sideOffset={7}>
-                {[
-                  ['rename', 'name'],
-                  ['session details', 'session'],
-                  ['fork', 'fork'],
-                  ['clone', 'clone'],
-                  ['undo on screen', 'undo'],
-                  ['redo on screen', 'redo'],
-                  ['compact context', 'compact'],
-                  ['export', 'export'],
-                  ['share locally', 'share'],
-                ].map(([label, command]) => (
-                  <DropdownMenu.Item
-                    key={command}
-                    onSelect={() => act(() => runtime.command(command!))}
-                  >
-                    {label}
-                  </DropdownMenu.Item>
-                ))}
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
-        </div>
-      </header>
       {finding && (
         <div className="find-bar">
           <Search size={14} />
           <input
             autoFocus
-            aria-label="find text"
-            placeholder="find in conversation"
+            aria-label={t('find text')}
+            placeholder={t('find in conversation')}
             value={find}
             onChange={(event) => {
               setFind(event.target.value);
@@ -479,15 +504,15 @@ export function Conversation({
           <span>
             {find
               ? `${matches.length ? (findIndex % matches.length) + 1 : 0} / ${matches.length}`
-              : 'type to search'}
+              : t('type to search')}
           </span>
           <IconButton
-            label="next match"
+            label={t('next match')}
             onClick={() => setFindIndex((value) => value + 1)}
           >
             <ArrowRight size={13} />
           </IconButton>
-          <IconButton label="close find" onClick={() => setFinding(false)}>
+          <IconButton label={t('close find')} onClick={() => setFinding(false)}>
             <X size={13} />
           </IconButton>
         </div>
@@ -497,16 +522,20 @@ export function Conversation({
           {messages.length === 0 ? (
             <div className="welcome">
               <span className="circle-logo large" />
-              <h2>what are we working on?</h2>
+              <h2>{t('what are we working on?')}</h2>
               <p>
-                Start with a message, a file, or a question about your project.
+                {t(
+                  'Start with a message, a file, or a question about your project.',
+                )}
               </p>
               <button
                 onClick={() => onDialog('trust')}
                 className="workspace-trust"
+                title={workspace.path}
               >
                 <Status value={workspace.trusted ? 'trusted' : 'not trusted'} />
-                {workspace.path}
+                <strong>{workspace.name}</strong>
+                <span>{workspace.path}</span>
               </button>
               <div className="welcome-context">
                 {workspace.instructions.map((item) => (
@@ -518,100 +547,99 @@ export function Conversation({
               </div>
             </div>
           ) : (
-            messages.map((message) => (
-              <div
-                key={message.id}
-                data-message-id={message.id}
-                className={
-                  find && matches[findIndex % matches.length]?.id === message.id
-                    ? 'find-match'
-                    : ''
-                }
-              >
-                {message.role === 'tool' && message.tool ? (
-                  <ToolMessage
-                    tool={message.tool}
-                    expanded={session.expandTools}
+            items.map((item, index) =>
+              item.kind === 'tools' ? (
+                <div key={item.id} data-message-id={item.rows[0]!.id}>
+                  <ToolGroup
+                    rows={item.rows}
+                    expanded={
+                      session.expandTools ||
+                      (!!find &&
+                        item.rows.some(
+                          (row) =>
+                            row.id === matches[findIndex % matches.length]?.id,
+                        ))
+                    }
                     onAgent={onAgent}
                     onFile={onFile}
-                  />
-                ) : message.role === 'notice' ? (
-                  <div className="transcript-notice">{message.text}</div>
-                ) : (
-                  <article className={`message ${message.role}`}>
-                    <header>
-                      <span
-                        className={
-                          message.role === 'user' ? 'user-mark' : 'agent-mark'
-                        }
-                      >
-                        {message.role === 'user' ? (
-                          'you'
-                        ) : (
-                          <span className="circle-logo small" />
-                        )}
-                      </span>
-                      <strong>
-                        {message.role === 'user' ? 'you' : 'circle'}
-                      </strong>
-                      <time
-                        dateTime={fullTime(message.at) && message.at}
-                        title={fullTime(message.at)}
-                      >
-                        {shownTime(message.at)}
-                      </time>
-                      {message.label && (
-                        <span className="label">{message.label}</span>
-                      )}
-                    </header>
-                    {message.thinking && (
-                      <details className="thinking" open={session.showThinking}>
-                        <summary>
-                          <Brain size={13} />
-                          thinking
-                        </summary>
-                        <p>{message.thinking}</p>
-                      </details>
-                    )}
-                    <Markdown text={message.text} />
-                    {message.attachments?.length ? (
-                      <div className="message-attachments">
-                        {message.attachments.map((file) => (
-                          <FileChip
-                            key={file.id}
-                            name={file.name}
-                            onClick={() => onPanel('context')}
-                          />
-                        ))}
-                      </div>
-                    ) : null}
-                    {message.usage && (
-                      <footer>
-                        {[
-                          message.usage.elapsed,
-                          `↑ ${message.usage.input.toLocaleString()}`,
-                          `↓ ${message.usage.output.toLocaleString()}`,
-                          message.usage.cost === null
-                            ? 'cost N/A'
-                            : '$' + message.usage.cost.toFixed(4),
-                        ]
-                          .filter(Boolean)
-                          .join(' · ')}
-                      </footer>
-                    )}
-                  </article>
-                )}
-              </div>
-            ))
+                    turn={index === clockAt ? clock : undefined}
+                  >
+                    {pending
+                      .filter(
+                        (request) =>
+                          request.kind === 'approval' &&
+                          !!request.callId &&
+                          item.rows.some(
+                            (row) => row.tool?.id === request.callId,
+                          ),
+                      )
+                      .map((request) => (
+                        <InlineRequest
+                          key={request.id}
+                          item={request}
+                          onSecret={() => onDialog('secret')}
+                        />
+                      ))}
+                  </ToolGroup>
+                </div>
+              ) : (
+                <div
+                  key={item.message.id}
+                  data-message-id={item.message.id}
+                  className={
+                    find &&
+                    matches[findIndex % matches.length]?.id === item.message.id
+                      ? 'find-match'
+                      : ''
+                  }
+                >
+                  {item.message.role === 'notice' ? (
+                    <div className="transcript-notice">{item.message.text}</div>
+                  ) : (
+                    <MessageView
+                      message={item.message}
+                      showThinking={session.showThinking}
+                      onAttachment={() => onPanel('context')}
+                    />
+                  )}
+                </div>
+              ),
+            )
           )}
-          {session.state === 'waiting' && (
+          {loose.map((item) => (
+            <InlineRequest
+              key={item.id}
+              item={item}
+              onSecret={() => onDialog('secret')}
+            />
+          ))}
+          {session.turn &&
+            browser?.dialogs?.map((dialog) => (
+              <BrowserDialogRequest
+                key={dialog.id}
+                sessionId={session.id}
+                dialog={dialog}
+              />
+            ))}
+          {session.turn &&
+            browser?.certificateChoices?.map((choice) => (
+              <CertificateChoiceRequest
+                key={choice.id}
+                sessionId={session.id}
+                choice={choice}
+              />
+            ))}
+          {session.turn && browser?.control === 'user' && (
+            <BrowserHandoffRequest
+              sessionId={session.id}
+              reason={browser.handoff}
+            />
+          )}
+          {clock && clockAt < 0 && <TurnRow turn={clock} />}
+          {session.state === 'waiting' && runtime.mode !== 'live' && (
             <div className="pending-message">
               <i />
-              {runtime.mode === 'live'
-                ? pending.length
-                  ? 'waiting for your response'
-                  : 'working'
-                : 'waiting for runtime connection'}
+              waiting for runtime connection
               {runtime.mode === 'preview' && (
                 <button onClick={() => onDialog('connect')}>
                   connection settings
@@ -622,7 +650,7 @@ export function Conversation({
           )}
           {session.state === 'paused' && (
             <div className="pending-message">
-              local conversation paused · remote state unverified
+              {t('local conversation paused · remote state unverified')}
             </div>
           )}
         </div>
@@ -632,11 +660,11 @@ export function Conversation({
           <div className="plan">
             <button
               className="plan-title"
-              aria-label="toggle plan"
+              aria-label={t('toggle plan')}
               aria-expanded={!planCollapsed}
               onClick={() => setPlanCollapsed((value) => !value)}
             >
-              <span>plan</span>
+              <span>{t('plan')}</span>
               <span>
                 {
                   session.todos.filter((todo) => todo.status === 'completed')
@@ -669,16 +697,14 @@ export function Conversation({
           </div>
         )}
         {pending.length > 0 && (
-          <button
-            className="interaction-summary"
-            onClick={() => onPanel('activity', pending[0]!.id)}
-          >
+          <button className="interaction-summary" onClick={showRequest}>
             <Status value="waiting" />
             <span>
-              {pending.length}{' '}
-              {runtime.mode === 'live'
-                ? 'requests to review'
-                : 'sample requests to review'}
+              {tn(
+                pending.length,
+                '{n} request waiting for you',
+                '{n} requests waiting for you',
+              )}
             </span>
             <ArrowRight size={13} />
           </button>
@@ -687,10 +713,12 @@ export function Conversation({
           <div className="queue">
             {session.queue.map((item) => (
               <div key={item.id}>
-                <span>{item.kind}</span>
+                <span>{QUEUE_KIND[item.kind]?.() ?? item.kind}</span>
                 <p>{item.text}</p>
                 <IconButton
-                  label={`remove queued ${item.kind}`}
+                  label={t('remove queued {kind}', {
+                    kind: QUEUE_KIND[item.kind]?.() ?? item.kind,
+                  })}
                   onClick={() =>
                     perform(() =>
                       runtime.change((state) => {
@@ -720,12 +748,13 @@ export function Conversation({
                 )
               }
             >
-              return queued messages to draft
+              {t('return queued messages to draft')}
             </button>
           </div>
         )}
         <div
           className="composer"
+          data-mode={sessionMode(session)}
           data-state={session.state}
           onDragOver={(event) => {
             if (Array.from(event.dataTransfer.types).includes('Files'))
@@ -742,7 +771,7 @@ export function Conversation({
             <div
               className="completion-list"
               role="listbox"
-              aria-label="input completions"
+              aria-label={t('input completions')}
             >
               {completions.map((item, index) => (
                 <button
@@ -761,8 +790,9 @@ export function Conversation({
           )}
           <textarea
             ref={input}
-            aria-label="message"
-            placeholder="Ask anything, or describe a change…"
+            rows={1}
+            aria-label={t('message')}
+            placeholder={t('Ask anything, or describe a change…')}
             value={session.draft}
             onChange={(event) => setDraft(event.target.value)}
             onPaste={(event) => {
@@ -822,17 +852,11 @@ export function Conversation({
                   return;
                 }
               }
+              // shift+tab: the next approval mode, as in other coding agents.
               if (event.shiftKey && event.key === 'Tab') {
                 event.preventDefault();
-                perform(() =>
-                  runtime.change((state) => {
-                    const target = currentSession(state);
-                    target.effort =
-                      EFFORTS[
-                        (EFFORTS.indexOf(target.effort) + 1) % EFFORTS.length
-                      ]!;
-                  }),
-                );
+                event.stopPropagation();
+                setMode(nextMode(sessionMode(session)));
                 return;
               }
               if (event.key === 'Enter' && !event.shiftKey) {
@@ -941,97 +965,103 @@ export function Conversation({
               ))}
             </div>
           )}
-          <div className="composer-toolbar">
-            <div>
-              {contributions.map(({ plugin, widget }) => (
-                <PluginBoundary key={widget.id} name={plugin.title}>
-                  <widget.component sessionId={session.id} />
-                </PluginBoundary>
-              ))}
-              <IconButton label="attach files" onClick={onAttach}>
-                <Plus size={17} />
+          <div className="composer-send">
+            {session.state === 'waiting' ? (
+              <IconButton
+                label={t('pause conversation')}
+                onClick={() => {
+                  perform(() =>
+                    runtime.change((state) => {
+                      currentSession(state).state = 'paused';
+                    }),
+                  );
+                  runtime.request('abort');
+                }}
+              >
+                <Square size={13} />
               </IconButton>
-              <button
-                className="text-button model-button"
-                onClick={() => act(() => runtime.command('models'))}
+            ) : session.state === 'paused' ? (
+              <IconButton
+                label={t('resume conversation')}
+                onClick={() => {
+                  perform(() =>
+                    runtime.change((state) => {
+                      currentSession(state).state = 'waiting';
+                    }),
+                  );
+                  runtime.request('resume');
+                }}
               >
-                {session.model}
-                <ChevronDown size={11} />
-              </button>
-              <button
-                className="text-button"
-                onClick={() => act(() => runtime.command('effort'))}
-              >
-                {session.effort}
-                <ChevronDown size={11} />
-              </button>
-            </div>
-            <div>
-              <button
-                className={`mode-button ${session.readOnly ? 'active' : ''}`}
-                onClick={() => act(() => runtime.command('plan'))}
-              >
-                {session.readOnly ? 'read-only' : session.auto ? 'auto' : 'ask'}
-              </button>
-              {session.state === 'waiting' ? (
-                <IconButton
-                  label="pause conversation"
-                  onClick={() => {
-                    perform(() =>
-                      runtime.change((state) => {
-                        currentSession(state).state = 'paused';
-                      }),
-                    );
-                    runtime.request('abort');
-                  }}
-                >
-                  <Square size={13} />
-                </IconButton>
-              ) : session.state === 'paused' ? (
-                <IconButton
-                  label="resume conversation"
-                  onClick={() => {
-                    perform(() =>
-                      runtime.change((state) => {
-                        currentSession(state).state = 'waiting';
-                      }),
-                    );
-                    runtime.request('resume');
-                  }}
-                >
-                  <Play size={14} />
-                </IconButton>
-              ) : null}
-              <button
-                className="send"
-                aria-label="send message"
-                disabled={!session.draft.trim()}
-                onClick={() => act(() => runtime.send())}
-              >
-                <ArrowUp size={17} />
-              </button>
-            </div>
+                <Play size={14} />
+              </IconButton>
+            ) : null}
+            <button
+              className="send"
+              aria-label={t('send message')}
+              disabled={!session.draft.trim()}
+              onClick={() => act(() => runtime.send())}
+            >
+              <ArrowUp size={16} />
+            </button>
           </div>
         </div>
-        <div className="usage-bar">
-          <span>
-            ↑ {stats.input.toLocaleString()} · ↓ {stats.output.toLocaleString()}{' '}
-            <i />
-            cost N/A <i />
-            ctx{' '}
-            {model?.contextWindow
-              ? Math.round(
-                  ((stats.input + stats.output) / model.contextWindow) * 100,
-                ) + '%'
-              : 'N/A'}
-          </span>
-          <button
-            onClick={() =>
-              onDialog(runtime.mode === 'live' ? 'session' : 'preview')
-            }
-          >
-            {runtime.mode === 'live' ? 'session details' : 'frontend preview'}
-          </button>
+        {/* Under the box, as Claude has it: attach and mode on the left, model,
+            thinking depth and the context ring on the right. */}
+        <div className="composer-footbar">
+          <div>
+            <IconButton label={t('attach files')} onClick={onAttach}>
+              <Plus size={16} />
+            </IconButton>
+            <ModeMenu session={session} onMode={setMode} />
+            {contributions.map(({ plugin, widget }) => (
+              <PluginBoundary key={widget.id} name={plugin.title}>
+                <widget.component sessionId={session.id} />
+              </PluginBoundary>
+            ))}
+          </div>
+          <div>
+            {runtime.mode === 'live' && !snapshot.runtime?.configured ? (
+              <button
+                className="footbar-button attention"
+                onClick={() => onDialog('connect')}
+              >
+                {t('connect a model')}
+              </button>
+            ) : (
+              <ModelMenu
+                session={session}
+                models={snapshot.models}
+                enabled={snapshot.settings.enabledModels}
+                onModel={(id) =>
+                  perform(() =>
+                    runtime.change((state) => {
+                      currentSession(state).model = id;
+                    }),
+                  )
+                }
+                onManage={() => act(() => runtime.command('models'))}
+              />
+            )}
+            <EffortMenu
+              session={session}
+              onEffort={(effort) =>
+                perform(() =>
+                  runtime.change((state) => {
+                    currentSession(state).effort = effort;
+                  }),
+                )
+              }
+            />
+            <ContextRing
+              session={session}
+              jobs={jobs}
+              onCompact={() => act(() => runtime.command('compact'))}
+              onJobs={() => onPanel('activity')}
+              onDetails={() =>
+                onDialog(runtime.mode === 'live' ? 'session' : 'preview')
+              }
+            />
+          </div>
         </div>
         {(jobs.length > 0 || agents.length > 0) && (
           <div className="running-strip">

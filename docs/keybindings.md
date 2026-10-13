@@ -41,7 +41,8 @@ Press `?` in an empty input box, or run `/hotkeys`, to see the shortcuts in the 
 | `ctrl+x` | Copy the last answer, the same as `/copy`. |
 | `ctrl+f` | Find text in the conversation. See [Find](#find). |
 | `ctrl+p` | Switch to the next model for this session. See [Choose a model](models.md#switch-models). |
-| `shift+tab` | Switch to the next thinking depth for this session. |
+| `shift+tab` | Switch to the next session mode: manual, accept edits, read-only, auto. See [Modes](usage.md#modes). |
+| `alt+t` | Switch to the next thinking depth for this session. |
 
 The input box grows with what you type: a line break starts a new row and a long line wraps at a space. It grows to 30% of the screen's height (at least five rows), then scrolls to keep the cursor in view. In a draft of several rows, `↑` and `↓` move between the rows; on the first row `↑` goes to earlier messages, and once you are going through them, `↑` and `↓` keep doing that.
 
@@ -219,7 +220,8 @@ A key named there does that action everywhere, in a card or a list too, and no l
 | `suspend` | `ctrl+z` |
 | `model.select` | `ctrl+l` |
 | `model.cycle` | `ctrl+p` |
-| `thinking.cycle` | `shift+tab` |
+| `mode.cycle` | `shift+tab` |
+| `thinking.cycle` | `alt+t` |
 | `thinking.toggle` | `ctrl+t` |
 | `tools.expand` | `ctrl+o` |
 | `editor.external` | `ctrl+g` |

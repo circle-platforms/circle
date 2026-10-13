@@ -1,13 +1,15 @@
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
 import { observePage, captureFailure } from './helpers/diagnostics.mjs';
+import { readViewport, setViewport } from './helpers/viewport.mjs';
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-const root = fileURLToPath(new URL('..', import.meta.url));
+const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
+const appPath = resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? root);
 const require = createRequire(import.meta.url);
 const output = join(root, 'artifacts/interface');
 await mkdir(output, { recursive: true });
@@ -26,8 +28,8 @@ const env = {
 delete env.ELECTRON_RUN_AS_NODE;
 const application = await electron.launch({
   chromiumSandbox: true,
-  executablePath: require('electron'),
-  args: [root],
+  executablePath: process.env.CIRCLE_DESKTOP_EXECUTABLE ?? require('electron'),
+  args: [appPath],
   cwd: root,
   env,
 });
@@ -38,19 +40,17 @@ observePage(page, errors);
 await page
   .getByRole('heading', { name: 'Fix the reconnect race', exact: true })
   .waitFor({ timeout: 30000 });
+let viewportSizing;
 if (process.env.CIRCLE_DESKTOP_CHECK_NARROW) {
   await page.waitForURL(/^circle:\/\/workbench/);
-  await application.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows()[0].setContentSize(1024, 650),
-  );
-  await page.waitForFunction(() => innerWidth <= 1024 && innerHeight <= 650);
+  viewportSizing = await setViewport(application, page, {
+    width: 1024,
+    height: 650,
+  });
   await page.reload();
 }
 const checks = [];
-const viewport = await page.evaluate(() => ({
-  width: innerWidth,
-  height: innerHeight,
-}));
+const viewport = await readViewport(page);
 const sourceCommands = (await import('../../../src/tui/slash_commands.ts'))
   .BUILTIN_SLASH;
 const state = () =>
@@ -81,6 +81,8 @@ const expected = {
   trust: ['dialog', 'workspace trust'],
   settings: ['heading', 'settings'],
   themes: ['heading', 'settings'],
+  variables: ['heading', 'settings'],
+  secrets: ['heading', 'settings'],
   mcp: ['heading', 'mcp servers'],
   extensions: ['heading', 'extensions'],
   approvals: ['heading', 'approvals'],
@@ -126,6 +128,8 @@ try {
         assert.equal(snapshot.sessions[0].readOnly, true);
       else if (command.name === 'yolo')
         assert.equal(snapshot.sessions[0].auto, true);
+      else if (command.name === 'mode')
+        assert.equal(snapshot.sessions[0].mode, 'accept-edits');
       else if (command.name === 'thinking')
         assert.equal(snapshot.sessions[0].showThinking, false);
       else if (command.name === 'details')
@@ -219,7 +223,10 @@ try {
   await page
     .getByRole('button', { name: /execute needs your permission approval/ })
     .click();
-  await page.getByRole('button', { name: 'allow once', exact: true }).click();
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'allow once', exact: true })
+    .click();
   const decision = await state();
   assert.equal(decision.interactions[0].status, 'recorded');
   assert.equal(decision.jobs[0].state, 'running');
@@ -274,10 +281,111 @@ try {
   await page.getByRole('heading', { name: 'models', exact: true }).waitFor();
   checks.push('custom key binding invokes its configured action');
   await reset();
-  await application.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows()[0].setContentSize(800, 650),
+  await page.getByRole('button', { name: 'new session', exact: true }).click();
+  await page
+    .getByRole('heading', { name: 'new session', exact: true })
+    .waitFor();
+  const resetSessionId = new URL(page.url()).hash.split('/').at(-1);
+  const resetDraft = 'preview reset regression draft';
+  await page
+    .getByRole('textbox', { name: 'message', exact: true })
+    .fill(resetDraft);
+  await page.waitForFunction(
+    (draft) =>
+      localStorage.getItem('circle.workbench.preview.v1')?.includes(draft),
+    resetDraft,
   );
-  await page.waitForFunction(() => innerWidth <= 800);
+  const resetBefore = await state();
+  const previewDialog = page.getByRole('dialog', {
+    name: 'frontend preview',
+    exact: true,
+  });
+  const openPreview = async () => {
+    await page
+      .getByRole('button', { name: 'frontend preview', exact: true })
+      .click();
+    await previewDialog.waitFor();
+  };
+  await openPreview();
+  await previewDialog
+    .getByRole('button', { name: 'reset sample data', exact: true })
+    .click();
+  await previewDialog
+    .getByRole('button', { name: 'keep local data', exact: true })
+    .click();
+  assert.deepEqual(await state(), resetBefore);
+  await previewDialog
+    .getByRole('button', { name: 'close dialog', exact: true })
+    .click();
+  await openPreview();
+  await previewDialog
+    .getByRole('button', { name: 'reset sample data', exact: true })
+    .waitFor();
+  assert.equal(
+    await previewDialog
+      .getByRole('button', { name: 'confirm reset', exact: true })
+      .count(),
+    0,
+  );
+  await previewDialog
+    .getByRole('button', { name: 'reset sample data', exact: true })
+    .click();
+  await previewDialog
+    .getByRole('button', { name: 'close dialog', exact: true })
+    .click();
+  assert.deepEqual(await state(), resetBefore);
+  await openPreview();
+  await previewDialog
+    .getByRole('button', { name: 'reset sample data', exact: true })
+    .click();
+  await previewDialog
+    .getByRole('button', { name: 'confirm reset', exact: true })
+    .click();
+  await previewDialog.waitFor({ state: 'hidden' });
+  await page.waitForURL((url) => url.hash === '#/session/session1');
+  await page
+    .getByRole('heading', { name: 'Fix the reconnect race', exact: true })
+    .waitFor();
+  assert.equal(await state(), null);
+  assert.equal(
+    await page
+      .getByRole('textbox', { name: 'message', exact: true })
+      .inputValue(),
+    '',
+  );
+  await page.reload();
+  await page
+    .getByRole('heading', { name: 'Fix the reconnect race', exact: true })
+    .waitFor();
+  assert.equal(await state(), null);
+  assert.equal(
+    await page
+      .getByRole('textbox', { name: 'message', exact: true })
+      .inputValue(),
+    '',
+  );
+  assert.notEqual(new URL(page.url()).hash.split('/').at(-1), resetSessionId);
+  await openPreview();
+  await previewDialog
+    .getByRole('button', { name: 'reset sample data', exact: true })
+    .waitFor();
+  assert.equal(
+    await previewDialog
+      .getByRole('button', { name: 'confirm reset', exact: true })
+      .count(),
+    0,
+  );
+  await previewDialog
+    .getByRole('button', { name: 'close dialog', exact: true })
+    .click();
+  checks.push(
+    'preview reset cancel, confirmation, reopen and persisted data effects',
+  );
+  await reset();
+  const narrowViewport = await setViewport(application, page, {
+    width: 800,
+    height: 650,
+  });
   await page
     .getByRole('dialog', { name: 'inspector', exact: true })
     .waitFor({ state: 'hidden' });
@@ -295,10 +403,16 @@ try {
     JSON.stringify(
       {
         testedAt: new Date().toISOString(),
+        appPath,
+        appPackaged: await page
+          .evaluate(() => window.circleDesktop.info())
+          .then((info) => info.packaged),
         sourceFiles: await sourceEvidence(),
         buildFiles: await rendererEvidence(root),
         commands: sourceCommands.length,
         viewport,
+        viewportSizing,
+        narrowViewport,
         checks,
         errors,
         scope:

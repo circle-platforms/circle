@@ -1,0 +1,22 @@
+import { app } from './app.ts';
+import { common } from './common.ts';
+import { components } from './components.ts';
+import { conversation } from './conversation.ts';
+import { dialogs } from './dialogs.ts';
+import { model } from './model.ts';
+import { pages } from './pages.ts';
+import { panels } from './panels.ts';
+import { plugins } from './plugins.ts';
+
+/** Every interface text in Simplified Chinese, keyed by its English. */
+export const ZH_CN: Record<string, string> = {
+  ...common,
+  ...app,
+  ...components,
+  ...conversation,
+  ...dialogs,
+  ...model,
+  ...pages,
+  ...panels,
+  ...plugins,
+};

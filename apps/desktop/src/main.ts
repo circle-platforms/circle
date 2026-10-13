@@ -10,16 +10,26 @@ import {
   Menu,
   nativeTheme,
   net,
+  Notification,
   protocol,
   shell,
   session,
 } from 'electron';
 import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import originalFs from 'original-fs';
 import { join, dirname, basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { WorkspaceGrants, nativeFile } from './files';
+import { attention } from './attention';
+import {
+  isNativeLocale,
+  nativeText,
+  systemNativeLocale,
+  type NativeLocale,
+} from './native-text';
 import {
   assetPath,
   boundedText,
@@ -29,8 +39,13 @@ import {
   trustedAppUrl,
   validSaveName,
 } from './policy';
-import type { DesktopAction, DesktopInfo } from './contracts';
+import type { DesktopAction, DesktopInfo, UpdateAction } from './contracts';
+import { installation, Updater } from './updater';
+import { releaseTag, updateCheckEnabled } from '../../../src/update.js';
 app.setName('Circle');
+// Windows shows notifications for the id the installer's Start menu shortcut carries.
+if (process.platform === 'win32')
+  app.setAppUserModelId('com.qingshanfeihu.circle');
 const dataPath =
   process.env.CIRCLE_WORKBENCH_DATA_DIR ??
   (existsSync(join(app.getPath('appData'), 'Circle Workbench'))
@@ -62,6 +77,8 @@ protocol.registerSchemesAsPrivileged([
 const grants = new WorkspaceGrants();
 let window: BrowserWindow | null = null;
 let browsers: BrowserSessions | null = null;
+// Certificate exceptions live only in this application process, across window recreation.
+const browserCertificates = new Map<string, Set<string>>();
 let runtime: RuntimeSupervisor | undefined;
 const workspaceSelections = new Map<string, string>();
 const previewMode = process.env.CIRCLE_WORKBENCH_MODE === 'preview';
@@ -69,6 +86,14 @@ const rendererRoot = join(__dirname, 'renderer');
 const fixtureProfile = process.env.CIRCLE_WORKBENCH_TEST_PROFILE
   ? JSON.parse(process.env.CIRCLE_WORKBENCH_TEST_PROFILE)
   : undefined;
+// The window follows the system language; checks read it in English on any machine.
+// (Chromium's --lang does not change the languages a page sees on macOS.)
+const forcedLanguage: NativeLocale | undefined = process.env
+  .CIRCLE_WORKBENCH_LANGUAGE
+  ? systemNativeLocale([process.env.CIRCLE_WORKBENCH_LANGUAGE])
+  : fixtureProfile
+    ? 'en'
+    : undefined;
 function checkSender(event: IpcMainInvokeEvent) {
   if (
     !window ||
@@ -87,94 +112,222 @@ function handle(channel: string, handler: (...args: unknown[]) => unknown) {
 }
 const sendAction = (action: DesktopAction) =>
   window?.webContents.send('circle:action', action);
+// The window says which language it shows; until it does, the system's.
+let interfaceLocale: NativeLocale = 'en';
+const text = (value: string) => nativeText(interfaceLocale)(value);
+// Electron names role items in English; in Chinese the menu names them itself.
+const role = (
+  name: NonNullable<MenuItemConstructorOptions['role']>,
+  english: string,
+): MenuItemConstructorOptions =>
+  interfaceLocale === 'en'
+    ? { role: name }
+    : { role: name, label: text(english) };
 function configureMenu() {
   const menu: MenuItemConstructorOptions[] = [];
   if (process.platform === 'darwin')
     menu.push({
       label: app.name,
       submenu: [
-        { role: 'about' },
+        role('about', 'About Circle'),
         { type: 'separator' },
         {
-          label: 'settings',
+          label: text('settings'),
           accelerator: 'CmdOrCtrl+,',
           click: () => sendAction('settings'),
         },
         { type: 'separator' },
-        { role: 'hide' },
-        { role: 'hideOthers' },
-        { role: 'unhide' },
+        role('hide', 'Hide Circle'),
+        role('hideOthers', 'Hide Others'),
+        role('unhide', 'Show All'),
         { type: 'separator' },
-        { role: 'quit' },
+        role('quit', 'Quit Circle'),
       ],
     });
   menu.push(
     {
-      label: 'file',
+      label: text('file'),
       submenu: [
         {
-          label: 'new session',
+          label: text('new session'),
           accelerator: 'CmdOrCtrl+N',
           click: () => sendAction('new'),
         },
         {
-          label: 'open folder',
+          label: text('open folder'),
           accelerator: 'CmdOrCtrl+O',
           click: () => sendAction('open-folder'),
         },
         { type: 'separator' },
-        { label: 'import session', click: () => sendAction('import') },
-        { label: 'export session', click: () => sendAction('export') },
+        { label: text('import session'), click: () => sendAction('import') },
+        { label: text('export session'), click: () => sendAction('export') },
         { type: 'separator' },
-        { role: process.platform === 'darwin' ? 'close' : 'quit' },
+        process.platform === 'darwin'
+          ? role('close', 'Close Window')
+          : role('quit', 'Quit Circle'),
       ],
     },
     {
-      label: 'edit',
+      label: text('edit'),
       submenu: [
-        { role: 'undo' },
-        { role: 'redo' },
+        role('undo', 'Undo'),
+        role('redo', 'Redo'),
         { type: 'separator' },
-        { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
-        { role: 'selectAll' },
+        role('cut', 'Cut'),
+        role('copy', 'Copy'),
+        role('paste', 'Paste'),
+        role('selectAll', 'Select All'),
       ],
     },
     {
-      label: 'view',
+      label: text('view'),
       submenu: [
-        { label: 'session tree', click: () => sendAction('tree') },
+        { label: text('session tree'), click: () => sendAction('tree') },
         { type: 'separator' },
         {
-          label: 'reload window',
+          label: text('reload window'),
           accelerator: 'CmdOrCtrl+Shift+R',
           click: () => window?.webContents.reload(),
         },
-        { role: 'toggleDevTools' },
+        role('toggleDevTools', 'Toggle Developer Tools'),
         { type: 'separator' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
-        { role: 'togglefullscreen' },
+        role('resetZoom', 'Actual Size'),
+        role('zoomIn', 'Zoom In'),
+        role('zoomOut', 'Zoom Out'),
+        role('togglefullscreen', 'Toggle Full Screen'),
       ],
     },
     {
-      label: 'window',
+      label: text('window'),
       submenu: [
-        { role: 'minimize' },
-        { role: 'zoom' },
+        role('minimize', 'Minimize'),
+        role('zoom', 'Zoom'),
         ...(process.platform === 'darwin'
-          ? [{ role: 'front' } as MenuItemConstructorOptions]
+          ? [role('front', 'Bring All to Front')]
           : []),
       ],
     },
     {
-      label: 'help',
-      submenu: [{ label: 'Circle help', click: () => sendAction('help') }],
+      label: text('help'),
+      submenu: [
+        { label: text('Circle help'), click: () => sendAction('help') },
+      ],
     },
   );
   Menu.setApplicationMenu(Menu.buildFromTemplate(menu));
+}
+// Outside the window: a dock badge for the requests that wait, a busy bar on Windows and
+// Linux, and a notification for a new request or an ended turn while you are elsewhere.
+const announced = new Set<string>();
+// Where a release link leads. Chromium's network stack applies the system's proxy settings,
+// and net.fetch does not report the address a redirect reached, so the redirect is read here.
+function redirectTarget(url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const request = net.request({ url, method: 'HEAD', redirect: 'manual' });
+    const timer = setTimeout(() => {
+      request.abort();
+      reject(Error('the release check timed out'));
+    }, 15000);
+    const done = (value: string) => {
+      clearTimeout(timer);
+      request.abort();
+      resolve(value);
+    };
+    request.on('redirect', (_status, _method, location) =>
+      done(new URL(location, url).href),
+    );
+    request.on('response', () => done(url));
+    request.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    request.end();
+  });
+}
+const updater = new Updater({
+  version: app.getVersion(),
+  home: join(dataPath, 'runtime-home'),
+  folder: join(dataPath, 'updates'),
+  installation: app.isPackaged
+    ? installation(
+        process.platform,
+        process.arch,
+        process.execPath,
+        process.env.ProgramFiles,
+      )
+    : undefined,
+  platform: process.platform,
+  request: (input, init) => net.fetch(input as string, init),
+  latest: async (releases) =>
+    releaseTag(await redirectTarget(`${releases}/latest`)),
+  // On macOS the installer runs on its own at once. On Windows it starts itself again apart
+  // from Circle and returns; Circle waits for that before it quits.
+  launch: (command, args) =>
+    new Promise<void>((resolve, reject) => {
+      const windows = process.platform === 'win32';
+      // In the data folder: a working folder inside the application would keep Windows from
+      // moving it
+      const installer = spawn(command, args, {
+        cwd: dataPath,
+        detached: !windows,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      installer.once('error', reject);
+      if (!windows) {
+        installer.once('spawn', () => resolve());
+        installer.unref();
+        return;
+      }
+      const timer = setTimeout(() => {
+        installer.kill();
+        reject(Error('it did not answer within a minute'));
+      }, 60000);
+      installer.once('exit', (code) => {
+        clearTimeout(timer);
+        if (code === 0) resolve();
+        else reject(Error(`it exited with ${code}`));
+      });
+    }),
+  quit: () => app.quit(),
+  remove: (path) =>
+    originalFs.promises.rm(path, {
+      recursive: true,
+      force: true,
+      maxRetries: 3,
+    }),
+  args: process.argv.slice(1),
+});
+// The daily check, as the terminal's: the packaged application, unless it is turned off.
+function dailyUpdateCheck() {
+  if (!app.isPackaged || fixtureProfile || previewMode) return;
+  let settings: { update_check?: unknown } = {};
+  try {
+    settings = JSON.parse(
+      readFileSync(join(dataPath, 'runtime-home', 'settings.json'), 'utf8'),
+    );
+  } catch {
+    /* no settings yet: the check is on */
+  }
+  if (updateCheckEnabled(settings)) void updater.check(false);
+}
+function showAttention(update: Parameters<typeof attention>[0]) {
+  const state = attention(update, announced, text);
+  if (process.platform !== 'win32') app.setBadgeCount(state.badge);
+  if (process.platform !== 'darwin')
+    window?.setProgressBar(state.busy && !state.badge ? 2 : -1);
+  if (!window || window.isFocused() || fixtureProfile) return;
+  if (state.badge && process.platform === 'darwin')
+    app.dock?.bounce('informational');
+  if (!Notification.isSupported()) return;
+  for (const notice of state.notices) {
+    const note = new Notification({ title: notice.title, body: notice.body });
+    note.on('click', () => {
+      window?.show();
+      window?.focus();
+    });
+    note.show();
+  }
 }
 async function createWindow() {
   window = new BrowserWindow({
@@ -202,7 +355,22 @@ async function createWindow() {
       webSecurity: true,
     },
   });
-  browsers = new BrowserSessions(window);
+  browsers = new BrowserSessions(
+    window,
+    (state) => window?.webContents.send('circle:browser-event', state),
+    () => interfaceLocale,
+    join(dataPath, 'browser-certificates.json'),
+    browserCertificates,
+    // A browser keeps downloads in the system's Downloads folder; an isolated data folder
+    // (development, tests) keeps its own
+    process.env.CIRCLE_WORKBENCH_DATA_DIR
+      ? join(dataPath, 'downloads')
+      : app.getPath('downloads'),
+  );
+  runtime?.onBrowser((request, signal) => {
+    if (!browsers) throw Error('the browser is closed');
+    return browsers.agent(request, signal);
+  });
   window.webContents.setWindowOpenHandler(({ url }) => {
     const allowed = safeExternalUrl(url);
     if (allowed && !fixtureProfile) void shell.openExternal(allowed);
@@ -263,6 +431,7 @@ app
       dataPath,
       runtimeConnected: runtime?.connected ?? false,
       frontendOnly: previewMode,
+      language: forcedLanguage,
     }));
     if (!previewMode) {
       runtime = new RuntimeSupervisor(
@@ -276,9 +445,10 @@ app
           if (allowed && !fixtureProfile) void shell.openExternal(allowed);
         },
       );
-      runtime.subscribe((update) =>
-        window?.webContents.send('circle:runtime-update', update),
-      );
+      runtime.subscribe((update) => {
+        window?.webContents.send('circle:runtime-update', update);
+        showAttention(update);
+      });
       await runtime.start();
     }
     handle('circle:runtime-state', () => {
@@ -307,7 +477,10 @@ app
         fixtureProfile?.files ??
         (
           await dialog.showOpenDialog(window!, {
-            title: purpose === 'import' ? 'import a session' : 'choose files',
+            title:
+              purpose === 'import'
+                ? text('import a session')
+                : text('choose files'),
             properties:
               purpose === 'attach'
                 ? ['openFile', 'multiSelections']
@@ -316,13 +489,13 @@ app
               purpose === 'import'
                 ? [
                     {
-                      name: 'session or text',
+                      name: text('session or text'),
                       extensions: ['json', 'jsonl', 'md', 'txt'],
                     },
                   ]
                 : [
                     {
-                      name: 'supported files',
+                      name: text('supported files'),
                       extensions: [
                         'txt',
                         'md',
@@ -367,13 +540,40 @@ app
         ? [fixtureProfile.workspace]
         : (
             await dialog.showOpenDialog(window!, {
-              title: 'open a workspace',
+              title: text('open a workspace'),
               properties: ['openDirectory'],
             })
           ).filePaths;
       const selected = paths[0] ? await grants.open(paths[0]) : null;
       if (selected) workspaceSelections.set(selected.id, selected.path);
       return selected;
+    });
+    // The files of the folder the runtime works in, when it is trusted: the app's own
+    // workspace, or one you opened and trusted. Reads still go through granted handles.
+    handle('circle:list-workspace', async (workspaceId) => {
+      if (!runtime || typeof workspaceId !== 'string')
+        throw Error('invalid workspace');
+      const snapshot = runtime.state().snapshot;
+      const active = snapshot.sessions.find(
+        (row) => row.id === snapshot.activeSessionId,
+      );
+      const workspace = snapshot.workspaces.find(
+        (row) => row.id === workspaceId,
+      );
+      if (
+        !workspace ||
+        active?.workspaceId !== workspaceId ||
+        !workspace.trusted
+      )
+        return null;
+      const listed = await grants.open(workspace.path);
+      workspaceSelections.set(listed.id, listed.path);
+      return listed;
+    });
+    handle('circle:set-language', (value) => {
+      if (!isNativeLocale(value)) throw Error('invalid language');
+      interfaceLocale = value;
+      configureMenu();
     });
     handle('circle:read-workspace-file', async (workspaceId, fileId) => {
       if (typeof workspaceId !== 'string' || typeof fileId !== 'string')
@@ -389,7 +589,7 @@ app
       const result = fixtureProfile?.exportPath
         ? { canceled: false, filePath: fixtureProfile.exportPath }
         : await dialog.showSaveDialog(window!, {
-            title: 'export session',
+            title: text('export session'),
             defaultPath: name,
           });
       if (result.canceled || !result.filePath) return { saved: false };
@@ -419,6 +619,52 @@ app
       if (!browsers) throw Error('window not ready');
       return browsers.capture(id);
     });
+    handle('circle:set-theme', (dark) => browsers?.setDark(dark === true));
+    handle('circle:browser-tabs', (id, action, tab) => {
+      if (!browsers) throw Error('window not ready');
+      return browsers.tabs(id, action, tab);
+    });
+    handle('circle:browser-dialog', (id, dialog, accept, text, password) => {
+      if (!browsers) throw Error('window not ready');
+      return browsers.dialog(id, dialog, accept, text, password);
+    });
+    handle('circle:browser-dialog-screen', (id, dialog) => {
+      if (!browsers) throw Error('window not ready');
+      return browsers.dialogScreen(id, dialog);
+    });
+    handle('circle:browser-choose', (id, chooser) => {
+      if (!browsers) throw Error('window not ready');
+      return browsers.choose(id, chooser);
+    });
+    handle('circle:browser-keep-download', (id, download, keep) => {
+      if (!browsers) throw Error('window not ready');
+      return browsers.keepDownload(id, download, keep);
+    });
+    handle('circle:browser-certificate', (id, choice, index) => {
+      if (!browsers) throw Error('window not ready');
+      return browsers.certificate(id, choice, index);
+    });
+    handle('circle:browser-permission', (id, request, allow) => {
+      if (!browsers) throw Error('window not ready');
+      return browsers.permission(id, request, allow);
+    });
+    handle('circle:browser-control', (id, action) => {
+      if (!browsers) throw Error('window not ready');
+      return browsers.control(id, action);
+    });
+    handle('circle:browser-reveal', (id, download) => {
+      if (!browsers) throw Error('window not ready');
+      shell.showItemInFolder(browsers.downloadPath(id, download));
+    });
+    updater.subscribe((state) =>
+      window?.webContents.send('circle:update', state),
+    );
+    handle('circle:update-state', () => updater.state);
+    handle('circle:update', (action) => {
+      if (!['check', 'download', 'install'].includes(String(action)))
+        throw Error('invalid update action');
+      return updater.command(action as UpdateAction);
+    });
     handle('circle:window-control', (action) => {
       if (!window) return;
       switch (action) {
@@ -438,8 +684,17 @@ app
           throw Error('invalid window action');
       }
     });
+    interfaceLocale = systemNativeLocale(app.getPreferredSystemLanguages());
     configureMenu();
+    // An update folder it cannot read or clear never keeps the application from starting
+    const updated = await updater.start().then(
+      (state) => state.phase === 'current',
+      () => false,
+    );
     await createWindow();
+    // Started by the installer, which macOS does not bring to the front by itself
+    if (updated) app.focus({ steal: true });
+    dailyUpdateCheck();
     app.on('activate', () => {
       if (!BrowserWindow.getAllWindows().length) void createWindow();
     });
@@ -466,7 +721,7 @@ app.on('before-quit', (event) => {
     .catch((error) => {
       void dialog.showMessageBox({
         type: 'error',
-        message: 'Circle could not stop its runtime',
+        message: text('Circle could not stop its runtime'),
         detail: String(error),
       });
     });

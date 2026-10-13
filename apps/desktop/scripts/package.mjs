@@ -8,10 +8,13 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const outputRoot = process.env.CIRCLE_DESKTOP_OUTPUT_DIR ?? join(root, 'out');
 const stage = join(root, '.stage');
 const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
-// The application carries Circle's version, as the command line does
-const { version } = JSON.parse(
-  await readFile(join(root, '../../package.json'), 'utf8'),
-);
+// The application carries Circle's version, as the command line does. test/update.mjs packages
+// a newer one with CIRCLE_DESKTOP_VERSION to update to.
+const version =
+  process.env.CIRCLE_DESKTOP_VERSION ??
+  JSON.parse(await readFile(join(root, '../../package.json'), 'utf8')).version;
+if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version))
+  throw Error(`invalid desktop version ${version}`);
 await rm(stage, { recursive: true, force: true });
 await mkdir(stage, { recursive: true });
 await cp(join(root, 'dist'), join(stage, 'dist'), { recursive: true });
@@ -114,17 +117,6 @@ if (platform === 'darwin' && process.platform === 'darwin') {
   }
   await rm(content, { recursive: true, force: true });
   archives.push(image);
-} else if (platform === 'win32') {
-  const archive = `${asset}.zip`;
-  await rm(archive, { force: true });
-  execFileSync(
-    process.platform === 'win32' ? 'tar' : 'zip',
-    process.platform === 'win32'
-      ? ['-a', '-c', '-f', archive, relative(outputRoot, paths[0])]
-      : ['-qry', archive, relative(outputRoot, paths[0])],
-    { cwd: outputRoot, stdio: 'inherit' },
-  );
-  archives.push(archive);
 } else if (platform === 'linux') {
   const archive = `${asset}.tar.gz`;
   execFileSync(
@@ -134,6 +126,8 @@ if (platform === 'darwin' && process.platform === 'darwin') {
   );
   archives.push(archive);
 }
+// Windows has no archive: its folder is released only as the .msi, which scripts/msi.ts
+// builds from it
 for (const archive of archives) {
   const sha256 = createHash('sha256')
     .update(await readFile(archive))

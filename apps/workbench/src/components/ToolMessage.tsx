@@ -10,10 +10,16 @@ import {
   Terminal,
   Users,
   FileText,
+  Globe,
 } from 'lucide-react';
 import type { ToolCall } from '../model/types';
 import { useRuntime } from '../app/context';
 import { DataBlock, IconButton, Status } from './common';
+import { DiffBlock } from './DiffBlock';
+import { t } from '../i18n';
+import { relativePath } from '../model/format';
+import { currentSession } from '../model/state';
+import { hasToolInput } from '../model/browser';
 export function ToolMessage({
   tool,
   expanded,
@@ -27,16 +33,24 @@ export function ToolMessage({
 }) {
   const [open, setOpen] = useState(expanded);
   const [tab, setTab] = useState<'output' | 'input'>('output');
-  const { notify } = useRuntime();
+  const { notify, runtime, snapshot } = useRuntime();
+  const root = snapshot.workspaces.find(
+    (workspace) => workspace.id === currentSession(snapshot).workspaceId,
+  )?.path;
   useEffect(() => setOpen(expanded), [expanded]);
   const Icon =
     tool.name === 'task'
       ? Users
       : tool.name === 'execute'
         ? Terminal
-        : tool.before !== undefined
-          ? FileDiff
-          : FileText;
+        : tool.name.startsWith('browser_')
+          ? Globe
+          : tool.diff || tool.before !== undefined
+            ? FileDiff
+            : FileText;
+  // A file change that happened shows its diff under the call; a waiting one shows it in
+  // the request below, and one that failed changed nothing.
+  const diff = tool.diff && tool.status === 'success' ? tool.diff : undefined;
   return (
     <div className={`tool-call tool-${tool.status}`}>
       <button
@@ -49,14 +63,23 @@ export function ToolMessage({
         </span>
         <code>{tool.name}</code>
         <span className="tool-target">
-          {String(
-            tool.input.file_path ??
-              tool.input.command ??
-              tool.input.description ??
-              tool.input.query ??
-              '',
+          {relativePath(
+            String(
+              tool.input.file_path ??
+                tool.input.path ??
+                tool.input.command ??
+                tool.input.description ??
+                tool.input.query ??
+                tool.input.pattern ??
+                tool.input.url ??
+                tool.input.element ??
+                tool.input.key ??
+                '',
+            ),
+            root,
           )}
         </span>
+        {diff && <span className="tool-diff-summary">{diff.summary}</span>}
         <span className="tool-time">{tool.elapsed}</span>
         {tool.status === 'success' ? (
           <Check size={13} />
@@ -67,29 +90,37 @@ export function ToolMessage({
           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </span>
       </button>
+      {diff && !open && (
+        <div className="tool-diff">
+          <DiffBlock diff={diff} compact />
+        </div>
+      )}
       {open && (
         <div className="tool-content">
+          {diff && <DiffBlock diff={diff} />}
           <div className="tool-toolbar">
             <div className="segmented">
               <button
                 className={tab === 'output' ? 'active' : ''}
                 onClick={() => setTab('output')}
               >
-                output
+                {t('output')}
               </button>
-              <button
-                className={tab === 'input' ? 'active' : ''}
-                onClick={() => setTab('input')}
-              >
-                input
-              </button>
+              {hasToolInput(tool.input) && (
+                <button
+                  className={tab === 'input' ? 'active' : ''}
+                  onClick={() => setTab('input')}
+                >
+                  {t('input')}
+                </button>
+              )}
             </div>
             {tool.filePath && (
               <button
                 className="text-button"
                 onClick={() => onFile(tool.filePath!)}
               >
-                open file
+                {t('open file')}
                 <ArrowUpRight size={12} />
               </button>
             )}
@@ -98,31 +129,35 @@ export function ToolMessage({
                 className="text-button"
                 onClick={() => onAgent(tool.agentId!)}
               >
-                agent record
+                {t('agent record')}
                 <ArrowUpRight size={12} />
               </button>
             )}
             <IconButton
-              label="copy tool output"
+              label={t('copy tool output')}
               onClick={() =>
                 copyText(
                   tab === 'input'
                     ? JSON.stringify(tool.input, null, 2)
                     : tool.output,
                 ).then(
-                  () => notify('copied'),
-                  () => notify('clipboard unavailable'),
+                  () => notify(t('copied')),
+                  () => notify(t('clipboard unavailable')),
                 )
               }
             >
               <Copy size={13} />
             </IconButton>
           </div>
-          <DataBlock
-            title={tab === 'input' ? 'raw input' : 'raw output'}
-            value={tab === 'input' ? tool.input : tool.output}
-          />
-          <div className="tool-meta">{tool.id} · sample record</div>
+          {(tab === 'output' || hasToolInput(tool.input)) && (
+            <DataBlock
+              title={tab === 'input' ? t('raw input') : t('raw output')}
+              value={tab === 'input' ? tool.input : tool.output}
+            />
+          )}
+          {runtime.mode !== 'live' && (
+            <div className="tool-meta">{tool.id} · sample record</div>
+          )}
         </div>
       )}
     </div>

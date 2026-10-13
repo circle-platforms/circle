@@ -241,6 +241,8 @@ export interface TurnUsage {
   seconds: number;
   input: number;
   output: number;
+  /** In US dollars; null when a request's price is not known in dollars. */
+  cost?: number | null;
 }
 export function turnUsageRow(usage: TurnUsage): string {
   const p = palette();

@@ -69,14 +69,21 @@ To change or drop a waiting message, take it back into the input box. `↑` in a
 
 ## Modes
 
-Two modes change what Circle is allowed to do. The current one is shown in the bottom-right corner of the input box. Normal mode shows nothing.
+Three modes change what Circle is allowed to do. The current one is shown in the bottom-right corner of the input box. Normal mode (`manual`, asking before each change and command) shows nothing.
 
 | Mode | Turn on | What it does |
 |---|---|---|
-| `read-only` | `/plan` | Circle can read and search, and change only a file named `plan.md`. It cannot run commands or change other files. It writes its plan to `plan.md` for you to review. The model can turn it on itself, and asks you before it turns it off. |
-| `auto` | `/yolo` or `/auto` | Circle stops asking. Every command and file change runs without a card. Use `/yolo off` to go back. |
+| `accept edits` | `/mode accept-edits` | Circle changes files inside the workspace without asking. Commands, deletes and changes outside the workspace still ask. |
+| `read-only` | `/plan` or `/mode plan` | Circle can read and search, and change only a file named `plan.md`. It cannot run commands or change other files. It writes its plan to `plan.md` for you to review. The model can turn it on itself, and asks you before it turns it off: you can answer that it should then accept edits. |
+| `auto` | `/yolo`, `/auto` or `/mode auto` | Circle stops asking. Every command and file change runs without a card. Use `/yolo off` to go back. |
 
-`read-only` wins when both are on. Auto mode applies only to the current conversation and is forgotten when you start a new one. Read [Security](security.md#auto-mode) before you use it.
+`shift+tab` moves to the next mode: manual, accept edits, read-only, auto, and back to manual. `/mode` with no argument does the same, and works while a turn runs; `/mode manual` goes back to asking. Leaving `read-only` returns to manual. Read [Security](security.md#auto-mode) before you use auto.
+
+A mode lives in its conversation: `/new`, `/fork`, `/clone`, `/import` and restarting drop back to manual, unless you save a default. `/settings` → `default mode` (or `default_mode` in [settings](settings.md)) picks the mode every new session starts in — including `-p`, line and RPC runs. A `read-only` state restored from a resumed conversation wins over the saved default, and `--yolo` wins over both in print and line mode.
+
+## Fewer asks for the commands you trust
+
+Instead of a mode, you can allow commands by pattern. `allowed_commands` in [settings](settings.md) holds wildcards (`*` and `?`); a command runs without a card when **every** part of it matches one — so `npm ci && rm -rf dist` needs both `npm *` and `rm -rf *`. A pattern answers even for a command Circle always asks about (`rm -rf`, a force push), and in print and line mode too, but nothing gets past a [refused](security.md#how-commands-are-sorted) command: naming a credential file or `sudo` still stops it. `/approvals add <pattern>` and `/approvals remove <pattern>` edit the list; `/approvals` lists it. A trusted folder's `.circle/settings.json` may add patterns of its own, on top of yours. These are broader than the per-conversation rules an approval card saves — read [Security](security.md#command-patterns-in-settings).
 
 ## The plan
 
@@ -113,3 +120,7 @@ While `task` subagents run, a strip below the footer lists them. Press `↓` in 
 When a task needs a password or token, the model can ask for it without it entering the conversation. A card names the variable and the file it will be written to, such as `API_TOKEN → /path/to/.env`. Press `ctrl+s` (or choose `enter secret`), type the value (it is masked), and press `enter`. The value is written straight to that file as `API_TOKEN=…`, keeping the file's other lines. The model is told it was collected, not what it was. `esc` cancels, and the model is told to ask you to put it in the file yourself; it never asks for the value in chat.
 
 The value must fit on one line and in 4,096 bytes. A request nobody answers is dropped after ten minutes, and the model is told. Without the full-screen interface nobody can type it, so such a request waits out those ten minutes. Read the file name on the card before you enter a value: the model chooses it. See [Security](security.md#secrets).
+
+A secret you keep for later has a name instead. `/secrets NAME` saves one on a masked card; `/secrets` or `/variables` alone lists the variables and the secrets, secrets by name only. The model writes `%NAME%` in a tool's arguments, for example in a browser's password field or a command. Circle puts the value in when the tool runs, and the model only ever reads `%NAME%`. `/variables NAME=value` keeps a plain value the same way, which the model may see. See [Secrets by name](security.md#secrets-by-name).
+
+The model can also ask for such a value when a task needs one you have not saved. For a password it asks a secret question with a name and no file, and the value is kept as a secret. For something like a folder path, a device's address or a user name, the question's card shows the name it will be kept under (`%BACKUP_DIR%`), and your answer is kept as a variable in your settings. Either way the model then writes `%NAME%`, and Circle fills in the value wherever it is used.

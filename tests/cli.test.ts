@@ -6,7 +6,13 @@ import {
   type ServerResponse,
 } from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { pathToFileURL } from 'node:url';
@@ -23,7 +29,11 @@ import { CheckpointStore } from '../src/checkpoint_store.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { ScriptedModel } from '../src/testing.js';
 import { SessionApp } from '../src/tui/session_app.js';
-import { runLineTrust, terminalPrompter } from '../src/line_setup.js';
+import {
+  runLineInit,
+  runLineTrust,
+  terminalPrompter,
+} from '../src/line_setup.js';
 import { cleanup, scratch } from './helpers.js';
 
 type Reply =
@@ -505,6 +515,32 @@ test('--verbose shows tool calls, calls not run, retries and tokens in print and
   assert.match(line.stderr, /^↑ 3\.6k · ↓ 102 · 1 call not run/m);
 });
 
+test('print mode runs the commands the settings allow, without --yolo', async (t) => {
+  const home = scratch(t);
+  const workspace = realpathSync(scratch(t));
+  const replies: Reply[] = [
+    { call: { name: 'execute', args: { command: 'touch made.txt' } } },
+    { call: { name: 'execute', args: { command: 'rm -rf dist' } } },
+    { content: 'done' },
+  ];
+  const endpoint = await gateway(t, replies);
+  setUp(home, endpoint.base, [workspace]);
+  const settings = loadSettings(home);
+  settings.allowed_commands = ['touch *'];
+  saveSettings(settings, home);
+  const run = await circle(home, ['-p', 'work', workspace, '--verbose']);
+  assert.equal(run.code, 0, run.stderr);
+  assert.equal(run.stdout, 'done\n');
+  // the covered command really ran
+  assert.equal(existsSync(join(workspace, 'made.txt')), true);
+  // one no pattern covers still does not run, and says so
+  assert.match(
+    run.stderr,
+    /^ {2}⎿ Bash\(rm -rf dist\) not run · always asks$/m,
+    run.stderr,
+  );
+});
+
 test('stdin: without a prompt the read waits for the end; with one it waits three seconds', async (t) => {
   const { mock } = await import('node:test');
   mock.timers.enable({ apis: ['setTimeout'] });
@@ -581,6 +617,54 @@ test('the trust question asked line by line saves the folder, and no keeps it un
   const yes = await answer('yes\n');
   assert.deepEqual(yes.result?.trusted_folders, [workspace]);
   assert.deepEqual(loadSettings(home).trusted_folders, [workspace]);
+});
+
+test('line setup keeps the saved key only on the saved host; another host needs its own key', async (t) => {
+  const endpoint = await gateway(t, [{ content: 'unused' }], ['line-model']);
+  const answer = async (home: string, text: string) => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    let shown = '';
+    output.on('data', (data) => (shown += data));
+    input.end(text);
+    const result = await runLineInit(home, terminalPrompter(input, output));
+    return { result, shown };
+  };
+  // Set up before for another provider: its key is not sent to this endpoint
+  const elsewhere = scratch(t);
+  const other = defaultSettings();
+  other.initialized = true;
+  other.auth.base_url = 'https://old-provider.example/v1';
+  other.auth.model = 'old-model';
+  saveSettings(other, elsewhere);
+  saveCredentials({ api_key: 'old-provider-key' }, elsewhere);
+  const refused = await answer(elsewhere, `${endpoint.base}/v1\n\n`);
+  assert.equal(refused.result, undefined);
+  assert.match(refused.shown, /API KEY: /);
+  assert.ok(!refused.shown.includes('enter keeps the saved one'));
+  assert.match(
+    refused.shown,
+    /Enter the key for this endpoint: the saved one is for another\./,
+  );
+  assert.deepEqual(endpoint.keys, []);
+  assert.equal(
+    loadSettings(elsewhere).auth.base_url,
+    'https://old-provider.example/v1',
+  );
+  // The same host: empty enters keep the URL and the key
+  const same = scratch(t);
+  const saved = defaultSettings();
+  saved.initialized = true;
+  saved.auth.base_url = `${endpoint.base}/v1`;
+  saved.auth.model = 'old-model';
+  saveSettings(saved, same);
+  saveCredentials({ api_key: 'saved-key' }, same);
+  const kept = await answer(same, '\n\n1\n');
+  assert.match(kept.shown, /API KEY \(enter keeps the saved one\): /);
+  assert.equal(kept.result?.auth.model, 'line-model');
+  assert.deepEqual(endpoint.keys, ['Bearer saved-key']);
+  assert.equal(loadSettings(same).auth.model, 'line-model');
+  assert.equal(loadCredentials(same).api_key, 'saved-key');
 });
 
 // A terminal on standard input without the full-screen interface (`-p` in a terminal): the

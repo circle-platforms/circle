@@ -2,13 +2,18 @@ import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
-const root = fileURLToPath(new URL('..', import.meta.url));
+import {
+  assertViewport,
+  readViewport,
+  setViewport,
+} from './helpers/viewport.mjs';
+const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
 const output = join(root, 'artifacts/live');
 await mkdir(output, { recursive: true });
@@ -16,7 +21,7 @@ const temp = await mkdtemp(join(tmpdir(), 'circle-native-live-'));
 const fixturePath = join(temp, 'model.json');
 const requestsPath = join(temp, 'requests.jsonl');
 const exportPath = join(temp, 'export.jsonl');
-const appPath = process.env.CIRCLE_DESKTOP_APP_PATH ?? root;
+const appPath = resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? root);
 const fixture = {
   requestsPath,
   replies: [
@@ -93,6 +98,7 @@ const errors = [];
 let app;
 let page;
 let gateway;
+let viewportSizing;
 const state = () =>
   page
     .evaluate(() => window.circleDesktop.runtimeState())
@@ -135,14 +141,11 @@ try {
   page.on('pageerror', (error) => errors.push(String(error)));
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   if (process.env.CIRCLE_DESKTOP_TEST_WIDTH) {
-    await app.evaluate(({ BrowserWindow }, width) => {
-      const window = BrowserWindow.getAllWindows()[0];
-      window.show();
-      window.setContentSize(width, 768);
-    }, Number(process.env.CIRCLE_DESKTOP_TEST_WIDTH));
-    await page.waitForFunction(
-      (width) => innerWidth === width,
-      Number(process.env.CIRCLE_DESKTOP_TEST_WIDTH),
+    viewportSizing = await setViewport(
+      app,
+      page,
+      { width: Number(process.env.CIRCLE_DESKTOP_TEST_WIDTH), height: 768 },
+      { show: true },
     );
   }
   const info = await page.evaluate(() => window.circleDesktop.info());
@@ -182,17 +185,23 @@ try {
   checks.push(
     'frontend prompt reaches core but actual write waits for approval',
   );
-  await page.locator('.interaction-summary').click();
-  await page.locator('.activity-row').filter({ hasText: 'write_file' }).click();
-  await page.getByRole('button', { name: 'allow once', exact: true }).click();
+  // The request waits in the conversation, under the call, with the change it makes.
+  const request = page.locator('.inline-request');
+  await request.waitFor();
+  assert.match(await request.locator('.diff-block').innerText(), /new file/);
+  checks.push('approval shows inline in the conversation with its diff');
+  await request
+    .getByRole('button', { name: 'allow once', exact: true })
+    .click();
   await page.getByText('native answer completed', { exact: true }).waitFor();
   if (
     process.env.CIRCLE_DESKTOP_TEST_WIDTH &&
     Number(process.env.CIRCLE_DESKTOP_TEST_WIDTH) <= 1050
   ) {
-    assert.equal(
-      await page.evaluate(() => innerWidth),
-      Number(process.env.CIRCLE_DESKTOP_TEST_WIDTH),
+    assertViewport(
+      await readViewport(page),
+      viewportSizing.target,
+      viewportSizing.scaleFactor,
     );
     await page
       .getByRole('dialog', { name: 'inspector', exact: true })
@@ -222,14 +231,13 @@ try {
       ),
     'question',
   );
-  await page.locator('.interaction-summary').click();
-  await page
-    .locator('.activity-row')
-    .filter({ hasText: 'Choose a target' })
-    .click();
-  await page.getByRole('radio', { name: 'staging' }).check();
-  await page
-    .getByRole('button', { name: 'save response', exact: true })
+  // The question waits in the conversation too, and is answered there.
+  const question = page
+    .locator('.inline-request')
+    .filter({ hasText: 'Choose a target' });
+  await question.getByRole('radio', { name: 'staging' }).check();
+  await question
+    .getByRole('button', { name: 'send answer', exact: true })
     .click();
   await page.getByText('staging target received', { exact: true }).waitFor();
   const afterQuestion = (await readFile(requestsPath, 'utf8'))
@@ -342,8 +350,16 @@ try {
   await app.close();
   app = undefined;
   const gatewayRequests = [];
+  const modelListKeys = [];
+  let modelListDown = false;
   gateway = createServer(async (req, res) => {
     if (req.url === '/v1/models') {
+      modelListKeys.push(req.headers.authorization);
+      if (modelListDown) {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({ data: [{ id: 'native-fixture-model' }] }));
       return;
@@ -408,22 +424,95 @@ try {
     timeout: 45_000,
   });
   page = await app.firstWindow();
-  await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
+  // Nothing is set up yet, so the connection form opens by itself.
+  await page.getByRole('textbox', { name: 'base url', exact: true }).waitFor();
   assert.equal((await state()).runtime.configured, false);
-  await send('/login');
+  checks.push('a first start without a model opens the connection form');
   await page
     .getByRole('textbox', { name: 'base url', exact: true })
     .fill(`http://127.0.0.1:${gateway.address().port}/v1`);
+  // Nothing saved: the key is required
+  assert.equal(
+    await page
+      .getByRole('textbox', { name: 'api key', exact: true })
+      .getAttribute('placeholder'),
+    'required',
+  );
   await page
     .getByRole('textbox', { name: 'api key', exact: true })
     .fill('native-local-key');
+  // First the URL and the key; the endpoint is asked for its models, as setup does
+  await page.getByRole('button', { name: 'next', exact: true }).click();
   await page
-    .getByLabel('connection model', { exact: true })
-    .fill('native-fixture-model');
+    .getByRole('option', { name: 'native-fixture-model', exact: true })
+    .waitFor();
+  await page
+    .getByText('discovered 1 model (openai)', { exact: true })
+    .waitFor();
+  assert.deepEqual(modelListKeys, ['Bearer native-local-key']);
+  assert.equal((await state()).runtime.configured, false);
+  await page
+    .getByRole('option', { name: 'native-fixture-model', exact: true })
+    .click();
   await page.getByRole('button', { name: 'connect', exact: true }).click();
   await waitFor(
     async () => (await state()).runtime.configured,
     'saved connection',
+  );
+  assert.equal(
+    (await state()).settings.endpoint,
+    `http://127.0.0.1:${gateway.address().port}/v1`,
+  );
+  checks.push(
+    'the connection form asks for the URL and key, lists the models the endpoint answered with, and saves the chosen one',
+  );
+  // Again: the saved key is kept only while the URL stays on the saved endpoint's host
+  await send('/login');
+  const keyBox = page.getByRole('textbox', { name: 'api key', exact: true });
+  await keyBox.waitFor();
+  assert.equal(
+    await keyBox.getAttribute('placeholder'),
+    'leave empty to keep the saved key',
+  );
+  await page
+    .getByRole('textbox', { name: 'base url', exact: true })
+    .fill('https://another-provider.example/v1');
+  assert.equal(await keyBox.getAttribute('placeholder'), 'required');
+  assert.equal(await keyBox.evaluate((input) => input.required), true);
+  await page.getByRole('button', { name: 'cancel', exact: true }).click();
+  await keyBox.waitFor({ state: 'detached' });
+  checks.push(
+    'an empty key keeps the saved one only for the saved host; another host needs its key',
+  );
+  // An endpoint that stops listing its models: refresh says so instead of failing
+  modelListDown = true;
+  await page.evaluate(() => {
+    location.hash = '/page/models';
+  });
+  await page
+    .getByRole('button', { name: 'refresh models', exact: true })
+    .click();
+  await page
+    .getByText(
+      'The endpoint did not list its models (http 404). Search for the model id below and use it.',
+      { exact: true },
+    )
+    .waitFor();
+  assert.equal(modelListKeys.at(-1), 'Bearer native-local-key');
+  assert.equal((await state()).runtime.error, undefined);
+  assert(
+    (await state()).models.some((model) => model.id === 'native-fixture-model'),
+  );
+  modelListDown = false;
+  await page.evaluate(
+    (id) => {
+      location.hash = '/session/' + id;
+    },
+    (await state()).activeSessionId,
+  );
+  await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
+  checks.push(
+    'refreshing models from an endpoint that does not list them explains it and keeps the list',
   );
   assert.equal(
     await page.evaluate(() =>
@@ -458,10 +547,11 @@ try {
   const stamp = page.locator('article.message time').last();
   assert.match(await stamp.innerText(), /^\d{2}:\d{2}$/);
   assert.ok(await stamp.getAttribute('title'));
+  // The turn's last answer shows the whole turn: its time, then its tokens
   const usage = await page.locator('article.message footer').last().innerText();
-  assert.match(usage, /^↑ \d/);
+  assert.match(usage, /^\d+s · ↑ \d+ · ↓ \d+ · /);
   checks.push(
-    'message times show as the local clock and usage rows have no empty part',
+    'message times show as the local clock, and the turn line under the last answer gives its time and tokens with no empty part',
   );
   // A picture pasted in the box goes to the model as an image
   await page.evaluate((base64) => {
@@ -593,6 +683,7 @@ try {
         mode: 'live',
         packaged: info.packaged,
         appPath,
+        viewportSizing,
         dataIsolation: true,
         scriptedModel: true,
         externalNodeRequired: false,

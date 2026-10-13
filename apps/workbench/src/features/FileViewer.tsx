@@ -3,6 +3,13 @@ import { FileText, FileDiff, Save, Download, ArrowLeft, X } from 'lucide-react';
 import { useRuntime } from '../app/context';
 import { currentSession } from '../model/state';
 import { Button, IconButton, Status } from '../components/common';
+import { t, tn } from '../i18n';
+// The viewer's three ways to show a file.
+const MODE_LABEL = {
+  file: () => t('file'),
+  diff: () => t('diff'),
+  edit: () => t('edit'),
+};
 export function FileViewer({
   path,
   onClose,
@@ -26,8 +33,8 @@ export function FileViewer({
   if (!file)
     return (
       <div className="empty-state">
-        <h3>file not found</h3>
-        <Button onClick={onClose}>back to conversation</Button>
+        <h3>{t('file not found')}</h3>
+        <Button onClick={onClose}>{t('back to conversation')}</Button>
       </div>
     );
   const before = (file.original ?? '').split('\n');
@@ -40,7 +47,7 @@ export function FileViewer({
           <strong>{file.path}</strong>
           {file.status && <Status value={file.status} />}
         </div>
-        <IconButton label="close file" onClick={onClose}>
+        <IconButton label={t('close file')} onClick={onClose}>
           <X size={15} />
         </IconButton>
       </header>
@@ -52,13 +59,13 @@ export function FileViewer({
               className={mode === item ? 'active' : ''}
               onClick={() => setMode(item)}
             >
-              {item}
+              {MODE_LABEL[item]()}
             </button>
           ))}
         </div>
         <span>
           {file.nativeGrant
-            ? 'local file · disk unchanged'
+            ? t('local file · disk unchanged')
             : 'sample workspace · disk unchanged'}
         </span>
         {mode === 'edit' && (
@@ -69,19 +76,19 @@ export function FileViewer({
                   state.files.find((item) => item.id === file.id)!.draft =
                     value;
                 });
-                notify('buffer saved locally');
+                notify(t('buffer saved locally'));
               })
             }
           >
             <Save size={13} />
-            save buffer
+            {t('save buffer')}
           </Button>
         )}
       </div>
       {mode === 'edit' ? (
         <textarea
           className="code-editor"
-          aria-label="file buffer"
+          aria-label={t('file buffer')}
           spellCheck={false}
           value={value}
           onChange={(event) => setValue(event.target.value)}
@@ -89,7 +96,7 @@ export function FileViewer({
       ) : mode === 'diff' ? (
         <div className="diff-view">
           <div className="diff-column">
-            <header>original</header>
+            <header>{t('original')}</header>
             {before.map((line, index) => (
               <div
                 className={line !== after[index] ? 'removed' : ''}
@@ -101,7 +108,7 @@ export function FileViewer({
             ))}
           </div>
           <div className="diff-column">
-            <header>proposed</header>
+            <header>{t('proposed')}</header>
             {after.map((line, index) => (
               <div
                 className={line !== before[index] ? 'added' : ''}
@@ -125,8 +132,9 @@ export function FileViewer({
       )}
       <footer className="file-view-footer">
         <span>
-          {file.language} · {file.content.split('\n').length} lines
-          {file.truncated ? ' · preview truncated' : ''}
+          {file.language} ·{' '}
+          {tn(file.content.split('\n').length, '{n} line', '{n} lines')}
+          {file.truncated ? ' · ' + t('preview truncated') : ''}
         </span>
         <Button
           disabled={
@@ -145,12 +153,12 @@ export function FileViewer({
                   item.content = value;
                   item.draft = undefined;
                 });
-                notify('file saved');
+                notify(t('file saved'));
               } else notify('write request recorded; disk is unchanged');
             })
           }
         >
-          {runtime.mode === 'live' ? 'save to disk' : 'request file save'}
+          {runtime.mode === 'live' ? t('save to disk') : 'request file save'}
         </Button>
       </footer>
     </section>

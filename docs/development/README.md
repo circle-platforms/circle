@@ -27,12 +27,12 @@ Every change in behaviour needs a test that shows it: the next model request, th
 
 CI runs `npm run check` and the format check on Linux, macOS and Windows (`.github/workflows/check.yml`), and builds and smoke-tests the release packages (`.github/workflows/release.yml`). A job that is configured is not a result: look at the run.
 
-The guides and reference in this folder are published at <https://qingshanfeihu.github.io/circle/>. `.github/workflows/pages.yml` builds the site. Contributing, the security policy and the changelog stay in the repository.
+The English guides and reference in this folder are published at <https://qingshanfeihu.github.io/circle/>. `.github/workflows/pages.yml` builds the site. The TUI contract is in Chinese, and the desktop working notes are under `docs/workbench/`; both stay in the repository and are not pages on the site. Contributing, the security policy and the changelog stay in the repository too.
 
 More:
 
 - [Architecture](architecture.md): the module map.
-- [The TUI contract](tui-contract.md): the rules for everything on screen.
+- [The TUI contract](https://github.com/qingshanfeihu/circle/blob/main/docs/development/tui-contract.md): the rules for everything on screen. It is written in Chinese.
 - [Releasing](releasing.md): cutting a release.
 - [The TypeScript port](migration.md) and [Session data migration](migration-data.md): how 0.5.0 became 1.0.
 - [Register Circle in skills.sh](skills-registry.md).

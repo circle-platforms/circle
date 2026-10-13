@@ -17,7 +17,7 @@ This page lists what does not work as you might expect in the current version, w
 
 - **Going back with `/tree` does not undo file changes.** It changes what the model remembers, not your files.
 - **`/undo` does not make the model forget, and does not revert files.**
-- **`/yolo` turns itself off** on `/new`, `/fork`, `/clone`, `/import` and restart.
+- **`auto` and `accept edits` turn themselves off** on `/new`, `/fork`, `/clone`, `/import` and restart; the session falls back to the `default_mode` saved in the settings, or asks again (`manual`) without one. `read-only` stays with the conversation.
 - **`projects/` in the data folder is mostly not cleaned up.** It keeps the messages that summaries replaced, very long tool results, pasted pictures and screenshots, for every project; only command and job output is removed, a day after its run ended. Delete old folders by hand.
 - **Circle 0.5.0 cannot import the JSONL exports of this version.** This version imports 0.5.0's.
 
@@ -26,13 +26,16 @@ This page lists what does not work as you might expect in the current version, w
 These are gaps to know about before you trust Circle with a repository or a machine you do not fully control. The complete list is in [Security](security.md#what-is-not-protected).
 
 - **`/yolo` also skips the questions Circle always asks**, such as `rm -rf` and force-push.
+- **An `allowed_commands` pattern skips them too** for the commands it matches: `git *` covers a force-push, and patterns match text, not what a command reaches. Keep them narrow.
 - **Custom commands can run shell snippets without asking**, and a trusted folder's commands, skills and instruction files apply at once. Read a repository's `.circle/`, `.opencode/`, `.pi/`, `.claude/` and `.agents/` folders before you trust it.
 - **The credential-file check reads names, not contents.** File tools and commands refuse the listed names, but `ls` and `glob` show them, and a command that reaches a file without naming it (a script, a variable, a copy under another name) is not refused.
 - **A secret can be written to any path the model names.** Check the file on the card before you enter the value.
+- **An empty key keeps the saved key even when the URL moves to another provider**, in `/login` and in the desktop application's connection form. The old provider's key is then sent to the new one. Enter the new key whenever you change the provider.
 
 ## Subagents and tools
 
 - **Tool calls other than `task` in one reply run one after another.** 0.5.0 asked every approval first and then ran all the calls of a reply at the same time; here only `task` calls next to each other run together. To run subagents side by side, the model can start them with `background: true`.
+- **The diff on an `edit_file` card assumes its text appears once.** When the text to replace appears more than once, the card shows the change at the first place, but the tool refuses such an edit unless it replaces every one. The model is told and usually tries again with more context.
 - **`grep` searches for literal text, not regular expressions.** Its description says so and points the model to `rg` in the shell for a regular expression, which asks for approval like any command.
 
 ## Images and screenshots
@@ -65,9 +68,24 @@ If your endpoint is slow or never answers, a turn can take a long time to give u
 
 - **It is not signed by Apple or Microsoft.** macOS asks once whether to open it (System Settings → Privacy & Security → Open Anyway), and Windows SmartScreen may stop it the first time (More info → Run anyway). See [Installation](installation.md#the-desktop-application).
 - **On Linux, its sandbox helper needs root once.** Where unprivileged user namespaces are restricted, as on Ubuntu 24.04 and later, Chromium's sandbox needs `chrome-sandbox` owned by root with the setuid bit; until then the application stops at start. [Installation](installation.md#the-desktop-application) has the two commands.
-- **It does not update itself.** `circle update` updates only the command line; take the new release's file to update the application.
+- **On Linux it does not update itself.** Check now links to the release page: an update cannot keep `chrome-sandbox` owned by root, so the folder is replaced by hand. Releases up to 1.2.0 do not update themselves on any system; install the newer release over them once by hand.
+- **Updating the Windows installation asks for administrator permission**, as installing did, because the `.msi` installs for all users. Declining it leaves the old version, and settings say that the update was not installed.
 - **A waiting steering message cannot be sent at once yet.** The terminal's `enter` on an empty box has no counterpart in the application: the message is read before the model's next step. Waiting messages can be removed one by one, or all put back in the box.
 - **It refuses to start with `--no-sandbox`.** The application enables Chromium's sandbox for every child process; the switch contradicts that and crashed the main process with an access violation when the first child process started. It now exits with an explanation instead. See [electron#54838](https://github.com/electron/electron/issues/54838).
-- **Workspace grants expire with the application.** Reopen a selected folder after restarting it to refresh its read handles. Conversations and pinned input stay in the application's own data folder.
+- **Workspace grants expire with the application.** The files panel lists the folder of the open session again by itself when the folder is trusted; another folder has to be opened again with open folder after a restart. Conversations and pinned input stay in the application's own data folder.
+- **The changes panel shows only what file tools changed while the application ran.** Each file is compared with its version before the session's first change in this run. After a restart the panel starts empty, and a file a command changed is not listed.
+- **Windows shows no count of waiting requests on the taskbar,** only a busy bar. macOS shows the count on the Dock icon, and Linux where the desktop supports it. Windows notifications need the Start menu shortcut the installer makes.
+- **Some words come from Circle's core in English** in the Chinese interface: slash command descriptions, the shortcut list, error messages and reasons for an approval other than the common ones. The terminal interface is English only.
 - **A failed turn's line lasts only while the application runs.** It is shown in the conversation, but not saved with it.
+- **Browser snapshots cannot read a frame from another site.** Same-origin frames and open shadow roots are included; a cross-origin frame's contents are not. Open the frame's address as the main page when you need Circle to read it.
+- **A certificate allowed once is forgotten when Circle exits**, and one trusted for good can be reviewed only in `browser-certificates.json` in the application's data folder (delete an entry there to forget it). Circle cannot tell when Chrome would refuse to let anyone proceed, as for sites that require HTTPS: Electron does not say.
+- **Circle cannot answer a page's own file picker** (`showOpenFilePicker` and the like) when one of its clicks opens one; the result says so, and you can choose in the browser. Dropping files onto a page is not possible either.
+- **In the terminal's browser a click of yours while Circle acts races Circle's**: there is no layer over the page and no take over. Stop the turn first, or let the model hand you the browser. In the desktop panel the layer takes clicks, not keys: keys you press in the page during an action still reach it.
+- **Downloads cannot be paused or cancelled from Circle.** In the terminal's browser a download still arriving when Circle exits is lost.
+- **The terminal has a browser only with Chrome, Edge or Chromium installed**, and only in the full-screen interface. `CIRCLE_BROWSER` names one Circle does not find. The terminal's browser shows permission requests and the choice of a client certificate to you in its window; the model does not see them.
+- **In the terminal's browser an HTTP sign-in that Circle's action meets has no prompt for you** until the model answers it or hands you the browser; the tab keeps loading meanwhile. A sign-in that a page's own requests meet (an image, a script, a fetch) is left to the browser, and the model does not see it.
+- **Secrets are stored unencrypted** in `secrets.json`, protected by your user's file permissions only.
+- **A secret's value is hidden wherever it shows in output, even inside other text.** A password that is a common word, such as `admin`, turns that word into `%NAME%` in every tool result, which can confuse the model and tells it where the password appears. A value that is also a plain variable's value is not hidden, since the model knows it already.
+- **A model that writes its tool call as text in its thinking ends the turn** with "model ended without an answer", as step-3.7-flash sometimes does. Send "continue" to have it try again.
+- **In the desktop browser, a page's prompt() is answered through a request to its own address.** A page whose content security policy forbids requests to its own origin, or a page without an origin (`about:blank`, `data:`), gets no answer: prompt() returns nothing there. Circle takes over Electron's private dialog event to show dialogs in the tab; a test checks alert, confirm and prompt on every Electron upgrade.
 - **The platform pages show what circle-server returns, not more.** Knowledge, work, execution and methods are paired with the circle-server extension and read the server's own records; they hold nothing of their own. They have been checked against circle-server's local development stack only, not a deployed server. The [integration audit](workbench/integration-audit.md) records what remains.

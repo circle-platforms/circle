@@ -12,11 +12,24 @@ Usage notes:
 - If you recommend a specific option, make that the first option in the list and add "(Recommended)" to the end of the label
 - Where no panel is available (line mode), the questions come back as text instead: ask them in your reply and wait for the user
 
+Values to keep (paths, addresses, user names):
+- When a task needs a value only the user knows and later steps will use it again, such as a
+  folder path, a device address or a user name, ask for it at once with a `key` (ENV-style
+  name, e.g. `BACKUP_DIR`) and no `secret`. The user's answer is kept as a Circle variable:
+  afterwards write `%KEY%` in any tool's arguments. Check the variables already listed in
+  your instructions before asking.
+
 Secrets (passwords, tokens, credentials):
-- For any secret, add `secret: true` plus `key` (ENV-style name, e.g. `JUMPHOST_PASS`) and
-  `target_file` (the env file the value should land in, e.g. `~/.config/compile-excel/env`).
-- The user types the value in a masked input (Ctrl+S when prompted); the harness writes
-  `KEY=value` (file mode 600) and the tool result only confirms collection — the value
-  NEVER enters this conversation. Do not ask for secrets in plain questions.
+- When a task needs a password or token the user has not saved, ask for it at once this way
+  rather than stopping or asking in chat.
+- For any secret, add `secret: true` plus `key` (ENV-style name, e.g. `JUMPHOST_PASS`).
+- Without `target_file`, the value is kept as a Circle secret: afterwards write `%KEY%` in any
+  tool's arguments (a command, a browser field, an MCP tool's input) and Circle puts the value in
+  when the tool runs. Check the secrets already listed in your instructions before asking.
+- With `target_file` (the env file the value should land in, e.g. `~/.config/compile-excel/env`),
+  the harness writes `KEY=value` there (file mode 600) instead.
+- The user types the value in a masked input (Ctrl+S when prompted); the tool result only
+  confirms collection — the value NEVER enters this conversation. Do not ask for secrets in
+  plain questions.
 - If secret collection reports unavailable/failed, tell the user to write the credential
   into the target file themselves; never fall back to collecting it in chat.

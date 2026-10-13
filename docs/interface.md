@@ -94,7 +94,7 @@ The input box changes colour and behaviour depending on who has to act.
 
 A card that only says what Circle is doing, such as `Looking for models…` during setup, keeps a faint frame.
 
-At the bottom-right corner a single word shows the mode, but only when it is not the default: `read-only` or `auto`. When both are on, it shows `read-only`. See [Use Circle in the terminal](usage.md#modes).
+At the bottom-right corner a word shows the mode, but only when it is not the default: `accept edits`, `read-only` or `auto`. See [Use Circle in the terminal](usage.md#modes).
 
 ## Lamps
 
@@ -151,7 +151,7 @@ A tool approval, a question from the model, a secret a task asks for, and the fi
 
 If your screen is too short for a long command, the card shows the start of it and how many lines are hidden. Reject if you cannot see enough to approve.
 
-Setup asks one thing at a time on its card. The URL and the key are typed in the card's input row, the key as dots; when Circle was set up before, the empty row says `enter keeps …` and an empty `enter` keeps the saved one. The model is a list of what the endpoint offers, with no numbers: type to search it, and a model it does not list gets a row of its own, `use "…"`, marked `not listed`.
+Setup asks one thing at a time on its card. The URL and the key are typed in the card's input row, the key as dots; when Circle was set up before, the empty row says `enter keeps …` and an empty `enter` keeps the saved one. The saved key is kept only while the URL stays on the saved endpoint's host and port; for another host the row is empty and an empty `enter` asks for the key. The model is a list of what the endpoint offers, with no numbers: type to search it, and a model it does not list gets a row of its own, `use "…"`, marked `not listed`.
 
 ## Dark and light terminals
 

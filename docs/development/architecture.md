@@ -70,6 +70,8 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 | `approvals.ts` | Sorts commands and tool calls, keeps the session's rules and decides what needs your answer. |
 | `sandbox.ts` | Resolves paths (including `/conversation_history/`, `/large_tool_results/` and `/background_jobs/`, which live in the data folder), refuses credential files, runs commands with secret variables stripped from their environment, and stops their process groups. It is a policy boundary, not an operating-system sandbox. |
 | `redact.ts` | Hides passwords and tokens in command and job output. |
+| `secrets.ts` | Variables and saved secrets written `%NAME%`: `secrets.json`, putting values into a call's arguments after its approval, and turning a secret's value back into `%NAME%` in what the model reads. |
+| `browser/` | The conversation browser. `tools.ts` has the `browser_*` tools, each action's site for its approval and the handshake with the person. `page.ts` is the script that reads a page and moves the pointer. `protocol.ts`, `format.ts`, `hosts.ts`, `certificates.ts` and `files.ts` are what both browsers share. `chrome.ts` and `cdp.ts` drive Chrome, Edge or Chromium for the terminal; the desktop's browser is `apps/desktop/src/browser.ts`. |
 | `user_shell.ts` | Your own `!command` and `!!command`. |
 
 ## Sessions and data
@@ -97,7 +99,7 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 
 ## The terminal interface
 
-`src/ink/` draws: it reads keys and terminal reports, builds the palette, and turns state into rows. `src/tui/` decides what is on screen and what a key does. The rules for both are in [The TUI contract](tui-contract.md).
+`src/ink/` draws: it reads keys and terminal reports, builds the palette, and turns state into rows. `src/tui/` decides what is on screen and what a key does. The rules for both are in [The TUI contract](https://github.com/qingshanfeihu/circle/blob/main/docs/development/tui-contract.md).
 
 | Module | What it does |
 |---|---|

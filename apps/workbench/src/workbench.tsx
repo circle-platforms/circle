@@ -4,7 +4,12 @@ import { RuntimeProvider } from './app/context';
 import { PluginProvider } from './plugins/context';
 import type { RuntimePort } from './model/types';
 import type { WorkbenchPlugin, ServiceRegistry } from './plugins/types';
+import { useLocale } from './i18n';
 import './styles/app.css';
+// A new language draws everything again; the route, and so the open page, stays.
+function LocalizedApp() {
+  return <App key={useLocale()} />;
+}
 /** Hosts inject the Circle session port and independent, versioned component plugins. */
 export function CircleWorkbench({
   runtime,
@@ -19,7 +24,7 @@ export function CircleWorkbench({
     <RuntimeProvider runtime={runtime}>
       <PluginProvider plugins={plugins} services={services}>
         <HashRouter>
-          <App />
+          <LocalizedApp />
         </HashRouter>
       </PluginProvider>
     </RuntimeProvider>

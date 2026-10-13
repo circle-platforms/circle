@@ -134,7 +134,7 @@ for (const scopedRun of [false, true])
     await key('ctrl+p');
     assert.equal(runtime.harness.model.model, 'a');
     assert.equal(discoveryCount, beforeCycle);
-    await key('shift+tab');
+    await key('alt+t');
     assert.equal(runtime.thinkingLevel, 'minimal');
     await app.command('models', '');
     app.state.picker!.query = 'b';
