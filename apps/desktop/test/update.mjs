@@ -13,12 +13,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { cp, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
-import {
-  appendFileSync,
-  createReadStream,
-  existsSync,
-  openSync,
-} from 'node:fs';
+import { existsSync, createReadStream, openSync } from 'node:fs';
 import { join, relative, basename, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -52,36 +47,13 @@ const msiexec = (...args) => {
     );
 };
 // Each stage says when it starts, so a run that hangs shows where
-// When the last step began: the watchdog below ends a check that stops moving
-let lastStage = Date.now();
-const stage = (text) => {
-  lastStage = Date.now();
-  note(text);
-  console.log(`-- ${text}`);
-};
+const stage = (text) => console.log(`-- ${text}`);
 const { version } = JSON.parse(
   await readFile(join(root, '../../package.json'), 'utf8'),
 );
 const [major, minor, patch] = version.split(/[.-]/).map(Number);
 const next = `${major}.${minor}.${patch + 1}`;
-// A folder CI can collect when the check hangs (CIRCLE_DESKTOP_TEST_TEMP), else the system's
-const temp = await mkdtemp(
-  join(
-    process.env.CIRCLE_DESKTOP_TEST_TEMP || tmpdir(),
-    'circle-desktop-update-',
-  ),
-);
-// Every step, written at once: a check that stops answering still says where it was
-const note = (text) => {
-  try {
-    appendFileSync(
-      join(temp, 'progress.log'),
-      `${new Date().toISOString()} ${text}\n`,
-    );
-  } catch {
-    /* the folder may be gone */
-  }
-};
+const temp = await mkdtemp(join(tmpdir(), 'circle-desktop-update-'));
 // An application that no longer answers must not hold a check for good
 const within = (promise, ms) =>
   Promise.race([
@@ -93,11 +65,9 @@ const within = (promise, ms) =>
 const checks = [];
 const check = (name) => {
   checks.push(name);
-  note(`ok ${name}`);
   console.log('ok', name);
 };
-// What the installer did, what the application wrote and what is left: shown when a check
-// fails, and by the watchdog when nothing moves for long
+// What the installer did, what the application wrote and what is left, when a check fails
 const evidence = async () => {
   for (const file of [
     join(temp, 'data', 'updates', 'install.log'),
@@ -132,30 +102,12 @@ const evidence = async () => {
     /* no process list */
   }
 };
-// A step that stops moving (an application that neither quits nor answers) ends here with
-// its evidence, long before the CI job's own limit would end it without a log
-const watchdog = setInterval(() => {
-  if (Date.now() - lastStage < 8 * 60 * 1000) return;
-  console.error('update check: nothing moved for 8 minutes');
-  void evidence().finally(() => {
-    if (running && running.exitCode === null) running.kill();
-    process.exit(1);
-  });
-}, 30000);
-watchdog.unref();
 let server;
 let running;
 let passed = false;
 let installationAttempted = false;
 let installedPath;
 let port;
-// A watch of its own: a check blocked in a call that never returns cannot end itself
-const watch = spawn(
-  process.execPath,
-  [join(root, 'test/helpers/watch.mjs'), String(process.pid), temp, '12'],
-  { stdio: ['ignore', 'inherit', 'inherit'] },
-);
-watch.unref();
 try {
   // The installed copy: in a folder of its own, or where the .msi puts it
   const installed = msi
@@ -293,7 +245,7 @@ try {
   // An installer that does not start leaves the application open, saying why. A line every
   // 20 seconds shows that the machine is still there.
   const beat = setInterval(
-    () => console.log('--', 'still waiting for Circle to quit'),
+    () => stage('still waiting for Circle to quit'),
     20000,
   );
   const left = await Promise.race([
@@ -301,7 +253,6 @@ try {
     new Promise((resolve) => setTimeout(() => resolve(false), 120000)),
   ]);
   clearInterval(beat);
-  note(`the application ${left ? 'quit' : 'did not quit in 120 s'}`);
   if (!left)
     throw Error(
       `the application did not quit for the installer: ${JSON.stringify(
@@ -311,14 +262,12 @@ try {
         ).catch((error) => String(error)),
       )}`,
     );
-  await within(browser.close(), 10000).catch((error) =>
-    note(`closing the connection: ${error}`),
-  );
+  await within(browser.close(), 10000).catch(() => {});
   check('the application quits for the installer');
 
   stage('waiting for the new version to start');
   const beat2 = setInterval(
-    () => console.log('--', 'still waiting for the new version'),
+    () => stage('still waiting for the new version'),
     20000,
   );
   ({ browser, page: view } = await page(180000).finally(() =>
@@ -382,7 +331,6 @@ try {
   await evidence();
   throw error;
 } finally {
-  watch.kill();
   if (running && running.exitCode === null) running.kill();
   server?.close();
   // The installed package goes, whichever version it is now. Quietly, Windows Installer

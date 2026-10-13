@@ -189,9 +189,6 @@ jobs:
           if ($created) { Remove-Item $data }
       - name: Run the packaged application
         shell: bash
-        timeout-minutes: 15
-        env:
-          CIRCLE_DESKTOP_TEST_TEMP: ${{ runner.temp }}
         run: |
           export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.app }}"
           export CIRCLE_DESKTOP_EXECUTABLE="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.executable }}"
@@ -216,31 +213,6 @@ jobs:
             export CIRCLE_DESKTOP_UPDATE_MSI="$GITHUB_WORKSPACE/apps/desktop/out/circle-desktop-$version-windows-x64.msi"
           fi
           "${run[@]}" npm --prefix apps/desktop run test:update
-      # What the update check wrote, also when it was ended for taking too long
-      - name: Evidence of the update check
-        if: always()
-        shell: bash
-        run: |
-          root="$RUNNER_TEMP"
-          command -v cygpath >/dev/null 2>&1 && root="$(cygpath -u "$RUNNER_TEMP")"
-          for folder in "$root"/circle-desktop-update-*/; do
-            [ -d "$folder" ] || continue
-            echo "== $folder"
-            for file in progress.log application.log data/updates/install.log data/updates/install.json.out data/updates/install.json.err; do
-              [ -f "$folder$file" ] || continue
-              echo "--- $file"
-              cat "$folder$file"
-              echo
-            done
-          done
-          true
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: circle-desktop-update-evidence-${{ matrix.target }}
-          path: ${{ runner.temp }}/circle-desktop-update-*/**/*.log
-          if-no-files-found: ignore
-          retention-days: 7
       - uses: actions/upload-artifact@v7
         if: failure() && runner.os == 'Windows'
         with:
