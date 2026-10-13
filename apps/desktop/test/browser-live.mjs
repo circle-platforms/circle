@@ -621,6 +621,43 @@ try {
       .waitFor();
     await page.getByTestId('browser-insecure').waitFor();
     assert.equal((await browserState(sessionId)).insecure, true);
+    // The page fills the panel, also in a window as tall as the screen allows, where a
+    // page of fixed height left a gap: below the footer there is only the panel's own
+    // padding (20) and the footer's margin (10)
+    const blankBelow = async (height) => {
+      await app.evaluate(
+        ({ BrowserWindow }, size) =>
+          BrowserWindow.getAllWindows()[0].setContentSize(...size),
+        [width, height],
+      );
+      // The screen may hold less than asked: wait until the window has settled
+      let settled = -1;
+      for (let tries = 0; tries < 20; tries++) {
+        const now = await page.evaluate(() => innerHeight);
+        if (now === settled) break;
+        settled = now;
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+      return page.evaluate(() => {
+        const bottom = (selector) =>
+          document.querySelector(selector).getBoundingClientRect().bottom;
+        return {
+          height: innerHeight,
+          blank: bottom('.inspector-body') - bottom('.native-browser-footer'),
+        };
+      });
+    };
+    const tallest = await app.evaluate(
+      ({ screen }) => screen.getPrimaryDisplay().workAreaSize.height,
+    );
+    for (const height of [tallest, 900]) {
+      const panel = await blankBelow(height);
+      assert(
+        panel.blank <= 32,
+        `blank under the browser panel: ${JSON.stringify(panel)}`,
+      );
+    }
+    assert.equal(await page.evaluate(() => innerHeight), 900);
     const firstSnapshot = await textOf('proceed');
     assert.match(firstSnapshot, /Circle proceeded, approved by the user/);
     for (const text of [

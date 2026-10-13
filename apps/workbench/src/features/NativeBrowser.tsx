@@ -152,7 +152,8 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
       .catch(() => notify(t('navigation failed')));
   const failure = state?.failure;
   return (
-    <>
+    // One column the height of the panel: the page takes what the bars leave
+    <div className="native-browser">
       {!!state?.tabs?.length && (
         <div className="browser-tabs" role="tablist">
           {state.tabs.map((tab) => (
@@ -419,6 +420,6 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
           <p className="panel-note">{capture.observedAt}</p>
         </details>
       )}
-    </>
+    </div>
   );
 }
