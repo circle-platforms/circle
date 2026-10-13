@@ -193,8 +193,8 @@ async function kill(entry: Entry, force: boolean): Promise<void> {
 
 /** One application's jobs. Reopening a conversation never replays a command. */
 export class JobRegistry {
-  /** Hides what the model may not read in a notice, such as a secret a command printed. */
-  redact: (text: string) => string = (text) => text;
+  /** Hides what the model may not read in a session's notice, such as a secret a command printed. */
+  redact: (text: string, sessionId: string) => string = (text) => text;
   private entries = new Set<Entry>();
   private jobs = new Map<string, Entry>();
   private notices = new Map<string, Job[]>();
@@ -669,8 +669,9 @@ export class JobRegistry {
         role: 'user',
         content: this.redact(
           `<system-reminder data-source="circle-jobs">\n${taken.map(jobNotice).join('\n\n')}\n\nThis is a background-job notice.\n</system-reminder>`,
+          sessionId,
         ),
-        display: this.redact(taken.map(noticeLine).join('\n')),
+        display: this.redact(taken.map(noticeLine).join('\n'), sessionId),
         internal: 'job_notice',
       },
     ];

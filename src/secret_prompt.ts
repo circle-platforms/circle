@@ -332,7 +332,7 @@ export async function collect(
       if (!request.target_file) {
         saveSecret(home, request.key, value);
         results.push(
-          `  - ${request.key} → collected and kept as a Circle secret; write %${request.key}% where a tool needs it (the value is not in the conversation)`,
+          `  - ${request.key} → collected and kept as a Circle secret; write %${request.key}% where a tool needs it. The value is not in the conversation: a tool's output shows %${request.key}% where it has the value, unless that is text you or the user wrote`,
         );
       } else {
         const path = await applyToTarget(request, value, combined);
