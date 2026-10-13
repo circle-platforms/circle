@@ -20,6 +20,8 @@ New here? Start with the [Quickstart](quickstart.md). Coming from Circle 0.5.0? 
 | Know what it may do to my machine | [Run Circle safely](security.md) |
 | Find out what the screen is telling me | [The interface](interface.md) |
 | Use the desktop application | [The desktop application](desktop.md) |
+| Let Circle use a web page with me, such as a device's web interface | [The browser](tools.md#the-browser) |
+| Give Circle a password or a value without the model seeing it | [Secrets by name](security.md#secrets-by-name) |
 | Steer, stop, copy, find | [Use Circle in the terminal](usage.md) |
 | Keep, reopen or branch a conversation | [Sessions and context](sessions.md) |
 | Run a server, a watcher or a subagent while I keep working | [Background jobs](background-jobs.md) |

@@ -26,6 +26,8 @@ The main agent has twenty-one built-in tools. See [Built-in tools](tools.md).
 - Background jobs: `list_jobs`, `stop_job`
 - Extending itself: `skill`, `task`, `compact_conversation`
 
+In the desktop application, and in the full-screen terminal interface when Chrome, Edge or Chromium is installed, eleven `browser_*` tools use a browser as a person does: they read pages, click, type, answer dialogs, manage tabs and give pages files. You see what Circle does in the browser, and you can act in it too. See [The browser](tools.md#the-browser).
+
 MCP servers and [extensions](extensions.md) add more.
 
 ## Context
@@ -59,6 +61,8 @@ With `background: true` a subagent runs as a [background job](background-jobs.md
 ## Safety
 
 Every session runs in a folder you have trusted. Commands and file changes ask first, and some commands are always refused. There are three modes you can switch on: `accept edits` stops asking for file changes inside the workspace, `read-only` blocks all changes, and `auto` stops asking. None of this is an operating-system sandbox: a command you approve runs with your full user rights. Read [Security](security.md) before you rely on it.
+
+The browser is approved site by site. Passing a certificate warning and giving a page files ask every time, and a page's permissions and client certificates are yours alone. A password reaches a page or a command as a [saved secret](security.md#secrets-by-name): the model writes `%NAME%` and never sees the value.
 
 ## Sessions
 

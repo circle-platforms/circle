@@ -6,7 +6,7 @@ This table records the frontend phase before the user authorized Circle runtime 
 |---|---|---|
 | Standalone application | Electron window, app icon/menu, bundled resources, `.app` / `.dmg` build and packaged-app tests | No web server needed |
 | Native operations | Selected files/folders, scoped reads, clipboard and native export checked through IPC | File edits and shell commands remain requests |
-| Browser display | Sandboxed native browser, actual local-fixture navigation and capture, stable session identity | Local operator only; agent connection pending |
+| Browser display | Sandboxed native browser, actual local-fixture navigation and capture, stable session identity | Local operator only in this phase; the agent has since been connected, see [The browser](../tools.md#the-browser) |
 | Circle commands | All 38 current commands and aliases mapped; each canonical command exercised in the native UI | Runtime actions have explicit local/pending state |
 | Tool presentation | 22 documented entries, including the subagent-only tool; generic raw input/output renderer | No tool execution inferred from sample rows |
 | Conversations | Free input, persistent drafts, steering/follow-up queues, attachments, search and expanded draft editor | No invented response or automatic task classification |

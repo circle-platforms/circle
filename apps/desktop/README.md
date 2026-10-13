@@ -33,10 +33,10 @@ The desktop package includes the renderer, Circle runtime/dependencies, prompts,
 - `src/preload.ts` exposes named capabilities rather than an unrestricted IPC or Node API.
 - `src/runtime-supervisor.ts` owns the native core process. `src/runtime-controller.ts` translates named commands into existing core APIs and projects actual state; `runtime-worker.ts` hosts it.
 - `src/files.ts` reads user-selected files and indexes selected folders. Workspace reads require opaque granted handles and reject unknown handles or symlink escapes.
-- `src/browser.ts` keeps one sandboxed native browser per Circle session. The browser identity is stable across inspector switches; capture records its identity, time and content hash.
+- `src/browser.ts` keeps one sandboxed native browser per Circle session, which the model drives through the browser tools and the person uses in the panel. It covers dialogs, certificate warnings, downloads, uploads, sign-ins, permissions, client certificates and handoff. The browser identity is stable across inspector switches; capture records its identity, time and content hash.
 - `../workbench` provides Circle's session interface and its file/activity/browser components.
 
-Quitting waits for Circle to cancel and close its owned jobs, then waits for its native process to exit. Renderer reload preserves that process. Window close remains separate from future C/D service control. Native browser control is currently by the local operator.
+Quitting waits for Circle to cancel and close its owned jobs, then waits for its native process to exit. Renderer reload preserves that process. Window close remains separate from future C/D service control. The native browser is shared: the model acts in it with approval, and the person can take it over.
 
 ## Check
 

@@ -63,6 +63,12 @@ Circle 工作时可以继续打字：`enter` 会插话给正在进行的回合�
 
 终端界面使用对话卡片、状态灯，以及跟随终端颜色的 `auto` 主题。如果终端不能报告颜色，可用 `/themes dark` 或 `/themes light` 手动指定。各信号的含义和限制见[界面说明](https://qingshanfeihu.github.io/circle/interface/)。
 
+## 浏览器、变量和密钥
+
+让 Circle 打开一个网页，比如你内网里某台设备的管理界面，它会像人一样用浏览器：读页面，移动指针去点击和输入，回答网页弹出的对话框。遇到证书警告，要你批准后才继续；下载、网页要的文件和登录框，它都会告诉你。终端里的浏览器是一个用全新空白配置启动的 Chrome、Edge 或 Chromium 窗口；桌面版里是你和 Circle 共用的浏览器面板，你随时可以接管。操作浏览器按站点审批，有些事始终由你决定：把文件交给网页、摄像头或位置等权限，以及用哪张客户端证书表明身份。
+
+用 `/secrets NAME` 保存密码，桌面版在设置 → 变量里保存。模型在需要的地方写 `%NAME%`，浏览器里的输入框或其他任何工具都可以，它看不到真实值：工具运行时 Circle 才填入，返回的内容里再把它隐藏起来。`/variables NAME=value` 用同样的方式保存普通值。详见[浏览器](https://qingshanfeihu.github.io/circle/tools/#the-browser)和[按名字使用密钥](https://qingshanfeihu.github.io/circle/security/#secrets-by-name)。
+
 ## 了解更多
 
 | | |
@@ -71,6 +77,7 @@ Circle 工作时可以继续打字：`enter` 会插话给正在进行的回合�
 | [界面](https://qingshanfeihu.github.io/circle/interface/) | 灯、底色、边框各代表什么 |
 | [安全使用](https://qingshanfeihu.github.io/circle/security/) | 问什么、拒什么、不保护什么 |
 | [选择模型](https://qingshanfeihu.github.io/circle/models/) | 网关、切换、思考深度 |
+| [浏览器](https://qingshanfeihu.github.io/circle/tools/#the-browser) | 你和 Circle 一起用的网页 |
 | [Skills](https://qingshanfeihu.github.io/circle/skills/)、[自定义命令](https://qingshanfeihu.github.io/circle/custom-commands/)、[MCP](https://qingshanfeihu.github.io/circle/mcp/)、[扩展](https://qingshanfeihu.github.io/circle/extensions/) | 让 Circle 适合你 |
 | [全部文档](https://qingshanfeihu.github.io/circle/) | 指南与参考 |
 
@@ -89,6 +96,19 @@ CIRCLE_HOME=$(mktemp -d) npm run dev -- ~/code/my-project
 推送代码不会自动发布新版本：推送 `v*` 标签时发布流程才会运行。见[发布](https://qingshanfeihu.github.io/circle/development/releasing/)。
 
 参与开发见 [CONTRIBUTING.md](CONTRIBUTING.md)，编程助手见 [AGENTS.md](AGENTS.md)，结构见[架构](https://qingshanfeihu.github.io/circle/development/architecture/)。安全问题按 [SECURITY.md](SECURITY.md) 报告。参与者请遵守[行为准则](CODE_OF_CONDUCT.md)。
+
+## 桌面版
+
+Circle 也有桌面版：对话、会话历史、文件和改动、审批、后台任务、模型和扩展都在一个窗口里，还有一个你和 Circle 共用的浏览器面板。每个 Release 都附有 macOS、Windows 和 Linux 的桌面版，文件名是 `circle-desktop-<版本>-<系统>-<架构>`；第一次打开的方法见[安装](docs/installation.md#the-desktop-application)。从源码运行见 [apps/desktop](apps/desktop/README.md)：
+
+```bash
+npm ci
+npm --prefix apps/workbench ci
+npm --prefix apps/desktop ci
+npm --prefix apps/desktop run dev
+```
+
+桌面版在自己的原生进程里运行 Circle 的交互运行时，对话、工具、审批、提问、会话和 shell 命令都走 Circle 现有的核心。在应用里填 API URL、key 和模型即可连接。它的数据目录和 `~/.circle` 分开。
 
 ## 许可
 
