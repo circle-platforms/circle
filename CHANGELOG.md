@@ -4,6 +4,10 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Fixed
+
+- **A user name that is also the password showed to the model as the secret's name.** With a password such as `admin` saved as a secret, a sign-in page's user name field read `value="%NAME%"` after the model typed `admin` into it, so the model took the name for text typed by mistake, deleted part of the user name and failed to sign in; it also told the model what the password was. A secret's value now stays as written where it stands as a word in what you or the model wrote in the conversation, in a tool's result and in a background job's notice.
+
 ## 1.4.1 - 2026-10-13
 
 ### Fixed
