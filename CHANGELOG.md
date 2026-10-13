@@ -10,6 +10,7 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ### Changed
 
+- **Circle is licensed under the Apache License 2.0** from this version on; versions up to 1.2.1 were released under the MIT License and stay available under it. A `NOTICE` file names the copyright holder and reserves the Circle and Circle Hub names, logos and icons; the release package and the desktop application carry it next to `LICENSE`, and the Windows installer shows the new license. The architecture and design specifications listed in `docs/design/README.md` are under CC BY 4.0 and must be credited, with a link to the original, when reused. Contributors sign off their commits and accept the contributor terms in `CONTRIBUTING.md`; `docs/open-source-readiness.md` records the licensing state.
 - **The documentation site is the English guides.** The TUI contract is in Chinese, and the desktop working notes live under `docs/workbench/`; both stay in the repository and are not pages on the site. The README describes the desktop application with the terminal.
 
 ## 1.2.1 - 2026-10-12

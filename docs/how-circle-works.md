@@ -86,3 +86,7 @@ The full-screen interface is the main way to use Circle. `circle -p` runs one pr
 ## Extending Circle
 
 [Skills](skills.md) add instructions on demand. [Custom commands](custom-commands.md) turn a Markdown file into a slash command. [MCP servers](mcp.md) add tools from other programs. [Extensions](extensions.md) are JavaScript or TypeScript modules that add tools, commands, middleware, subagents and result renderers.
+
+---
+
+This document is one of Circle's design specifications, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/): quote or build on it with attribution to Circle and qingshanfeihu and a link to the original. See the [design specifications index](https://github.com/qingshanfeihu/circle/blob/main/docs/design/README.md).

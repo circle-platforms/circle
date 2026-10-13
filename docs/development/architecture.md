@@ -154,3 +154,7 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 - `src/data/`: the models.dev snapshot and the provider profiles, compressed.
 - `scripts/`: building and smoke-testing release packages, the release script, copying assets into `dist/`, `update-models-dev.ts` (refreshes `src/data/models_dev.json.gz`; run it before a release), and `port-status.ts` (see [The TypeScript port](migration.md)).
 - `tests/`: one `*.test.ts` file per area, run with Node's test runner through `tsx`. They drive `ScriptedModel` or a local HTTP gateway and need no network.
+
+---
+
+This document is one of Circle's design specifications, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/): quote or build on it with attribution to Circle and qingshanfeihu and a link to the original. See the [design specifications index](https://github.com/qingshanfeihu/circle/blob/main/docs/design/README.md).

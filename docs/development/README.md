@@ -27,7 +27,7 @@ Every change in behaviour needs a test that shows it: the next model request, th
 
 CI runs `npm run check` and the format check on Linux, macOS and Windows (`.github/workflows/check.yml`), and builds and smoke-tests the release packages (`.github/workflows/release.yml`). A job that is configured is not a result: look at the run.
 
-The English guides and reference in this folder are published at <https://qingshanfeihu.github.io/circle/>. `.github/workflows/pages.yml` builds the site. The TUI contract is in Chinese, and the desktop working notes are under `docs/workbench/`; both stay in the repository and are not pages on the site. Contributing, the security policy and the changelog stay in the repository too.
+The English guides and reference in this folder are published at <https://qingshanfeihu.github.io/circle/>. `.github/workflows/pages.yml` builds the site. The TUI contract is in Chinese, and the desktop working notes are under `docs/workbench/`; both stay in the repository and are not pages on the site. Contributing, the security policy, the changelog, the [design specifications index](https://github.com/qingshanfeihu/circle/blob/main/docs/design/README.md) and the [open-source readiness record](https://github.com/qingshanfeihu/circle/blob/main/docs/open-source-readiness.md) stay in the repository too.
 
 More:
 
