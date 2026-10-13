@@ -105,6 +105,7 @@ const evidence = async () => {
 let server;
 let running;
 let passed = false;
+let installationAttempted = false;
 let installedPath;
 let port;
 try {
@@ -115,6 +116,7 @@ try {
   if (msi) {
     assert.equal(existsSync(installed), false, `${installed} exists already`);
     stage(`installing ${msi}`);
+    installationAttempted = true;
     msiexec(
       '/i',
       msi,
@@ -334,7 +336,8 @@ try {
   // The installed package goes, whichever version it is now. Quietly, Windows Installer
   // restarts the machine when a file it removes is in use: nothing may still run from the
   // folder, and it must not restart.
-  if (msi && existsSync(join(programFiles, 'Circle'))) {
+  // A pre-existing copy never belongs to this check; a failed install may leave files.
+  if (installationAttempted && existsSync(join(programFiles, 'Circle'))) {
     stage('stopping what runs from the installed folder');
     spawnSync(
       'powershell.exe',
