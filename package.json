@@ -3,7 +3,7 @@
   "version": "1.2.1",
   "private": true,
   "description": "A terminal coding agent for your own model endpoint",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "engines": {
     "node": ">=24.0.0"
@@ -15,6 +15,7 @@
     "dist",
     "src/prompts",
     "docs",
+    "NOTICE",
     "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {

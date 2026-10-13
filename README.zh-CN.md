@@ -110,4 +110,4 @@ CIRCLE_HOME=$(mktemp -d) npm run dev -- ~/code/my-project
 
 ## 许可
 
-Circle 以 [MIT 许可证](LICENSE)发布。`src/data/` 里的模型目录含有来自 models.dev 的元数据，`src/prompts/` 里的许多提示词来自 OpenCode，各自适用自己的 MIT 许可，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+Circle 以 [Apache License 2.0](LICENSE) 发布。[NOTICE](NOTICE) 写明著作权人，并保留商标：本开源许可仅授予代码与相关文档的使用权，未经明确书面许可，不授予任何使用 Circle、Circle Hub 或相关商标、Logo 及服务标识的权利。[docs/design/README.md](docs/design/README.md) 列出的架构与设计规范按 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.zh-hans) 授权，引用、借鉴须保留署名并注明原始出处链接。1.2.1 及之前的版本以 MIT 许可证发布。`src/data/` 里的模型目录含有来自 models.dev 的元数据，`src/prompts/` 里的许多提示词来自 OpenCode，各自适用自己的 MIT 许可，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。贡献按 [CONTRIBUTING.md](CONTRIBUTING.md#contributor-terms) 的贡献者条款接受。

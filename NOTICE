@@ -1,0 +1,42 @@
+Circle
+Copyright (c) 2026 qingshanfeihu
+
+This product is developed by qingshanfeihu and the Circle contributors
+(https://github.com/qingshanfeihu/circle).
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this product except in compliance with the License. A copy of the License
+is in the LICENSE file next to this one and at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Versions of Circle up to 1.2.1 were released under the MIT License, and
+contributions received before 2026-10-13 were submitted under it. Those
+releases and contributions remain available under the MIT License as well.
+
+Third-party components, with their own notices and licenses, are listed in
+THIRD_PARTY_NOTICES.md.
+
+Design specifications
+---------------------
+
+The architecture and design specifications listed in docs/design/README.md
+are licensed under the Creative Commons Attribution 4.0 International License
+(CC BY 4.0, https://creativecommons.org/licenses/by/4.0/). Quoting, reusing
+or adapting them requires a clear attribution to Circle and qingshanfeihu and
+a link to the original at https://github.com/qingshanfeihu/circle.
+
+Trademarks
+----------
+
+"Circle", "Circle Hub", the Circle logo and the Circle application icons are
+trademarks or service marks of qingshanfeihu.
+
+The open-source licenses above grant rights to the code and the related
+documentation only. They do not grant any right to use the Circle or
+Circle Hub names, the Circle logo, the application icons or any related
+trademark or service mark, in particular to name, brand, promote or endorse a
+modified version, a fork, a product or a service, without the express written
+permission of the trademark owner. Section 6 of the Apache License applies.
+Truthful, non-misleading statements that a work is derived from or works with
+Circle are not restricted by this notice.

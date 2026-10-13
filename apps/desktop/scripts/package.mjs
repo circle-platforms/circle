@@ -19,6 +19,7 @@ await rm(stage, { recursive: true, force: true });
 await mkdir(stage, { recursive: true });
 await cp(join(root, 'dist'), join(stage, 'dist'), { recursive: true });
 await cp(join(root, '../../LICENSE'), join(stage, 'LICENSE'));
+await cp(join(root, '../../NOTICE'), join(stage, 'NOTICE'));
 await cp(
   join(root, '../../THIRD_PARTY_NOTICES.md'),
   join(stage, 'THIRD_PARTY_NOTICES.md'),
@@ -31,7 +32,7 @@ await writeFile(
       version,
       main: 'dist/main.cjs',
       description: manifest.description,
-      license: 'MIT',
+      license: 'Apache-2.0',
     },
     null,
     2,

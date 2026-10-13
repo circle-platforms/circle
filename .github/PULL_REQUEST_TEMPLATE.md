@@ -5,6 +5,7 @@
 ## How it was checked
 
 - [ ] `npm run check` and `npm run format:check` pass
+- [ ] Every commit is signed off (`git commit -s`), as the contributor terms in CONTRIBUTING.md require
 - [ ] Behaviour you can see in the terminal: tried it in a real `circle` session (say what you did)
 - [ ] User-facing change: the relevant page under `docs/` is updated
 

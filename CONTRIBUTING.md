@@ -68,12 +68,38 @@ One short imperative sentence in English, capitalised, with no prefix and no ful
 
 - Keep a pull request to one change.
 - Run the tests and say so in the description.
+- Sign off every commit (`git commit -s`); see [Contributor terms](#contributor-terms).
 - Fill in the checklist in the template.
 
 ## Security
 
 Do not open a public issue for a vulnerability. See [SECURITY.md](SECURITY.md).
 
+## Contributor terms
+
+Circle is open source today, and the people behind it may later offer it under commercial terms as well, next to the open-source version. So that this stays possible without asking every contributor again, every contribution (code, tests, documentation, design, translations) is accepted on the terms below. There is no separate form to sign: submitting a contribution means you accept them.
+
+### Sign off your commits
+
+Every commit in a pull request carries a `Signed-off-by` line with your real name and an email address you control. `git commit -s` adds it. The line is your certification of the [Developer Certificate of Origin 1.1](https://developercertificate.org/):
+
+- the contribution was created in whole or in part by you, and you have the right to submit it under the licenses of this repository; or
+- it is based on previous work that, to the best of your knowledge, is under a compatible open-source license, and you have the right to submit that work, with or without your changes, under the same licenses; or
+- it was given to you by someone who certified one of the above, and you have not changed it;
+- and you understand that the contribution, with your sign-off, is public and is kept with the project.
+
+A pull request whose commits are not signed off is not merged.
+
+### License to the project
+
+You keep the copyright in your contribution. By submitting it you grant qingshanfeihu, the Circle project and any person or organization that later takes over the maintenance of Circle (together, the project owner) a perpetual, worldwide, non-exclusive, royalty-free, irrevocable copyright license, with the right to sublicense through several tiers, to reproduce, prepare derivative works of, publicly display, publicly perform, distribute and otherwise use your contribution and derivative works of it, under the Apache License 2.0, under CC BY 4.0, or under any other terms the project owner chooses, including commercial, proprietary and dual-license terms.
+
+You also grant the project owner and every recipient of Circle a patent license on the terms of section 3 of the Apache License 2.0 for the patent claims you can license that your contribution infringes by itself or combined with Circle.
+
+You confirm that you may grant these rights: if your employer or anyone else holds rights in your work, you have their permission or they have waived those rights. If the contribution includes work by others, say so in the pull request and name the license it comes under. These terms do not transfer your copyright, and they do not oblige the project owner to use your contribution.
+
+If you cannot agree to these terms, do not submit the contribution.
+
 ## License
 
-Circle is released under the [MIT License](LICENSE). By contributing, you agree that your contributions are released under it too.
+Circle's code and documentation are released under the [Apache License 2.0](LICENSE). The [NOTICE](NOTICE) file names the copyright holder and reserves the Circle and Circle Hub names, logos and icons, which no license here covers. The architecture and design specifications listed in [docs/design/README.md](docs/design/README.md) are under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). A contribution is released under the license of the part it changes, in addition to the terms above. Versions up to 1.2.1 were released under the MIT License.

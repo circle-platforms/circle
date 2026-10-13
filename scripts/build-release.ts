@@ -108,6 +108,7 @@ try {
     'package-lock.json',
     'README.md',
     'LICENSE',
+    'NOTICE',
     'THIRD_PARTY_NOTICES.md',
     'install.sh',
     'install.ps1',

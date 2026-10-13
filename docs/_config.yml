@@ -43,6 +43,10 @@ exclude:
   # working records, one of them in Chinese. Both stay in the repository.
   - development/tui-contract.md
   - workbench
+  # Licensing records: the design specifications index and the open-source
+  # readiness record. They stay in the repository, like CONTRIBUTING.md.
+  - design
+  - open-source-readiness.md
 
 aux_links:
   GitHub:

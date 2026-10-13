@@ -95,9 +95,9 @@ const license = tables.Control.find(
   (row) => row.Dialog_ === 'WelcomeEulaDlg' && row.Control === 'LicenseText',
 );
 assert.ok(
-  license.Text.includes('MIT License') &&
+  license.Text.includes('Apache License') &&
     license.Text.includes('qingshanfeihu') &&
-    license.Text.includes('THE SOFTWARE IS PROVIDED'),
+    license.Text.includes('WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND'),
 );
 const finish = tables.ControlEvent.filter(
   (row) => row.Dialog_ === 'ExitDialog' && row.Control_ === 'Finish',
