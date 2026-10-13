@@ -228,15 +228,20 @@ export function browserPage(command: string, args: Record<string, any>) {
     return el;
   };
   // What a warning page's control decides: Circle's own warning marks its controls, and
-  // Chrome's (the terminal's browser) has its proceed link. Other pages decide nothing.
+  // Chrome's (the terminal's browser) has its advanced button and proceed link. Other pages
+  // decide nothing.
   const warningAction = (el: Element): string =>
     location.protocol === 'circle-warning:'
       ? (el
           .closest('[data-circle-action]')
           ?.getAttribute('data-circle-action') ?? '')
-      : location.protocol === 'chrome-error:' && el.closest('#proceed-link')
-        ? 'proceed'
-        : '';
+      : location.protocol !== 'chrome-error:'
+        ? ''
+        : el.closest('#proceed-link')
+          ? 'proceed'
+          : el.closest('#details-button')
+            ? 'advanced'
+            : '';
   if (command === 'snapshot') {
     state.refs.clear();
     const fresh = state.snapshots++ > 0;
@@ -329,8 +334,11 @@ export function browserPage(command: string, args: Record<string, any>) {
             : ['input', 'textarea', 'select'].includes(el.localName)
               ? ` value=${JSON.stringify(clean(value.value))}`
               : '';
+        // On a certificate warning, what its advanced button and its link to proceed are,
+        // in any language: a replayed script's proceed step finds them so
+        const warning = warningAction(el);
         add(
-          `${indent}[${ref}] ${role(el)} ${JSON.stringify(name(el))}${content}${value.disabled ? ' disabled' : ''}${value.checked ? ' checked' : ''}${added ? ' [new]' : ''}`,
+          `${indent}[${ref}] ${role(el)} ${JSON.stringify(name(el))}${content}${value.disabled ? ' disabled' : ''}${value.checked ? ' checked' : ''}${added ? ' [new]' : ''}${warning === 'advanced' || warning === 'proceed' ? ` [warning: ${warning}]` : ''}`,
         );
       } else if (
         isVisible &&

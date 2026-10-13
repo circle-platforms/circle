@@ -4,7 +4,7 @@ nav_order: 20
 
 # Built-in tools
 
-The main agent has these twenty-one core tools. The desktop application adds the eleven [browser tools](#the-browser) below, and so does the full-screen terminal interface when Chrome, Edge or Chromium is installed. MCP servers and [extensions](extensions.md) add more.
+The main agent has these twenty-one core tools. The desktop application adds the thirteen [browser tools](#the-browser) below, and so does the full-screen terminal interface when Chrome, Edge or Chromium is installed. MCP servers and [extensions](extensions.md) add more.
 
 "Asks" means Circle shows an approval card before the call runs. See [Security](security.md). In `read-only` mode the tools that do not ask keep working; the others are refused, except changes to a plan file (see [Read-only mode](security.md#read-only-mode)).
 
@@ -40,7 +40,7 @@ These tools use the conversation's browser, which you can use at the same time a
 - In the desktop application it is the conversation's [browser panel](desktop.md#the-browser-panel). The panel opens when Circle starts using the browser, unless you are on another page of the application or the window is narrow, where it would cover the conversation.
 - In the full-screen terminal interface it is a Chrome, Edge or Chromium window that Circle starts at the first browser action, with a new, empty profile of its own: your own browser's profile, cookies and passwords are never used. Circle looks for Chrome, then Edge, then Chromium where they are usually installed (on Linux, on `PATH`); [`CIRCLE_BROWSER`](environment-variables.md#browser) names another. Without one, and in line and print mode, there are no browser tools. The window closes when Circle exits. A page behind another tab gets no input, so when Circle acts on a tab that is not in front, for example after you chose another tab or after another conversation used the browser, it brings that tab and its window to the front first.
 
-Every result has the same parts: what the action did; the dialogs pages are waiting on, in every tab; what happened since the model last looked (tabs opened or closed, dialogs answered and by whom, a certificate warning passed); the tabs, when there are several or they changed; the shown page; and its snapshot. The snapshot is the page's visible text and the elements the model can act on, each with a ref such as `e12`. A ref stays with its element as long as the page is the same document, and an element that appeared since the last snapshot is marked `[new]`. Same-origin frames and open shadow roots are read, tables row by row; frames from other sites are not. Password fields show only whether they are filled.
+Every result has the same parts: what the action did; the dialogs pages are waiting on, in every tab; what happened since the model last looked (tabs opened or closed, dialogs answered and by whom, a certificate warning passed); the tabs, when there are several or they changed; the shown page; and its snapshot. The snapshot is the page's visible text and the elements the model can act on, each with a ref such as `e12`. A ref stays with its element as long as the page is the same document, and an element that appeared since the last snapshot is marked `[new]`. On a certificate warning the advanced button is marked `[warning: advanced]` and the link to proceed `[warning: proceed]`, in any language; a page cannot mark its own elements so. Same-origin frames and open shadow roots are read, tables row by row; frames from other sites are not. Password fields show only whether they are filled.
 
 A click, typing, a choice or a file given to a `ref` names the element it acted on as the snapshot shows it, its role and name read from the page at that moment, never the model's `element` words: `Clicked e28 link "主机设置".`, `Typed secret ROUTER_PASSWORD into e2 password "Password".` An element without a name is named by its role, `Clicked e7 button.` When `element` describes another element, the sentence says so, so that the model looks again: `Clicked e28 link "主机设置" — you described it as "网络菜单"; check the snapshot.` A description fits when it holds the name or the name holds it, ignoring case and spaces, or when every word of it but the kind of control (`link`, `button`, `菜单`, `按钮` and the like) is in the name: "the Proceed link" fits `Proceed to 192.168.1.1 (unsafe)`. A description in another language than the page's does not fit. The pointer's label in the page, and the field in an upload's approval, show the page's name too, or the model's words for an element without one.
 
@@ -57,6 +57,8 @@ A click, typing, a choice or a file given to a `ref` names the element it acted 
 | `browser_tabs` | `list`, `new` (with an optional `url`), `select` or `close` a tab. | yes | |
 | `browser_handoff` | Hand you the browser, saying in `reason` what for, and wait until you hand it back; the result then lists where the tabs went meanwhile and shows the page. | no | The model sees nothing of the page until you hand it back. |
 | `browser_upload` | Give `paths` to the file input at `ref`, or, without `ref`, to the file chooser one of Circle's clicks opened; an empty list closes that chooser. Paths are taken as the file tools take them. | always, also in `auto` mode | Up to 50 MB a file. Not a credential file, and not a file with other names on disk (hard links). |
+| `browser_record` | Write this conversation's browser actions to a script file at `path`, as steps that find their elements by role and name; `name` names it, `first` and `last` keep part of the steps. The result lists the steps. See [Recording and replaying](#recording-and-replaying). | yes, as writing a file does | The file tools' rules for the path: a credential file or a background job's output is refused. |
+| `browser_replay` | Run the script at `path` step by step, without the model in between; `variables` gives values for its `%NAME%`, `from` and `to` run part of it. The result says what each step did; the first step that cannot be done stops it. | yes, for the site it starts on | Acts only on that site. A step waits for its element or text up to 10 seconds unless its `timeout` says otherwise. The file is read as `read_file` reads it, up to 1 MB. |
 
 A tool that asks does so once for each site (scheme, host and port): the card names the site, and allowing it for the session covers every browser action there. A navigation asks about the site it goes to. When the page has gone to another site before a click, typing, selection, key press or upload runs, nothing is done and the result shows the page as it is now. See [the approval rules](security.md#approvals).
 
@@ -90,6 +92,49 @@ You and Circle share the browser.
 A download is kept in the system's Downloads folder, under the name the site gives it, with ` (1)` and so on added when that name is taken, as browsers do. The result names it (`dl1`) when it starts and gives its path when it is done; an address that downloads a file instead of opening a page says so. When the model's action downloads from a site not yet allowed, the file waits in a temporary folder and Circle asks you, after the action, with the site and each file's name and size: keep it, keep downloads from that site for this session, or discard it. A download a page starts within ten seconds after one of the model's actions counts as the model's, and is asked about with its next action. The site is the download's own, or for a `blob:` file the page's that made it; files from two sites are asked about one site at a time. In the desktop panel a file **waiting for approval** also has **keep** and **discard**, for when Circle's turn ended before it asked. In `auto` mode it is kept without asking. The action is not done again; its result says what you decided, and a discarded file is deleted. The desktop panel shows the file as **waiting for approval** meanwhile. Downloads you start yourself are not held. The model can read a finished download with the file tools. The desktop panel lists the latest downloads, each with **show in folder**.
 
 A click of Circle's that opens a page's file chooser does not open the system's dialog: the result shows the chooser waiting, and the model answers it with `browser_upload`, or you do with **choose…** under the page in the desktop panel. A file chooser you open yourself is the system's own. Before a page gets files from the model, Circle asks you, showing the files, their sizes, the site and the file input as the page names it.
+
+### Recording and replaying
+
+When you ask Circle to record what it did in the browser, or to do it again, it writes the conversation's browser actions to a script file with `browser_record` and runs one with `browser_replay`, in this conversation or another. The file is Circle's own format, JSON, by convention named `*.circle-browser.json`; scripts run only in Circle.
+
+```json
+{
+  "circle": "browser-script/1",
+  "name": "SLB list cases",
+  "description": "optional",
+  "steps": [
+    { "navigate": "https://%APV_HOST%/login" },
+    { "proceed": "certificate" },
+    { "type": { "role": "textbox", "name": "用户名" }, "text": "%APV_USER%" },
+    { "type": { "role": "password", "name": "密码" }, "text": "%APV_PASSWORD%", "submit": true },
+    { "click": { "role": "link", "name": "服务器负载均衡" } },
+    { "click": { "role": "button", "name": "删除", "nth": 2 }, "note": "the second 删除 on the page" },
+    { "select": { "role": "combobox", "name": "类型" }, "values": ["TCP"] },
+    { "press": "Enter" },
+    { "dialog": "accept" },
+    { "expect": "The virtual service ip address list is in use" },
+    { "absent": "Error" },
+    { "wait": 2 }
+  ]
+}
+```
+
+The steps:
+
+- `navigate` opens an address, or goes `back`, `forward` or `reload`, as `browser_navigate` does. A page that cannot be loaded stops the replay.
+- `proceed`, always `"certificate"`, passes the certificate warning the tab shows: it opens **Advanced** if needed and clicks the link to proceed, and you are asked as when the model clicks it. Without a warning it does nothing.
+- `click`, `type` and `select` act on an element, as `browser_click`, `browser_type` (with `text` and `submit`) and `browser_select` (with `values`) do.
+- `press` presses a key, as `browser_press` does.
+- `dialog` is `"accept"` or `"dismiss"` for the page's dialog, with `text` for a prompt or a sign-in's user name and `password` for a sign-in's password, as `browser_dialog` takes them. It waits for the dialog to open.
+- `tabs` is `"new"`, with an optional `url`, or `"close"` for the shown tab.
+- `expect` and `absent` wait until the page's text, as a snapshot reads it, shows or no longer shows the text.
+- `wait` waits that many seconds.
+
+An element is `{ "role", "name", "nth" }`: its role and name exactly as a snapshot prints them (`[e5] button "删除"`), compared with runs of spaces as one, and `nth` (from 1) for the second, third… of the elements with that role and name in the snapshot's order. Any step may have a `note`, which is not used, and a `timeout`: how long, in seconds, it waits for its element, dialog or text (10 unless given, up to 600).
+
+**Recording.** `browser_record` reads the conversation's stored messages: each browser call as the model wrote it, with its refs and `%NAME%`, never a secret's value, and its result. A ref becomes the element the browser result before the call showed under it, with `nth` when that snapshot had several of the same role and name; when it did not show that element there, the element the call's own result names. A click on a certificate warning's link to proceed becomes a `proceed` step; when you passed a warning yourself, or a page was reached past a certificate accepted earlier in the conversation or trusted for good, a `proceed` step is added too, which does nothing in a run without the warning. Snapshots, screenshots, hand-overs, uploads, tab lists, calls that failed or did nothing, other clicks on a warning, choosing a tab and closing a tab that is not shown are left out, and the result says how many of each. Tab ids (`t1`, `t2`) differ between runs, so a script has no step that chooses a tab. Values the model typed as plain text stay plain text. The file has one step a line; the result lists them, and the model then cleans the file up with `read_file` and `edit_file`: it drops detours, adds `expect` steps and writes values that change between runs as `%NAME%`. The path is taken and approved as `write_file` takes it.
+
+**Replaying.** `browser_replay` reads the file as `read_file` does and checks it; an error names the step and what is wrong. `%NAME%` anywhere in a step but its `note` takes the replay's `variables`, then Circle's [variables](security.md#secrets-by-name), then its secrets; a name none of them sets stops the replay before any step, naming it. Text made only of secrets' names is typed as a secret, so a password field takes it, and a variable given to the replay as a secret's `%NAME%` counts as that secret. Wherever a secret's value appears in the result, the model reads `%NAME%`. Each step looks for its element in a new snapshot until it shows or the step's time is up, and tries a click, typing or choice again while the element is covered, hidden, disabled or out of view, or its ref went stale. The approval is the browser's, for the site the replay starts on: where its first navigation goes when no step acts on the page before it, else the page shown; **allow on *site* for this session** covers it as any browser action there. Every step acts on that site only: a navigation elsewhere, or a page that went to another site, stops the replay, and calling it again from that step asks about the new site. A certificate warning still asks you every time, also in `auto` mode, and a download from a site not yet allowed asks as usual. In the desktop application, taking the browser while a replay runs stops it: its next request to the browser waits until you hand the browser back, does nothing, and the replay ends there, showing the page as you left it. The first step that cannot be done stops the replay; the error gives its number, the step as written, why, the steps done before it, and the page as it is with its snapshot, and the model fixes the file and calls again with `from` at that step. A finished replay says what each step did, what happened meanwhile (downloads, dialogs answered) and the page it ended on. `esc` stops it between steps and during one.
 
 ## Working with you
 

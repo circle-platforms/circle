@@ -26,7 +26,7 @@ The main agent has twenty-one built-in tools. See [Built-in tools](tools.md).
 - Background jobs: `list_jobs`, `stop_job`
 - Extending itself: `skill`, `task`, `compact_conversation`
 
-In the desktop application, and in the full-screen terminal interface when Chrome, Edge or Chromium is installed, eleven `browser_*` tools use a browser as a person does: they read pages, click, type, answer dialogs, manage tabs and give pages files. You see what Circle does in the browser, and you can act in it too. See [The browser](tools.md#the-browser).
+In the desktop application, and in the full-screen terminal interface when Chrome, Edge or Chromium is installed, thirteen `browser_*` tools use a browser as a person does: they read pages, click, type, answer dialogs, manage tabs and give pages files, and record what they did as a script that Circle can replay. You see what Circle does in the browser, and you can act in it too. See [The browser](tools.md#the-browser).
 
 MCP servers and [extensions](extensions.md) add more.
 

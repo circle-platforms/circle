@@ -4,6 +4,10 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Added
+
+- **Record what Circle did in the browser as a script, and replay it.** Asked to save a browser session for reuse, a model had no way but to rebuild it from the site's HTTP requests or to install another browser tool. `browser_record` now writes the conversation's browser actions to a file in Circle's own format (`"circle": "browser-script/1"`), each element kept by its role and name as the snapshot shows it, with `nth` among equals, values as `%NAME%`, and a certificate warning passed as a `proceed` step; the model then cleans it up and adds `expect` checks. `browser_replay` runs such a file step by step without the model in between, waiting for each element, typing secrets as secrets, asking once for the site it starts on and acting on no other, and stops at the first step that cannot be done with the page as it is, so that the model fixes the file and goes on `from` that step. In the desktop application and in the terminal's browser. See [Recording and replaying](docs/tools.md#recording-and-replaying).
+
 ### Fixed
 
 - **A browser action's result repeated the model's own words for the element instead of naming the one it acted on.** A model that took ref `e28` for the network menu was told `Clicked e28 "网络菜单".` when it had clicked the host settings link, and went on believing it. A click, typing, a choice or a file given to a ref now names the element as the snapshot shows it, read from the page at that moment (`Clicked e28 link "主机设置".`), and says when the model described another one: `— you described it as "网络菜单"; check the snapshot`. The pointer's label and the field in an upload's approval show the page's name too. In the desktop application and in the terminal's browser. See [Tools](docs/tools.md#the-browser).

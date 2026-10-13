@@ -1344,11 +1344,38 @@ try {
     app = undefined;
 
     requestsPath = join(temp, 'trusted-requests.jsonl');
+    // A recorded script for the form on the other port, whose certificate this start has
+    // not seen: the replay passes the warning, types a secret by name and submits
+    const replayPath = join(temp, 'fixture.circle-browser.json');
+    await writeFile(
+      replayPath,
+      JSON.stringify({
+        circle: 'browser-script/1',
+        name: 'fixture form',
+        steps: [
+          { navigate: otherUrl },
+          { proceed: 'certificate' },
+          { type: { role: 'textbox', name: 'Username' }, text: 'replayed' },
+          {
+            type: { role: 'password', name: 'Password' },
+            text: '%FIXTURE_PASSWORD%',
+          },
+          {
+            select: { role: 'combobox', name: 'Role' },
+            values: ['maintainer'],
+          },
+          { click: { role: 'button', name: 'Log in' } },
+          { expect: 'Submitted admin as maintainer' },
+        ],
+      }),
+    );
     await script([
       calls('trusted-navigate', [
         call('trusted-navigate', 'browser_navigate', { url }),
       ]),
       answer('trusted-done', 'trusted site opened'),
+      calls('replay', [call('replay', 'browser_replay', { path: replayPath })]),
+      answer('replay-done', 'replay finished'),
     ]);
     await launch();
     await send('open the trusted site');
@@ -1359,6 +1386,53 @@ try {
     assert.equal((await browserState(sessionId)).insecure, true);
     checks.push(
       'a certificate trusted for good opens without a warning after another restart',
+    );
+
+    // ---- a recorded script replayed: one approval for its site, the warning approved
+    const before = posts.length;
+    await send('replay the fixture form');
+    const replayCard = approval('runs a recorded browser script');
+    await replayCard.waitFor();
+    assert.match(await replayCard.innerText(), /browser_replay/);
+    assert(
+      (await replayCard.innerText()).includes(new URL(otherUrl).origin),
+      'the card names the site the script starts on',
+    );
+    await replayCard
+      .getByRole('button', { name: 'allow once', exact: true })
+      .click();
+    await approval('trusts an untrusted certificate')
+      .getByRole('button', { name: 'allow once', exact: true })
+      .click();
+    await page.getByText('replay finished', { exact: true }).waitFor();
+    const replayed = await textOf('replay');
+    assert.match(
+      replayed,
+      /^Replayed "fixture form": steps 1–7 of 7 done\./,
+      replayed,
+    );
+    assert.match(replayed, /\n2\. Clicked e\d+ link "Proceed to /);
+    assert.match(
+      replayed,
+      /Typed secret FIXTURE_PASSWORD into e2 password "Password"\./,
+    );
+    assert.match(replayed, /Circle proceeded, approved by the user/);
+    assert.match(
+      replayed,
+      /\n7\. The page shows "Submitted admin as maintainer"\./,
+    );
+    assert.equal(posts.length, before + 1);
+    assert.deepEqual(posts.at(-1), {
+      username: 'replayed',
+      password: 'secret-from-circle',
+      role: 'maintainer',
+    });
+    assert.equal(
+      (await readFile(requestsPath, 'utf8')).includes('secret-from-circle'),
+      false,
+    );
+    checks.push(
+      "a recorded browser script replays in the panel without the model in between: one approval for the site it starts on, Circle's certificate warning passed with the person's approval, a secret typed by name, and the form's POST reaches the site",
     );
     assert.deepEqual(errors, []);
   }

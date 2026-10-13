@@ -187,6 +187,13 @@ export const model: Record<string, string> = {
     '列出、打开、切换或关闭浏览器标签页',
   'Pages that open a new window or tab appear as tabs; you and Circle see the same shown tab.':
     '网页打开的新窗口或标签页会成为标签页；你和 Circle 看到的是同一个当前标签页。',
+  "Record the conversation's browser actions as a script":
+    '把对话中的浏览器操作录制为脚本',
+  "Write this conversation's browser actions to a script file in Circle's own format, each element kept by its role and name. Writing the file asks as writing any file does.":
+    '把这个对话中的浏览器操作写成 Circle 自己格式的脚本文件，每个元素按角色和名称记录。写入文件时和写其他文件一样需要审批。',
+  'Replay a recorded browser script': '回放录制的浏览器脚本',
+  "Run a script's steps in the conversation's browser without the model in between, waiting for each element. It acts only on the site it starts on, which you allow as for other browser actions, and stops at the first step that cannot be done.":
+    '在会话浏览器中逐步执行脚本，中间不经过模型，每一步都会等待它的元素出现。它只在开始时所在的站点上操作，你像批准其他浏览器操作一样批准这个站点；遇到第一个无法完成的步骤时停止。',
   'Give a page files from this computer': '把这台电脑上的文件交给网页',
   'Hand you the browser and wait for it back': '把浏览器交给你，等你交还',
   'For what only you should do in the page, such as a security key or a CAPTCHA. Circle sees nothing while you have it, and learns only where the tabs went.':
