@@ -512,8 +512,7 @@ export function createFixtures(): WorkbenchSnapshot {
       protocol: 'openai',
       credentialFiles: ['*.key'],
       updateCheck: true,
-      uiFontSize: 13,
-      codeFontSize: 13,
+      textSize: 'default',
       keybindings: {},
     },
     uiPlugins: [

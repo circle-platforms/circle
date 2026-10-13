@@ -9,7 +9,13 @@ import type {
   WorkbenchSnapshot,
   Session,
 } from './types';
-import { currentSession, visibleMessages, EFFORTS } from './state';
+import {
+  currentSession,
+  visibleMessages,
+  EFFORTS,
+  parseMode,
+  sessionMode,
+} from './state';
 import {
   BUILTIN_SLASH,
   parseSlash,
@@ -17,6 +23,7 @@ import {
 } from '../../../../src/tui/slash_commands';
 import { saveExport } from '../host';
 import { MAX_PROMPT_PAYLOAD } from '../../../desktop/src/runtime-protocol';
+import { t } from '../i18n/index.ts';
 
 const LOCAL_SESSION = [
   'draft',
@@ -28,7 +35,7 @@ const LOCAL_SESSION = [
   'pinned',
   'shared',
 ] as const;
-const LOCAL_SETTINGS = ['uiFontSize', 'codeFontSize', 'keybindings'] as const;
+const LOCAL_SETTINGS = ['textSize', 'keybindings'] as const;
 const equal = (a: unknown, b: unknown) =>
   JSON.stringify(a) === JSON.stringify(b);
 type View = Partial<Pick<Session, (typeof LOCAL_SESSION)[number]>>;
@@ -41,6 +48,9 @@ export class LiveRuntime implements RuntimePort {
   private listeners = new Set<() => void>();
   private views = new Map<string, View>();
   private files: WorkbenchSnapshot['files'] = [];
+  // The workspace whose files were last listed, and a listing in flight.
+  private listed?: string;
+  private listing?: Promise<void>;
   private settings: Partial<WorkbenchSnapshot['settings']> = {};
   private plugins?: string[];
   private changes = Promise.resolve();
@@ -97,7 +107,7 @@ export class LiveRuntime implements RuntimePort {
         }),
       );
     } catch {
-      this.report(Error('UI preferences could not be saved'));
+      this.report(Error(t('UI preferences could not be saved')));
     }
   }
   private receive = (update: RuntimeUpdate) => {
@@ -110,13 +120,52 @@ export class LiveRuntime implements RuntimePort {
     for (const session of this.snapshot.sessions)
       Object.assign(session, this.views.get(session.id) ?? {});
     for (const listener of this.listeners) listener();
+    // A file tool or a finished turn may have added files: list the folder again.
+    const kind = update.event?.kind;
+    const workspace = currentSession(this.snapshot).workspaceId;
+    if (
+      workspace !== this.listed ||
+      kind === 'run_end' ||
+      (kind === 'tool_result' &&
+        ['write_file', 'edit_file', 'apply_patch', 'delete'].includes(
+          String(update.event?.payload.name),
+        ))
+    )
+      void this.listWorkspace(workspace);
   };
+  // The active workspace's files when the desktop may list it (trusted), so the files
+  // panel and @ completion work without opening the folder again.
+  private listWorkspace(workspaceId: string): Promise<void> {
+    if (!this.host.listWorkspace) return Promise.resolve();
+    this.listed = workspaceId;
+    const run = async () => {
+      await this.listing;
+      const listed = await this.host.listWorkspace(workspaceId);
+      if (!listed) return;
+      this.files = [
+        ...this.files.filter((file) => file.workspaceId !== workspaceId),
+        ...listed.files.map((file) => ({
+          id: file.id,
+          workspaceId,
+          path: file.path,
+          content: '',
+          language: file.language,
+          nativeGrant: { workspaceId: listed.id, fileId: file.id },
+        })),
+      ];
+      this.snapshot = { ...this.snapshot, files: this.files };
+      for (const listener of this.listeners) listener();
+    };
+    this.listing = run().catch(() => undefined);
+    return this.listing;
+  }
   private report(error: unknown) {
     this.snapshot = {
       ...this.snapshot,
       runtime: {
         ...this.snapshot.runtime!,
-        error: error instanceof Error ? error.message : 'runtime action failed',
+        error:
+          error instanceof Error ? error.message : t('runtime action failed'),
       },
     };
     for (const listener of this.listeners) listener();
@@ -138,7 +187,7 @@ export class LiveRuntime implements RuntimePort {
   ): Promise<unknown> {
     const promise = (async () => {
       if (!this.snapshot.runtime?.connected)
-        throw Error('Circle runtime disconnected');
+        throw Error(t('Circle runtime disconnected'));
       const reply = await this.host.runtimeCommand({
         id: crypto.randomUUID(),
         name,
@@ -146,7 +195,7 @@ export class LiveRuntime implements RuntimePort {
         payload,
       });
       this.receive(await this.host.runtimeState());
-      if (!reply.ok) throw Error(reply.error ?? 'runtime action failed');
+      if (!reply.ok) throw Error(reply.error ?? t('runtime action failed'));
       return reply.data;
     })();
     void promise.catch((error) => this.report(error));
@@ -162,7 +211,7 @@ export class LiveRuntime implements RuntimePort {
         requested.sessions.map((s) => s.id),
       )
     )
-      throw Error('use a native session operation');
+      throw Error(t('use a native session operation'));
     const operations: {
       name: RuntimeCommandName;
       payload: Record<string, unknown>;
@@ -195,13 +244,15 @@ export class LiveRuntime implements RuntimePort {
         add('set-plan-mode', { enabled: item.readOnly }, item.id);
       if (item.auto !== previous.auto)
         add('set-auto', { enabled: item.auto }, item.id);
+      if (item.mode !== previous.mode && item.mode)
+        add('set-mode', { mode: item.mode }, item.id);
       if (!equal(item.queue, previous.queue)) {
         if (
           item.queue.some(
             (entry) => !previous.queue.some((old) => equal(old, entry)),
           )
         )
-          throw Error('queue messages through the composer');
+          throw Error(t('queue messages through the composer'));
         for (const entry of previous.queue
           .filter((old) => !item.queue.some((row) => row.id === old.id))
           .reverse())
@@ -229,12 +280,14 @@ export class LiveRuntime implements RuntimePort {
           (m) => !previous.messages.some((old) => old.id === m.id),
         )
       )
-        throw Error('history can only be imported through the native runtime');
+        throw Error(
+          t('history can only be imported through the native runtime'),
+        );
     }
     for (const workspace of requested.workspaces) {
       const old = before.workspaces.find((row) => row.id === workspace.id);
       if (!old)
-        throw Error('choose a workspace through the native folder dialog');
+        throw Error(t('choose a workspace through the native folder dialog'));
       if (workspace.trusted !== old.trusted)
         add('trust', { enabled: workspace.trusted });
     }
@@ -305,7 +358,7 @@ export class LiveRuntime implements RuntimePort {
         (row) => row.workspaceId === workspaceId,
       );
       if (!session)
-        throw Error('open the workspace through the native folder dialog');
+        throw Error(t('open the workspace through the native folder dialog'));
       await this.selectSession(session.id);
     }
     const result = (await this.native('new-session')) as { sessionId: string };
@@ -327,7 +380,7 @@ export class LiveRuntime implements RuntimePort {
   };
   answer = async (id: string, revision: number, answer: string) => {
     const item = this.snapshot.interactions.find((row) => row.id === id);
-    if (!item) throw Error('interaction is no longer available');
+    if (!item) throw Error(t('interaction is no longer available'));
     if (item.kind === 'approval')
       answer =
         answer === 'allow once'
@@ -352,6 +405,7 @@ export class LiveRuntime implements RuntimePort {
         'extensions.reload': 'reload',
         'set-model': 'set-model',
         'set-plan-mode': 'set-plan-mode',
+        'set-mode': 'set-mode',
         'revoke-approval': 'revoke-approval',
         'stop-job': 'stop-job',
         abort: 'abort',
@@ -380,7 +434,7 @@ export class LiveRuntime implements RuntimePort {
         const row = this.snapshot.interactions.find(
           (row) => row.id === payload.id,
         );
-        if (!row) throw Error('interaction is no longer available');
+        if (!row) throw Error(t('interaction is no longer available'));
         return this.native(
           'answer',
           { ...payload, cancel: true },
@@ -388,7 +442,7 @@ export class LiveRuntime implements RuntimePort {
         );
       }
       const name = names[kind];
-      if (!name) throw Error(`${kind} is not connected yet`);
+      if (!name) throw Error(t('{kind} is not connected yet', { kind }));
       return this.native(name, payload);
     };
     const result = operation();
@@ -422,7 +476,9 @@ export class LiveRuntime implements RuntimePort {
       return this.command(slash.name, slash.args);
     }
     if (commandWord(raw))
-      return { notice: `unknown command /${commandWord(raw)}` };
+      return {
+        notice: t('unknown command /{name}', { name: commandWord(raw) }),
+      };
     if (!raw && !session.attachments.length) return {};
     const textAttachments = session.attachments.filter(
       (a) => !['image', 'document'].includes(a.kind),
@@ -447,8 +503,9 @@ export class LiveRuntime implements RuntimePort {
     // Said here, with the message left in the box, rather than as a refused command
     if (JSON.stringify(payload).length > MAX_PROMPT_PAYLOAD)
       return {
-        notice:
+        notice: t(
           'the message and its files are over 64 MB; remove some pictures or PDFs',
+        ),
       };
     await this.native('prompt', payload);
     this.change((state) => {
@@ -477,14 +534,14 @@ export class LiveRuntime implements RuntimePort {
         this.snapshot.sessions.find(
           (s) => s.id === args || s.id.endsWith(args),
         ) ?? this.snapshot.sessions[Number(args) - 1];
-      if (!target) throw Error('session not found');
+      if (!target) throw Error(t('session not found'));
       await this.selectSession(target.id);
       return { openSession: true };
     }
     if (name === 'resume') return { page: 'sessions' };
     if (name === 'continue') {
       if (!this.snapshot.previousSessionId)
-        return { notice: 'no previous session' };
+        return { notice: t('no previous session') };
       await this.selectSession(this.snapshot.previousSessionId);
       return { openSession: true };
     }
@@ -509,6 +566,13 @@ export class LiveRuntime implements RuntimePort {
       });
       return {};
     }
+    if (name === 'mode') {
+      const mode = parseMode(args, sessionMode(session));
+      if (!mode)
+        return { notice: t('choose manual, accept-edits, plan or auto') };
+      await this.native('set-mode', { mode });
+      return {};
+    }
     if (['thinking', 'details'].includes(name) && !args) {
       this.change((s) => {
         const target = currentSession(s);
@@ -519,7 +583,7 @@ export class LiveRuntime implements RuntimePort {
     }
     if (['effort', 'thinking'].includes(name) && args) {
       if (!(EFFORTS as string[]).includes(args))
-        throw Error('unknown thinking depth');
+        throw Error(t('unknown thinking depth'));
       await this.native('set-effort', { effort: args });
       return {};
     }
@@ -545,7 +609,7 @@ export class LiveRuntime implements RuntimePort {
           content: result.content,
         });
       });
-      return { notice: 'skill added to the next message' };
+      return { notice: t('skill added to the next message') };
     }
     if (name === 'undo' || name === 'redo') {
       this.change((s) => {
@@ -565,15 +629,15 @@ export class LiveRuntime implements RuntimePort {
       return {
         notice:
           name === 'undo'
-            ? 'last turn hidden; saved history and files remain'
-            : 'transcript restored',
+            ? t('last turn hidden; saved history and files remain')
+            : t('transcript restored'),
       };
     }
     if (name === 'approvals' && args.startsWith('revoke ')) {
       const rule = this.snapshot.approvalRules.filter(
         (r) => r.sessionId === session.id,
       )[Number(args.slice(7)) - 1];
-      if (!rule) throw Error('rule not found');
+      if (!rule) throw Error(t('rule not found'));
       await this.native('revoke-approval', { ruleId: rule.id });
       return { page: 'approvals' };
     }
@@ -586,7 +650,7 @@ export class LiveRuntime implements RuntimePort {
       (['mcp', 'extensions'].includes(name) && args === 'reload')
     ) {
       await this.native('reload');
-      return { notice: 'Circle integrations reloaded' };
+      return { notice: t('Circle integrations reloaded') };
     }
     if (name === 'jobs') return { panel: 'activity', selection: args };
     if (name === 'copy') return { effect: 'copy' };
@@ -600,8 +664,8 @@ export class LiveRuntime implements RuntimePort {
       return {
         notice:
           name === 'share'
-            ? `local share saved · ${data.path}`
-            : 'local share removed',
+            ? t('local share saved · {path}', { path: data.path })
+            : t('local share removed'),
       };
     }
     if (this.snapshot.commands.some((command) => command.name === name)) {
@@ -637,10 +701,10 @@ export class LiveRuntime implements RuntimePort {
     };
     if (pages[name]) return { page: pages[name] };
     if (!BUILTIN_SLASH.some((item) => item.name === name))
-      return { notice: `unknown command /${name}` };
-    throw Error(`/${name} is not connected yet`);
+      return { notice: t('unknown command /{name}', { name }) };
+    throw Error(t('/{name} is not connected yet', { name }));
   };
   reset = () => {
-    throw Error('live sessions are managed through the sessions page');
+    throw Error(t('live sessions are managed through the sessions page'));
   };
 }

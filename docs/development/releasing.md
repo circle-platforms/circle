@@ -47,13 +47,15 @@ When all six pass, the `publish` job checks that every archive and checksum is t
 | `windows-2025` | `circle-<version>-windows-x64.zip` |
 | `windows-11-arm` | `circle-<version>-windows-arm64.zip` |
 
-The `desktop` job packages the desktop application on four more runners (`npm --prefix apps/desktop run package`) and starts each package with `test:desktop` and `test:live` before it is published (under `xvfb-run` on Linux). On macOS the application is signed again, ad hoc, after packaging, because packaging breaks the signature Electron's own files came with, and a copy with a broken signature is reported as damaged once downloaded.
+The `desktop` job packages the desktop application on four more runners (`npm --prefix apps/desktop run package`) and starts each package with `test:desktop` and `test:live` before it is published (under `xvfb-run` on Linux). `test:update` then packages a newer version beside it, serves it from a local releases page and updates a copy of the package through settings, as a user does; it passes when the copy that starts again is the newer version. On Windows it does that with the installed MSI (`CIRCLE_DESKTOP_UPDATE_MSI`): it installs the package's MSI, updates it to a newer MSI through the application and removes it again. Linux shows the release page and skips it. On macOS the application is signed again, ad hoc, after packaging, because packaging breaks the signature Electron's own files came with, and a copy with a broken signature is reported as damaged once downloaded.
+
+On Windows the job also installs the WiX Toolset 5.0.2 as a dotnet tool and builds the MSI from the packaged folder (`npm --prefix apps/desktop run package:msi`, which runs `wix build` and the ICE checks of `wix msi validate`). It then installs the MSI with `msiexec /qn`, checks that `C:\Program Files\Circle` holds the packaged folder file for file, that the Start menu entry starts `Circle.exe` with the application's AppUserModelID and that Installed apps lists Circle with the release version, removes it with `msiexec /x` and checks that the folder, the entry and the listing are gone and that `%APPDATA%\Circle` was left alone. The msiexec logs are uploaded when the job fails. The MSI takes Circle's version as its own, so a version with a prerelease suffix cannot be released; its UpgradeCode in `apps/desktop/scripts/msi.ts` must never change, or a new version installs beside the old one instead of replacing it. The `Desktop workbench` workflow also builds and validates the MSI on Windows and runs the same `test:update` on it. Windows gets only the MSI: there is no `.zip` of the desktop application, because only an installed copy can update itself.
 
 | Runner | Desktop asset |
 |---|---|
 | `macos-15` | `circle-desktop-<version>-darwin-arm64.dmg` |
 | `macos-15-intel` | `circle-desktop-<version>-darwin-x64.dmg` |
-| `windows-2025` | `circle-desktop-<version>-windows-x64.zip` |
+| `windows-2025` | `circle-desktop-<version>-windows-x64.msi` |
 | `ubuntu-24.04` | `circle-desktop-<version>-linux-x64.tar.gz` |
 
 Each has its `.sha256`, so a release has 20 files before `install.sh`, `install.ps1` and `SHA256SUMS` are added. The application takes its version from the root `package.json`.
@@ -81,6 +83,7 @@ Do not reuse a version number. People who installed it are "up to date" and will
 | `scripts/build-release.ts` | Builds the package and its checksum for the current target. |
 | `scripts/smoke-release.ts` | Runs the package before it is published. |
 | `apps/desktop/scripts/package.mjs` | Packages the desktop application for the current platform, signs it ad hoc on macOS, and writes its archive and checksum. |
+| `apps/desktop/scripts/msi.ts` | Holds the WiX package source, builds the Windows MSI from the packaged folder, validates it, and writes its checksum; `apps/desktop/test/msi.test.ts` pins the source and the WiX arguments. |
 | `install.sh`, `install.ps1` | Verify the checksum, unpack, and hand the package to `install_manager`. |
 | `src/install_manager.ts`, `src/install_layout.ts`, `src/legacy_install.ts` | Check and run the new version once, remove a Python circle, write `versions/<version>`, the launcher, `installation.json` and `current.ref`. |
 | `src/update.ts` | `circle update` and the daily check. `circle update` runs the installer that came with the running version. |

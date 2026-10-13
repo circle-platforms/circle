@@ -23,9 +23,25 @@ export interface DesktopInfo {
   dataPath: string;
   runtimeConnected: boolean;
   frontendOnly: boolean;
+  /** A language set for this run (checks, CIRCLE_WORKBENCH_LANGUAGE); not saved. */
+  language?: 'en' | 'zh-CN';
 }
 export type DesktopAction =
   'new' | 'tree' | 'import' | 'export' | 'settings' | 'open-folder' | 'help';
+/**
+ * Where the application's own update is. `page` is the release page, given when this copy
+ * cannot replace itself (or failed to) and the new version is downloaded by hand.
+ */
+export type UpdateState =
+  | { phase: 'idle' }
+  | { phase: 'checking' }
+  | { phase: 'current'; updated?: string }
+  | { phase: 'available'; version: string; page?: string }
+  | { phase: 'downloading'; version: string; received: number; total: number }
+  | { phase: 'ready'; version: string }
+  | { phase: 'installing'; version: string }
+  | { phase: 'failed'; version?: string; error: string; page?: string };
+export type UpdateAction = 'check' | 'download' | 'install';
 export interface DesktopBridge {
   apiVersion: 1;
   info: () => Promise<DesktopInfo>;
@@ -40,6 +56,10 @@ export interface DesktopBridge {
     workspaceId: string,
     fileId: string,
   ) => Promise<NativeFile>;
+  /** The files of the active, trusted workspace; null for any other. */
+  listWorkspace: (workspaceId: string) => Promise<NativeWorkspace | null>;
+  /** The window's language, for menus, system dialogs and notifications. */
+  setLanguage: (locale: 'en' | 'zh-CN') => Promise<void>;
   saveFile: (options: {
     name: string;
     content: string;
@@ -59,6 +79,9 @@ export interface DesktopBridge {
   browserHide: (sessionId: string) => Promise<void>;
   browserCapture: (sessionId: string) => Promise<BrowserCapture>;
   onAction: (listener: (action: DesktopAction) => void) => () => void;
+  updateState: () => Promise<UpdateState>;
+  update: (action: UpdateAction) => Promise<UpdateState>;
+  onUpdate: (listener: (state: UpdateState) => void) => () => void;
 }
 
 export interface BrowserBounds {

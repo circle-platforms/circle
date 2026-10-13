@@ -44,16 +44,20 @@ Restart your terminal after installing, then run `circle`. Upgrade with `circle 
 
 ## Desktop application
 
-Each release also has Circle as a desktop application: the same agent in its own window. It carries everything it needs and does not use the `circle` command. It keeps its settings, key and sessions in its own data folder, apart from `~/.circle`. It does not update itself; take the new release's file to update it.
+Each release also has Circle as a desktop application: the same agent in its own window. [The desktop application](https://qingshanfeihu.github.io/circle/desktop/) says what the window shows. It carries everything it needs and does not use the `circle` command. It keeps its settings, key and sessions in its own data folder, apart from `~/.circle`.
 
 | System | File |
 |---|---|
 | macOS, Apple silicon | `circle-desktop-<version>-darwin-arm64.dmg` |
 | macOS, Intel | `circle-desktop-<version>-darwin-x64.dmg` |
-| Windows x64 | `circle-desktop-<version>-windows-x64.zip` |
+| Windows x64 | `circle-desktop-<version>-windows-x64.msi` |
 | Linux x64 | `circle-desktop-<version>-linux-x64.tar.gz` |
 
-Take the file from [Releases](https://github.com/qingshanfeihu/circle/releases). It is signed ad hoc, not by Apple or Microsoft, so the first launch asks you to confirm. On Linux the sandbox helper needs one root command. The steps, and where the data folder is, are in [Installation](https://qingshanfeihu.github.io/circle/installation/#the-desktop-application). To run it from a checkout, see [apps/desktop](apps/desktop/README.md).
+Take the file from [Releases](https://github.com/qingshanfeihu/circle/releases). It is signed ad hoc, not by Apple or Microsoft, so the first launch asks you to confirm. The Windows installer puts Circle in `C:\Program Files\Circle` and on the Start menu. On Linux the sandbox helper needs one root command. The steps are in [Installation](https://qingshanfeihu.github.io/circle/installation/#the-desktop-application).
+
+On macOS and Windows the application updates itself: settings → about → check now, then update and restart. On Linux, check now opens the release page and the folder is replaced by hand. Releases up to 1.2.0 do not update themselves.
+
+The window follows the system language the first time, and can be English or 简体中文. The terminal stays English. To run it from a checkout, see [apps/desktop](apps/desktop/README.md).
 
 ## Run
 
@@ -85,7 +89,7 @@ The terminal interface uses conversation cards, status lamps and an `auto` theme
 | [Run Circle safely](https://qingshanfeihu.github.io/circle/security/) | What is asked, what is refused, what is not protected. |
 | [Choose a model](https://qingshanfeihu.github.io/circle/models/) | Endpoints, switching, thinking depth. |
 | [Skills](https://qingshanfeihu.github.io/circle/skills/), [Commands](https://qingshanfeihu.github.io/circle/custom-commands/), [MCP](https://qingshanfeihu.github.io/circle/mcp/), [Extensions](https://qingshanfeihu.github.io/circle/extensions/) | Make Circle yours. |
-| [The desktop application](https://qingshanfeihu.github.io/circle/installation/#the-desktop-application) | The same agent in its own window. |
+| [The desktop application](https://qingshanfeihu.github.io/circle/desktop/) | The same agent in its own window. |
 | [All documentation](https://qingshanfeihu.github.io/circle/) | Guides and reference. |
 
 ## Development

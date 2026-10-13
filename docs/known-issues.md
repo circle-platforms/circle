@@ -17,7 +17,7 @@ This page lists what does not work as you might expect in the current version, w
 
 - **Going back with `/tree` does not undo file changes.** It changes what the model remembers, not your files.
 - **`/undo` does not make the model forget, and does not revert files.**
-- **`/yolo` turns itself off** on `/new`, `/fork`, `/clone`, `/import` and restart.
+- **`auto` and `accept edits` turn themselves off** on `/new`, `/fork`, `/clone`, `/import` and restart; the session asks again (`manual`). `read-only` stays with the conversation.
 - **`projects/` in the data folder is mostly not cleaned up.** It keeps the messages that summaries replaced, very long tool results, pasted pictures and screenshots, for every project; only command and job output is removed, a day after its run ended. Delete old folders by hand.
 - **Circle 0.5.0 cannot import the JSONL exports of this version.** This version imports 0.5.0's.
 
@@ -33,6 +33,7 @@ These are gaps to know about before you trust Circle with a repository or a mach
 ## Subagents and tools
 
 - **Tool calls other than `task` in one reply run one after another.** 0.5.0 asked every approval first and then ran all the calls of a reply at the same time; here only `task` calls next to each other run together. To run subagents side by side, the model can start them with `background: true`.
+- **The diff on an `edit_file` card assumes its text appears once.** When the text to replace appears more than once, the card shows the change at the first place, but the tool refuses such an edit unless it replaces every one. The model is told and usually tries again with more context.
 - **`grep` searches for literal text, not regular expressions.** Its description says so and points the model to `rg` in the shell for a regular expression, which asks for approval like any command.
 
 ## Images and screenshots
@@ -65,9 +66,13 @@ If your endpoint is slow or never answers, a turn can take a long time to give u
 
 - **It is not signed by Apple or Microsoft.** macOS asks once whether to open it (System Settings → Privacy & Security → Open Anyway), and Windows SmartScreen may stop it the first time (More info → Run anyway). See [Installation](installation.md#the-desktop-application).
 - **On Linux, its sandbox helper needs root once.** Where unprivileged user namespaces are restricted, as on Ubuntu 24.04 and later, Chromium's sandbox needs `chrome-sandbox` owned by root with the setuid bit; until then the application stops at start. [Installation](installation.md#the-desktop-application) has the two commands.
-- **It does not update itself.** `circle update` updates only the command line; take the new release's file to update the application.
+- **On Linux it does not update itself.** Check now links to the release page: an update cannot keep `chrome-sandbox` owned by root, so the folder is replaced by hand. Releases up to 1.2.0 do not update themselves on any system; install the newer release over them once by hand.
+- **Updating the Windows installation asks for administrator permission**, as installing did, because the `.msi` installs for all users. Declining it leaves the old version, and settings say that the update was not installed.
 - **A waiting steering message cannot be sent at once yet.** The terminal's `enter` on an empty box has no counterpart in the application: the message is read before the model's next step. Waiting messages can be removed one by one, or all put back in the box.
 - **It refuses to start with `--no-sandbox`.** The application enables Chromium's sandbox for every child process; the switch contradicts that and crashed the main process with an access violation when the first child process started. It now exits with an explanation instead. See [electron#54838](https://github.com/electron/electron/issues/54838).
-- **Workspace grants expire with the application.** Reopen a selected folder after restarting it to refresh its read handles. Conversations and pinned input stay in the application's own data folder.
+- **Workspace grants expire with the application.** The files panel lists the folder of the open session again by itself when the folder is trusted; another folder has to be opened again with open folder after a restart. Conversations and pinned input stay in the application's own data folder.
+- **The changes panel shows only what file tools changed while the application ran.** Each file is compared with its version before the session's first change in this run. After a restart the panel starts empty, and a file a command changed is not listed.
+- **Windows shows no count of waiting requests on the taskbar,** only a busy bar. macOS shows the count on the Dock icon, and Linux where the desktop supports it. Windows notifications need the Start menu shortcut the installer makes.
+- **Some words come from Circle's core in English** in the Chinese interface: slash command descriptions, the shortcut list, error messages and reasons for an approval other than the common ones. The terminal interface is English only.
 - **A failed turn's line lasts only while the application runs.** It is shown in the conversation, but not saved with it.
 - **UI components are not paired with live runtime plugin packages yet.** The other platform objects share the workbench component API, but their service calls and Circle runtime entries are not installed by it, and the application does not show them. The [integration audit](https://github.com/qingshanfeihu/circle/blob/main/docs/workbench/integration-audit.md) names the remaining work.

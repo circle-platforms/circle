@@ -44,16 +44,20 @@ irm https://raw.githubusercontent.com/qingshanfeihu/circle/main/install.ps1 | ie
 
 ## 桌面应用
 
-每个发布包里还有 Circle 的桌面应用：同一个助手，自己一个窗口。它自带运行所需的全部文件，不使用 `circle` 命令。设置、密钥和会话放在它自己的数据目录里，和 `~/.circle` 分开。它不会自己更新，要换新版本就下载新的发布文件替换。
+每个发布包里还有 Circle 的桌面应用：同一个助手，自己一个窗口。窗口里有什么，见[桌面应用](https://qingshanfeihu.github.io/circle/desktop/)（英文）。它自带运行所需的全部文件，不使用 `circle` 命令。设置、密钥和会话放在它自己的数据目录里，和 `~/.circle` 分开。
 
 | 系统 | 文件 |
 |---|---|
 | macOS，Apple 芯片 | `circle-desktop-<version>-darwin-arm64.dmg` |
 | macOS，Intel | `circle-desktop-<version>-darwin-x64.dmg` |
-| Windows x64 | `circle-desktop-<version>-windows-x64.zip` |
+| Windows x64 | `circle-desktop-<version>-windows-x64.msi` |
 | Linux x64 | `circle-desktop-<version>-linux-x64.tar.gz` |
 
-文件在[发布页面](https://github.com/qingshanfeihu/circle/releases)。它不是 Apple 或 Microsoft 签名的，第一次打开需要你确认。Linux 上沙箱助手要先做一次需要 root 的设置。步骤和数据目录的位置见[安装与升级](https://qingshanfeihu.github.io/circle/installation/#the-desktop-application)。从源码运行见 [apps/desktop](apps/desktop/README.md)。
+文件在[发布页面](https://github.com/qingshanfeihu/circle/releases)。它不是 Apple 或 Microsoft 签名的，第一次打开需要你确认。Windows 安装器把它装到 `C:\Program Files\Circle`，并加到开始菜单。Linux 上沙箱助手要先做一次需要 root 的设置。步骤见[安装与升级](https://qingshanfeihu.github.io/circle/installation/#the-desktop-application)。
+
+macOS 和 Windows 上它可以自己更新：设置 → 关于 → 立即检查，然后更新并重启。Linux 上「立即检查」会打开发布页面，文件夹要自己替换。1.2.0 及更早的版本不会自己更新。
+
+窗口第一次打开时跟随系统语言，可以是英文或简体中文。终端界面仍是英文。从源码运行见 [apps/desktop](apps/desktop/README.md)。
 
 ## 运行
 
@@ -85,7 +89,7 @@ Circle 工作时可以继续打字：`enter` 会插话给正在进行的回合�
 | [安全使用](https://qingshanfeihu.github.io/circle/security/) | 问什么、拒什么、不保护什么 |
 | [选择模型](https://qingshanfeihu.github.io/circle/models/) | 网关、切换、思考深度 |
 | [Skills](https://qingshanfeihu.github.io/circle/skills/)、[自定义命令](https://qingshanfeihu.github.io/circle/custom-commands/)、[MCP](https://qingshanfeihu.github.io/circle/mcp/)、[扩展](https://qingshanfeihu.github.io/circle/extensions/) | 让 Circle 适合你 |
-| [桌面应用](https://qingshanfeihu.github.io/circle/installation/#the-desktop-application) | 同一个助手，自己一个窗口 |
+| [桌面应用](https://qingshanfeihu.github.io/circle/desktop/) | 同一个助手，自己一个窗口 |
 | [全部文档](https://qingshanfeihu.github.io/circle/) | 指南与参考 |
 
 ## 开发

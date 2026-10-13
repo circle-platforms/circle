@@ -2,7 +2,8 @@ name: release
 
 # Every push builds the runtime-inclusive package on six targets and smoke-tests it: install,
 # relocation, upgrade, checksum rejection, replacing a Python circle, a real tool turn. It also
-# packages the desktop application on four targets and runs each package.
+# packages the desktop application on four targets and runs each package; on Windows it also
+# builds the MSI, installs it and removes it again.
 # Push a tag vX.Y.Z and the same run publishes one GitHub Release once every target passed.
 # Steps to cut one: docs/development/releasing.md. A manual run never publishes.
 
@@ -64,10 +65,11 @@ jobs:
           retention-days: 3
 
   # The desktop application, built and run as a user gets it: a signed-ad-hoc .dmg on macOS,
-  # a .zip on Windows, a .tar.gz on Linux, each started from the package before it is published.
+  # an .msi on Windows, a .tar.gz on Linux, each started from the package before it is
+  # published. The MSI holds the packaged folder; it is installed and removed here.
   desktop:
     name: desktop (${{ matrix.target }})
-    timeout-minutes: 30
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -102,9 +104,85 @@ jobs:
       - run: npm ci
       - run: npm --prefix apps/workbench ci
       - run: npm --prefix apps/desktop ci
+      - name: Install the WiX Toolset
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          dotnet tool install --global wix --version 5.0.2
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.dotnet\tools"
       - run: npm --prefix apps/workbench test
       - run: npm --prefix apps/desktop run test:runtime
       - run: npm --prefix apps/desktop run package
+      # Built and installed before the packaged folder is started, so both hold exactly what
+      # package wrote
+      - name: Build the MSI
+        if: runner.os == 'Windows'
+        run: npm --prefix apps/desktop run package:msi
+      - name: Install and remove the MSI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $out = "$env:GITHUB_WORKSPACE\apps\desktop\out"
+          $msi = "$out\circle-desktop-$version-windows-x64.msi"
+          $packaged = "$out\Circle-win32-x64"
+          $installed = "$env:ProgramFiles\Circle"
+          $shortcut = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Circle.lnk"
+          $data = "$env:APPDATA\Circle"
+          $uninstall = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
+          function Invoke-Msiexec([string[]] $arguments) {
+            $process = Start-Process msiexec.exe -ArgumentList $arguments -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw "msiexec $arguments exited with $($process.ExitCode)" }
+          }
+          function Get-Entry {
+            Get-ItemProperty $uninstall -ErrorAction SilentlyContinue | Where-Object DisplayName -eq 'Circle'
+          }
+          function Get-Tree([string] $root) {
+            Get-ChildItem $root -Recurse -File -Force | ForEach-Object {
+              '{0} {1}' -f $_.FullName.Substring($root.Length), (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+            }
+          }
+          if (Test-Path $installed) { throw "$installed exists before installing" }
+          # A file in the data folder, which removing the application must leave alone
+          $created = -not (Test-Path $data)
+          New-Item -ItemType Directory -Force $data | Out-Null
+          Set-Content "$data\msi-smoke.txt" 'kept'
+
+          Invoke-Msiexec @('/i', "`"$msi`"", '/qn', '/l*v', "`"$env:RUNNER_TEMP\msi-install.log`"")
+          foreach ($file in 'Circle.exe', 'resources\app.asar') {
+            if (-not (Test-Path "$installed\$file")) { throw "$installed\$file is missing" }
+          }
+          $asar = (Get-FileHash "$installed\resources\app.asar" -Algorithm SHA256).Hash
+          if ($asar -ne (Get-FileHash "$packaged\resources\app.asar" -Algorithm SHA256).Hash) {
+            throw 'the installed app.asar is not the packaged one'
+          }
+          $difference = Compare-Object (Get-Tree $packaged) (Get-Tree $installed)
+          if ($difference) {
+            $difference | Format-Table -AutoSize | Out-String -Width 400 | Write-Host
+            throw 'the installed folder differs from the packaged one'
+          }
+          if (-not (Test-Path $shortcut)) { throw "$shortcut is missing" }
+          $target = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcut).TargetPath
+          if ($target -ne "$installed\Circle.exe") { throw "the Start menu entry starts $target" }
+          # The link stores its AppUserModelID as UTF-16 text, at any byte offset
+          $link = [BitConverter]::ToString([IO.File]::ReadAllBytes($shortcut))
+          $id = [BitConverter]::ToString([Text.Encoding]::Unicode.GetBytes('com.qingshanfeihu.circle'))
+          if (-not $link.Contains($id)) { throw 'the Start menu entry has no AppUserModelID' }
+          $entry = @(Get-Entry)
+          if ($entry.Count -ne 1 -or $entry[0].DisplayVersion -ne $version -or $entry[0].Publisher -ne 'qingshanfeihu') {
+            $entry | Format-List | Out-String | Write-Host
+            throw 'Installed apps does not list Circle once with this version'
+          }
+
+          Invoke-Msiexec @('/x', "`"$msi`"", '/qn', '/l*v', "`"$env:RUNNER_TEMP\msi-uninstall.log`"")
+          if (Test-Path $installed) { throw "$installed is still there after removing Circle" }
+          if (Test-Path $shortcut) { throw "$shortcut is still there after removing Circle" }
+          if (Get-Entry) { throw 'Installed apps still lists Circle' }
+          if ((Get-Content "$data\msi-smoke.txt") -ne 'kept') { throw 'removing Circle changed its data folder' }
+          Remove-Item "$data\msi-smoke.txt"
+          if ($created) { Remove-Item $data }
       - name: Run the packaged application
         shell: bash
         run: |
@@ -124,6 +202,20 @@ jobs:
           fi
           "${run[@]}" npm --prefix apps/desktop run test:desktop
           "${run[@]}" npm --prefix apps/desktop run test:live
+          # It updates itself to a newer package: the bundle on macOS, the installed MSI on
+          # Windows (installed and removed again by the check); Linux shows the release page
+          if [ "$RUNNER_OS" = Windows ]; then
+            version="$(node -p "require('./package.json').version")"
+            export CIRCLE_DESKTOP_UPDATE_MSI="$GITHUB_WORKSPACE/apps/desktop/out/circle-desktop-$version-windows-x64.msi"
+          fi
+          "${run[@]}" npm --prefix apps/desktop run test:update
+      - uses: actions/upload-artifact@v7
+        if: failure() && runner.os == 'Windows'
+        with:
+          name: circle-desktop-msi-logs
+          path: ${{ runner.temp }}/msi-*.log
+          if-no-files-found: ignore
+          retention-days: 7
       - uses: actions/upload-artifact@v7
         with:
           name: circle-desktop-${{ matrix.target }}
@@ -159,7 +251,7 @@ jobs:
             test -s "dist-release/circle-$VERSION-$target.zip"
             test -s "dist-release/circle-$VERSION-$target.zip.sha256"
           done
-          for asset in darwin-arm64.dmg darwin-x64.dmg windows-x64.zip linux-x64.tar.gz; do
+          for asset in darwin-arm64.dmg darwin-x64.dmg windows-x64.msi linux-x64.tar.gz; do
             test -s "dist-release/circle-desktop-$VERSION-$asset"
             test -s "dist-release/circle-desktop-$VERSION-$asset.sha256"
           done
@@ -167,7 +259,7 @@ jobs:
           cp install.sh install.ps1 dist-release/
           cd dist-release
           sha256sum --check circle-*.sha256
-          sha256sum circle-*.tar.gz circle-*.zip circle-*.dmg install.sh install.ps1 > SHA256SUMS
+          sha256sum circle-*.tar.gz circle-*.zip circle-*.dmg circle-*.msi install.sh install.ps1 > SHA256SUMS
           ls -l
       - name: Release notes
         run: |

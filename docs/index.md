@@ -5,7 +5,7 @@ permalink: /
 
 # Circle documentation
 
-Circle is a coding agent. You describe a task, and Circle reads your code, runs commands and edits files in your project, asking before it does anything that changes something. It runs in the terminal, and as a [desktop application](installation.md#the-desktop-application).
+Circle is a coding agent. You describe a task, and Circle reads your code, runs commands and edits files in your project, asking before it does anything that changes something. It runs in the terminal, and as a [desktop application](desktop.md).
 
 New here? Start with the [Quickstart](quickstart.md). Coming from Circle 0.5.0? Read [Upgrading from 0.5.0](#upgrading-from-050) first.
 
@@ -15,7 +15,7 @@ New here? Start with the [Quickstart](quickstart.md). Coming from Circle 0.5.0? 
 |---|---|
 | Install Circle and run my first task | [Quickstart](quickstart.md) |
 | Install, update or move from the Python version | [Installation and updates](installation.md) |
-| Use Circle in its own window | [The desktop application](installation.md#the-desktop-application) |
+| Use Circle in its own window | [The desktop application](desktop.md) |
 | Understand what Circle does and why | [How Circle works](how-circle-works.md) |
 | Connect a model or switch to another | [Choose a model](models.md) |
 | Know what it may do to my machine | [Run Circle safely](security.md) |
@@ -54,6 +54,7 @@ What you may notice afterwards:
 
 - [Use Circle in the terminal](usage.md)
 - [The interface](interface.md)
+- [The desktop application](desktop.md)
 - [Choose a model](models.md)
 - [Sessions and context](sessions.md)
 - [Background jobs](background-jobs.md)

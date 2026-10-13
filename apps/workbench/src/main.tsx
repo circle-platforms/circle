@@ -7,11 +7,12 @@ import { LiveRuntime } from './model/live';
 import type { RuntimePort } from './model/types';
 import { circlePlugins } from './plugins/builtins';
 import { applyTheme } from './theme';
+import { loadLanguage, locale, subscribeLanguage } from './i18n';
 async function start() {
   const host = desktopHost();
   let runtime: RuntimePort;
-  if (host) {
-    const info = await host.info();
+  const info = host ? await host.info() : undefined;
+  if (host && info) {
     document.documentElement.dataset.desktop = info.platform;
     document.documentElement.dataset.host = 'desktop';
     runtime = info.frontendOnly
@@ -26,7 +27,14 @@ async function start() {
       });
     }
   } else runtime = new PreviewRuntime(localStorage);
-  applyTheme(runtime.getSnapshot().settings.theme);
+  applyTheme(
+    runtime.getSnapshot().settings.theme,
+    runtime.getSnapshot().settings.textSize,
+  );
+  loadLanguage(localStorage, info?.language);
+  // Menus, system dialogs and notifications follow the window's language.
+  void host?.setLanguage(locale());
+  subscribeLanguage(() => void host?.setLanguage(locale()));
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
       <CircleWorkbench runtime={runtime} plugins={circlePlugins} />

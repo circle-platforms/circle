@@ -10,13 +10,15 @@
     "start": "electron .",
     "dev": "npm run build && npm start",
     "package": "npm run build && node scripts/package.mjs",
-    "test": "node --test test/policy.test.ts test/capture.test.ts test/sandbox-guard.test.ts",
-    "test:runtime": "node ../../node_modules/tsx/dist/cli.mjs --test test/runtime.test.ts",
+    "package:msi": "node scripts/msi.ts",
+    "test": "node --test test/policy.test.ts test/capture.test.ts test/sandbox-guard.test.ts test/msi.test.ts test/attention.test.ts",
+    "test:runtime": "node ../../node_modules/tsx/dist/cli.mjs --test test/runtime.test.ts test/updater.test.ts",
     "test:live": "node test/live.mjs",
     "test:desktop": "node test/desktop.mjs",
     "format:check": "prettier --check src test scripts package.json tsconfig.json",
     "typecheck": "tsc --noEmit",
-    "test:interface": "node test/interface.mjs"
+    "test:interface": "node test/interface.mjs",
+    "test:update": "node test/update.mjs"
   },
   "engines": {
     "node": ">=24"

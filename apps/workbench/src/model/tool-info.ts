@@ -1,164 +1,282 @@
+import { t } from '../i18n/index.ts';
+
 // Derived from docs/tools.md at Circle 9b53272. Checked by the coverage test.
+// Descriptions are getters so they follow the interface language; tool names stay as they are.
 export const BUILTIN_TOOL_INFO = [
   {
     name: 'ls',
-    description: 'List a folder',
-    detail: 'List a folder. Folders end in `/`.',
+    get description() {
+      return t('List a folder');
+    },
+    get detail() {
+      return t('List a folder. Folders end in `/`.');
+    },
     kind: 'read',
   },
   {
     name: 'read_file',
-    description:
-      "Read a text file with line numbers (12: text), a folder's entries, or an image or a PDF",
-    detail:
-      "Read a text file with line numbers (`12: text`), a folder's entries, or an image or a PDF. Arguments: `file_path`, `offset` (lines to skip), `limit`.",
+    get description() {
+      return t(
+        "Read a text file with line numbers (12: text), a folder's entries, or an image or a PDF",
+      );
+    },
+    get detail() {
+      return t(
+        "Read a text file with line numbers (`12: text`), a folder's entries, or an image or a PDF. Arguments: `file_path`, `offset` (lines to skip), `limit`.",
+      );
+    },
     kind: 'read',
   },
   {
     name: 'glob',
-    description: 'Find files by pattern.',
-    detail: 'Find files by pattern.',
+    get description() {
+      return t('Find files by pattern.');
+    },
+    get detail() {
+      return t('Find files by pattern.');
+    },
     kind: 'read',
   },
   {
     name: 'grep',
-    description:
-      'Search file contents for **literal text**, not a regular expression',
-    detail:
-      'Search file contents for **literal text**, not a regular expression. Modes: files with matches (the default), matching lines, counts. A `glob` argument limits the files searched.',
+    get description() {
+      return t(
+        'Search file contents for **literal text**, not a regular expression',
+      );
+    },
+    get detail() {
+      return t(
+        'Search file contents for **literal text**, not a regular expression. Modes: files with matches (the default), matching lines, counts. A `glob` argument limits the files searched.',
+      );
+    },
     kind: 'read',
   },
   {
     name: 'lsp',
-    description:
-      'Ask a language server: go to definition, find references, hover, symbols in a file or the workspace, implementations',
-    detail:
-      'Ask a language server: go to definition, find references, hover, symbols in a file or the workspace, implementations. Positions are 1-based.',
+    get description() {
+      return t(
+        'Ask a language server: go to definition, find references, hover, symbols in a file or the workspace, implementations',
+      );
+    },
+    get detail() {
+      return t(
+        'Ask a language server: go to definition, find references, hover, symbols in a file or the workspace, implementations. Positions are 1-based.',
+      );
+    },
     kind: 'read',
   },
   {
     name: 'webfetch',
-    description: 'Fetch a URL',
-    detail:
-      'Fetch a URL. Formats: `markdown` (the default), `text`, `html`. JSON is pretty-printed.',
+    get description() {
+      return t('Fetch a URL');
+    },
+    get detail() {
+      return t(
+        'Fetch a URL. Formats: `markdown` (the default), `text`, `html`. JSON is pretty-printed.',
+      );
+    },
     kind: 'read',
   },
   {
     name: 'websearch',
-    description: 'Search the web through DuckDuckGo',
-    detail: 'Search the web through DuckDuckGo. No API key.',
+    get description() {
+      return t('Search the web through DuckDuckGo');
+    },
+    get detail() {
+      return t('Search the web through DuckDuckGo. No API key.');
+    },
     kind: 'read',
   },
   {
     name: 'write_file',
-    description: 'Create or overwrite a file.',
-    detail: 'Create or overwrite a file.',
+    get description() {
+      return t('Create or overwrite a file.');
+    },
+    get detail() {
+      return t('Create or overwrite a file.');
+    },
     kind: 'write',
   },
   {
     name: 'edit_file',
-    description: 'Replace exact text in a file',
-    detail:
-      'Replace exact text in a file. Arguments: `file_path`, `old_string`, `new_string`, `replace_all`.',
+    get description() {
+      return t('Replace exact text in a file');
+    },
+    get detail() {
+      return t(
+        'Replace exact text in a file. Arguments: `file_path`, `old_string`, `new_string`, `replace_all`.',
+      );
+    },
     kind: 'write',
   },
   {
     name: 'apply_patch',
-    description:
-      'Apply a multi-file patch in the *** Begin Patch format: add, update, move and delete files.',
-    detail:
-      'Apply a multi-file patch in the `*** Begin Patch` format: add, update, move and delete files.',
+    get description() {
+      return t(
+        'Apply a multi-file patch in the *** Begin Patch format: add, update, move and delete files.',
+      );
+    },
+    get detail() {
+      return t(
+        'Apply a multi-file patch in the `*** Begin Patch` format: add, update, move and delete files.',
+      );
+    },
     kind: 'write',
   },
   {
     name: 'delete',
-    description: 'Delete a file or a folder and everything in it.',
-    detail: 'Delete a file or a folder and everything in it.',
+    get description() {
+      return t('Delete a file or a folder and everything in it.');
+    },
+    get detail() {
+      return t('Delete a file or a folder and everything in it.');
+    },
     kind: 'write',
   },
   {
     name: 'screenshot',
-    description:
-      'Take a screenshot of the main screen, or of the front window of one application',
-    detail:
-      'Take a screenshot of the main screen, or of the front window of the application named in `app`, and send it to the model as an image. It asks each time unless allowed for the session, and is refused in read-only mode.',
+    get description() {
+      return t(
+        'Take a screenshot of the main screen, or of the front window of one application',
+      );
+    },
+    get detail() {
+      return t(
+        'Take a screenshot of the main screen, or of the front window of the application named in `app`, and send it to the model as an image. It asks each time unless allowed for the session, and is refused in read-only mode.',
+      );
+    },
     kind: 'read',
   },
   {
     name: 'execute',
-    description: 'Run a shell command in the workspace',
-    detail:
-      'Run a shell command in the workspace. With `background: true` it runs as a background job and returns at once. Standard output and standard error come back together, in the order they were written.',
+    get description() {
+      return t('Run a shell command in the workspace');
+    },
+    get detail() {
+      return t(
+        'Run a shell command in the workspace. With `background: true` it runs as a background job and returns at once. Standard output and standard error come back together, in the order they were written.',
+      );
+    },
     kind: 'write',
   },
   {
     name: 'write_todos',
-    description: 'Keep the plan shown in the plan box.',
-    detail: 'Keep the plan shown in the plan box.',
+    get description() {
+      return t('Keep the plan shown in the plan box.');
+    },
+    get detail() {
+      return t('Keep the plan shown in the plan box.');
+    },
     kind: 'interaction',
   },
   {
     name: 'question',
-    description:
-      'Ask you one or more questions with options, or ask for a secret',
-    detail:
-      'Ask you one or more questions with options, or ask for a secret. Your answers become the tool result. See Answer a question and Secrets.',
+    get description() {
+      return t(
+        'Ask you one or more questions with options, or ask for a secret',
+      );
+    },
+    get detail() {
+      return t(
+        'Ask you one or more questions with options, or ask for a secret. Your answers become the tool result. See Answer a question and Secrets.',
+      );
+    },
     kind: 'interaction',
   },
   {
     name: 'plan_enter',
-    description: 'Switch to read-only mode, as /plan does.',
-    detail: 'Switch to `read-only` mode, as `/plan` does.',
+    get description() {
+      return t('Switch to read-only mode, as /plan does.');
+    },
+    get detail() {
+      return t('Switch to `read-only` mode, as `/plan` does.');
+    },
     kind: 'interaction',
   },
   {
     name: 'plan_exit',
-    description:
-      'Ask you whether to leave read-only mode and implement the plan',
-    detail:
-      'Ask you whether to leave `read-only` mode and implement the plan. Only you can say yes, so it fails without the full-screen interface.',
+    get description() {
+      return t(
+        'Ask you whether to leave read-only mode and implement the plan',
+      );
+    },
+    get detail() {
+      return t(
+        'Ask you whether to leave `read-only` mode and implement the plan. Only you can say yes, so it fails without the full-screen interface.',
+      );
+    },
     kind: 'interaction',
   },
   {
     name: 'list_jobs',
-    description:
-      "List this conversation's jobs: id, kind, state, time, what, and the file their output goes to.",
-    detail:
-      "List this conversation's jobs: id, kind, state, time, what, and the file their output goes to.",
+    get description() {
+      return t(
+        "List this conversation's jobs: id, kind, state, time, what, and the file their output goes to.",
+      );
+    },
+    get detail() {
+      return t(
+        "List this conversation's jobs: id, kind, state, time, what, and the file their output goes to.",
+      );
+    },
     kind: 'agent / job',
   },
   {
     name: 'stop_job',
-    description: 'Stop a running job with everything it started.',
-    detail: 'Stop a running job with everything it started.',
+    get description() {
+      return t('Stop a running job with everything it started.');
+    },
+    get detail() {
+      return t('Stop a running job with everything it started.');
+    },
     kind: 'agent / job',
   },
   {
     name: 'wait_jobs',
-    description:
-      'Wait until one of the given jobs ends (up to 600 seconds), and return how it ended',
-    detail:
-      'Wait until one of the given jobs ends (up to 600 seconds), and return how it ended. Only subagents have it: they cannot be woken by a notice.',
+    get description() {
+      return t(
+        'Wait until one of the given jobs ends (up to 600 seconds), and return how it ended',
+      );
+    },
+    get detail() {
+      return t(
+        'Wait until one of the given jobs ends (up to 600 seconds), and return how it ended. Only subagents have it: they cannot be woken by a notice.',
+      );
+    },
     kind: 'agent / job',
   },
   {
     name: 'skill',
-    description: 'Load the full instructions of a skill by name.',
-    detail: 'Load the full instructions of a skill by name.',
+    get description() {
+      return t('Load the full instructions of a skill by name.');
+    },
+    get detail() {
+      return t('Load the full instructions of a skill by name.');
+    },
     kind: 'interaction',
   },
   {
     name: 'task',
-    description:
-      'Run a subagent (general-purpose, explore, or one an extension adds) and return its answer',
-    detail:
-      'Run a subagent (`general-purpose`, `explore`, or one an extension adds) and return its answer. Arguments: `description`, `subagent_type`, `background`. With `background: true` the subagent runs as a background job and its report comes as a notice. See How Circle works.',
+    get description() {
+      return t(
+        'Run a subagent (general-purpose, explore, or one an extension adds) and return its answer',
+      );
+    },
+    get detail() {
+      return t(
+        'Run a subagent (`general-purpose`, `explore`, or one an extension adds) and return its answer. Arguments: `description`, `subagent_type`, `background`. With `background: true` the subagent runs as a background job and its report comes as a notice. See How Circle works.',
+      );
+    },
     kind: 'agent / job',
   },
   {
     name: 'compact_conversation',
-    description: 'Summarize older messages now',
-    detail: 'Summarize older messages now. See Compaction.',
+    get description() {
+      return t('Summarize older messages now');
+    },
+    get detail() {
+      return t('Summarize older messages now. See Compaction.');
+    },
     kind: 'interaction',
   },
 ] as const;

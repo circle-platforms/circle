@@ -182,9 +182,14 @@ try {
   checks.push(
     'frontend prompt reaches core but actual write waits for approval',
   );
-  await page.locator('.interaction-summary').click();
-  await page.locator('.activity-row').filter({ hasText: 'write_file' }).click();
-  await page.getByRole('button', { name: 'allow once', exact: true }).click();
+  // The request waits in the conversation, under the call, with the change it makes.
+  const request = page.locator('.inline-request');
+  await request.waitFor();
+  assert.match(await request.locator('.diff-block').innerText(), /new file/);
+  checks.push('approval shows inline in the conversation with its diff');
+  await request
+    .getByRole('button', { name: 'allow once', exact: true })
+    .click();
   await page.getByText('native answer completed', { exact: true }).waitFor();
   if (
     process.env.CIRCLE_DESKTOP_TEST_WIDTH &&
@@ -222,14 +227,13 @@ try {
       ),
     'question',
   );
-  await page.locator('.interaction-summary').click();
-  await page
-    .locator('.activity-row')
-    .filter({ hasText: 'Choose a target' })
-    .click();
-  await page.getByRole('radio', { name: 'staging' }).check();
-  await page
-    .getByRole('button', { name: 'save response', exact: true })
+  // The question waits in the conversation too, and is answered there.
+  const question = page
+    .locator('.inline-request')
+    .filter({ hasText: 'Choose a target' });
+  await question.getByRole('radio', { name: 'staging' }).check();
+  await question
+    .getByRole('button', { name: 'send answer', exact: true })
     .click();
   await page.getByText('staging target received', { exact: true }).waitFor();
   const afterQuestion = (await readFile(requestsPath, 'utf8'))
@@ -408,9 +412,10 @@ try {
     timeout: 45_000,
   });
   page = await app.firstWindow();
-  await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
+  // Nothing is set up yet, so the connection form opens by itself.
+  await page.getByRole('textbox', { name: 'base url', exact: true }).waitFor();
   assert.equal((await state()).runtime.configured, false);
-  await send('/login');
+  checks.push('a first start without a model opens the connection form');
   await page
     .getByRole('textbox', { name: 'base url', exact: true })
     .fill(`http://127.0.0.1:${gateway.address().port}/v1`);

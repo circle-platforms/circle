@@ -25,6 +25,9 @@ const bridge: DesktopBridge = {
   chooseWorkspace: () => ipcRenderer.invoke('circle:choose-workspace'),
   readWorkspaceFile: (workspaceId, fileId) =>
     ipcRenderer.invoke('circle:read-workspace-file', workspaceId, fileId),
+  listWorkspace: (workspaceId) =>
+    ipcRenderer.invoke('circle:list-workspace', workspaceId),
+  setLanguage: (locale) => ipcRenderer.invoke('circle:set-language', locale),
   saveFile: (options) => ipcRenderer.invoke('circle:save-file', options),
   copyText: (text) => ipcRenderer.invoke('circle:copy-text', text),
   windowControl: (action) =>
@@ -36,6 +39,14 @@ const bridge: DesktopBridge = {
     ipcRenderer.invoke('circle:browser-bounds', id, bounds, visible),
   browserHide: (id) => ipcRenderer.invoke('circle:browser-hide', id),
   browserCapture: (id) => ipcRenderer.invoke('circle:browser-capture', id),
+  updateState: () => ipcRenderer.invoke('circle:update-state'),
+  update: (action) => ipcRenderer.invoke('circle:update', action),
+  onUpdate: (listener) => {
+    const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
+      listener(value);
+    ipcRenderer.on('circle:update', handler);
+    return () => ipcRenderer.removeListener('circle:update', handler);
+  },
   onAction: (listener) => {
     const handler = (_event: unknown, value: DesktopAction) => {
       if (actions.has(value)) listener(value);

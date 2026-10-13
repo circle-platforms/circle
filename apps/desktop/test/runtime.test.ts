@@ -970,3 +970,161 @@ test('a message may carry pictures of several megabytes, scaled down by the core
   assert.equal(huge.ok, false);
   assert.match(String(huge.error), /over 64 MB; remove some pictures or PDFs/);
 });
+
+const activeSession = (f: { controller: RuntimeController }) => {
+  const snapshot = f.controller.snapshot();
+  return snapshot.sessions.find((row) => row.id === snapshot.activeSessionId)!;
+};
+
+test('accept-edits edits without asking, keeps call order, and shows the diff and the change', async (t) => {
+  const f = await setup(t, [
+    {
+      message: assistant('', [
+        { id: 'read', name: 'read_file', args: { file_path: 'calc.py' } },
+      ]),
+    },
+    {
+      message: assistant('', [
+        {
+          id: 'edit',
+          name: 'edit_file',
+          args: {
+            file_path: 'calc.py',
+            old_string: 'a - b',
+            new_string: 'a + b',
+          },
+        },
+        { id: 'run', name: 'execute', args: { command: 'touch ran.txt' } },
+      ]),
+      usage: { ...emptyUsage(), input_tokens: 120, output_tokens: 30 },
+    },
+    {
+      message: assistant('done'),
+      usage: { ...emptyUsage(), input_tokens: 150, output_tokens: 5 },
+    },
+  ]);
+  await writeFile(
+    join(f.workspace, 'calc.py'),
+    'def add(a, b):\n    return a - b\n',
+  );
+  assert.equal((await f.call('set-mode', { mode: 'sometimes' })).ok, false);
+  assert.equal((await f.call('set-mode', { mode: 'accept-edits' })).ok, true);
+  assert.equal(activeSession(f).mode, 'accept-edits');
+  assert.equal((await f.call('prompt', { text: 'fix add' })).ok, true);
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((row) => row.status === 'pending'),
+    'the command approval',
+  );
+  // The edit ran without a request; only the command waits.
+  assert.equal(
+    await readFile(join(f.workspace, 'calc.py'), 'utf8'),
+    'def add(a, b):\n    return a + b\n',
+  );
+  const pending = f.controller
+    .snapshot()
+    .interactions.filter((row) => row.status === 'pending');
+  assert.deepEqual(
+    pending.map((row) => row.tool),
+    ['execute'],
+  );
+  const session = activeSession(f);
+  assert.equal(session.turn?.verb.length ? true : false, true);
+  const tools = session.messages.filter((row) => row.tool);
+  assert.deepEqual(
+    tools.map((row) => [row.tool!.name, row.tool!.status]),
+    [
+      ['read_file', 'success'],
+      ['edit_file', 'success'],
+      ['execute', 'waiting'],
+    ],
+  );
+  const diff = tools[1]!.tool!.diff!;
+  assert.equal(diff.summary, '+1 -1');
+  assert.ok(
+    diff.rows.some(
+      (row) => row.tone === 'added' && row.text.includes('return a + b'),
+    ),
+  );
+  assert.ok(
+    diff.rows.some(
+      (row) => row.tone === 'removed' && row.text.includes('return a - b'),
+    ),
+  );
+  assert.deepEqual(
+    session.changes?.map((change) => [
+      change.path.endsWith('calc.py'),
+      change.kind,
+      change.diff.summary,
+    ]),
+    [[true, 'modified', '+1 -1']],
+  );
+  const row = pending[0]!;
+  assert.equal(
+    (
+      await f.call(
+        'answer',
+        { id: row.id, revision: row.revision, answer: 'reject' },
+        row.sessionId,
+      )
+    ).ok,
+    true,
+  );
+  await wait(() => activeSession(f).state === 'idle', 'the turn end');
+  assert.equal(existsSync(join(f.workspace, 'ran.txt')), false);
+  const done = activeSession(f);
+  assert.equal(done.turn, undefined);
+  assert.equal(done.meters?.input, 270);
+  assert.equal(done.meters?.output, 35);
+  // The scripted model has no price: as the terminal says it.
+  assert.equal(done.meters?.cost, 'N/A');
+  assert.equal(done.meters?.contextInput, 150, 'the last answer, not a sum');
+});
+
+test('an approval for a new file carries its diff', async (t) => {
+  const f = await setup(t, [
+    {
+      message: assistant('', [
+        {
+          id: 'write',
+          name: 'write_file',
+          args: { file_path: 'notes.txt', content: 'one\ntwo\n' },
+        },
+      ]),
+    },
+    { message: assistant('done') },
+  ]);
+  assert.equal(activeSession(f).mode, 'manual');
+  assert.equal((await f.call('prompt', { text: 'write notes' })).ok, true);
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((row) => row.status === 'pending'),
+    'the write approval',
+  );
+  const row = f.controller
+    .snapshot()
+    .interactions.find((row) => row.status === 'pending')!;
+  assert.equal(row.diff?.summary, 'new file, 2 lines');
+  assert.deepEqual(
+    row.diff?.rows.filter((line) => line.tone === 'added').length,
+    2,
+  );
+  await f.call(
+    'answer',
+    { id: row.id, revision: row.revision, answer: 'approve' },
+    row.sessionId,
+  );
+  await wait(() => activeSession(f).state === 'idle', 'the turn end');
+  assert.equal(
+    await readFile(join(f.workspace, 'notes.txt'), 'utf8'),
+    'one\ntwo\n',
+  );
+  assert.deepEqual(
+    activeSession(f).changes?.map((change) => change.kind),
+    ['added'],
+  );
+});

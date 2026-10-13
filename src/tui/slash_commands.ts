@@ -109,6 +109,10 @@ export const BUILTIN_SLASH: SlashCommand[] = [
     description: 'Toggle auto mode: approve every tool call without asking',
     aliases: ['auto'],
   },
+  {
+    name: 'mode',
+    description: 'Next approval mode, or /mode manual|accept-edits|plan|auto',
+  },
   { name: 'exit', description: 'Quit Circle', aliases: ['quit', 'q'] },
 ];
 const CANONICAL = new Map<string, string>(

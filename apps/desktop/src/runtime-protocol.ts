@@ -18,6 +18,7 @@ export type RuntimeCommandName =
   | 'set-effort'
   | 'set-plan-mode'
   | 'set-auto'
+  | 'set-mode'
   | 'configure'
   | 'logout'
   | 'trust'
@@ -89,6 +90,7 @@ export const runtimeCommands = new Set<RuntimeCommandName>([
   'set-effort',
   'set-plan-mode',
   'set-auto',
+  'set-mode',
   'configure',
   'logout',
   'trust',

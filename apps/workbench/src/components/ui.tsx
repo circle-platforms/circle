@@ -1,6 +1,7 @@
 import { Search, ShieldAlert, X } from 'lucide-react';
 import { Dialog, Tooltip } from 'radix-ui';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import { t } from '../i18n';
 export function Button({
   children,
   className = '',
@@ -66,7 +67,7 @@ export function Modal({
               )}
             </div>
             <Dialog.Close asChild>
-              <button className="icon-button" aria-label="close dialog">
+              <button className="icon-button" aria-label={t('close dialog')}>
                 <X size={17} />
               </button>
             </Dialog.Close>
@@ -110,8 +111,8 @@ export function PermissionState() {
   return (
     <div className="permission-state">
       <ShieldAlert size={28} />
-      <h2>permission required</h2>
-      <p>This view requires access from a connected runtime.</p>
+      <h2>{t('permission required')}</h2>
+      <p>{t('This view requires access from a connected runtime.')}</p>
     </div>
   );
 }
