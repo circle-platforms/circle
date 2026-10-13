@@ -360,7 +360,14 @@ test('a card waits until typing has paused for a second, keys typed meanwhile st
     if (event.kind === 'tool_waiting') waiting = true;
   });
   const run = s.runtime.harness.run('write it');
-  await until(() => waiting);
+  // Typing goes on until the call waits, however long the model takes to ask: a pause of a
+  // second before it would rightly show the card at once
+  while (!waiting) {
+    s.key('right');
+    s.key('left');
+    await delay(20);
+  }
+  assert.equal(s.app.state.dialog, undefined);
   // keys that would answer the card are still typing for the draft
   s.type('n');
   await delay(200);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync, type ChildProcess } from 'node:child_process';
 import { X509Certificate } from 'node:crypto';
 import {
   existsSync,
@@ -98,6 +98,37 @@ test('findBrowser looks where Chrome and Edge are installed, and CIRCLE_BROWSER 
     undefined,
   );
 });
+
+test(
+  'a browser that does not answer in time is stopped, and the action says it did not start',
+  {
+    skip:
+      process.platform === 'win32'
+        ? 'the program that never answers is a shell script'
+        : false,
+  },
+  async (t) => {
+    const root = made(t);
+    // Takes the browser's arguments and never answers on the pipe
+    const silent = join(root, 'silent-browser');
+    writeFileSync(silent, '#!/bin/sh\nexec sleep 30\n', { mode: 0o755 });
+    const chrome = new ChromeBrowser({
+      executable: silent,
+      headless: true,
+      downloads: join(root, 'downloads'),
+      startTimeout: 300,
+    });
+    cleanup(t, () => chrome.close());
+    const started = Date.now();
+    await assert.rejects(
+      chrome.request('c', 'snapshot', {}, new AbortController().signal),
+      /^Error: the browser did not start in 0\.3 s$/,
+    );
+    assert.ok(Date.now() - started < 10_000);
+    const child = (chrome as unknown as { child: ChildProcess }).child;
+    assert.equal(child.killed, true);
+  },
+);
 
 const listen = (server: Server) =>
   new Promise<number>((resolve) =>
