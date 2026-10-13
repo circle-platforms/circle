@@ -4,6 +4,11 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Fixed
+
+- **The desktop browser panel left a blank band under its footer** in a tall window: the page had a fixed height. It now fills the panel under the bars.
+- **The desktop plan showed three and a half rows**, cutting the fourth in half, and the step under way could be scrolled out of sight. It now shows whole rows and keeps the step under way, or else the next one, in sight.
+
 ## 1.4.1 - 2026-10-13
 
 ### Fixed
