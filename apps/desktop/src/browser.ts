@@ -51,7 +51,11 @@ import {
   type PageElement,
 } from '../../../src/browser/format.js';
 import { TrustedCertificates } from '../../../src/browser/certificates.js';
-import { downloadSite, siteOf } from '../../../src/browser/hosts.js';
+import {
+  downloadSite,
+  secretRefused,
+  siteOf,
+} from '../../../src/browser/hosts.js';
 import {
   downloadName,
   downloadsFolder,
@@ -200,7 +204,7 @@ interface Conversation {
   // The model's action under way, and the warning it may pass with the person's approval.
   agent?: {
     tab: string;
-    approved?: { token: string; scope: 'once' | 'always' };
+    approved?: { token: string; scope: 'once' | 'always' | 'auto' };
   };
   // host + fingerprint the person let through, until Circle closes
   exceptions: Set<string>;
@@ -226,6 +230,12 @@ interface Conversation {
   waiting: boolean;
   // Woken when the person hands the browser back
   handedBack: Set<() => void>;
+  // In auto mode, while the person has the browser: when they last gave the page input,
+  // and the check that takes the browser back once they are done
+  personInput?: number;
+  autoReturn?: ReturnType<typeof setInterval>;
+  // Who ended the person's last turn with the browser: they, or auto mode
+  takenBack?: boolean;
   // Over the shown tab while Circle acts: the person's click there takes the browser
   mask?: WebContentsView;
 }
@@ -291,6 +301,8 @@ export class BrowserSessions {
     private exceptions = new Map<string, Set<string>>(),
     // Where downloads are kept: the system's Downloads folder unless given
     private downloadsDir = downloadsFolder(),
+    // The conversation's mode (manual, accept-edits, plan or auto), as the runtime has it
+    private modeOf: (id: string) => string | undefined = () => undefined,
   ) {
     this.trusted = new TrustedCertificates(trustFile);
   }
@@ -600,6 +612,13 @@ export class BrowserSessions {
     );
     if (given.every((value) => value === true)) return answer(true);
     if (given.some((value) => value === false)) return answer(false);
+    // Auto mode asks nobody: what the person has not allowed is refused, and the model told
+    if (this.modeOf(conversation.id) === 'auto') {
+      conversation.events.push(
+        `auto mode: ${origin} asked for ${kinds.join(', ')}; Circle refused it without asking`,
+      );
+      return answer(false);
+    }
     const waiting = conversation.permissions.find(
       (entry) =>
         entry.tab === tab.id &&
@@ -773,6 +792,13 @@ export class BrowserSessions {
       // The app's event types this callback's certificate as optional, as it is: none
       const callback = give as (certificate?: Certificate) => void;
       if (!list.length) return callback();
+      // Auto mode asks nobody: no certificate goes, and the model is told
+      if (this.modeOf(conversation.id) === 'auto') {
+        conversation.events.push(
+          `auto mode: ${siteOf(url) || url} asked for a client certificate; Circle sent none without asking`,
+        );
+        return callback();
+      }
       tab.choice?.answer();
       tab.choice = {
         id: `c${++conversation.nextChoice}`,
@@ -880,6 +906,11 @@ export class BrowserSessions {
       tab.network.clear();
       tab.lastNetwork = Date.now();
       this.publish(id);
+    });
+    // The person's own input in the page, while they have the browser
+    contents.on('input-event', () => {
+      if (conversation.control === 'user')
+        conversation.personInput = Date.now();
     });
     contents.on('did-navigate', (_event, url) => {
       if (url.startsWith(WARNING_SCHEME + ':')) return;
@@ -1223,7 +1254,7 @@ export class BrowserSessions {
       if (agent?.approved?.scope === 'always' && privateHost(host))
         this.trusted.add(host, warning.certificate.fingerprint);
       conversation.events.push(
-        `certificate warning for ${host}: ${agent ? 'Circle proceeded, approved by the user' : 'the user proceeded'}${agent?.approved?.scope === 'always' && privateHost(host) ? '; this certificate is trusted on this host from now on' : ''}`,
+        `certificate warning for ${host}: ${agent?.approved?.scope === 'auto' ? `Circle proceeded in auto mode, without asking (sha256 ${warning.certificate.fingerprint})` : agent ? 'Circle proceeded, approved by the user' : 'the user proceeded'}${agent?.approved?.scope === 'always' && privateHost(host) ? '; this certificate is trusted on this host from now on' : ''}`,
       );
       tab.warning = undefined;
       void this.load(conversation, tab, target).catch(() => {});
@@ -1483,20 +1514,78 @@ export class BrowserSessions {
     if (action === 'take') {
       if (conversation.control === 'agent')
         conversation.control = 'user_pending';
-      else if (conversation.control === 'shared') conversation.control = 'user';
-      else return this.state(id);
+      else if (conversation.control === 'shared') {
+        conversation.control = 'user';
+        this.watchReturn(conversation);
+      } else return this.state(id);
       conversation.events.push('the user took over the browser');
     } else if (action === 'return') {
       if (!['user', 'user_pending'].includes(conversation.control))
         return this.state(id);
-      conversation.control = conversation.operating ? 'agent' : 'shared';
-      conversation.handoff = undefined;
-      conversation.events.push('the user handed the browser back');
-      for (const wake of conversation.handedBack) wake();
+      this.giveBack(conversation, 'the user handed the browser back');
     } else throw Error('invalid browser control');
     this.visibility(conversation);
     this.publish(id);
     return this.state(id);
+  }
+  /** The person wrote to Circle: whatever they had the browser for, they are done with it. */
+  personWrote(idValue: unknown) {
+    const conversation = this.conversations.get(String(idValue));
+    if (conversation && ['user', 'user_pending'].includes(conversation.control))
+      this.control(conversation.id, 'return');
+  }
+  private giveBack(conversation: Conversation, event: string, auto = false) {
+    clearInterval(conversation.autoReturn);
+    conversation.autoReturn = undefined;
+    conversation.takenBack = auto;
+    conversation.control = conversation.operating ? 'agent' : 'shared';
+    conversation.handoff = undefined;
+    conversation.events.push(event);
+    for (const wake of conversation.handedBack) wake();
+  }
+  /**
+   * In auto mode the person's turn with the browser ends by itself: Circle takes it back
+   * once they stop for 5 seconds after acting in the page, or 2 seconds after it moved on
+   * (a new address or a new tab). The other modes wait for the person.
+   */
+  private watchReturn(conversation: Conversation) {
+    if (conversation.autoReturn) return;
+    const addresses = () =>
+      new Map(
+        [...conversation.tabs.values()].map((tab) => [
+          tab.id,
+          tab.view.webContents.getURL(),
+        ]),
+      );
+    const before = addresses();
+    const since = Date.now();
+    conversation.personInput = undefined;
+    conversation.autoReturn = setInterval(() => {
+      if (conversation.control !== 'user') {
+        clearInterval(conversation.autoReturn);
+        conversation.autoReturn = undefined;
+        return;
+      }
+      if (this.modeOf(conversation.id) !== 'auto') return;
+      const quiet = Date.now() - (conversation.personInput ?? since);
+      const moved = [...addresses()].some(
+        ([tab, url]) => before.get(tab) !== url,
+      );
+      if (
+        (moved && quiet >= 2000) ||
+        (conversation.personInput !== undefined && quiet >= 5000)
+      ) {
+        this.giveBack(
+          conversation,
+          moved
+            ? 'auto mode: Circle took the browser back, as the page moved on'
+            : 'auto mode: Circle took the browser back, as the user stopped',
+          true,
+        );
+        this.visibility(conversation);
+        this.publish(conversation.id);
+      }
+    }, 500);
   }
   private handedBack(conversation: Conversation, signal: AbortSignal) {
     return new Promise<void>((resolve, reject) => {
@@ -2111,7 +2200,9 @@ export class BrowserSessions {
         return {
           text: await this.result(
             conversation,
-            'Nothing was done: the user had the browser and has handed it back. This is the page now.',
+            conversation.takenBack
+              ? 'Nothing was done: the user had the browser, and auto mode took it back. This is the page now.'
+              : 'Nothing was done: the user had the browser and has handed it back. This is the page now.',
             signal,
           ),
         };
@@ -2133,8 +2224,10 @@ export class BrowserSessions {
         conversation.lastAction = Date.now();
         // The person may have asked for the browser meanwhile
         const control = conversation.control as BrowserControl;
-        if (control === 'user_pending') conversation.control = 'user';
-        else if (control === 'agent') conversation.control = 'shared';
+        if (control === 'user_pending') {
+          conversation.control = 'user';
+          this.watchReturn(conversation);
+        } else if (control === 'agent') conversation.control = 'shared';
         this.visibility(conversation);
         if (composer && !this.window.isDestroyed())
           this.window.webContents.focus();
@@ -2179,8 +2272,13 @@ export class BrowserSessions {
     const { action, args } = request;
     if (action === 'handoff') {
       // Circle hands the person the browser, and waits until they hand it back
+      if (this.modeOf(conversation.id) === 'plan')
+        throw Error(
+          'plan mode does not hand the browser over: plan from what the page shows, and say what the user will do there',
+        );
       conversation.control = 'user';
       conversation.operating = false;
+      this.watchReturn(conversation);
       conversation.handoff =
         typeof args.reason === 'string' ? args.reason.slice(0, 500) : '';
       this.visibility(conversation);
@@ -2190,7 +2288,9 @@ export class BrowserSessions {
       return {
         text: await this.result(
           conversation,
-          'The user handed the browser back.',
+          conversation.takenBack
+            ? 'Circle took the browser back in auto mode.'
+            : 'The user handed the browser back.',
           signal,
         ),
       };
@@ -2263,6 +2363,14 @@ export class BrowserSessions {
         (target.type !== 'auth' || typeof args.password !== 'string')
       )
         throw Error('a password answers only a sign-in');
+      if (typeof args.password === 'string') {
+        const host = hostOf(target.origin);
+        const refused = secretRefused(
+          host,
+          conversation.insecureHosts.has(host),
+        );
+        if (refused) throw Error(refused);
+      }
       const dialog = await this.answerDialog(
         conversation,
         target.id,
@@ -2388,6 +2496,14 @@ export class BrowserSessions {
         action === 'type' && args.secret === true
           ? { name: String(args.secretName ?? 'secret') }
           : undefined;
+      if (secret) {
+        const host = hostOf(tab.view.webContents.getURL());
+        const refused = secretRefused(
+          host,
+          !tab.warning && conversation.insecureHosts.has(host),
+        );
+        if (refused) throw Error(refused);
+      }
       if (
         action === 'type' &&
         (typeof args.text !== 'string' ||
@@ -2442,7 +2558,12 @@ export class BrowserSessions {
           tab: tab.id,
           approved: {
             token: warning.token,
-            scope: approval.scope === 'always' ? 'always' : 'once',
+            scope:
+              approval.scope === 'always'
+                ? 'always'
+                : approval.scope === 'auto'
+                  ? 'auto'
+                  : 'once',
           },
         };
       }
@@ -2693,6 +2814,8 @@ export class BrowserSessions {
   }
   close() {
     this.closed = true;
+    for (const conversation of this.conversations.values())
+      clearInterval(conversation.autoReturn);
     // Downloads no one kept go with Circle
     if (this.held) rmSync(this.held, { recursive: true, force: true });
     for (const conversation of this.conversations.values()) {

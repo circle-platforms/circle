@@ -28,7 +28,14 @@ import {
   type PageDialog,
   type PageElement,
 } from './format.js';
-import { downloadSite, privateHost, siteOf, webUrl } from './hosts.js';
+import {
+  downloadSite,
+  hostOf,
+  privateHost,
+  secretRefused,
+  siteOf,
+  webUrl,
+} from './hosts.js';
 import {
   downloadName,
   downloadsFolder,
@@ -115,6 +122,16 @@ export interface ChromeOptions {
   handoff?: (reason: string, signal: AbortSignal) => Promise<void>;
   /** How long the browser has to start, in milliseconds: a minute unless given. */
   startTimeout?: number;
+  /**
+   * Host names mapped to addresses, as Chrome's --host-resolver-rules: for tests, which reach
+   * a local site by a public name.
+   */
+  hostRules?: string;
+  /**
+   * A conversation's mode (manual, accept-edits, plan or auto): plan mode hands nothing over,
+   * and in auto mode Circle takes the browser back once the page has moved on.
+   */
+  mode?: (conversation: string) => string | undefined;
 }
 interface Download {
   id: string;
@@ -161,7 +178,7 @@ interface Tab {
   wake: Set<() => void>;
   warning?: Warning;
   /** Who is taking the warning's proceed link: Circle with approval, or for a trusted certificate. */
-  proceeding?: 'approved' | 'trusted';
+  proceeding?: 'approved' | 'trusted' | 'auto';
   failure?: { url: string; error: string };
   security?: {
     securityState?: string;
@@ -273,6 +290,9 @@ export class ChromeBrowser implements BrowserPort {
         ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
         ...(process.platform === 'linux' ? ['--password-store=basic'] : []),
         ...(this.options.headless ? ['--headless=new'] : []),
+        ...(this.options.hostRules
+          ? [`--host-resolver-rules=${this.options.hostRules}`]
+          : []),
         BLANK,
       ],
       { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] },
@@ -692,9 +712,11 @@ export class ChromeBrowser implements BrowserPort {
               `certificate warning for ${tab.warning.host}: ${
                 tab.proceeding === 'approved'
                   ? 'Circle proceeded, approved by the user'
-                  : tab.proceeding === 'trusted'
-                    ? 'proceeded, as the user trusts this certificate on this host'
-                    : 'the user proceeded'
+                  : tab.proceeding === 'auto'
+                    ? `Circle proceeded in auto mode, without asking (sha256 ${tab.warning.fingerprint})`
+                    : tab.proceeding === 'trusted'
+                      ? 'proceeded, as the user trusts this certificate on this host'
+                      : 'the user proceeded'
               }`,
             );
           // A new document: a chooser or an approval for the old one is gone with it
@@ -1076,6 +1098,15 @@ export class ChromeBrowser implements BrowserPort {
   ): Promise<BrowserResult> {
     if (args.password !== undefined && typeof args.password !== 'string')
       throw Error('invalid browser dialog answer');
+    // The tab's certificate exception covers the sign-in only on the tab's own host
+    if (args.accept && typeof args.password === 'string') {
+      const host = hostOf(dialog.origin);
+      const refused = secretRefused(
+        host,
+        host === hostOf(tab.url) && this.insecure(tab),
+      );
+      if (refused) throw Error(refused);
+    }
     tab.dialogs = tab.dialogs.filter((entry) => entry !== dialog);
     const next = this.dialogOpens(tab);
     await this.send(
@@ -1552,6 +1583,10 @@ export class ChromeBrowser implements BrowserPort {
     if (action === 'handoff') {
       if (!this.options.handoff)
         throw Error('there is no one to hand the browser to here');
+      if (this.options.mode?.(conversation.id) === 'plan')
+        throw Error(
+          'plan mode does not hand the browser over: plan from what the page shows, and say what the user will do there',
+        );
       // The window comes to the front for the person, who has it until they hand it back
       await this.send('Page.bringToFront', {}, tab.session).catch(() => {});
       // A sign-in waiting for the model is the browser's own dialog for them
@@ -1573,19 +1608,53 @@ export class ChromeBrowser implements BrowserPort {
           );
         }
       conversation.acting = false;
+      // In auto mode the card closes by itself 2 seconds after a tab settled at a new address
+      const done = new AbortController();
+      const stop = () => done.abort();
+      signal.addEventListener('abort', stop, { once: true });
+      const addresses = () =>
+        [...conversation.tabs.values()]
+          .map((tab) => `${tab.id} ${tab.frameUrl}`)
+          .join('\n');
+      const before = addresses();
+      let seen = before;
+      let changed = 0;
+      let movedOn = false;
+      const watch = setInterval(() => {
+        const now = addresses();
+        if (now !== seen) [seen, changed] = [now, Date.now()];
+        if (
+          this.options.mode?.(conversation.id) === 'auto' &&
+          seen !== before &&
+          Date.now() - changed >= 2000
+        ) {
+          movedOn = true;
+          done.abort();
+        }
+      }, 500);
       try {
         await this.options.handoff(
           typeof args.reason === 'string' ? args.reason.slice(0, 500) : '',
-          signal,
+          done.signal,
         );
+      } catch (error) {
+        if (!movedOn) throw error;
       } finally {
+        clearInterval(watch);
+        signal.removeEventListener('abort', stop);
         conversation.acting = true;
       }
-      conversation.events.push('the user handed the browser back');
+      conversation.events.push(
+        movedOn
+          ? 'auto mode: Circle took the browser back, as the page moved on'
+          : 'the user handed the browser back',
+      );
       return {
         text: await this.result(
           conversation,
-          'The user handed the browser back.',
+          movedOn
+            ? 'Circle took the browser back in auto mode, as the page moved on.'
+            : 'The user handed the browser back.',
           signal,
         ),
       };
@@ -1905,6 +1974,10 @@ export class ChromeBrowser implements BrowserPort {
         action === 'type' && args.secret === true
           ? { name: String(args.secretName ?? 'secret') }
           : undefined;
+      if (secret) {
+        const refused = secretRefused(hostOf(tab.url), this.insecure(tab));
+        if (refused) throw Error(refused);
+      }
       if (
         action === 'type' &&
         (typeof args.text !== 'string' ||
@@ -1932,7 +2005,7 @@ export class ChromeBrowser implements BrowserPort {
         { ref: args.ref, typing: action === 'type', secret: !!secret },
         signal,
       );
-      let trust: 'once' | 'always' | undefined;
+      let trust: 'once' | 'always' | 'auto' | undefined;
       if (action === 'click' && target.action === 'proceed') {
         const warning = tab.warning;
         if (!warning)
@@ -1954,7 +2027,12 @@ export class ChromeBrowser implements BrowserPort {
               privateHost: privateHost(warning.host),
             },
           };
-        trust = approval.scope === 'always' ? 'always' : 'once';
+        trust =
+          approval.scope === 'always'
+            ? 'always'
+            : approval.scope === 'auto'
+              ? 'auto'
+              : 'once';
       }
       const verb =
         action === 'type' ? 'type' : action === 'select' ? 'select' : 'click';
@@ -1980,7 +2058,7 @@ export class ChromeBrowser implements BrowserPort {
       const which = actedOn(args.ref, point);
       const other = describedOther(args.element, point);
       if (action === 'click') {
-        if (trust) tab.proceeding = 'approved';
+        if (trust) tab.proceeding = trust === 'auto' ? 'auto' : 'approved';
         if (trust === 'always' && tab.warning)
           this.trusted.add(tab.warning.host, tab.warning.fingerprint);
         for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased'])

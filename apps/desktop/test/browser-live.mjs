@@ -403,6 +403,23 @@ await script([
   answer('later-done', 'clicked later'),
   calls('later-look', [call('later-look', 'browser_snapshot', {})]),
   answer('later-look-done', 'looked after the download'),
+  // Auto mode: the person's turn with the browser ends by itself, and a page's permission
+  // request is refused without asking
+  calls('auto-handoff', [
+    call('auto-handoff', 'browser_handoff', {
+      reason: 'type the code from your phone',
+    }),
+  ]),
+  answer('auto-back', 'auto mode took the browser back'),
+  calls('auto-permission-nav', [
+    call('auto-permission-nav', 'browser_navigate', {
+      url: otherUrl + 'permission',
+    }),
+  ]),
+  calls('auto-permission-ask', [
+    call('auto-permission-ask', 'browser_click', { ref: 'e1', element: 'Ask' }),
+  ]),
+  answer('auto-permission-done', 'auto mode refused notifications'),
 ]);
 const env = {
   ...process.env,
@@ -767,6 +784,17 @@ try {
 
     // ---- a dialog the person answers in the conversation while the model works
     await send('delete the configuration, then look again');
+    // A click that deletes asks every time, though the site is allowed for the session
+    const deleting = approval('which can delete');
+    await deleting.waitFor();
+    assert.match(await deleting.innerText(), /Delete configuration/);
+    assert.equal(
+      await deleting.getByRole('button', { name: /for this session/ }).count(),
+      0,
+    );
+    await deleting
+      .getByRole('button', { name: 'allow once', exact: true })
+      .click();
     const asked = page.getByTestId('browser-dialog-request');
     await asked.waitFor();
     assert.match(await asked.innerText(), /Delete the configuration\?/);
@@ -950,9 +978,23 @@ try {
     await send('hand me the browser');
     const handoffCard = page.getByTestId('browser-handoff-request');
     await handoffCard.waitFor();
-    const band = page.getByTestId('browser-control');
-    await band.waitFor();
-    assert.match(await band.innerText(), /sign in with your security key/);
+    // What Circle waits for is said in the conversation; the panel only says who has it
+    assert.match(
+      await handoffCard.innerText(),
+      /sign in with your security key/,
+    );
+    assert.match(
+      await handoffCard.innerText(),
+      /When you are done, continue here or send a message/,
+    );
+    await page.getByTestId('browser-user').waitFor();
+    assert.equal(await page.getByTestId('browser-control').count(), 0);
+    assert.equal(
+      await page
+        .getByRole('button', { name: 'hand back', exact: true })
+        .count(),
+      0,
+    );
     assert.equal((await browserState(sessionId)).control, 'user');
     const bar = page.getByRole('textbox', {
       name: 'browser address',
@@ -965,7 +1007,7 @@ try {
       'the person goes elsewhere',
     );
     await handoffCard
-      .getByRole('button', { name: 'hand back', exact: true })
+      .getByRole('button', { name: 'continue', exact: true })
       .click();
     await page.getByText('browser handed back', { exact: true }).waitFor();
     assert.match(
@@ -1001,13 +1043,19 @@ try {
     });
     assert.equal(masked, 0);
     await page.getByTestId('browser-pending').waitFor();
-    await band.waitFor();
     // The model's next look waits for the browser back, then shows the page as it is;
-    // the panel says so once that look is waiting, not before
+    // a message to Circle hands it back, and reaches the model with the page
     await handoffCard.waitFor();
-    await page.getByTestId('browser-waiting').waitFor();
-    await band.getByRole('button', { name: 'hand back', exact: true }).click();
+    await waitFor(
+      async () => (await browserState(sessionId)).waiting === true,
+      "Circle's next look waits",
+    );
+    await send('done, go on');
     await page.getByText('takeover checked', { exact: true }).waitFor();
+    assert(
+      JSON.stringify((await requests()).at(-1)).includes('done, go on'),
+      'the message reached the model',
+    );
     assert.match(await textOf('slow-nav'), /the user took over the browser/);
     assert.match(
       await textOf('after-takeover'),
@@ -1274,6 +1322,73 @@ try {
     );
     checks.push(
       'the same certificate on another port warns again, and the person passes it in the tab without an approval',
+    );
+
+    // ---- auto mode: the person's turn with the browser ends by itself once they stop,
+    // and a page's permission request is refused without asking
+    const setMode = (mode) =>
+      page.evaluate(async (mode) => {
+        const current = await window.circleDesktop.runtimeState();
+        return window.circleDesktop.runtimeCommand({
+          id: crypto.randomUUID(),
+          name: 'set-mode',
+          payload: { mode },
+          sessionId: current.snapshot.activeSessionId,
+        });
+      }, mode);
+    await setMode('auto');
+    await send('hand me the browser in auto mode');
+    await handoffCard.waitFor();
+    assert.match(
+      await handoffCard.innerText(),
+      /Circle goes on by itself once you are done/,
+    );
+    // The person types in the page, then stops
+    const typed = await app.evaluate(({ BrowserWindow }, address) => {
+      const tab = BrowserWindow.getAllWindows()[0].contentView.children.find(
+        (view) => view.webContents.getURL().startsWith(address),
+      );
+      if (!tab) return false;
+      for (const type of ['keyDown', 'char', 'keyUp'])
+        tab.webContents.sendInputEvent({ type, keyCode: 'a' });
+      return true;
+    }, otherUrl);
+    assert.equal(typed, true);
+    const stopped = Date.now();
+    await page
+      .getByText('auto mode took the browser back', { exact: true })
+      .waitFor({ timeout: 30_000 });
+    assert(Date.now() - stopped >= 4000, 'it waits for the person to stop');
+    const autoBack = await textOf('auto-handoff');
+    assert.match(
+      autoBack,
+      /### Result\nCircle took the browser back in auto mode\./,
+    );
+    assert.match(
+      autoBack,
+      /- auto mode: Circle took the browser back, as the user stopped/,
+    );
+    await send('ask for notifications on the other port');
+    await page
+      .getByText('auto mode refused notifications', { exact: true })
+      .waitFor();
+    assert.match(
+      await textOf('auto-permission-ask'),
+      new RegExp(
+        `auto mode: ${new URL(otherUrl).origin} asked for notifications; Circle refused it without asking`,
+      ),
+    );
+    assert.equal(await page.getByTestId('browser-permission').count(), 0);
+    assert(
+      (await state()).interactions.every((row) => row.status !== 'pending'),
+    );
+    assert.equal(
+      await native(`document.getElementById('out').textContent`),
+      'notifications: denied',
+    );
+    await setMode('manual');
+    checks.push(
+      "auto mode takes the browser back once the person stops, says so to the model, and refuses a page's permission request without asking",
     );
     assert.deepEqual(errors, []);
     await page.screenshot({ path: join(output, 'browser-live.png') });

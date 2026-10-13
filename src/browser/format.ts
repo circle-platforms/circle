@@ -91,6 +91,43 @@ export function describes(description: string, element: PageElement): boolean {
     .filter((word) => word && word !== role && !KINDS.has(word))
     .every((word) => name.includes(word));
 }
+// Words of a control that deletes, clears, resets or wipes something: the person confirms
+// such a click first in manual mode, as a deleting command asks
+const DESTRUCTIVE =
+  /删除|移除|清除|清空|清理|重置|恢复出厂|出厂设置|格式化|卸载|销毁|丢弃|\b(?:delete|remove|erase|clear|purge|drop|destroy|reset|wipe|format|uninstall|discard|truncate)\b/i;
+/** Whether a control's name, or a dialog's message, says it deletes something. */
+export const destructive = (text: string): boolean => DESTRUCTIVE.test(text);
+/** The role and name a browser result's snapshot gave a ref: `[e28] link "主机设置"`. */
+export function snapshotElement(
+  text: string,
+  ref: string,
+): PageElement | undefined {
+  if (!/^e[1-9][0-9]*$/.test(ref)) return undefined;
+  // Refs can stand mid-line, as in a table row
+  const found = text.match(
+    new RegExp(`\\[${ref}\\] (\\S+)(?: ("(?:[^"\\\\]|\\\\.)*"))?`),
+  );
+  if (!found) return undefined;
+  let name = '';
+  try {
+    name = found[2] ? String(JSON.parse(found[2])) : '';
+  } catch {
+    /* a name cut by the snapshot's limit */
+  }
+  return { role: found[1]!, name };
+}
+/** What a browser result lists under "Dialogs waiting": the dialog with this id, or the first. */
+export function waitingDialog(text: string, id?: unknown): string {
+  const section =
+    text.split('### Dialogs waiting')[1]?.split('\n### ')[0] ?? '';
+  const lines = section.split('\n').filter((line) => line.startsWith('- ['));
+  return (
+    (typeof id === 'string' &&
+      lines.find((line) => line.startsWith(`- [${id}]`))) ||
+    lines[0] ||
+    ''
+  );
+}
 /** One line of "Dialogs waiting". */
 export function dialogLine(dialog: PageDialog): string {
   if (dialog.type === 'auth')

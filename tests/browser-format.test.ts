@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  destructive,
+  snapshotElement,
+  waitingDialog,
   actedOn,
   describedOther,
   describes,
@@ -60,4 +63,51 @@ test('a description of another element ends the sentence with a note to look aga
     'close icon',
   );
   assert.equal(shownName({ role: 'button', name: '' }, ''), 'button');
+});
+
+test('a control or dialog that deletes is told by its words, and a ref by the snapshot it came from', () => {
+  for (const name of [
+    '删除',
+    '批量删除',
+    '清空日志',
+    '恢复出厂设置',
+    'Delete configuration',
+    'Remove',
+    'reset password',
+  ])
+    assert.equal(destructive(name), true, name);
+  for (const name of [
+    '添加',
+    '编辑',
+    'Dropdown',
+    'Restart device',
+    'Address',
+    'Cleared at 10:24',
+  ])
+    assert.equal(destructive(name), false, name);
+  const page = [
+    '### Snapshot',
+    '[e5] button "删除"',
+    '| vs3 | [e9] link "编辑 \\"vs3\\"" | [e10] checkbox |',
+    '### Dialogs waiting',
+    '- [d1] confirm · tab t1 · from https://x: "确定删除吗？" → browser_dialog',
+    '- [d2] alert · tab t2 · from https://y: "Saved" → browser_dialog',
+  ].join('\n');
+  assert.deepEqual(snapshotElement(page, 'e5'), {
+    role: 'button',
+    name: '删除',
+  });
+  assert.deepEqual(snapshotElement(page, 'e9'), {
+    role: 'link',
+    name: '编辑 "vs3"',
+  });
+  assert.deepEqual(snapshotElement(page, 'e10'), {
+    role: 'checkbox',
+    name: '',
+  });
+  assert.equal(snapshotElement(page, 'e1'), undefined);
+  assert.equal(snapshotElement(page, 'e5|.*'), undefined);
+  assert.match(waitingDialog(page), /\[d1\] confirm/);
+  assert.match(waitingDialog(page, 'd2'), /\[d2\] alert/);
+  assert.equal(waitingDialog('no dialogs'), '');
 });

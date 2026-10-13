@@ -633,6 +633,7 @@ export function Conversation({
             <BrowserHandoffRequest
               sessionId={session.id}
               reason={browser.handoff}
+              auto={session.mode === 'auto'}
             />
           )}
           {clock && clockAt < 0 && <TurnRow turn={clock} />}

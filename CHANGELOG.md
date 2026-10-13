@@ -4,6 +4,16 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Changed
+
+- **Auto mode asks nothing in the browser either.** Passing a certificate warning and giving a page files no longer ask in `auto` mode, and the model's result names the certificate it passed; in the desktop application a page's permission request and a site's request for a client certificate are refused without asking. Turning `auto` on says what it lets through.
+- **You give the browser back by going on in the conversation.** The desktop panel's **hand back** button is gone: **continue** on the card in the conversation, or any message to Circle, returns the browser, and in `auto` mode Circle takes it back by itself once you stop or the page moves on. The model no longer hands you the browser for a certificate warning, a dialog or a stale element, and plan mode hands nothing over.
+
+### Added
+
+- **A click that deletes on a page asks every time** in manual and accept-edits mode, though the site is allowed for the session: a control named 删除, 清空, Delete, Remove, Reset and the like, or accepting a dialog that says so. `auto` mode does not ask.
+- **A saved secret goes into no page on a public address whose certificate was not trusted**, typed or given to a sign-in, in every mode; on this network it is typed as before.
+
 ### Fixed
 
 - **A browser action's result repeated the model's own words for the element instead of naming the one it acted on.** A model that took ref `e28` for the network menu was told `Clicked e28 "网络菜单".` when it had clicked the host settings link, and went on believing it. A click, typing, a choice or a file given to a ref now names the element as the snapshot shows it, read from the page at that moment (`Clicked e28 link "主机设置".`), and says when the model described another one: `— you described it as "网络菜单"; check the snapshot`. The pointer's label and the field in an upload's approval show the page's name too. In the desktop application and in the terminal's browser. See [Tools](docs/tools.md#the-browser).

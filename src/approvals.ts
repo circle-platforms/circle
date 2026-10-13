@@ -754,6 +754,15 @@ export class ApprovalPolicy {
       );
     if (Object.hasOwn(BROWSER_ACTIONS, tool)) {
       const site = typeof args.site === 'string' ? args.site : '';
+      // A click on a control that deletes, clears or resets something, or accepting a dialog
+      // that says so, asks every time, as a deleting command does: a rule for the site does
+      // not cover it, and only auto mode stops asking (the tools add `deletes`)
+      if (typeof args.deletes === 'string' && args.deletes)
+        return review(
+          'ASK_FORCED',
+          `${BROWSER_ACTIONS[tool]}, which can delete: ${JSON.stringify(args.deletes)}`,
+          { warn_delete: true },
+        );
       return review('ASK', BROWSER_ACTIONS[tool]!, {
         pattern: site ? 'site:' + site : '*',
         scope: site ? `browser control on ${site}` : 'browser control',

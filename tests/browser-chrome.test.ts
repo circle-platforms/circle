@@ -1474,3 +1474,237 @@ test(
     assert.equal(visited.at(-1), '/network');
   },
 );
+
+test(
+  'a saved secret goes into no page on a public address whose certificate was not trusted, but does on this network',
+  { skip },
+  async (t) => {
+    const temp = made(t, 'circle-chrome-secret-');
+    const key = join(temp, 'key.pem');
+    const cert = join(temp, 'cert.pem');
+    execFileSync(
+      'openssl',
+      [
+        'req',
+        '-x509',
+        '-newkey',
+        'rsa:2048',
+        '-nodes',
+        '-keyout',
+        key,
+        '-out',
+        cert,
+        '-days',
+        '1',
+        '-subj',
+        '/CN=Circle secret fixture',
+      ],
+      { stdio: 'ignore' },
+    );
+    const posts: string[] = [];
+    const server = createHttps(
+      { key: readFileSync(key), cert: readFileSync(cert) },
+      (req, res) => {
+        if (req.method === 'POST') {
+          let body = '';
+          req.on('data', (chunk) => (body += chunk));
+          req.on('end', () => {
+            posts.push(body);
+            res.end('<!doctype html><title>Sent</title>');
+          });
+          return;
+        }
+        if (req.url === '/auth') {
+          res.writeHead(401, { 'www-authenticate': 'Basic realm="Lab"' });
+          return res.end();
+        }
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(
+          '<!doctype html><title>Login</title><form method="post"><label>User <input name="user"></label><label>Password <input name="pass" type="password"></label><button>Sign in</button></form>',
+        );
+      },
+    );
+    const port = await listen(server as unknown as Server);
+    cleanup(
+      t,
+      () => new Promise<void>((resolve) => server.close(() => resolve())),
+    );
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: join(temp, 'downloads'),
+      // A public name for the local site (not one Chrome keeps to HTTPS for good, as .test)
+      hostRules: 'MAP device.example.net 127.0.0.1',
+    });
+    cleanup(t, () => chrome.close());
+    const act = (
+      conversation: string,
+      action: BrowserAction,
+      args: Record<string, unknown> = {},
+    ) =>
+      chrome.request(conversation, action, args, new AbortController().signal);
+    const pick = (text: string, pattern: RegExp) => {
+      const found = text.match(pattern);
+      assert(found, `${pattern} is not in:\n${text}`);
+      return found[1]!;
+    };
+    // Past the warning, as the person allowed
+    const open = async (
+      conversation: string,
+      url: string,
+      scope: 'once' | 'auto' = 'once',
+    ) => {
+      const warned = await act(conversation, 'navigate', { url });
+      const advanced = await act(conversation, 'click', {
+        ref: pick(warned.text, /\[(e\d+)\] button "(?:Advanced|高级)"/),
+        element: 'advanced',
+      });
+      const proceed = pick(
+        advanced.text,
+        /\[(e\d+)\] link "(?:Proceed to|继续前往)/,
+      );
+      const asked = await act(conversation, 'click', {
+        ref: proceed,
+        element: 'proceed',
+      });
+      const page = await act(conversation, 'click', {
+        ref: proceed,
+        element: 'proceed',
+        approval: { token: asked.approval!.token, scope },
+      });
+      assert.match(
+        page.text,
+        /not secure: its certificate was accepted for this session/,
+      );
+      return page.text;
+    };
+    const secret = {
+      text: 'lab-pass',
+      secret: true,
+      secretName: 'LAB_PASSWORD',
+    };
+
+    const publicPage = await open(
+      'public',
+      `https://device.example.net:${port}/`,
+    );
+    const user = pick(publicPage, /\[(e\d+)\] textbox "User"/);
+    const password = pick(publicPage, /\[(e\d+)\] password "Password"/);
+    // Plain text still goes in; the secret does not, and nothing reaches the field
+    await act('public', 'type', { ref: user, text: 'admin', element: 'User' });
+    await assert.rejects(
+      act('public', 'type', { ref: password, element: 'Password', ...secret }),
+      /a saved secret goes into no page on device\.example\.net:\d+: its certificate is not trusted and it is a public address/,
+    );
+    const after = await act('public', 'snapshot');
+    assert.match(after.text, /password "Password" empty/);
+    // Nor an HTTP sign-in there
+    const signIn = await act('public', 'navigate', {
+      url: `https://device.example.net:${port}/auth`,
+    });
+    assert.match(signIn.text, /sign-in/);
+    await assert.rejects(
+      act('public', 'dialog', {
+        accept: true,
+        text: 'admin',
+        password: 'lab-pass',
+      }),
+      /a saved secret goes into no page on device\.example\.net/,
+    );
+
+    // On this network the same certificate is passed, here by auto mode, and the secret typed
+    const localPage = await open('local', `https://127.0.0.1:${port}/`, 'auto');
+    assert.match(
+      localPage,
+      /- certificate warning for 127\.0\.0\.1:\d+: Circle proceeded in auto mode, without asking \(sha256 [0-9A-F:]+\)/,
+    );
+    const localPassword = pick(localPage, /\[(e\d+)\] password "Password"/);
+    const typed = await act('local', 'type', {
+      ref: localPassword,
+      element: 'Password',
+      ...secret,
+    });
+    assert.match(
+      typed.text,
+      /Typed secret LAB_PASSWORD into e\d+ password "Password"/,
+    );
+    assert.match(typed.text, /password "Password" filled/);
+    assert.deepEqual(posts, []);
+  },
+);
+
+test(
+  'in auto mode the terminal browser takes itself back once the page moved on, and plan mode hands nothing over',
+  { skip },
+  async (t) => {
+    const temp = made(t, 'circle-chrome-auto-handoff-');
+    const site = createHttp((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(
+        `<!doctype html><title>${req.url === '/b' ? 'Signed in' : 'Sign in'}</title><input aria-label="Code">`,
+      );
+    });
+    const base = `http://127.0.0.1:${await listen(site)}`;
+    t.after(() => site.close());
+    let mode = 'auto';
+    let closed = false;
+    const chrome: ChromeBrowser = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: temp,
+      mode: () => mode,
+      // The person goes on in the window and never answers the card: it stays until closed
+      handoff: (_reason, signal) =>
+        new Promise<void>((_resolve, reject) => {
+          const internals = chrome as unknown as {
+            conversations: Map<
+              string,
+              { tabs: Map<string, { session: string }> }
+            >;
+            send: (
+              method: string,
+              params: Record<string, unknown>,
+              session?: string,
+            ) => Promise<unknown>;
+          };
+          const tab = internals.conversations.get('c')!.tabs.get('t1')!;
+          void internals.send(
+            'Runtime.evaluate',
+            { expression: `location.href = '/b'` },
+            tab.session,
+          );
+          signal.addEventListener('abort', () => {
+            closed = true;
+            reject(signal.reason);
+          });
+        }),
+    });
+    cleanup(t, () => chrome.close());
+    const signal = new AbortController().signal;
+    await chrome.request('c', 'navigate', { url: `${base}/a` }, signal);
+    const started = Date.now();
+    const back = await chrome.request(
+      'c',
+      'handoff',
+      { reason: 'sign in' },
+      signal,
+    );
+    assert.equal(closed, true);
+    assert(Date.now() - started >= 2000, 'it waits for the page to settle');
+    assert.match(
+      back.text,
+      /### Result\nCircle took the browser back in auto mode, as the page moved on\./,
+    );
+    assert.match(
+      back.text,
+      /- auto mode: Circle took the browser back, as the page moved on/,
+    );
+    assert.match(back.text, /tab t1 · "Signed in"/);
+    // Plan mode does not hand the browser over
+    mode = 'plan';
+    await assert.rejects(
+      chrome.request('c', 'handoff', { reason: 'sign in' }, signal),
+      /plan mode does not hand the browser over/,
+    );
+  },
+);

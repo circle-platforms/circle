@@ -1105,13 +1105,15 @@ export class RuntimeController {
     for (const runtime of this.runtimes.values()) runtime.refreshPrompt();
     this.publish();
   }
-  /** The model pressed "proceed" on a certificate warning: only the person decides. */
+  /** The model pressed "proceed" on a certificate warning: the person decides, auto mode passes it. */
   private async confirmCertificate(
     runtime: AgentRuntime,
     approval: CertificateApproval,
     signal: AbortSignal,
     callId?: string,
-  ): Promise<'once' | 'always' | 'reject'> {
+  ): Promise<'once' | 'always' | 'reject' | 'auto'> {
+    // Auto mode passes it without asking; the model's result names the certificate
+    if (runtime.policy.mode(runtime.session.id) === 'auto') return 'auto';
     const answer = await this.wait(
       runtime,
       {
@@ -1152,6 +1154,8 @@ export class RuntimeController {
     signal: AbortSignal,
     callId?: string,
   ): Promise<'once' | 'reject'> {
+    // Auto mode gives the files without asking
+    if (runtime.policy.mode(runtime.session.id) === 'auto') return 'once';
     const answer = await this.wait(
       runtime,
       {

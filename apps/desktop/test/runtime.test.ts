@@ -393,7 +393,34 @@ function warningBrowser(privateHost: boolean) {
   return { port, requests };
 }
 
-test('passing a certificate warning waits for the person, also in auto mode, under its call, and the token never reaches the model', async (t) => {
+// Manual mode asks for browser control on the site first: the person allows it for the session
+async function allowSite(f: Awaited<ReturnType<typeof setup>>) {
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some(
+          (row) =>
+            row.status === 'pending' && row.reason === 'clicks in the browser',
+        ),
+    'browser control approval',
+  );
+  const row = f.controller
+    .snapshot()
+    .interactions.find((row) => row.status === 'pending')!;
+  assert.equal(
+    (
+      await f.call('answer', {
+        id: row.id,
+        revision: row.revision,
+        answer: 'always',
+      })
+    ).ok,
+    true,
+  );
+}
+
+test('passing a certificate warning waits for the person in manual mode, under its call, and the token never reaches the model', async (t) => {
   const browser = warningBrowser(true);
   const f = await setup(
     t,
@@ -412,19 +439,27 @@ test('passing a certificate warning waits for the person, also in auto mode, und
     true,
     browser.port,
   );
-  // Browser control itself needs no question in auto mode; the certificate still does
-  assert.equal((await f.call('set-mode', { mode: 'auto' })).ok, true);
+  // Manual mode: the certificate asks, under the call that met it, after the site's control
   await f.call('prompt', { text: 'open the device' });
+  await allowSite(f);
   await wait(
     () =>
       f.controller
         .snapshot()
-        .interactions.some((row) => row.status === 'pending'),
+        .interactions.some(
+          (row) =>
+            row.status === 'pending' &&
+            row.reason === 'trusts an untrusted certificate',
+        ),
     'certificate approval',
   );
   const row = f.controller
     .snapshot()
-    .interactions.find((row) => row.status === 'pending')!;
+    .interactions.find(
+      (row) =>
+        row.status === 'pending' &&
+        row.reason === 'trusts an untrusted certificate',
+    )!;
   assert.equal(row.reason, 'trusts an untrusted certificate');
   assert.equal(row.tool, 'browser_click');
   assert.equal(row.callId, 'proceed-call');
@@ -495,18 +530,26 @@ test('a public host offers no lasting trust, and refusing sends the browser noth
     true,
     browser.port,
   );
-  assert.equal((await f.call('set-mode', { mode: 'auto' })).ok, true);
   await f.call('prompt', { text: 'open the site' });
+  await allowSite(f);
   await wait(
     () =>
       f.controller
         .snapshot()
-        .interactions.some((row) => row.status === 'pending'),
+        .interactions.some(
+          (row) =>
+            row.status === 'pending' &&
+            row.reason === 'trusts an untrusted certificate',
+        ),
     'certificate approval',
   );
   const row = f.controller
     .snapshot()
-    .interactions.find((row) => row.status === 'pending')!;
+    .interactions.find(
+      (row) =>
+        row.status === 'pending' &&
+        row.reason === 'trusts an untrusted certificate',
+    )!;
   assert.deepEqual(row.choices, ['approve', 'reject']);
   await f.call('answer', {
     id: row.id,
@@ -521,6 +564,49 @@ test('a public host offers no lasting trust, and refusing sends the browser noth
         message.role === 'tool' &&
         message.status === 'error' &&
         /did not approve/.test(String(message.content)),
+    ),
+  );
+});
+
+test('auto mode passes a certificate warning without asking, and the token still never reaches the model', async (t) => {
+  const browser = warningBrowser(false);
+  const f = await setup(
+    t,
+    [
+      {
+        message: assistant('', [
+          {
+            id: 'proceed-call',
+            name: 'browser_click',
+            args: { ref: 'e3', element: 'proceed link' },
+          },
+        ]),
+      },
+      { message: assistant('inside') },
+    ],
+    true,
+    browser.port,
+  );
+  assert.equal((await f.call('set-mode', { mode: 'auto' })).ok, true);
+  await f.call('prompt', { text: 'open the site' });
+  await wait(() => f.model.requests.length === 2, 'next model request');
+  // Nobody was asked, and the browser was told auto mode let it through
+  assert.equal(f.controller.snapshot().interactions.length, 0);
+  assert.equal(browser.requests.length, 2);
+  assert.deepEqual(browser.requests[1]!.args.approval, {
+    token: 'warning-token-7f3a',
+    scope: 'auto',
+  });
+  assert.equal(
+    JSON.stringify(f.model.requests).includes('warning-token-7f3a'),
+    false,
+  );
+  assert(
+    f.model.requests[1]!.messages.some(
+      (message) =>
+        message.role === 'tool' &&
+        message.content === 'device page' &&
+        message.status === 'success',
     ),
   );
 });

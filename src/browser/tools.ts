@@ -5,6 +5,7 @@ import { fitMedia } from '../media.js';
 import type { Effect, Tool } from '../types.js';
 import { onlyReferences } from '../secrets.js';
 import { siteOf } from './hosts.js';
+import { destructive, snapshotElement, waitingDialog } from './format.js';
 import {
   BROWSER_KEYS,
   type BrowserAction,
@@ -100,14 +101,14 @@ const element = {
 
 /**
  * Asks the person whether the model may pass a certificate warning (once, for good, or not)
- * or give a page files (once or not).
+ * or give a page files (once or not). `auto`: auto mode answered without asking, as once.
  */
 export type BrowserConfirm = (
   sessionId: string,
   approval: BrowserApproval,
   signal: AbortSignal,
   callId?: string,
-) => Promise<'once' | 'always' | 'reject'>;
+) => Promise<'once' | 'always' | 'reject' | 'auto'>;
 
 /** What the tools need of the runtime that hosts them, beyond the browser itself. */
 export interface BrowserToolOptions {
@@ -128,8 +129,30 @@ export function browserTools(
   options: BrowserToolOptions = {},
 ): Tool[] {
   const { confirm, files = full } = options;
-  // Each conversation's shown site, from the latest result
+  // Each conversation's shown site and latest result, which names what its refs are
   const sites = new Map<string, string>();
+  const pages = new Map<string, string>();
+  // What an action would delete, for its approval: the control's name in the latest
+  // snapshot (the model's own words when the ref is not there), or the dialog it accepts
+  const deletes = (
+    action: BrowserAction,
+    args: Record<string, unknown>,
+    sessionId: string,
+  ): string => {
+    const page = pages.get(sessionId) ?? '';
+    if (action === 'click' && typeof args.ref === 'string') {
+      const target = snapshotElement(page, args.ref);
+      const name =
+        target?.name ||
+        (target ? '' : typeof args.element === 'string' ? args.element : '');
+      return destructive(name) ? name : '';
+    }
+    if (action === 'dialog' && args.accept === true) {
+      const dialog = waitingDialog(page, args.id);
+      return destructive(dialog) ? dialog.slice(0, 300) : '';
+    }
+    return '';
+  };
   // The site an action acts on, for its approval: where a navigation goes, else the page's
   const siteFor = (
     action: BrowserAction,
@@ -168,7 +191,13 @@ export function browserTools(
       : {
           approvalFacts: (args: Record<string, unknown>, sessionId: string) => {
             const site = siteFor(action, args, sessionId);
-            return site ? { site } : undefined;
+            const removes = deletes(action, args, sessionId);
+            return site || removes
+              ? {
+                  ...(site ? { site } : {}),
+                  ...(removes ? { deletes: removes } : {}),
+                }
+              : undefined;
           },
         }),
     parameters: {
@@ -271,6 +300,7 @@ export function browserTools(
       }
       if (typeof result.origin === 'string')
         sites.set(context.sessionId, result.origin);
+      pages.set(context.sessionId, result.text);
       if (!result.image) return result.text;
       if (!context.emitAttachments)
         throw Error('this caller does not accept media attachments');

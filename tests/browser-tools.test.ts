@@ -210,6 +210,101 @@ test('browser control is allowed site by site: the site goes to the card and the
   assert.equal('site' in (click.parameters as any).properties, false);
 });
 
+test('a click that deletes on a page, or accepting a dialog that says so, asks every time in manual mode, rules aside, and never in auto mode', async (t) => {
+  const root = scratch(t);
+  const page = [
+    '### Page',
+    'tab t1 · "virtual services" · https://device.lan/vs',
+    '### Snapshot',
+    '| vs3 | [e4] checkbox |',
+    '[e5] button "删除"',
+    '[e6] button "添加"',
+  ].join('\n');
+  const requests: string[] = [];
+  const port: BrowserPort = {
+    async request(_session, action, args) {
+      requests.push(`${action} ${String(args.ref ?? args.url ?? '')}`.trim());
+      // Deleting opens the page's own confirmation
+      const text =
+        action === 'click' && args.ref === 'e5'
+          ? `Clicked e5 button "删除". It opened dialog d1.\n${page}\n### Dialogs waiting\n- [d1] confirm · tab t1 · from https://device.lan: "确定删除选中的虚拟服务吗？" → browser_dialog`
+          : `${action} done\n${page}`;
+      return { text, origin: 'https://device.lan' };
+    },
+  };
+  const step = (id: string, name: string, args: Record<string, unknown>) => ({
+    message: {
+      id,
+      role: 'assistant' as const,
+      content: '',
+      tool_calls: [{ id, name, args }],
+    },
+  });
+  const model = new ScriptedModel([
+    step('open', 'browser_navigate', { url: 'https://device.lan/vs' }),
+    step('select', 'browser_click', { ref: 'e4', element: 'vs3' }),
+    // The model calls it something else: the page's name decides
+    step('delete', 'browser_click', { ref: 'e5', element: 'the button' }),
+    step('confirm', 'browser_dialog', { accept: true }),
+    step('add', 'browser_click', { ref: 'e6', element: '添加' }),
+    step('again', 'browser_click', { ref: 'e5', element: '删除' }),
+    { message: { id: 'done', role: 'assistant', content: 'done' } },
+    step('auto-delete', 'browser_click', { ref: 'e5', element: '删除' }),
+    step('auto-confirm', 'browser_dialog', { accept: true }),
+    { message: { id: 'auto-done', role: 'assistant', content: 'done' } },
+  ]);
+  const asked: { id: string; deletes: unknown; choices: string }[] = [];
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: trustFolder(defaultSettings(), root),
+    model,
+    extraTools: browserTools(port),
+    // The person allows the site for the session, and allows each delete once: its card
+    // offers no "for this session"
+    approve: async (call) => {
+      const review = runtime.policy.review(call.name, call.args);
+      asked.push({
+        id: call.id,
+        deletes: call.args.deletes,
+        choices: review.verdict,
+      });
+      return review.verdict === 'ASK_FORCED' ? 'approve' : 'always';
+    },
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.harness.run('remove vs3');
+  assert.deepEqual(asked, [
+    { id: 'open', deletes: undefined, choices: 'ASK' },
+    { id: 'delete', deletes: '删除', choices: 'ASK_FORCED' },
+    {
+      id: 'confirm',
+      deletes:
+        '- [d1] confirm · tab t1 · from https://device.lan: "确定删除选中的虚拟服务吗？" → browser_dialog',
+      choices: 'ASK_FORCED',
+    },
+    // A delete allowed once leaves no rule: the next one asks again
+    { id: 'again', deletes: '删除', choices: 'ASK_FORCED' },
+  ]);
+  // Every call ran once allowed; the checkbox and 添加 were covered by the site's rule
+  assert.deepEqual(requests, [
+    'navigate https://device.lan/vs',
+    'click e4',
+    'click e5',
+    'dialog',
+    'click e6',
+    'click e5',
+  ]);
+  // Auto mode does not ask
+  runtime.policy.setMode(runtime.session.id, 'auto');
+  await runtime.harness.run('remove it again');
+  assert.equal(asked.length, 4);
+  assert.deepEqual(requests.slice(-2), ['click e5', 'dialog']);
+  // The model cannot say what deletes: the schema refuses it
+  const click = runtime.allTools.find((tool) => tool.name === 'browser_click')!;
+  assert.equal('deletes' in (click.parameters as any).properties, false);
+});
+
 test('a download the model starts is kept or discarded by the person, and the model learns what its action did either way', async (t) => {
   const root = scratch(t);
   const requests: Record<string, unknown>[] = [];
