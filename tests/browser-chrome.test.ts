@@ -1159,6 +1159,16 @@ test(
     };
     const token = (result: { approval?: unknown }) =>
       (result.approval as { token: string }).token;
+    // A download starts a moment after what started it, later on a busy machine: look again
+    // until the browser holds one
+    const held = async (result: Awaited<ReturnType<typeof act>>) => {
+      const end = Date.now() + 10_000;
+      while (!result.approval && Date.now() < end) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        result = await act('snapshot');
+      }
+      return result;
+    };
 
     // ---- a blob is the download of the page that made it
     const blob = await act('navigate', { url: `${base}/blob` });
@@ -1203,15 +1213,15 @@ test(
       ref: ref(two.text, /\[(e\d+)\] button "Both"/),
       element: 'both',
     });
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    const first = both.approval
-      ? both
-      : await act('snapshot').then((result) => result);
+    // The second starts 400 ms after the first
+    const first = await held(both);
     assert.equal(first.approval?.kind, 'download');
     const firstSite = (first.approval as { site: string }).site;
-    const second = await act('snapshot', {
-      approval: { token: token(first), scope: 'once' },
-    });
+    const second = await held(
+      await act('snapshot', {
+        approval: { token: token(first), scope: 'once' },
+      }),
+    );
     assert.equal(second.approval?.kind, 'download');
     const secondSite = (second.approval as { site: string }).site;
     assert.deepEqual(
