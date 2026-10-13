@@ -81,6 +81,7 @@ Nobody can answer an approval card in print mode, so each call that would ask is
 
 - Without `--yolo` it is not run, and the model is told it needs `--yolo` or approval. Listing, reading and searching need no approval, so a question about the code can still be answered. Standard error says how many calls were not run.
 - With `--yolo` it runs, except the calls Circle always asks about: deleting, `rm -rf`, force-push and the other cases listed in [Security](security.md#how-commands-are-sorted). Those are still not run.
+- A command matching an `allowed_commands` pattern in the settings runs with or without `--yolo`, one that always asks included. See [Security](security.md#command-patterns-in-settings).
 - Commands the policy refuses (`sudo`, credential files) are refused as in a session.
 
 A question from the model comes back to it as text, and it asks the question in its answer.

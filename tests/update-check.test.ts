@@ -344,12 +344,16 @@ test('keybindings.json from the Python releases keeps working and its problems a
     JSON.stringify({
       'job.background': 'ctrl+k',
       'command.background': 'alt+b',
+      'mode.cycle': 'ctrl+m',
+      'thinking.cycle': 'alt+x',
       'no.such': 'ctrl+y',
     }),
   );
   const { remap, problems } = loadRemap(home);
   assert.equal(remap['ctrl+k'], 'ctrl+b');
   assert.equal(remap['alt+b'], 'ctrl+b');
+  assert.equal(remap['ctrl+m'], 'shift+tab');
+  assert.equal(remap['alt+x'], 'alt+t');
   assert.deepEqual(problems, ["unknown action 'no.such' in keybindings.json"]);
   const session = app(t, home);
   session.applyRunSettings();

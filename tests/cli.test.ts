@@ -6,7 +6,13 @@ import {
   type ServerResponse,
 } from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { pathToFileURL } from 'node:url';
@@ -507,6 +513,32 @@ test('--verbose shows tool calls, calls not run, retries and tokens in print and
   assert.match(line.stderr, /^● Read\(notes\.txt\)$/m);
   assert.match(line.stderr, /^ {2}⎿ Bash\(touch made\.txt\) not run/m);
   assert.match(line.stderr, /^↑ 3\.6k · ↓ 102 · 1 call not run/m);
+});
+
+test('print mode runs the commands the settings allow, without --yolo', async (t) => {
+  const home = scratch(t);
+  const workspace = realpathSync(scratch(t));
+  const replies: Reply[] = [
+    { call: { name: 'execute', args: { command: 'touch made.txt' } } },
+    { call: { name: 'execute', args: { command: 'rm -rf dist' } } },
+    { content: 'done' },
+  ];
+  const endpoint = await gateway(t, replies);
+  setUp(home, endpoint.base, [workspace]);
+  const settings = loadSettings(home);
+  settings.allowed_commands = ['touch *'];
+  saveSettings(settings, home);
+  const run = await circle(home, ['-p', 'work', workspace, '--verbose']);
+  assert.equal(run.code, 0, run.stderr);
+  assert.equal(run.stdout, 'done\n');
+  // the covered command really ran
+  assert.equal(existsSync(join(workspace, 'made.txt')), true);
+  // one no pattern covers still does not run, and says so
+  assert.match(
+    run.stderr,
+    /^ {2}⎿ Bash\(rm -rf dist\) not run · always asks$/m,
+    run.stderr,
+  );
 });
 
 test('stdin: without a prompt the read waits for the end; with one it waits three seconds', async (t) => {

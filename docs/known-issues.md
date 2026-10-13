@@ -17,7 +17,7 @@ This page lists what does not work as you might expect in the current version, w
 
 - **Going back with `/tree` does not undo file changes.** It changes what the model remembers, not your files.
 - **`/undo` does not make the model forget, and does not revert files.**
-- **`auto` and `accept edits` turn themselves off** on `/new`, `/fork`, `/clone`, `/import` and restart; the session asks again (`manual`). `read-only` stays with the conversation.
+- **`auto` and `accept edits` turn themselves off** on `/new`, `/fork`, `/clone`, `/import` and restart; the session falls back to the `default_mode` saved in the settings, or asks again (`manual`) without one. `read-only` stays with the conversation.
 - **`projects/` in the data folder is mostly not cleaned up.** It keeps the messages that summaries replaced, very long tool results, pasted pictures and screenshots, for every project; only command and job output is removed, a day after its run ended. Delete old folders by hand.
 - **Circle 0.5.0 cannot import the JSONL exports of this version.** This version imports 0.5.0's.
 
@@ -26,6 +26,7 @@ This page lists what does not work as you might expect in the current version, w
 These are gaps to know about before you trust Circle with a repository or a machine you do not fully control. The complete list is in [Security](security.md#what-is-not-protected).
 
 - **`/yolo` also skips the questions Circle always asks**, such as `rm -rf` and force-push.
+- **An `allowed_commands` pattern skips them too** for the commands it matches: `git *` covers a force-push, and patterns match text, not what a command reaches. Keep them narrow.
 - **Custom commands can run shell snippets without asking**, and a trusted folder's commands, skills and instruction files apply at once. Read a repository's `.circle/`, `.opencode/`, `.pi/`, `.claude/` and `.agents/` folders before you trust it.
 - **The credential-file check reads names, not contents.** File tools and commands refuse the listed names, but `ls` and `glob` show them, and a command that reaches a file without naming it (a script, a variable, a copy under another name) is not refused.
 - **A secret can be written to any path the model names.** Check the file on the card before you enter the value.

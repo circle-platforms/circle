@@ -501,6 +501,41 @@ export function commandPrefix(command: string): string[] {
     return [];
   return words.slice(0, 1);
 }
+// The leading `cd <folder> &&` (or `;`) of a command, when the folder is the
+// workspace itself; what remains is the command that rules and hashes see.
+function stripLeadingCd(command: string, workspace: string): string {
+  const leading = command.match(
+    /^\s*cd\s+(?:--\s+)?("[^"$`]*"|'[^']*'|[^\s;&|<>()$`'"]+)\s*(?:&&|;)\s*/,
+  );
+  if (
+    leading &&
+    normalizeWorkspace(
+      resolve(workspace, leading[1]!.replace(/^['"]|['"]$/g, '')),
+    ) === normalizeWorkspace(workspace)
+  )
+    return command.slice(leading[0].length);
+  return command;
+}
+/**
+ * Whether `allowed_commands` patterns from the settings cover a command:
+ * every segment of it, after a leading workspace `cd` is stripped, matches
+ * one of the patterns as a wildcard. A command that does not parse, or parses
+ * to nothing, is never covered.
+ */
+export function commandAllowed(
+  command: string,
+  patterns: readonly string[],
+  workspace: string,
+): boolean {
+  if (!patterns.length) return false;
+  const tokens = commandTokens(stripLeadingCd(command, workspace));
+  if (!tokens) return false;
+  const parts = segments(tokens);
+  if (!parts.length) return false;
+  return parts.every((words) =>
+    patterns.some((pattern) => wildcard(pattern, words.join(' '))),
+  );
+}
 interface Rule {
   tool: string;
   pattern: string;
@@ -524,7 +559,12 @@ export class ApprovalStore {
       const raw = readJson(this.path(thread));
       if (isRecord(raw))
         return {
-          rules: Array.isArray(raw.rules) ? (raw.rules as Rule[]) : [],
+          // Python 0.5.0 revoked a rule by marking it instead of removing
+          // it; a marked rule stays revoked here, and the next save drops it.
+          rules: (Array.isArray(raw.rules) ? (raw.rules as Rule[]) : []).filter(
+            (rule) =>
+              isRecord(rule) && !(rule as { revoked?: unknown }).revoked,
+          ),
           log: Array.isArray(raw.log) ? (raw.log as StoreData['log']) : [],
         };
     } catch {
@@ -619,7 +659,22 @@ export class ApprovalPolicy {
     readonly workspace: string,
     readonly credentialFiles = DEFAULT_CREDENTIAL_FILES,
     private readonly resolvePath?: (path: string) => string,
+    private allowed: readonly string[] = [],
   ) {}
+  get allowedCommands(): readonly string[] {
+    return this.allowed;
+  }
+  setAllowedCommands(patterns: readonly string[]): void {
+    this.allowed = patterns;
+  }
+  // A command the settings' patterns cover runs without asking, in every mode
+  // and even when it always asks; a DENY still wins, decided before this.
+  allowedBySettings(tool: string, args: Record<string, unknown>): boolean {
+    return (
+      tool === 'execute' &&
+      commandAllowed(String(args.command || ''), this.allowed, this.workspace)
+    );
+  }
   setMode(thread: string, mode: ApprovalMode): void {
     if (mode === 'manual') this.modes.delete(thread);
     else this.modes.set(thread, mode);
@@ -639,16 +694,7 @@ export class ApprovalPolicy {
       const found = classifyCommand(command, this.credentialFiles);
       if (found.verdict !== 'ASK' || found.pattern === 'read-only')
         return found;
-      const leading = command.match(
-        /^\s*cd\s+(?:--\s+)?("[^"$`]*"|'[^']*'|[^\s;&|<>()$`'"]+)\s*(?:&&|;)\s*/,
-      );
-      if (
-        leading &&
-        normalizeWorkspace(
-          resolve(this.workspace, leading[1]!.replace(/^['"]|['"]$/g, '')),
-        ) === normalizeWorkspace(this.workspace)
-      )
-        command = command.slice(leading[0].length);
+      command = stripLeadingCd(command, this.workspace);
       const prefix = commandPrefix(command);
       const words = prefix.length ? (commandTokens(command) ?? []) : [];
       return {
@@ -726,6 +772,7 @@ export class ApprovalPolicy {
   ): boolean {
     const found = this.review(tool, args);
     if (found.verdict === 'DENY') return false;
+    if (this.allowedBySettings(tool, args)) return false;
     const mode = this.mode(thread);
     if (allowYolo && mode === 'auto') return false;
     if (found.verdict === 'ASK_FORCED') return true;
@@ -774,11 +821,13 @@ export function defaultPolicy(
   home = circleHome(),
   credentials = DEFAULT_CREDENTIAL_FILES,
   resolvePath?: (path: string) => string,
+  allowedCommands: readonly string[] = [],
 ): ApprovalPolicy {
   return new ApprovalPolicy(
     new ApprovalStore(join(home, 'approvals')),
     workspace,
     credentials,
     resolvePath,
+    allowedCommands,
   );
 }

@@ -51,6 +51,7 @@ test('settings preserve unknown keys, credentials merge, and project cannot repl
   const settings = defaultSettings();
   settings.auth.base_url = 'https://gateway.test/v1';
   settings.credential_files = ['secret.txt'];
+  settings.allowed_commands = ['npm *'];
   saveSettings(settings, root);
   const path = join(root, 'settings.json');
   const raw = JSON.parse(readFileSync(path, 'utf8'));
@@ -68,14 +69,26 @@ test('settings preserve unknown keys, credentials merge, and project cannot repl
       auth: { base_url: 'https://evil.test' },
       theme: 'light',
       credential_files: ['other.txt'],
+      allowed_commands: ['git *'],
+      // a project may not choose the mode a session starts with
+      default_mode: 'auto',
     }),
   );
   const { changed, problems } = applyProjectSettings(settings, root);
-  assert.equal(problems.length, 1);
+  const projectPath = join(root, '.circle/settings.json');
+  assert.deepEqual(problems, [
+    `${projectPath}: 'auth' is not a project setting`,
+    `${projectPath}: 'default_mode' is not a project setting`,
+  ]);
   assert.equal(settings.auth.base_url, 'https://gateway.test/v1');
   assert.deepEqual(settings.credential_files, ['secret.txt', 'other.txt']);
+  assert.deepEqual(settings.allowed_commands, ['npm *', 'git *']);
+  assert.equal(settings.default_mode, '');
   assert.equal(settings.theme, 'light');
   assert.equal(withoutProjectSettings(settings, changed).theme, 'auto');
+  assert.deepEqual(withoutProjectSettings(settings, changed).allowed_commands, [
+    'npm *',
+  ]);
   settings.theme = 'dark';
   assert.equal(withoutProjectSettings(settings, changed).theme, 'dark');
 });

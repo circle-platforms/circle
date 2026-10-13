@@ -35,7 +35,7 @@ export const BUILTIN_SLASH: SlashCommand[] = [
   },
   {
     name: 'approvals',
-    description: 'Session approvals: /approvals [revoke N]',
+    description: 'Session approvals: /approvals [add P|remove P|revoke N]',
   },
   {
     name: 'jobs',
@@ -119,7 +119,8 @@ export const BUILTIN_SLASH: SlashCommand[] = [
   },
   {
     name: 'mode',
-    description: 'Next approval mode, or /mode manual|accept-edits|plan|auto',
+    description:
+      'Next session mode (shift+tab), or /mode manual|accept-edits|plan|auto',
   },
   { name: 'exit', description: 'Quit Circle', aliases: ['quit', 'q'] },
 ];
@@ -240,7 +241,8 @@ export function hotkeysText(): string {
     '  ctrl+r          reverse-i-search history',
     '  ctrl+l          choose a model (/models); also redraws the screen',
     '  ctrl+p          next model, for this session',
-    '  shift+tab       next thinking depth, for this session',
+    '  shift+tab       next session mode (manual, accept edits, read-only, auto)',
+    '  alt+t           next thinking depth, for this session',
     '  ctrl+g          edit the draft in $VISUAL / $EDITOR (/editor)',
     '  ctrl+x          copy the last answer (/copy)',
     '  ctrl+f          find in the conversation; enter next, esc closes',

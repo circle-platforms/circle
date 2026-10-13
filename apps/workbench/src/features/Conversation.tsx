@@ -338,10 +338,7 @@ export function Conversation({
           runtime.request('abort');
         } else if (mapped === 'clear') setDraft('');
         else if (mapped === 'newline') setDraft(current.draft + '\n');
-        else if (
-          mapped === 'thinking.cycle' &&
-          !(event.shiftKey && event.key === 'Tab')
-        )
+        else if (mapped === 'thinking.cycle')
           perform(() =>
             runtime.change((state) => {
               const target = currentSession(state);
@@ -349,6 +346,9 @@ export function Conversation({
                 EFFORTS[(EFFORTS.indexOf(target.effort) + 1) % EFFORTS.length]!;
             }),
           );
+        // The input box takes shift+tab itself; this is the key elsewhere, or another key
+        else if (mapped === 'mode.cycle')
+          setMode(nextMode(sessionMode(current)));
         else if (mapped === 'model.cycle') {
           const next =
             snapshot.models[

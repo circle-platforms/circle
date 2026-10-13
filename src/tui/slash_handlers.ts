@@ -19,6 +19,7 @@ import {
   loadSettings,
   saveSettingsChange,
   VARIABLE_NAME,
+  settingsForRun,
   type CircleSettings,
 } from '../settings.js';
 import { removeSecret, saveSecret, secretNames } from '../secrets.js';
@@ -96,6 +97,7 @@ type Handler = (host: CommandHost, args: string) => Promise<void> | void;
 // credentials and busy-aware toggles are in: they touch neither the session nor the model.
 const BUSY_OK = new Set([
   'yolo',
+  'mode',
   'approvals',
   'settings',
   'session',
@@ -314,8 +316,21 @@ const MODE_NOTICES: Record<SessionMode, string> = {
   plan: 'Read-only on · writes and shell are blocked, /plan.md is allowed',
   auto: 'Auto on · tool calls run without asking',
 };
+// The modes as the frame's corner word spells them.
+const MODE_WORDS: Record<SessionMode, string> = {
+  manual: 'manual',
+  'accept-edits': 'accept edits',
+  plan: 'read-only',
+  auto: 'auto',
+};
+const MODE_META: Record<SessionMode, string> = {
+  manual: 'asking before each change and command',
+  'accept-edits': 'workspace edits run without asking',
+  plan: 'writes and shell are blocked · plan.md is allowed',
+  auto: 'tool calls run without asking',
+};
 
-// /mode with no argument moves to the next mode, as shift+tab does in other agents.
+// /mode with no argument moves to the next mode; shift+tab does the same.
 function mode(host: CommandHost, args: string): void {
   const runtime = host.runtime;
   const token = args
@@ -341,6 +356,56 @@ function mode(host: CommandHost, args: string): void {
   }
   runtime.setMode(want);
   host.notice(MODE_NOTICES[want]);
+}
+// The mode list from /settings: enter uses a mode in this session, ctrl+s
+// also writes default_mode, as /effort does for the thinking depth.
+function modePicker(host: CommandHost): void {
+  const now = host.runtime.mode;
+  let saved: SessionMode | '' = '';
+  try {
+    saved = loadSettings(host.home).default_mode;
+  } catch {
+    /* An unreadable settings.json marks no default. */
+  }
+  const apply = (want: SessionMode, asDefault: boolean): void => {
+    if (asDefault) {
+      saveSettingsChange(host.home, (file) => {
+        file.default_mode = want;
+      });
+      host.settings.default_mode = want;
+    }
+    if (!asDefault && host.runtime.mode === want) {
+      host.flash(`Mode is already ${MODE_WORDS[want]}`);
+      return;
+    }
+    host.runtime.setMode(want);
+    host.notice(
+      MODE_NOTICES[want] + (asDefault ? ' · saved as the default' : ''),
+    );
+  };
+  host.picker(
+    'Session mode',
+    SESSION_MODES.map((mode) => ({
+      key: mode,
+      label: MODE_WORDS[mode],
+      current: mode === now,
+      meta: [MODE_META[mode], mode === saved ? 'default' : '']
+        .filter(Boolean)
+        .join(' · '),
+    })),
+    (item) => apply(item.key as SessionMode, false),
+    {
+      hint: 'enter uses it in this session · ctrl+s also makes it the default',
+      focusKey: now,
+      keys: {
+        'ctrl+s': (item) => {
+          if (!item) return;
+          host.closePicker();
+          apply(item.key as SessionMode, true);
+        },
+      },
+    },
+  );
 }
 
 function thinking(host: CommandHost, args: string): void {
@@ -442,13 +507,79 @@ const APPROVAL_WORDS: Record<string, string> = {
   reject: 'rejected',
   revoke: 'revoked',
 };
+// The merged pattern list from disk (the user's file plus a trusted
+// project's), live on the policy at once; /reload refreshes it too.
+function refreshAllowedPatterns(host: CommandHost): void {
+  const merged = settingsForRun(host.home, host.workspace).settings
+    .allowed_commands;
+  host.settings.allowed_commands = merged;
+  host.runtime.policy.setAllowedCommands(merged);
+}
+// /approvals add <pattern>: a wildcard rule in the user's settings.json;
+// matching commands run without asking, in every session.
+function approvalsAdd(host: CommandHost, pattern: string): void {
+  if (!pattern) {
+    host.flash('Usage: /approvals add <pattern>');
+    return;
+  }
+  if (host.settings.allowed_commands.includes(pattern)) {
+    host.flash(`"${pattern}" is already allowed`);
+    return;
+  }
+  saveSettingsChange(host.home, (file) => {
+    file.allowed_commands = [...new Set([...file.allowed_commands, pattern])];
+  });
+  refreshAllowedPatterns(host);
+  host.notice(`Allowed · commands matching "${pattern}" run without asking`);
+}
+// /approvals remove <pattern|number>: drops it from the user's settings; a
+// trusted project's copy of the same pattern survives, and says so.
+function approvalsRemove(host: CommandHost, target: string): void {
+  if (!target) {
+    host.flash('Usage: /approvals remove <pattern|number>');
+    return;
+  }
+  const merged = host.settings.allowed_commands;
+  let pattern = target;
+  if (/^\d+$/.test(target)) {
+    const found = merged[Number(target) - 1];
+    if (!found) {
+      host.flash(`No pattern number ${target}`);
+      return;
+    }
+    pattern = found;
+  } else if (!merged.includes(pattern)) {
+    host.flash(`No pattern "${pattern}"`);
+    return;
+  }
+  saveSettingsChange(host.home, (file) => {
+    file.allowed_commands = file.allowed_commands.filter(
+      (entry) => entry !== pattern,
+    );
+  });
+  refreshAllowedPatterns(host);
+  host.notice(
+    host.settings.allowed_commands.includes(pattern)
+      ? `Removed from your settings · the project still allows "${pattern}"`
+      : `Removed · commands matching "${pattern}" ask again`,
+  );
+}
 function approvals(host: CommandHost, args: string): void {
   const runtime = host.runtime;
   const store = runtime.policy.store;
   const thread = runtime.session.id;
-  const parts = args.split(/\s+/).filter(Boolean);
+  const trimmed = args.trim();
+  const parts = trimmed.split(/\s+/).filter(Boolean);
   if (!parts.length) {
     approvalsList(host);
+    return;
+  }
+  if (parts[0] === 'add') {
+    approvalsAdd(host, trimmed.slice(3).trim());
+    return;
+  }
+  if (parts[0] === 'remove') {
+    approvalsRemove(host, trimmed.slice(6).trim());
     return;
   }
   if (parts[0] === 'revoke') {
@@ -473,6 +604,12 @@ function approvals(host: CommandHost, args: string): void {
         `  ${index + 1}. ${rule.tool} · ${rule.label || rule.pattern}`,
     ),
   ];
+  const patterns = host.settings.allowed_commands;
+  if (patterns.length)
+    lines.push(
+      'Command patterns from settings:',
+      ...patterns.map((pattern, index) => `  ${index + 1}. ${pattern}`),
+    );
   const recent = store.log(thread).slice(-5);
   if (recent.length)
     lines.push(
@@ -483,6 +620,8 @@ function approvals(host: CommandHost, args: string): void {
       ),
     );
   if (rules.length) lines.push('Revoke one: /approvals revoke <number>');
+  if (patterns.length)
+    lines.push('Remove one: /approvals remove <pattern|number>');
   host.notice(lines.join('\n'));
 }
 // /approvals with nothing after it: the rules as a list; enter on one revokes it.
@@ -492,6 +631,7 @@ function approvalsList(host: CommandHost): void {
   const thread = runtime.session.id;
   const rules = store.rules(thread);
   const recent = store.log(thread).slice(-5);
+  const patterns = host.settings.allowed_commands;
   const items: PickerItem[] = rules.map((rule, index) => {
     const label = rule.label || rule.pattern;
     return {
@@ -500,14 +640,27 @@ function approvalsList(host: CommandHost): void {
       meta: `always · ${rule.tool}`,
     };
   });
+  patterns.forEach((pattern, index) => {
+    items.push({
+      key: `pattern:${index}`,
+      label: `${rules.length + index + 1}. Allow: ${pattern}`,
+      meta: 'settings · execute',
+    });
+  });
   items.push({ key: 'close', label: `${items.length + 1}. Close` });
   const choose = (item: PickerItem): void => {
-    if (!item.key.startsWith('revoke:')) return;
-    const rule = store.revoke(thread, Number(item.key.slice(7)));
-    if (rule)
-      host.notice(
-        `Revoked · ${rule.tool} · ${rule.label || rule.pattern} · the next call like it will ask again`,
-      );
+    if (item.key.startsWith('revoke:')) {
+      const rule = store.revoke(thread, Number(item.key.slice(7)));
+      if (rule)
+        host.notice(
+          `Revoked · ${rule.tool} · ${rule.label || rule.pattern} · the next call like it will ask again`,
+        );
+      return;
+    }
+    if (item.key.startsWith('pattern:')) {
+      const pattern = patterns[Number(item.key.slice(8))];
+      if (pattern) approvalsRemove(host, pattern);
+    }
   };
   const move = (step: number) => (): void => {
     const picker = host.state.picker;
@@ -535,6 +688,7 @@ function approvalsList(host: CommandHost): void {
             )
             .join(' · ')
         : '',
+      '/approvals add <pattern> allows commands by pattern',
     ]
       .filter(Boolean)
       .join(' · '),
@@ -870,6 +1024,11 @@ function settingsList(host: CommandHost, focusKey?: string): void {
       meta: `${runtime.thinkingLevel || 'default'} · /effort`,
     },
     {
+      key: 'default_mode',
+      label: 'default mode',
+      meta: MODE_WORDS[host.settings.default_mode || 'manual'],
+    },
+    {
       key: 'endpoint',
       label: 'endpoint',
       meta: `${auth.protocol} · ${auth.base_url || '—'}`,
@@ -895,6 +1054,10 @@ function settingsList(host: CommandHost, focusKey?: string): void {
     };
     if (opens[item.key]) {
       await host.command(...opens[item.key]!);
+      return;
+    }
+    if (item.key === 'default_mode') {
+      modePicker(host);
       return;
     }
     if (item.key === 'theme')
@@ -934,7 +1097,7 @@ function setThinking(host: CommandHost, level: string, saved = false): void {
     3000,
   );
 }
-// shift+tab: the next depth, for this session.
+// alt+t: the next depth, for this session.
 export function cycleThinking(host: CommandHost): void {
   if (host.runtime.busy) {
     host.flash(BUSY_WORDS.effort!);
@@ -977,7 +1140,7 @@ function effort(host: CommandHost, args: string): void {
     })),
     (item) => setThinking(host, item.key),
     {
-      hint: 'enter uses it in this session · ctrl+s also makes it the default · shift+tab cycles',
+      hint: 'enter uses it in this session · ctrl+s also makes it the default · alt+t cycles',
       focusKey: now || undefined,
       keys: {
         'ctrl+s': (item) => {
