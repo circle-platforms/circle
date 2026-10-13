@@ -117,6 +117,8 @@ Code pushes do not publish a new version: the release workflow publishes when a 
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md) for coding agents, and the [architecture](https://circle-platforms.github.io/circle/development/architecture/). Report security problems as described in [SECURITY.md](SECURITY.md). Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
+Circle is one of three repositories. [circle-hub](https://github.com/circle-platforms/circle-hub) is the team hub a Circle signs in to, and [circle-packs](https://github.com/circle-platforms/circle-packs) holds the skill packs and product-line packs installed on it. The [compatibility matrix](https://github.com/circle-platforms/circle-hub/blob/main/docs/compatibility.md) says what each expects of the others.
+
 ## License
 
 Circle is released under the [Apache License 2.0](LICENSE). The [NOTICE](NOTICE) file names the copyright holder and reserves the Circle and Circle Hub names, logos and icons: the license covers the code and its documentation, not the marks. The architecture and design specifications listed in [docs/design/README.md](docs/design/README.md) are under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) and must be credited, with a link to the original, when reused. Versions up to 1.2.1 were released under the MIT License. The model catalogs in `src/data/` carry metadata from models.dev, and many prompts in `src/prompts/` come from OpenCode, each under its own MIT license; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Contributions are accepted under the [contributor terms](CONTRIBUTING.md#contributor-terms).
