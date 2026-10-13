@@ -77,7 +77,13 @@ Three modes change what Circle is allowed to do. The current one is shown in the
 | `read-only` | `/plan` or `/mode plan` | Circle can read and search, and change only a file named `plan.md`. It cannot run commands or change other files. It writes its plan to `plan.md` for you to review. The model can turn it on itself, and asks you before it turns it off: you can answer that it should then accept edits. |
 | `auto` | `/yolo`, `/auto` or `/mode auto` | Circle stops asking. Every command and file change runs without a card. Use `/yolo off` to go back. |
 
-`/mode` with no argument moves to the next mode: manual, accept edits, read-only, auto, and back to manual. `/mode manual` goes back to asking. Leaving `read-only` returns to manual. The modes apply only to the current conversation and are forgotten when you start a new one. Read [Security](security.md#auto-mode) before you use auto.
+`shift+tab` moves to the next mode: manual, accept edits, read-only, auto, and back to manual. `/mode` with no argument does the same, and works while a turn runs; `/mode manual` goes back to asking. Leaving `read-only` returns to manual. Read [Security](security.md#auto-mode) before you use auto.
+
+A mode lives in its conversation: `/new`, `/fork`, `/clone`, `/import` and restarting drop back to manual, unless you save a default. `/settings` → `default mode` (or `default_mode` in [settings](settings.md)) picks the mode every new session starts in — including `-p`, line and RPC runs. A `read-only` state restored from a resumed conversation wins over the saved default, and `--yolo` wins over both in print and line mode.
+
+## Fewer asks for the commands you trust
+
+Instead of a mode, you can allow commands by pattern. `allowed_commands` in [settings](settings.md) holds wildcards (`*` and `?`); a command runs without a card when **every** part of it matches one — so `npm ci && rm -rf dist` needs both `npm *` and `rm -rf *`. A pattern answers even for a command Circle always asks about (`rm -rf`, a force push), and in print and line mode too, but nothing gets past a [refused](security.md#how-commands-are-sorted) command: naming a credential file or `sudo` still stops it. `/approvals add <pattern>` and `/approvals remove <pattern>` edit the list; `/approvals` lists it. A trusted folder's `.circle/settings.json` may add patterns of its own, on top of yours. These are broader than the per-conversation rules an approval card saves — read [Security](security.md#command-patterns-in-settings).
 
 ## The plan
 
