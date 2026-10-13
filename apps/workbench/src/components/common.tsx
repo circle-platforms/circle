@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { InputHTMLAttributes, ReactNode } from 'react';
 import { ChevronDown, ChevronRight, FileText, Search, X } from 'lucide-react';
 import { Button, IconButton } from './ui';
 import { t } from '../i18n';
@@ -32,23 +32,31 @@ export function SearchInput({
   onChange,
   label = t('search'),
   placeholder = t('search…'),
+  inputProps,
 }: {
   value: string;
   onChange: (value: string) => void;
   label?: string;
   placeholder?: string;
+  // keys, focus and the list it controls, for a search over a list of choices
+  inputProps?: InputHTMLAttributes<HTMLInputElement>;
 }) {
   return (
     <div className="search-field">
       <Search size={15} />
       <input
+        {...inputProps}
         aria-label={label}
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
       />
       {value && (
-        <IconButton label={t('clear search')} onClick={() => onChange('')}>
+        <IconButton
+          type="button"
+          label={t('clear search')}
+          onClick={() => onChange('')}
+        >
           <X size={13} />
         </IconButton>
       )}

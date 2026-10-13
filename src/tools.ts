@@ -65,6 +65,18 @@ const integer = (description: string, minimum = 1) => ({
 export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
   const read = new Set<string>();
   const tools: Tool[] = [];
+  // What these write stays on disk: a %NAME% there is text, never a variable's value.
+  const FILE_WRITERS = new Set(['write_file', 'edit_file', 'apply_patch']);
+  // What these take becomes a model's input or the conversation's: a secret stays its name
+  const MODEL_INPUT = new Set([
+    'task',
+    'question',
+    'write_todos',
+    'plan_enter',
+    'plan_exit',
+    'skill',
+    'compact_conversation',
+  ]);
   const add = (
     name: string,
     effect: Tool['effect'],
@@ -77,6 +89,11 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       parameters,
       description: loadToolPrompt(name),
       run,
+      ...(FILE_WRITERS.has(name)
+        ? { variables: false }
+        : MODEL_INPUT.has(name)
+          ? { variables: 'plain' as const }
+          : {}),
     });
   };
   add(

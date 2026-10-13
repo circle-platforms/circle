@@ -16,13 +16,22 @@ export const BUILTIN_SLASH: SlashCommand[] = [
   { name: 'trust', description: 'Trust this workspace' },
   { name: 'settings', description: 'Show current settings' },
   {
+    name: 'variables',
+    description: 'Values the model uses as %NAME%: /variables [NAME=value]',
+  },
+  {
+    name: 'secrets',
+    description: 'Values the model uses as %NAME% unseen: /secrets [NAME]',
+  },
+  {
     name: 'themes',
     description: 'Show or set the theme: /themes [auto|dark|light]',
   },
   { name: 'mcp', description: 'List / reload MCP servers and tools' },
   {
     name: 'extensions',
-    description: 'List extensions: /extensions [reload]',
+    description:
+      'List extensions: /extensions [reload | enable <name> | disable <name>]',
     aliases: ['ext'],
   },
   {

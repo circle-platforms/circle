@@ -21,6 +21,7 @@ import {
   applyProjectSettings,
   withoutProjectSettings,
   isReady,
+  keepsSavedKey,
 } from '../src/settings.js';
 import { EventBus, getDefaultBus, withEventBus } from '../src/events.js';
 import {
@@ -114,6 +115,33 @@ test('the auth mode and OAuth provider an older release wrote are dropped; witho
   assert.equal(isReady(settings), true);
   saveSettings(settings, root);
   assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')).auth, settings.auth);
+});
+test('an empty key keeps the saved one only after setup and only on the saved host and port', () => {
+  const saved = defaultSettings();
+  saved.auth.base_url = 'https://Gateway.Example/v1';
+  // Not set up: nothing to keep
+  assert.equal(keepsSavedKey(saved, 'https://gateway.example/v1'), false);
+  saved.initialized = true;
+  for (const url of [
+    'https://gateway.example/v1',
+    'https://GATEWAY.example/other/path',
+    ' https://gateway.example:443/anthropic ',
+  ])
+    assert.equal(keepsSavedKey(saved, url), true, url);
+  for (const url of [
+    'https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic',
+    'https://gateway.example:8443/v1',
+    'https://api.gateway.example/v1',
+    'not a url',
+    '',
+  ])
+    assert.equal(keepsSavedKey(saved, url), false, url);
+  saved.auth.base_url = 'http://127.0.0.1:4000';
+  assert.equal(keepsSavedKey(saved, 'http://127.0.0.1:4000/v1'), true);
+  assert.equal(keepsSavedKey(saved, 'http://127.0.0.1:4001/v1'), false);
+  assert.equal(keepsSavedKey(saved, 'http://localhost:4000/v1'), false);
+  saved.auth.base_url = '';
+  assert.equal(keepsSavedKey(saved, 'http://127.0.0.1:4000/v1'), false);
 });
 test('event subscribers are isolated and async bus identity stays scoped', async () => {
   const one = new EventBus('one');

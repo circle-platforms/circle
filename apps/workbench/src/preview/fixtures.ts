@@ -511,6 +511,8 @@ export function createFixtures(): WorkbenchSnapshot {
       endpoint: 'https://api.example.test/v1',
       protocol: 'openai',
       credentialFiles: ['*.key'],
+      variables: { BASE_URL: 'https://example.test', USER_NAME: 'admin' },
+      secrets: ['API_TOKEN'],
       updateCheck: true,
       textSize: 'default',
       keybindings: {},

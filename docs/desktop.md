@@ -8,7 +8,14 @@ The desktop application is a window around the same Circle: the same model conne
 
 ## First start
 
-The first time, Circle opens the connection form by itself: the API URL, the key and the model id your endpoint uses. Later, open it from the connection at the bottom of the sidebar (`connect a model` until one is set), from the top bar's ⋯ menu or from settings. To change only the URL or the model, leave the key empty: the saved key is kept.
+The first time, Circle opens the connection form by itself. Later, open it from the connection at the bottom of the sidebar (`connect a model` until one is set), from the top bar's ⋯ menu, from settings or with `/login`. It asks what the terminal's setup asks, in two steps:
+
+1. The API URL and the key. Next asks the endpoint for its models, as [setup](models.md#connect-an-endpoint) does: it works out whether the API is OpenAI-style or Anthropic-style and which URL answers. Nothing is saved yet.
+2. The model. When the endpoint listed its models, pick one from the list (arrow keys and `enter` work in its search box); type to search it, and `use “…”` takes an id it does not list. When it listed none, or could not be asked, type the model id your provider documents; it is not checked. If the endpoint could not be asked, choose whether the API is OpenAI-style or Anthropic-style too. Connect saves the URL that answered (the one you typed when none did), the kind of API, the model and the key, and lists that endpoint's models in place of the ones listed before.
+
+The key field can stay empty only while the URL stays on the host (and port) of the saved endpoint: then the saved key is kept, so the path or the model can change alone. For another host the key is required, and the saved one is never sent there. Back returns to the first step; the key you typed is kept in the form until it closes.
+
+The models page lists what the saved endpoint offered when it was connected or last refreshed, with the models in use. Refresh models asks it again; an endpoint that does not list its models, such as an Anthropic-style path without `GET /v1/models`, gets a note saying so, and its model ids are typed in the search and used from there.
 
 ## The window
 
@@ -27,7 +34,7 @@ When Circle wants to change a file or run a command, the request appears in the 
 | Answer | What it does |
 |---|---|
 | allow once | Runs this call. |
-| allow for this session | Runs this call, and in this session does not ask again for the same thing: the same command, or file changes inside the workspace. |
+| allow for this session | Runs this call, and in this session does not ask again for the same thing: the same command, or file changes inside the workspace. For the browser it reads **allow on *site* for this session** and covers that site. |
 | allow “…” commands | For a command: allows commands starting with the same words, in this session. |
 | reject | Does not run it; the model is told. |
 | reject and explain | Does not run it, and tells the model what to do instead. |
@@ -49,9 +56,23 @@ The mode belongs to the session, as in the terminal; see [Modes](usage.md#modes)
 
 ## While Circle works
 
-The frame around the input box turns through the rainbow while the model works, with a label on its top edge: the word for this turn, the time, and the tokens written so far, as in the terminal. Time spent waiting for you is not counted. When a model request is tried again the label says why and which try. With reduced motion turned on in the system settings the frame stays still.
+The input box is one line and grows as you type more. Its frame takes the approval mode's colour: blue to accept edits, violet to plan, orange for auto; in manual mode it keeps its plain border. While the model works, the row of the turn's latest tools shows how long the turn has run and, once a model request has finished, the tokens the endpoint reported for it, as Claude's desktop application does; before the first tool a row of its own shows them beside Circle's turning ring. Time spent waiting for you is not counted. When a model request is tried again the row says why and which try. When the turn ends, its last answer shows the whole turn: the time, the tokens sent and received, and the cost when every request had a price in dollars. Turns finished before Circle started again show only the last request's tokens.
 
 A finished file change shows its diff when its line is opened. The changes panel lists every file this session changed while the app was open, each against its version before the first change. The files panel lists the open folder when it is trusted.
+
+## The browser panel
+
+Each conversation has its own sandboxed browser, which you and Circle use together: what one does, the other sees. Open the browser panel from the top bar and enter an HTTP or HTTPS address, or ask Circle to use it. The panel has tabs, back, forward and reload. The model's [browser tools](tools.md#the-browser) open pages, read them, click, type, choose options, press keys, take screenshots, answer a page's dialogs, manage tabs and give pages files. While Circle acts, a click on the page or **take over** under it gives you the browser once that action ends; **hand back** returns it. See [Taking turns](tools.md#taking-turns). Downloads go to the system's Downloads folder and are listed under the page, with **show in folder**; one that Circle's action started from a site not yet allowed shows **waiting for approval** until you answer the card in the conversation (**keep**, **allow downloads from *site* for this session** or **discard**); when a click of Circle's opens a file chooser, **choose…** under the page lets you pick the files instead of Circle. A site that asks for a user name and password gets a sign-in over the page, which you or Circle can answer; a page that asks for the camera, your location, notifications and the like asks under the page, with **allow** and **block**, and only you answer; a site that asks for a client certificate lists yours in the page's place, and only you choose one, or **send none**. They can reach local devices and private addresses as well as public sites. They are available to the main agent only.
+
+Before Circle acts on a page, an approval card shows the site and the URL, element or text involved. **Allow on *site* for this session** covers all browser actions on that site in that conversation, and another site asks again; reading the page and taking a screenshot do not ask. In plan mode those two reads work, and the other browser tools are refused. When Circle starts using the browser the panel opens and shows **Circle is operating** at the bottom, unless you are on another page of the application or the window is narrow (1050 pixels or less), where the panel would cover the conversation and its requests; open it from the top bar there. In the page, a pointer moves to what Circle clicks, with a ripple, and a field it types into is outlined, with a label saying what it does. The pointer fades after a few seconds and stays out of snapshots and screenshots.
+
+A page's alert, confirm, prompt or "leave site?" question appears over its tab, on a picture of the page as it stopped, with the site it came from; a tab waiting on one is marked. While Circle is working it appears in the conversation too. You can answer it in either place, or Circle can; the first answer counts, and Circle is told who gave it. No dialog appears over the whole window.
+
+A site whose certificate is not trusted, such as a device with a self-signed certificate, gets the browser's privacy warning in its tab, as in Chrome: **Your connection is not private**, the error code, **Advanced** and **Back to safety**. **Advanced** shows the certificate (who it is issued to and by, its validity and its SHA-256 fingerprint) and **Proceed to … (unsafe)**. You can click it yourself. Circle sees the same page and can click it too, but then asks you first in the conversation; for a host on this network you can also trust that certificate there for good. The address bar says **certificate error** while the warning shows and **not secure** after you proceed. See [Built-in tools](tools.md#dialogs-warnings-and-tabs) for how long each choice lasts. A link or script that opens a new window opens a new tab. Other loading failures show **cannot reach this site** in the panel.
+
+Password values never appear in snapshots; a password field shows only whether it is filled. The model cannot type plain text into one: it writes `%NAME%` for a secret you saved, and never sees the value; with none saved it asks you for one. You can still type it yourself in the panel. See [Secrets by name](security.md#secrets-by-name). Pages can still send whatever you or Circle enter to their server: read the approval card and the address before allowing an action. Contents of frames from another site cannot be read.
+
+The warning page and the pointer follow the application's theme.
 
 ## Under the input box
 
@@ -60,6 +81,10 @@ As in Claude: on the left, + to attach files and the mode; on the right, the mod
 ## Outside the window
 
 While the window is in the background, Circle sends a system notification when a request needs you and when a turn ends or fails. On macOS the Dock icon counts the requests that wait. On Windows and Linux the taskbar shows a busy bar while Circle works.
+
+## Variables
+
+Settings → variables lists names and values as Windows lists environment variables, with **new…**, **edit…** and **delete** under each table; double-click a row to edit it. The model writes `%NAME%` in any tool's arguments and Circle puts the value in when the tool runs. The first table holds plain variables, whose values the model is told; they are `variables` in `settings.json`. The second holds secrets, whose values the model never sees and the page never shows again: to change one, enter a new value, or leave the value empty to keep it when you only rename it. In the dialog, **secret** decides which: it is ticked by itself for a name with a part such as `PASSWORD`, `TOKEN` or `KEY`, and ticking it while you edit a plain variable moves that variable to the secrets in one step. See [Secrets by name](security.md#secrets-by-name).
 
 ## Language and text size
 

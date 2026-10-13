@@ -47,18 +47,78 @@ const msiexec = (...args) => {
     );
 };
 // Each stage says when it starts, so a run that hangs shows where
-const stage = (text) => console.log(`-- ${text}`);
+// When the last step began: the watchdog below ends a check that stops moving
+let lastStage = Date.now();
+const stage = (text) => {
+  lastStage = Date.now();
+  console.log(`-- ${text}`);
+};
 const { version } = JSON.parse(
   await readFile(join(root, '../../package.json'), 'utf8'),
 );
 const [major, minor, patch] = version.split(/[.-]/).map(Number);
 const next = `${major}.${minor}.${patch + 1}`;
 const temp = await mkdtemp(join(tmpdir(), 'circle-desktop-update-'));
+// An application that no longer answers must not hold a check for good
+const within = (promise, ms) =>
+  Promise.race([
+    promise,
+    new Promise((_resolve, reject) =>
+      setTimeout(() => reject(Error(`no answer in ${ms / 1000} s`)), ms),
+    ),
+  ]);
 const checks = [];
 const check = (name) => {
   checks.push(name);
   console.log('ok', name);
 };
+// What the installer did, what the application wrote and what is left: shown when a check
+// fails, and by the watchdog when nothing moves for long
+const evidence = async () => {
+  for (const file of [
+    join(temp, 'data', 'updates', 'install.log'),
+    join(temp, 'data', 'updates', 'install.json.out'),
+    join(temp, 'data', 'updates', 'install.json.err'),
+    join(temp, 'application.log'),
+    join(temp, 'data', 'DevToolsActivePort'),
+  ])
+    if (existsSync(file))
+      console.error(`--- ${file}\n${await readFile(file, 'utf8')}`);
+  for (const folder of [
+    join(temp, 'data', 'updates'),
+    dirname(installedPath ?? temp),
+  ])
+    if (existsSync(folder))
+      console.error(`--- ${folder}: ${(await readdir(folder)).join(', ')}`);
+  try {
+    console.error(
+      execFileSync(
+        process.platform === 'win32' ? 'tasklist' : 'ps',
+        process.platform === 'win32' ? [] : ['-axo', 'pid,command'],
+        { encoding: 'utf8', timeout: 20000 },
+      )
+        .split('\n')
+        .filter(
+          (line) =>
+            /Circle|powershell|msiexec/i.test(line) && !/Helper/.test(line),
+        )
+        .join('\n'),
+    );
+  } catch {
+    /* no process list */
+  }
+};
+// A step that stops moving (an application that neither quits nor answers) ends here with
+// its evidence, long before the CI job's own limit would end it without a log
+const watchdog = setInterval(() => {
+  if (Date.now() - lastStage < 8 * 60 * 1000) return;
+  console.error('update check: nothing moved for 8 minutes');
+  void evidence().finally(() => {
+    if (running && running.exitCode === null) running.kill();
+    process.exit(1);
+  });
+}, 30000);
+watchdog.unref();
 let server;
 let running;
 let passed = false;
@@ -200,7 +260,7 @@ try {
   // An installer that does not start leaves the application open, saying why. A line every
   // 20 seconds shows that the machine is still there.
   const beat = setInterval(
-    () => stage('still waiting for Circle to quit'),
+    () => console.log('--', 'still waiting for Circle to quit'),
     20000,
   );
   const left = await Promise.race([
@@ -211,15 +271,18 @@ try {
   if (!left)
     throw Error(
       `the application did not quit for the installer: ${JSON.stringify(
-        await view.evaluate(() => window.circleDesktop.updateState()),
+        await within(
+          view.evaluate(() => window.circleDesktop.updateState()),
+          10000,
+        ).catch((error) => String(error)),
       )}`,
     );
-  await browser.close().catch(() => {});
+  await within(browser.close(), 10000).catch(() => {});
   check('the application quits for the installer');
 
   stage('waiting for the new version to start');
   const beat2 = setInterval(
-    () => stage('still waiting for the new version'),
+    () => console.log('--', 'still waiting for the new version'),
     20000,
   );
   ({ browser, page: view } = await page(180000).finally(() =>
@@ -263,10 +326,11 @@ try {
     execFileSync('codesign', ['--verify', '--deep', '--strict', installed]);
   }
   check('the old copy is replaced in place and the download is cleared');
-  await view
-    .evaluate(() => window.circleDesktop.windowControl('quit'))
-    .catch(() => {});
-  await browser.close().catch(() => {});
+  await within(
+    view.evaluate(() => window.circleDesktop.windowControl('quit')),
+    10000,
+  ).catch(() => {});
+  await within(browser.close(), 10000).catch(() => {});
   const end = Date.now() + 30000;
   while (Date.now() < end) {
     try {
@@ -279,39 +343,7 @@ try {
   console.log(`update checks passed: ${checks.length}`);
   passed = true;
 } catch (error) {
-  // What the installer did, what the application wrote and what is left
-  for (const file of [
-    join(temp, 'data', 'updates', 'install.log'),
-    join(temp, 'data', 'updates', 'install.json.out'),
-    join(temp, 'data', 'updates', 'install.json.err'),
-    join(temp, 'application.log'),
-    join(temp, 'data', 'DevToolsActivePort'),
-  ])
-    if (existsSync(file))
-      console.error(`--- ${file}\n${await readFile(file, 'utf8')}`);
-  for (const folder of [
-    join(temp, 'data', 'updates'),
-    dirname(installedPath ?? temp),
-  ])
-    if (existsSync(folder))
-      console.error(`--- ${folder}: ${(await readdir(folder)).join(', ')}`);
-  try {
-    console.error(
-      execFileSync(
-        process.platform === 'win32' ? 'tasklist' : 'ps',
-        process.platform === 'win32' ? [] : ['-axo', 'pid,command'],
-        { encoding: 'utf8', timeout: 20000 },
-      )
-        .split('\n')
-        .filter(
-          (line) =>
-            /Circle|powershell|msiexec/i.test(line) && !/Helper/.test(line),
-        )
-        .join('\n'),
-    );
-  } catch {
-    /* no process list */
-  }
+  await evidence();
   throw error;
 } finally {
   if (running && running.exitCode === null) running.kill();

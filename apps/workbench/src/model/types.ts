@@ -247,8 +247,12 @@ export interface RuntimeExtension {
   id: string;
   name: string;
   version: string;
-  scope: 'project' | 'user';
+  scope: 'project' | 'user' | 'bundled';
   enabled: boolean;
+  /** The line it set with api.setStatus, shown above the sidebar footer. */
+  status?: { text: string; lamp: 'running' | 'ok' | 'error' | 'wait' | 'none' };
+  /** What it published with api.setView, for a UI plugin paired with it. */
+  view?: unknown;
   tools: string[];
   commands: string[];
   events: string[];
@@ -272,6 +276,10 @@ export interface Settings {
   endpoint: string;
   protocol: 'openai' | 'anthropic';
   credentialFiles: string[];
+  /** Values the model may use by name, as `settings.json` keeps them. */
+  variables: Record<string, string>;
+  /** Names of the saved secrets, used as %NAME%: never a value. */
+  secrets: string[];
   updateCheck: boolean;
   textSize: TextSize;
   keybindings: Record<string, string | string[]>;
@@ -312,6 +320,8 @@ export interface WorkbenchSnapshot {
   requests: PendingRequest[];
   settings: Settings;
   uiPlugins: string[];
+  /** The last link an extension asked to open; the window opens each id once. */
+  openUrl?: { id: string; url: string; sessionId: string };
 }
 export interface CommandResult {
   openSession?: boolean;

@@ -58,8 +58,8 @@ export function applyTheme(choice: Theme, size: TextSize = 'default') {
     .map(([at, value]) => `rgb(${value.join(' ')}) ${at * 100}%`)
     .join(',');
   root.style.setProperty('--logo-gradient', `conic-gradient(${stops})`);
-  // The composer frame turns through these, as the terminal's frame does.
-  root.style.setProperty('--rainbow-stops', stops);
+  // Plan mode's colour, for the composer frame and the mode word
+  root.style.setProperty('--violet', stop(1));
   // Your turn: the terminal's frame is yellow; the app takes the rainbow's orange, which
   // the palette has already darkened to read on a light background.
   root.style.setProperty('--attention', stop(3));

@@ -81,6 +81,8 @@ const expected = {
   trust: ['dialog', 'workspace trust'],
   settings: ['heading', 'settings'],
   themes: ['heading', 'settings'],
+  variables: ['heading', 'settings'],
+  secrets: ['heading', 'settings'],
   mcp: ['heading', 'mcp servers'],
   extensions: ['heading', 'extensions'],
   approvals: ['heading', 'approvals'],
@@ -238,7 +240,25 @@ try {
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
-  assert.equal(await page.getByRole('checkbox').count(), 3);
+  // Three plain components, and the circle-server interface with the four platform
+  // objects, all paired with a runtime extension the preview does not have, so off.
+  assert.equal(await page.getByRole('checkbox').count(), 8);
+  for (const id of ['knowledge', 'work', 'execution', 'methods'])
+    assert.equal(
+      await page
+        .getByRole('checkbox', { name: `enable ${id} interface`, exact: true })
+        .isChecked(),
+      false,
+    );
+  assert.equal(
+    await page
+      .getByRole('checkbox', {
+        name: 'enable circle-server interface',
+        exact: true,
+      })
+      .isChecked(),
+    false,
+  );
   assert.equal(
     await page.evaluate(() =>
       localStorage.getItem('circle.workbench.platform-preview.v1'),

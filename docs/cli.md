@@ -182,7 +182,7 @@ Print mode has its own codes, listed [above](#print-mode).
 
 ## Setting up again
 
-`circle --init` runs the same setup as the first start. An empty `enter` keeps the saved URL or key, so you can fix one without typing the other again.
+`circle --init` runs the same setup as the first start. An empty `enter` keeps the saved URL, so you can fix the key without typing the URL again. It keeps the saved key only while the URL stays on the saved endpoint's host and port; a URL on another host needs its own key.
 
 It replaces only the connection, `auth` in `settings.json`: endpoint, protocol and model. Everything else stays, including `trusted_folders`, `mcp_servers`, `extensions`, `credential_files`, `theme` and keys Circle does not know. When the endpoint changes, `enabled_models` is cleared, since it named the old endpoint's models. `credentials.json` is merged, so earlier keys stay.
 

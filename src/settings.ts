@@ -45,8 +45,13 @@ export interface CircleSettings {
   models: Record<string, Record<string, unknown>>;
   double_escape: 'tree' | 'fork' | 'none';
   hide_thinking: boolean;
+  /** Named values, written %NAME% in a tool's arguments; the model also reads them. */
+  variables: Record<string, string>;
   [key: string]: unknown;
 }
+/** A variable's or a secret's name: capital letters, digits and _, from a letter. */
+export const VARIABLE_NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
+const MAX_VARIABLE = 2000;
 export const defaultAuth = (): ModelAuth => ({
   protocol: 'openai',
   base_url: '',
@@ -71,6 +76,7 @@ export const defaultSettings = (): CircleSettings => ({
   models: {},
   double_escape: 'tree',
   hide_thinking: false,
+  variables: {},
 });
 export const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -142,6 +148,14 @@ export function loadSettingsFromDict(
   settings.double_escape =
     double === 'fork' || double === 'none' ? double : 'tree';
   settings.hide_thinking = Boolean(raw.hide_thinking);
+  settings.variables = Object.fromEntries(
+    Object.entries(isRecord(raw.variables) ? raw.variables : {}).filter(
+      ([name, value]) =>
+        VARIABLE_NAME.test(name) &&
+        typeof value === 'string' &&
+        value.length <= MAX_VARIABLE,
+    ),
+  ) as Record<string, string>;
   return settings;
 }
 export function readJson(path: string): unknown {
@@ -247,6 +261,20 @@ export function withConnection(
   )
     out.enabled_models = [];
   return { ...out, initialized: true, auth };
+}
+// Whether an empty key may keep the saved one for `url`: only when Circle was set up before
+// and `url` is on the saved endpoint's host and port. A key saved for one provider is never
+// sent to another; a new host needs its key typed.
+export function keepsSavedKey(saved: CircleSettings, url: string): boolean {
+  if (!saved.initialized || !saved.auth.base_url) return false;
+  try {
+    return (
+      new URL(url.trim()).host.toLowerCase() ===
+      new URL(saved.auth.base_url.trim()).host.toLowerCase()
+    );
+  } catch {
+    return false;
+  }
 }
 export function applyAuthToEnviron(
   settings: CircleSettings,

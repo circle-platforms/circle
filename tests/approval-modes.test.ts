@@ -39,6 +39,42 @@ function policy(root: string) {
   return new ApprovalPolicy(new ApprovalStore(join(root, 'approvals')), root);
 }
 
+test('one session browser rule covers every browser action and can be revoked', (t) => {
+  const root = scratch(t);
+  const rules = policy(root);
+  const actions = [
+    'browser_navigate',
+    'browser_click',
+    'browser_type',
+    'browser_select',
+    'browser_press',
+    'browser_dialog',
+  ];
+  const click = { ref: 'e3', element: 'sign in' };
+  assert.equal(rules.needsApproval('browser_click', click, 's'), true);
+  assert.equal(rules.remember('s', 'browser_click', click, 'always'), true);
+  assert.deepEqual(
+    rules.store.rules('s').map(({ tool, pattern, label }) => ({
+      tool,
+      pattern,
+      label,
+    })),
+    [{ tool: 'browser', pattern: '*', label: 'browser control' }],
+  );
+  for (const action of actions) {
+    assert.equal(rules.needsApproval(action, {}, 's'), false, action);
+    assert.equal(rules.needsApproval(action, {}, 'other'), true, action);
+  }
+  assert.equal(
+    rules.needsApproval('write_file', { file_path: 'a' }, 's'),
+    true,
+  );
+  rules.store.revoke('s', 0);
+  assert.equal(rules.needsApproval('browser_type', {}, 's'), true);
+  assert.equal(rules.remember('s', 'browser_click', click, 'approve'), true);
+  assert.equal(rules.needsApproval('browser_type', {}, 's'), true);
+});
+
 test('accept-edits answers for edits inside the workspace and asks for the rest', (t) => {
   const root = scratch(t);
   const rules = policy(root);

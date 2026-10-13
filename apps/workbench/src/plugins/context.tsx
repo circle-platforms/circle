@@ -6,7 +6,7 @@ import {
 } from 'react';
 import type { ReactNode } from 'react';
 import { useRuntime } from '../app/context';
-import { PluginRegistry } from './registry';
+import { PluginRegistry, effectivePlugins } from './registry';
 import type { ServiceRegistry, WorkbenchPlugin, PluginService } from './types';
 interface Value {
   registry: PluginRegistry;
@@ -26,8 +26,10 @@ export function PluginProvider({
 }) {
   const { snapshot, runtime, perform } = useRuntime();
   const registry = useMemo(() => new PluginRegistry(plugins), [plugins]);
-  const enabled = snapshot.uiPlugins.filter((id) =>
-    registry.plugins.some((plugin) => plugin.id === id),
+  const enabled = effectivePlugins(
+    registry.plugins,
+    snapshot.uiPlugins,
+    snapshot.extensions,
   );
   return (
     <Context.Provider
@@ -35,7 +37,25 @@ export function PluginProvider({
         registry,
         services,
         enabled,
-        toggle: (id, enabled) =>
+        toggle: (id, enabled) => {
+          const plugin = registry.plugins.find((item) => item.id === id);
+          // A paired plugin is one with its runtime extension: switch that.
+          if (plugin?.runtimeExtension) {
+            const name = plugin.runtimeExtension;
+            perform(async () => {
+              if (runtime.mode !== 'live')
+                throw Error('this interface needs the Circle runtime');
+              if (!snapshot.extensions.some((item) => item.name === name))
+                throw Error(`runtime extension ${name} is not installed`);
+              // Saved like the runtime extension's own switch, then loaded.
+              runtime.change((state) => {
+                state.extensions.find((item) => item.name === name)!.enabled =
+                  enabled;
+              });
+              await runtime.request('reload', {});
+            });
+            return;
+          }
           perform(() =>
             runtime.change((state) => {
               state.uiPlugins = registry.change(
@@ -46,7 +66,8 @@ export function PluginProvider({
                 enabled,
               );
             }),
-          ),
+          );
+        },
       }}
     >
       {children}

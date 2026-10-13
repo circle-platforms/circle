@@ -18,6 +18,11 @@ export interface QuestionHooks {
     signal: AbortSignal,
   ) => Promise<string>;
   secret?: (request: SecretRequest, signal: AbortSignal) => Promise<void>;
+  /**
+   * Keeps an answer as a Circle variable named by the question's `key`, written %KEY%
+   * afterwards, as a path or an address the next steps use again.
+   */
+  keep?: (name: string, value: string) => void;
 }
 export function panelQuestion(value: Record<string, unknown>): Question {
   const raw = value.options ?? value.choices ?? [];
@@ -33,10 +38,13 @@ export function panelQuestion(value: Record<string, unknown>): Question {
           description: isRecord(option) ? String(option.description || '') : '',
         });
     }
+  // A question whose answer is kept says under what name
+  const key = typeof value.key === 'string' ? value.key.trim() : '';
+  const header = String(value.header || '').trim();
   return {
     question:
       String(value.question || value.prompt || '').trim() || '(empty question)',
-    header: String(value.header || '').trim(),
+    header: key ? (header ? `${header} → %${key}%` : `%${key}%`) : header,
     options,
     multiple: Boolean(value.multiple || value.multiSelect),
     custom: value.custom !== false || !options.length,
@@ -79,7 +87,29 @@ export async function askQuestions(
         lines.push(
           'The user closed the question panel without answering. Do not assume an answer: ask again in chat if needed.',
         );
-      else
+      else {
+        // An answer to a question with a key is kept as a variable, for %KEY%
+        const kept: string[] = [];
+        plain.forEach((question, index) => {
+          const key =
+            typeof question.key === 'string' ? question.key.trim() : '';
+          const answer = Array.isArray(values[index])
+            ? values[index][0]
+            : values[index];
+          if (!key || typeof answer !== 'string' || !answer.trim()) return;
+          try {
+            if (!hooks.keep) throw new Error('variables cannot be kept here');
+            hooks.keep(key, answer.trim());
+            kept.push(
+              `${key} = ${JSON.stringify(answer.trim())} — kept as a Circle variable; write %${key}% where it is needed`,
+            );
+          } catch (error) {
+            kept.push(
+              `${key} was not kept: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        });
+        if (kept.length) lines.push('VARIABLES — ' + kept.join('\n'));
         lines.push(
           'The user answered in the question panel (an empty answer means the user left it unanswered):\n' +
             JSON.stringify(
@@ -95,6 +125,7 @@ export async function askQuestions(
               2,
             ),
         );
+      }
     } else
       lines.push(
         'USER_QUESTIONS — present these to the user and wait for answers before continuing irreversible work:\n\n' +
@@ -109,17 +140,15 @@ export async function askQuestions(
   }
   if (secret.length) {
     const requests = secret.map((question) => {
-      if (
-        typeof question.target_file !== 'string' ||
-        !question.target_file.trim()
-      )
-        throw new Error('secret question names no target_file');
+      // Without a target file the value is kept as a Circle secret, used as %KEY%
+      const target =
+        typeof question.target_file === 'string'
+          ? question.target_file.trim()
+          : '';
       return {
         question: String(question.question || '').trim(),
         key: String(question.key || '').trim(),
-        target_file: sandbox.resolvePath(
-          String(question.target_file || '').trim(),
-        ),
+        target_file: target ? sandbox.resolvePath(target) : '',
       };
     });
     try {
@@ -137,7 +166,11 @@ export async function askQuestions(
     } catch (error) {
       signal.throwIfAborted();
       lines.push(
-        'SECRET_QUESTIONS — the secret was not collected. Ask the user to enter the credential in the target file themselves, never in chat.',
+        `SECRET_QUESTIONS — the secret was not collected (${error instanceof Error ? error.message : String(error)}). ` +
+          // Without a target file there is no file to point the user to
+          (requests.some((request) => request.target_file)
+            ? 'Ask the user to enter the credential in the target file themselves, never in chat.'
+            : 'Ask again with the question tool when the user is ready, or ask them to save it as a Circle secret themselves; never ask for it in chat.'),
       );
     }
   }

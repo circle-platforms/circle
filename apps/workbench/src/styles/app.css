@@ -348,6 +348,27 @@ pre {
   color: var(--muted);
   font-size: var(--ui-tiny);
 }
+.extension-status {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.extension-status .status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.extension-lamp-running i,
+.extension-lamp-wait i {
+  background: var(--accent);
+}
+.extension-lamp-ok i {
+  background: var(--secondary);
+}
+.extension-lamp-error i {
+  background: var(--negative);
+}
 .sidebar-footer span {
   display: flex;
   gap: 6px;
@@ -1844,6 +1865,54 @@ pre {
   font-size: var(--ui-tiny);
   color: var(--muted);
 }
+/* The connection form's second step: the models the endpoint lists, searched and chosen as
+   in the terminal's /login. */
+.model-choices {
+  max-height: min(320px, 38vh);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  margin-top: -6px;
+}
+.model-choices button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.model-choices button:last-child {
+  border-bottom: 0;
+}
+.model-choices button.selected {
+  background: var(--active);
+}
+.model-choices span {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: var(--ui-small);
+  overflow-wrap: anywhere;
+}
+.model-choices small,
+.model-choices-empty {
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+}
+.model-choices-empty {
+  padding: 12px;
+}
+.form-stack > .field-label {
+  margin: 0;
+}
+.form-stack > .field-label .segmented {
+  align-self: flex-start;
+}
+.form-stack > .pending-message {
+  margin: 0;
+}
 .model-glyph {
   display: grid;
   place-items: center;
@@ -2617,7 +2686,7 @@ pre {
   }
   .composer textarea {
     font-size: 16px;
-    min-height: 70px;
+    min-height: 50px;
   }
   .composer-toolbar {
     gap: 5px;
@@ -2966,7 +3035,8 @@ pre {
   display: none;
 }
 .native-browser-viewport {
-  height: 390px;
+  position: relative;
+  height: min(640px, max(320px, calc(100vh - 300px)));
   margin: 12px -5px 0;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -2988,14 +3058,225 @@ pre {
   text-overflow: ellipsis;
   font-size: var(--ui-tiny);
 }
-
-/* The composer frame, as the terminal's: the rainbow turns while the model works, it is
-   orange and still while Circle waits for you, faint and still when idle. */
-@property --frame-angle {
-  syntax: '<angle>';
-  inherits: false;
-  initial-value: 0deg;
+.browser-insecure,
+.browser-operating {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
 }
+.browser-insecure {
+  color: var(--attention);
+  font-size: var(--ui-tiny);
+}
+.browser-operating {
+  color: var(--accent);
+}
+.browser-operation-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: browser-operation-pulse 1.6s ease-in-out infinite;
+}
+@keyframes browser-operation-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+.browser-error-page {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 30px 24px;
+  background: var(--bg);
+  color: var(--fg);
+}
+.browser-error-page h3 {
+  font-size: calc(var(--ui-size) + 3px);
+  line-height: 1.5;
+}
+.browser-error-page p {
+  color: var(--secondary);
+  font-size: var(--ui-small);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.browser-error-page > code {
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  overflow-wrap: anywhere;
+}
+.browser-approval-input {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  width: 100%;
+  font-size: var(--ui-small);
+}
+.browser-approval-input > div {
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr);
+  gap: 8px;
+}
+.browser-approval-input dt {
+  color: var(--muted);
+}
+.browser-approval-input dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.browser-approval-input code {
+  font-size: var(--code-size);
+}
+/* Tabs of the conversation's browser, above its address bar. */
+.browser-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 12px -5px 0;
+  overflow-x: auto;
+}
+.browser-tab {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 180px;
+  flex: 0 1 auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.browser-tab.active {
+  background: var(--bg);
+  border-color: var(--secondary);
+}
+.browser-tab-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 4px 4px 4px 8px;
+  font-size: var(--ui-tiny);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: none;
+  border: 0;
+  color: var(--fg);
+}
+.browser-tab-alert {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--attention);
+}
+.browser-tab .icon-button {
+  flex: none;
+}
+/* A page's dialog over its tab: the page as it stopped, dimmed, under the box. */
+.browser-dialog-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 18%;
+  background: var(--surface);
+  overflow: hidden;
+}
+.browser-dialog-screen {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top left;
+  opacity: 0.45;
+}
+.browser-dialog-box {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  width: min(380px, calc(100% - 32px));
+  padding: 18px 18px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--fg) 18%, transparent);
+  font-size: var(--ui-small);
+}
+.browser-dialog-box p,
+.browser-dialog-message {
+  margin: 0;
+  color: var(--secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.browser-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.browser-dialog-fields {
+  display: grid;
+  gap: 8px;
+}
+.browser-certificates {
+  display: grid;
+  gap: 6px;
+  max-height: 240px;
+  overflow: auto;
+}
+.browser-certificate-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.browser-certificate-option strong,
+.browser-certificate-option small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.browser-certificate-option small {
+  color: var(--muted);
+}
+.browser-dialog-note {
+  color: var(--accent);
+}
+.browser-dialog-pointer {
+  position: absolute;
+  left: -4px;
+  top: -4px;
+  color: var(--fg);
+  fill: currentColor;
+  stroke: var(--bg);
+  stroke-width: 1.7;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 1px 1px var(--bg));
+  transition: transform 420ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  pointer-events: none;
+  z-index: 2;
+}
+.browser-dialog-pointer.pressed {
+  scale: 0.85;
+}
+.browser-approval-input {
+  padding: 10px 0 4px;
+}
+
+/* The composer frame takes the approval mode's colour, as the mode word in the terminal's
+   frame does: blue to accept edits, violet to plan, orange for auto; manual keeps the border. */
 .composer::before {
   content: '';
   position: absolute;
@@ -3011,40 +3292,38 @@ pre {
   -webkit-mask-composite: xor;
   mask-composite: exclude;
 }
-.composer[data-frame='busy']::before {
+.composer[data-mode='accept-edits']::before {
   opacity: 1;
-  background: conic-gradient(from var(--frame-angle), var(--rainbow-stops));
-  animation: frame-turn 8.33s linear infinite;
+  background: var(--accent);
 }
-.composer[data-frame='waiting']::before {
+.composer[data-mode='plan']::before {
+  opacity: 1;
+  background: var(--violet);
+}
+.composer[data-mode='auto']::before {
   opacity: 1;
   background: var(--attention);
 }
-@keyframes frame-turn {
-  to {
-    --frame-angle: 360deg;
-  }
+/* The turn's clock on its tools' row. */
+.turn-clock {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+/* Before the turn's first tool: Circle's ring turns beside the clock. */
+.turn-ring {
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--logo-gradient);
+  -webkit-mask: radial-gradient(circle, transparent 3.5px, var(--fg) 4px);
+  mask: radial-gradient(circle, transparent 3.5px, var(--fg) 4px);
+  animation: spin 1.2s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) {
-  .composer[data-frame='busy']::before {
+  .turn-ring {
     animation: none;
   }
-}
-.busy-label {
-  position: absolute;
-  top: -0.75em;
-  left: 14px;
-  z-index: 1;
-  padding: 0 6px;
-  background: var(--bg);
-  font-family: var(--mono);
-  font-size: var(--ui-tiny);
-  line-height: 1.5;
-  color: var(--secondary);
-  white-space: nowrap;
-  max-width: calc(100% - 28px);
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* The approval mode in the composer and its menu. */
@@ -3608,6 +3887,12 @@ pre {
 .message-meta footer {
   margin: 0;
 }
+.turn-summary {
+  margin: 4px 0 0;
+  font-size: var(--ui-tiny);
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
 .message-meta .icon-button {
   width: 24px;
   height: 24px;
@@ -3722,9 +4007,10 @@ pre {
 .composer::before {
   border-radius: 17px;
 }
+/* One line, with the buttons beside it; it grows as lines are typed. */
 .composer textarea {
-  min-height: 56px;
-  padding: 15px 96px 15px 18px;
+  min-height: 46px;
+  padding: 11px 96px 11px 18px;
   border-radius: 16px;
 }
 .composer .attachment-strip {
@@ -3732,8 +4018,8 @@ pre {
 }
 .composer-send {
   position: absolute;
-  right: 10px;
-  bottom: 10px;
+  right: 8px;
+  bottom: 7px;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -3797,7 +4083,7 @@ pre {
   color: var(--attention);
 }
 .composer-footbar .mode-button[data-mode='plan'] {
-  color: var(--fg);
+  color: var(--violet);
 }
 .composer-footbar .mode-button[data-mode] svg {
   color: inherit;
@@ -4147,4 +4433,141 @@ pre {
 .update-chip svg {
   flex-shrink: 0;
   color: var(--accent);
+}
+
+/* Variables in settings, as Windows lists environment variables: a framed table of names
+   and values, the selected row marked, new, edit and delete under it. */
+.variable-table {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.variable-table-frame {
+  min-height: 92px;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.variable-table table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: var(--ui-small);
+}
+.variable-table th {
+  position: sticky;
+  top: 0;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--secondary);
+  font-weight: 500;
+  text-align: left;
+}
+.variable-table th:first-child,
+.variable-table td:first-child {
+  width: 34%;
+}
+.variable-table td {
+  padding: 6px 10px;
+  overflow: hidden;
+  color: var(--fg);
+  font-family: var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.variable-table tbody tr {
+  cursor: default;
+}
+.variable-table tbody tr:hover {
+  background: var(--hover);
+}
+.variable-table tbody tr[aria-selected='true'] {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.variable-table tbody tr:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.form-stack label.variable-secret {
+  flex-direction: row;
+  align-items: center;
+  color: var(--fg);
+}
+.variable-table-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.settings-block h3 {
+  margin: 18px 0 4px;
+  font-size: var(--ui-size);
+}
+/* A file chooser a click of Circle's opened, and the conversation's downloads, under the page. */
+.browser-chooser {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: var(--ui-small);
+  color: var(--fg);
+}
+.browser-chooser span {
+  flex: 1;
+}
+.browser-downloads {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+  font-size: var(--ui-tiny);
+  color: var(--muted);
+}
+.browser-downloads li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.browser-download-name {
+  flex: 1;
+  overflow: hidden;
+  color: var(--fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The person has the conversation's browser: a band over the page with the way back. */
+.browser-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--attention);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: var(--ui-small);
+  color: var(--fg);
+}
+.browser-control span {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+.browser-control small {
+  color: var(--secondary);
+}
+.browser-operating .button {
+  margin-left: 6px;
+  padding: 2px 8px;
+  font-size: var(--ui-tiny);
 }

@@ -1,6 +1,7 @@
 import { desktopHost } from '../host';
 import { validateKeybindings } from '../model/shortcuts';
 import { usePlugins } from '../plugins/context';
+import { pairing } from '../plugins/registry';
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { CUSTOMIZE, NAVIGATION } from '../components/Sidebar';
@@ -66,6 +67,7 @@ import {
 } from '../components/common';
 import { Markdown } from '../components/Markdown';
 import { UpdateControl } from './Update';
+import { VariablesSettings } from './VariablesSettings';
 import { BUILTIN_TOOL_INFO } from '../model/tool-info';
 import { TEXT_SIZES, textSizes } from '../theme';
 import { LANGUAGES, languageChoice, setLanguage, t, tn } from '../i18n';
@@ -231,6 +233,9 @@ function ModelsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(currentSession(snapshot).model);
   const [saveDefault, setSaveDefault] = useState(false);
+  // Why refresh found no list: an endpoint that does not list its models (an Anthropic-style
+  // path without GET /v1/models) still takes a model id typed here.
+  const [unlisted, setUnlisted] = useState('');
   const session = currentSession(snapshot);
   // models.dev prices are in US dollars per million tokens
   const usageModel = snapshot.models.find((item) => item.id === session.model);
@@ -269,7 +274,15 @@ function ModelsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
             <Button
               onClick={() =>
                 perform(async () => {
-                  await runtime.request('discover-models');
+                  const found = (await runtime.request('discover-models')) as {
+                    status?: string;
+                    detail?: string;
+                  };
+                  if (found?.status === 'failed') {
+                    setUnlisted(found.detail || t('model discovery failed'));
+                    return;
+                  }
+                  setUnlisted('');
                   notify(t('models refreshed'));
                 })
               }
@@ -293,6 +306,14 @@ function ModelsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
         </span>
         <code>{snapshot.settings.endpoint || t('no endpoint configured')}</code>
       </div>
+      {unlisted && (
+        <p className="panel-note" role="status">
+          {t(
+            'The endpoint did not list its models ({detail}). Search for the model id below and use it.',
+            { detail: unlisted },
+          )}
+        </p>
+      )}
       <div className="list-toolbar">
         <SearchInput
           value={query}
@@ -989,9 +1010,17 @@ function ExtensionsPage() {
                 />
               </div>
               <p className="panel-note">
-                {t('bundled first-party component · {version}', {
-                  version: '0.1.0',
-                })}
+                {plugin.runtimeExtension
+                  ? t('paired with runtime extension {name} · {version}', {
+                      name: plugin.runtimeExtension,
+                      version: plugin.version,
+                    }) +
+                    (pairing(plugin, snapshot.extensions).reason
+                      ? ' · ' + pairing(plugin, snapshot.extensions).reason
+                      : '')
+                  : t('bundled first-party component · {version}', {
+                      version: plugin.version,
+                    })}
               </p>
             </article>
           ))}
@@ -1324,6 +1353,7 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
           )}
         </p>
       </section>
+      <VariablesSettings />
       <section className="settings-block">
         <h2>{t('keyboard')}</h2>
         <Button onClick={() => onDialog('hotkeys')}>

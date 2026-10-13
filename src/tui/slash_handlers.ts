@@ -18,9 +18,11 @@ import {
   isFolderTrusted,
   loadSettings,
   saveSettingsChange,
+  VARIABLE_NAME,
   settingsForRun,
   type CircleSettings,
 } from '../settings.js';
+import { removeSecret, saveSecret, secretNames } from '../secrets.js';
 import type {
   Picker,
   PickerItem,
@@ -86,6 +88,8 @@ export interface CommandHost {
   followJobs(list: Picker, rows: () => PickerItem[]): void;
   // The footer's ctx is unknown until the next answer (after /undo and /redo, as in 0.5.0).
   clearContextMeter(): void;
+  // A value typed on a masked card, never in the input box; null when cancelled.
+  secretValue(body: string): Promise<string | null>;
 }
 type Handler = (host: CommandHost, args: string) => Promise<void> | void;
 
@@ -714,6 +718,37 @@ async function mcp(host: CommandHost, args: string): Promise<void> {
 
 async function extensions(host: CommandHost, args: string): Promise<void> {
   const runtime = host.runtime;
+  const [verb = '', name = ''] = args.trim().split(/\s+/);
+  if (['enable', 'disable'].includes(verb.toLowerCase())) {
+    const enable = verb.toLowerCase() === 'enable';
+    if (!name) {
+      host.fail(`Usage: /extensions ${enable ? 'enable' : 'disable'} <name>`);
+      return;
+    }
+    // The list is complete once integrations have loaded at start.
+    await runtime.initialize().catch(() => {});
+    if (!runtime.extensions.extensions.some((ext) => ext.name === name)) {
+      host.fail(`No extension named ${name}`);
+      return;
+    }
+    // Saved, so it stays on (or off) in the next session too.
+    saveSettingsChange(host.home, (saved) => {
+      saved.extensions[name] = { ...saved.extensions[name], enabled: enable };
+    });
+    host.settings.extensions[name] = {
+      ...host.settings.extensions[name],
+      enabled: enable,
+    };
+    try {
+      await runtime.reloadIntegrations();
+    } catch (error) {
+      host.fail(`Extension reload failed: ${reason(error)}`);
+      return;
+    }
+    host.notice(`${name} ${enable ? 'enabled' : 'disabled'}`);
+    host.notice(runtime.extensions.describe());
+    return;
+  }
   if (['reload', 'refresh'].includes(args.trim().toLowerCase())) {
     try {
       await runtime.reloadIntegrations();
@@ -1579,6 +1614,145 @@ async function tree(
   });
   if (args.trim() && host.state.picker) host.state.picker.query = args.trim();
 }
+// Variables as Windows writes them: `NAME=value` sets one, `NAME=` removes it, and the model
+// writes %NAME% in a tool's arguments. A secret is a variable whose value it never sees.
+const MAX_VARIABLE = 2000;
+const assignment = (text: string) => {
+  const match = text.match(/^([^=\s]+)\s*(?:=(.*))?$/s);
+  return match ? { name: match[1]!.toUpperCase(), value: match[2] } : undefined;
+};
+const NAME_RULE =
+  'a name is capital letters, digits and _, starting with a letter';
+function variablesList(host: CommandHost): void {
+  const saved = host.settings.variables;
+  host.picker(
+    'Variables',
+    [
+      ...Object.entries(saved).map(([name, value]) => ({
+        key: 'variable:' + name,
+        label: `${name}=${value}`,
+        meta: 'variable',
+      })),
+      ...secretNames(host.home).map((name) => ({
+        key: 'secret:' + name,
+        label: `${name}=••••••••`,
+        meta: 'secret',
+      })),
+      {
+        key: 'new-variable',
+        label: 'new variable',
+        meta: '/variables NAME=value',
+      },
+      { key: 'new-secret', label: 'new secret', meta: '/secrets NAME' },
+    ],
+    (item) => {
+      const [kind, name = ''] = item.key.split(':');
+      host.setDraft(
+        kind === 'variable'
+          ? `/variables ${name}=${saved[name] ?? ''}`
+          : kind === 'secret'
+            ? `/secrets ${name}`
+            : item.key === 'new-variable'
+              ? '/variables '
+              : '/secrets ',
+      );
+    },
+    {
+      hint: 'enter puts the command in the input box · NAME= removes',
+      empty: 'no variables',
+    },
+  );
+}
+/** The model's next request is told the variables and the secrets' names anew. */
+function variablesChanged(host: CommandHost, next: Record<string, string>) {
+  host.settings.variables = next;
+  host.runtime.options.settings.variables = next;
+  saveSettingsChange(host.home, (saved) => {
+    saved.variables = next;
+  });
+  host.runtime.refreshPrompt();
+}
+function variables(host: CommandHost, args: string): void {
+  const text = args.trim();
+  if (!text) return variablesList(host);
+  const parsed = assignment(text);
+  if (!parsed || !VARIABLE_NAME.test(parsed.name)) {
+    host.fail(`Usage: /variables NAME=value · ${NAME_RULE}`);
+    return;
+  }
+  const { name, value } = parsed;
+  const saved = host.settings.variables;
+  if (value === undefined) {
+    host.notice(
+      name in saved
+        ? `${name}=${saved[name]}`
+        : secretNames(host.home).includes(name)
+          ? `${name} is a secret · /secrets ${name} sets it`
+          : `No variable ${name}`,
+    );
+    return;
+  }
+  if (secretNames(host.home).includes(name)) {
+    host.fail(`${name} is a secret · /secrets ${name} sets it`);
+    return;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    if (!(name in saved)) {
+      host.flash(`No variable ${name}`);
+      return;
+    }
+    const { [name]: _removed, ...rest } = saved;
+    variablesChanged(host, rest);
+    host.notice(`Removed variable ${name}`);
+    return;
+  }
+  if (trimmed.length > MAX_VARIABLE) {
+    host.fail('A variable is at most 2,000 characters');
+    return;
+  }
+  variablesChanged(host, { ...saved, [name]: trimmed });
+  host.notice(`${name}=${trimmed} · the model writes %${name}% to use it`);
+}
+async function secrets(host: CommandHost, args: string): Promise<void> {
+  const text = args.trim();
+  if (!text) return variablesList(host);
+  const parsed = assignment(text);
+  if (!parsed || !VARIABLE_NAME.test(parsed.name)) {
+    host.fail(`Usage: /secrets NAME · ${NAME_RULE}`);
+    return;
+  }
+  const { name, value } = parsed;
+  if (value !== undefined) {
+    if (value.trim()) {
+      // The value would be on the screen and in the input box's history
+      host.fail(
+        `Type a secret's value on its masked card: /secrets ${name}, then enter`,
+      );
+      return;
+    }
+    if (!removeSecret(host.home, name)) host.flash(`No secret ${name}`);
+    else {
+      host.runtime.refreshPrompt();
+      host.notice(`Removed secret ${name}`);
+    }
+    return;
+  }
+  if (name in host.settings.variables) {
+    host.fail(`${name} is a variable · /variables ${name}= removes it first`);
+    return;
+  }
+  const typed = await host.secretValue(
+    `${name}\nThe model knows only the name and writes %${name}% in a tool's arguments; Circle puts this value in when the tool runs.`,
+  );
+  if (!typed) {
+    host.flash('No secret saved');
+    return;
+  }
+  saveSecret(host.home, name, typed);
+  host.runtime.refreshPrompt();
+  host.notice(`Saved secret ${name} · the model writes %${name}% to use it`);
+}
 async function clone(host: CommandHost): Promise<void> {
   const runtime = host.runtime;
   const session = runtime.store.fork(runtime.session.id, host.workspace);
@@ -1617,6 +1791,8 @@ const HANDLERS: Record<string, Handler> = {
   import: importSession,
   copy,
   settings: (host) => settingsList(host),
+  variables,
+  secrets,
   effort,
   logout,
   jobs,

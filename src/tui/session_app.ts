@@ -8,9 +8,11 @@ import {
   submitAnswer,
   cancelRequest,
   listPending,
+  secretDestination,
   type SecretRequest,
 } from '../secret_prompt.js';
 import { execFile, spawn } from 'node:child_process';
+import { openInBrowser } from '../open_url.js';
 import {
   existsSync,
   mkdirSync,
@@ -108,6 +110,13 @@ import { PlanPanel } from '../ink/components/plan_panel.js';
 import { stripAnsi } from '../ink/string_width.js';
 import { modelScope } from '../model_scope.js';
 import { resumeHint, runningJobs, stoppedJobsLine } from './exit_lines.js';
+import { ChromeBrowser, findBrowser } from '../browser/chrome.js';
+import { browserTools } from '../browser/tools.js';
+import type {
+  BrowserApproval,
+  CertificateApproval,
+} from '../browser/protocol.js';
+import { sizeText } from '../browser/files.js';
 export { VERSION } from '../version.js';
 interface DialogPending {
   complete: (answer: unknown) => void;
@@ -155,6 +164,8 @@ export class SessionApp {
   private jobWakeSnoozed = false;
   // As in 0.5.0, a background agent's card shows whether a turn runs or not: after the
   // turn's own cards (the queue takes those first) and once typing pauses.
+  // The conversation browser, when a Chrome or Edge is installed
+  private browser?: ChromeBrowser;
   private interactions = new InteractionQueue(
     () => !this.externalEditor && !this.state.dialog,
     () => Boolean(this.state.draft || this.state.picker),
@@ -520,6 +531,7 @@ export class SessionApp {
     this.state.connected = Boolean(this.runtime) && !this.connecting;
     this.state.branch = this.welcomeState.branch();
     this.state.thinkingDepth = this.runtime?.thinkingLevel;
+    this.state.extensionStatus = this.runtime?.extensions.statuses() ?? [];
     this.turns.fill(this.state);
     this.state.welcome = welcomeRows(
       process.stdout.columns || 80,
@@ -660,10 +672,44 @@ export class SessionApp {
     options: Omit<RuntimeOptions, 'approve' | 'question'>,
   ): Promise<void> {
     this.connecting = true;
+    // The conversation's browser: a Chrome or Edge window, started at the first browser
+    // action. Without one installed the model has no browser tools.
+    const executable = findBrowser();
+    if (executable && !this.browser)
+      this.browser = new ChromeBrowser({
+        executable,
+        trustFile: join(this.home, 'browser-certificates.json'),
+        headless: process.env.CIRCLE_BROWSER_HEADLESS === '1',
+        handoff: (reason, signal) =>
+          this.interactions.run(() => this.handBrowser(reason, signal), signal),
+      });
     this.runtime = new AgentRuntime({
       ...options,
+      extraTools: [
+        ...(options.extraTools ?? []),
+        ...(this.browser
+          ? browserTools(this.browser, {
+              confirm: (_session, approval, signal) =>
+                this.interactions.run(
+                  () => this.confirmBrowser(approval, signal),
+                  signal,
+                  false,
+                ),
+              files: (path) => {
+                const full = this.runtime!.sandbox.resolvePath(path);
+                this.runtime!.sandbox.checkCredentialPath(full);
+                return full;
+              },
+            })
+          : []),
+      ],
       settings: this.settings,
       ...this.cardHooks(),
+      onExtensionStatus: () => this.requestRender(),
+      openUrl: async (url) => {
+        await openInBrowser(url);
+        this.flash('Opened in the browser');
+      },
     });
     this.offSignals?.();
     this.offSignals = installExitGuard(this.runtime, (code) => {
@@ -916,7 +962,7 @@ export class SessionApp {
     try {
       const choice = await this.askChoice(
         'secret',
-        `${request.question}\n${request.key} → ${request.target_file}\nctrl+s enters a masked value`,
+        `${request.question}\n${secretDestination(request)}\nctrl+s enters a masked value`,
         ['enter secret', 'cancel'],
         signal,
       );
@@ -926,7 +972,7 @@ export class SessionApp {
       }
       const value = await this.showCard(
         new SecretCard(
-          `${request.question}\n${request.key} → ${request.target_file}`,
+          `${request.question}\n${secretDestination(request)}`,
           request.mask !== false,
         ),
         signal,
@@ -988,6 +1034,96 @@ export class SessionApp {
       signal?.addEventListener('abort', abort, { once: true });
       this.repaint();
     });
+  }
+  /** Circle hands the person the browser window; the card stays until they hand it back. */
+  private async handBrowser(reason: string, signal: AbortSignal) {
+    await this.askChoice(
+      'browser',
+      [
+        `Circle hands you the browser${reason ? `: ${reason}` : ''}`,
+        'Use the browser window. Circle does not see what you do there; when you hand it back it learns where the tabs went, never what you typed.',
+      ].join('\n'),
+      ['hand back'],
+      signal,
+    );
+  }
+  /** What only the person decides in the browser: files for a page or from it, or passing a warning. */
+  private async confirmBrowser(
+    approval: BrowserApproval,
+    signal: AbortSignal,
+  ): Promise<'once' | 'always' | 'reject'> {
+    if (approval.kind === 'certificate')
+      return this.confirmCertificate(approval, signal);
+    if (approval.kind === 'download') {
+      // auto mode keeps what the model downloads; the other modes ask once per site
+      if (this.runtime?.policy.mode(this.runtime.session.id) === 'auto')
+        return 'once';
+      const always = 'allow downloads from this site for this session';
+      const choice = await this.askChoice(
+        'download',
+        [
+          'Circle downloaded files: keep them?',
+          `site: ${approval.site || 'unknown'}`,
+          ...approval.files.map(
+            (file) => `${file.name} · ${sizeText(file.size)}`,
+          ),
+        ].join('\n'),
+        ['keep', always, 'discard'],
+        signal,
+      );
+      return choice === 'keep'
+        ? 'once'
+        : choice === always
+          ? 'always'
+          : 'reject';
+    }
+    const choice = await this.askChoice(
+      'upload',
+      [
+        'Circle wants to give the page these files',
+        `site: ${approval.origin || 'unknown'}`,
+        `field: ${approval.element}`,
+        ...approval.files.map(
+          (file) => `${file.name} · ${sizeText(file.size)} · ${file.path}`,
+        ),
+      ].join('\n'),
+      ['allow', 'reject'],
+      signal,
+    );
+    return choice === 'allow' ? 'once' : 'reject';
+  }
+  /** The model clicked proceed on the browser's certificate warning: only the person decides. */
+  private async confirmCertificate(
+    approval: CertificateApproval,
+    signal: AbortSignal,
+  ): Promise<'once' | 'always' | 'reject'> {
+    const always = 'always trust this certificate on this host';
+    const choice = await this.askChoice(
+      'certificate',
+      [
+        "Circle wants to go past the browser's certificate warning",
+        `site: ${approval.url}`,
+        `issued to: ${approval.subject || 'unknown'}`,
+        `issued by: ${approval.issuer || 'unknown'}`,
+        ...(approval.validExpiry
+          ? [
+              `valid until: ${new Date(approval.validExpiry * 1000).toISOString().slice(0, 10)}`,
+            ]
+          : []),
+        `sha256: ${approval.fingerprint || 'unknown'}`,
+      ].join('\n'),
+      [
+        'allow once',
+        ...(approval.privateHost && approval.fingerprint ? [always] : []),
+        'reject',
+      ],
+      signal,
+    );
+    return choice === 'allow once'
+      ? 'once'
+      : choice === always
+        ? 'always'
+        : 'reject';
   }
   private async approve(
     call: ToolCall,
@@ -1804,6 +1940,7 @@ export class SessionApp {
       followJobs: (list, rows) => {
         this.jobsList = { list, rows };
       },
+      secretValue: (body) => this.showCard(new SecretCard(body, true)),
       clearContextMeter: () => {
         this.meterCleared =
           this.runtime?.harness.messages
@@ -2025,7 +2162,7 @@ export class SessionApp {
     const askKey = (list: Picker): void => {
       list.title = title();
       list.ask(
-        'api key' + (flow.hasSavedKey ? ' (enter keeps the saved one)' : ''),
+        'api key' + (flow.keepsKey ? ' (enter keeps the saved one)' : ''),
         '',
         (typed) => {
           flow.submitKey(typed);
@@ -2322,7 +2459,7 @@ export class SessionApp {
     const runtime = this.runtime;
     const jobs = runtime ? runningJobs(runtime) : 0;
     const hint = runtime ? resumeHint(runtime, this.workspace) : '';
-    await runtime?.close();
+    await Promise.all([runtime?.close(), this.browser?.close()]);
     for (const line of [stoppedJobsLine(jobs), hint])
       if (line) this.terminal.write(line + '\n');
   }

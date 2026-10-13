@@ -43,11 +43,35 @@ export interface Tool {
   parameters: Record<string, unknown>;
   effect: Effect;
   approval?: boolean;
+  /** False keeps the tool from subagents: it belongs to the conversation the user sees. */
+  subagents?: boolean;
+  /**
+   * False: %NAME% in its arguments stays as written. File writers set it, so what they put on
+   * disk keeps the reference and never a secret's value. `plain`: plain variables' values go
+   * in, secrets stay %NAME%, for a tool whose arguments become a model's input or the
+   * conversation's (a subagent's task, a question, the todo list).
+   */
+  variables?: boolean | 'plain';
+  /**
+   * What the tool knows of a call that the model did not say, such as the site a browser
+   * action acts on: added to the call's arguments before the approval, so the rules and
+   * the card go by it, and checked again by the tool when it runs.
+   */
+  approvalFacts?: (
+    args: Record<string, unknown>,
+    sessionId: string,
+  ) => Record<string, unknown> | undefined;
   run(args: Record<string, unknown>, context: ToolContext): Promise<string>;
 }
 export interface ToolContext {
   signal: AbortSignal;
   sessionId: string;
+  /** The call being run: a request the tool raises can be shown under it. */
+  callId?: string;
+  /** The secrets whose values went into this call's arguments, by name. */
+  secretNames?: string[];
+  /** The arguments as the model wrote them, with %NAME% where a variable went. */
+  rawArgs?: Record<string, unknown>;
   emitAttachments?: (attachments: MediaAttachment[]) => void;
   /** Whether the model in use reads images: false when it is known not to. */
   imageInput?: boolean;

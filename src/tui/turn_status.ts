@@ -19,6 +19,7 @@ const RETRY_CAUSE: Record<string, string> = {
 
 export class TurnStatus {
   verb = 'Brewing';
+  // The output tokens of the turn's finished requests, as their usage gives them
   tokens = 0;
   // The model request being tried again (`timeout 3/10`), until it answers or the turn ends
   retry?: string;
@@ -33,6 +34,7 @@ export class TurnStatus {
     waitingSince?: number;
     input: number;
     output: number;
+    cost: number | null;
   };
   constructor(private random = Math.random) {}
 
@@ -60,6 +62,15 @@ export class TurnStatus {
       if (turn) {
         turn.input += event.usage?.input_tokens ?? 0;
         turn.output += output;
+        const cost = (event.payload.message as Message | undefined)?.cost;
+        // A request without a price in dollars leaves the turn's unknown
+        turn.cost =
+          turn.cost === null ||
+          !cost ||
+          cost.currency !== 'USD' ||
+          cost.amount === null
+            ? null
+            : turn.cost + cost.amount;
       }
     }
     if (subagent) {
@@ -87,7 +98,7 @@ export class TurnStatus {
     if (event.kind === 'run_start') {
       this.verb = pickBusyVerb(this.random);
       this.tokens = 0;
-      this.turn = { started: now, waited: 0, input: 0, output: 0 };
+      this.turn = { started: now, waited: 0, input: 0, output: 0, cost: 0 };
       this.thinkingFrom = this.live = undefined;
     } else if (event.kind === 'llm_start')
       this.thinkingFrom = this.live = undefined;
@@ -113,6 +124,7 @@ export class TurnStatus {
           seconds: Math.max(0, (now - turn.started - turn.waited) / 1000),
           input: turn.input,
           output: turn.output,
+          cost: turn.cost,
         };
       this.turn = undefined;
     }

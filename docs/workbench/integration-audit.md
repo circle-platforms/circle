@@ -2,7 +2,7 @@
 
 Inspected on 2026-10-11 against Circle 1.0.4 and workbench commit `738ba94ddaf3d53a431b9d5ae06797c9d88127e0`. This page audits the complete application/plugin goal. It does not change the current frontend phase into a completed runtime integration.
 
-Subsequent scope change: the user authorized completing Circle's frontend/backend integration first. [The native runtime record](native-runtime.md) documents the implemented connection and its checks. The findings below remain the historical audit at the stated source; B/C/D/E production services and paired runtime plugins are still outstanding.
+Subsequent scope change: the user authorized completing Circle's frontend/backend integration first. [The native runtime record](native-runtime.md) documents the implemented connection and its checks. The findings below remain the historical audit at the stated source. Since then the knowledge, work, execution and methods pages are paired with the bundled circle-server extension and read B, C, D and E as circle-server holds them; that was checked against circle-server's local development stack, and no production service is connected.
 
 ## What current evidence proves
 
@@ -22,7 +22,7 @@ The native application, named host capabilities and bundled UI components are im
 | MCP, skills and runtime extensions load under normal trust and policy | Actual integration loading and tools in the next model request | Core loading exists; desktop requests do not perform it |
 | B is an installed knowledge/evidence capability | Version-bound calls reach B; original inputs, evidence and artifacts retain their identities | UI component installed; local preview service only |
 | C is an installed durable-work capability | Accepted work survives the A process; changes, handoffs and cancellation use C's authoritative records | UI component installed; no durable service connected |
-| D is an installed execution capability | Agent and user observe the same execution; inputs, leases, effects and stopping are verified at D | Local operator browser verified; agent control, SSH and platform execution remain unconnected |
+| D is an installed execution capability | Agent and user observe the same execution; inputs, leases, effects and stopping are verified at D | The conversation browser is shared by the agent and the person; SSH and platform execution remain unconnected |
 | E is an installed methods capability | Exact versions load into the actual model/tool context; validation and publication use E's policy | UI pins/loading checked; actual capability loading/publication not connected |
 | All four use the same plugin installation model | One package identity connects its UI contributions, runtime registration, compatibility and configuration | Shared UI API exists; a joint UI/runtime package contract is missing |
 | Permissions and full disclosure hold across objects | Trusted identities at service/execution boundaries; actual requests, returns, artifacts and effects distinguish facts from judgments | Native host boundary checked; demo roles are not production authentication |

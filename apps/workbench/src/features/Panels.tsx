@@ -650,8 +650,12 @@ export function ActivityPanel({
     </>
   );
 }
-export function BrowserPanel() {
-  return desktopHost() ? <NativeBrowser /> : <BrowserPlaceholder />;
+export function BrowserPanel({ selection }: { selection?: string } = {}) {
+  return desktopHost() ? (
+    <NativeBrowser target={selection} />
+  ) : (
+    <BrowserPlaceholder />
+  );
 }
 function BrowserPlaceholder() {
   const { runtime, notify } = useRuntime();

@@ -398,6 +398,7 @@ export class LiveRuntime implements RuntimePort {
       await this.changes;
       const names: Record<string, RuntimeCommandName> = {
         'configure-connection': 'configure',
+        'probe-connection': 'probe-connection',
         'cancel-interaction': 'answer',
         'import-native-session': 'import',
         'export-session': 'export',
@@ -420,6 +421,8 @@ export class LiveRuntime implements RuntimePort {
         'discover-models': 'discover-models',
         'launch-options': 'launch-options',
         'trust-workspace': 'trust',
+        'save-secret': 'save-secret',
+        'remove-secret': 'remove-secret',
         execute: 'shell',
       };
       if (kind === 'export-session') {
@@ -692,6 +695,8 @@ export class LiveRuntime implements RuntimePort {
       help: 'help',
       settings: 'settings',
       themes: 'settings',
+      variables: 'settings',
+      secrets: 'settings',
       mcp: 'mcp',
       extensions: 'extensions',
       approvals: 'approvals',

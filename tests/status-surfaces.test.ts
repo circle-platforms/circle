@@ -1000,6 +1000,8 @@ test('an attached session shows the busy verb while it works and the turn line a
     seconds: app.state.turnUsage!.final!.seconds,
     input: 1500,
     output: 42,
+    // The scripted model has no price in dollars
+    cost: null,
   });
 });
 
@@ -1024,4 +1026,54 @@ test('the retry on the busy line goes when a new step starts or a steering messa
     turns.apply(event(next), () => undefined);
     assert.equal(turns.retry, undefined, next);
   }
+});
+
+test("a finished turn keeps its requests' tokens and, when every one is priced in dollars, its cost", () => {
+  const turns = new TurnStatus(() => 0.35);
+  const event = (
+    kind: string,
+    payload: Record<string, unknown> = {},
+    usage?: Record<string, number>,
+  ) =>
+    ({
+      kind,
+      payload,
+      tags: {},
+      run_id: '',
+      parent_run_id: null,
+      seq: 0,
+      ts: '',
+      ...(usage ? { usage } : {}),
+    }) as unknown as Parameters<TurnStatus['apply']>[0];
+  const last = () => 'final';
+  const priced = (amount: number) => ({
+    message: { id: 'm', cost: { currency: 'USD', amount } },
+  });
+  turns.apply(event('run_start'), last);
+  turns.apply(event('llm_token', { text: 'streaming text' }), last);
+  // The count is the endpoint's, given when a request ends
+  assert.equal(turns.tokens, 0);
+  turns.apply(
+    event('llm_end', priced(0.01), { input_tokens: 900, output_tokens: 42 }),
+    last,
+  );
+  assert.equal(turns.tokens, 42);
+  turns.apply(
+    event('llm_end', priced(0.02), { input_tokens: 950, output_tokens: 8 }),
+    last,
+  );
+  turns.apply(event('run_end'), last);
+  const usage = turns.usage.final!;
+  assert.deepEqual(
+    { input: usage.input, output: usage.output },
+    { input: 1850, output: 50 },
+  );
+  assert.equal(usage.cost!.toFixed(2), '0.03');
+  // A request without a price in dollars leaves the turn's cost unknown
+  const unpriced = new TurnStatus(() => 0.35);
+  unpriced.apply(event('run_start'), last);
+  unpriced.apply(event('llm_end', priced(0.01), { output_tokens: 1 }), last);
+  unpriced.apply(event('llm_end', { message: { id: 'm2' } }), last);
+  unpriced.apply(event('run_end'), last);
+  assert.equal(unpriced.usage.final!.cost, null);
 });

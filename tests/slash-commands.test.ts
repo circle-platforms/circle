@@ -1136,22 +1136,21 @@ test("/login asks for the URL and the key on its list, lists the endpoint's mode
   await key('ctrl+u');
   ui.handle({ type: 'paste', text: base });
   await key('enter');
-  // The key as dots; an empty enter would keep the saved one
-  assert.equal(
-    line(),
-    'api key (enter keeps the saved one): ▏  enter continues · esc goes back',
-  );
+  // The key as dots. The saved key is for gateway.example, another host: an empty enter
+  // does not keep it
+  assert.equal(line(), 'api key: ▏  enter continues · esc goes back');
   // esc on the key goes back to the URL as it was given
   await key('escape');
   assert.equal(app.state.picker, picker);
   assert.equal(picker.title, 'Sign in');
   assert.equal(line(), `base url: ${base}▏  enter continues · esc closes`);
   await key('enter');
+  await key('enter');
+  assert.equal(picker.title, 'Sign in · Enter the key for this endpoint');
+  assert.equal(line(), 'api key: ▏  enter continues · esc goes back');
+  assert.equal(seen.length, 0, seen.join('\n'));
   ui.handle({ type: 'paste', text: 'new-key' });
-  assert.equal(
-    line(),
-    'api key (enter keeps the saved one): •••••••▏  enter continues · esc goes back',
-  );
+  assert.equal(line(), 'api key: •••••••▏  enter continues · esc goes back');
   await key('enter');
   // The endpoint's models, searchable; enter on a search nothing matches uses what was typed
   await until(() => app.state.picker?.items.length === 2);
@@ -1191,4 +1190,188 @@ test("/login asks for the URL and the key on its list, lists the endpoint's mode
   );
   assert.equal(runtime.harness.model.model, 'gamma');
   assert.equal(app.state.model, 'gamma');
+  // Again on the same host: an empty enter keeps the saved URL and key
+  await app.submit('/login');
+  assert.equal(line(), `base url: ${base}/v1▏  enter continues · esc closes`);
+  await key('enter');
+  assert.equal(
+    line(),
+    'api key (enter keeps the saved one): ▏  enter continues · esc goes back',
+  );
+  const asked = seen.length;
+  await key('enter');
+  await until(() => app.state.picker?.items.length === 2);
+  assert.deepEqual(seen.slice(asked), ['GET /v1/models Bearer new-key']);
+  await typed('beta');
+  await key('enter');
+  await until(
+    () => app.state.notices.at(-1)?.endsWith('model beta-two') === true,
+  );
+  assert.equal(loadSettings(home).auth.model, 'beta-two');
+  assert.equal(loadCredentials(home).api_key, 'new-key');
+  // The key saved for gateway.example never went to this endpoint
+  assert.ok(!seen.some((line) => line.includes('old-key')), seen.join('\n'));
+});
+
+test('/variables and /secrets keep values as Windows writes them, and the model is told the names', async (t) => {
+  const { app, model, home, key, screen } = await session(t, [answer('noted')]);
+  await app.submit('/variables base_url=https://example.test');
+  assert.deepEqual(loadSettings(home).variables, {
+    BASE_URL: 'https://example.test',
+  });
+  assert.match(
+    screen(),
+    /BASE_URL=https:\/\/example\.test · the model writes %BASE_URL% to use it/,
+  );
+  await app.submit('/variables 1BAD=x');
+  assert.match(screen(), /Usage: \/variables NAME=value/);
+  // A secret's value is never typed in the input box
+  await app.submit('/secrets API_TOKEN=typed-in-the-box');
+  assert.match(screen(), /Type a secret's value on its masked card/);
+  assert.equal(existsSync(join(home, 'secrets.json')), false);
+  const saving = app.submit('/secrets api_token');
+  await until(() => app.state.dialog?.masked === true);
+  for (const char of 'token-value-1') await key(char, char);
+  assert.ok(!screen().includes('token-value-1'));
+  await key('enter');
+  await saving;
+  assert.match(
+    screen(),
+    /Saved secret API_TOKEN · the model writes %API_TOKEN% to use it/,
+  );
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(home, 'secrets.json'), 'utf8')),
+    { secrets: { API_TOKEN: 'token-value-1' } },
+  );
+  // One name, one kind
+  await app.submit('/variables API_TOKEN=x');
+  assert.match(screen(), /API_TOKEN is a secret · \/secrets API_TOKEN sets it/);
+  // The list puts the command for a row in the input box
+  await app.submit('/variables');
+  const list = app.state.picker!;
+  assert.equal(list.title, 'Variables');
+  assert.deepEqual(
+    list.items.map((item) => item.label),
+    [
+      'BASE_URL=https://example.test',
+      'API_TOKEN=••••••••',
+      'new variable',
+      'new secret',
+    ],
+  );
+  await key('enter');
+  await until(
+    () => app.state.draft === '/variables BASE_URL=https://example.test',
+  );
+  app.state.draft = '';
+  await app.submit('tell me what you know');
+  const system = model.requests[0]!.system;
+  assert.match(system, /- BASE_URL = https:\/\/example\.test/);
+  assert.match(system, /only by name: API_TOKEN/);
+  assert.equal(JSON.stringify(model.requests).includes('token-value-1'), false);
+  await app.submit('/variables BASE_URL=');
+  await app.submit('/secrets API_TOKEN=');
+  assert.deepEqual(loadSettings(home).variables, {});
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(home, 'secrets.json'), 'utf8')),
+    { secrets: {} },
+  );
+  assert.match(screen(), /Removed variable BASE_URL/);
+  assert.match(screen(), /Removed secret API_TOKEN/);
+});
+
+test('the terminal asks for files a page would get or gave, and for passing a certificate warning, on cards of their own', async (t) => {
+  const { app, ui, key } = await session(t, []);
+  const signal = new AbortController().signal;
+  const upload = ui.confirmBrowser(
+    {
+      kind: 'upload',
+      token: 'token',
+      origin: 'https://device.lan',
+      element: 'firmware',
+      files: [{ path: '/tmp/fw.bin', name: 'fw.bin', size: 2048 }],
+    },
+    signal,
+  );
+  await until(() => Boolean(app.state.dialog));
+  assert.equal(app.state.dialog!.title, 'upload');
+  assert.match(
+    app.state.dialog!.body,
+    /Circle wants to give the page these files\nsite: https:\/\/device\.lan\nfield: firmware\nfw\.bin · 2\.0 KB · \/tmp\/fw\.bin/,
+  );
+  assert.deepEqual(app.state.dialog!.options, ['allow', 'reject']);
+  await key('enter');
+  assert.equal(await upload, 'once');
+  const certificate = ui.confirmBrowser(
+    {
+      kind: 'certificate',
+      token: 'token',
+      url: 'https://172.16.6.215:8888/',
+      host: '172.16.6.215:8888',
+      subject: 'ProductWebUI',
+      issuer: 'RSAWebRoot',
+      fingerprint: 'AA:BB',
+      validExpiry: 2284329600,
+      privateHost: true,
+    },
+    signal,
+  );
+  await until(() => Boolean(app.state.dialog));
+  assert.equal(app.state.dialog!.title, 'certificate');
+  assert.match(
+    app.state.dialog!.body,
+    /issued to: ProductWebUI\nissued by: RSAWebRoot\nvalid until: 2042-05-22\nsha256: AA:BB/,
+  );
+  assert.deepEqual(app.state.dialog!.options, [
+    'allow once',
+    'always trust this certificate on this host',
+    'reject',
+  ]);
+  await key('down');
+  await key('enter');
+  assert.equal(await certificate, 'always');
+  // A download the model started: kept, kept from the site for the session, or discarded
+  const download = {
+    kind: 'download' as const,
+    token: 'token',
+    site: 'https://device.lan',
+    files: [{ name: 'config.bin', size: 12 }],
+  };
+  const keep = ui.confirmBrowser(download, signal);
+  await until(() => Boolean(app.state.dialog));
+  assert.equal(app.state.dialog!.title, 'download');
+  assert.equal(
+    app.state.dialog!.body,
+    'Circle downloaded files: keep them?\nsite: https://device.lan\nconfig.bin · 12 B',
+  );
+  assert.deepEqual(app.state.dialog!.options, [
+    'keep',
+    'allow downloads from this site for this session',
+    'discard',
+  ]);
+  await key('down');
+  await key('down');
+  await key('enter');
+  assert.equal(await keep, 'reject');
+  // auto mode keeps them without a card
+  ui.runtime!.policy.setMode(ui.runtime!.session.id, 'auto');
+  assert.equal(await ui.confirmBrowser(download, signal), 'once');
+  assert.equal(app.state.dialog, undefined);
+  ui.runtime!.policy.setMode(ui.runtime!.session.id, 'manual');
+  // Circle hands the person the browser: the card stays until they hand it back
+  let handed = false;
+  const handoff = ui
+    .handBrowser('sign in with your security key', signal)
+    .then(() => (handed = true));
+  await until(() => Boolean(app.state.dialog));
+  assert.equal(app.state.dialog!.title, 'browser');
+  assert.match(
+    app.state.dialog!.body,
+    /^Circle hands you the browser: sign in with your security key\nUse the browser window\. Circle does not see what you do there/,
+  );
+  assert.deepEqual(app.state.dialog!.options, ['hand back']);
+  assert.equal(handed, false);
+  await key('enter');
+  await handoff;
+  assert.equal(handed, true);
 });

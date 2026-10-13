@@ -513,6 +513,67 @@ test('main tool limits retain the subagent tool set and subagent approvals belon
   assert.equal(approvals, 1);
   assert.equal(runtime.policy.store.rules(runtime.session.id).length, 1);
 });
+test('conversation tools marked subagents false are unavailable to child models and cannot run there', async (t) => {
+  const root = scratch(t);
+  const model = new ScriptedModel([
+    {
+      message: assistant('', [
+        {
+          id: 'task',
+          name: 'task',
+          args: {
+            description: 'inspect the conversation',
+            subagent_type: 'general-purpose',
+          },
+        },
+      ]),
+    },
+    {
+      message: assistant('', [
+        { id: 'private', name: 'conversation_only', args: {} },
+      ]),
+    },
+    { message: assistant('child refused') },
+    { message: assistant('main done') },
+  ]);
+  let effects = 0;
+  const runtime = new AgentRuntime({
+    home: root,
+    workspace: root,
+    settings: defaultSettings(),
+    model,
+    headless: true,
+    extraTools: [
+      {
+        name: 'conversation_only',
+        description: 'a tool owned by the visible conversation',
+        parameters: { type: 'object', properties: {} },
+        effect: 'read',
+        subagents: false,
+        async run() {
+          effects++;
+          return 'conversation changed';
+        },
+      },
+    ],
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.harness.run('delegate');
+  assert(
+    model.requests[0]!.tools.some((tool) => tool.name === 'conversation_only'),
+  );
+  assert.equal(
+    model.requests[1]!.tools.some((tool) => tool.name === 'conversation_only'),
+    false,
+  );
+  assert(model.requests[1]!.tools.some((tool) => tool.name === 'read_file'));
+  assert.equal(effects, 0);
+  const result = model.requests[2]!.messages.find(
+    (message) => message.tool_call_id === 'private',
+  )!;
+  assert.equal(result.status, 'error');
+  assert.match(result.content, /unknown tool|not available/i);
+});
 test('a read-only switch while a child approval is pending blocks the already queued mutation', async (t) => {
   const root = scratch(t);
   const path = join(root, 'blocked.txt');

@@ -39,6 +39,38 @@ const bridge: DesktopBridge = {
     ipcRenderer.invoke('circle:browser-bounds', id, bounds, visible),
   browserHide: (id) => ipcRenderer.invoke('circle:browser-hide', id),
   browserCapture: (id) => ipcRenderer.invoke('circle:browser-capture', id),
+  setTheme: (dark) => ipcRenderer.invoke('circle:set-theme', dark),
+  browserTabs: (id, action, tab) =>
+    ipcRenderer.invoke('circle:browser-tabs', id, action, tab),
+  browserDialog: (id, dialog, accept, text, password) =>
+    ipcRenderer.invoke(
+      'circle:browser-dialog',
+      id,
+      dialog,
+      accept,
+      text,
+      password,
+    ),
+  browserDialogScreen: (id, dialog) =>
+    ipcRenderer.invoke('circle:browser-dialog-screen', id, dialog),
+  browserChoose: (id, chooser) =>
+    ipcRenderer.invoke('circle:browser-choose', id, chooser),
+  browserKeepDownload: (id, download, keep) =>
+    ipcRenderer.invoke('circle:browser-keep-download', id, download, keep),
+  browserCertificate: (id, choice, index) =>
+    ipcRenderer.invoke('circle:browser-certificate', id, choice, index),
+  browserPermission: (id, request, allow) =>
+    ipcRenderer.invoke('circle:browser-permission', id, request, allow),
+  browserReveal: (id, download) =>
+    ipcRenderer.invoke('circle:browser-reveal', id, download),
+  browserControl: (id, action) =>
+    ipcRenderer.invoke('circle:browser-control', id, action),
+  onBrowserEvent: (listener) => {
+    const handler = (_event: unknown, state: Parameters<typeof listener>[0]) =>
+      listener(state);
+    ipcRenderer.on('circle:browser-event', handler);
+    return () => ipcRenderer.removeListener('circle:browser-event', handler);
+  },
   updateState: () => ipcRenderer.invoke('circle:update-state'),
   update: (action) => ipcRenderer.invoke('circle:update', action),
   onUpdate: (listener) => {

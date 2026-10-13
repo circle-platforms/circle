@@ -2,6 +2,8 @@ import { readFileSync, appendFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { RuntimeController } from './runtime-controller';
+import { BrowserBridge } from '../../../src/browser/tools.js';
+import type { BrowserReply } from '../../../src/browser/protocol.js';
 import { ScriptedModel } from '../../../src/testing.js';
 import { emptyUsage, type ModelResponse } from '../../../src/types.js';
 import { ModelCatalog } from '../../../src/model_catalog.js';
@@ -35,7 +37,9 @@ if (fixturePath) {
               JSON.stringify({
                 system: request.system,
                 messages: request.messages,
-                tools: request.tools.map(({ run: _run, ...tool }) => tool),
+                tools: request.tools.map(
+                  ({ run: _run, approvalFacts: _facts, ...tool }) => tool,
+                ),
               }) + '\n',
               { mode: 0o600 },
             );
@@ -65,17 +69,25 @@ if (fixturePath) {
     ),
   );
 }
+const browser = new BrowserBridge((message) => port.postMessage(message));
 const controller = new RuntimeController({
   home,
   model,
+  browser,
   userHome: home,
   catalog: process.env.CIRCLE_WORKBENCH_TEST_PROFILE
     ? (path) =>
         new ModelCatalog(path, { env: { CIRCLE_NO_MODELS_REFRESH: '1' } })
     : undefined,
   emit: (update) => port.postMessage({ type: 'update', update }),
+  openUrl: (url) => port.postMessage({ type: 'open-url', url }),
 });
 port.on('message', ({ data }) => {
+  const message = data as { type?: unknown; reply?: BrowserReply };
+  if (message?.type === 'browser-reply' && message.reply) {
+    browser.receive(message.reply);
+    return;
+  }
   void controller
     .dispatch(data)
     .then((reply) => port.postMessage({ type: 'reply', reply }));

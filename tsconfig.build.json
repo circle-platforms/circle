@@ -8,5 +8,5 @@
     "noEmitOnError": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["tests", "scripts"]
+  "exclude": ["tests", "scripts", "src/extensions"]
 }

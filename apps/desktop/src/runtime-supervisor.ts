@@ -6,6 +6,16 @@ import type {
   RuntimeReply,
   RuntimeUpdate,
 } from './runtime-protocol';
+import {
+  validateBrowserRequest,
+  type BrowserReply,
+  type BrowserRequest,
+  type BrowserResult,
+} from '../../../src/browser/protocol.js';
+export type BrowserHandler = (
+  request: BrowserRequest,
+  signal: AbortSignal,
+) => Promise<BrowserResult>;
 
 /** One app-owned core process survives renderer reloads and closes actual jobs on quit. */
 export class RuntimeSupervisor {
@@ -22,9 +32,14 @@ export class RuntimeSupervisor {
   private exited?: Promise<void>;
   private closing?: Promise<void>;
   private listeners = new Set<(update: RuntimeUpdate) => void>();
+  // The runtime's browser requests under way, to stop when it says so or exits
+  private browserRequests = new Map<string, AbortController>();
+  private browserHandler?: BrowserHandler;
   constructor(
     readonly home: string,
     readonly directory: string,
+    // A link an extension asked to open; the caller checks it before opening anything.
+    private readonly openUrl: (url: string) => void = () => {},
   ) {}
   get connected() {
     return !!this.child && !!this.latest?.connected;
@@ -54,7 +69,15 @@ export class RuntimeSupervisor {
           type: string;
           update?: RuntimeUpdate;
           reply?: RuntimeReply;
+          url?: unknown;
+          request?: unknown;
+          id?: unknown;
         }) => {
+          if (message.type === 'open-url' && typeof message.url === 'string')
+            this.openUrl(message.url);
+          if (message.type === 'browser') this.browser(message.request);
+          if (message.type === 'browser-cancel')
+            this.browserRequests.get(String(message.id))?.abort();
           if (message.type === 'update' && message.update) {
             if (this.latest && message.update.seq <= this.latest.seq) return;
             this.latest = message.update;
@@ -76,6 +99,8 @@ export class RuntimeSupervisor {
         child.once('exit', (code) => {
           clearTimeout(timer);
           this.child = undefined;
+          for (const request of this.browserRequests.values()) request.abort();
+          this.browserRequests.clear();
           const error = Error(`Circle runtime exited (${code})`);
           for (const pending of this.pending.values()) {
             clearTimeout(pending.timer);
@@ -104,6 +129,43 @@ export class RuntimeSupervisor {
       );
     });
     await ready;
+  }
+  /** Who carries out the runtime's browser requests: the window's browser sessions. */
+  onBrowser(handler: BrowserHandler) {
+    this.browserHandler = handler;
+  }
+  private browser(value: unknown) {
+    let request: BrowserRequest;
+    try {
+      request = validateBrowserRequest(value);
+    } catch (error) {
+      const id = (value as { id?: unknown })?.id;
+      if (typeof id === 'string')
+        this.reply({ id, ok: false, error: String(error) });
+      return;
+    }
+    const handler = this.browserHandler;
+    if (!handler) {
+      this.reply({ id: request.id, ok: false, error: 'the browser is closed' });
+      return;
+    }
+    const controller = new AbortController();
+    this.browserRequests.set(request.id, controller);
+    void Promise.resolve()
+      .then(() => handler(request, controller.signal))
+      .then(
+        (data) => this.reply({ id: request.id, ok: true, data }),
+        (error) =>
+          this.reply({
+            id: request.id,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+      );
+  }
+  private reply(reply: BrowserReply) {
+    this.browserRequests.delete(reply.id);
+    this.child?.postMessage({ type: 'browser-reply', reply });
   }
   state() {
     if (!this.latest) throw Error('runtime not ready');

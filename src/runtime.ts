@@ -11,6 +11,12 @@ import {
 } from './approvals.js';
 import { Sandbox } from './sandbox.js';
 import { buildTools, type Todo } from './tools.js';
+import {
+  loadSecrets,
+  MAX_SECRET,
+  secretNames,
+  secretRedactor,
+} from './secrets.js';
 import { buildSystemPrompt } from './system_prompt.js';
 import { Harness, type ApprovalDecision } from './harness.js';
 import { EventBus } from './events.js';
@@ -21,7 +27,12 @@ import { fromJsonl, toSessionBundle } from './session_export.js';
 import { projectDataDir, circleHome, normalizeWorkspace } from './paths.js';
 import { McpManager } from './mcp_loader.js';
 import { ExtensionHost } from './extensions.js';
-import { isFolderTrusted, settingsForRun } from './settings.js';
+import {
+  isFolderTrusted,
+  saveSettingsChange,
+  settingsForRun,
+  VARIABLE_NAME,
+} from './settings.js';
 import { BUILTIN_SLASH } from './tui/slash_commands.js';
 import { discoverCustomCommands } from './commands.js';
 import { LspManager } from './lsp_tool.js';
@@ -106,6 +117,12 @@ export interface RuntimeOptions {
   model?: ChatModel;
   catalog?: ModelCatalog;
   extraTools?: Tool[];
+  /** Where the extensions that ship with Circle are; false for none (tests). */
+  bundledExtensions?: string | false;
+  /** An extension's status line changed. */
+  onExtensionStatus?: () => void;
+  /** Opens a link an extension asked for (api.openUrl); the URL is already checked. */
+  openUrl?: (url: string) => Promise<void>;
   /** How `screenshot` takes the screen: tests give their own runner; false leaves it out.
    * By default it is offered where there is a desktop on this machine. */
   screenshot?: Omit<ScreenshotOptions, 'app' | 'target'> | false;
@@ -133,6 +150,8 @@ export class AgentRuntime {
   readonly bus = new EventBus();
   readonly sandbox: Sandbox;
   readonly jobs: JobRegistry;
+  /** Hides secrets' values in what the model reads, from calls and background jobs. */
+  readonly redact: (text: string, used?: Record<string, string>) => string;
   readonly catalog: ModelCatalog;
   private childJobOwners = new Map<string, import('./jobs.js').JobOwner>();
   private closing = false;
@@ -200,6 +219,13 @@ export class AgentRuntime {
         tags: { session_id: job.sessionId },
       });
     });
+    // A background command can print a secret: its notice reaches the model and history.
+    // Calls and notices share what values each secret had.
+    this.redact = secretRedactor(
+      () => loadSecrets(this.options.home),
+      () => this.options.settings.variables ?? {},
+    );
+    this.jobs.redact = this.redact;
     this.userShells = new UserShells(this.jobs, this.store, {
       sessionId: () => this.session.id,
       busy: () => this.busy,
@@ -303,6 +329,7 @@ export class AgentRuntime {
         askQuestions(this.options.home, this.sandbox, args, context.signal, {
           ask: this.options.question,
           secret: this.options.secret,
+          keep: (name, value) => this.keepVariable(name, value),
         }),
       plan: async (enabled, context) => {
         if (!enabled && !this.options.question)
@@ -450,6 +477,7 @@ export class AgentRuntime {
         });
         const childTools = (custom?.tools ?? this.allTools).filter(
           (tool) =>
+            tool.subagents !== false &&
             tool.name !== 'task' &&
             tool.name !== 'compact_conversation' &&
             tool.name !== 'plan_enter' &&
@@ -484,6 +512,7 @@ export class AgentRuntime {
                         this.options.secret!(request, signal, origin),
                       )
                   : undefined,
+                keep: (name, value) => this.keepVariable(name, value),
               },
             ),
         });
@@ -509,6 +538,9 @@ export class AgentRuntime {
               : tool,
         );
         const child: Harness = new Harness({
+          variables: () => this.options.settings.variables,
+          secrets: () => loadSecrets(this.options.home),
+          redact: this.redact,
           model: childModel,
           tools: ownedChildTools,
           store: this.store,
@@ -595,6 +627,9 @@ export class AgentRuntime {
     // A new or resumed session after the integrations loaded keeps their subagents.
     if (this.integrationsReady) this.describeSubagents(tools);
     const harness = new Harness({
+      variables: () => this.options.settings.variables,
+      secrets: () => loadSecrets(this.options.home),
+      redact: this.redact,
       model: this.extensions.model(model),
       tools,
       store: this.store,
@@ -670,6 +705,12 @@ export class AgentRuntime {
       home: this.options.home,
       workspace: this.options.workspace,
       trusted: isFolderTrusted(this.options.settings, this.options.workspace),
+      secret: this.options.secret
+        ? (request, signal) => this.options.secret!(request, signal)
+        : undefined,
+      bundledRoot: this.options.bundledExtensions,
+      onStatus: () => this.options.onExtensionStatus?.(),
+      openUrl: this.options.openUrl,
       settings: this.options.settings.extensions,
       reservedTools: new Set([...BUILTIN_TOOL_NAMES, ...reservedTools]),
       reservedCommands: new Set([
@@ -705,8 +746,34 @@ export class AgentRuntime {
         extensionTools: this.extensions.tools(),
         userHome: this.options.userHome,
         localContext: this.options.localContext,
+        variables: this.options.settings.variables,
+        secrets: secretNames(this.options.home),
       },
     );
+  }
+  /** The variables or the secrets changed: the next request tells the model. */
+  refreshPrompt(): void {
+    this.refreshSystemPrompt();
+  }
+  /**
+   * Keeps a value the person gave as a Circle variable, in the settings and for this run;
+   * the model's next request lists it.
+   */
+  keepVariable(name: string, value: string): void {
+    if (!VARIABLE_NAME.test(name))
+      throw new Error(
+        'a variable name is capital letters, digits and _, starting with a letter',
+      );
+    if (secretNames(this.options.home).includes(name))
+      throw new Error(`${name} is a secret; it keeps its own value`);
+    if (value.length > MAX_SECRET || /[\r\n]/.test(value))
+      throw new Error('a variable is one line of at most 4,096 characters');
+    const next = { ...(this.options.settings.variables ?? {}), [name]: value };
+    this.options.settings.variables = next;
+    saveSettingsChange(this.options.home, (saved) => {
+      saved.variables = { ...(saved.variables ?? {}), [name]: value };
+    });
+    this.refreshSystemPrompt();
   }
   private refreshSystemPrompt(): void {
     this.harness.system = this.systemPrompt(this.harness.model.model);

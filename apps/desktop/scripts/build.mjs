@@ -24,6 +24,11 @@ await cp(join(root, '../../src/prompts'), join(dist, 'prompts'), {
   recursive: true,
 });
 await cp(join(root, '../../src/data'), join(dist, 'data'), { recursive: true });
+await cp(join(root, '../../src/extensions'), join(dist, 'extensions'), {
+  recursive: true,
+}).catch((error) => {
+  if (error?.code !== 'ENOENT') throw error;
+});
 await build({
   entryPoints: [join(root, 'src/main.ts')],
   outfile: join(dist, 'main.cjs'),

@@ -8,7 +8,7 @@ import {
 import { parsePreviewBundle } from '../model/transfer';
 import { usePlugins } from '../plugins/context';
 import { PluginBoundary } from '../plugins/Boundary';
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Group, Panel, Separator } from 'react-resizable-panels';
 import { DropdownMenu, Tooltip } from 'radix-ui';
@@ -59,6 +59,7 @@ import { ManagementPage } from '../features/Pages';
 import { DialogHost, InteractionDialog } from '../features/Dialogs';
 import { applyTheme } from '../theme';
 import { t } from '../i18n';
+import { isSessionBrowser } from '../model/browser';
 // The names of the pages in the top bar; any other page shows its id.
 const PAGE_NAMES: Partial<Record<string, () => string>> = {
   sessions: () => t('sessions'),
@@ -133,6 +134,27 @@ export function App() {
     setSelection(choice);
     setInspectorOpen(true);
   };
+  // When Circle starts using this conversation's browser, its panel opens so the person
+  // sees it work: once per start, and never by taking the person away from another page.
+  // A narrow window lays the panel over the conversation, where Circle's cards and the
+  // input box are: there it stays closed until the person opens it.
+  const browserOperating = useRef(false);
+  const onPage = location.pathname.startsWith('/page/');
+  useEffect(() => {
+    const host = desktopHost();
+    if (!host) return;
+    browserOperating.current = false;
+    const show = (state: Awaited<ReturnType<typeof host.browserState>>) => {
+      if (!isSessionBrowser(state, session.id)) return;
+      const started = !!state.operating && !browserOperating.current;
+      browserOperating.current = !!state.operating;
+      if (started && !onPage && !narrow) {
+        setPanel('browser');
+        setInspectorOpen(true);
+      }
+    };
+    return host.onBrowserEvent(show);
+  }, [session.id, onPage, narrow]);
   const onFile = async (path: string) => {
     try {
       await readNativeFile(runtime, path);
@@ -148,6 +170,21 @@ export function App() {
   };
   const onSessionRoute = () =>
     navigate(`/session/${runtime.getSnapshot().activeSessionId}`);
+  // A link an extension asked to open (api.openUrl): the browser panel opens it, once.
+  const openedLink = useRef(snapshot.openUrl?.id);
+  useEffect(() => {
+    const request = snapshot.openUrl;
+    if (!request || request.id === openedLink.current) return;
+    openedLink.current = request.id;
+    if (desktopHost() && enabled.includes('browser')) {
+      // The browser panel sits beside the session: show the session, then the panel.
+      onSessionRoute();
+      onPanel('browser', request.url);
+    }
+    // Without the panel, the window's own handler hands it to the system browser.
+    else window.open(request.url, '_blank', 'noopener');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot.openUrl?.id]);
   useEffect(() => {
     if (location.pathname === '/')
       navigate(`/session/${session.id}`, { replace: true });
@@ -165,8 +202,13 @@ export function App() {
     setAgent(null);
   }, [session.id]);
   useEffect(() => {
-    const apply = () =>
+    const apply = () => {
       applyTheme(snapshot.settings.theme, snapshot.settings.textSize);
+      // The browser's own pages (a certificate warning) and its pointer use these colours
+      void desktopHost()
+        ?.setTheme(document.documentElement.dataset.theme === 'dark')
+        .catch(() => {});
+    };
     apply();
     const media = matchMedia('(prefers-color-scheme: dark)');
     media.addEventListener('change', apply);

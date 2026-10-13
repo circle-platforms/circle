@@ -44,7 +44,7 @@ Restart your terminal after installing, then run `circle`. Upgrade with `circle 
 
 ## Desktop application
 
-Each release also has Circle as a desktop application: the same agent in its own window. [The desktop application](https://qingshanfeihu.github.io/circle/desktop/) says what the window shows. It carries everything it needs and does not use the `circle` command. It keeps its settings, key and sessions in its own data folder, apart from `~/.circle`.
+Each release also has Circle as a desktop application: the same agent in its own window, with a browser panel you and Circle use together. [The desktop application](https://qingshanfeihu.github.io/circle/desktop/) says what the window shows. It carries everything it needs and does not use the `circle` command. It keeps its settings, key and sessions in its own data folder, apart from `~/.circle`.
 
 | System | File |
 |---|---|
@@ -82,6 +82,12 @@ While Circle works you can keep typing: `enter` steers the running turn. `esc` t
 
 The terminal interface uses conversation cards, status lamps and an `auto` theme that follows terminal colours. Use `/themes dark` or `/themes light` when your terminal cannot report its colours. See [The interface](https://qingshanfeihu.github.io/circle/interface/) for the signals and limits.
 
+## The browser, variables and secrets
+
+Ask Circle to open a page, such as a device's web interface on your network, and it uses the browser as you would. It reads the page, moves a pointer to click and type, and answers the page's dialogs. It passes a certificate warning only after you approve, and it tells you about downloads, files a page asks for and sign-ins. In the terminal the browser is a Chrome, Edge or Chromium window with a new, empty profile; in the desktop application it is a browser panel you share with Circle and can take over. Control is approved site by site, and some things are always yours to decide: giving a page files, camera or location permissions, and which client certificate identifies you.
+
+Save a password with `/secrets NAME`, or under settings → variables in the desktop application. The model writes `%NAME%` wherever the password is needed, in a browser field or in any other tool, and never sees the value: Circle puts it in when the tool runs and hides it again in what comes back. `/variables NAME=value` keeps plain values the same way. See [The browser](https://qingshanfeihu.github.io/circle/tools/#the-browser) and [Secrets by name](https://qingshanfeihu.github.io/circle/security/#secrets-by-name).
+
 ## Learn more
 
 | | |
@@ -90,6 +96,7 @@ The terminal interface uses conversation cards, status lamps and an `auto` theme
 | [The interface](https://qingshanfeihu.github.io/circle/interface/) | What the lamps, tints and frame mean. |
 | [Run Circle safely](https://qingshanfeihu.github.io/circle/security/) | What is asked, what is refused, what is not protected. |
 | [Choose a model](https://qingshanfeihu.github.io/circle/models/) | Endpoints, switching, thinking depth. |
+| [The browser](https://qingshanfeihu.github.io/circle/tools/#the-browser) | Web pages Circle and you use together. |
 | [Skills](https://qingshanfeihu.github.io/circle/skills/), [Commands](https://qingshanfeihu.github.io/circle/custom-commands/), [MCP](https://qingshanfeihu.github.io/circle/mcp/), [Extensions](https://qingshanfeihu.github.io/circle/extensions/) | Make Circle yours. |
 | [The desktop application](https://qingshanfeihu.github.io/circle/desktop/) | The same agent in its own window. |
 | [All documentation](https://qingshanfeihu.github.io/circle/) | Guides and reference. |

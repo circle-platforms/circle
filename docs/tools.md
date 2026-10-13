@@ -4,7 +4,7 @@ nav_order: 20
 
 # Built-in tools
 
-The main agent has these twenty-one tools. MCP servers and [extensions](extensions.md) add more.
+The main agent has these twenty-one core tools. The desktop application adds the eleven [browser tools](#the-browser) below, and so does the full-screen terminal interface when Chrome, Edge or Chromium is installed. MCP servers and [extensions](extensions.md) add more.
 
 "Asks" means Circle shows an approval card before the call runs. See [Security](security.md). In `read-only` mode the tools that do not ask keep working; the others are refused, except changes to a plan file (see [Read-only mode](security.md#read-only-mode)).
 
@@ -33,12 +33,68 @@ The main agent has these twenty-one tools. MCP servers and [extensions](extensio
 
 The file tools refuse a credential file and a background job's output; `execute` refuses a command that names a credential file. See [Security](security.md#credential-files).
 
+## The browser
+
+These tools use the conversation's browser, which you can use at the same time as Circle. They are available to the main agent only.
+
+- In the desktop application it is the conversation's [browser panel](desktop.md#the-browser-panel). The panel opens when Circle starts using the browser, unless you are on another page of the application or the window is narrow, where it would cover the conversation.
+- In the full-screen terminal interface it is a Chrome, Edge or Chromium window that Circle starts at the first browser action, with a new, empty profile of its own: your own browser's profile, cookies and passwords are never used. Circle looks for Chrome, then Edge, then Chromium where they are usually installed (on Linux, on `PATH`); [`CIRCLE_BROWSER`](environment-variables.md#browser) names another. Without one, and in line and print mode, there are no browser tools. The window closes when Circle exits. A page behind another tab gets no input, so when Circle acts on a tab that is not in front, for example after you chose another tab or after another conversation used the browser, it brings that tab and its window to the front first.
+
+Every result has the same parts: what the action did; the dialogs pages are waiting on, in every tab; what happened since the model last looked (tabs opened or closed, dialogs answered and by whom, a certificate warning passed); the tabs, when there are several or they changed; the shown page; and its snapshot. The snapshot is the page's visible text and the elements the model can act on, each with a ref such as `e12`. A ref stays with its element as long as the page is the same document, and an element that appeared since the last snapshot is marked `[new]`. Same-origin frames and open shadow roots are read, tables row by row; frames from other sites are not. Password fields show only whether they are filled.
+
+| Tool | What it does | Asks | Limits |
+|---|---|---|---|
+| `browser_navigate` | Open `url` in the shown tab, or use `back`, `forward` or `reload`. | yes | HTTP and HTTPS only, including local and private addresses. A site whose certificate is not trusted gets the browser's warning page in the tab, which the result shows; see below. |
+| `browser_snapshot` | Read the shown page and the rest of the result. | no | About 30,000 characters. Password values and Circle's pointer are left out. |
+| `browser_click` | Move the pointer to `ref`, described by `element`, and click it with real mouse events. | yes | Refuses a covered element and names what covers it. |
+| `browser_type` | Replace what `ref` holds with `text`; `submit: true` presses Enter. `%NAME%` in the text puts in a variable or a saved [secret](security.md#secrets-by-name). | yes | A password field takes only text made of secrets' names. |
+| `browser_select` | Choose options of a select element at `ref`, by text or value. | yes | |
+| `browser_press` | Press `key`: Enter, Tab, Escape, Backspace, Delete, Space, an arrow key, Home, End, PageUp or PageDown. | yes | |
+| `browser_screenshot` | Send a PNG of the shown page to the model. | no | Not while the page waits on a dialog or shows an error. The model must accept images. |
+| `browser_dialog` | Answer a page's dialog: `accept: true` presses OK (or leaves the page), `false` Cancel (or stays); `text` answers a prompt; `id` picks a dialog in another tab. For a sign-in, `text` is the user name and `password` the password. | yes | A sign-in's `password` is only a saved [secret](security.md#secrets-by-name) written `%NAME%`. |
+| `browser_tabs` | `list`, `new` (with an optional `url`), `select` or `close` a tab. | yes | |
+| `browser_handoff` | Hand you the browser, saying in `reason` what for, and wait until you hand it back; the result then lists where the tabs went meanwhile and shows the page. | no | The model sees nothing of the page until you hand it back. |
+| `browser_upload` | Give `paths` to the file input at `ref`, or, without `ref`, to the file chooser one of Circle's clicks opened; an empty list closes that chooser. Paths are taken as the file tools take them. | always, also in `auto` mode | Up to 50 MB a file. Not a credential file, and not a file with other names on disk (hard links). |
+
+A tool that asks does so once for each site (scheme, host and port): the card names the site, and allowing it for the session covers every browser action there. A navigation asks about the site it goes to. When the page has gone to another site before a click, typing, selection, key press or upload runs, nothing is done and the result shows the page as it is now. See [the approval rules](security.md#approvals).
+
+### Dialogs, warnings and tabs
+
+A page's alert, confirm, prompt or "leave site?" question waits in its tab. In the desktop application it appears over that tab in the browser panel, on a picture of the page as it stopped, with where it came from, and while Circle is working also in the conversation; in the terminal's browser it is the browser's own dialog, in its window. You, or the model with `browser_dialog`, can answer it; the first answer counts, and the next result says who gave it. While a page waits on a dialog, the other tools that act on it refuse and say which dialog to answer.
+
+A site, or a proxy, that asks for a user name and password (HTTP sign-in) waits the same way, as a dialog the result shows with the site and the realm. In the desktop application it appears over the tab with fields for the user name and password, and while Circle is working also in the conversation; what you type there goes to the site, and the model learns only that you answered. The model answers with `browser_dialog`: `text` is the user name, `password` a saved [secret](security.md#secrets-by-name) written `%NAME%`, never plain text. A user name or password the site does not accept makes it ask again, and the result says so. An answer goes only to the site the action was allowed on: a dialog in another tab, or a sign-in another site asks for, is answered after showing that tab, which asks about its site. In the terminal's browser a sign-in that one of Circle's actions meets waits for the model; when the model hands you the browser it becomes the browser's own dialog, in its window, as is a sign-in that comes while Circle is not acting.
+
+In the desktop application a page that asks for the camera, the microphone, your location, notifications, reading the clipboard, MIDI devices, idle detection or window placement asks under the page in the panel, with **allow** and **block**, as a browser asks. Only you answer; the answer holds for that site until Circle closes. The model sees the request waiting and then your answer, and the page goes on meanwhile. Other permissions are refused. In the terminal's browser these requests are the browser's own, in its window, and the model does not see them.
+
+A site that asks for a client certificate, to know who you are, waits for your choice. In the desktop application the certificates you could send are listed in the page's place in the panel, and while Circle is working also in the conversation, each with its subject, issuer and expiry: choose one, or **send none**. Only you choose; Circle's action waits for your choice and then learns which certificate you chose, by subject and issuer, or that you sent none. A site that asks when you have no certificate gets none, without asking. In the terminal's browser the choice is the browser's own, in its window.
+
+When a site's certificate is not trusted, as with the self-signed certificate of a device's web interface, the tab shows the browser's privacy warning instead of the site, as Chrome does: in the terminal it is the browser's own page, in the desktop application Circle's page made like it. You and the model see the same page: **Advanced** shows the link to proceed, and in the desktop application the certificate too. When the model clicks that link, Circle first asks you, in the conversation or on a card in the terminal, showing the site, the certificate's subject and issuer, its expiry and its SHA-256 fingerprint. You can allow it once; for a host on this network (a private, loopback or link-local address, or a name like `nas.lan`) you can also trust that certificate on that host for good. Allowing once lasts until Circle closes; in the terminal's browser it covers that host on every port, as the browser's own exception does. A certificate you trust for good is kept in `browser-certificates.json`, in the application's data folder for the desktop and in Circle's data folder for the terminal; delete it there to forget it. Your own click on the link needs no approval. A different certificate on the same host shows the warning again.
+
+A link or script that opens a new window opens a new tab, shown to both of you; one that opens in the background stays behind. The result names new tabs.
+
+One **allow on *site* for this session** choice covers all browser actions on that site in this conversation but two, which are asked every time, also in `auto` mode: passing a certificate warning (unless you trust the certificate for good) and giving a page files. Keeping a download the model started is asked once per site, except in `auto` mode. `read-only` mode allows snapshots and browser screenshots and refuses the other tools. See [The browser panel](desktop.md#the-browser-panel), [Browser safety](security.md#the-desktop-browser) and [The terminal's browser](security.md#the-terminals-browser).
+
+### Taking turns
+
+You and Circle share the browser.
+
+- In the desktop application, while Circle performs an action a clear layer over the page takes your clicks: a click there, or **take over** under the page, gives you the browser as soon as that action ends (meanwhile **waiting for Circle to stop…**).
+- While you have it, a band over the page says so and Circle's browser tools wait. When you **hand back**, in the band or on the card in the conversation, the tool that waited does nothing and shows the model the page as you left it.
+- The model can hand you the browser itself with `browser_handoff`, for a security key, a CAPTCHA or a choice that is yours. In the terminal the browser window comes to the front and a card waits for **hand back**; to take the browser there yourself, stop the turn with `esc`.
+- Either way the model learns where the tabs went while it did not act (`tab t1 went to … while Circle was not acting`), which dialogs and file choosers you answered and what was downloaded; never what you typed, and no picture of the page.
+
+### Downloads and files
+
+A download is kept in the system's Downloads folder, under the name the site gives it, with ` (1)` and so on added when that name is taken, as browsers do. The result names it (`dl1`) when it starts and gives its path when it is done; an address that downloads a file instead of opening a page says so. When the model's action downloads from a site not yet allowed, the file waits in a temporary folder and Circle asks you, after the action, with the site and each file's name and size: keep it, keep downloads from that site for this session, or discard it. A download a page starts within ten seconds after one of the model's actions counts as the model's, and is asked about with its next action. The site is the download's own, or for a `blob:` file the page's that made it; files from two sites are asked about one site at a time. In the desktop panel a file **waiting for approval** also has **keep** and **discard**, for when Circle's turn ended before it asked. In `auto` mode it is kept without asking. The action is not done again; its result says what you decided, and a discarded file is deleted. The desktop panel shows the file as **waiting for approval** meanwhile. Downloads you start yourself are not held. The model can read a finished download with the file tools. The desktop panel lists the latest downloads, each with **show in folder**.
+
+A click of Circle's that opens a page's file chooser does not open the system's dialog: the result shows the chooser waiting, and the model answers it with `browser_upload`, or you do with **choose…** under the page in the desktop panel. A file chooser you open yourself is the system's own. Before a page gets files from the model, Circle asks you, showing the files, their sizes and the site.
+
 ## Working with you
 
 | Tool | What it does | Asks |
 |---|---|---|
 | `write_todos` | Keep the plan shown in the plan box. | no |
-| `question` | Ask you one or more questions with options, or ask for a secret. Your answers become the tool result. See [Answer a question](usage.md#answer-a-question) and [Secrets](usage.md#secrets). | no |
+| `question` | Ask you one or more questions with options, or ask for a secret. Your answers become the tool result. A question with a `key` keeps your answer as a variable, a secret question as a secret, both written `%KEY%` afterwards. See [Answer a question](usage.md#answer-a-question) and [Secrets](usage.md#secrets). | no |
 | `plan_enter` | Switch to `read-only` mode, as `/plan` does. | no |
 | `plan_exit` | Ask you whether to leave `read-only` mode and implement the plan. Only you can say yes, so it fails without the full-screen interface. | no |
 

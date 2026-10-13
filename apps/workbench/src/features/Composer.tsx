@@ -10,12 +10,7 @@ import {
 } from 'lucide-react';
 import type { Effort, Job, Model, Session, SessionMode } from '../model/types';
 import { EFFORTS, MODES, sessionMode } from '../model/state';
-import {
-  contextPercent,
-  formatBusyElapsed,
-  formatTokens,
-  formatWindow,
-} from '../model/format';
+import { contextPercent, formatTokens, formatWindow } from '../model/format';
 import { t, tn } from '../i18n';
 
 export const MODE_TEXT: Record<
@@ -96,59 +91,6 @@ export function ModeMenu({
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
-  );
-}
-
-// The busy words the core picks one of per turn (src/tui/status_rows.ts BUSY_VERBS).
-const VERBS: Record<string, () => string> = {
-  Thinking: () => t('Thinking'),
-  Considering: () => t('Considering'),
-  Analyzing: () => t('Analyzing'),
-  Brewing: () => t('Brewing'),
-  Pondering: () => t('Pondering'),
-  Cogitating: () => t('Cogitating'),
-  Reflecting: () => t('Reflecting'),
-  Processing: () => t('Processing'),
-  Evaluating: () => t('Evaluating'),
-  Examining: () => t('Examining'),
-};
-// What a retry is for (src/tui/turn_status.ts RETRY_CAUSE), then `3/10`.
-const RETRIES: Record<string, () => string> = {
-  timeout: () => t('timeout'),
-  'network error': () => t('network error'),
-  'server error': () => t('server error'),
-  'rate limited': () => t('rate limited'),
-  'endpoint error': () => t('endpoint error'),
-  error: () => t('error'),
-};
-function retryText(retry: string) {
-  const match = retry.match(/^(.*) (\d+\/\d+)$/);
-  if (!match) return retry;
-  const cause = RETRIES[match[1]!]?.() ?? match[1]!;
-  return t('retrying {cause} {attempt}', { cause, attempt: match[2]! });
-}
-
-/**
- * The frame's top edge while the model works, as in the terminal:
- * `Brewing… · 12.4s · ↓ 1.9k`. Time spent waiting for you is left out.
- */
-export function BusyLabel({ turn }: { turn: NonNullable<Session['turn']> }) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 160);
-    return () => clearInterval(timer);
-  }, []);
-  const seconds = Math.max(0, now - turn.startedAt - turn.waited) / 1000;
-  const verb = VERBS[turn.verb]?.() ?? turn.verb;
-  return (
-    <span className="busy-label" aria-live="off">
-      {[
-        verb + '…',
-        ...(turn.retry ? [retryText(turn.retry)] : []),
-        formatBusyElapsed(seconds),
-        '↓ ' + formatTokens(turn.tokens),
-      ].join(' · ')}
-    </span>
   );
 }
 

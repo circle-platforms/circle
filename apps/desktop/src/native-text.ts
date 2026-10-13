@@ -47,6 +47,25 @@ const ZH_CN: Record<string, string> = {
   'Circle has a question': 'Circle 有一个问题',
   'Circle finished': 'Circle 已完成',
   'Circle stopped with an error': 'Circle 因错误停止',
+  click: '点击',
+  type: '输入',
+  select: '选择',
+  // The certificate warning Circle shows inside a browser tab, in Chrome's words
+  'Privacy error': '隐私设置错误',
+  'Your connection is not private': '您的连接不是私密连接',
+  'Attackers might be trying to steal your information from {host} (for example, passwords, messages or credit cards).':
+    '攻击者可能会试图从 {host} 窃取您的信息（例如：密码、消息或信用卡信息）。',
+  Advanced: '高级',
+  'Hide advanced': '隐藏详情',
+  'Back to safety': '返回安全连接',
+  'This server could not prove that it is {host}; its security certificate is not trusted by your device. This may be caused by a misconfiguration or an attacker intercepting your connection.':
+    '此服务器无法证明它是 {host}；您的设备不信任该服务器的安全证书。出现此问题的原因可能是配置有误或您的连接被拦截了。',
+  'Proceed to {host} (unsafe)': '继续前往 {host}（不安全）',
+  'Issued to': '颁发给',
+  'Issued by': '颁发者',
+  'Valid from': '有效期开始',
+  'Valid until': '有效期至',
+  'SHA-256 fingerprint': 'SHA-256 指纹',
 };
 export const isNativeLocale = (value: unknown): value is NativeLocale =>
   value === 'en' || value === 'zh-CN';

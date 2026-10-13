@@ -9,7 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 4202 --strictPort",
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/state.test.ts test/coverage.test.ts test/i18n.test.ts test/format.test.ts",
+    "test": "node --test test/state.test.ts test/coverage.test.ts test/i18n.test.ts test/format.test.ts test/pairing.test.ts",
     "format:check": "prettier --check src test package.json tsconfig.json vite.config.ts index.html",
     "test:ui": "npm --prefix ../desktop run test:interface"
   },
