@@ -20,7 +20,7 @@ Up to 0.5.0 Circle was a Python program built on deepagents and LangGraph; that 
 - **Sessions:** `tests/fixtures/legacy-baseline/` and `tests/migration.test.ts`. See [Session data migration](migration-data.md).
 - **Installing over a Python circle:** `tests/legacy-install.test.ts` and `npm run release:smoke`.
 - **What 0.5.0 users notice:** `## Unreleased` in `CHANGELOG.md`.
-- **What still differs:** [Known issues](../known-issues.md), and "not yet" in [The TUI contract](tui-contract.md#8-尚未落地的部分).
+- **What still differs:** [Known issues](../known-issues.md), and "not yet" in [The TUI contract](https://github.com/qingshanfeihu/circle/blob/main/docs/development/tui-contract.md#8-尚未落地的部分).
 - **The Python code:** the tag `v0.5.0`. AGENTS.md says how to read it.
 
 ## The inventories are historical

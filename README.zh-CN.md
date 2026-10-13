@@ -4,7 +4,7 @@
 
 <h1 align="center">Circle</h1>
 
-<p align="center">接你自己模型端点的终端编程助手。</p>
+<p align="center">接你自己模型端点的编程助手，在终端里用，也可以用它自己的窗口。</p>
 
 <p align="center">
   <a href="https://qingshanfeihu.github.io/circle/">文档</a> ·
@@ -16,7 +16,7 @@
 
 ---
 
-Circle 在你指定的目录里读代码、改文件、跑命令。任何兼容 OpenAI 或 Anthropic 接口的服务或网关都能接。运行命令和改文件之前它会先问你，屏幕上一眼能看出它是在干活，还是在等你。
+Circle 在你指定的目录里读代码、改文件、跑命令。任何兼容 OpenAI 或 Anthropic 接口的服务或网关都能接。运行命令和改文件之前它会先问你，屏幕上一眼能看出它是在干活，还是在等你。终端里的 Circle 和桌面应用是同一个助手。
 
 **Circle 还很早。** 没有操作系统级沙箱。把它用在重要的东西上之前，请先读[已知问题](https://qingshanfeihu.github.io/circle/known-issues/)和[安全使用](https://qingshanfeihu.github.io/circle/security/)。文档目前只有英文版。
 
@@ -40,7 +40,20 @@ irm https://raw.githubusercontent.com/qingshanfeihu/circle/main/install.ps1 | ie
 
 安装后重新打开终端，再运行 `circle`；以后用 `circle update` 升级。详见[安装与升级](https://qingshanfeihu.github.io/circle/installation/)和[发布页面](https://github.com/qingshanfeihu/circle/releases)。
 
-**从 Circle 0.5.0 或更早版本升级？** 那些版本是 Python 写的。运行上面的安装命令即可：它会卸载 Python 版，保留你的设置、密钥、技能和会话，再装上 1.0。旧版的 `circle update` 做不了这一步。Python 扩展需要重写，见[扩展](https://qingshanfeihu.github.io/circle/extensions/)。
+**从 Circle 0.5.0 或更早版本升级？** 那些版本是 Python 写的。运行上面的安装命令即可：它会卸载 Python 版，保留你的设置、密钥、技能和会话，再装上当前版本。旧版的 `circle update` 不能安装 1.0.0 及之后的版本。Python 扩展需要重写，见[扩展](https://qingshanfeihu.github.io/circle/extensions/)。
+
+## 桌面应用
+
+每个发布包里还有 Circle 的桌面应用：同一个助手，自己一个窗口。它自带运行所需的全部文件，不使用 `circle` 命令。设置、密钥和会话放在它自己的数据目录里，和 `~/.circle` 分开。它不会自己更新，要换新版本就下载新的发布文件替换。
+
+| 系统 | 文件 |
+|---|---|
+| macOS，Apple 芯片 | `circle-desktop-<version>-darwin-arm64.dmg` |
+| macOS，Intel | `circle-desktop-<version>-darwin-x64.dmg` |
+| Windows x64 | `circle-desktop-<version>-windows-x64.zip` |
+| Linux x64 | `circle-desktop-<version>-linux-x64.tar.gz` |
+
+文件在[发布页面](https://github.com/qingshanfeihu/circle/releases)。它不是 Apple 或 Microsoft 签名的，第一次打开需要你确认。Linux 上沙箱助手要先做一次需要 root 的设置。步骤和数据目录的位置见[安装与升级](https://qingshanfeihu.github.io/circle/installation/#the-desktop-application)。从源码运行见 [apps/desktop](apps/desktop/README.md)。
 
 ## 运行
 
@@ -72,6 +85,7 @@ Circle 工作时可以继续打字：`enter` 会插话给正在进行的回合�
 | [安全使用](https://qingshanfeihu.github.io/circle/security/) | 问什么、拒什么、不保护什么 |
 | [选择模型](https://qingshanfeihu.github.io/circle/models/) | 网关、切换、思考深度 |
 | [Skills](https://qingshanfeihu.github.io/circle/skills/)、[自定义命令](https://qingshanfeihu.github.io/circle/custom-commands/)、[MCP](https://qingshanfeihu.github.io/circle/mcp/)、[扩展](https://qingshanfeihu.github.io/circle/extensions/) | 让 Circle 适合你 |
+| [桌面应用](https://qingshanfeihu.github.io/circle/installation/#the-desktop-application) | 同一个助手，自己一个窗口 |
 | [全部文档](https://qingshanfeihu.github.io/circle/) | 指南与参考 |
 
 ## 开发

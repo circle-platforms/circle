@@ -4,7 +4,7 @@
 
 <h1 align="center">Circle</h1>
 
-<p align="center">A terminal coding agent for your own model endpoint.</p>
+<p align="center">A coding agent for your own model endpoint, in the terminal and in its own window.</p>
 
 <p align="center">
   <a href="https://qingshanfeihu.github.io/circle/">Docs</a> ·
@@ -16,7 +16,7 @@
 
 ---
 
-Circle reads and edits the code in a folder you choose, and runs commands there. It works with any service or gateway that speaks the OpenAI or Anthropic API. It asks before it runs a command or changes a file, and the screen shows at a glance whether it is working or waiting for you.
+Circle reads and edits the code in a folder you choose, and runs commands there. It works with any service or gateway that speaks the OpenAI or Anthropic API. It asks before it runs a command or changes a file, and the screen shows at a glance whether it is working or waiting for you. The same agent runs in the terminal and in the desktop application.
 
 **Circle is early software.** There is no operating-system sandbox. Read [Known issues](https://qingshanfeihu.github.io/circle/known-issues/) and [Run Circle safely](https://qingshanfeihu.github.io/circle/security/) before you point it at anything you care about.
 
@@ -40,7 +40,20 @@ The installers download the latest release for your platform, verify its SHA-256
 
 Restart your terminal after installing, then run `circle`. Upgrade with `circle update`. See [Installation and updates](https://qingshanfeihu.github.io/circle/installation/) and [Releases](https://github.com/qingshanfeihu/circle/releases).
 
-**Coming from Circle 0.5.0 or older?** Those were written in Python. Run the install command above: it removes the Python version, keeps your settings, keys, skills and sessions, and installs 1.0 in its place. The old `circle update` cannot do this step. Python extensions have to be rewritten; see [Extensions](https://qingshanfeihu.github.io/circle/extensions/).
+**Coming from Circle 0.5.0 or older?** Those were written in Python. Run the install command above: it removes the Python version, keeps your settings, keys, skills and sessions, and installs the current release in its place. The old `circle update` cannot install 1.0.0 or later. Python extensions have to be rewritten; see [Extensions](https://qingshanfeihu.github.io/circle/extensions/).
+
+## Desktop application
+
+Each release also has Circle as a desktop application: the same agent in its own window. It carries everything it needs and does not use the `circle` command. It keeps its settings, key and sessions in its own data folder, apart from `~/.circle`. It does not update itself; take the new release's file to update it.
+
+| System | File |
+|---|---|
+| macOS, Apple silicon | `circle-desktop-<version>-darwin-arm64.dmg` |
+| macOS, Intel | `circle-desktop-<version>-darwin-x64.dmg` |
+| Windows x64 | `circle-desktop-<version>-windows-x64.zip` |
+| Linux x64 | `circle-desktop-<version>-linux-x64.tar.gz` |
+
+Take the file from [Releases](https://github.com/qingshanfeihu/circle/releases). It is signed ad hoc, not by Apple or Microsoft, so the first launch asks you to confirm. On Linux the sandbox helper needs one root command. The steps, and where the data folder is, are in [Installation](https://qingshanfeihu.github.io/circle/installation/#the-desktop-application). To run it from a checkout, see [apps/desktop](apps/desktop/README.md).
 
 ## Run
 
@@ -72,6 +85,7 @@ The terminal interface uses conversation cards, status lamps and an `auto` theme
 | [Run Circle safely](https://qingshanfeihu.github.io/circle/security/) | What is asked, what is refused, what is not protected. |
 | [Choose a model](https://qingshanfeihu.github.io/circle/models/) | Endpoints, switching, thinking depth. |
 | [Skills](https://qingshanfeihu.github.io/circle/skills/), [Commands](https://qingshanfeihu.github.io/circle/custom-commands/), [MCP](https://qingshanfeihu.github.io/circle/mcp/), [Extensions](https://qingshanfeihu.github.io/circle/extensions/) | Make Circle yours. |
+| [The desktop application](https://qingshanfeihu.github.io/circle/installation/#the-desktop-application) | The same agent in its own window. |
 | [All documentation](https://qingshanfeihu.github.io/circle/) | Guides and reference. |
 
 ## Development
@@ -93,16 +107,3 @@ See [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md) for coding agents
 ## License
 
 Circle is released under the [MIT License](LICENSE). The model catalogs in `src/data/` carry metadata from models.dev, and many prompts in `src/prompts/` come from OpenCode, each under its own MIT license; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-## Circle desktop application
-
-Circle also comes as a desktop application: the conversation, session history, files and diffs, approvals, jobs, models and extensions in one window. Each release has it for macOS, Windows and Linux as `circle-desktop-<version>-<os>-<arch>`; [Installation](docs/installation.md#the-desktop-application) says how to open it the first time. To run it from a checkout, see [apps/desktop](apps/desktop/README.md):
-
-```bash
-npm ci
-npm --prefix apps/workbench ci
-npm --prefix apps/desktop ci
-npm --prefix apps/desktop run dev
-```
-
-The application bundles Circle's interactive runtime in its own native process. Conversations, tools, approvals, questions, native sessions and shell commands use the existing Circle core. Connect your API URL, key and model in the application. Its data folder is separate from `~/.circle`. Deferred platform components are not loaded in the application. See [native runtime and verification](docs/workbench/native-runtime.md) and [desktop architecture](docs/workbench/architecture.md).
