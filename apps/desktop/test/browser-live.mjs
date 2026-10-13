@@ -957,8 +957,10 @@ try {
     assert.equal(masked, 0);
     await page.getByTestId('browser-pending').waitFor();
     await band.waitFor();
-    // The model's next look waits for the browser back, then shows the page as it is
+    // The model's next look waits for the browser back, then shows the page as it is;
+    // the panel says so once that look is waiting, not before
     await handoffCard.waitFor();
+    await page.getByTestId('browser-waiting').waitFor();
     await band.getByRole('button', { name: 'hand back', exact: true }).click();
     await page.getByText('takeover checked', { exact: true }).waitFor();
     assert.match(await textOf('slow-nav'), /the user took over the browser/);

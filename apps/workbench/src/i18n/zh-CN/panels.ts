@@ -118,6 +118,7 @@ export const panels: Record<string, string> = {
   'You control the browser. Circle is paused and does not see what you do.':
     '你在控制浏览器。Circle 已暂停，看不到你的操作。',
   'hand back': '交还',
+  'Circle is waiting to go on': 'Circle 在等你交还后继续',
   'Waiting for Circle to stop…': '等待 Circle 停下…',
   'take over': '接管',
   'you have the browser': '浏览器在你手上',

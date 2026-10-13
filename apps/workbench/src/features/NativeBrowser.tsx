@@ -243,6 +243,11 @@ export function NativeBrowser() {
               'You control the browser. Circle is paused and does not see what you do.',
             )}
             {state.handoff && <small>{state.handoff}</small>}
+            {state.waiting && (
+              <small data-testid="browser-waiting">
+                {t('Circle is waiting to go on')}
+              </small>
+            )}
           </span>
           <Button onClick={() => void host.browserControl(id, 'return')}>
             {t('hand back')}
