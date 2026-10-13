@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.4.1 - 2026-10-13
+
 ### Fixed
 
 - **The terminal's browser gave up on Chrome after 20 seconds** with "browser action timed out"; a first start with a new profile on a busy Windows machine can take that long. It now waits a minute, and says the browser did not start.
