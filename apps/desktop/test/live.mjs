@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
+import { armDeadline } from './helpers/diagnostics.mjs';
 import {
   assertViewport,
   readViewport,
@@ -97,6 +98,7 @@ const checks = [];
 const errors = [];
 let app;
 let page;
+armDeadline({ minutes: 12, page: () => page, events: errors, output, checks });
 let gateway;
 let viewportSizing;
 const state = () =>

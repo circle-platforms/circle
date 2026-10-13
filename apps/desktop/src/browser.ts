@@ -218,6 +218,8 @@ interface Conversation {
   lastAction: number;
   control: BrowserControl;
   handoff?: string;
+  // An action of Circle's waits for the person to hand the browser back
+  waiting: boolean;
   // Woken when the person hands the browser back
   handedBack: Set<() => void>;
   // Over the shown tab while Circle acts: the person's click there takes the browser
@@ -329,6 +331,7 @@ export class BrowserSessions {
         nextPermission: 0,
         allowed: new Map(),
         control: 'shared',
+        waiting: false,
         handedBack: new Set(),
       };
       this.exceptions.set(id, conversation.exceptions);
@@ -1276,6 +1279,7 @@ export class BrowserSessions {
         !!conversation?.insecureHosts.has(hostOf(url)),
       operating: conversation?.operating ?? false,
       control: conversation?.control ?? 'shared',
+      ...(conversation?.waiting ? { waiting: true } : {}),
       ...(conversation?.handoff ? { handoff: conversation.handoff } : {}),
       tab: tab?.id,
       tabs: conversation
@@ -2091,7 +2095,15 @@ export class BrowserSessions {
       // The person has the browser: Circle waits for it back, and acts on nothing it saw
       // before, since the page may be another by then
       if (conversation.control === 'user') {
-        await this.handedBack(conversation, signal);
+        // The panel says that Circle waits: the person knows to hand the browser back
+        conversation.waiting = true;
+        this.publish(conversation.id);
+        try {
+          await this.handedBack(conversation, signal);
+        } finally {
+          conversation.waiting = false;
+          this.publish(conversation.id);
+        }
         return {
           text: await this.result(
             conversation,

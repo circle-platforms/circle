@@ -1,5 +1,9 @@
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
-import { observePage, captureFailure } from './helpers/diagnostics.mjs';
+import {
+  armDeadline,
+  observePage,
+  captureFailure,
+} from './helpers/diagnostics.mjs';
 import { readViewport, setViewport } from './helpers/viewport.mjs';
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
@@ -50,6 +54,7 @@ if (process.env.CIRCLE_DESKTOP_CHECK_NARROW) {
   await page.reload();
 }
 const checks = [];
+armDeadline({ minutes: 12, page: () => page, events: errors, output, checks });
 const viewport = await readViewport(page);
 const sourceCommands = (await import('../../../src/tui/slash_commands.ts'))
   .BUILTIN_SLASH;

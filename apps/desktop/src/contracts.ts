@@ -174,6 +174,8 @@ export interface BrowserState {
   control?: BrowserControl;
   /** Why Circle handed the person the browser, in its words. */
   handoff?: string;
+  /** The person took the browser and an action of Circle's waits until they hand it back. */
+  waiting?: boolean;
 }
 export type BrowserControl = 'shared' | 'agent' | 'user_pending' | 'user';
 /** A site asks for a client certificate: only the person chooses one, or none. */

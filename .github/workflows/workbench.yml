@@ -110,12 +110,38 @@ jobs:
         if: runner.os == 'Windows'
         timeout-minutes: 15
         shell: bash
+        env:
+          CIRCLE_DESKTOP_TEST_TEMP: ${{ runner.temp }}
         run: |
           export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/Circle-win32-x64"
           export CIRCLE_DESKTOP_EXECUTABLE="$CIRCLE_DESKTOP_APP_PATH/Circle.exe"
           version="$(node -p "require('./package.json').version")"
           export CIRCLE_DESKTOP_UPDATE_MSI="$GITHUB_WORKSPACE/apps/desktop/out/circle-desktop-$version-windows-x64.msi"
           npm --prefix apps/desktop run test:update
+      # What the update check wrote, also when it was ended for taking too long
+      - name: Evidence of the update check
+        if: always() && runner.os == 'Windows'
+        shell: bash
+        run: |
+          root="$(cygpath -u "$RUNNER_TEMP")"
+          for folder in "$root"/circle-desktop-update-*/; do
+            [ -d "$folder" ] || continue
+            echo "== $folder"
+            for file in progress.log application.log data/updates/install.log data/updates/install.json.out data/updates/install.json.err; do
+              [ -f "$folder$file" ] || continue
+              echo "--- $file"
+              cat "$folder$file"
+              echo
+            done
+          done
+          true
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        if: always() && runner.os == 'Windows'
+        with:
+          name: circle-desktop-update-evidence-${{ matrix.os }}
+          path: ${{ runner.temp }}/circle-desktop-update-*/**/*.log
+          if-no-files-found: ignore
+          retention-days: 7
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: circle-desktop-${{ matrix.os }}-development

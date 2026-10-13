@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
-import { captureFailure } from './helpers/diagnostics.mjs';
+import { armDeadline, captureFailure } from './helpers/diagnostics.mjs';
 
 // The conversation's browser, driven by a scripted model and by the person, against local
 // HTTPS sites with a self-signed certificate: everything a page asks for reaches both.
@@ -32,6 +32,7 @@ const checks = [];
 const errors = [];
 let app;
 let page;
+armDeadline({ minutes: 15, page: () => page, events: errors, output, checks });
 let requestsPath = join(temp, 'requests.jsonl');
 
 // Every request is local. The certificate exists only inside this test's scratch folder.
@@ -957,8 +958,10 @@ try {
     assert.equal(masked, 0);
     await page.getByTestId('browser-pending').waitFor();
     await band.waitFor();
-    // The model's next look waits for the browser back, then shows the page as it is
+    // The model's next look waits for the browser back, then shows the page as it is;
+    // the panel says so once that look is waiting, not before
     await handoffCard.waitFor();
+    await page.getByTestId('browser-waiting').waitFor();
     await band.getByRole('button', { name: 'hand back', exact: true }).click();
     await page.getByText('takeover checked', { exact: true }).waitFor();
     assert.match(await textOf('slow-nav'), /the user took over the browser/);

@@ -78,7 +78,7 @@ One **allow on *site* for this session** choice covers all browser actions on th
 
 You and Circle share the browser.
 
-- In the desktop application, while Circle performs an action a clear layer over the page takes your clicks: a click there, or **take over** under the page, gives you the browser as soon as that action ends (meanwhile **waiting for Circle to stop…**).
+- In the desktop application, while Circle performs an action a clear layer over the page takes your clicks: a click there, or **take over** under the page, gives you the browser as soon as that action ends (meanwhile **waiting for Circle to stop…**). While you have it and Circle's next action waits, the band under the page says **Circle is waiting to go on**.
 - While you have it, a band over the page says so and Circle's browser tools wait. When you **hand back**, in the band or on the card in the conversation, the tool that waited does nothing and shows the model the page as you left it.
 - The model can hand you the browser itself with `browser_handoff`, for a security key, a CAPTCHA or a choice that is yours. In the terminal the browser window comes to the front and a card waits for **hand back**; to take the browser there yourself, stop the turn with `esc`.
 - Either way the model learns where the tabs went while it did not act (`tab t1 went to … while Circle was not acting`), which dialogs and file choosers you answered and what was downloaded; never what you typed, and no picture of the page.
