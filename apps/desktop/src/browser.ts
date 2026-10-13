@@ -1768,6 +1768,21 @@ export class BrowserSessions {
     this.publish(id);
     return this.state(id);
   }
+  /**
+   * A tab a page just opened has its document before the browser knows its address and
+   * title (the renderer commits first): a moment, so the result names the page.
+   */
+  private async committed(tab: Tab, signal?: AbortSignal) {
+    const contents = tab.view.webContents;
+    const end = Date.now() + 3000;
+    while (
+      !tab.closed &&
+      !contents.isDestroyed() &&
+      !contents.getURL() &&
+      Date.now() < end
+    )
+      await delay(50, undefined, { signal });
+  }
   /** A finished download is in the downloads folder, and the model is told where. */
   private finishDownload(conversation: Conversation, entry: Arriving) {
     const { download } = entry;
@@ -1955,6 +1970,7 @@ export class BrowserSessions {
       await this.chosen(tab, signal);
       await this.idle(tab, signal);
     }
+    await this.committed(tab, signal);
     const dialogs = [...conversation.tabs.values()].flatMap(
       (entry) => entry.dialogs,
     );
@@ -2504,6 +2520,11 @@ export class BrowserSessions {
     await this.idle(tab, signal);
     await this.downloadsDone(conversation, signal);
     const shown = this.activeTab(conversation);
+    // A tab the click opened is the one the result shows: its page first
+    if (shown !== tab) {
+      await this.committed(shown, signal);
+      await this.idle(shown, signal);
+    }
     if (tab.dialogs.length) text += ` It opened dialog ${tab.dialogs[0]!.id}.`;
     else if (conversation.nextChooser > choosersBefore && tab.chooser)
       text += ` It opened file chooser ${tab.chooser.id}: answer it with browser_upload.`;
