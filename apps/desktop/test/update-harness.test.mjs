@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -14,10 +15,7 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 // Execute the real harness's Windows preflight in a child Node process. Native commands
-// and Playwright are intercepted before the harness imports them; no installer, watcher or app runs.
-const watchHelper = fileURLToPath(
-  new URL('./helpers/watch.mjs', import.meta.url),
-);
+// and Playwright are intercepted before the harness imports them; no installer or app runs.
 const hooks = `
 import { registerHooks } from 'node:module';
 Object.defineProperty(process, 'platform', { value: 'win32' });
@@ -30,12 +28,6 @@ const commands = ${JSON.stringify(String.raw`
     process.env.CIRCLE_UPDATE_ACTIONS, JSON.stringify({ method, command, args }) + '\n');
   export function spawn(command, args) {
     record('spawn', command, args);
-    if (command === process.execPath && args[0] === process.env.CIRCLE_UPDATE_WATCH_HELPER) {
-      return {
-        unref() { record('unref', command, args); },
-        kill() { record('kill', command, args); return true; },
-      };
-    }
     throw Error('unexpected application launch');
   }
   export function execFileSync(command, args) {
@@ -98,13 +90,15 @@ function preflight(t, existing) {
     {
       env: {
         ...process.env,
+        // The harness's own scratch folder goes under this test's, whichever platform runs it
+        TMPDIR: root,
+        TEMP: root,
+        TMP: root,
         CIRCLE_UPDATE_PROGRAM_FILES: programFiles,
         CIRCLE_DESKTOP_APP_PATH: join(root, 'package'),
         CIRCLE_DESKTOP_EXECUTABLE: join(root, 'package', 'Circle.exe'),
         CIRCLE_DESKTOP_UPDATE_MSI: msi,
-        CIRCLE_DESKTOP_TEST_TEMP: root,
         CIRCLE_UPDATE_ACTIONS: actions,
-        CIRCLE_UPDATE_WATCH_HELPER: watchHelper,
         CIRCLE_HOME: join(root, 'home'),
         CIRCLE_WORKBENCH_DATA_DIR: join(root, 'data'),
       },
@@ -117,73 +111,51 @@ function preflight(t, existing) {
   const recorded = existsSync(actions)
     ? readFileSync(actions, 'utf8').trim().split('\n').map(JSON.parse)
     : [];
-  const watchArgs = [
-    watchHelper,
-    String(result.pid),
-    recorded[0]?.args[2],
-    '12',
-  ];
-  assert.equal(dirname(watchArgs[2]), root);
-  assert.ok(basename(watchArgs[2]).startsWith('circle-desktop-update-'));
-  assert.deepEqual(
-    recorded.filter((action) =>
-      ['spawn', 'unref', 'kill'].includes(action.method),
-    ),
-    ['spawn', 'unref', 'kill'].map((method) => ({
-      method,
-      command: process.execPath,
-      args: watchArgs,
-    })),
+  // A failed check keeps its scratch folder to look at
+  const scratch = readdirSync(root).filter((name) =>
+    name.startsWith('circle-desktop-update-'),
   );
-  return {
-    installed,
-    msi,
-    result,
-    watchArgs,
-    actions: recorded,
-  };
+  assert.equal(scratch.length, 1, scratch.join(', '));
+  const temp = join(root, scratch[0]);
+  assert.ok(result.stderr.includes(`kept ${temp}`), result.stderr);
+  return { installed, msi, result, temp, actions: recorded };
 }
 
 test('update preflight leaves an existing installation and its processes alone', (t) => {
-  const { installed, result, actions, watchArgs } = preflight(t, true);
+  const { installed, result, actions } = preflight(t, true);
   assert.match(result.stderr, /exists already/);
   assert.ok(result.stderr.includes(installed));
   assert.equal(
     readFileSync(join(installed, 'existing-install'), 'utf8'),
     'leave this installation alone',
   );
+  // Only the evidence of the failure: no process is stopped and nothing is removed
   assert.deepEqual(actions, [
-    { method: 'spawn', command: process.execPath, args: watchArgs },
-    { method: 'unref', command: process.execPath, args: watchArgs },
     { method: 'execFileSync', command: 'tasklist', args: [] },
-    { method: 'kill', command: process.execPath, args: watchArgs },
   ]);
 });
 
 test('update cleanup removes its own partially attempted installation', (t) => {
-  const { installed, msi, result, actions, watchArgs } = preflight(t, false);
+  const { installed, msi, result, actions, temp } = preflight(t, false);
   assert.match(result.stderr, /msiexec .* exited with 1603/);
   assert.equal(existsSync(installed), false);
   assert.deepEqual(
     actions.map((action) => [action.method, action.command]),
     [
-      ['spawn', process.execPath],
-      ['unref', process.execPath],
       ['spawnSync', 'msiexec.exe'],
       ['execFileSync', 'tasklist'],
-      ['kill', process.execPath],
       ['spawnSync', 'powershell.exe'],
       ['spawnSync', 'msiexec.exe'],
       ['spawnSync', 'msiexec.exe'],
     ],
   );
-  assert.deepEqual(actions[2].args, [
+  assert.deepEqual(actions[0].args, [
     '/i',
     msi,
     '/qn',
     '/norestart',
     '/l*v',
-    join(watchArgs[2], 'msi-install.log'),
+    join(temp, 'msi-install.log'),
   ]);
   const stop = actions.find((action) => action.command === 'powershell.exe');
   assert.ok(stop);
@@ -200,7 +172,7 @@ test('update cleanup removes its own partially attempted installation', (t) => {
     (action) => action.command === 'msiexec.exe' && action.args[0] === '/x',
   );
   assert.equal(removed.length, 2);
-  assert.equal(dirname(removed[0].args[1]), join(watchArgs[2], 'release'));
+  assert.equal(dirname(removed[0].args[1]), join(temp, 'release'));
   assert.match(
     basename(removed[0].args[1]),
     /^circle-desktop-\d+\.\d+\.\d+-windows-x64\.msi$/,
