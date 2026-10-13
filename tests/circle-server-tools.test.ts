@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer, type IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -12,6 +12,13 @@ import { submitAnswer } from '../src/secret_prompt.js';
 
 const PASSWORD = 'pw-tools-5521-qq';
 const TOKEN = 'tok-tools-77c1a9';
+const sha = (bytes: Buffer): string =>
+  createHash('sha256').update(bytes).digest('hex');
+// Synthetic record contents the stand-in server serves.
+const BED = Buffer.from('# bed facts\nsynthetic rows\n');
+const ROW = Buffer.from('row,value\n1,2\n');
+const TREE = Buffer.from('{"commands":3812}');
+const BAD = Buffer.from('tampered synthetic bytes');
 async function read(request: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -19,7 +26,8 @@ async function read(request: IncomingMessage): Promise<Buffer> {
 }
 
 // A stand-in server with a tool catalog: two read tools (one of them a server task), one
-// tool that changes something, and one whose source is down.
+// tool that changes something, and one whose source is down. It also serves the content of
+// a few knowledge, evidence and artifact records, one with a SHA-256 that does not match.
 async function toolServer(t: Parameters<typeof scratch>[0]) {
   const calls: { name: string; body: Record<string, unknown> }[] = [];
   const packs: Record<string, any>[] = [];
@@ -140,6 +148,30 @@ async function toolServer(t: Parameters<typeof scratch>[0]) {
       });
     if (url.pathname === '/v1/tasks/task_tree/result')
       return send(200, { data: { status: 'succeeded', commands: 3812 } });
+    const content =
+      /^\/v1\/(knowledge\/records|evidence|artifacts)\/([^/]+)\/content$/.exec(
+        url.pathname,
+      );
+    if (content) {
+      const found = (
+        {
+          knr_bed: { body: BED, type: 'text/markdown; charset=utf-8' },
+          evd_row: { body: ROW, type: 'text/csv' },
+          evd_bad: { body: BAD, type: 'text/plain', sha: '0'.repeat(64) },
+          art_tree: { body: TREE, type: 'application/json' },
+        } as Record<string, { body: Buffer; type: string; sha?: string }>
+      )[decodeURIComponent(content[2]!)];
+      if (!found)
+        return send(404, {
+          status: 'failed',
+          error: { code: 'TARGET_NOT_FOUND' },
+        });
+      response.writeHead(200, {
+        'content-type': found.type,
+        'x-content-sha256': found.sha ?? sha(found.body),
+      });
+      return response.end(found.body);
+    }
     if (url.pathname === '/v1/skillpacks' && request.method === 'POST') {
       const pack = JSON.parse(body.toString());
       // The server's contract is strict: these keys and no others.
@@ -756,5 +788,94 @@ test('a model can start the trial record and push the skill pack it changed, wit
       /someone else approves: \/server approve/.test(line),
     ),
   );
+  await delay(200);
+});
+
+test('the evidence tool saves a record’s content after checking its SHA-256, and refuses what does not check out', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = await toolServer(t);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { 'circle-server': { enabled: true } },
+    secret: async (request) => {
+      await submitAnswer(home, request.id, PASSWORD);
+    },
+  }).load();
+  const context = {
+    workspace,
+    toast: () => {},
+    append: () => {},
+    sendUserMessage: () => {},
+  };
+  await host
+    .commands()
+    .get('server')!
+    .handler(`login ${server.url} tester`, context);
+  const tool = host
+    .tools()
+    .find((item) => item.name === 'circle_server_evidence')!;
+  assert.ok(tool, 'the evidence tool is offered to the model');
+  assert.equal(tool.effect, 'read');
+  assert.equal(tool.approval, false);
+  const run = { signal: new AbortController().signal, sessionId: 's' } as never;
+  const call = async (args: Record<string, unknown>) => {
+    const result: unknown = await host.toolBoundary(
+      { tool, args, context: run },
+      (request) => tool.run(request.args, request.context),
+    );
+    return typeof result === 'string' ? JSON.parse(result) : result;
+  };
+
+  // Each prefix reads its own route and saves under evidence/, checked against the SHA-256.
+  const bed = await call({ id: 'knr_bed' });
+  assert.equal(bed.id, 'knr_bed');
+  assert.equal(bed.path, 'evidence/knr_bed.md');
+  assert.equal(bed.mediaType, 'text/markdown');
+  assert.equal(bed.sha256, sha(BED));
+  assert.equal(bed.bytes, BED.length);
+  assert.equal(readFileSync(join(workspace, bed.path), 'utf8'), BED.toString());
+  assert.ok(
+    !JSON.stringify(bed).includes('synthetic rows'),
+    'the content itself stays out of the reply',
+  );
+  const row = await call({ id: 'evd_row' });
+  assert.equal(row.path, 'evidence/evd_row.csv');
+  assert.equal(row.sha256, sha(ROW));
+  assert.equal(readFileSync(join(workspace, row.path), 'utf8'), ROW.toString());
+
+  // save_as picks where the file goes, inside the workspace.
+  const tree = await call({ id: 'art_tree', save_as: 'downloads/tree.json' });
+  assert.equal(tree.path, 'downloads/tree.json');
+  assert.equal(tree.mediaType, 'application/json');
+  assert.equal(
+    readFileSync(join(workspace, tree.path), 'utf8'),
+    TREE.toString(),
+  );
+
+  // Bytes that do not match the server's SHA-256 are not saved.
+  await assert.rejects(
+    () => call({ id: 'evd_bad' }),
+    /do not match the server's SHA-256 .*not saved/,
+  );
+  assert.ok(!existsSync(join(workspace, 'evidence', 'evd_bad.txt')));
+
+  // An id whose prefix names no record kind never reaches the server.
+  await assert.rejects(
+    () => call({ id: 'tsk_9' }),
+    /must start with knr_ \(knowledge record\), evd_ \(evidence\) or art_ \(artifact\)/,
+  );
+
+  // save_as cannot leave the workspace.
+  await assert.rejects(
+    () => call({ id: 'knr_bed', save_as: '../outside.txt' }),
+    /save_as \.\.\/outside\.txt is outside the workspace/,
+  );
+  assert.ok(!existsSync(join(root, 'outside.txt')));
   await delay(200);
 });

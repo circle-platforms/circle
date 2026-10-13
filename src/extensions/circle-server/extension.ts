@@ -16,6 +16,7 @@ import {
 } from 'node:fs';
 import {
   basename,
+  dirname,
   extname,
   isAbsolute,
   join,
@@ -94,6 +95,25 @@ const MAX_DETAIL_CHARS = 2000;
 // A task in one of these phases changes no more; `unknown` waits for someone to check.
 const TERMINAL = new Set(['delivered', 'failed', 'cancelled', 'unknown']);
 const MAX_UPLOAD_BYTES = 16 * 1024 * 1024;
+// The file extension a saved record's media type suggests; anything else is .bin.
+const EXTENSIONS: Record<string, string> = {
+  'application/json': 'json',
+  'application/pdf': 'pdf',
+  'application/zip': 'zip',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+    'docx',
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/svg+xml': 'svg',
+  'text/plain': 'txt',
+  'text/markdown': 'md',
+  'text/csv': 'csv',
+  'text/html': 'html',
+  'text/xml': 'xml',
+  'application/xml': 'xml',
+};
 const USAGE = [
   '/server                          where you are signed in',
   '/server login <url> <user>       sign in; the password is asked on a masked card',
@@ -2381,6 +2401,90 @@ export async function register(api: ExtensionAPI): Promise<void> {
       } catch (error) {
         throw new api.ToolError(reason(error));
       }
+    },
+    { readOnly: true },
+  );
+  // The original bytes of a knowledge record, an evidence record or an artifact, for a skill
+  // that must read them (apv-mindmap-compile's --bed-facts). Saved in the workspace after
+  // the bytes are checked against the SHA-256 the server sends; the reply names the path,
+  // never the content.
+  api.registerTool(
+    'circle_server_evidence',
+    'Read the content of a circle-server record by id: knr_… a knowledge record, evd_… an evidence record, art_… an artifact. The bytes are checked against the SHA-256 the server sends (x-content-sha256) and saved under evidence/ in the workspace (or at save_as), never overwriting; the reply names the saved path, its SHA-256 and size, never the content. Read-only on the server.',
+    {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+          description: 'knr_…, evd_… or art_…',
+        },
+        save_as: {
+          type: 'string',
+          description:
+            'a relative path in the workspace to save to instead of evidence/<id>.<ext>',
+        },
+      },
+      required: ['id'],
+    },
+    async (args) => {
+      const id = String(args.id ?? '');
+      const route = id.startsWith('knr_')
+        ? `/v1/knowledge/records/${encodeURIComponent(id)}/content`
+        : id.startsWith('evd_')
+          ? `/v1/evidence/${encodeURIComponent(id)}/content`
+          : id.startsWith('art_')
+            ? `/v1/artifacts/${encodeURIComponent(id)}/content`
+            : '';
+      if (!route)
+        throw new api.ToolError(
+          `id must start with knr_ (knowledge record), evd_ (evidence) or art_ (artifact): ${id || '(empty)'}`,
+        );
+      const workspace = api.workspace;
+      if (!workspace)
+        throw new api.ToolError('no workspace to save the content into');
+      const saveAs =
+        typeof args.save_as === 'string' && args.save_as ? args.save_as : '';
+      const wanted = saveAs ? resolve(workspace, saveAs) : '';
+      if (saveAs) {
+        const inside = relative(workspace, wanted);
+        if (!inside || inside.startsWith('..') || isAbsolute(inside))
+          throw new api.ToolError(`save_as ${saveAs} is outside the workspace`);
+      }
+      let bytes: Buffer;
+      let headers: Headers;
+      try {
+        ({ bytes, headers } = await request('GET', route, {
+          raw: true,
+          timeoutMs: 120_000,
+        }));
+      } catch (error) {
+        throw new api.ToolError(reason(error));
+      }
+      const actual = sha256(bytes);
+      const declared = headers.get('x-content-sha256');
+      if (declared && declared !== actual)
+        throw new api.ToolError(
+          `the bytes (sha256 ${short(actual)}) do not match the server's SHA-256 (${short(declared)}); not saved`,
+        );
+      const mediaType =
+        (headers.get('content-type') ?? '')
+          .split(';')[0]
+          ?.trim()
+          .toLowerCase() ?? '';
+      const directory = saveAs ? dirname(wanted) : join(workspace, 'evidence');
+      const name = saveAs
+        ? basename(wanted)
+        : `${id}.${EXTENSIONS[mediaType] ?? 'bin'}`;
+      mkdirSync(directory, { recursive: true });
+      const path = freePath(directory, name);
+      writeFileSync(path, bytes, { flag: 'wx' });
+      return {
+        id,
+        path: relative(workspace, path).split(sep).join('/'),
+        sha256: actual,
+        bytes: bytes.byteLength,
+        mediaType: mediaType || 'application/octet-stream',
+      };
     },
     { readOnly: true },
   );
