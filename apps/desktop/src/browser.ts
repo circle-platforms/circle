@@ -36,6 +36,7 @@ import {
   validateBrowserRequest,
   type BrowserRequest,
   type BrowserResult,
+  type DownloadApproval,
 } from '../../../src/browser/protocol.js';
 import { pageCall } from '../../../src/browser/page.js';
 import {
@@ -46,7 +47,7 @@ import {
   signInAnswered,
 } from '../../../src/browser/format.js';
 import { TrustedCertificates } from '../../../src/browser/certificates.js';
-import { siteOf } from '../../../src/browser/hosts.js';
+import { downloadSite, siteOf } from '../../../src/browser/hosts.js';
 import {
   downloadName,
   downloadsFolder,
@@ -65,6 +66,16 @@ import {
   DEFAULT_LIGHT,
 } from '../../../src/ink/theme.js';
 
+/** One site's downloads that wait for the person. */
+interface Hold {
+  token: string;
+  site: string;
+  // Asked about in a result: kept only by the answer to that, or the person in the panel
+  asked: boolean;
+  downloads: Arriving[];
+}
+/** How long after an action of the model's a download still counts as its doing. */
+const LATE_DOWNLOAD = 10_000;
 /** A download, with what keeping it takes. */
 interface Arriving {
   download: BrowserDownload & { path: string };
@@ -201,8 +212,10 @@ interface Conversation {
   permissions: Permission[];
   nextPermission: number;
   allowed: Map<string, boolean>;
-  // What an action of the model's downloaded from a site not yet allowed
-  hold?: { token: string; site: string; asked: boolean; downloads: Arriving[] };
+  // What the model's actions downloaded from sites not yet allowed, one hold per site
+  holds: Hold[];
+  // When the model's last action ended: a page can start a download a moment later
+  lastAction: number;
   control: BrowserControl;
   handoff?: string;
   // Woken when the person hands the browser back
@@ -310,6 +323,8 @@ export class BrowserSessions {
         nextChooser: 0,
         downloads: [],
         downloadSites: new Set(),
+        holds: [],
+        lastAction: 0,
         permissions: [],
         nextPermission: 0,
         allowed: new Map(),
@@ -383,15 +398,24 @@ export class BrowserSessions {
     );
     // A download goes to the downloads folder under its own name, as a browser keeps it; the
     // path is set here, or Electron would ask with a save dialog
-    session.on('will-download', (_event, item) => {
+    session.on('will-download', (_event, item, contents) => {
       const shown = conversation.active
         ? conversation.tabs.get(conversation.active)
         : undefined;
-      // The download's own site, or the page's for one made in the page
-      const site = siteOf(item.getURL()) || (shown ? this.site(shown) : '');
-      // The model's action downloads from a site not allowed yet: the person decides
-      const held =
-        conversation.operating && !conversation.downloadSites.has(site);
+      const initiator = [...conversation.tabs.values()].find(
+        (tab) => tab.view.webContents === contents,
+      );
+      // The download's own site (a blob's page's), else the page that started it
+      const site =
+        downloadSite(item.getURL()) ||
+        (initiator ? this.site(initiator) : '') ||
+        (shown ? this.site(shown) : '');
+      // The model's action, or a page it acted on a moment ago, downloads from a site not
+      // allowed yet: the person decides
+      const byModel =
+        conversation.operating ||
+        Date.now() - conversation.lastAction < LATE_DOWNLOAD;
+      const held = byModel && !conversation.downloadSites.has(site);
       let path: string;
       if (held) {
         this.held ??= mkdtempSync(join(tmpdir(), 'circle-downloads-'));
@@ -419,13 +443,15 @@ export class BrowserSessions {
         held,
       };
       if (held) {
-        conversation.hold ??= {
-          token: randomUUID(),
-          site,
-          asked: false,
-          downloads: [],
-        };
-        conversation.hold.downloads.push(entry);
+        // One question per site: allowing one site never keeps another's file
+        let hold = conversation.holds.find(
+          (entry) => entry.site === site && !entry.asked,
+        );
+        if (!hold) {
+          hold = { token: randomUUID(), site, asked: false, downloads: [] };
+          conversation.holds.push(hold);
+        }
+        hold.downloads.push(entry);
       }
       conversation.downloads = [...conversation.downloads, download].slice(-5);
       conversation.events.push(
@@ -517,6 +543,10 @@ export class BrowserSessions {
     view.setBounds(conversation.bounds);
     view.setVisible(false);
     this.window.contentView.addChildView(view);
+    // A tab Circle's action opens (a new tab, a popup) stays under the layer that takes the
+    // person's clicks while Circle acts
+    if (conversation.mask && conversation.operating)
+      this.window.contentView.addChildView(conversation.mask);
     this.prepareSession(conversation, contents.session);
     this.handle(conversation, tab);
     contents.debugger.attach('1.3');
@@ -1122,15 +1152,23 @@ export class BrowserSessions {
     text: string,
     by: 'model' | 'user',
     password?: string,
+    signal?: AbortSignal,
   ): Promise<Dialog> {
     for (const tab of conversation.tabs.values()) {
       const dialog = tab.dialogs.find((entry) => entry.id === dialogId);
       if (!dialog) continue;
       if (by === 'model') {
-        // The person sees the pointer press the button before the dialog closes.
+        // The person sees the pointer press the button before the dialog closes. A stopped
+        // action answers nothing: no password goes, no page is left.
         dialog.answering = { accept };
         this.publish(conversation.id);
-        await delay(600);
+        try {
+          await delay(600, undefined, { signal });
+        } catch (error) {
+          dialog.answering = undefined;
+          this.publish(conversation.id);
+          throw error;
+        }
         if (!tab.dialogs.includes(dialog))
           throw Error(`dialog ${dialogId} was already answered`);
       }
@@ -1638,8 +1676,10 @@ export class BrowserSessions {
    */
   private async intercept(tab: Tab, enabled: boolean) {
     if (tab.closed || tab.view.webContents.isDestroyed()) return;
+    // A page held by a dialog answers nothing: interception stays on, as known here, and
+    // ends when the dialog does
+    if (!enabled && this.stopped(tab)) return;
     tab.intercepting = enabled;
-    if (!enabled && tab.dialogs.length) return;
     await this.limit(
       tab.view.webContents.debugger.sendCommand(
         'Page.setInterceptFileChooserDialog',
@@ -1651,8 +1691,11 @@ export class BrowserSessions {
   }
   /** Ends interception left on while a dialog held the page. */
   private release(tab: Tab) {
-    if (tab.intercepting && !tab.dialogs.length)
-      void this.intercept(tab, false);
+    if (tab.intercepting && !this.stopped(tab)) void this.intercept(tab, false);
+  }
+  /** A page dialog stops the page; a sign-in waits outside it. */
+  private stopped(tab: Tab): boolean {
+    return tab.dialogs.some((dialog) => dialog.type !== 'auth');
   }
   /** The browser's own id for the element the page script marked with `token`. */
   private async marked(tab: Tab, token: string): Promise<number> {
@@ -1685,9 +1728,45 @@ export class BrowserSessions {
       (conversation.downloads.some(
         (download) => download.state === 'progress',
       ) ||
-        conversation.hold?.downloads.some((entry) => entry.running))
+        conversation.holds.some((hold) =>
+          hold.downloads.some((entry) => entry.running),
+        ))
     )
       await delay(100, undefined, { signal });
+  }
+  /** The next site's held downloads to ask the person about, if any. */
+  private askHold(conversation: Conversation): DownloadApproval | undefined {
+    const hold = conversation.holds.find((entry) => !entry.asked);
+    if (!hold) return undefined;
+    hold.asked = true;
+    return {
+      kind: 'download',
+      token: hold.token,
+      site: hold.site,
+      files: hold.downloads.map((entry) => ({
+        name: entry.download.name,
+        size: entry.download.received,
+      })),
+    };
+  }
+  /**
+   * The person keeps or discards a waiting download from the panel, with the others from
+   * its site, as when Circle's turn ended before it could ask.
+   */
+  keepDownload(idValue: unknown, downloadValue: unknown, keep: unknown) {
+    const id = this.validId(idValue);
+    const conversation = this.conversations.get(id);
+    const hold = conversation?.holds.find((entry) =>
+      entry.downloads.some((item) => item.download.id === downloadValue),
+    );
+    if (!conversation || !hold || typeof keep !== 'boolean')
+      throw Error('no such download');
+    this.decideHold(conversation, hold, keep, false);
+    conversation.events.push(
+      `the user ${keep ? 'kept' : 'discarded'} the downloads from ${hold.site || 'the page'}`,
+    );
+    this.publish(id);
+    return this.state(id);
   }
   /** A finished download is in the downloads folder, and the model is told where. */
   private finishDownload(conversation: Conversation, entry: Arriving) {
@@ -1713,17 +1792,16 @@ export class BrowserSessions {
     }
   }
   /**
-   * The person's answer about held downloads: kept (and the site allowed for the session
-   * when they said so), or discarded with what is left of them.
+   * The person's answer about one site's held downloads: kept (and the site allowed for the
+   * session when they said so), or discarded with what is left of them.
    */
   private decideHold(
     conversation: Conversation,
+    hold: Hold,
     keep: boolean,
     always: boolean,
   ) {
-    const hold = conversation.hold;
-    if (!hold) return;
-    conversation.hold = undefined;
+    conversation.holds = conversation.holds.filter((entry) => entry !== hold);
     if (keep && always) conversation.downloadSites.add(hold.site);
     for (const entry of hold.downloads) {
       entry.held = false;
@@ -1973,15 +2051,27 @@ export class BrowserSessions {
       const approval = request.args.approval as
         { token?: unknown; scope?: unknown } | undefined;
       // The person's answer about downloads the action made: the action is not done again
-      if (conversation.hold && approval?.token === conversation.hold.token) {
-        const keep = approval.scope === 'once' || approval.scope === 'always';
-        this.decideHold(conversation, keep, approval.scope === 'always');
+      const answered = conversation.holds.find(
+        (hold) => hold.asked && hold.token === approval?.token,
+      );
+      if (answered) {
+        const keep = approval!.scope === 'once' || approval!.scope === 'always';
+        this.decideHold(
+          conversation,
+          answered,
+          keep,
+          approval!.scope === 'always',
+        );
+        // Another site's files wait too: asked next
+        const next = this.askHold(conversation);
         return {
           text: downloadDecision(keep, conversation.events.splice(0)),
+          ...(next ? { approval: next } : {}),
         };
       }
       // Not kept when asked: a new action leaves them behind
-      if (conversation.hold?.asked) this.decideHold(conversation, false, false);
+      for (const hold of conversation.holds.filter((entry) => entry.asked))
+        this.decideHold(conversation, hold, false, false);
       // The person has the browser: Circle waits for it back, and acts on nothing it saw
       // before, since the page may be another by then
       if (conversation.control === 'user') {
@@ -2003,24 +2093,12 @@ export class BrowserSessions {
       this.publish(conversation.id);
       try {
         const result = await this.action(conversation, request, signal);
-        const hold = conversation.hold;
-        if (!hold || hold.asked || result.approval) return result;
-        hold.asked = true;
-        return {
-          ...result,
-          approval: {
-            kind: 'download',
-            token: hold.token,
-            site: hold.site,
-            files: hold.downloads.map((entry) => ({
-              name: entry.download.name,
-              size: entry.download.received,
-            })),
-          },
-        };
+        const next = result.approval ? undefined : this.askHold(conversation);
+        return next ? { ...result, approval: next } : result;
       } finally {
         conversation.agent = undefined;
         conversation.operating = false;
+        conversation.lastAction = Date.now();
         // The person may have asked for the browser meanwhile
         const control = conversation.control as BrowserControl;
         if (control === 'user_pending') conversation.control = 'user';
@@ -2133,6 +2211,21 @@ export class BrowserSessions {
           ? all.find((dialog) => dialog.id === args.id)
           : (tab.dialogs[0] ?? all[0]);
       if (!target) throw Error('no dialog is open');
+      // Allowed on one site, an answer goes to no other: a dialog in another tab, or a
+      // sign-in another site asks for
+      const owner = conversation.tabs.get(target.tab) ?? tab;
+      const where =
+        target.type === 'auth' && !target.proxy
+          ? target.origin
+          : this.site(owner);
+      if (typeof args.site === 'string' && args.site && where !== args.site)
+        return {
+          text: await this.result(
+            conversation,
+            `Nothing was done: dialog ${target.id} is for ${where || 'no site'}, not ${args.site}, which the action was allowed on.${owner !== tab ? ` It is in tab ${owner.id}: show that tab with browser_tabs, then answer it.` : ''}`,
+            signal,
+          ),
+        };
       if (
         args.password !== undefined &&
         (target.type !== 'auth' || typeof args.password !== 'string')
@@ -2145,6 +2238,7 @@ export class BrowserSessions {
         typeof args.text === 'string' ? args.text : target.defaultPrompt,
         'model',
         typeof args.password === 'string' ? args.password : undefined,
+        signal,
       );
       // The page goes on where it stopped and may ask again at once, as confirm then alert
       const answered = conversation.tabs.get(dialog.tab) ?? tab;

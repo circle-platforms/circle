@@ -221,8 +221,9 @@ export function browserTools(
         args,
         context.signal,
       );
-      // An action can need the person more than once: past a warning, then a download
-      for (let round = 0; result.approval && round < 3; round++) {
+      // An action can need the person more than once: past a warning, then a download from
+      // each site
+      for (let round = 0; result.approval && round < 8; round++) {
         const approval = result.approval;
         // The approval comes from the person, never from the model's arguments: the token
         // that carries it is not shown to the model and the schema refuses it.

@@ -153,6 +153,13 @@ const handler = async (request, response) => {
     response.end('<!doctype html><title>401</title><p>sign in first</p>');
     return;
   }
+  if (request.url === '/later') {
+    response.writeHead(200, { 'Content-Type': 'text/html' });
+    response.end(
+      `<!doctype html><title>Later</title><button onclick="setTimeout(() => location = '/download', 1500)">Later</button>`,
+    );
+    return;
+  }
   if (request.url === '/held') {
     // Answers once the test lets it, as a handshake goes on once a certificate is chosen
     await new Promise((resolve) => (releaseHeld = resolve));
@@ -378,6 +385,15 @@ await script([
     call('certificate-after', 'browser_snapshot', {}),
   ]),
   answer('certificate-after-done', 'certificate request seen'),
+  calls('later-nav', [
+    call('later-nav', 'browser_navigate', { url: url + 'later' }),
+  ]),
+  calls('later-click', [
+    call('later-click', 'browser_click', { ref: 'e1', element: 'Later' }),
+  ]),
+  answer('later-done', 'clicked later'),
+  calls('later-look', [call('later-look', 'browser_snapshot', {})]),
+  answer('later-look-done', 'looked after the download'),
 ]);
 const env = {
   ...process.env,
@@ -740,8 +756,15 @@ try {
     assert.equal((await browserState(sessionId)).tabs.length, 2);
     assert.equal((await browserState(sessionId)).tab, 't1');
     await page.getByRole('tab').nth(1).waitFor();
+    // The tab Circle's click opened went under the layer that takes the person's clicks
+    const order = await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].contentView.children.map((view) =>
+        view.webContents.getURL().includes('circle-mask') ? 'mask' : 'tab',
+      ),
+    );
+    assert.equal(order.at(-1), 'mask', order.join(','));
     checks.push(
-      'a link that opens a new window becomes a tab shown to both, named in the result, and the model can switch back',
+      "a link that opens a new window becomes a tab shown to both, named in the result, and the model can switch back; the tab stays under the layer that takes the person's clicks",
     );
 
     await send('read the browser and take its screenshot');
@@ -805,12 +828,16 @@ try {
       .getByText('waiting for approval', { exact: true })
       .waitFor();
     assert.equal(existsSync(kept), false);
-    await keep
-      .getByRole('button', {
-        name: `allow downloads from ${new URL(url).origin} for this session`,
-        exact: true,
-      })
-      .click();
+    assert.equal(
+      await keep
+        .getByRole('button', {
+          name: `allow downloads from ${new URL(url).origin} for this session`,
+          exact: true,
+        })
+        .count(),
+      1,
+    );
+    await keep.getByRole('button', { name: 'keep', exact: true }).click();
     await page.getByText('browser download kept', { exact: true }).waitFor();
     assert.match(
       await textOf('download'),
@@ -1154,6 +1181,33 @@ try {
     );
     checks.push(
       "a site's request for a client certificate waits in the panel and the conversation for the person alone, with nothing over it; Circle's action waits for the choice, which the site gets, and the model learns only which certificate or none",
+    );
+
+    // ---- a download the page starts after Circle's turn ended waits; the person keeps it
+    await send('click later');
+    await page.getByText('clicked later', { exact: true }).waitFor();
+    const downloadsList = page.getByTestId('browser-downloads');
+    await downloadsList
+      .getByText('waiting for approval', { exact: true })
+      .waitFor();
+    await downloadsList
+      .getByRole('button', { name: 'keep', exact: true })
+      .click();
+    const laterFile = join(dataPath, 'downloads', 'report (1).bin');
+    await waitFor(() => existsSync(laterFile), 'the kept download');
+    assert.equal(await readFile(laterFile, 'utf8'), 'report bytes');
+    await send('look again');
+    await page
+      .getByText('looked after the download', { exact: true })
+      .waitFor();
+    const looked = await textOf('later-look');
+    assert(
+      looked.includes(`the user kept the downloads from ${origin}`),
+      looked,
+    );
+    assert(looked.includes(`finished: ${laterFile}`), looked);
+    checks.push(
+      "a download a page starts a moment after Circle's click is still Circle's: it waits, and the person keeps it in the panel when Circle's turn has ended",
     );
 
     // ---- the person's own click on proceed needs no approval, on another port

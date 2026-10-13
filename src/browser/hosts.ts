@@ -56,6 +56,18 @@ export function webUrl(value: string): string | undefined {
 }
 
 /** A page's site: `https://host:port` for a web address, else nothing. */
+/**
+ * The site a download comes from: its address's, or for a blob: the page's that made it.
+ * Nothing for a data: address, which says nothing of where it came from.
+ */
+export const downloadSite = (url: string): string => {
+  try {
+    const origin = new URL(url).origin;
+    return /^https?:\/\//.test(origin) ? origin : '';
+  } catch {
+    return '';
+  }
+};
 export const siteOf = (url: string): string => {
   try {
     const parsed = new URL(url);

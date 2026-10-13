@@ -1,12 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
+import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -28,17 +22,15 @@ import { AgentRuntime } from '../src/runtime.js';
 import { ScriptedModel } from '../src/testing.js';
 import {
   defaultSettings,
+  loadSettings,
   loadSettingsFromDict,
   trustFolder,
 } from '../src/settings.js';
 import { buildSystemPrompt } from '../src/system_prompt.js';
 import type { Tool, ToolContext } from '../src/types.js';
+import { cleanup, scratch as made } from './helpers.js';
 
-const scratch = (t: test.TestContext) => {
-  const dir = mkdtempSync(join(tmpdir(), 'circle-secrets-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  return dir;
-};
+const scratch = (t: test.TestContext) => made(t, 'circle-secrets-');
 
 test('secrets are kept privately by name, and a damaged file reads as empty', (t) => {
   const home = scratch(t);
@@ -184,7 +176,7 @@ test('a tool runs with the values, the model sees a secret only by name, and fil
     model,
     extraTools: [echo, failing, writer],
   });
-  t.after(() => runtime.close());
+  cleanup(t, () => runtime.close());
   await runtime.harness.run('log in');
   assert.equal(seen[0]!.args.text, 'admin/value-the-model-must-not-see');
   assert.deepEqual(seen[0]!.context.secretNames, ['API_TOKEN']);
@@ -263,7 +255,7 @@ test('a secret question without a target file keeps the value as a Circle secret
       await submitAnswer(root, request.id, 'typed-by-the-person');
     },
   });
-  t.after(() => runtime.close());
+  cleanup(t, () => runtime.close());
   await runtime.harness.run('ask me');
   assert.deepEqual(loadSecrets(root), {
     API_TOKEN: 'typed-by-the-person',
@@ -324,7 +316,7 @@ test('a secret that is also a plain variable is not hidden behind the secret nam
     model,
     extraTools: [echo],
   });
-  t.after(() => runtime.close());
+  cleanup(t, () => runtime.close());
   await runtime.harness.run('fill the user');
   const result = model.requests[1]!.messages.find(
     (message) => message.role === 'tool',
@@ -364,7 +356,7 @@ test('a secret question that is not answered asks again rather than pointing to 
       throw new Error('the card was closed');
     },
   });
-  t.after(() => runtime.close());
+  cleanup(t, () => runtime.close());
   await runtime.harness.run('ask me');
   const result = String(
     model.requests[1]!.messages.find((message) => message.role === 'tool')!
@@ -416,4 +408,199 @@ test('the model is told the variables with their values and the secrets by name 
     { localContext: false },
   );
   assert.equal(plain.includes('<variables>'), false);
+});
+
+test('a command is judged by what it runs: a variable that makes it delete asks, even under a rule for commands that only read', async (t) => {
+  const root = scratch(t);
+  writeFileSync(join(root, 'victim.txt'), 'keep me');
+  const model = new ScriptedModel([
+    {
+      message: {
+        id: 'run',
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'ls', name: 'execute', args: { command: 'ls %TAIL%' } },
+        ],
+      },
+    },
+    { message: { id: 'done', role: 'assistant', content: 'done' } },
+  ]);
+  const settings = trustFolder(defaultSettings(), root);
+  settings.variables = { TAIL: '&& rm victim.txt' };
+  const cards: string[] = [];
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings,
+    model,
+    approve: async (call) => {
+      cards.push(String(call.args.command));
+      return 'reject';
+    },
+  });
+  cleanup(t, () => runtime.close());
+  // Commands that only read are allowed for the session
+  assert.equal(
+    runtime.policy.remember(
+      runtime.session.id,
+      'execute',
+      { command: 'ls' },
+      'always',
+    ),
+    true,
+  );
+  await runtime.harness.run('list the folder');
+  // The card shows what would run; the person said no, and nothing was deleted
+  assert.deepEqual(cards, ['ls && rm victim.txt']);
+  assert.equal(readFileSync(join(root, 'victim.txt'), 'utf8'), 'keep me');
+});
+
+test("a secret stays its name where a model reads it: a subagent's task, a background job's notice, and a value changed while a tool used the old one", async (t) => {
+  const root = scratch(t);
+  saveSecret(root, 'API_TOKEN', 'old-token-value');
+  const rotating: Tool = {
+    name: 'rotating_login',
+    description: 'uses the token, which is changed meanwhile',
+    effect: 'read',
+    parameters: {
+      type: 'object',
+      properties: { text: { type: 'string' } },
+      required: ['text'],
+    },
+    run: async (args) => {
+      saveSecret(root, 'API_TOKEN', 'new-token-value');
+      return `sent ${String(args.text)}`;
+    },
+  };
+  const step = (id: string, name: string, args: Record<string, unknown>) => ({
+    message: {
+      id,
+      role: 'assistant' as const,
+      content: '',
+      tool_calls: [{ id, name, args }],
+    },
+  });
+  const model = new ScriptedModel([
+    step('task', 'task', {
+      description: 'Call the API using %API_TOKEN%',
+      subagent_type: 'general-purpose',
+    }),
+    // The subagent's own turn
+    { message: { id: 'child', role: 'assistant', content: 'child done' } },
+    step('job', 'execute', {
+      command: 'echo %API_TOKEN%',
+      background: true,
+    }),
+    step('rotate', 'rotating_login', { text: '%API_TOKEN%' }),
+    { message: { id: 'first', role: 'assistant', content: 'started' } },
+    { message: { id: 'second', role: 'assistant', content: 'seen' } },
+  ]);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: trustFolder(defaultSettings(), root),
+    model,
+    extraTools: [rotating],
+    approve: async () => 'approve',
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.harness.run('use the token');
+  // The background command ends, and its notice comes with the next turn
+  const end = Date.now() + 10000;
+  while (
+    runtime.jobs.list().some((job) => job.status === 'running') &&
+    Date.now() < end
+  )
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  await runtime.harness.run('anything new?');
+  // The subagent was given the name; its tools would put the value in
+  const child = model.requests[1]!;
+  assert(
+    JSON.stringify(child.messages).includes('Call the API using %API_TOKEN%'),
+  );
+  const everything = JSON.stringify(model.requests);
+  assert.equal(everything.includes('old-token-value'), false);
+  assert.equal(everything.includes('new-token-value'), false);
+  const rotated = model.requests
+    .at(-2)!
+    .messages.find((message) => message.tool_call_id === 'rotate')!;
+  assert.equal(rotated.content, 'sent %API_TOKEN%');
+  // The notice says what the command printed, by name, in the request and in history
+  const notice = model.requests
+    .at(-1)!
+    .messages.find((message) => message.internal === 'job_notice');
+  assert(notice, 'the background notice reached the model');
+  assert.match(String(notice.content), /%API_TOKEN%/);
+  const history = JSON.stringify(runtime.store.get(runtime.session.id));
+  assert.equal(history.includes('old-token-value'), false);
+});
+
+test('a question with a key keeps the answer as a Circle variable, which the next tools take as %KEY%', async (t) => {
+  const root = scratch(t);
+  const seen: string[] = [];
+  const echo: Tool = {
+    name: 'echo_path',
+    description: 'echoes the path',
+    effect: 'read',
+    parameters: {
+      type: 'object',
+      properties: { path: { type: 'string' } },
+      required: ['path'],
+    },
+    run: async (args) => {
+      seen.push(String(args.path));
+      return `listed ${String(args.path)}`;
+    },
+  };
+  const step = (id: string, name: string, args: Record<string, unknown>) => ({
+    message: {
+      id,
+      role: 'assistant' as const,
+      content: '',
+      tool_calls: [{ id, name, args }],
+    },
+  });
+  const model = new ScriptedModel([
+    step('ask', 'question', {
+      questions: [
+        { question: 'Where are the backups kept?', key: 'BACKUP_DIR' },
+      ],
+    }),
+    step('use', 'echo_path', { path: '%BACKUP_DIR%/latest' }),
+    { message: { id: 'done', role: 'assistant', content: 'done' } },
+  ]);
+  const asked: unknown[] = [];
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: trustFolder(defaultSettings(), root),
+    model,
+    extraTools: [echo],
+    // The person types the path on the question's card
+    question: async (args) => {
+      asked.push(structuredClone(args));
+      return JSON.stringify([['/data/backups']]);
+    },
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.harness.run('back up the device');
+  // The card says the answer is kept, and under what name
+  assert.equal(
+    (asked[0] as { questions: { header: string }[] }).questions[0]!.header,
+    '%BACKUP_DIR%',
+  );
+  // Saved for later runs, and told to the model with the next request
+  assert.deepEqual(loadSettings(root).variables, {
+    BACKUP_DIR: '/data/backups',
+  });
+  const answer = model.requests[1]!.messages.find(
+    (message) => message.tool_call_id === 'ask',
+  )!;
+  assert.match(
+    String(answer.content),
+    /BACKUP_DIR = "\/data\/backups" — kept as a Circle variable; write %BACKUP_DIR%/,
+  );
+  assert.match(model.requests[1]!.system, /- BACKUP_DIR = \/data\/backups/);
+  assert.deepEqual(seen, ['/data/backups/latest']);
 });

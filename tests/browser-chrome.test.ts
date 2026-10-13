@@ -5,15 +5,12 @@ import { X509Certificate } from 'node:crypto';
 import {
   existsSync,
   linkSync,
-  mkdtempSync,
   readFileSync,
   realpathSync,
-  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { createServer as createHttp, type Server } from 'node:http';
 import { createServer as createHttps } from 'node:https';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ChromeBrowser, findBrowser } from '../src/browser/chrome.js';
 import { browserTools } from '../src/browser/tools.js';
@@ -26,6 +23,7 @@ import type {
   CertificateApproval,
 } from '../src/browser/protocol.js';
 import { emptyUsage } from '../src/types.js';
+import { cleanup, scratch as made } from './helpers.js';
 
 // The terminal's browser, driven for real: a Chrome or Edge without a window, local HTTP and
 // HTTPS sites with a certificate made for this test, nothing from the network.
@@ -112,8 +110,7 @@ test(
   'the terminal browser reads and acts on pages, answers dialogs, follows tabs and passes certificate warnings only with approval',
   { skip },
   async (t) => {
-    const temp = mkdtempSync(join(tmpdir(), 'circle-chrome-test-'));
-    t.after(() => rmSync(temp, { recursive: true, force: true }));
+    const temp = made(t, 'circle-chrome-test-');
     const key = join(temp, 'key.pem');
     const cert = join(temp, 'cert.pem');
     execFileSync(
@@ -233,7 +230,7 @@ test(
         downloads,
       });
     let chrome = start();
-    t.after(() => chrome.close());
+    cleanup(t, () => chrome.close());
     const signal = new AbortController().signal;
     // A failure names the step it happened at
     const act = (action: BrowserAction, args: Record<string, unknown> = {}) =>
@@ -648,8 +645,7 @@ test(
   'in a conversation, a password typed as %NAME% reaches the site from a secret, and the person approves the certificate',
   { skip },
   async (t) => {
-    const temp = mkdtempSync(join(tmpdir(), 'circle-chrome-runtime-'));
-    t.after(() => rmSync(temp, { recursive: true, force: true }));
+    const temp = made(t, 'circle-chrome-runtime-');
     const key = join(temp, 'key.pem');
     const cert = join(temp, 'cert.pem');
     execFileSync(
@@ -698,7 +694,7 @@ test(
       trustFile: join(temp, 'certificates.json'),
       headless: true,
     });
-    t.after(() => chrome.close());
+    cleanup(t, () => chrome.close());
     saveSecret(temp, 'LAB_PASSWORD', 'never-shown-to-the-model');
     const asked: string[] = [];
     const settings = trustFolder(defaultSettings(), temp);
@@ -803,7 +799,7 @@ test(
         },
       }),
     });
-    t.after(() => runtime.close());
+    cleanup(t, () => runtime.close());
     runtime.policy.setYolo(runtime.session.id, true);
     await runtime.harness.run('sign in to the device');
     assert.equal(asked.length, 1);
@@ -827,8 +823,7 @@ test(
   'the terminal browser hands the person the browser and tells the model only where the tabs went',
   { skip },
   async (t) => {
-    const temp = mkdtempSync(join(tmpdir(), 'circle-chrome-handoff-'));
-    t.after(() => rmSync(temp, { recursive: true, force: true }));
+    const temp = made(t, 'circle-chrome-handoff-');
     const site = createHttp((req, res) => {
       res.writeHead(200, { 'content-type': 'text/html' });
       res.end(
@@ -867,7 +862,7 @@ test(
         await new Promise((resolve) => setTimeout(resolve, 800));
       },
     });
-    t.after(() => chrome.close());
+    cleanup(t, () => chrome.close());
     const signal = new AbortController().signal;
     await chrome.request('c', 'navigate', { url: `${base}/a` }, signal);
     const back = await chrome.request(
@@ -914,7 +909,7 @@ test(
       executable: executable!,
       headless: true,
     });
-    t.after(() => alone.close());
+    cleanup(t, () => alone.close());
     await assert.rejects(
       alone.request('c', 'handoff', { reason: 'x' }, signal),
       /no one to hand the browser to/,
@@ -926,8 +921,7 @@ test(
   "a download the model's action starts is discarded when the person does not keep it, and the next one from the site is asked about again",
   { skip },
   async (t) => {
-    const temp = mkdtempSync(join(tmpdir(), 'circle-chrome-download-'));
-    t.after(() => rmSync(temp, { recursive: true, force: true }));
+    const temp = made(t, 'circle-chrome-download-');
     const site = createHttp((_req, res) => {
       res.writeHead(200, {
         'content-type': 'application/octet-stream',
@@ -943,7 +937,7 @@ test(
       headless: true,
       downloads,
     });
-    t.after(() => chrome.close());
+    cleanup(t, () => chrome.close());
     const signal = new AbortController().signal;
     const asked = await chrome.request(
       'conversation',
@@ -977,5 +971,213 @@ test(
       signal,
     );
     assert.equal(again.approval?.kind, 'download');
+  },
+);
+
+test(
+  "the terminal browser's downloads, dialogs and file choosers go by the site and the actor that made them",
+  { skip },
+  async (t) => {
+    const temp = made(t, 'circle-chrome-provenance-');
+    const file = (res: import('node:http').ServerResponse, name: string) => {
+      res.writeHead(200, {
+        'content-type': 'application/octet-stream',
+        'content-disposition': `attachment; filename="${name}"`,
+      });
+      res.end(name);
+    };
+    const page = (res: import('node:http').ServerResponse, body: string) => {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(`<!doctype html>${body}`);
+    };
+    let otherBase = '';
+    const site = createHttp((req, res) => {
+      if (req.url === '/download') return file(res, 'mine.bin');
+      if (req.url === '/late')
+        return page(
+          res,
+          `<title>Late</title><button onclick="setTimeout(() => location = '/download', 1500)">Later</button>`,
+        );
+      if (req.url === '/blob')
+        return page(
+          res,
+          `<title>Blob</title><button onclick="const a = document.createElement('a'); a.href = window.URL.createObjectURL(new Blob(['made here'])); a.download = 'made.txt'; document.body.append(a); a.click()">Make</button>`,
+        );
+      if (req.url === '/two')
+        return page(
+          res,
+          `<title>Two</title><button onclick="location = '${otherBase}/download'; setTimeout(() => location = '/download', 400)">Both</button>`,
+        );
+      if (req.url === '/alert')
+        return page(
+          res,
+          `<title>Files</title><button onclick="alert('saved')">Save</button><input type="file" aria-label="Attachment">`,
+        );
+      page(res, '<title>Home</title><p>home</p>');
+    });
+    const other = createHttp((req, res) => {
+      if (req.url === '/download') return file(res, 'theirs.bin');
+      page(
+        res,
+        `<title>Asks</title><script>setTimeout(() => confirm('Delete everything?'), 300)</script>`,
+      );
+    });
+    const base = `http://127.0.0.1:${await listen(site)}`;
+    otherBase = `http://127.0.0.1:${await listen(other)}`;
+    t.after(() => {
+      site.close();
+      other.close();
+    });
+    const downloads = join(temp, 'downloads');
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads,
+    });
+    cleanup(t, () => chrome.close());
+    const signal = new AbortController().signal;
+    const act = (action: BrowserAction, args: Record<string, unknown> = {}) =>
+      chrome.request('c', action, args, signal).catch((error: Error) => {
+        error.message = `${action} ${JSON.stringify(args)}: ${error.message}`;
+        throw error;
+      });
+    const ref = (text: string, pattern: RegExp) => {
+      const match = text.match(pattern);
+      assert(match, `no ${pattern} in:\n${text}`);
+      return match[1]!;
+    };
+    const token = (result: { approval?: unknown }) =>
+      (result.approval as { token: string }).token;
+
+    // ---- a blob is the download of the page that made it
+    const blob = await act('navigate', { url: `${base}/blob` });
+    const make = await act('click', {
+      ref: ref(blob.text, /\[(e\d+)\] button "Make"/),
+      element: 'make',
+    });
+    // The page makes the file after the click: asked with this result or the next
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const made2 = make.approval ? make : await act('snapshot');
+    assert.equal(made2.approval?.kind, 'download');
+    assert.equal((made2.approval as { site: string }).site, base);
+    const kept = await act('click', {
+      ref: 'e1',
+      approval: { token: token(made2), scope: 'once' },
+    });
+    assert.match(kept.text, /The download was kept\./);
+    assert.equal(
+      readFileSync(join(downloads, 'made.txt'), 'utf8'),
+      'made here',
+    );
+
+    // ---- a download a page starts a moment after the model's click is still the model's
+    const late = await act('navigate', { url: `${base}/late` });
+    const clicked = await act('click', {
+      ref: ref(late.text, /\[(e\d+)\] button "Later"/),
+      element: 'later',
+    });
+    assert.equal(clicked.approval, undefined);
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    const after = await act('snapshot');
+    assert.equal(after.approval?.kind, 'download');
+    assert.equal((after.approval as { site: string }).site, base);
+    await act('snapshot', {
+      approval: { token: token(after), scope: 'reject' },
+    });
+    assert.equal(existsSync(join(downloads, 'mine.bin')), false);
+
+    // ---- files from two sites are asked about site by site
+    const two = await act('navigate', { url: `${base}/two` });
+    const both = await act('click', {
+      ref: ref(two.text, /\[(e\d+)\] button "Both"/),
+      element: 'both',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const first = both.approval
+      ? both
+      : await act('snapshot').then((result) => result);
+    assert.equal(first.approval?.kind, 'download');
+    const firstSite = (first.approval as { site: string }).site;
+    const second = await act('snapshot', {
+      approval: { token: token(first), scope: 'once' },
+    });
+    assert.equal(second.approval?.kind, 'download');
+    const secondSite = (second.approval as { site: string }).site;
+    assert.deepEqual(
+      new Set([firstSite, secondSite]),
+      new Set([base, otherBase]),
+    );
+    await act('snapshot', {
+      approval: { token: token(second), scope: 'reject' },
+    });
+    const keptName = firstSite === base ? 'mine.bin' : 'theirs.bin';
+    const discardedName = firstSite === base ? 'theirs.bin' : 'mine.bin';
+    assert.equal(existsSync(join(downloads, keptName)), true);
+    assert.equal(existsSync(join(downloads, discardedName)), false);
+
+    // ---- a dialog in another tab is answered only with that site's allowance
+    const opened = await act('tabs', { action: 'new', url: otherBase });
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    const asking = await act('snapshot');
+    const dialog = ref(asking.text, /\[(d\d+)\] confirm/);
+    void opened;
+    await act('tabs', { action: 'select', tab: 't1' });
+    const refused = await act('dialog', {
+      id: dialog,
+      accept: true,
+      site: base,
+    });
+    assert.match(
+      refused.text,
+      new RegExp(
+        `Nothing was done: dialog ${dialog} is for ${otherBase.replace(/[.]/g, '\\.')}, not ${base.replace(/[.]/g, '\\.')}`,
+      ),
+    );
+    assert.match(refused.text, /It is in tab t2/);
+    await act('tabs', { action: 'select', tab: 't2' });
+    const answered = await act('dialog', {
+      id: dialog,
+      accept: false,
+      site: otherBase,
+    });
+    assert.match(answered.text, new RegExp(`Dismissed dialog ${dialog}\\.`));
+    await act('tabs', { action: 'close', tab: 't2' });
+
+    // ---- a dialog that ends Circle's click ends its hold on the page's file choosers too
+    const files = await act('navigate', { url: `${base}/alert` });
+    const saved = await act('click', {
+      ref: ref(files.text, /\[(e\d+)\] button "Save"/),
+      element: 'save',
+    });
+    assert.match(saved.text, /\[(d\d+)\] alert/);
+    const internals = chrome as unknown as {
+      conversations: Map<
+        string,
+        { tabs: Map<string, { session: string; chooser?: unknown }> }
+      >;
+      send: (
+        method: string,
+        params: Record<string, unknown>,
+        session?: string,
+      ) => Promise<unknown>;
+    };
+    const tab = internals.conversations.get('c')!.tabs.get('t1')!;
+    // The person closes the alert and opens the file picker themselves
+    await internals.send(
+      'Page.handleJavaScriptDialog',
+      { accept: true },
+      tab.session,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await internals.send(
+      'Runtime.evaluate',
+      {
+        expression: `document.querySelector('input[type=file]').click()`,
+        userGesture: true,
+      },
+      tab.session,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.equal(tab.chooser, undefined);
   },
 );

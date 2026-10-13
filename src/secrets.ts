@@ -93,17 +93,48 @@ export function expandVariables<T>(
     ) as T;
   return value;
 }
-/** Shows %NAME% wherever a secret's value appears; the longest values go first. */
+/**
+ * Shows %NAME% wherever a secret's value appears; the longest values go first. A name can
+ * come with more than one value, as a secret changed while a tool used the old one.
+ */
 export function redactSecrets(
   text: string,
-  secrets: Record<string, string>,
+  secrets: Record<string, string> | [string, string][],
 ): string {
   let shown = text;
-  for (const [name, value] of Object.entries(secrets).sort(
-    ([, a], [, b]) => b.length - a.length,
-  ))
+  for (const [name, value] of (Array.isArray(secrets)
+    ? [...secrets]
+    : Object.entries(secrets)
+  ).sort(([, a], [, b]) => b.length - a.length))
     if (value) shown = shown.split(value).join(`%${name}%`);
   return shown;
+}
+/**
+ * Hides secrets' values in text the model will read: the values given, the ones saved now,
+ * and every value a secret had while this ran, for text made with an older one (a job's
+ * output after the token changed). A value that is also a plain variable's is known to the
+ * model already: hiding it would only rename that variable's text, as a user name that is
+ * also the password.
+ */
+export function secretRedactor(
+  secrets: () => Record<string, string>,
+  variables: () => Record<string, string> = () => ({}),
+) {
+  const seen: [string, string][] = [];
+  const note = (values: Record<string, string>) => {
+    for (const [name, value] of Object.entries(values))
+      if (value && !seen.some(([n, v]) => n === name && v === value))
+        seen.push([name, value]);
+  };
+  return (text: string, used: Record<string, string> = {}): string => {
+    note(used);
+    note(secrets());
+    const known = new Set(Object.values(variables()));
+    return redactSecrets(
+      text,
+      seen.filter(([, value]) => !known.has(value)),
+    );
+  };
 }
 /** Whether a string is made only of %NAME% for the given names, as a password typed from secrets is. */
 export const onlyReferences = (text: string, names: string[]): boolean => {

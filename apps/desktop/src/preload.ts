@@ -55,6 +55,8 @@ const bridge: DesktopBridge = {
     ipcRenderer.invoke('circle:browser-dialog-screen', id, dialog),
   browserChoose: (id, chooser) =>
     ipcRenderer.invoke('circle:browser-choose', id, chooser),
+  browserKeepDownload: (id, download, keep) =>
+    ipcRenderer.invoke('circle:browser-keep-download', id, download, keep),
   browserCertificate: (id, choice, index) =>
     ipcRenderer.invoke('circle:browser-certificate', id, choice, index),
   browserPermission: (id, request, allow) =>

@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { browserTools, type BrowserPort } from '../src/browser/tools.js';
 import type { BrowserApproval } from '../src/browser/protocol.js';
@@ -9,12 +8,9 @@ import { AgentRuntime } from '../src/runtime.js';
 import { ScriptedModel } from '../src/testing.js';
 import { defaultSettings, trustFolder } from '../src/settings.js';
 import { saveSecret } from '../src/secrets.js';
+import { cleanup, scratch as made } from './helpers.js';
 
-const scratch = (t: test.TestContext) => {
-  const dir = mkdtempSync(join(tmpdir(), 'circle-browser-tools-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  return dir;
-};
+const scratch = (t: test.TestContext) => made(t, 'circle-browser-tools-');
 
 test('browser_upload takes paths as the file tools do, refuses credential files and asks the person every time, also in auto mode', async (t) => {
   const root = scratch(t);
@@ -85,7 +81,7 @@ test('browser_upload takes paths as the file tools do, refuses credential files 
       },
     }),
   });
-  t.after(() => runtime.close());
+  cleanup(t, () => runtime.close());
   // auto mode answers the policy's questions, never this one
   runtime.policy.setYolo(runtime.session.id, true);
   await runtime.harness.run('upload the notes');
@@ -174,7 +170,7 @@ test('browser control is allowed site by site: the site goes to the card and the
       return 'always';
     },
   });
-  t.after(() => runtime.close());
+  cleanup(t, () => runtime.close());
   await runtime.harness.run('use the device');
   // Asked once for each site, never again on a site already allowed
   assert.deepEqual(asked, [
@@ -272,7 +268,7 @@ test('a download the model starts is kept or discarded by the person, and the mo
     }),
     approve: async () => 'always',
   });
-  t.after(() => runtime.close());
+  cleanup(t, () => runtime.close());
   await runtime.harness.run('export the configuration');
   const results = Object.fromEntries(
     model.requests
@@ -345,7 +341,7 @@ test("a sign-in's password is only ever a saved secret: the browser gets the val
       return 'approve';
     },
   });
-  t.after(() => runtime.close());
+  cleanup(t, () => runtime.close());
   await runtime.harness.run('sign in to the device');
   const results = Object.fromEntries(
     model.requests[1]!.messages.filter(
@@ -374,4 +370,49 @@ test("a sign-in's password is only ever a saved secret: the browser gets the val
   );
   assert.equal(JSON.stringify(cards).includes('value-of-the-secret'), false);
   assert(cards.some((card) => card.password === '%LAB_PASSWORD%'));
+});
+
+test('a navigation written with a variable is allowed for the site it goes to, never for every site', async (t) => {
+  const root = scratch(t);
+  const requests: Record<string, unknown>[] = [];
+  const port: BrowserPort = {
+    async request(_session, action, args) {
+      requests.push({ action, ...structuredClone(args) });
+      return { text: `${action} done`, origin: String(args.site ?? '') };
+    },
+  };
+  const step = (id: string, url: string) => ({
+    message: {
+      id,
+      role: 'assistant' as const,
+      content: '',
+      tool_calls: [{ id, name: 'browser_navigate', args: { url } }],
+    },
+  });
+  const model = new ScriptedModel([
+    step('templated', '%BASE_URL%/login'),
+    step('elsewhere', 'https://other.example/'),
+    { message: { id: 'done', role: 'assistant', content: 'done' } },
+  ]);
+  const settings = trustFolder(defaultSettings(), root);
+  settings.variables = { BASE_URL: 'https://device.lan:8443' };
+  const asked: unknown[] = [];
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings,
+    model,
+    extraTools: browserTools(port),
+    approve: async (call) => {
+      asked.push(call.args.site);
+      return 'always';
+    },
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.harness.run('open the device');
+  assert.deepEqual(asked, ['https://device.lan:8443', 'https://other.example']);
+  assert.deepEqual(
+    requests.map((request) => request.url),
+    ['https://device.lan:8443/login', 'https://other.example/'],
+  );
 });

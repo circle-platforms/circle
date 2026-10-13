@@ -102,6 +102,12 @@ export interface DesktopBridge {
   ) => Promise<string | null>;
   /** The person chooses the files for the file chooser a click of Circle's opened. */
   browserChoose: (sessionId: string, chooser: string) => Promise<BrowserState>;
+  /** The person keeps or discards a download that waits for approval, with its site's others. */
+  browserKeepDownload: (
+    sessionId: string,
+    download: string,
+    keep: boolean,
+  ) => Promise<BrowserState>;
   /** The person's client certificate for a site that asks (an index), or none (null). */
   browserCertificate: (
     sessionId: string,

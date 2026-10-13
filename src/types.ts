@@ -47,9 +47,11 @@ export interface Tool {
   subagents?: boolean;
   /**
    * False: %NAME% in its arguments stays as written. File writers set it, so what they put on
-   * disk keeps the reference and never a secret's value.
+   * disk keeps the reference and never a secret's value. `plain`: plain variables' values go
+   * in, secrets stay %NAME%, for a tool whose arguments become a model's input or the
+   * conversation's (a subagent's task, a question, the todo list).
    */
-  variables?: boolean;
+  variables?: boolean | 'plain';
   /**
    * What the tool knows of a call that the model did not say, such as the site a browser
    * action acts on: added to the call's arguments before the approval, so the rules and

@@ -374,6 +374,29 @@ export function NativeBrowser() {
                     ? t('waiting for approval')
                     : downloadProgress(download)}
               </span>
+              {download.state === 'waiting' && (
+                // Circle's turn may have ended before it could ask: the person decides here
+                <>
+                  <Button
+                    onClick={() =>
+                      void host
+                        .browserKeepDownload(id, download.id, false)
+                        .catch(() => {})
+                    }
+                  >
+                    {t('discard')}
+                  </Button>
+                  <Button
+                    onClick={() =>
+                      void host
+                        .browserKeepDownload(id, download.id, true)
+                        .catch(() => {})
+                    }
+                  >
+                    {t('keep')}
+                  </Button>
+                </>
+              )}
               {download.state === 'done' && (
                 <IconButton
                   label={t('show in folder')}

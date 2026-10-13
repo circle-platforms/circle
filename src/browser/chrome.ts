@@ -9,7 +9,7 @@ import {
   rmSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { delimiter, join, win32 } from 'node:path';
+import { join, posix, win32 } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { palette } from '../ink/theme.js';
@@ -24,7 +24,7 @@ import {
   quote,
   type PageDialog,
 } from './format.js';
-import { privateHost, siteOf, webUrl } from './hosts.js';
+import { downloadSite, privateHost, siteOf, webUrl } from './hosts.js';
 import {
   downloadName,
   downloadsFolder,
@@ -38,6 +38,7 @@ import {
   BROWSER_KEYS,
   type BrowserAction,
   type BrowserResult,
+  type DownloadApproval,
 } from './protocol.js';
 import type { BrowserPort } from './tools.js';
 
@@ -65,8 +66,8 @@ export function findBrowser(
       'Chromium.app/Contents/MacOS/Chromium',
     ])
       candidates.push(
-        join('/Applications', app),
-        join(env.HOME || homedir(), 'Applications', app),
+        posix.join('/Applications', app),
+        posix.join(env.HOME || homedir(), 'Applications', app),
       );
   else if (platform === 'win32') {
     const roots = [
@@ -80,7 +81,8 @@ export function findBrowser(
     ])
       for (const root of roots) candidates.push(win32.join(root, ...app));
   } else {
-    const dirs = (env.PATH ?? '').split(delimiter).filter(Boolean);
+    // The paths of the system asked about, wherever this runs
+    const dirs = (env.PATH ?? '').split(posix.delimiter).filter(Boolean);
     for (const name of [
       'google-chrome',
       'google-chrome-stable',
@@ -89,7 +91,7 @@ export function findBrowser(
       'chromium',
       'chromium-browser',
     ])
-      for (const dir of dirs) candidates.push(join(dir, name));
+      for (const dir of dirs) candidates.push(posix.join(dir, name));
   }
   return candidates.find((path) => exists(path));
 }
@@ -188,9 +190,20 @@ interface Conversation {
   acting: boolean;
   /** Sites whose downloads the person allowed for this conversation. */
   downloadSites: Set<string>;
-  /** What an action of the model's downloaded from a site not yet allowed. */
-  hold?: { token: string; site: string; asked: boolean; downloads: Download[] };
+  /** What the model's actions downloaded from sites not yet allowed, one hold per site. */
+  holds: Hold[];
+  /** When the model's last action ended: a page can start a download a moment later. */
+  lastAction: number;
 }
+interface Hold {
+  token: string;
+  site: string;
+  /** Asked about in a result: kept only by the answer to that. */
+  asked: boolean;
+  downloads: Download[];
+}
+/** How long after an action of the model's a download still counts as its doing. */
+const LATE_DOWNLOAD = 10_000;
 const BLANK = 'about:blank';
 const CERTIFICATE_ERROR = /^ERR_(CERT_|SSL_PINNED|BAD_SSL)/;
 const originOf = (url: string) => {
@@ -333,6 +346,8 @@ export class ChromeBrowser implements BrowserPort {
         nextChooser: 0,
         acting: false,
         downloadSites: new Set(),
+        holds: [],
+        lastAction: 0,
         events: [],
         tabsChanged: false,
         queue: Promise.resolve(),
@@ -491,16 +506,24 @@ export class ChromeBrowser implements BrowserPort {
       return;
     }
     if (method === 'Browser.downloadWillBegin') {
-      const conversation =
-        this.byTarget.get(params.frameId)?.conversation ?? this.current;
+      // The tab that started it, when its main frame did
+      const initiator = this.byTarget.get(params.frameId);
+      const conversation = initiator?.conversation ?? this.current;
       if (!conversation) return;
       const shown = conversation.active
         ? conversation.tabs.get(conversation.active)
         : undefined;
-      // The download's own site, or the page's for one made in the page
-      const site = siteOf(params.url ?? '') || (shown ? this.site(shown) : '');
-      // The model's action downloads from a site not allowed yet: the person decides
-      const held = conversation.acting && !conversation.downloadSites.has(site);
+      // The download's own site (a blob's page's), else the page that started it
+      const site =
+        downloadSite(params.url ?? '') ||
+        (initiator ? this.site(initiator) : '') ||
+        (shown ? this.site(shown) : '');
+      // The model's action, or a page it acted on a moment ago, downloads from a site not
+      // allowed yet: the person decides
+      const byModel =
+        conversation.acting ||
+        Date.now() - conversation.lastAction < LATE_DOWNLOAD;
+      const held = byModel && !conversation.downloadSites.has(site);
       const download: Download = {
         id: `dl${++conversation.nextDownload}`,
         guid: params.guid,
@@ -513,13 +536,15 @@ export class ChromeBrowser implements BrowserPort {
       };
       this.downloads.set(params.guid, download);
       if (held) {
-        conversation.hold ??= {
-          token: randomUUID(),
-          site,
-          asked: false,
-          downloads: [],
-        };
-        conversation.hold.downloads.push(download);
+        // One question per site: allowing one site never keeps another's file
+        let hold = conversation.holds.find(
+          (entry) => entry.site === site && !entry.asked,
+        );
+        if (!hold) {
+          hold = { token: randomUUID(), site, asked: false, downloads: [] };
+          conversation.holds.push(hold);
+        }
+        hold.downloads.push(download);
       }
       conversation.events.push(
         `download ${download.id} of ${quote(download.name)} from ${download.url} ${held ? 'waits for approval to keep it' : 'started'}`,
@@ -712,17 +737,16 @@ export class ChromeBrowser implements BrowserPort {
     }
   }
   /**
-   * The person's answer about held downloads: kept (and the site allowed for the session
-   * when they said so), or discarded with what is left of them.
+   * The person's answer about one site's held downloads: kept (and the site allowed for the
+   * session when they said so), or discarded with what is left of them.
    */
   private async decideHold(
     conversation: Conversation,
+    hold: Hold,
     keep: boolean,
     always: boolean,
   ) {
-    const hold = conversation.hold;
-    if (!hold) return;
-    conversation.hold = undefined;
+    conversation.holds = conversation.holds.filter((entry) => entry !== hold);
     if (keep && always) conversation.downloadSites.add(hold.site);
     for (const download of hold.downloads) {
       download.held = false;
@@ -739,6 +763,21 @@ export class ChromeBrowser implements BrowserPort {
       conversation.events.push(`download ${download.id} was not kept`);
     }
   }
+  /** The next site's held downloads to ask the person about, if any. */
+  private askHold(conversation: Conversation): DownloadApproval | undefined {
+    const hold = conversation.holds.find((entry) => !entry.asked);
+    if (!hold) return undefined;
+    hold.asked = true;
+    return {
+      kind: 'download',
+      token: hold.token,
+      site: hold.site,
+      files: hold.downloads.map((download) => ({
+        name: download.name,
+        size: download.size,
+      })),
+    };
+  }
   /** Moves a finished download from the profile to the downloads folder, by its own name. */
   private keep(guid: string, name: string): string {
     const folder = this.options.downloads ?? downloadsFolder();
@@ -754,8 +793,10 @@ export class ChromeBrowser implements BrowserPort {
    */
   private async intercept(tab: Tab, enabled: boolean) {
     if (tab.closed) return;
+    // A page held by a dialog answers nothing: interception stays on, as known here, and
+    // ends when the dialog does
+    if (!enabled && this.held(tab)) return;
     tab.intercepting = enabled;
-    if (!enabled && tab.dialogs.length) return;
     await this.limit(
       this.send('Page.setInterceptFileChooserDialog', { enabled }, tab.session),
       undefined,
@@ -764,8 +805,11 @@ export class ChromeBrowser implements BrowserPort {
   }
   /** Ends interception left on while a dialog held the page. */
   private release(tab: Tab) {
-    if (tab.intercepting && !tab.dialogs.length)
-      void this.intercept(tab, false);
+    if (tab.intercepting && !this.held(tab)) void this.intercept(tab, false);
+  }
+  /** A page dialog stops the page; a sign-in waits outside it. */
+  private held(tab: Tab): boolean {
+    return tab.dialogs.some((dialog) => dialog.type !== 'auth');
   }
   /** The browser's own id for the element the page script marked with `token`. */
   private async marked(tab: Tab, token: string): Promise<number> {
@@ -1341,40 +1385,40 @@ export class ChromeBrowser implements BrowserPort {
       const approval = args.approval as
         { token?: unknown; scope?: unknown } | undefined;
       // The person's answer about downloads the action made: the action is not done again
-      if (conversation.hold && approval?.token === conversation.hold.token) {
-        const keep = approval.scope === 'once' || approval.scope === 'always';
-        await this.decideHold(conversation, keep, approval.scope === 'always');
+      const answered = conversation.holds.find(
+        (hold) => hold.asked && hold.token === approval?.token,
+      );
+      if (answered) {
+        const keep = approval!.scope === 'once' || approval!.scope === 'always';
+        await this.decideHold(
+          conversation,
+          answered,
+          keep,
+          approval!.scope === 'always',
+        );
+        // Another site's files wait too: asked next
+        const next = this.askHold(conversation);
         return {
           text: downloadDecision(keep, conversation.events.splice(0)),
+          ...(next ? { approval: next } : {}),
           origin: this.shownSite(conversation),
         };
       }
       // Not kept when asked: a new action leaves them behind
-      if (conversation.hold?.asked)
-        await this.decideHold(conversation, false, false);
+      for (const hold of conversation.holds.filter((entry) => entry.asked))
+        await this.decideHold(conversation, hold, false, false);
       conversation.acting = true;
       try {
         const result = await this.action(conversation, action, args, signal);
-        const hold = conversation.hold;
-        if (hold && !hold.asked && !result.approval) {
-          hold.asked = true;
-          return {
-            ...result,
-            approval: {
-              kind: 'download' as const,
-              token: hold.token,
-              site: hold.site,
-              files: hold.downloads.map((download) => ({
-                name: download.name,
-                size: download.size,
-              })),
-            },
-            origin: this.shownSite(conversation),
-          };
-        }
-        return { ...result, origin: this.shownSite(conversation) };
+        const next = result.approval ? undefined : this.askHold(conversation);
+        return {
+          ...result,
+          ...(next ? { approval: next } : {}),
+          origin: this.shownSite(conversation),
+        };
       } finally {
         conversation.acting = false;
+        conversation.lastAction = Date.now();
       }
     };
     const result = conversation.queue.then(run, run);
@@ -1477,6 +1521,20 @@ export class ChromeBrowser implements BrowserPort {
           : (all.find((entry) => entry.tab === tab) ?? all[0]);
       if (!target) throw Error('no dialog is open');
       const owner = target.tab;
+      // Allowed on one site, an answer goes to no other: a dialog in another tab, or a
+      // sign-in another site asks for
+      const where =
+        target.dialog.type === 'auth' && !target.dialog.proxy
+          ? target.dialog.origin
+          : this.site(owner);
+      if (typeof args.site === 'string' && args.site && where !== args.site)
+        return {
+          text: await this.result(
+            conversation,
+            `Nothing was done: dialog ${target.dialog.id} is for ${where || 'no site'}, not ${args.site}, which the action was allowed on.${owner !== tab ? ` It is in tab ${owner.id}: show that tab with browser_tabs, then answer it.` : ''}`,
+            signal,
+          ),
+        };
       if (target.dialog.type === 'auth')
         return this.signIn(conversation, owner, target.dialog, args, signal);
       if (args.password !== undefined)

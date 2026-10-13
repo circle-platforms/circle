@@ -629,6 +629,10 @@ app
       if (!browsers) throw Error('window not ready');
       return browsers.choose(id, chooser);
     });
+    handle('circle:browser-keep-download', (id, download, keep) => {
+      if (!browsers) throw Error('window not ready');
+      return browsers.keepDownload(id, download, keep);
+    });
     handle('circle:browser-certificate', (id, choice, index) => {
       if (!browsers) throw Error('window not ready');
       return browsers.certificate(id, choice, index);
