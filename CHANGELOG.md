@@ -29,6 +29,7 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 - **A subagent that only ran tools showed nothing of what it did.** Its current step, and that it waits on an approval, now show while it runs.
 - **Going back to a desktop session that waited on an approval failed** with "a turn is running" once you had opened another folder, so the approval could not be answered.
 - **A Windows update restarted Circle with its arguments split** at spaces and quotes. Paths with spaces, quotes, trailing backslashes, empty arguments and Unicode now keep their boundaries.
+- **After a Windows update the desktop application could miss that it had been updated** when it started while the installer was still exiting and held its output files. It now reports the new version, and removes what the installer left then or at the next update.
 
 ## 1.5.0 - 2026-10-14
 

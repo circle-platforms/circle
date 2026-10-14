@@ -26,7 +26,15 @@ import {
 const windows = process.platform === 'win32';
 const scratch = (t: { after: (fn: () => void) => void }) => {
   const folder = mkdtempSync(join(tmpdir(), 'circle-updater-'));
-  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  // On Windows the installer's own hidden copy can hold its output files while it exits
+  t.after(() =>
+    rmSync(folder, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 250,
+    }),
+  );
   return folder;
 };
 const until = async (done: () => boolean, ms = 15000) => {
@@ -493,6 +501,87 @@ test('a copy that cannot replace itself points to the release page, and an updat
   });
   assert.deepEqual(await offline.check(false), { phase: 'idle' });
   assert.equal((await offline.check()).phase, 'failed');
+});
+
+test('an installed update is reported while the installer still holds what it left', async (t) => {
+  const root = scratch(t);
+  const folder = join(root, 'updates');
+  mkdirSync(folder);
+  const leftovers = () => {
+    writeFileSync(
+      join(folder, 'pending.json'),
+      JSON.stringify({ version: '1.1.0', from: '1.0.0' }),
+    );
+    writeFileSync(join(folder, 'install.json'), '{}');
+    writeFileSync(join(folder, 'install.json.out'), '');
+    writeFileSync(join(folder, 'install.json.err'), '');
+    writeFileSync(join(folder, 'install.log'), 'Mon installed\n');
+  };
+  // As Windows answers while the installer's hidden PowerShell has not yet exited
+  const busy = (path: string) =>
+    Object.assign(Error(`EBUSY: resource busy or locked, unlink '${path}'`), {
+      code: 'EBUSY',
+    });
+  const updater = (locked: (path: string, tries: number) => boolean) => {
+    const tries = new Map<string, number>();
+    return {
+      tries,
+      updater: new Updater({
+        version: '1.1.0',
+        home: join(root, 'home'),
+        folder,
+        launch: () => assert.fail('nothing to install'),
+        quit: () => assert.fail('nothing to install'),
+        remove: async (path) => {
+          const count = (tries.get(path) ?? 0) + 1;
+          tries.set(path, count);
+          if (locked(path, count)) throw busy(path);
+          rmSync(path, { recursive: true, force: true });
+        },
+      }),
+    };
+  };
+  const err = join(folder, 'install.json.err');
+
+  // Released after a moment: removed, and the update is reported
+  leftovers();
+  const brief = updater((path, tries) => path === err && tries < 3);
+  assert.deepEqual(await brief.updater.start(), {
+    phase: 'current',
+    updated: '1.1.0',
+  });
+  assert.equal(brief.tries.get(err), 3);
+  assert.deepEqual(readdirSync(folder), ['install.log']);
+
+  // Never released: the rest goes, the update is still reported, and nothing else is
+  // retried. Another error gives up at once.
+  leftovers();
+  const held = updater((path) => path === err);
+  assert.deepEqual(await held.updater.start(), {
+    phase: 'current',
+    updated: '1.1.0',
+  });
+  assert.equal(held.tries.get(err), 12);
+  assert.equal(held.tries.get(join(folder, 'pending.json')), 1);
+  assert.deepEqual(readdirSync(folder).sort(), [
+    'install.json.err',
+    'install.log',
+  ]);
+  rmSync(err);
+
+  leftovers();
+  const denied = updater((path) => {
+    if (path === err)
+      throw Object.assign(Error('EACCES: permission denied'), {
+        code: 'EACCES',
+      });
+    return false;
+  });
+  assert.deepEqual(await denied.updater.start(), {
+    phase: 'current',
+    updated: '1.1.0',
+  });
+  assert.equal(denied.tries.get(err), 1);
 });
 
 test('an installer that does not start leaves the application running and says so', async (t) => {

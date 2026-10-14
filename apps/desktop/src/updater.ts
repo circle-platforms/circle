@@ -267,6 +267,22 @@ export class Updater {
   get state(): UpdateState {
     return this.current;
   }
+  /**
+   * Removes what an installed update left. On Windows the installer that started this copy can
+   * still hold its output files for a moment while it exits; what stays locked is removed at the
+   * next update, and the update is reported either way.
+   */
+  private async clear(path: string): Promise<void> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.remove(path);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if ((code !== 'EBUSY' && code !== 'EPERM') || attempt === 12) return;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+  }
   subscribe(listener: (state: UpdateState) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -310,7 +326,7 @@ export class Updater {
       if (wanted === version) {
         // The installer's log stays until the next update, for when something looks wrong
         for (const name of await readdir(folder))
-          if (name !== 'install.log') await this.remove(join(folder, name));
+          if (name !== 'install.log') await this.clear(join(folder, name));
         return this.set({ phase: 'current', updated: version });
       }
       let detail = '';
