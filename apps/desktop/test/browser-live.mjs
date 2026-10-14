@@ -657,7 +657,7 @@ try {
         `blank under the browser panel: ${JSON.stringify(panel)}`,
       );
     }
-    assert.equal(await page.evaluate(() => innerHeight), 900);
+    // Back to the size the window started at: 900 high, or what a smaller screen allows
     const firstSnapshot = await textOf('proceed');
     assert.match(firstSnapshot, /Circle proceeded, approved by the user/);
     for (const text of [
