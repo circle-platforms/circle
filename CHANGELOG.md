@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.6.0 - 2026-10-14
+
 ### Added
 
 - **Organize sessions from the desktop sidebar.** The ⋯ beside a folder starts a session in it, shows it in Finder or the file manager, collapses the folders or archives all of its sessions; a session's ⋯ pins, renames, archives, restores or deletes it. Archiving hides a session without deleting its history or touching the folder: all sessions → archived sessions lists it, it stays readable, and restoring it lets the conversation go on. A session that is running, waits on a request or runs a background job cannot be archived or deleted, and archive all changes nothing while one of the folder's sessions is busy. See [Organizing sessions](docs/desktop.md#organizing-sessions).
