@@ -193,7 +193,6 @@ try {
             inputWindow.focus();
             if (process.platform === 'darwin') app.focus({ steal: true });
           }
-          if (mode !== 'hidden') inputWindow.webContents.focus();
         }, mode);
         const windowState = () =>
           app.evaluate(() => ({
@@ -314,6 +313,24 @@ try {
                 id,
               ),
             );
+            // Keep the original unfocused Electron baseline. Every positive
+            // path prepares its native target after the DOM focus/select above,
+            // then sends exactly the original CDP arguments without a delay.
+            if (
+              requireKeyboard ||
+              !(mode === 'hidden' && transport === 'electron-debugger')
+            ) {
+              check.nativeFocusAfterDom = await limited(() =>
+                app.evaluate(() => {
+                  inputWindow.webContents.focus();
+                  return {
+                    visible: inputWindow.isVisible(),
+                    windowFocused: inputWindow.isFocused(),
+                    contentsFocused: inputWindow.webContents.isFocused(),
+                  };
+                }),
+              );
+            }
             const select = {
               key: 'a',
               code: 'KeyA',

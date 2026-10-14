@@ -350,8 +350,9 @@ try {
     globalThis.circleInputTrace = [];
   });
   const dispatchWrite = async (name, text, deadline) => {
+    await run('focus', { ref: ref(name) });
     // This is a Playwright-owned hidden BrowserWindow, not the production tab's
-    // WebContentsView. Explicitly prepare its native input target; isFocused()
+    // WebContentsView. Prepare native input after DOM focus/select; isFocused()
     // stays false for a hidden window, so only real trusted effects confirm it.
     record({ kind: 'fixture-input-focus-request' });
     const focus = await app.evaluate(({ BrowserWindow }) => {
@@ -364,7 +365,6 @@ try {
       };
     });
     record({ kind: 'fixture-input-focus-returned', state: focus });
-    await run('focus', { ref: ref(name) });
     const selector = name === 'username' ? '#username' : '#number';
     const eventStart = await page.evaluate(
       () => window.circleInputEvents.length,
