@@ -77,9 +77,12 @@ export async function setViewport(app, page, target, { show = false } = {}) {
       };
     }
     // Compensate only for the measured rounding overshoot, then verify again.
+    // Height may already have been fitted to the work area. Adjust what was sent to
+    // Electron, otherwise reducing a taller original request just fits it to the same
+    // height again on the next attempt.
     requested = {
-      width: requested.width - Math.max(0, actual.width - fitted.width),
-      height: requested.height - Math.max(0, actual.height - fitted.height),
+      width: expected.width - Math.max(0, actual.width - fitted.width),
+      height: expected.height - Math.max(0, actual.height - fitted.height),
     };
   }
   throw Error(`native viewport did not fit ${target.width}×${target.height}`);
