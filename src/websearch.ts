@@ -1,5 +1,5 @@
 import { decodeHTML } from 'entities';
-import { networkError } from './net.js';
+import { networkError, networkErrorReason } from './net.js';
 export type FetchFunction = typeof fetch;
 export function stripTags(text: string): string {
   return decodeHTML(
@@ -84,6 +84,26 @@ export async function limitedBody(
   }
   return { text: Buffer.concat(chunks).toString('utf8'), truncated };
 }
+/** The useful causes of both failed requests and interrupted response streams. */
+export function fetchErrorReason(error: unknown): string {
+  return networkErrorReason(error);
+}
+/** A network failure the machine may fix with a proxy, as opposed to a site
+ * that answered with an error of its own. */
+export function unreachableReason(reason: string): boolean {
+  return (
+    /ECONN|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|UND_ERR_(?:CONNECT_TIMEOUT|HEADERS_TIMEOUT|BODY_TIMEOUT|SOCKET)|TimeoutError|aborted due to timeout|socket hang up/i.test(
+      reason,
+    ) || reason === 'fetch failed'
+  );
+}
+const PROXY_HINT =
+  '; the endpoint is unreachable from this network — if you go through a proxy, set HTTPS_PROXY before starting Circle (see docs/environment-variables.md)';
+function webError(error: unknown, host: string): Error {
+  const result = networkError(error, host);
+  if (unreachableReason(fetchErrorReason(error))) result.message += PROXY_HINT;
+  return result;
+}
 export async function webSearch(
   query: string,
   signal: AbortSignal,
@@ -115,7 +135,7 @@ export async function webSearch(
       throw new Error('empty body');
     } catch (error) {
       signal.throwIfAborted();
-      failures.push(networkError(error, host));
+      failures.push(webError(error, host));
     }
   }
   throw new Error(
@@ -170,23 +190,33 @@ export async function webFetch(
       });
     } catch (error) {
       signal.throwIfAborted();
-      throw networkError(error, url.hostname);
+      throw webError(error, url.host);
     }
     if (![301, 302, 303, 307, 308].includes(response.status)) break;
     const location = response.headers.get('location');
-    await response.body?.cancel();
+    try {
+      await response.body?.cancel();
+    } catch (error) {
+      signal.throwIfAborted();
+      throw webError(error, url.host);
+    }
     if (!location) throw new Error('redirect has no location');
     url = new URL(location, url);
     if (redirect === 10) throw new Error('too many redirects');
   }
   if (!response?.ok)
-    throw networkError(new Error(`HTTP ${response?.status}`), url.hostname);
+    throw webError(
+      Object.assign(new Error(`HTTP ${response?.status}`), {
+        status: response?.status,
+      }),
+      url.host,
+    );
   let body: Awaited<ReturnType<typeof limitedBody>>;
   try {
     body = await limitedBody(response, 500000);
   } catch (error) {
     signal.throwIfAborted();
-    throw networkError(error, url.hostname);
+    throw webError(error, url.host);
   }
   const type = response.headers.get('content-type')?.toLowerCase() || 'unknown';
   let rendered = body.text;

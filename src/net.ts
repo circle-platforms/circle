@@ -319,7 +319,7 @@ function errorChain(
 // authorization headers or a search query echoed by a failed request.
 export function safeNetworkText(text: string): string {
   return text
-    .replace(/https?:\/\/[^\s'"<>\])]+/gi, (raw) => {
+    .replace(/https?:\/\/[^\s'"<>)]+/gi, (raw) => {
       try {
         const url = new URL(raw);
         return `${url.protocol}//${url.host}`;
@@ -344,11 +344,30 @@ export function isNetworkFailure(error: unknown): boolean {
       value.status === 407,
   );
 }
+
+export function networkErrorReason(error: unknown): string {
+  return (
+    [
+      ...new Set(
+        errorChain(error)
+          .map((value) =>
+            safeNetworkText(
+              [value.code, value.message].filter(Boolean).join(': '),
+            ),
+          )
+          .filter(Boolean),
+      ),
+    ].join('; ') || safeNetworkText(String(error))
+  );
+}
+
+/** Describe the endpoint and retain the complete original cause for callers. */
 export function networkError(error: unknown, host: string): Error {
   const chain = errorChain(error);
   let target = host;
   try {
-    target = new URL(host).hostname;
+    target = new URL(/^https?:\/\//i.test(host) ? host : `https://${host}`)
+      .host;
   } catch {
     target = host.replace(/[^a-zA-Z0-9.:[\]-]/g, '');
   }
@@ -371,20 +390,8 @@ export function networkError(error: unknown, host: string): Error {
             : /empty body/i.test(messages)
               ? 'empty response'
               : 'connection';
-  const details =
-    [
-      ...new Set(
-        chain
-          .map((value) =>
-            safeNetworkText(
-              [value.code, value.message].filter(Boolean).join(': '),
-            ),
-          )
-          .filter(Boolean),
-      ),
-    ].join('; ') || safeNetworkText(String(error));
   const result = new Error(
-    `${kind} failure on ${target}: ${details}${tlsFailure ? `; ${certificateHint()}; ${networkSummary()}` : ''}`,
+    `${kind} failure on ${target}: ${networkErrorReason(error)}${tlsFailure ? `; ${certificateHint()}; ${networkSummary()}` : ''}`,
     { cause: error },
   );
   const specific = chain.find((value) => value.code);
