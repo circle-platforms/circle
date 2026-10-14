@@ -4,12 +4,12 @@ import { _electron as electron } from 'playwright';
 import { createServer as httpsServer } from 'node:https';
 import { createServer } from 'node:http';
 import { connect } from 'node:net';
-import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { tlsCertificates } from '../../../tests/tls-certificates.mjs';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const require = createRequire(import.meta.url);
 const temp = await mkdtemp(join(tmpdir(), 'circle-network-native-'));
@@ -29,63 +29,10 @@ try {
   for (const host of ['first.circle.test', 'second.circle.test']) {
     const folder = join(temp, host);
     await mkdir(folder);
-    const openssl = (args) =>
-      execFileSync('openssl', args, { cwd: folder, stdio: 'ignore' });
-    openssl([
-      'req',
-      '-x509',
-      '-newkey',
-      'rsa:2048',
-      '-nodes',
-      '-days',
-      '2',
-      '-subj',
-      `/CN=Circle synthetic CA ${host}`,
-      '-keyout',
-      'ca-key.pem',
-      '-out',
-      'ca.pem',
-    ]);
-    openssl([
-      'req',
-      '-newkey',
-      'rsa:2048',
-      '-nodes',
-      '-subj',
-      `/CN=${host}`,
-      '-keyout',
-      'key.pem',
-      '-out',
-      'leaf.csr',
-    ]);
-    await writeFile(
-      join(folder, 'ext.cnf'),
-      `subjectAltName=DNS:${host}\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n`,
-    );
-    openssl([
-      'x509',
-      '-req',
-      '-in',
-      'leaf.csr',
-      '-CA',
-      'ca.pem',
-      '-CAkey',
-      'ca-key.pem',
-      '-set_serial',
-      '2',
-      '-days',
-      '2',
-      '-out',
-      'leaf.pem',
-      '-extfile',
-      'ext.cnf',
-    ]);
-    caFiles.push(join(folder, 'ca.pem'));
+    const chain = tlsCertificates(folder, host);
+    caFiles.push(chain.ca);
     const server = httpsServer(
-      {
-        key: await readFile(join(folder, 'key.pem')),
-        cert: await readFile(join(folder, 'leaf.pem')),
-      },
+      { key: chain.key, cert: chain.cert },
       async (req, res) => {
         const body = JSON.parse(
           Buffer.concat(await Array.fromAsync(req)).toString(),

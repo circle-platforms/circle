@@ -11,6 +11,8 @@ import { build } from 'esbuild';
 import { cp } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { X509Certificate } from 'node:crypto';
+import { tlsCertificates } from './tls-certificates.mjs';
 import { scratch, cleanup } from './helpers.js';
 import {
   defaultSettings,
@@ -20,69 +22,13 @@ import {
 } from '../src/settings.js';
 
 const openssl = spawnSync('openssl', ['version']).status === 0;
-function certificates(t: TestContext, host: string) {
+function certificates(
+  t: TestContext,
+  host: string,
+  env: NodeJS.ProcessEnv = process.env,
+) {
   const root = scratch(t, 'circle-network-ca-');
-  const run = (args: string[]) => {
-    const out = spawnSync('openssl', args, { cwd: root, encoding: 'utf8' });
-    assert.equal(out.status, 0, out.stderr);
-  };
-  run([
-    'req',
-    '-x509',
-    '-newkey',
-    'rsa:2048',
-    '-nodes',
-    '-days',
-    '2',
-    '-subj',
-    `/CN=${host} test CA`,
-    '-keyout',
-    'ca.key',
-    '-out',
-    'ca.pem',
-    '-addext',
-    'basicConstraints=critical,CA:TRUE',
-  ]);
-  run([
-    'req',
-    '-new',
-    '-newkey',
-    'rsa:2048',
-    '-nodes',
-    '-subj',
-    `/CN=${host}`,
-    '-keyout',
-    'key.pem',
-    '-out',
-    'leaf.csr',
-  ]);
-  writeFileSync(
-    join(root, 'ext.cnf'),
-    `subjectAltName=DNS:${host},IP:127.0.0.1\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n`,
-  );
-  run([
-    'x509',
-    '-req',
-    '-in',
-    'leaf.csr',
-    '-CA',
-    'ca.pem',
-    '-CAkey',
-    'ca.key',
-    '-set_serial',
-    '2',
-    '-days',
-    '2',
-    '-out',
-    'leaf.pem',
-    '-extfile',
-    'ext.cnf',
-  ]);
-  return {
-    ca: join(root, 'ca.pem'),
-    key: readFileSync(join(root, 'key.pem')),
-    cert: readFileSync(join(root, 'leaf.pem')),
-  };
+  return tlsCertificates(root, host, env);
 }
 async function listen(t: TestContext, server: Server) {
   const sockets = new Set<Duplex>();
@@ -138,6 +84,36 @@ async function child(args: string[], env: NodeJS.ProcessEnv, stdin = '') {
     },
   );
 }
+
+test(
+  'synthetic TLS chains ignore ambient CA extensions and have distinct valid issuers',
+  { skip: !openssl },
+  (t) => {
+    const config = join(scratch(t), 'ambient-openssl.cnf');
+    writeFileSync(
+      config,
+      '[req]\ndistinguished_name=dn\nx509_extensions=ambient_ca\n[dn]\nCN=ambient default\n[ambient_ca]\nbasicConstraints=CA:TRUE\n',
+    );
+    const env = { ...process.env, OPENSSL_CONF: config };
+    const a = certificates(t, 'fixture.circle.test', env);
+    const b = certificates(t, 'fixture.circle.test', env);
+    const issuers = [a, b].map((chain) => {
+      const ca = new X509Certificate(readFileSync(chain.ca));
+      const leaf = new X509Certificate(chain.cert);
+      assert.equal(ca.ca, true);
+      assert.equal(leaf.ca, false);
+      assert.equal(leaf.checkIssued(ca), true);
+      assert.equal(leaf.verify(ca.publicKey), true);
+      assert.equal(
+        leaf.checkHost('fixture.circle.test'),
+        'fixture.circle.test',
+      );
+      assert.equal(leaf.checkIP('127.0.0.1'), '127.0.0.1');
+      return ca.subject;
+    });
+    assert.notEqual(issuers[0], issuers[1]);
+  },
+);
 
 test(
   'shared bootstrap adds two CAs, retains default trust and makes actual child HTTPS requests through CONNECT',

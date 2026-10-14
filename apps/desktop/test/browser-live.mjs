@@ -1446,7 +1446,10 @@ try {
     const priorBrowser = await browserState(sessionId);
     await draftAddress.fill('invalid://circle-fixture');
     await draftAddress.press('Enter');
-    await page.getByText('navigation failed', { exact: true }).waitFor();
+    await page.getByText('invalid address', { exact: true }).waitFor();
+    const rejectedAddress = await browserState(sessionId);
+    assert.equal(rejectedAddress.url, priorBrowser.url);
+    assert.equal(rejectedAddress.tab, priorBrowser.tab);
     await page.getByRole('button', { name: 'new tab', exact: true }).click();
     await waitFor(
       async () => (await draftAddress.inputValue()) === '',

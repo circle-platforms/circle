@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -18,6 +18,8 @@ if (process.env.CIRCLE_DESKTOP_EXECUTABLE) {
 }
 const require = createRequire(import.meta.url);
 const root = fileURLToPath(new URL('..', import.meta.url));
+const evidence = join(root, '../../outputs/browser-regressions');
+await mkdir(evidence, { recursive: true });
 const temp = await mkdtemp(join(tmpdir(), 'circle-browser-page-'));
 const source = await build({
   entryPoints: [join(root, '../../src/browser/page.ts')],
@@ -93,6 +95,14 @@ const env = {
 };
 delete env.ELECTRON_RUN_AS_NODE;
 let app;
+let cdp;
+let navigation = 0;
+const started = Date.now();
+const metadata = [];
+const record = (value) => {
+  metadata.push({ at: Date.now() - started, ...value });
+  if (metadata.length > 200) metadata.shift();
+};
 try {
   app = await electron.launch({
     executablePath: require('electron'),
@@ -103,25 +113,111 @@ try {
   });
   const page = await app.firstWindow();
   await page.waitForLoadState('load');
-  const run = async (command, args = {}) => {
-    const result = await app.evaluate(
-      ({ BrowserWindow }, { script, command, args }) =>
-        BrowserWindow.getAllWindows()[0].webContents.executeJavaScriptInIsolatedWorld(
-          999,
-          [
-            {
-              code:
-                script +
-                '\n(async()=>{try{return {ok:true,value:await CirclePage.browserPage(' +
-                JSON.stringify(command) +
-                ',' +
-                JSON.stringify(args) +
-                ')}}catch(error){return {ok:false,error:error.message}}})()',
-            },
-          ],
-        ),
-      { script, command, args },
+  cdp = await page.context().newCDPSession(page);
+  for (const method of [
+    'Runtime.executionContextsCleared',
+    'Page.loadEventFired',
+  ])
+    cdp.on(method, () => record({ kind: 'event', method }));
+  cdp.on('Runtime.executionContextCreated', ({ context }) =>
+    record({
+      kind: 'event',
+      method: 'Runtime.executionContextCreated',
+      context: context.id,
+      frame: context.auxData?.frameId,
+      isDefault: context.auxData?.isDefault,
+    }),
+  );
+  cdp.on('Runtime.executionContextDestroyed', ({ executionContextId }) =>
+    record({
+      kind: 'event',
+      method: 'Runtime.executionContextDestroyed',
+      context: executionContextId,
+    }),
+  );
+  cdp.on('Page.frameNavigated', ({ frame }) => {
+    if (!frame.parentId) navigation++;
+    record({
+      kind: 'event',
+      method: 'Page.frameNavigated',
+      frame: frame.id,
+      loader: frame.loaderId,
+      main: !frame.parentId,
+    });
+  });
+  for (const method of ['Page.frameStartedLoading', 'Page.frameStoppedLoading'])
+    cdp.on(method, ({ frameId }) =>
+      record({ kind: 'event', method, frame: frameId }),
     );
+  cdp.on('Animation.animationStarted', ({ animation }) =>
+    record({
+      kind: 'event',
+      method: 'Animation.animationStarted',
+      animation: animation.id,
+      type: animation.type,
+      duration: animation.source?.duration,
+      delay: animation.source?.delay,
+    }),
+  );
+  cdp.on('Animation.animationCanceled', ({ id }) =>
+    record({
+      kind: 'event',
+      method: 'Animation.animationCanceled',
+      animation: id,
+    }),
+  );
+  await Promise.all(
+    ['Runtime.enable', 'Page.enable', 'Animation.enable'].map((method) =>
+      cdp.send(method),
+    ),
+  );
+  const run = async (command, args = {}) => {
+    // Only timing/context/animation metadata is retained: no page text, URLs,
+    // expressions, argument values, input, screenshot pixels or returned values.
+    const at = Date.now();
+    const boundary = navigation;
+    record({
+      kind: 'command',
+      method: 'executeJavaScriptInIsolatedWorld',
+      world: 999,
+      command,
+    });
+    let result;
+    try {
+      result = await app.evaluate(
+        ({ BrowserWindow }, { script, command, args }) =>
+          BrowserWindow.getAllWindows()[0].webContents.executeJavaScriptInIsolatedWorld(
+            999,
+            [
+              {
+                code:
+                  script +
+                  '\n(async()=>{try{return {ok:true,value:await CirclePage.browserPage(' +
+                  JSON.stringify(command) +
+                  ',' +
+                  JSON.stringify(args) +
+                  ')}}catch(error){return {ok:false,error:error.message}}})()',
+              },
+            ],
+          ),
+        { script, command, args },
+      );
+    } catch (error) {
+      record({
+        kind: 'command-error',
+        command,
+        elapsed: Date.now() - at,
+        navigationChanged: boundary !== navigation,
+      });
+      throw error;
+    }
+    record({
+      kind: 'response',
+      command,
+      elapsed: Date.now() - at,
+      ok: result.ok,
+      navigationChanged: boundary !== navigation,
+    });
     if (!result.ok) throw Error(result.error);
     return result.value;
   };
@@ -276,7 +372,13 @@ try {
     label: 'overlay should be excluded',
     click: true,
   };
-  await run('overlay', overlay);
+  const overlayNavigation = navigation;
+  assert.equal(await run('overlay', overlay), true);
+  assert.equal(
+    navigation,
+    overlayNavigation,
+    'overlay acknowledgement must come from the same document',
+  );
   assert.equal(await page.locator('[data-circle-browser-overlay]').count(), 1);
   assert.equal(
     await page
@@ -373,7 +475,26 @@ try {
   console.log(
     'PASS browser page: visible DOM, isolated refs, frames and shadow roots, password guards, obstruction, real input, closed overlay and bounded snapshots; refs only for own actions and stable across snapshots',
   );
+  await writeFile(
+    join(evidence, 'browser-page-metadata.json'),
+    JSON.stringify(
+      { platform: process.platform, success: true, metadata },
+      null,
+      2,
+    ),
+  );
+} catch (error) {
+  await writeFile(
+    join(evidence, 'browser-page-failure-metadata.json'),
+    JSON.stringify(
+      { platform: process.platform, success: false, metadata },
+      null,
+      2,
+    ),
+  );
+  throw error;
 } finally {
+  await cdp?.detach().catch(() => {});
   await app?.close();
   await Promise.all([
     new Promise((resolve) => server.close(resolve)),

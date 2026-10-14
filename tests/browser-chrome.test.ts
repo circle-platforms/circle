@@ -13,6 +13,7 @@ import { createServer as createHttp, type Server } from 'node:http';
 import { createServer as createHttps } from 'node:https';
 import { join } from 'node:path';
 import { ChromeBrowser, findBrowser } from '../src/browser/chrome.js';
+import type { CdpPipe } from '../src/browser/cdp.js';
 import { browserTools, runtimeBrowserOptions } from '../src/browser/tools.js';
 import { formatScript, parseScript } from '../src/browser/script.js';
 import { saveSecret } from '../src/secrets.js';
@@ -24,6 +25,7 @@ import type {
   CertificateApproval,
 } from '../src/browser/protocol.js';
 import { emptyUsage } from '../src/types.js';
+import { getEventListeners } from 'node:events';
 import { cleanup, scratch as made } from './helpers.js';
 
 // The terminal's browser, driven for real: a Chrome or Edge without a window, local HTTP and
@@ -137,6 +139,240 @@ const listen = (server: Server) =>
       resolve((server.address() as { port: number }).port),
     ),
   );
+
+/** The simulated person hands back a page they have actually finished opening. */
+async function humanNavigation(
+  cdp: Pick<CdpPipe, 'on'>,
+  session: string,
+  url: string,
+  signal: AbortSignal,
+  action: () => Promise<unknown>,
+): Promise<void> {
+  const lifecycle = new AbortController();
+  const active = AbortSignal.any([signal, lifecycle.signal]);
+  const loaded = new Promise<void>((resolve, reject) => {
+    let frame: string | undefined;
+    const seen: string[] = [];
+    let stop = () => {};
+    const finish = (error?: unknown) => {
+      clearTimeout(timer);
+      stop();
+      active.removeEventListener('abort', aborted);
+      if (error) reject(error);
+      else resolve();
+    };
+    const aborted = () => finish(active.reason ?? Error('handoff stopped'));
+    const timer = setTimeout(
+      () =>
+        finish(
+          Error(
+            `the human navigation did not finish in 10 s; ${seen.join(', ')}`,
+          ),
+        ),
+      10_000,
+    );
+    stop = cdp.on((event) => {
+      if (event.method === 'Circle.closed')
+        return finish(Error('browser closed before human navigation finished'));
+      if (event.sessionId !== session) return;
+      if (
+        event.method === 'Page.frameNavigated' &&
+        !event.params.frame.parentId
+      ) {
+        seen.push(
+          `frame ${event.params.frame.id} committed ${event.params.frame.url === url ? 'the expected URL' : 'another URL'}`,
+        );
+        if (event.params.frame.url === url) frame = event.params.frame.id;
+      }
+      if (event.method === 'Page.frameStoppedLoading') {
+        seen.push(`frame ${event.params.frameId} stopped loading`);
+        if (frame && event.params.frameId === frame) finish();
+      }
+    });
+    active.addEventListener('abort', aborted, { once: true });
+    if (active.aborted) aborted();
+  });
+  try {
+    await Promise.all([
+      loaded,
+      Promise.resolve().then(() => {
+        active.throwIfAborted();
+        return action();
+      }),
+    ]);
+  } finally {
+    lifecycle.abort(Error('human navigation wait ended'));
+  }
+}
+
+test('human navigation observes a rejected CDP send and removes the navigation listener', async () => {
+  const listeners = new Set<Parameters<CdpPipe['on']>[0]>();
+  const cdp = {
+    on: (listener: Parameters<CdpPipe['on']>[0]) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  const controller = new AbortController();
+  const failure = Error('fixture send rejected');
+  await assert.rejects(
+    humanNavigation(
+      cdp,
+      'session',
+      'http://fixture/b',
+      controller.signal,
+      async () => {
+        throw failure;
+      },
+    ),
+    (error) => error === failure,
+  );
+  assert.equal(listeners.size, 0);
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+});
+
+test('aborted human navigation removes its event listener and retains the abort reason', async () => {
+  const listeners = new Set<Parameters<CdpPipe['on']>[0]>();
+  const cdp = {
+    on: (listener: Parameters<CdpPipe['on']>[0]) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  const controller = new AbortController();
+  let sent!: () => void;
+  const started = new Promise<void>((resolve) => (sent = resolve));
+  const pending = humanNavigation(
+    cdp,
+    'session',
+    'http://fixture/b',
+    controller.signal,
+    () => {
+      sent();
+      return new Promise(() => {});
+    },
+  );
+  const failure = Error('fixture handoff stopped');
+  const rejected = assert.rejects(pending, (error) => error === failure);
+  await started;
+  controller.abort(failure);
+  await rejected;
+  assert.equal(listeners.size, 0);
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+});
+
+/** Diagnostics contain protocol metadata only, never expressions, input, URLs or results. */
+function browserProtocolTrace(chrome: ChromeBrowser) {
+  const internal = chrome as unknown as {
+    cdp?: CdpPipe;
+    send: (
+      method: string,
+      params?: Record<string, unknown>,
+      session?: string,
+    ) => Promise<any>;
+  };
+  const started = Date.now();
+  const records: Record<string, unknown>[] = [];
+  const pending = new Map<number, Record<string, unknown>>();
+  let next = 0;
+  let watched: CdpPipe | undefined;
+  const add = (record: Record<string, unknown>) => {
+    records.push({ at: Date.now() - started, ...record });
+    if (records.length > 160) records.shift();
+  };
+  const send = internal.send.bind(chrome);
+  internal.send = (method, params = {}, session) => {
+    if (internal.cdp && internal.cdp !== watched) {
+      watched = internal.cdp;
+      watched.on((event) => {
+        const detail = event.params;
+        const common = {
+          kind: 'event',
+          method: event.method,
+          session: event.sessionId,
+        };
+        if (event.method === 'Runtime.executionContextCreated')
+          add({
+            ...common,
+            context: detail.context.id,
+            frame: detail.context.auxData?.frameId,
+            isDefault: detail.context.auxData?.isDefault,
+          });
+        else if (event.method === 'Runtime.executionContextDestroyed')
+          add({ ...common, context: detail.executionContextId });
+        else if (event.method === 'Page.frameNavigated')
+          add({
+            ...common,
+            frame: detail.frame.id,
+            loader: detail.frame.loaderId,
+            main: !detail.frame.parentId,
+          });
+        else if (
+          ['Page.frameStartedLoading', 'Page.frameStoppedLoading'].includes(
+            event.method,
+          )
+        )
+          add({ ...common, frame: detail.frameId });
+        else if (
+          [
+            'Runtime.executionContextsCleared',
+            'Page.loadEventFired',
+            'Circle.closed',
+          ].includes(event.method)
+        )
+          add(common);
+        else if (event.method === 'Animation.animationStarted')
+          add({
+            ...common,
+            animation: detail.animation.id,
+            type: detail.animation.type,
+            duration: detail.animation.source?.duration,
+            delay: detail.animation.source?.delay,
+          });
+        else if (event.method === 'Animation.animationCanceled')
+          add({ ...common, animation: detail.id });
+      });
+    }
+    const id = ++next;
+    const at = Date.now();
+    const request = {
+      id,
+      method,
+      session,
+      context: params.contextId,
+      awaitPromise: params.awaitPromise,
+    };
+    pending.set(id, { ...request, started: at });
+    add({ kind: 'request', ...request });
+    if (method === 'Page.enable')
+      void send('Animation.enable', {}, session).catch(() => {});
+    return send(method, params, session).then(
+      (value) => {
+        pending.delete(id);
+        add({
+          kind: 'response',
+          id,
+          method,
+          elapsed: Date.now() - at,
+          exception: !!value?.exceptionDetails,
+        });
+        return value;
+      },
+      (error) => {
+        pending.delete(id);
+        add({ kind: 'request-error', id, method, elapsed: Date.now() - at });
+        throw error;
+      },
+    );
+  };
+  return () => ({
+    pending: [...pending.values()].map(({ started: at, ...request }) => ({
+      ...request,
+      elapsed: Date.now() - Number(at),
+    })),
+    recent: records,
+  });
+}
 
 test(
   'the terminal browser reads and acts on pages, answers dialogs, follows tabs and passes certificate warnings only with approval',
@@ -254,20 +490,27 @@ test(
     });
     const trustFile = join(temp, 'browser-certificates.json');
     const downloads = join(temp, 'downloads');
-    const start = () =>
-      new ChromeBrowser({
+    const traces = new WeakMap<
+      ChromeBrowser,
+      ReturnType<typeof browserProtocolTrace>
+    >();
+    const start = () => {
+      const browser = new ChromeBrowser({
         executable: executable!,
         trustFile,
         headless: true,
         downloads,
       });
+      traces.set(browser, browserProtocolTrace(browser));
+      return browser;
+    };
     let chrome = start();
     cleanup(t, () => chrome.close());
     const signal = new AbortController().signal;
     // A failure names the step it happened at
     // A failure names the step it happened at, and what the browser was in: a failure
     // seen only in a CI log has to say enough
-    const internals = chrome as unknown as {
+    type DebugBrowser = {
       cdp: {
         send: (
           method: string,
@@ -281,13 +524,22 @@ test(
           active?: string;
           tabs: Map<
             string,
-            { session: string; interceptFailure?: string; dialogs: unknown[] }
+            {
+              session: string;
+              world?: number;
+              loading: boolean;
+              network: Set<string>;
+              lastNetwork: number;
+              interceptFailure?: string;
+              dialogs: unknown[];
+            }
           >;
         }
       >;
       stderr: string[];
     };
     const diagnose = async () => {
+      const internals = chrome as unknown as DebugBrowser;
       const within = (promise: Promise<unknown>) =>
         Promise.race([
           promise.then(
@@ -299,6 +551,7 @@ test(
           ),
         ]);
       const lines: string[] = [];
+      lines.push(`protocol metadata ${JSON.stringify(traces.get(chrome)?.())}`);
       const conversation = internals.conversations.get('conversation-1');
       const shown = conversation?.active
         ? conversation.tabs.get(conversation.active)
@@ -318,10 +571,10 @@ test(
               .then((reply) => reply.result?.value),
           );
         lines.push(
-          `interception ${shown.interceptFailure ?? 'taken'}; dialogs ${shown.dialogs.length}`,
+          `context ${shown.world}; loading ${shown.loading}; network ${shown.network.size}; quiet ${Date.now() - shown.lastNetwork} ms; interception ${shown.interceptFailure ?? 'taken'}; dialogs ${shown.dialogs.length}`,
         );
         lines.push(
-          `visibility ${await see('document.visibilityState + " focus " + document.hasFocus()')}`,
+          `visibility ${await see('document.visibilityState + " focus " + document.hasFocus() + " ready " + document.readyState')}`,
         );
         lines.push(
           `bringToFront ${await within(internals.cdp.send('Page.bringToFront', {}, shown.session))}`,
@@ -338,7 +591,7 @@ test(
             .then((reply) =>
               reply.targetInfos?.map(
                 (info: { type: string; url: string; attached: boolean }) =>
-                  `${info.type} ${info.url} ${info.attached ? 'attached' : ''}`,
+                  `${info.type} ${info.attached ? 'attached' : 'unattached'}`,
               ),
             ),
         )}`,
@@ -350,7 +603,7 @@ test(
       chrome
         .request('conversation-1', action, args, signal)
         .catch(async (error: Error) => {
-          error.message = `${action} ${JSON.stringify(args)}: ${error.message}\n${await diagnose()}`;
+          error.message = `${action} (argument keys: ${Object.keys(args).join(', ')}): ${error.message}\n${await diagnose()}`;
           throw error;
         });
     const ref = (text: string, pattern: RegExp) => {
@@ -983,9 +1236,12 @@ test(
     const temp = made(t, 'circle-chrome-handoff-');
     const site = createHttp((req, res) => {
       res.writeHead(200, { 'content-type': 'text/html' });
-      res.end(
-        `<!doctype html><title>${req.url === '/b' ? 'Signed in' : 'Sign in'}</title><input aria-label="Code">`,
-      );
+      const finish = () =>
+        res.end(
+          `<!doctype html><title>${req.url === '/b' ? 'Signed in' : 'Sign in'}</title><input aria-label="Code">`,
+        );
+      if (req.url === '/b') setTimeout(finish, 1500);
+      else finish();
     });
     const base = `http://127.0.0.1:${await listen(site)}`;
     t.after(() => site.close());
@@ -995,9 +1251,10 @@ test(
       headless: true,
       downloads: temp,
       // The person types a code and goes on, in the window: Circle sees none of it
-      handoff: async (reason) => {
+      handoff: async (reason, signal) => {
         reasons.push(reason);
         const internals = chrome as unknown as {
+          cdp: CdpPipe;
           conversations: Map<
             string,
             { tabs: Map<string, { session: string }> }
@@ -1009,14 +1266,23 @@ test(
           ) => Promise<unknown>;
         };
         const tab = internals.conversations.get('c')!.tabs.get('t1')!;
-        await internals.send(
-          'Runtime.evaluate',
-          {
-            expression: `document.querySelector('input').value = 'typed-by-the-person'; location.href = '/b'`,
-          },
+        // Subscribe before initiating navigation so an immediately cached page cannot
+        // commit between the action and our listener. A slow response exceeds the old
+        // fixed 800 ms wait, but ownership remains with the person until actual load.
+        await humanNavigation(
+          internals.cdp,
           tab.session,
+          `${base}/b`,
+          signal,
+          () =>
+            internals.send(
+              'Runtime.evaluate',
+              {
+                expression: `document.querySelector('input').value = 'typed-by-the-person'; location.href = '/b'`,
+              },
+              tab.session,
+            ),
         );
-        await new Promise((resolve) => setTimeout(resolve, 800));
       },
     });
     cleanup(t, () => chrome.close());

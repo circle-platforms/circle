@@ -146,7 +146,7 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
       setCapture(null);
       await host.browserNavigate(id, target);
       requestAnimationFrame(() => updateBounds.current());
-    } catch {
+    } catch (error) {
       if (
         version !== navigationVersion.current ||
         identity.session !== currentIdentity.current.session ||
@@ -157,7 +157,13 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
         setUrl(target);
         editingAddress.current = true;
       }
-      notify(t('navigation failed'));
+      // A string the address bar could not read is the person's to fix, not a
+      // network failure; say which of the two it was.
+      notify(
+        error instanceof Error && error.message === 'invalid browser address'
+          ? t('invalid address')
+          : t('navigation failed'),
+      );
     }
   };
   // A link an extension asked for opens as soon as it is given; typing in the address

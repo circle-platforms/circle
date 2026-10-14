@@ -25,14 +25,31 @@ concurrency:
   group: workbench-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  native-macos:
-    runs-on: macos-latest
-    timeout-minutes: 20
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: darwin-arm64
+            app: Circle-darwin-arm64/Circle.app
+            executable: Circle-darwin-arm64/Circle.app/Contents/MacOS/Circle
+          - runner: macos-15-intel
+            target: darwin-x64
+            app: Circle-darwin-x64/Circle.app
+            executable: Circle-darwin-x64/Circle.app/Contents/MacOS/Circle
+          - runner: ubuntu-24.04
+            target: linux-x64
+            app: Circle-linux-x64
+            executable: Circle-linux-x64/Circle
+    runs-on: ${{ matrix.runner }}
+    # Both application modes and both viewport widths run on each native architecture.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version: '24.21.0'
           cache: npm
           cache-dependency-path: |
             package-lock.json
@@ -41,6 +58,22 @@ jobs:
       - run: npm ci
       - run: npm --prefix apps/workbench ci
       - run: npm --prefix apps/desktop ci
+      - name: Record the native test environment
+        shell: bash
+        run: |
+          node -p 'JSON.stringify({node:process.version,platform:process.platform,arch:process.arch})'
+          openssl version
+      - name: Start an isolated Linux display and retain the Chromium sandbox
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xauth libgtk-3-0 libnss3 libasound2t64
+          Xvfb :99 -screen 0 1920x1080x24 > "$RUNNER_TEMP/circle-xvfb.log" 2>&1 &
+          echo 'DISPLAY=:99' >> "$GITHUB_ENV"
+          helper="$GITHUB_WORKSPACE/apps/desktop/node_modules/electron/dist/chrome-sandbox"
+          sudo chown root:root "$helper"
+          sudo chmod 4755 "$helper"
       - run: npm --prefix apps/workbench run format:check
       - run: npm --prefix apps/desktop run format:check
       - run: npm --prefix apps/workbench test
@@ -56,9 +89,13 @@ jobs:
       - name: Check the packaged application
         shell: bash
         run: |
-          app_path="$(find apps/desktop/out -maxdepth 2 -name 'Circle.app' -print -quit)"
-          export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/$app_path"
-          export CIRCLE_DESKTOP_EXECUTABLE="$CIRCLE_DESKTOP_APP_PATH/Contents/MacOS/Circle"
+          export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.app }}"
+          export CIRCLE_DESKTOP_EXECUTABLE="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.executable }}"
+          if [ "$RUNNER_OS" = Linux ]; then
+            helper="$(dirname "$CIRCLE_DESKTOP_EXECUTABLE")/chrome-sandbox"
+            sudo chown root:root "$helper"
+            sudo chmod 4755 "$helper"
+          fi
           npm --prefix apps/desktop run test:desktop
           cp apps/desktop/artifacts/desktop/receipt.json apps/desktop/artifacts/desktop/packaged-receipt.json
           npm --prefix apps/desktop run test:live
@@ -67,25 +104,28 @@ jobs:
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         if: always()
         with:
-          name: circle-desktop-macos-development
+          name: circle-desktop-${{ matrix.target }}-native
           path: |
             apps/desktop/out/*.dmg
+            apps/desktop/out/*.tar.gz
+            apps/desktop/out/*.sha256
             apps/desktop/out/artifact-receipt.json
             apps/desktop/artifacts/
             outputs/
+            ${{ runner.temp }}/circle-xvfb.log
           if-no-files-found: error
   package-other-platforms:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version: '24.21.0'
       - run: npm ci
       - run: npm --prefix apps/workbench ci
       - run: npm --prefix apps/desktop ci
@@ -102,6 +142,21 @@ jobs:
         if: runner.os == 'Windows'
         run: node --test apps/desktop/test/update-harness.test.mjs apps/desktop/test/update-observer.test.mjs
       - run: npm --prefix apps/desktop run package
+      - name: Check invalid browser addresses on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          node apps/desktop/test/browser-address.mjs
+          $env:CIRCLE_DESKTOP_APP_PATH = Join-Path $env:GITHUB_WORKSPACE 'apps/desktop/out/Circle-win32-x64'
+          $env:CIRCLE_DESKTOP_EXECUTABLE = Join-Path $env:CIRCLE_DESKTOP_APP_PATH 'Circle.exe'
+          node apps/desktop/test/browser-address.mjs
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        if: runner.os == 'Windows' && always()
+        with:
+          name: circle-windows-browser-address
+          path: apps/desktop/artifacts/browser-address/
+          if-no-files-found: ignore
       # The release workflow installs and removes it; here it only has to build and validate
       - name: Build the MSI
         if: runner.os == 'Windows'

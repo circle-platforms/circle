@@ -1,6 +1,7 @@
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
 import { observePage, captureFailure } from './helpers/diagnostics.mjs';
 import { readViewport, setViewport } from './helpers/viewport.mjs';
+import { waitBrowserState } from './helpers/browser-state.mjs';
 import { createServer } from 'node:http';
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
@@ -134,12 +135,13 @@ try {
     .getByRole('button', { name: 'navigate browser', exact: true })
     .click();
   await page.getByText('native browser', { exact: true }).waitFor();
-  await page.waitForFunction(async () => {
-    const state = await window.circleDesktop.browserState('session1');
-    return !state.loading && state.title === 'Circle native browser fixture';
-  });
-  const browserState = await page.evaluate(() =>
-    window.circleDesktop.browserState('session1'),
+  const browserState = await waitBrowserState(
+    page,
+    'session1',
+    (state) =>
+      state.url === siteUrl + '/' &&
+      !state.loading &&
+      state.title === 'Circle native browser fixture',
   );
   const browserIdentity = await app.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows()[0];
@@ -214,13 +216,40 @@ try {
     }),
     browserIdentity.id,
   );
+  // A non-web scheme is refused as an address the bar cannot read, not as a
+  // network failure; and a bare host the person typed is accepted, completed
+  // with https (#67).
   await assert.rejects(
     () =>
       page.evaluate(() =>
         window.circleDesktop.browserNavigate('session1', 'file:///etc/passwd'),
       ),
-    /http/,
+    /invalid browser address/,
   );
+  const bareHost = await page.evaluate(() =>
+    window.circleDesktop
+      .browserNavigate('session1', '127.0.0.1:1')
+      .then(() => 'opened')
+      .catch((error) => String((error && error.message) || error)),
+  );
+  assert.ok(
+    !bareHost.includes('invalid browser address'),
+    'a bare host must pass address parsing: ' + bareHost,
+  );
+  // And through the real address bar: typing an unreadable address notifies
+  // the person with the invalid-address message, not a network failure (#67).
+  await page
+    .getByRole('textbox', { name: 'browser address', exact: true })
+    .fill('file:///etc/passwd');
+  await page
+    .getByRole('button', { name: 'navigate browser', exact: true })
+    .click();
+  await page
+    .getByRole('status')
+    .getByText('invalid address', { exact: true })
+    .waitFor();
+  await page.waitForFunction(() => !document.querySelector('.toast'));
+  checks.push('the address bar says invalid address, not navigation failed');
   await page.getByRole('button', { name: 'files panel', exact: true }).click();
   checks.push(
     'sandboxed native browser keeps one session identity across panel switches',

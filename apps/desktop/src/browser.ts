@@ -67,6 +67,7 @@ import {
 } from '../../../src/browser/format.js';
 import { TrustedCertificates } from '../../../src/browser/certificates.js';
 import {
+  addressBarInput,
   downloadSite,
   secretRefused,
   siteOf,
@@ -1484,8 +1485,11 @@ export class BrowserSessions {
     if (['back', 'forward', 'reload'].includes(urlValue))
       await this.history(conversation, tab, urlValue);
     else {
-      const url = safeExternalUrl(urlValue);
-      if (!url) throw Error('only http or https navigation is supported');
+      // The person may type a bare host into the address bar; a request that
+      // reaches here from the model is already a full URL, so this only widens
+      // human input, and still refuses any scheme but http(s).
+      const url = addressBarInput(urlValue);
+      if (!url) throw Error('invalid browser address');
       await this.load(conversation, tab, url);
     }
     return this.state(id);
