@@ -174,10 +174,23 @@ test('an independent observer captures a blocked Node, ignores heartbeat progres
   assert.ok(evidence.owner.pid === f.child.pid);
   assert.ok(evidence.owner.executable);
   assert.ok(evidence.owner.createdAt);
+  if (process.platform === 'win32')
+    assert.equal(
+      evidence.owner.executable.toLowerCase(),
+      process.execPath.toLowerCase(),
+    );
   const ownedPid = Number(await readFile(join(f.folder, 'owned-pid'), 'utf8'));
   assert.ok(evidence.processes.some((p) => p.pid === ownedPid));
   assert.ok(
+    evidence.termination.some((p) => p.pid === ownedPid && p.terminated),
+  );
+  assert.ok(
     evidence.termination.some((p) => p.pid === f.child.pid && p.terminated),
+  );
+  assert.ok(
+    evidence.termination.every((p) =>
+      evidence.processes.some((verified) => verified.pid === p.pid),
+    ),
   );
   assert.equal(sentinel.exitCode, null);
   assert.doesNotThrow(() => process.kill(sentinel.pid, 0));
@@ -233,6 +246,123 @@ test('known ancestry rejects an unrelated older child and a reused parent identi
   assert.ok(
     !ownedProcesses(rows, owner, [previous]).some((row) => row.pid === 13),
   );
+});
+
+test('an expired parent cannot authorize an unknown child after its reused PID has also exited', () => {
+  const owner = { pid: 10, parentPid: 1, createdAt: '100', executable: 'node' };
+  const previous = {
+    pid: 11,
+    parentPid: 10,
+    createdAt: '200',
+    executable: 'owned-app',
+  };
+  // The owned parent exits at 300. An unrelated process reuses PID 11 at 350,
+  // creates child 13 at 400, then exits at 450, before this snapshot at 500.
+  const orphan = {
+    pid: 13,
+    parentPid: 11,
+    createdAt: '400',
+    executable: 'unrelated-child',
+  };
+  assert.deepEqual(ownedProcesses([owner, orphan], owner, [previous]), [owner]);
+});
+
+test('a previously verified child stays owned after its parent exits and only its live identity authorizes descendants', () => {
+  const owner = { pid: 10, parentPid: 1, createdAt: '100', executable: 'node' };
+  const parent = {
+    pid: 11,
+    parentPid: 10,
+    createdAt: '200',
+    executable: 'app',
+  };
+  const child = { pid: 12, parentPid: 11, createdAt: '250', executable: 'app' };
+  const known = ownedProcesses([child, parent, owner], owner);
+  assert.deepEqual(
+    known.map((row) => row.pid),
+    [10, 11, 12],
+  );
+  const descendant = {
+    pid: 14,
+    parentPid: 12,
+    createdAt: '400',
+    executable: 'app',
+  };
+  assert.deepEqual(ownedProcesses([owner, child, descendant], owner, known), [
+    owner,
+    child,
+    descendant,
+  ]);
+  const reused = { ...child, createdAt: '350', executable: 'unrelated' };
+  assert.deepEqual(ownedProcesses([owner, reused, descendant], owner, known), [
+    owner,
+  ]);
+});
+
+test('a stalled observer records an unverified orphan for diagnostics and terminates only verified identities', async (t) => {
+  const f = await fixture(
+    t,
+    (folder) => `
+    import assert from 'node:assert/strict';import {registerHooks} from 'node:module';
+    import {writeFileSync,readFileSync} from 'node:fs';
+    Object.defineProperty(process,'platform',{value:'win32'});
+    const folder=${JSON.stringify(folder)};
+    const owner={pid:10,parentPid:1,createdAt:'100',executable:'owned-node'};
+    const parent={pid:11,parentPid:10,createdAt:'200',executable:'owned-app'};
+    const child={pid:12,parentPid:11,createdAt:'250',executable:'owned-child'};
+    const orphan={pid:13,parentPid:11,createdAt:'400',executable:'unrelated-child',command:folder+'/unverified'};
+    const native=${JSON.stringify(`
+      import {appendFileSync,readFileSync} from 'node:fs';
+      export function spawn(){throw Error('unexpected native process launch')}
+      export function spawnSync(command){
+        if(command!=='where.exe')throw Error('unexpected native command: '+command);
+        return {status:1};
+      }
+      export function execFileSync(command,args){
+        if(command!=='powershell.exe')throw Error('unexpected native command: '+command);
+        const plan=JSON.parse(readFileSync(args.at(-1),'utf8'));
+        const fixture=JSON.parse(readFileSync(process.env.CIRCLE_OBSERVER_FIXTURE,'utf8'));
+        switch(args.at(-2)){
+          case 'identity':return JSON.stringify(fixture.owner);
+          case 'list':return JSON.stringify(fixture.rows);
+          case 'threads':return '[]';
+          case 'terminate':{
+            appendFileSync(process.env.CIRCLE_OBSERVER_TERMINATION,JSON.stringify(plan.owner)+'\\n');
+            return JSON.stringify({pid:plan.owner.pid,terminated:true});
+          }
+          default:throw Error('unexpected native action: '+args.at(-2));
+        }
+      }
+    `)};
+    registerHooks({resolve(specifier,context,next){if(specifier==='node:child_process')return{url:'data:text/javascript,'+encodeURIComponent(native),shortCircuit:true};return next(specifier,context)}});
+    const {observe,ownedProcesses,writeProgress}=await import(${JSON.stringify(helper)});
+    const known=ownedProcesses([child,parent,owner],owner);
+    assert.deepEqual(known.map(row=>row.pid),[10,11,12]);
+    process.env.CIRCLE_OBSERVER_FIXTURE=folder+'/snapshot.json';
+    process.env.CIRCLE_OBSERVER_TERMINATION=folder+'/termination.jsonl';
+    writeFileSync(process.env.CIRCLE_OBSERVER_FIXTURE,JSON.stringify({owner,rows:[owner,child,orphan]}));
+    const config=folder+'/observer-plan.json';
+    writeFileSync(config,JSON.stringify({folder,owner,known,token:'fixture-token',timeoutMs:1,pollMs:1}));
+    writeProgress(folder,'stage','restarting to update');
+    await new Promise(resolve=>setTimeout(resolve,5));
+    await observe(config);
+    const evidence=JSON.parse(readFileSync(folder+'/observer/evidence.json','utf8'));
+    assert.equal(evidence.complete,true);
+    assert.equal(evidence.reason,'stage stalled');
+    assert.equal(evidence.stage.text,'restarting to update');
+    assert.deepEqual(evidence.processes.map(row=>row.pid),[10,12]);
+    assert.deepEqual(evidence.relatedProcesses.map(row=>row.pid),[13]);
+    const terminated=readFileSync(process.env.CIRCLE_OBSERVER_TERMINATION,'utf8').trim().split('\\n').map(JSON.parse);
+    assert.deepEqual(terminated,[child,owner]);
+    assert.deepEqual(evidence.termination,[{pid:12,terminated:true},{pid:10,terminated:true}]);
+    assert.match(readFileSync(folder+'/observer/progress.log','utf8'),/restarting to update/);
+    assert.deepEqual(JSON.parse(readFileSync(folder+'/observer/threads.json','utf8')),[]);
+    assert.equal(JSON.parse(readFileSync(folder+'/observer/dump.json','utf8')).status,'unavailable');
+    console.log('unverified orphan retained only as evidence');
+  `,
+  );
+  const end = await f.closed;
+  assert.equal(end.code, 0, f.output());
+  assert.match(f.output(), /unverified orphan retained only as evidence/);
 });
 
 test('real stage progress postpones capture and allows a healthy owned process to stop normally', async (t) => {
