@@ -16,15 +16,26 @@ import { palette } from '../ink/theme.js';
 import { CdpPipe, type CdpEvent } from './cdp.js';
 import { TrustedCertificates } from './certificates.js';
 import {
+  actedOn,
+  describedOther,
   dialogLine,
   dialogOpened,
   dialogSnapshot,
   downloadDecision,
+  shownName,
   signInAnswered,
   quote,
   type PageDialog,
+  type PageElement,
 } from './format.js';
-import { downloadSite, privateHost, siteOf, webUrl } from './hosts.js';
+import {
+  downloadSite,
+  hostOf,
+  privateHost,
+  secretRefused,
+  siteOf,
+  webUrl,
+} from './hosts.js';
 import {
   downloadName,
   downloadsFolder,
@@ -111,6 +122,16 @@ export interface ChromeOptions {
   handoff?: (reason: string, signal: AbortSignal) => Promise<void>;
   /** How long the browser has to start, in milliseconds: a minute unless given. */
   startTimeout?: number;
+  /**
+   * Host names mapped to addresses, as Chrome's --host-resolver-rules: for tests, which reach
+   * a local site by a public name.
+   */
+  hostRules?: string;
+  /**
+   * A conversation's mode (manual, accept-edits, plan or auto): plan mode hands nothing over,
+   * and in auto mode Circle takes the browser back once the page has moved on.
+   */
+  mode?: (conversation: string) => string | undefined;
 }
 interface Download {
   id: string;
@@ -157,7 +178,7 @@ interface Tab {
   wake: Set<() => void>;
   warning?: Warning;
   /** Who is taking the warning's proceed link: Circle with approval, or for a trusted certificate. */
-  proceeding?: 'approved' | 'trusted';
+  proceeding?: 'approved' | 'trusted' | 'auto';
   failure?: { url: string; error: string };
   security?: {
     securityState?: string;
@@ -269,6 +290,9 @@ export class ChromeBrowser implements BrowserPort {
         ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
         ...(process.platform === 'linux' ? ['--password-store=basic'] : []),
         ...(this.options.headless ? ['--headless=new'] : []),
+        ...(this.options.hostRules
+          ? [`--host-resolver-rules=${this.options.hostRules}`]
+          : []),
         BLANK,
       ],
       { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] },
@@ -682,15 +706,18 @@ export class ChromeBrowser implements BrowserPort {
         if (!params.frame.parentId) {
           tab.frameUrl = params.frame.url;
           tab.world = undefined;
-          // Past the warning to its site: by whom, for the model's next result
-          if (tab.warning && tab.frameUrl === tab.warning.url)
+          // Past the warning to its site, wherever on that host it went on to (a site that
+          // sends / to /login): by whom, for the model's next result
+          if (tab.warning && hostOf(tab.frameUrl) === tab.warning.host)
             tab.conversation.events.push(
               `certificate warning for ${tab.warning.host}: ${
                 tab.proceeding === 'approved'
                   ? 'Circle proceeded, approved by the user'
-                  : tab.proceeding === 'trusted'
-                    ? 'proceeded, as the user trusts this certificate on this host'
-                    : 'the user proceeded'
+                  : tab.proceeding === 'auto'
+                    ? `Circle proceeded in auto mode, without asking (sha256 ${tab.warning.fingerprint})`
+                    : tab.proceeding === 'trusted'
+                      ? 'proceeded, as the user trusts this certificate on this host'
+                      : 'the user proceeded'
               }`,
             );
           // A new document: a chooser or an approval for the old one is gone with it
@@ -1072,6 +1099,15 @@ export class ChromeBrowser implements BrowserPort {
   ): Promise<BrowserResult> {
     if (args.password !== undefined && typeof args.password !== 'string')
       throw Error('invalid browser dialog answer');
+    // The tab's certificate exception covers the sign-in only on the tab's own host
+    if (args.accept && typeof args.password === 'string') {
+      const host = hostOf(dialog.origin);
+      const refused = secretRefused(
+        host,
+        host === hostOf(tab.url) && this.insecure(tab),
+      );
+      if (refused) throw Error(refused);
+    }
     tab.dialogs = tab.dialogs.filter((entry) => entry !== dialog);
     const next = this.dialogOpens(tab);
     await this.send(
@@ -1548,6 +1584,10 @@ export class ChromeBrowser implements BrowserPort {
     if (action === 'handoff') {
       if (!this.options.handoff)
         throw Error('there is no one to hand the browser to here');
+      if (this.options.mode?.(conversation.id) === 'plan')
+        throw Error(
+          'plan mode does not hand the browser over: plan from what the page shows, and say what the user will do there',
+        );
       // The window comes to the front for the person, who has it until they hand it back
       await this.send('Page.bringToFront', {}, tab.session).catch(() => {});
       // A sign-in waiting for the model is the browser's own dialog for them
@@ -1569,19 +1609,53 @@ export class ChromeBrowser implements BrowserPort {
           );
         }
       conversation.acting = false;
+      // In auto mode the card closes by itself 2 seconds after a tab settled at a new address
+      const done = new AbortController();
+      const stop = () => done.abort();
+      signal.addEventListener('abort', stop, { once: true });
+      const addresses = () =>
+        [...conversation.tabs.values()]
+          .map((tab) => `${tab.id} ${tab.frameUrl}`)
+          .join('\n');
+      const before = addresses();
+      let seen = before;
+      let changed = 0;
+      let movedOn = false;
+      const watch = setInterval(() => {
+        const now = addresses();
+        if (now !== seen) [seen, changed] = [now, Date.now()];
+        if (
+          this.options.mode?.(conversation.id) === 'auto' &&
+          seen !== before &&
+          Date.now() - changed >= 2000
+        ) {
+          movedOn = true;
+          done.abort();
+        }
+      }, 500);
       try {
         await this.options.handoff(
           typeof args.reason === 'string' ? args.reason.slice(0, 500) : '',
-          signal,
+          done.signal,
         );
+      } catch (error) {
+        if (!movedOn) throw error;
       } finally {
+        clearInterval(watch);
+        signal.removeEventListener('abort', stop);
         conversation.acting = true;
       }
-      conversation.events.push('the user handed the browser back');
+      conversation.events.push(
+        movedOn
+          ? 'auto mode: Circle took the browser back, as the page moved on'
+          : 'the user handed the browser back',
+      );
       return {
         text: await this.result(
           conversation,
-          'The user handed the browser back.',
+          movedOn
+            ? 'Circle took the browser back in auto mode, as the page moved on.'
+            : 'The user handed the browser back.',
           signal,
         ),
       };
@@ -1763,17 +1837,18 @@ export class ChromeBrowser implements BrowserPort {
       origin: string;
       element: string;
       multiple: boolean;
-      ref?: string;
+      // For a ref: the input as the snapshot shows it, and the note when the model
+      // described another
+      which?: string;
+      other?: string;
     };
     const chooser = tab.chooser;
     if (typeof args.ref === 'string') {
       if (!/^e[1-9][0-9]*$/.test(args.ref)) throw Error('invalid element ref');
       const token = randomUUID();
-      const input = await this.js<{
-        multiple: boolean;
-        name: string;
-        origin: string;
-      }>(tab, 'file-input', { ref: args.ref, token }, signal);
+      const input = await this.js<
+        PageElement & { multiple: boolean; origin: string }
+      >(tab, 'file-input', { ref: args.ref, token }, signal);
       let backendNodeId: number;
       try {
         backendNodeId = await this.marked(tab, token);
@@ -1783,12 +1858,10 @@ export class ChromeBrowser implements BrowserPort {
       target = {
         backendNodeId,
         origin: input.origin,
-        element:
-          typeof args.element === 'string' && args.element
-            ? args.element
-            : input.name,
+        element: shownName(input, args.element),
         multiple: input.multiple,
-        ref: args.ref,
+        which: actedOn(args.ref, input),
+        other: describedOther(args.element, input),
       };
     } else if (chooser) {
       if (!chooser.backendNodeId)
@@ -1808,11 +1881,10 @@ export class ChromeBrowser implements BrowserPort {
       throw Error(
         "no file chooser is waiting: give a file input's ref, or click what opens the chooser first",
       );
-    const which = target.ref
-      ? `${target.ref} ${quote(target.element)}`
-      : quote(target.element);
+    const which = target.which ?? quote(target.element);
+    const other = target.other ?? '';
     if (!paths.length) {
-      if (!target.ref && chooser) {
+      if (!target.which && chooser) {
         tab.chooser = undefined;
         return {
           text: await this.result(
@@ -1828,7 +1900,11 @@ export class ChromeBrowser implements BrowserPort {
         tab.session,
       );
       return {
-        text: await this.result(conversation, `Cleared ${which}.`, signal),
+        text: await this.result(
+          conversation,
+          `Cleared ${which}${other}.`,
+          signal,
+        ),
       };
     }
     if (!target.multiple && paths.length > 1)
@@ -1866,13 +1942,13 @@ export class ChromeBrowser implements BrowserPort {
       },
       tab.session,
     );
-    if (!target.ref) tab.chooser = undefined;
+    if (!target.which) tab.chooser = undefined;
     tab.lastNetwork = Date.now();
     await this.idle(tab, signal);
     return {
       text: await this.result(
         conversation,
-        `Gave ${files.map((file) => `${quote(file.name)} (${sizeText(file.size)})`).join(', ')} to ${which}.`,
+        `Gave ${files.map((file) => `${quote(file.name)} (${sizeText(file.size)})`).join(', ')} to ${which}${other}.`,
         signal,
       ),
     };
@@ -1899,6 +1975,10 @@ export class ChromeBrowser implements BrowserPort {
         action === 'type' && args.secret === true
           ? { name: String(args.secretName ?? 'secret') }
           : undefined;
+      if (secret) {
+        const refused = secretRefused(hostOf(tab.url), this.insecure(tab));
+        if (refused) throw Error(refused);
+      }
       if (
         action === 'type' &&
         (typeof args.text !== 'string' ||
@@ -1912,20 +1992,21 @@ export class ChromeBrowser implements BrowserPort {
           !args.values.every((value) => typeof value === 'string'))
       )
         throw Error('invalid browser options');
-      const target = await this.js<{
-        x: number;
-        y: number;
-        width: number;
-        height: number;
-        name: string;
-        action: string;
-      }>(
+      const target = await this.js<
+        PageElement & {
+          x: number;
+          y: number;
+          width: number;
+          height: number;
+          action: string;
+        }
+      >(
         tab,
         'prepare',
         { ref: args.ref, typing: action === 'type', secret: !!secret },
         signal,
       );
-      let trust: 'once' | 'always' | undefined;
+      let trust: 'once' | 'always' | 'auto' | undefined;
       if (action === 'click' && target.action === 'proceed') {
         const warning = tab.warning;
         if (!warning)
@@ -1947,34 +2028,38 @@ export class ChromeBrowser implements BrowserPort {
               privateHost: privateHost(warning.host),
             },
           };
-        trust = approval.scope === 'always' ? 'always' : 'once';
+        trust =
+          approval.scope === 'always'
+            ? 'always'
+            : approval.scope === 'auto'
+              ? 'auto'
+              : 'once';
       }
       const verb =
         action === 'type' ? 'type' : action === 'select' ? 'select' : 'click';
-      const element =
-        typeof args.element === 'string' && args.element
-          ? args.element
-          : target.name;
       await this.js(
         tab,
         'overlay',
         {
           ...target,
-          label: `${verb} ${action === 'type' ? (secret ? '••••••' : args.text) : element}`,
+          label: `${verb} ${action === 'type' ? (secret ? '••••••' : args.text) : shownName(target, args.element)}`,
           typing: action === 'type',
           click: action === 'click',
           ...this.overlayColors(),
         },
         signal,
       );
-      const point = await this.js<{ x: number; y: number }>(
+      // Read again as the input goes in: the result names this element, not the model's words
+      const point = await this.js<PageElement & { x: number; y: number }>(
         tab,
         'prepare',
         { ref: args.ref, typing: action === 'type', secret: !!secret },
         signal,
       );
+      const which = actedOn(args.ref, point);
+      const other = describedOther(args.element, point);
       if (action === 'click') {
-        if (trust) tab.proceeding = 'approved';
+        if (trust) tab.proceeding = trust === 'auto' ? 'auto' : 'approved';
         if (trust === 'always' && tab.warning)
           this.trusted.add(tab.warning.host, tab.warning.fingerprint);
         for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased'])
@@ -1994,7 +2079,7 @@ export class ChromeBrowser implements BrowserPort {
         // Past the warning, the site's page follows: a slow machine takes a moment to
         // start it, and the result must show that page, not the warning
         if (trust) await this.proceeded(tab, signal);
-        text = `Clicked ${args.ref} ${quote(element)}.`;
+        text = `Clicked ${which}${other}.`;
       } else if (action === 'type') {
         await this.js(
           tab,
@@ -2035,10 +2120,10 @@ export class ChromeBrowser implements BrowserPort {
         }
         if (args.submit && !tab.dialogs.length)
           await this.key(tab, 'Enter', signal, !!secret);
-        text = `Typed ${secret ? `secret ${secret.name}` : 'text'} into ${args.ref} ${quote(element)}${args.submit ? ' and pressed Enter' : ''}.`;
+        text = `Typed ${secret ? `secret ${secret.name}` : 'text'} into ${which}${args.submit ? ' and pressed Enter' : ''}${other}.`;
       } else {
         await this.js(tab, 'select', args, signal);
-        text = `Chose ${(args.values as string[]).map(quote).join(', ')} in ${args.ref} ${quote(element)}.`;
+        text = `Chose ${(args.values as string[]).map(quote).join(', ')} in ${which}${other}.`;
       }
     }
     tab.lastNetwork = Date.now();

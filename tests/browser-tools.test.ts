@@ -210,6 +210,109 @@ test('browser control is allowed site by site: the site goes to the card and the
   assert.equal('site' in (click.parameters as any).properties, false);
 });
 
+test('a click that deletes on a page, or accepting a dialog that says so, asks every time in manual mode, rules aside, and never in auto mode', async (t) => {
+  const root = scratch(t);
+  const page = [
+    '### Page',
+    'tab t1 · "virtual services" · https://device.lan/vs',
+    '### Snapshot',
+    '| vs3 | [e4] checkbox |',
+    '[e5] button "删除"',
+    '[e6] button "添加"',
+  ].join('\n');
+  const requests: string[] = [];
+  const port: BrowserPort = {
+    async request(_session, action, args) {
+      requests.push(`${action} ${String(args.ref ?? args.url ?? '')}`.trim());
+      // Deleting opens the page's own confirmation
+      // A list of tabs has no snapshot: what the refs are stays as the last snapshot said
+      if (action === 'tabs')
+        return {
+          text: '### Tabs\n- t1 (shown) "virtual services"',
+          origin: 'https://device.lan',
+        };
+      const text =
+        action === 'click' && args.ref === 'e5'
+          ? `Clicked e5 button "删除". It opened dialog d1.\n${page}\n### Dialogs waiting\n- [d1] confirm · tab t1 · from https://device.lan: "确定删除选中的虚拟服务吗？" → browser_dialog`
+          : `${action} done\n${page}`;
+      return { text, origin: 'https://device.lan' };
+    },
+  };
+  const step = (id: string, name: string, args: Record<string, unknown>) => ({
+    message: {
+      id,
+      role: 'assistant' as const,
+      content: '',
+      tool_calls: [{ id, name, args }],
+    },
+  });
+  const model = new ScriptedModel([
+    step('open', 'browser_navigate', { url: 'https://device.lan/vs' }),
+    step('select', 'browser_click', { ref: 'e4', element: 'vs3' }),
+    step('tabs', 'browser_tabs', { action: 'list' }),
+    // The model calls it something else: the page's name decides
+    step('delete', 'browser_click', { ref: 'e5', element: 'the button' }),
+    step('confirm', 'browser_dialog', { accept: true }),
+    step('add', 'browser_click', { ref: 'e6', element: '添加' }),
+    step('again', 'browser_click', { ref: 'e5', element: '删除' }),
+    { message: { id: 'done', role: 'assistant', content: 'done' } },
+    step('auto-delete', 'browser_click', { ref: 'e5', element: '删除' }),
+    step('auto-confirm', 'browser_dialog', { accept: true }),
+    { message: { id: 'auto-done', role: 'assistant', content: 'done' } },
+  ]);
+  const asked: { id: string; deletes: unknown; choices: string }[] = [];
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: trustFolder(defaultSettings(), root),
+    model,
+    extraTools: browserTools(port),
+    // The person allows the site for the session, and allows each delete once: its card
+    // offers no "for this session"
+    approve: async (call) => {
+      const review = runtime.policy.review(call.name, call.args);
+      asked.push({
+        id: call.id,
+        deletes: call.args.deletes,
+        choices: review.verdict,
+      });
+      return review.verdict === 'ASK_FORCED' ? 'approve' : 'always';
+    },
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.harness.run('remove vs3');
+  assert.deepEqual(asked, [
+    { id: 'open', deletes: undefined, choices: 'ASK' },
+    { id: 'delete', deletes: '删除', choices: 'ASK_FORCED' },
+    {
+      id: 'confirm',
+      deletes:
+        '- [d1] confirm · tab t1 · from https://device.lan: "确定删除选中的虚拟服务吗？" → browser_dialog',
+      choices: 'ASK_FORCED',
+    },
+    // A delete allowed once leaves no rule: the next one asks again
+    { id: 'again', deletes: '删除', choices: 'ASK_FORCED' },
+  ]);
+  // Every call ran once allowed; the checkbox and 添加 were covered by the site's rule
+  assert.deepEqual(requests, [
+    'navigate https://device.lan/vs',
+    'click e4',
+    'tabs',
+    'click e5',
+    'dialog',
+    'click e6',
+    'click e5',
+  ]);
+  // Auto mode does not ask
+  runtime.policy.setMode(runtime.session.id, 'auto');
+  await runtime.harness.run('remove it again');
+  assert.equal(asked.length, 4);
+  assert.deepEqual(requests.slice(-2), ['click e5', 'dialog']);
+  // The model cannot say what deletes: the schema refuses it
+  const click = runtime.allTools.find((tool) => tool.name === 'browser_click')!;
+  assert.equal('deletes' in (click.parameters as any).properties, false);
+});
+
 test('a download the model starts is kept or discarded by the person, and the model learns what its action did either way', async (t) => {
   const root = scratch(t);
   const requests: Record<string, unknown>[] = [];
@@ -414,5 +517,96 @@ test('a navigation written with a variable is allowed for the site it goes to, n
   assert.deepEqual(
     requests.map((request) => request.url),
     ['https://device.lan:8443/login', 'https://other.example/'],
+  );
+});
+
+test('a replay whose script clicks a control that deletes asks every time in manual mode, and names those steps', async (t) => {
+  const root = scratch(t);
+  const port: BrowserPort = {
+    async request() {
+      return { text: 'done', origin: 'https://device.lan' };
+    },
+  };
+  const write = (name: string, steps: unknown[]) => {
+    const path = join(root, name);
+    writeFileSync(
+      path,
+      JSON.stringify({ circle: 'browser-script/1', name, steps }),
+    );
+    return path;
+  };
+  const cleanupScript = write('cleanup.json', [
+    { navigate: 'https://device.lan/vs' },
+    { click: { role: 'checkbox', name: '' } },
+    { click: { role: 'button', name: '删除' } },
+    { dialog: 'accept' },
+  ]);
+  const setupScript = write('setup.json', [
+    { navigate: 'https://device.lan/vs' },
+    { click: { role: 'button', name: '添加' } },
+  ]);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: trustFolder(defaultSettings(), root),
+    model: new ScriptedModel([]),
+    extraTools: browserTools(port, { files: (path) => path }),
+  });
+  cleanup(t, () => runtime.close());
+  const replay = runtime.allTools.find(
+    (tool) => tool.name === 'browser_replay',
+  )!;
+  const facts = replay.approvalFacts!(
+    { path: cleanupScript },
+    runtime.session.id,
+  )!;
+  assert.deepEqual(facts, {
+    site: 'https://device.lan',
+    deletes: 'step 3: button "删除"',
+  });
+  const review = runtime.policy.review('browser_replay', {
+    path: cleanupScript,
+    ...facts,
+  });
+  assert.equal(review.verdict, 'ASK_FORCED');
+  assert.match(review.reason, /step 3: button \\"删除\\"/);
+  // A rule for the site does not cover it; auto mode does not ask
+  runtime.policy.remember(
+    runtime.session.id,
+    'browser_navigate',
+    { site: 'https://device.lan' },
+    'always',
+  );
+  assert.equal(
+    runtime.policy.needsApproval(
+      'browser_replay',
+      { path: cleanupScript, ...facts },
+      runtime.session.id,
+    ),
+    true,
+  );
+  runtime.policy.setMode(runtime.session.id, 'auto');
+  assert.equal(
+    runtime.policy.needsApproval(
+      'browser_replay',
+      { path: cleanupScript, ...facts },
+      runtime.session.id,
+    ),
+    false,
+  );
+  // A script that deletes nothing is covered by the site's rule
+  runtime.policy.setMode(runtime.session.id, 'manual');
+  const plain = replay.approvalFacts!(
+    { path: setupScript },
+    runtime.session.id,
+  )!;
+  assert.deepEqual(plain, { site: 'https://device.lan' });
+  assert.equal(
+    runtime.policy.needsApproval(
+      'browser_replay',
+      { path: setupScript, ...plain },
+      runtime.session.id,
+    ),
+    false,
   );
 });

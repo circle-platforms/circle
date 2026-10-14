@@ -42,7 +42,11 @@ import { loadSkillBody } from '../../../src/skills.js';
 import { attachmentFromBase64, MAX_MEDIA_BYTES } from '../../../src/media.js';
 import { readPrompt } from '../../../src/system_prompt.js';
 import { toMarkdown, toHtml } from '../../../src/session_export.js';
-import { browserTools, type BrowserPort } from '../../../src/browser/tools.js';
+import {
+  browserTools,
+  runtimeBrowserOptions,
+  type BrowserPort,
+} from '../../../src/browser/tools.js';
 import type {
   CertificateApproval,
   DownloadApproval,
@@ -115,7 +119,14 @@ const flag = (value: unknown) => {
 };
 // The app has room for longer diffs than the terminal's card.
 const DIFF_ROWS = 400;
-const FILE_TOOLS = ['write_file', 'edit_file', 'apply_patch', 'delete'];
+// The tools that change files; a recorded browser script is one the model wrote
+const FILE_TOOLS = [
+  'write_file',
+  'edit_file',
+  'apply_patch',
+  'delete',
+  'browser_record',
+];
 const diffView = (lines: CardLine[]): DiffView | undefined =>
   lines.length
     ? {
@@ -294,12 +305,9 @@ export class RuntimeController {
                         signal,
                         callId,
                       ),
-              // Paths as the file tools take them; a credential file never goes
-              files: (path) => {
-                const full = runtime.sandbox.resolvePath(path);
-                runtime.sandbox.checkCredentialPath(full);
-                return full;
-              },
+              // Paths as the file tools take them (a credential file never goes), the
+              // conversation to record and the values a replayed script takes
+              ...runtimeBrowserOptions(() => runtime),
             })
           : undefined,
         approve: (call, signal, origin) =>
@@ -1105,13 +1113,15 @@ export class RuntimeController {
     for (const runtime of this.runtimes.values()) runtime.refreshPrompt();
     this.publish();
   }
-  /** The model pressed "proceed" on a certificate warning: only the person decides. */
+  /** The model pressed "proceed" on a certificate warning: the person decides, auto mode passes it. */
   private async confirmCertificate(
     runtime: AgentRuntime,
     approval: CertificateApproval,
     signal: AbortSignal,
     callId?: string,
-  ): Promise<'once' | 'always' | 'reject'> {
+  ): Promise<'once' | 'always' | 'reject' | 'auto'> {
+    // Auto mode passes it without asking; the model's result names the certificate
+    if (runtime.policy.mode(runtime.session.id) === 'auto') return 'auto';
     const answer = await this.wait(
       runtime,
       {
@@ -1152,6 +1162,8 @@ export class RuntimeController {
     signal: AbortSignal,
     callId?: string,
   ): Promise<'once' | 'reject'> {
+    // Auto mode gives the files without asking
+    if (runtime.policy.mode(runtime.session.id) === 'auto') return 'once';
     const answer = await this.wait(
       runtime,
       {

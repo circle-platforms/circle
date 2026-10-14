@@ -79,6 +79,7 @@ assert.equal(properties.ProductName, 'Circle');
 assert.equal(properties.ProductVersion, version);
 assert.equal(properties.ARPNOMODIFY, '1');
 assert.equal(properties.ARPNOREPAIR, '1');
+assert.equal(properties.MSIRESTARTMANAGERCONTROL, 'Disable');
 assert.equal(properties.WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT, 'launch Circle');
 assert.equal(properties.WIXUI_EXITDIALOGOPTIONALCHECKBOX, undefined);
 assert.ok(tables.Dialog.some((row) => row.Dialog === 'ExitDialog'));

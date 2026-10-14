@@ -97,6 +97,18 @@ export function browserPage(command: string, args: Record<string, any>) {
         el.textContent,
     ).slice(0, 500);
   };
+  // The name is the field's placeholder, a hint at what to type rather than a label
+  const hint = (el: Element) => {
+    const field = el as HTMLInputElement;
+    return (
+      !!el.getAttribute('placeholder') &&
+      !el.getAttribute('aria-label') &&
+      !el.getAttribute('aria-labelledby') &&
+      !field.labels?.length &&
+      !el.getAttribute('alt') &&
+      !el.getAttribute('title')
+    );
+  };
   const role = (el: Element): string => {
     const explicit = el.getAttribute('role');
     if (explicit) return explicit;
@@ -228,15 +240,20 @@ export function browserPage(command: string, args: Record<string, any>) {
     return el;
   };
   // What a warning page's control decides: Circle's own warning marks its controls, and
-  // Chrome's (the terminal's browser) has its proceed link. Other pages decide nothing.
+  // Chrome's (the terminal's browser) has its advanced button and proceed link. Other pages
+  // decide nothing.
   const warningAction = (el: Element): string =>
     location.protocol === 'circle-warning:'
       ? (el
           .closest('[data-circle-action]')
           ?.getAttribute('data-circle-action') ?? '')
-      : location.protocol === 'chrome-error:' && el.closest('#proceed-link')
-        ? 'proceed'
-        : '';
+      : location.protocol !== 'chrome-error:'
+        ? ''
+        : el.closest('#proceed-link')
+          ? 'proceed'
+          : el.closest('#details-button')
+            ? 'advanced'
+            : '';
   if (command === 'snapshot') {
     state.refs.clear();
     const fresh = state.snapshots++ > 0;
@@ -329,8 +346,11 @@ export function browserPage(command: string, args: Record<string, any>) {
             : ['input', 'textarea', 'select'].includes(el.localName)
               ? ` value=${JSON.stringify(clean(value.value))}`
               : '';
+        // On a certificate warning, what its advanced button and its link to proceed are,
+        // in any language: a replayed script's proceed step finds them so
+        const warning = warningAction(el);
         add(
-          `${indent}[${ref}] ${role(el)} ${JSON.stringify(name(el))}${content}${value.disabled ? ' disabled' : ''}${value.checked ? ' checked' : ''}${added ? ' [new]' : ''}`,
+          `${indent}[${ref}] ${role(el)} ${JSON.stringify(name(el))}${content}${value.disabled ? ' disabled' : ''}${value.checked ? ' checked' : ''}${added ? ' [new]' : ''}${warning === 'advanced' || warning === 'proceed' ? ` [warning: ${warning}]` : ''}`,
         );
       } else if (
         isVisible &&
@@ -454,7 +474,10 @@ export function browserPage(command: string, args: Record<string, any>) {
       y,
       width,
       height,
+      // The element as the snapshot shows it, read as the action uses it
+      role: role(el),
       name: name(el),
+      hint: hint(el),
       origin: el.ownerDocument.location.origin,
       password:
         el.localName === 'input' &&
@@ -568,6 +591,7 @@ export function browserPage(command: string, args: Record<string, any>) {
     return {
       multiple: el.multiple,
       accept: el.accept,
+      role: role(el),
       name: name(el),
       origin: el.ownerDocument.location.origin,
     };

@@ -60,6 +60,11 @@ export const PACKAGE_SOURCE = String.raw`<?xml version="1.0" encoding="utf-8"?>
     <Property Id="ARPHELPLINK" Value="https://github.com/circle-platforms/circle/issues" />
     <Property Id="ARPURLUPDATEINFO" Value="https://github.com/circle-platforms/circle/releases" />
     <Property Id="ARPNOREPAIR" Value="1" />
+    <!-- Restart Manager stays out of installing and removing Circle, and out of removing this
+         version when a newer one replaces it, which takes this package's value. On GitHub's
+         Windows runners a machine whose installs went through it stopped answering now and
+         then (issue 45). The updater waits for Circle to end before the installer runs. -->
+    <Property Id="MSIRESTARTMANAGERCONTROL" Value="Disable" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Circle" />

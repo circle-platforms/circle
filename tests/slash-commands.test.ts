@@ -422,7 +422,7 @@ test('/yolo takes off, 0, false and no as off; /plan takes on and off and says w
     assert.ok(runtime.policy.yoloEnabled(id));
     assert.equal(
       app.state.notices.at(-1),
-      'Auto on · tool calls run without asking',
+      'Auto on · nothing asks: commands that delete, certificate warnings and uploads go ahead · use it where that is safe',
     );
     await app.submit(`/yolo ${word}`);
     assert.ok(!runtime.policy.yoloEnabled(id), word);
@@ -813,7 +813,10 @@ test('/settings picks the mode new sessions start in, and ctrl+s saves it', asyn
       ['manual', 'asking before each change and command'],
       ['accept edits', 'workspace edits run without asking'],
       ['read-only', 'writes and shell are blocked · plan.md is allowed'],
-      ['auto', 'tool calls run without asking'],
+      [
+        'auto',
+        'nothing asks · deletes, certificate warnings and uploads included',
+      ],
     ],
   );
   // enter changes this session only
@@ -835,7 +838,7 @@ test('/settings picks the mode new sessions start in, and ctrl+s saves it', asyn
   assert.equal(runtime.mode, 'auto');
   assert.equal(
     app.state.notices.at(-1),
-    'Auto on · tool calls run without asking · saved as the default',
+    'Auto on · nothing asks: commands that delete, certificate warnings and uploads go ahead · use it where that is safe · saved as the default',
   );
   // /new starts in the saved default, and the list marks it
   await app.submit('/new');
@@ -1353,12 +1356,42 @@ test('the terminal asks for files a page would get or gave, and for passing a ce
   await key('down');
   await key('enter');
   assert.equal(await keep, 'reject');
-  // auto mode keeps them without a card
+  // auto mode keeps them, passes a certificate warning and gives files, without a card
   ui.runtime!.policy.setMode(ui.runtime!.session.id, 'auto');
   assert.equal(await ui.confirmBrowser(download, signal), 'once');
+  assert.equal(
+    await ui.confirmBrowser(
+      {
+        kind: 'certificate',
+        token: 'token',
+        url: 'https://device.example.net/',
+        host: 'device.example.net',
+        subject: 'Device',
+        issuer: 'Device',
+        fingerprint: 'AA:BB',
+        validExpiry: 2284329600,
+        privateHost: false,
+      },
+      signal,
+    ),
+    'auto',
+  );
+  assert.equal(
+    await ui.confirmBrowser(
+      {
+        kind: 'upload',
+        token: 'token',
+        origin: 'https://device.lan',
+        element: 'firmware',
+        files: [{ path: '/tmp/fw.bin', name: 'fw.bin', size: 2048 }],
+      },
+      signal,
+    ),
+    'once',
+  );
   assert.equal(app.state.dialog, undefined);
   ui.runtime!.policy.setMode(ui.runtime!.session.id, 'manual');
-  // Circle hands the person the browser: the card stays until they hand it back
+  // Circle hands the person the browser: the card stays until they continue
   let handed = false;
   const handoff = ui
     .handBrowser('sign in with your security key', signal)
@@ -1367,9 +1400,9 @@ test('the terminal asks for files a page would get or gave, and for passing a ce
   assert.equal(app.state.dialog!.title, 'browser');
   assert.match(
     app.state.dialog!.body,
-    /^Circle hands you the browser: sign in with your security key\nUse the browser window\. Circle does not see what you do there/,
+    /^Circle hands you the browser: sign in with your security key\nUse the browser window\. Circle does not see what you do there; it learns where the tabs went, never what you typed\. When you are done, choose continue\.$/,
   );
-  assert.deepEqual(app.state.dialog!.options, ['hand back']);
+  assert.deepEqual(app.state.dialog!.options, ['continue']);
   assert.equal(handed, false);
   await key('enter');
   await handoff;

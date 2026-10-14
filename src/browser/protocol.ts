@@ -57,7 +57,7 @@ export interface UploadApproval {
   token: string;
   /** Where the files would go: the site of the page that asks for them. */
   origin: string;
-  /** The file input, as the model and the page name it. */
+  /** The file input, as the page names it; the model's words for one without a name. */
   element: string;
   files: { path: string; name: string; size: number }[];
 }

@@ -235,6 +235,18 @@ test('Installed apps shows the icon and the project page', () => {
   assert.equal(properties.ARPNOREPAIR, '1');
 });
 
+test('Restart Manager stays out of installing, updating and removing Circle', () => {
+  const properties = Object.fromEntries(
+    all(pkg, 'Property').map((element) => [
+      element.attributes.Id,
+      element.attributes.Value,
+    ]),
+  );
+  // In the package, not only on msiexec's command line: removing an older version during an
+  // upgrade takes the older package's value
+  assert.equal(properties.MSIRESTARTMANAGERCONTROL, 'Disable');
+});
+
 test('only the completion button can launch Circle, after an unchecked opt-in', () => {
   assert.equal(only(pkg, 'ui:WixUI').attributes.Id, 'WixUI_Minimal');
   assert.deepEqual(only(pkg, 'WixVariable').attributes, {

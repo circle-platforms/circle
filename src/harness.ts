@@ -14,7 +14,12 @@ import { CheckpointStore, type Session } from './checkpoint_store.js';
 import { attachPrompt } from './mentions.js';
 import { prepareToolCall, RecoverableToolError } from './tool_call_compat.js';
 import { redact } from './redact.js';
-import { expandVariables, secretRedactor } from './secrets.js';
+import {
+  expandVariables,
+  secretRedactor,
+  written,
+  type Redactor,
+} from './secrets.js';
 import { httpStatus } from './model_guard.js';
 import { validateAttachments } from './media.js';
 export type ApprovalDecision =
@@ -33,7 +38,7 @@ export interface HarnessOptions {
    * Hides secrets' values in text the model reads, given the values a call used. One shared
    * with the runtime's background jobs knows every value a secret had.
    */
-  redact?: (text: string, used?: Record<string, string>) => string;
+  redact?: Redactor;
   model: ChatModel;
   tools: Tool[];
   store: CheckpointStore;
@@ -95,7 +100,7 @@ export class Harness {
   >();
   private active?: Promise<{ answer: string; usage: Usage }>;
   /** Secrets' values hidden as %NAME% in text the model reads. */
-  readonly redact: (text: string, used?: Record<string, string>) => string;
+  readonly redact: Redactor;
   constructor(readonly options: HarnessOptions) {
     this.redact =
       options.redact ??
@@ -628,8 +633,8 @@ export class Harness {
       acceptingAttachments = false;
     }
     // A command or a page may show a secret back: the model reads its name instead, for the
-    // values the call used and the ones saved now
-    content = this.redact(content, secrets);
+    // values the call used and the ones saved now, unless the person or the model wrote it
+    content = this.redact(content, secrets, () => written(this.messages));
     return {
       id: randomUUID(),
       role: 'tool',

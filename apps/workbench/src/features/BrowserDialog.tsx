@@ -287,15 +287,17 @@ export function BrowserDialogRequest({
 }
 
 /**
- * The person has the browser while the turn runs: Circle waits for it back, whether it
- * asked for help or the person took over.
+ * The person has the browser while the turn runs, whether Circle asked for help or they took
+ * over: they go on here or with a message. Auto mode goes on by itself once they are done.
  */
 export function BrowserHandoffRequest({
   sessionId,
   reason,
+  auto = false,
 }: {
   sessionId: string;
   reason?: string;
+  auto?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   return (
@@ -307,7 +309,11 @@ export function BrowserHandoffRequest({
       <header>
         <Globe size={14} />
         <strong>{t('you have the browser')}</strong>
-        <span>{t('Circle waits until you hand it back')}</span>
+        <span>
+          {auto
+            ? t('Circle goes on by itself once you are done')
+            : t('When you are done, continue here or send a message')}
+        </span>
       </header>
       {reason && <p className="browser-dialog-message">{reason}</p>}
       <div className="request-actions">
@@ -321,7 +327,7 @@ export function BrowserHandoffRequest({
               .finally(() => setBusy(false));
           }}
         >
-          {t('hand back')}
+          {t('continue')}
         </Button>
       </div>
     </section>

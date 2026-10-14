@@ -8,7 +8,6 @@ import {
   FileUp,
   FolderOpen,
   Globe,
-  Hand,
   Plus,
   RotateCw,
   ShieldAlert,
@@ -153,7 +152,8 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
       .catch(() => notify(t('navigation failed')));
   const failure = state?.failure;
   return (
-    <>
+    // One column the height of the panel: the page takes what the bars leave
+    <div className="native-browser">
       {!!state?.tabs?.length && (
         <div className="browser-tabs" role="tablist">
           {state.tabs.map((tab) => (
@@ -243,26 +243,6 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
           <ArrowUpRight size={14} />
         </IconButton>
       </div>
-      {state?.control === 'user' && (
-        // The person has the browser: Circle is paused until they hand it back
-        <div className="browser-control" data-testid="browser-control">
-          <Hand size={14} />
-          <span>
-            {t(
-              'You control the browser. Circle is paused and does not see what you do.',
-            )}
-            {state.handoff && <small>{state.handoff}</small>}
-            {state.waiting && (
-              <small data-testid="browser-waiting">
-                {t('Circle is waiting to go on')}
-              </small>
-            )}
-          </span>
-          <Button onClick={() => void host.browserControl(id, 'return')}>
-            {t('hand back')}
-          </Button>
-        </div>
-      )}
       <div className="native-browser-viewport" ref={viewport}>
         {dialog ? (
           <BrowserDialogPanel sessionId={id} dialog={dialog} />
@@ -343,7 +323,12 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
         </div>
       ))}
       <div className="native-browser-footer">
-        {state?.control === 'user_pending' ? (
+        {state?.control === 'user' ? (
+          // What Circle waits for is said in the conversation, where the person goes on
+          <span className="browser-operating" data-testid="browser-user">
+            {t('you have the browser')}
+          </span>
+        ) : state?.control === 'user_pending' ? (
           <span className="browser-operating" data-testid="browser-pending">
             {t('Waiting for Circle to stop…')}
           </span>
@@ -435,6 +420,6 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
           <p className="panel-note">{capture.observedAt}</p>
         </details>
       )}
-    </>
+    </div>
   );
 }

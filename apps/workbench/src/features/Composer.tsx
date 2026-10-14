@@ -35,7 +35,11 @@ export const MODE_TEXT: Record<
   },
   auto: {
     label: () => t('auto'),
-    detail: () => t('runs every tool call without asking'),
+    // Shown when it is turned on: what it lets through
+    detail: () =>
+      t(
+        'asks nothing: commands that delete, certificate warnings and uploads go ahead; use it only where that is safe',
+      ),
     icon: Zap,
   },
 };

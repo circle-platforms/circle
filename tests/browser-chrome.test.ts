@@ -13,7 +13,8 @@ import { createServer as createHttp, type Server } from 'node:http';
 import { createServer as createHttps } from 'node:https';
 import { join } from 'node:path';
 import { ChromeBrowser, findBrowser } from '../src/browser/chrome.js';
-import { browserTools } from '../src/browser/tools.js';
+import { browserTools, runtimeBrowserOptions } from '../src/browser/tools.js';
+import { formatScript, parseScript } from '../src/browser/script.js';
 import { saveSecret } from '../src/secrets.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { ScriptedModel } from '../src/testing.js';
@@ -381,7 +382,13 @@ test(
       secret: true,
       secretName: 'LAB_PASSWORD',
     });
-    assert.match(typed.text, /Typed secret LAB_PASSWORD into/);
+    // The field as the page names it, never the value
+    assert.match(
+      typed.text,
+      new RegExp(
+        `### Result\nTyped secret LAB_PASSWORD into ${password} password "Password"\\.`,
+      ),
+    );
     assert.match(typed.text, /password "Password" filled/);
     assert.doesNotMatch(typed.text, /value-from-a-secret/);
     await act('select', { ref: role, element: 'role', values: ['Maintainer'] });
@@ -559,7 +566,8 @@ test(
         kind: 'upload',
         token: 'string',
         origin: http,
-        element: 'attachment',
+        // The person is shown the input as the page names it
+        element: 'Attachment',
         files: [{ path: realpathSync(notes), name: 'notes.txt', size: 17 }],
       },
     );
@@ -577,7 +585,10 @@ test(
       paths: [log],
       approval: { token: other.approval!.token },
     });
-    assert.match(given.text, /Gave "run\.log" \(8 B\) to e\d+ "attachment"\./);
+    assert.match(
+      given.text,
+      /Gave "run\.log" \(8 B\) to e\d+ file "Attachment"\./,
+    );
     assert.match(
       given.text,
       /\[e\d+\] file "Attachment" accepts "\.txt" chosen "run\.log"/,
@@ -1331,5 +1342,610 @@ test(
     );
     await new Promise((resolve) => setTimeout(resolve, 500));
     assert.equal(tab.chooser, undefined);
+  },
+);
+
+test(
+  'an action names the element its ref acted on, as the snapshot does, and says when the model described another',
+  { skip: executable ? false : 'no Chrome, Edge or Chromium is installed' },
+  async (t) => {
+    const temp = made(t, 'circle-chrome-names-');
+    // Which pages the clicks reached: the real effect of each
+    const visited: string[] = [];
+    const site = createHttp((req, res) => {
+      const path = new URL(req.url ?? '/', 'http://local').pathname;
+      if (path !== '/favicon.ico') visited.push(path);
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      if (path === '/host')
+        return res.end('<!doctype html><title>Host</title><p>host page</p>');
+      if (path === '/network')
+        return res.end(
+          '<!doctype html><title>Network</title><p>network page</p>',
+        );
+      res.end(
+        `<!doctype html><title>Menu</title><nav><a href="/host">主机设置</a> <a href="/network">网络</a></nav><label>Name <input id="name"></label><select id="mode" aria-label="Mode"><option>auto</option><option>manual</option></select><input type="file" aria-label="Firmware"><button id="bare" style="width:40px;height:24px" onclick="this.dataset.clicked = 'yes'"></button>`,
+      );
+    });
+    const menu = `http://127.0.0.1:${await listen(site)}/menu`;
+    t.after(() => site.close());
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: join(temp, 'downloads'),
+    });
+    cleanup(t, () => chrome.close());
+    const signal = new AbortController().signal;
+    const act = (action: BrowserAction, args: Record<string, unknown> = {}) =>
+      chrome.request('c', action, args, signal);
+    const ref = (text: string, pattern: RegExp) => {
+      const match = text.match(pattern);
+      assert(match, `no ${pattern} in:\n${text}`);
+      return match[1]!;
+    };
+    // The line that says what the action did
+    const result = (text: string) => ref(text, /### Result\n(.*)/);
+    const internals = chrome as unknown as {
+      conversations: Map<string, { tabs: Map<string, unknown> }>;
+      evaluate: (tab: unknown, expression: string) => Promise<unknown>;
+    };
+    // What the pointer's label shows the person, and what the page holds, read in the
+    // browser's own world
+    const page = (expression: string) =>
+      internals.evaluate(
+        internals.conversations.get('c')!.tabs.get('t1')!,
+        expression,
+      );
+    const shown = await act('navigate', { url: menu });
+    const host = ref(shown.text, /\[(e\d+)\] link "主机设置"/);
+    const name = ref(shown.text, /\[(e\d+)\] textbox "Name"/);
+    const mode = ref(shown.text, /\[(e\d+)\] combobox "Mode"/);
+    const firmware = ref(shown.text, /\[(e\d+)\] file "Firmware"/);
+    const bare = ref(shown.text, /\[(e\d+)\] button ""/);
+
+    // A description that fits says nothing more
+    const typed = await act('type', {
+      ref: name,
+      element: 'name field',
+      text: 'router',
+    });
+    assert.equal(result(typed.text), `Typed text into ${name} textbox "Name".`);
+    assert.equal(await page(`document.querySelector('#name').value`), 'router');
+    // One that names something else is said, and the person's pointer shows the page's name
+    const chosen = await act('select', {
+      ref: mode,
+      element: 'speed',
+      values: ['manual'],
+    });
+    assert.equal(
+      result(chosen.text),
+      `Chose "manual" in ${mode} combobox "Mode" — you described it as "speed"; check the snapshot.`,
+    );
+    assert.equal(await page(`document.querySelector('#mode').value`), 'manual');
+    assert.equal(
+      await page('window.circleBrowser.bubble.textContent'),
+      'select Mode',
+    );
+    // An element without a name: its role, and no claim about the description
+    const clicked = await act('click', { ref: bare, element: 'close icon' });
+    assert.equal(result(clicked.text), `Clicked ${bare} button.`);
+    assert.equal(
+      await page(`document.querySelector('#bare').dataset.clicked`),
+      'yes',
+    );
+    assert.equal(
+      await page('window.circleBrowser.bubble.textContent'),
+      'click close icon',
+    );
+    // A file input: the person is asked about the input the page names
+    const firmwareFile = join(temp, 'fw.bin');
+    writeFileSync(firmwareFile, 'firmware');
+    const ask = await act('upload', {
+      ref: firmware,
+      element: 'certificate file',
+      paths: [firmwareFile],
+    });
+    assert.equal(ask.approval?.kind, 'upload');
+    assert.equal((ask.approval as { element: string }).element, 'Firmware');
+    const given = await act('upload', {
+      ref: firmware,
+      element: 'certificate file',
+      paths: [firmwareFile],
+      approval: { token: ask.approval!.token },
+    });
+    assert.equal(
+      result(given.text),
+      `Gave "fw.bin" (8 B) to ${firmware} file "Firmware" — you described it as "certificate file"; check the snapshot.`,
+    );
+    assert.match(given.text, /file "Firmware" chosen "fw\.bin"/);
+
+    // The live run's mistake: the model clicks the ref of 主机设置 believing it is the
+    // network menu. The click reaches the host page, and the result says so.
+    const wrong = await act('click', { ref: host, element: '网络菜单' });
+    assert.equal(
+      result(wrong.text),
+      `Clicked ${host} link "主机设置" — you described it as "网络菜单"; check the snapshot.`,
+    );
+    assert.match(wrong.text, /host page/);
+    assert.equal(visited.at(-1), '/host');
+    const back = await act('navigate', { url: menu });
+    const network = ref(back.text, /\[(e\d+)\] link "网络"/);
+    const right = await act('click', { ref: network, element: '网络菜单' });
+    assert.equal(result(right.text), `Clicked ${network} link "网络".`);
+    assert.match(right.text, /network page/);
+    assert.equal(visited.at(-1), '/network');
+  },
+);
+
+test(
+  'a saved secret goes into no page on a public address whose certificate was not trusted, but does on this network',
+  { skip },
+  async (t) => {
+    const temp = made(t, 'circle-chrome-secret-');
+    const key = join(temp, 'key.pem');
+    const cert = join(temp, 'cert.pem');
+    execFileSync(
+      'openssl',
+      [
+        'req',
+        '-x509',
+        '-newkey',
+        'rsa:2048',
+        '-nodes',
+        '-keyout',
+        key,
+        '-out',
+        cert,
+        '-days',
+        '1',
+        '-subj',
+        '/CN=Circle secret fixture',
+      ],
+      { stdio: 'ignore' },
+    );
+    const posts: string[] = [];
+    const server = createHttps(
+      { key: readFileSync(key), cert: readFileSync(cert) },
+      (req, res) => {
+        if (req.method === 'POST') {
+          let body = '';
+          req.on('data', (chunk) => (body += chunk));
+          req.on('end', () => {
+            posts.push(body);
+            res.end('<!doctype html><title>Sent</title>');
+          });
+          return;
+        }
+        if (req.url === '/auth') {
+          res.writeHead(401, { 'www-authenticate': 'Basic realm="Lab"' });
+          return res.end();
+        }
+        // A site that sends its root on to another page, as a device sends / to /login
+        if (req.url === '/start') {
+          res.writeHead(302, { location: '/' });
+          return res.end();
+        }
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(
+          '<!doctype html><title>Login</title><form method="post"><label>User <input name="user"></label><label>Password <input name="pass" type="password"></label><button>Sign in</button></form>',
+        );
+      },
+    );
+    const port = await listen(server as unknown as Server);
+    cleanup(
+      t,
+      () => new Promise<void>((resolve) => server.close(() => resolve())),
+    );
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: join(temp, 'downloads'),
+      // A public name for the local site (not one Chrome keeps to HTTPS for good, as .test)
+      hostRules: 'MAP device.example.net 127.0.0.1',
+    });
+    cleanup(t, () => chrome.close());
+    const act = (
+      conversation: string,
+      action: BrowserAction,
+      args: Record<string, unknown> = {},
+    ) =>
+      chrome.request(conversation, action, args, new AbortController().signal);
+    const pick = (text: string, pattern: RegExp) => {
+      const found = text.match(pattern);
+      assert(found, `${pattern} is not in:\n${text}`);
+      return found[1]!;
+    };
+    // Past the warning, as the person allowed
+    const open = async (
+      conversation: string,
+      url: string,
+      scope: 'once' | 'auto' = 'once',
+    ) => {
+      const warned = await act(conversation, 'navigate', { url });
+      const advanced = await act(conversation, 'click', {
+        ref: pick(warned.text, /\[(e\d+)\] button "(?:Advanced|高级)"/),
+        element: 'advanced',
+      });
+      const proceed = pick(
+        advanced.text,
+        /\[(e\d+)\] link "(?:Proceed to|继续前往)/,
+      );
+      const asked = await act(conversation, 'click', {
+        ref: proceed,
+        element: 'proceed',
+      });
+      const page = await act(conversation, 'click', {
+        ref: proceed,
+        element: 'proceed',
+        approval: { token: asked.approval!.token, scope },
+      });
+      assert.match(
+        page.text,
+        /not secure: its certificate was accepted for this session/,
+      );
+      return page.text;
+    };
+    const secret = {
+      text: 'lab-pass',
+      secret: true,
+      secretName: 'LAB_PASSWORD',
+    };
+
+    const publicPage = await open(
+      'public',
+      `https://device.example.net:${port}/`,
+    );
+    const user = pick(publicPage, /\[(e\d+)\] textbox "User"/);
+    const password = pick(publicPage, /\[(e\d+)\] password "Password"/);
+    // Plain text still goes in; the secret does not, and nothing reaches the field
+    await act('public', 'type', { ref: user, text: 'admin', element: 'User' });
+    await assert.rejects(
+      act('public', 'type', { ref: password, element: 'Password', ...secret }),
+      /a saved secret goes into no page on device\.example\.net:\d+: its certificate is not trusted and it is a public address/,
+    );
+    const after = await act('public', 'snapshot');
+    assert.match(after.text, /password "Password" empty/);
+    // Nor an HTTP sign-in there
+    const signIn = await act('public', 'navigate', {
+      url: `https://device.example.net:${port}/auth`,
+    });
+    assert.match(signIn.text, /sign-in/);
+    await assert.rejects(
+      act('public', 'dialog', {
+        accept: true,
+        text: 'admin',
+        password: 'lab-pass',
+      }),
+      /a saved secret goes into no page on device\.example\.net/,
+    );
+
+    // On this network the same certificate is passed, here by auto mode, and the secret typed
+    const localPage = await open(
+      'local',
+      `https://127.0.0.1:${port}/start`,
+      'auto',
+    );
+    assert.match(
+      localPage,
+      /- certificate warning for 127\.0\.0\.1:\d+: Circle proceeded in auto mode, without asking \(sha256 [0-9A-F:]+\)/,
+    );
+    const localPassword = pick(localPage, /\[(e\d+)\] password "Password"/);
+    const typed = await act('local', 'type', {
+      ref: localPassword,
+      element: 'Password',
+      ...secret,
+    });
+    assert.match(
+      typed.text,
+      /Typed secret LAB_PASSWORD into e\d+ password "Password"/,
+    );
+    assert.match(typed.text, /password "Password" filled/);
+    assert.deepEqual(posts, []);
+  },
+);
+
+test(
+  'in auto mode the terminal browser takes itself back once the page moved on, and plan mode hands nothing over',
+  { skip },
+  async (t) => {
+    const temp = made(t, 'circle-chrome-auto-handoff-');
+    const site = createHttp((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(
+        `<!doctype html><title>${req.url === '/b' ? 'Signed in' : 'Sign in'}</title><input aria-label="Code">`,
+      );
+    });
+    const base = `http://127.0.0.1:${await listen(site)}`;
+    t.after(() => site.close());
+    let mode = 'auto';
+    let closed = false;
+    const chrome: ChromeBrowser = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: temp,
+      mode: () => mode,
+      // The person goes on in the window and never answers the card: it stays until closed
+      handoff: (_reason, signal) =>
+        new Promise<void>((_resolve, reject) => {
+          const internals = chrome as unknown as {
+            conversations: Map<
+              string,
+              { tabs: Map<string, { session: string }> }
+            >;
+            send: (
+              method: string,
+              params: Record<string, unknown>,
+              session?: string,
+            ) => Promise<unknown>;
+          };
+          const tab = internals.conversations.get('c')!.tabs.get('t1')!;
+          void internals.send(
+            'Runtime.evaluate',
+            { expression: `location.href = '/b'` },
+            tab.session,
+          );
+          signal.addEventListener('abort', () => {
+            closed = true;
+            reject(signal.reason);
+          });
+        }),
+    });
+    cleanup(t, () => chrome.close());
+    const signal = new AbortController().signal;
+    await chrome.request('c', 'navigate', { url: `${base}/a` }, signal);
+    const started = Date.now();
+    const back = await chrome.request(
+      'c',
+      'handoff',
+      { reason: 'sign in' },
+      signal,
+    );
+    assert.equal(closed, true);
+    assert(Date.now() - started >= 2000, 'it waits for the page to settle');
+    assert.match(
+      back.text,
+      /### Result\nCircle took the browser back in auto mode, as the page moved on\./,
+    );
+    assert.match(
+      back.text,
+      /- auto mode: Circle took the browser back, as the page moved on/,
+    );
+    assert.match(back.text, /tab t1 · "Signed in"/);
+    // Plan mode does not hand the browser over
+    mode = 'plan';
+    await assert.rejects(
+      chrome.request('c', 'handoff', { reason: 'sign in' }, signal),
+      /plan mode does not hand the browser over/,
+    );
+  },
+);
+
+test(
+  "a conversation's browser actions are recorded as a script, and a fresh conversation in a new browser replays it with the same effects on the site",
+  { skip },
+  async (t) => {
+    const temp = made(t, 'circle-chrome-replay-');
+    const key = join(temp, 'key.pem');
+    const cert = join(temp, 'cert.pem');
+    execFileSync(
+      'openssl',
+      [
+        'req',
+        '-x509',
+        '-newkey',
+        'rsa:2048',
+        '-nodes',
+        '-keyout',
+        key,
+        '-out',
+        cert,
+        '-days',
+        '1',
+        '-subj',
+        '/CN=Circle Fixture Device',
+      ],
+      { stdio: 'ignore' },
+    );
+    // A device's admin page behind a self-signed certificate: a form, then a list in
+    // which two rows have the same button
+    const posts: Record<string, string>[] = [];
+    const deletes: string[] = [];
+    const device = createHttps(
+      { key: readFileSync(key), cert: readFileSync(cert) },
+      (req, res) => {
+        const url = new URL(req.url ?? '/', 'https://local');
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        if (req.method === 'POST' && url.pathname === '/submit') {
+          let body = '';
+          req.on('data', (chunk) => (body += chunk));
+          req.on('end', () => {
+            const fields = Object.fromEntries(new URLSearchParams(body));
+            posts.push(fields);
+            res.end(
+              `<!doctype html><title>Services</title><p>Welcome ${fields.username}</p><table><tr><td>vs-a</td><td><button onclick="fetch('/delete?id=a').then(() => out.textContent = 'deleted a')">Delete</button></td></tr><tr><td>vs-b</td><td><button onclick="fetch('/delete?id=b').then(() => out.textContent = 'deleted b')">Delete</button></td></tr></table><p id="out"></p>`,
+            );
+          });
+          return;
+        }
+        if (url.pathname === '/delete') {
+          deletes.push(url.searchParams.get('id') ?? '');
+          return res.end('ok');
+        }
+        res.end(
+          `<!doctype html><title>Login</title><form method="post" action="/submit"><label>User <input name="username"></label><label>Role <select name="role"><option value="viewer">Viewer</option><option value="maintainer">Maintainer</option></select></label><button>Sign in</button></form>`,
+        );
+      },
+    );
+    const url = `https://127.0.0.1:${await listen(device)}/form`;
+    t.after(() => device.close());
+    const settings = trustFolder(defaultSettings(), temp);
+    settings.variables = { LAB_USER: 'operator' };
+    const browser = () => {
+      // A browser of its own: the certificate allowed once in one is not in the other
+      const chrome = new ChromeBrowser({
+        executable: executable!,
+        trustFile: join(temp, 'certificates.json'),
+        headless: true,
+        downloads: join(temp, 'downloads'),
+      });
+      cleanup(t, () => chrome.close());
+      return chrome;
+    };
+    const asked: string[] = [];
+    // The calls that asked every time: a click that deletes, and a replay that has one
+    const forced: string[] = [];
+    const conversation = (model: ScriptedModel) => {
+      const chrome = browser();
+      const runtime: AgentRuntime = new AgentRuntime({
+        workspace: temp,
+        home: temp,
+        settings,
+        model,
+        extraTools: browserTools(chrome, {
+          ...runtimeBrowserOptions(() => runtime),
+          confirm: async (_session, approval) => {
+            asked.push(approval.kind);
+            return 'once';
+          },
+        }),
+        // The person allows the site for the session, and a delete once: its card offers
+        // no "for this session"
+        approve: async (call) => {
+          if (
+            runtime.policy.review(call.name, call.args).verdict !== 'ASK_FORCED'
+          )
+            return 'always';
+          forced.push(call.name);
+          return 'approve';
+        },
+      });
+      cleanup(t, () => runtime.close());
+      return runtime;
+    };
+    const last = (request: {
+      messages: { role: string; content: unknown }[];
+    }) =>
+      String(
+        request.messages.filter((m) => m.role === 'tool').at(-1)?.content ?? '',
+      );
+    const ref = (text: string, pattern: RegExp, index = 0) => {
+      const found = [...text.matchAll(new RegExp(pattern, 'g'))];
+      assert(found[index], `no ${pattern} (${index + 1}) in:\n${text}`);
+      return found[index]![1]!;
+    };
+    // A call the model makes from the page its last result showed
+    const step =
+      (
+        id: string,
+        name: string,
+        args: (shown: string) => Record<string, unknown>,
+      ) =>
+      async (request: { messages: { role: string; content: unknown }[] }) => ({
+        message: {
+          id,
+          role: 'assistant' as const,
+          content: '',
+          tool_calls: [{ id, name, args: args(last(request)) }],
+        },
+        usage: emptyUsage(),
+      });
+    const recording = new ScriptedModel([
+      step('open', 'browser_navigate', () => ({ url })),
+      // The warning's controls are marked in any language
+      step('advanced', 'browser_click', (shown) => ({
+        ref: ref(shown, /\[(e\d+)\] button "[^"]*" \[warning: advanced\]/),
+        element: 'advanced',
+      })),
+      step('proceed', 'browser_click', (shown) => ({
+        ref: ref(
+          shown,
+          /\[(e\d+)\] link "[^"]*"(?: \[new\])? \[warning: proceed\]/,
+        ),
+        element: 'proceed',
+      })),
+      step('user', 'browser_type', (shown) => ({
+        ref: ref(shown, /\[(e\d+)\] textbox "User"/),
+        element: 'user',
+        text: '%LAB_USER%',
+      })),
+      step('role', 'browser_select', (shown) => ({
+        ref: ref(shown, /\[(e\d+)\] combobox "Role/),
+        element: 'role',
+        values: ['Maintainer'],
+      })),
+      step('look', 'browser_snapshot', () => ({})),
+      step('sign-in', 'browser_click', (shown) => ({
+        ref: ref(shown, /\[(e\d+)\] button "Sign in"/),
+        element: 'sign in',
+      })),
+      // The second of two buttons named alike
+      step('delete', 'browser_click', (shown) => ({
+        ref: ref(shown, /\[(e\d+)\] button "Delete"/, 1),
+        element: 'delete vs-b',
+      })),
+      step('record', 'browser_record', () => ({
+        path: 'device.circle-browser.json',
+      })),
+      { message: { id: 'done', role: 'assistant', content: 'recorded' } },
+    ]);
+    const first = conversation(recording);
+    await first.harness.run('sign in, delete vs-b, and record it');
+    const record = last(recording.requests.at(-1)!);
+    assert.match(record, /^Recorded 6 steps in /, record);
+    assert.deepEqual(posts, [{ username: 'operator', role: 'maintainer' }]);
+    assert.deepEqual(deletes, ['b']);
+    assert.deepEqual(asked, ['certificate']);
+    const file = join(temp, 'device.circle-browser.json');
+    const script = parseScript(readFileSync(file, 'utf8'));
+    const role = script.steps[3] as { select: { role: string; name: string } };
+    assert.equal(role.select.role, 'combobox');
+    assert.match(role.select.name, /^Role/);
+    assert.deepEqual(script.steps, [
+      { navigate: url },
+      { proceed: 'certificate' },
+      { type: { role: 'textbox', name: 'User' }, text: '%LAB_USER%' },
+      { select: role.select, values: ['Maintainer'] },
+      { click: { role: 'button', name: 'Sign in' } },
+      { click: { role: 'button', name: 'Delete', nth: 2 } },
+    ]);
+    // The model's clean-up: a check that the row went
+    writeFileSync(
+      file,
+      formatScript({
+        ...script,
+        steps: [...script.steps, { expect: 'deleted b' }],
+      }),
+    );
+
+    // ---- another conversation, in a browser that has not seen the certificate
+    asked.length = 0;
+    const replaying = new ScriptedModel([
+      step('replay', 'browser_replay', () => ({
+        path: 'device.circle-browser.json',
+      })),
+      { message: { id: 'done', role: 'assistant', content: 'replayed' } },
+    ]);
+    const second = conversation(replaying);
+    await second.harness.run('do it again');
+    const replayed = last(replaying.requests.at(-1)!);
+    assert.match(
+      replayed,
+      /^Replayed "device": steps 1–7 of 7 done\./,
+      replayed,
+    );
+    assert.match(replayed, /\n2\. Clicked e\d+ link "[^"]+"\.\n/);
+    assert.match(replayed, /\n7\. The page shows "deleted b"\.\n/);
+    assert.match(
+      replayed,
+      /certificate warning for 127\.0\.0\.1:\d+: Circle proceeded, approved by the user/,
+    );
+    assert.deepEqual(asked, ['certificate']);
+    // The site saw the same requests again
+    assert.deepEqual(posts, [
+      { username: 'operator', role: 'maintainer' },
+      { username: 'operator', role: 'maintainer' },
+    ]);
+    assert.deepEqual(deletes, ['b', 'b']);
+    // The delete asked when the model clicked it, and the replay that clicks it again asked too
+    assert.deepEqual(forced, ['browser_click', 'browser_replay']);
   },
 );

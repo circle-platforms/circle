@@ -11,7 +11,8 @@ export const common: Record<string, string> = {
     '直接编辑工作区内的文件；命令和删除仍会询问',
   'read-only: researches and writes a plan, changes nothing':
     '只读：调研并写出计划，不做任何修改',
-  'runs every tool call without asking': '所有工具调用都不再询问',
+  'asks nothing: commands that delete, certificate warnings and uploads go ahead; use it only where that is safe':
+    '不再询问任何操作：删除命令、证书警告和文件上传都会直接执行，只在安全的环境下使用',
   // requests in the conversation
   'allow once': '允许本次',
   'allow for this session': '本会话内允许',
