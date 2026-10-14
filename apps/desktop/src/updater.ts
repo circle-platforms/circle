@@ -153,8 +153,18 @@ if ($Start) {
     ('"{0}"' -f $MyInvocation.MyCommand.Path), ('"{0}"' -f $Plan))
   exit 0
 }
-$p = Get-Content -Raw -LiteralPath $Plan | ConvertFrom-Json
+$p = Get-Content -Raw -Encoding UTF8 -LiteralPath $Plan | ConvertFrom-Json
 function Write-Log([string]$Text) { Add-Content -LiteralPath $p.log -Value "$(Get-Date -Format o) $Text" }
+function Quote-Argument([string]$Value) {
+  # Windows argv parsing consumes pairs of backslashes before quotes, including the
+  # closing quote. Start-Process joins its array, so build one quoted command line.
+  $quoted = [regex]::Replace($Value, '(\\*)"', {
+    param($match)
+    ('\' * (2 * $match.Groups[1].Value.Length + 1)) + '"'
+  })
+  $quoted = [regex]::Replace($quoted, '(\\+)$', '$1$1')
+  '"' + $quoted + '"'
+}
 try {
   Write-Log "installing $($p.staged) over $($p.target)"
   $until = (Get-Date).AddSeconds(120)
@@ -185,7 +195,10 @@ try {
 Write-Log "starting $($p.executable)"
 # In its own folder, as the Start menu and Explorer start it
 $folder = Split-Path -Parent $p.executable
-if ($p.args.Count) { Start-Process -FilePath $p.executable -WorkingDirectory $folder -ArgumentList $p.args } else { Start-Process -FilePath $p.executable -WorkingDirectory $folder }
+if ($p.args.Count) {
+  $arguments = @($p.args | ForEach-Object { Quote-Argument $_ }) -join ' '
+  Start-Process -FilePath $p.executable -WorkingDirectory $folder -ArgumentList $arguments
+} else { Start-Process -FilePath $p.executable -WorkingDirectory $folder }
 `;
 
 export interface UpdaterOptions {
