@@ -17,6 +17,7 @@ import {
   formatScript,
   parseScript,
   recordSteps,
+  leftOutText,
   ScriptValues,
   snapshotElements,
   type Step,
@@ -1428,4 +1429,39 @@ test('expect and absent read the page, not what its fields hold', () => {
     ),
     false,
   );
+});
+
+test('coordinate clicks are reported as left out rather than saved as replay coordinates', () => {
+  const port = {
+    async request() {
+      return { text: '' };
+    },
+  };
+  const recorded = recordSteps(
+    [
+      {
+        id: 'a',
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'point',
+            name: 'browser_click_at',
+            args: { x: 10, y: 20, screenshotId: 'shot' },
+          },
+        ],
+      },
+      {
+        id: 'b',
+        role: 'tool',
+        name: 'browser_click_at',
+        tool_call_id: 'point',
+        content: '### Result\nClicked at (10, 20): span "...".',
+      },
+    ],
+    browserTools(port),
+  );
+  assert.deepEqual(recorded.steps, []);
+  assert.deepEqual(recorded.left, ['coordinate']);
+  assert.match(leftOutText(recorded.left), /coordinate click \(not recorded\)/);
 });

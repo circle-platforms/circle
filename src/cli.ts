@@ -28,7 +28,8 @@ import { mediaType } from './media.js';
 import { mention } from './mentions.js';
 import { EFFORT_LEVELS } from './model.js';
 import { installExitGuard } from './exit_guard.js';
-import { configureNetwork, toolTrustBundle } from './net.js';
+import { initializeNetwork } from './network_bootstrap.js';
+import { networkSummary } from './net.js';
 import { VERSION } from './version.js';
 export { VERSION } from './version.js';
 export class UsageError extends Error {}
@@ -460,24 +461,11 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     // settings, before the first request (the update check and `circle update` need them too)
     if (!networkConfigured) {
       networkConfigured = true;
-      const trustHome = circleHome();
-      let trustFiles: string[] = [];
-      try {
-        trustFiles = loadSettings(trustHome).trust_cert_files;
-      } catch (error) {
-        process.stderr.write(
-          `settings.json could not be read; trust_cert_files ignored: ${
-            error instanceof Error ? error.message : String(error)
-          }\n`,
-        );
-      }
-      for (const problem of configureNetwork(process.env, trustFiles).problems)
+      const network = initializeNetwork(circleHome());
+      for (const problem of network.problems)
         process.stderr.write(problem + '\n');
-      const tool = toolTrustBundle(process.env, trustFiles, trustHome);
-      if (tool)
-        process.stderr.write(
-          `trust: ${tool.authorities} authorities (system, SSL_CERT_FILE and SSL_CERT_DIR, trust_cert_files) for requests and the tools Circle starts: ${tool.bundle}\n`,
-        );
+      if (network.bundle || network.proxy)
+        process.stderr.write(networkSummary(network) + '\n');
     }
     if (argv[0] === 'update') {
       const { updateInstalled } = await import('./update.js');

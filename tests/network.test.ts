@@ -300,12 +300,14 @@ test(
       protocol: 'openai',
     });
     assert.equal(untrusted.status, 'failed');
-    assert.equal(untrusted.detail, TLS_HINT);
+    assert.match(untrusted.detail, /TLS failure on 127\.0\.0\.1/);
+    assert.ok(untrusted.detail.includes(TLS_HINT));
     const anthropicUntrusted = await resolveEndpoint(models, 'key', {
       protocol: 'anthropic',
     });
     assert.equal(anthropicUntrusted.status, 'failed');
-    assert.equal(anthropicUntrusted.detail, TLS_HINT);
+    assert.match(anthropicUntrusted.detail, /TLS failure on 127\.0\.0\.1/);
+    assert.ok(anthropicUntrusted.detail.includes(TLS_HINT));
     const setup = configureNetwork({
       HTTPS_PROXY: relay.url,
       NO_PROXY: '127.0.0.1',

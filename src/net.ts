@@ -23,6 +23,15 @@ import {
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
+// Keep the feature checks valid with the older Node 24 declarations the renderer
+// package uses; packaged applications run a recent Node 24 runtime.
+const nodeTls = tls as typeof tls & {
+  setDefaultCACertificates?: (certificates: readonly string[]) => void;
+};
+const nodeHttp = http as typeof http & {
+  setGlobalProxyFromEnv?: (env: NodeJS.ProcessEnv) => () => void;
+};
+
 export interface NetworkSetup {
   // Certificate authorities added from SSL_CERT_FILE, SSL_CERT_DIR and trust_cert_files
   certificates: number;
@@ -31,6 +40,38 @@ export interface NetworkSetup {
   problems: string[];
   // Puts back what was there before (tests)
   restore(): void;
+}
+
+export interface NetworkStatus {
+  proxy: boolean;
+  certificates: number;
+  authorities: number;
+  sources: { name: string; certificates: number; path?: string }[];
+  problems: string[];
+  bundle?: string;
+}
+let status: NetworkStatus = {
+  proxy: false,
+  certificates: 0,
+  authorities: tls.getCACertificates('default').length,
+  sources: [
+    { name: 'default', certificates: tls.getCACertificates('default').length },
+  ],
+  problems: [],
+};
+export const currentNetworkStatus = (): NetworkStatus =>
+  structuredClone(status);
+export function networkSummary(value = currentNetworkStatus()): string {
+  const sources = value.sources
+    .map(
+      (source) =>
+        `${source.name}${source.path ? ` (${source.path})` : ''}: ${source.certificates}`,
+    )
+    .join(', ');
+  return `network: proxy ${value.proxy ? 'on' : 'off'}; trust ${value.authorities} authorities (${sources})${value.bundle ? `; bundle ${value.bundle}` : ''}${value.problems.length ? `; ${value.problems.join('; ')}` : ''}`;
+}
+export function networkProblem(problem: string): void {
+  status.problems.push(safeNetworkText(problem));
 }
 
 const PEM = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g;
@@ -56,16 +97,24 @@ export function extraCertificates(
 ): {
   certificates: string[];
   problems: string[];
+  sources: NetworkStatus['sources'];
 } {
   const certificates: string[] = [];
   const problems: string[] = [];
+  const sources: NetworkStatus['sources'] = [];
   const file = env.SSL_CERT_FILE?.trim();
   if (file) {
     try {
       const found = pemCertificates(file);
+      sources.push({
+        name: 'SSL_CERT_FILE',
+        path: file,
+        certificates: found.length,
+      });
       if (found.length) certificates.push(...found);
       else problems.push(`SSL_CERT_FILE has no PEM certificate: ${file}`);
     } catch (error) {
+      sources.push({ name: 'SSL_CERT_FILE', path: file, certificates: 0 });
       problems.push(`SSL_CERT_FILE cannot be read: ${reason(error)}`);
     }
   }
@@ -90,11 +139,18 @@ export function extraCertificates(
     }
     if (certificates.length === before)
       problems.push(`SSL_CERT_DIR has no PEM certificate: ${folder}`);
+    sources.push({
+      name: 'SSL_CERT_DIR',
+      path: folder,
+      certificates: certificates.length - before,
+    });
   }
+  const settingsCertificates: string[] = [];
   for (const raw of files) {
     const path = expandHome(raw);
     try {
       const found = pemCertificates(path);
+      settingsCertificates.push(...found);
       if (found.length) certificates.push(...found);
       else problems.push(`trust_cert_files has no PEM certificate: ${path}`);
     } catch (error) {
@@ -103,7 +159,34 @@ export function extraCertificates(
       );
     }
   }
-  return { certificates: [...new Set(certificates)], problems };
+  if (files.length)
+    sources.push({
+      name: 'trust_cert_files',
+      certificates: new Set(settingsCertificates).size,
+    });
+  for (const raw of (env.CIRCLE_TRUST_CERTS ?? '')
+    .split(delimiter)
+    .map((path) => path.trim())
+    .filter(Boolean)) {
+    const path = expandHome(raw);
+    try {
+      const found = pemCertificates(path);
+      sources.push({
+        name: 'CIRCLE_TRUST_CERTS',
+        path,
+        certificates: found.length,
+      });
+      certificates.push(...found);
+      if (!found.length)
+        problems.push(`CIRCLE_TRUST_CERTS has no PEM certificate: ${path}`);
+    } catch (error) {
+      sources.push({ name: 'CIRCLE_TRUST_CERTS', path, certificates: 0 });
+      problems.push(
+        `CIRCLE_TRUST_CERTS cannot be read: ${path}: ${reason(error)}`,
+      );
+    }
+  }
+  return { certificates: [...new Set(certificates)], problems, sources };
 }
 
 function reason(error: unknown): string {
@@ -128,18 +211,20 @@ export function configureNetwork(
   files: string[] = [],
 ): NetworkSetup {
   const undo: (() => void)[] = [];
-  const { certificates, problems } = extraCertificates(env, files);
+  const previousStatus = currentNetworkStatus();
+  const { certificates, problems, sources } = extraCertificates(env, files);
+  const defaultAuthorities = tls.getCACertificates('default').length;
   let added = 0;
   if (certificates.length) {
-    if (typeof tls.setDefaultCACertificates !== 'function')
+    if (typeof nodeTls.setDefaultCACertificates !== 'function')
       problems.push(
         `Node.js ${process.version} cannot add SSL_CERT_FILE or SSL_CERT_DIR; use NODE_EXTRA_CA_CERTS or Node.js 24.5 or later`,
       );
     else {
       const previous = tls.getCACertificates('default');
       try {
-        tls.setDefaultCACertificates([...previous, ...certificates]);
-        undo.push(() => tls.setDefaultCACertificates(previous));
+        nodeTls.setDefaultCACertificates([...previous, ...certificates]);
+        undo.push(() => nodeTls.setDefaultCACertificates!(previous));
         added = certificates.length;
       } catch (error) {
         problems.push(`certificates could not be added: ${reason(error)}`);
@@ -148,9 +233,9 @@ export function configureNetwork(
   }
   let proxy = false;
   if (PROXY_VARIABLES.some((name) => env[name]?.trim())) {
-    if (typeof http.setGlobalProxyFromEnv === 'function')
+    if (typeof nodeHttp.setGlobalProxyFromEnv === 'function')
       try {
-        undo.push(http.setGlobalProxyFromEnv(env));
+        undo.push(nodeHttp.setGlobalProxyFromEnv(env));
         proxy = true;
       } catch (error) {
         problems.push(`the proxy setting cannot be used: ${reason(error)}`);
@@ -161,32 +246,155 @@ export function configureNetwork(
         `Node.js ${process.version} cannot use HTTPS_PROXY or HTTP_PROXY; use Node.js 24.14 or later`,
       );
   }
+  status = {
+    proxy,
+    certificates: added,
+    authorities: new Set(
+      tls
+        .getCACertificates('default')
+        .map((pem) => new X509Certificate(pem).fingerprint256),
+    ).size,
+    sources: [
+      { name: 'default', certificates: defaultAuthorities },
+      ...sources,
+    ],
+    problems: problems.map(safeNetworkText),
+  };
+  if (env.NODE_EXTRA_CA_CERTS?.trim())
+    status.sources.push({
+      name: 'NODE_EXTRA_CA_CERTS',
+      path: env.NODE_EXTRA_CA_CERTS,
+      certificates: tls.getCACertificates('extra').length,
+    });
   return {
     certificates: added,
     proxy,
     problems,
     restore: () => {
       for (const step of [...undo].reverse()) step();
+      status = previousStatus;
     },
   };
 }
 
 // A failed certificate check, anywhere in an error's chain of causes (fetch wraps it).
 export function isCertificateError(error: unknown): boolean {
-  for (let current: unknown = error, depth = 0; current && depth < 5; depth++) {
-    const code = (current as { code?: unknown }).code;
-    if (
-      typeof code === 'string' &&
-      /CERT|SELF_SIGNED|UNABLE_TO_(VERIFY|GET_ISSUER)/.test(code)
-    )
-      return true;
-    current = (current as { cause?: unknown }).cause;
-  }
-  return false;
+  return errorChain(error).some((value) =>
+    /CERT|SELF_SIGNED|UNABLE_TO_(VERIFY|GET_ISSUER)/.test(value.code ?? ''),
+  );
 }
 
 export const TLS_HINT =
   'the TLS certificate could not be verified; if your network inspects HTTPS, set SSL_CERT_FILE to its CA bundle';
+
+function errorChain(
+  error: unknown,
+): { message?: string; code?: string; name?: string; status?: number }[] {
+  const found: {
+    message?: string;
+    code?: string;
+    name?: string;
+    status?: number;
+  }[] = [];
+  const pending = [error];
+  const seen = new Set<unknown>();
+  while (pending.length && found.length < 12) {
+    const current = pending.shift();
+    if (!current || typeof current !== 'object' || seen.has(current)) continue;
+    seen.add(current);
+    const value = current as Error & {
+      code?: string;
+      status?: number;
+      errors?: unknown[];
+    };
+    found.push(value);
+    pending.push(
+      value.cause,
+      ...(Array.isArray(value.errors) ? value.errors : []),
+    );
+  }
+  return found;
+}
+// Network diagnostics retain the host and cause, never proxy credentials, URL queries,
+// authorization headers or a search query echoed by a failed request.
+export function safeNetworkText(text: string): string {
+  return text
+    .replace(/https?:\/\/[^\s'"<>\])]+/gi, (raw) => {
+      try {
+        const url = new URL(raw);
+        return `${url.protocol}//${url.host}`;
+      } catch {
+        return '[URL]';
+      }
+    })
+    .replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9+/=._-]+/gi, '[credentials]')
+    .replace(
+      /\b(?:api[_-]?key|token|password|authorization)\s*[:=]\s*[^\s,;]+/gi,
+      '[credentials]',
+    );
+}
+export function isNetworkFailure(error: unknown): boolean {
+  return errorChain(error).some(
+    (value) =>
+      /^(?:EAI_AGAIN|ENOTFOUND|ECONN\w+|EHOST\w+|ENET\w+|EPIPE|ETIMEDOUT|ERR_TLS\w*|ERR_SSL\w*|UND_ERR_\w+|.*CERT.*|.*SELF_SIGNED.*|UNABLE_TO_.*)$/.test(
+        value.code ?? '',
+      ) ||
+      /(?:APIConnection|Timeout|Abort)Error/.test(value.name ?? '') ||
+      /fetch failed|connection error/i.test(value.message ?? '') ||
+      value.status === 407,
+  );
+}
+export function networkError(error: unknown, host: string): Error {
+  const chain = errorChain(error);
+  let target = host;
+  try {
+    target = new URL(host).hostname;
+  } catch {
+    target = host.replace(/[^a-zA-Z0-9.:[\]-]/g, '');
+  }
+  const codes = chain.map((value) => value.code ?? '').join(' ');
+  const messages = chain.map((value) => value.message ?? '').join(' ');
+  const tlsFailure = isCertificateError(error) || /ERR_TLS|ERR_SSL/.test(codes);
+  const kind = tlsFailure
+    ? 'TLS'
+    : /ENOTFOUND|EAI_AGAIN/.test(codes)
+      ? 'DNS'
+      : /PROXY|PRX|407/.test(codes + ' ' + messages) ||
+          chain.some((value) => value.status === 407)
+        ? 'proxy'
+        : /TIMEDOUT|TIMEOUT/.test(codes) ||
+            chain.some((value) => /TimeoutError/.test(value.name ?? ''))
+          ? 'timeout'
+          : /\bHTTP \d{3}\b/.test(messages) ||
+              chain.some((value) => typeof value.status === 'number')
+            ? 'HTTP'
+            : /empty body/i.test(messages)
+              ? 'empty response'
+              : 'connection';
+  const details =
+    [
+      ...new Set(
+        chain
+          .map((value) =>
+            safeNetworkText(
+              [value.code, value.message].filter(Boolean).join(': '),
+            ),
+          )
+          .filter(Boolean),
+      ),
+    ].join('; ') || safeNetworkText(String(error));
+  const result = new Error(
+    `${kind} failure on ${target}: ${details}${tlsFailure ? `; ${certificateHint()}; ${networkSummary()}` : ''}`,
+    { cause: error },
+  );
+  const specific = chain.find((value) => value.code);
+  if (specific?.code) Object.assign(result, { code: specific.code });
+  const statusCode = chain.find(
+    (value) => typeof value.status === 'number',
+  )?.status;
+  if (statusCode !== undefined) Object.assign(result, { status: statusCode });
+  return result;
+}
 
 export interface ToolTrust {
   bundle: string;
@@ -205,7 +413,13 @@ export function toolTrustBundle(
   files: string[] = [],
   home: string,
 ): ToolTrust | undefined {
-  if (!files.length && !env.SSL_CERT_FILE?.trim() && !env.SSL_CERT_DIR?.trim())
+  if (
+    !files.length &&
+    !env.SSL_CERT_FILE?.trim() &&
+    !env.SSL_CERT_DIR?.trim() &&
+    !env.NODE_EXTRA_CA_CERTS?.trim() &&
+    !env.CIRCLE_TRUST_CERTS?.trim()
+  )
     return undefined;
   const { certificates } = extraCertificates(env, files);
   // One certificate can arrive as two strings (Node's store and a parsed file differ in
@@ -232,7 +446,12 @@ export function toolTrustBundle(
     renameSync(temp, path);
   }
   env.SSL_CERT_FILE = path;
+  // Node only reads this at process start: a newly started Node tool must inherit the
+  // same authorities, even when it does not import Circle's network bootstrap.
+  env.NODE_EXTRA_CA_CERTS = path;
   toolTrust = { bundle: path, authorities: pems.length };
+  status.bundle = path;
+  status.authorities = pems.length;
   return toolTrust;
 }
 

@@ -1,4 +1,19 @@
 import {
+  checkCoordinateTarget,
+  checkScreenshot,
+  coordinateApproval,
+  screenshotCapture,
+  screenshotDescription,
+  screenshotMetadata,
+  type CoordinateTarget,
+  type PageCaptureState,
+  type ScreenshotCapture,
+} from '../../../src/browser/coordinates.js';
+import {
+  waitForDownloadStart,
+  type NavigationOutcome,
+} from '../../../src/browser/navigation.js';
+import {
   BrowserWindow,
   WebContentsView,
   dialog as systemDialog,
@@ -158,6 +173,7 @@ interface Warning {
 interface Tab {
   id: string;
   view: WebContentsView;
+  contents: WebContents;
   ready: Promise<void>;
   requestedUrl: string;
   // The last address that was neither a warning nor an exception: where "back" goes.
@@ -174,6 +190,7 @@ interface Tab {
   // Woken when a dialog opens: an action under way returns with it.
   wake: Set<() => void>;
   closed: boolean;
+  screenshot?: ScreenshotCapture;
   // The same-origin path the page's prompt() asks; Circle answers it, never the site.
   promptPath: string;
   // Dialogs as the debugger saw them open, oldest first, to pair with their closing
@@ -389,7 +406,7 @@ export class BrowserSessions {
     session.setPermissionRequestHandler(
       (contents, permission, callback, details) => {
         const tab = [...conversation.tabs.values()].find(
-          (entry) => entry.view.webContents === contents,
+          (entry) => entry.contents === contents,
         );
         const kinds = permissionKinds(
           permission,
@@ -422,7 +439,7 @@ export class BrowserSessions {
         ? conversation.tabs.get(conversation.active)
         : undefined;
       const initiator = [...conversation.tabs.values()].find(
-        (tab) => tab.view.webContents === contents,
+        (tab) => tab.contents === contents,
       );
       // The download's own site (a blob's page's), else the page that started it
       const site =
@@ -546,6 +563,7 @@ export class BrowserSessions {
     const tab: Tab = {
       id: 't' + ++conversation.nextTab,
       view,
+      contents,
       ready: Promise.resolve(),
       requestedUrl: '',
       safeUrl: '',
@@ -733,24 +751,41 @@ export class BrowserSessions {
   private closeTab(conversation: Conversation, tab: Tab, reason: string) {
     if (tab.closed) return;
     tab.closed = true;
-    for (const dialog of tab.dialogs) dialog.answer(false, '');
-    tab.dialogs = [];
-    tab.choice?.answer();
-    tab.choice = undefined;
-    this.dropPermissions(conversation, tab);
+    tab.screenshot = undefined;
+    // Keep the WebContents captured at creation: a destroyed view no longer exposes it.
+    const contents = tab.contents;
+    const settle = (cleanup: () => void) => {
+      try {
+        cleanup();
+      } catch {
+        /* The page may have gone away during cleanup. */
+      }
+    };
     conversation.tabs.delete(tab.id);
-    if (!this.window.isDestroyed())
-      this.window.contentView.removeChildView(tab.view);
-    if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
     if (conversation.active === tab.id)
       conversation.active = [...conversation.tabs.keys()].pop();
     conversation.tabsChanged = true;
     conversation.events.push(`tab ${tab.id} closed (${reason})`);
-    this.visibility(conversation);
-    this.publish(conversation.id);
+    for (const wake of tab.wake) wake();
+    tab.wake.clear();
+    const dialogs = tab.dialogs;
+    tab.dialogs = [];
+    for (const dialog of dialogs) settle(() => dialog.answer(false, ''));
+    const choice = tab.choice;
+    tab.choice = undefined;
+    if (choice) settle(() => choice.answer());
+    settle(() => this.dropPermissions(conversation, tab));
+    try {
+      if (!this.window.isDestroyed())
+        settle(() => this.window.contentView.removeChildView(tab.view));
+      if (!contents.isDestroyed()) settle(() => contents.close());
+    } finally {
+      this.visibility(conversation);
+      this.publish(conversation.id);
+    }
   }
   private handle(conversation: Conversation, tab: Tab) {
-    const contents = tab.view.webContents;
+    const contents = tab.contents;
     const id = conversation.id;
     contents.setWindowOpenHandler((details) => {
       if (!safeExternalUrl(details.url) && details.url !== BLANK)
@@ -1115,7 +1150,7 @@ export class BrowserSessions {
     tab: Tab,
     params: { requestId: string; request: { url: string; postData?: string } },
   ) {
-    const contents = tab.view.webContents;
+    const contents = tab.contents;
     const reply = (accept: boolean, text: string) =>
       void contents.debugger
         .sendCommand('Fetch.fulfillRequest', {
@@ -1174,7 +1209,7 @@ export class BrowserSessions {
     };
     // The page stops while it waits: the panel shows it as it was, under the dialog.
     if (fields.type !== 'beforeunload')
-      dialog.screen = tab.view.webContents
+      dialog.screen = tab.contents
         .capturePage(undefined, { stayHidden: true, stayAwake: true })
         .then((image) => (image.isEmpty() ? null : image.toDataURL()))
         .catch(() => null);
@@ -1239,7 +1274,7 @@ export class BrowserSessions {
     if (
       !warning ||
       warning.token !== token ||
-      !tab.view.webContents.getURL().startsWith(`${WARNING_SCHEME}://${token}`)
+      !tab.contents.getURL().startsWith(`${WARNING_SCHEME}://${token}`)
     )
       return;
     const agent =
@@ -1273,12 +1308,12 @@ export class BrowserSessions {
     this.dark = dark;
     for (const conversation of this.conversations.values())
       for (const tab of conversation.tabs.values()) {
-        const url = tab.view.webContents.getURL();
+        const url = tab.contents.getURL();
         if (
           tab.warning &&
           url.startsWith(`${WARNING_SCHEME}://${tab.warning.token}`)
         )
-          void tab.view.webContents.loadURL(url).catch(() => {});
+          void tab.contents.loadURL(url).catch(() => {});
       }
   }
   state(idValue: unknown): BrowserState {
@@ -1287,7 +1322,10 @@ export class BrowserSessions {
     const tab = conversation?.active
       ? conversation.tabs.get(conversation.active)
       : undefined;
-    const contents = tab?.view.webContents;
+    const contents =
+      tab && !tab.closed && !tab.contents.isDestroyed()
+        ? tab.contents
+        : undefined;
     const url =
       tab?.warning?.certificate.url ||
       tab?.failure?.url ||
@@ -1318,18 +1356,20 @@ export class BrowserSessions {
       ...(conversation?.handoff ? { handoff: conversation.handoff } : {}),
       tab: tab?.id,
       tabs: conversation
-        ? [...conversation.tabs.values()].map((entry) => ({
-            id: entry.id,
-            title: entry.warning
-              ? this.text('Privacy error')
-              : entry.view.webContents.getTitle(),
-            url:
-              entry.warning?.certificate.url ||
-              entry.failure?.url ||
-              entry.view.webContents.getURL(),
-            loading: entry.view.webContents.isLoading(),
-            active: entry.id === conversation.active,
-          }))
+        ? [...conversation.tabs.values()]
+            .filter((entry) => !entry.closed && !entry.contents.isDestroyed())
+            .map((entry) => ({
+              id: entry.id,
+              title: entry.warning
+                ? this.text('Privacy error')
+                : entry.contents.getTitle(),
+              url:
+                entry.warning?.certificate.url ||
+                entry.failure?.url ||
+                entry.contents.getURL(),
+              loading: entry.contents.isLoading(),
+              active: entry.id === conversation.active,
+            }))
         : [],
       dialogs: conversation
         ? [...conversation.tabs.values()].flatMap((entry) =>
@@ -1382,7 +1422,7 @@ export class BrowserSessions {
     if (picked.canceled || !picked.filePaths.length) return this.state(id);
     if (tab.chooser !== chooser)
       throw Error('the file chooser was answered meanwhile');
-    await tab.view.webContents.debugger.sendCommand('DOM.setFileInputFiles', {
+    await tab.contents.debugger.sendCommand('DOM.setFileInputFiles', {
       files: picked.filePaths,
       backendNodeId: chooser.backendNodeId,
     });
@@ -1453,6 +1493,8 @@ export class BrowserSessions {
   tabs(idValue: unknown, action: unknown, tabValue: unknown) {
     const id = this.validId(idValue);
     const conversation = this.conversation(id);
+    for (const entry of conversation.tabs.values())
+      entry.screenshot = undefined;
     if (action === 'new') this.createTab(conversation, { activate: true });
     else {
       const tab = conversation.tabs.get(String(tabValue));
@@ -1512,6 +1554,8 @@ export class BrowserSessions {
     const id = this.validId(idValue);
     const conversation = this.conversation(id);
     if (action === 'take') {
+      for (const entry of conversation.tabs.values())
+        entry.screenshot = undefined;
       if (conversation.control === 'agent')
         conversation.control = 'user_pending';
       else if (conversation.control === 'shared') {
@@ -1554,7 +1598,7 @@ export class BrowserSessions {
       new Map(
         [...conversation.tabs.values()].map((tab) => [
           tab.id,
-          tab.view.webContents.getURL(),
+          tab.contents.getURL(),
         ]),
       );
     const before = addresses();
@@ -1679,21 +1723,23 @@ export class BrowserSessions {
     tab: Tab,
     url: string,
     signal?: AbortSignal,
-  ) {
+  ): Promise<NavigationOutcome> {
     await tab.ready;
     signal?.throwIfAborted();
+    tab.screenshot = undefined;
     tab.warning = undefined;
     tab.failure = undefined;
     tab.requestedUrl = url;
     tab.leave = () => void this.load(conversation, tab, url).catch(() => {});
     this.visibility(conversation);
     this.publish(conversation.id);
-    const contents = tab.view.webContents;
+    const contents = tab.contents;
     const abort = () => contents.stop();
     signal?.addEventListener('abort', abort, { once: true });
     const loading = contents.loadURL(url);
     loading.catch(() => {});
     let dialog = this.dialogOpens(tab);
+    let outcome: NavigationOutcome = 'page';
     try {
       for (;;) {
         await this.limit(Promise.race([loading, dialog.opened]), signal, 30000);
@@ -1710,7 +1756,8 @@ export class BrowserSessions {
           error instanceof Error
             ? error.message.match(/ERR_[A-Z_]+/)?.[0]
             : undefined;
-        if (code !== 'ERR_ABORTED') {
+        if (code === 'ERR_ABORTED') outcome = 'aborted';
+        else {
           tab.failure = { url, error: code ?? 'ERR_TIMED_OUT' };
           contents.stop();
         }
@@ -1722,6 +1769,7 @@ export class BrowserSessions {
       this.publish(conversation.id);
     }
     await this.idle(tab, signal);
+    return outcome;
   }
   private async history(
     conversation: Conversation,
@@ -1729,7 +1777,7 @@ export class BrowserSessions {
     which: string,
     signal?: AbortSignal,
   ) {
-    const contents = tab.view.webContents;
+    const contents = tab.contents;
     const history = contents.navigationHistory;
     tab.failure = undefined;
     const go = () => {
@@ -1758,7 +1806,7 @@ export class BrowserSessions {
       signal?.throwIfAborted();
       if (tab.closed || tab.failure || tab.dialogs.length || tab.choice) return;
       if (
-        !tab.view.webContents.isLoading() &&
+        !tab.contents.isLoading() &&
         !tab.network.size &&
         Date.now() - tab.lastNetwork >= 400
       )
@@ -1772,16 +1820,15 @@ export class BrowserSessions {
    * chooser the person opens is the system's own.
    */
   private async intercept(tab: Tab, enabled: boolean) {
-    if (tab.closed || tab.view.webContents.isDestroyed()) return;
+    if (tab.closed || tab.contents.isDestroyed()) return;
     // A page held by a dialog answers nothing: interception stays on, as known here, and
     // ends when the dialog does
     if (!enabled && this.stopped(tab)) return;
     tab.intercepting = enabled;
     await this.limit(
-      tab.view.webContents.debugger.sendCommand(
-        'Page.setInterceptFileChooserDialog',
-        { enabled },
-      ),
+      tab.contents.debugger.sendCommand('Page.setInterceptFileChooserDialog', {
+        enabled,
+      }),
       undefined,
       2000,
     ).catch(() => {});
@@ -1797,7 +1844,7 @@ export class BrowserSessions {
   /** The browser's own id for the element the page script marked with `token`. */
   private async marked(tab: Tab, token: string): Promise<number> {
     const send = (method: string, params: Record<string, unknown>) =>
-      tab.view.webContents.debugger.sendCommand(method, params);
+      tab.contents.debugger.sendCommand(method, params);
     await send('DOM.getDocument', { depth: 0 });
     const { searchId, resultCount } = (await send('DOM.performSearch', {
       query: `[data-circle-file="${token}"]`,
@@ -1870,7 +1917,7 @@ export class BrowserSessions {
    * title (the renderer commits first): a moment, so the result names the page.
    */
   private async committed(tab: Tab, signal?: AbortSignal) {
-    const contents = tab.view.webContents;
+    const contents = tab.contents;
     const end = Date.now() + 3000;
     while (
       !tab.closed &&
@@ -1947,7 +1994,7 @@ export class BrowserSessions {
     if (tab.dialogs.some((dialog) => dialog.type !== 'beforeunload'))
       throw Error('the page is waiting on a dialog');
     const result = await this.limit(
-      tab.view.webContents.executeJavaScriptInIsolatedWorld(1001, [
+      tab.contents.executeJavaScriptInIsolatedWorld(1001, [
         {
           code: pageCall(command, args),
         },
@@ -1969,10 +2016,7 @@ export class BrowserSessions {
     try {
       if (tab.dialogs.length) return;
       await Promise.race([
-        this.limit(
-          tab.view.webContents.debugger.sendCommand(method, args),
-          signal,
-        ),
+        this.limit(tab.contents.debugger.sendCommand(method, args), signal),
         dialog.opened,
       ]);
       signal.throwIfAborted();
@@ -2030,9 +2074,15 @@ export class BrowserSessions {
     );
     try {
       await delay(50, undefined, { signal });
+      const capturedState = await this.js<PageCaptureState>(
+        tab,
+        'capture-state',
+        {},
+        signal,
+      );
       const { image, attempts, retryErrors } = await this.limit(
         captureFrame(() =>
-          tab.view.webContents.capturePage(undefined, {
+          tab.contents.capturePage(undefined, {
             stayAwake: true,
             stayHidden: !tab.view.getVisible(),
           }),
@@ -2042,8 +2092,18 @@ export class BrowserSessions {
       );
       if (this.state(id).url !== before.url)
         throw Error('browser changed during capture');
+      if (
+        JSON.stringify(capturedState) !==
+        JSON.stringify(await this.js(tab, 'capture-state', {}, signal))
+      )
+        throw Error(
+          'the page changed during capture; take a new browser_screenshot',
+        );
+      const screenshot = screenshotCapture(capturedState);
+      tab.screenshot = screenshot;
       const bytes = image.toPNG();
       return {
+        screenshot: screenshotMetadata(screenshot),
         ...before,
         dataUrl: image.toDataURL(),
         sha256: createHash('sha256').update(bytes).digest('hex'),
@@ -2126,7 +2186,7 @@ export class BrowserSessions {
           [...conversation.tabs.values()]
             .map(
               (entry) =>
-                `- ${entry.id}${entry.id === conversation.active ? ' (shown)' : ''} ${quote(entry.warning ? 'certificate warning' : entry.view.webContents.getTitle())} ${entry.warning?.certificate.url || entry.view.webContents.getURL()}`,
+                `- ${entry.id}${entry.id === conversation.active ? ' (shown)' : ''} ${quote(entry.warning ? 'certificate warning' : entry.contents.getTitle())} ${entry.warning?.certificate.url || entry.contents.getURL()}`,
             )
             .join('\n'),
       );
@@ -2249,9 +2309,7 @@ export class BrowserSessions {
     return siteOf(
       tab.warning?.certificate.url ||
         tab.failure?.url ||
-        (tab.view.webContents.isDestroyed()
-          ? ''
-          : tab.view.webContents.getURL()),
+        (tab.contents.isDestroyed() ? '' : tab.contents.getURL()),
     );
   }
   private overlayColors() {
@@ -2271,6 +2329,8 @@ export class BrowserSessions {
   ): Promise<BrowserResult> {
     const { action, args } = request;
     if (action === 'handoff') {
+      for (const entry of conversation.tabs.values())
+        entry.screenshot = undefined;
       // Circle hands the person the browser, and waits until they hand it back
       if (this.modeOf(conversation.id) === 'plan')
         throw Error(
@@ -2297,6 +2357,9 @@ export class BrowserSessions {
     }
     if (action === 'tabs') {
       const which = args.action;
+      if (which !== 'list')
+        for (const entry of conversation.tabs.values())
+          entry.screenshot = undefined;
       let text = '';
       if (which === 'new') {
         const tab = this.createTab(conversation, { activate: true });
@@ -2404,7 +2467,8 @@ export class BrowserSessions {
     if (action === 'screenshot') {
       const capture = await this.capture(conversation.id, signal);
       return {
-        text: `tab ${tab.id} · ${quote(capture.title)} · ${capture.url}\nbrowser screenshot`,
+        text: `tab ${tab.id} · ${quote(capture.title)} · ${capture.url}\nbrowser screenshot\n${screenshotDescription(tab.screenshot!)}`,
+        screenshot: capture.screenshot,
         image: capture.dataUrl.split(',')[1],
       };
     }
@@ -2422,13 +2486,19 @@ export class BrowserSessions {
       if (typeof urlValue !== 'string' || urlValue.length > 4096)
         throw Error('invalid browser URL');
       const downloads = conversation.nextDownload;
+      let outcome: NavigationOutcome = 'page';
       if (['back', 'forward', 'reload'].includes(urlValue))
         await this.history(conversation, tab, urlValue, signal);
       else {
         const url = safeExternalUrl(urlValue);
         if (!url) throw Error('only http or https navigation is supported');
-        await this.load(conversation, tab, url, signal);
+        outcome = await this.load(conversation, tab, url, signal);
       }
+      await waitForDownloadStart(
+        outcome,
+        () => conversation.nextDownload > downloads,
+        signal,
+      );
       await this.downloadsDone(conversation, signal);
       const text =
         conversation.nextDownload > downloads
@@ -2439,13 +2509,17 @@ export class BrowserSessions {
               ? `The page could not be loaded: ${tab.failure.error}.`
               : tab.dialogs.length
                 ? dialogOpened(tab.dialogs[0]!)
-                : 'Loaded.';
+                : outcome === 'aborted'
+                  ? 'Navigation was aborted; the page was not loaded.'
+                  : 'Loaded.';
       return { text: await this.result(conversation, text, signal) };
     }
     // Allowed on one site, an action does nothing on another: the page went elsewhere since
     // the model looked (the person, a redirect, a script)
     if (
-      ['click', 'type', 'select', 'press', 'upload'].includes(action) &&
+      ['click', 'click_at', 'type', 'select', 'press', 'upload'].includes(
+        action,
+      ) &&
       typeof args.site === 'string' &&
       args.site &&
       this.site(tab) !== args.site
@@ -2474,6 +2548,86 @@ export class BrowserSessions {
       await this.intercept(tab, false);
     }
   }
+  private async clickAt(
+    conversation: Conversation,
+    tab: Tab,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<BrowserResult> {
+    if (tab.warning)
+      throw Error(
+        'coordinate clicks are not allowed on certificate warnings; use browser_click with a ref',
+      );
+    const capture = checkScreenshot(tab.screenshot, args);
+    const point = await this.js<CoordinateTarget>(
+      tab,
+      'point',
+      { x: args.x, y: args.y, capture: capture.state },
+      signal,
+    );
+    const approval = coordinateApproval(
+      capture,
+      args,
+      point,
+      this.modeOf(conversation.id),
+    );
+    if (approval) return approval;
+    await this.js(
+      tab,
+      'overlay',
+      {
+        ...point,
+        label: `click ${shownName(point, undefined)}`,
+        click: true,
+        ...this.overlayColors(),
+      },
+      signal,
+    );
+    const current = await this.js<CoordinateTarget>(
+      tab,
+      'point',
+      { x: args.x, y: args.y, capture: capture.state },
+      signal,
+    );
+    checkCoordinateTarget(point, current);
+    tab.screenshot = undefined;
+    await this.input(
+      tab,
+      'Input.dispatchMouseEvent',
+      { type: 'mouseMoved', x: current.x, y: current.y },
+      signal,
+    );
+    // A real mouseenter may replace the action; never press based on the pre-hover target.
+    const hovered = await this.js<CoordinateTarget>(
+      tab,
+      'point',
+      { x: args.x, y: args.y, capture: capture.state },
+      signal,
+    );
+    checkCoordinateTarget(point, hovered);
+    for (const type of ['mousePressed', 'mouseReleased'])
+      await this.input(
+        tab,
+        'Input.dispatchMouseEvent',
+        {
+          type,
+          x: current.x,
+          y: current.y,
+          button: 'left',
+          clickCount: 1,
+        },
+        signal,
+      );
+    await this.idle(tab, signal);
+    await this.downloadsDone(conversation, signal);
+    return {
+      text: await this.result(
+        conversation,
+        `Clicked at (${current.x}, ${current.y}): ${current.role}${current.name ? ` ${quote(current.name)}` : ''}.`,
+        signal,
+      ),
+    };
+  }
   private async act(
     conversation: Conversation,
     tab: Tab,
@@ -2483,6 +2637,8 @@ export class BrowserSessions {
     warningBefore: string | undefined,
   ): Promise<BrowserResult> {
     const choosersBefore = conversation.nextChooser;
+    if (action === 'click_at')
+      return this.clickAt(conversation, tab, args, signal);
     let text = '';
     if (action === 'press') {
       if (typeof args.key !== 'string') throw Error('invalid browser key');
@@ -2497,7 +2653,7 @@ export class BrowserSessions {
           ? { name: String(args.secretName ?? 'secret') }
           : undefined;
       if (secret) {
-        const host = hostOf(tab.view.webContents.getURL());
+        const host = hostOf(tab.contents.getURL());
         const refused = secretRefused(
           host,
           !tab.warning && conversation.insecureHosts.has(host),
@@ -2687,7 +2843,7 @@ export class BrowserSessions {
     )
       throw Error('invalid file paths');
     const send = (method: string, params: Record<string, unknown>) =>
-      tab.view.webContents.debugger.sendCommand(method, params);
+      tab.contents.debugger.sendCommand(method, params);
     let target: {
       backendNodeId: number;
       origin: string;
@@ -2726,7 +2882,7 @@ export class BrowserSessions {
         );
       let origin = '';
       try {
-        origin = new URL(tab.view.webContents.getURL()).origin;
+        origin = new URL(tab.contents.getURL()).origin;
       } catch {
         /* a page without an address */
       }
@@ -2821,13 +2977,8 @@ export class BrowserSessions {
     for (const conversation of this.conversations.values()) {
       const mask = conversation.mask;
       if (mask && !mask.webContents.isDestroyed()) mask.webContents.close();
-      for (const tab of [...conversation.tabs.values()]) {
-        tab.closed = true;
-        for (const dialog of tab.dialogs) dialog.answer(false, '');
-        if (!this.window.isDestroyed())
-          this.window.contentView.removeChildView(tab.view);
-        if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
-      }
+      for (const tab of [...conversation.tabs.values()])
+        this.closeTab(conversation, tab, 'the browser closed');
     }
     this.conversations.clear();
   }

@@ -13,6 +13,7 @@ import { ScriptedModel } from '../src/testing.js';
 import { defaultSettings } from '../src/settings.js';
 import { scratch, cleanup } from './helpers.js';
 import type { Message } from '../src/types.js';
+import { networkError } from '../src/net.js';
 const reply = (
   id: string,
   content: string,
@@ -49,6 +50,103 @@ test('web search uses fallback endpoint, honors cancellation and never invents r
     /Interrupted/,
   );
   assert.equal(urls.length, 2);
+});
+test('websearch reports both hosts and classified causes without proxy credentials or query strings', async () => {
+  let calls = 0;
+  const request: typeof fetch = async () => {
+    calls++;
+    if (calls === 1)
+      throw new TypeError('fetch failed', {
+        cause: Object.assign(
+          new Error(
+            'certificate chain at https://user:proxy-secret@relay.test/path?token=query-secret',
+          ),
+          { code: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' },
+        ),
+      });
+    throw new TypeError('fetch failed', {
+      cause: Object.assign(new Error('lookup failed'), { code: 'ENOTFOUND' }),
+    });
+  };
+  await assert.rejects(
+    webSearch('private-search-query', new AbortController().signal, 5, request),
+    (error: Error) => {
+      assert.match(error.message, /TLS failure on lite.duckduckgo.com/);
+      assert.match(error.message, /DNS failure on html.duckduckgo.com/);
+      assert.match(error.message, /UNABLE_TO_VERIFY_LEAF_SIGNATURE/);
+      assert.match(error.message, /network:.*trust/);
+      assert.ok(
+        !/proxy-secret|query-secret|private-search-query/.test(error.message),
+      );
+      assert.ok(error.cause instanceof AggregateError);
+      return true;
+    },
+  );
+  assert.equal(calls, 2);
+});
+test('network diagnostics classify timeouts, DNS, proxy and connection causes, including aggregate TLS causes', () => {
+  for (const [code, kind] of [
+    ['ENOTFOUND', 'DNS'],
+    ['ETIMEDOUT', 'timeout'],
+    ['UND_ERR_PRX_TLS', 'proxy'],
+    ['ECONNREFUSED', 'connection'],
+  ]) {
+    const cause = Object.assign(new Error('endpoint unavailable'), { code });
+    const error = networkError(
+      new TypeError('fetch failed', { cause }),
+      'https://user:secret@endpoint.test/route?key=hidden',
+    );
+    assert.match(error.message, new RegExp(`${kind} failure on endpoint.test`));
+    assert.ok(!/secret|hidden/.test(error.message));
+    assert.ok(error.cause instanceof TypeError);
+  }
+  assert.match(
+    networkError(
+      new AggregateError(
+        [Object.assign(Error('untrusted chain'), { code: 'CERT_HAS_EXPIRED' })],
+        'TLS errors',
+      ),
+      'host.test',
+    ).message,
+    /TLS failure on host.test/,
+  );
+});
+test('websearch cancels during its first request without attempting a fallback', async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  await assert.rejects(
+    webSearch('cancel', controller.signal, 5, async (_url, init) => {
+      calls++;
+      controller.abort(Error('Interrupted'));
+      init!.signal!.throwIfAborted();
+      return new Response('unexpected');
+    }),
+    /Interrupted/,
+  );
+  assert.equal(calls, 1);
+});
+test('webfetch reports a TLS host and its nested cause while preserving private redirect refusal', async () => {
+  await assert.rejects(
+    webFetch(
+      'https://public.example/path?token=hidden',
+      'text',
+      new AbortController().signal,
+      async () => {
+        throw new TypeError('fetch failed', {
+          cause: Object.assign(Error('self signed certificate'), {
+            code: 'DEPTH_ZERO_SELF_SIGNED_CERT',
+          }),
+        });
+      },
+    ),
+    (error: Error) => {
+      assert.match(error.message, /TLS failure on public.example/);
+      assert.match(error.message, /DEPTH_ZERO_SELF_SIGNED_CERT/);
+      assert.ok(!error.message.includes('hidden'));
+      assert.ok(error.cause instanceof TypeError);
+      return true;
+    },
+  );
 });
 test('web fetch upgrades HTTP, preserves JSON and HTML formats, limits streamed bodies and rejects private redirects', async () => {
   let observed = '';

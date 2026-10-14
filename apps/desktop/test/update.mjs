@@ -13,10 +13,14 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { cp, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
-import { existsSync, createReadStream, openSync } from 'node:fs';
+import { existsSync, createReadStream, openSync, mkdirSync } from 'node:fs';
 import { join, relative, basename, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import {
+  startUpdateObserver,
+  writeProgress,
+} from './helpers/update-observer.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const appPath = process.env.CIRCLE_DESKTOP_APP_PATH;
@@ -47,13 +51,24 @@ const msiexec = (...args) => {
     );
 };
 // Each stage says when it starts, so a run that hangs shows where
-const stage = (text) => console.log(`-- ${text}`);
+const stage = (text) => {
+  writeProgress(temp, 'stage', text);
+  console.log(`-- ${text}`);
+};
+// A heartbeat proves only that timers ran; it must not postpone a stalled-stage timeout.
+const heartbeat = (text) => {
+  writeProgress(temp, 'heartbeat', text);
+  console.log(`-- ${text}`);
+};
 const { version } = JSON.parse(
   await readFile(join(root, '../../package.json'), 'utf8'),
 );
 const [major, minor, patch] = version.split(/[.-]/).map(Number);
 const next = `${major}.${minor}.${patch + 1}`;
-const temp = await mkdtemp(join(tmpdir(), 'circle-desktop-update-'));
+const evidenceRoot = process.env.CIRCLE_DESKTOP_UPDATE_EVIDENCE_DIR || tmpdir();
+mkdirSync(evidenceRoot, { recursive: true });
+const temp = await mkdtemp(join(evidenceRoot, 'circle-desktop-update-'));
+stage('preflight');
 // An application that no longer answers must not hold a check for good
 const within = (promise, ms) =>
   Promise.race([
@@ -65,6 +80,7 @@ const within = (promise, ms) =>
 const checks = [];
 const check = (name) => {
   checks.push(name);
+  writeProgress(temp, 'stage', `ok ${name}`);
   console.log('ok', name);
 };
 // What the installer did, what the application wrote and what is left, when a check fails
@@ -108,6 +124,7 @@ let passed = false;
 let installationAttempted = false;
 let installedPath;
 let port;
+let observer;
 try {
   // The installed copy: in a folder of its own, or where the .msi puts it
   const installed = msi
@@ -240,12 +257,14 @@ try {
     .getByRole('button', { name: 'restart to update' })
     .waitFor({ timeout: 120000 });
   check('the update downloads and is checked');
+  observer = await startUpdateObserver(temp);
+  stage('requesting restart to update');
   await control.getByRole('button', { name: 'restart to update' }).click();
   stage('restarting to update');
   // An installer that does not start leaves the application open, saying why. A line every
   // 20 seconds shows that the machine is still there.
   const beat = setInterval(
-    () => stage('still waiting for Circle to quit'),
+    () => heartbeat('still waiting for Circle to quit'),
     20000,
   );
   const left = await Promise.race([
@@ -267,7 +286,7 @@ try {
 
   stage('waiting for the new version to start');
   const beat2 = setInterval(
-    () => stage('still waiting for the new version'),
+    () => heartbeat('still waiting for the new version'),
     20000,
   );
   ({ browser, page: view } = await page(180000).finally(() =>
@@ -331,6 +350,7 @@ try {
   await evidence();
   throw error;
 } finally {
+  await observer?.stop();
   if (running && running.exitCode === null) running.kill();
   server?.close();
   // The installed package goes, whichever version it is now. Quietly, Windows Installer

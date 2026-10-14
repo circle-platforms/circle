@@ -23,6 +23,8 @@ const bridge: DesktopBridge = {
   },
   chooseFiles: (purpose) => ipcRenderer.invoke('circle:choose-files', purpose),
   chooseWorkspace: () => ipcRenderer.invoke('circle:choose-workspace'),
+  revealWorkspace: (workspaceId) =>
+    ipcRenderer.invoke('circle:reveal-workspace', workspaceId),
   readWorkspaceFile: (workspaceId, fileId) =>
     ipcRenderer.invoke('circle:read-workspace-file', workspaceId, fileId),
   listWorkspace: (workspaceId) =>

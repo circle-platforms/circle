@@ -1,0 +1,19 @@
+{
+  "checks": [
+    "the native form selects and saves the 21st Anthropic model, and the actual SDK request carries that exact id",
+    "a second-page failure exposes no truncated model choices and cannot replace the saved connection without an explicit model",
+    "the next actual SDK request after cancellation still uses the saved endpoint, key and model"
+  ],
+  "packaged": false,
+  "pageErrors": [],
+  "modelRequests": [
+    {
+      "url": "/anthropic/v1/messages",
+      "model": "claude-page-21"
+    },
+    {
+      "url": "/anthropic/v1/messages",
+      "model": "claude-page-21"
+    }
+  ]
+}

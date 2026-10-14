@@ -12,6 +12,10 @@ import { validateKeybindings, matchingAction } from '../src/model/shortcuts.ts';
 import { PlatformPreviewService } from '../src/plugins/platform/store.ts';
 import { PluginRegistry } from '../src/plugins/registry.ts';
 import type { WorkbenchPlugin } from '../src/plugins/types.ts';
+import {
+  canArchiveSession,
+  workspaceSessions,
+} from '../src/model/session-management.ts';
 function storage() {
   const values = new Map<string, string>();
   return {
@@ -26,6 +30,44 @@ function draft(runtime: PreviewRuntime, text: string) {
     currentSession(state).draft = text;
   });
 }
+test('session lists separate archived records, preserve their history, and reject running work or pending decisions', () => {
+  const runtime = new PreviewRuntime();
+  const state = runtime.getSnapshot();
+  const session = currentSession(state);
+  const history = structuredClone(session.messages);
+  state.interactions = [];
+  state.jobs = [];
+  session.state = 'idle';
+  assert.equal(canArchiveSession(state, session), true);
+  session.archivedAt = '2026-10-14T00:00:00.000Z';
+  assert.equal(
+    workspaceSessions(state, session.workspaceId).some(
+      (row) => row.id === session.id,
+    ),
+    false,
+  );
+  assert.equal(
+    workspaceSessions(state, session.workspaceId, true).some(
+      (row) => row.id === session.id,
+    ),
+    true,
+  );
+  assert.deepEqual(session.messages, history);
+  session.state = 'waiting';
+  assert.equal(canArchiveSession(state, session), false);
+  session.state = 'idle';
+  state.interactions = [
+    {
+      id: 'pending',
+      sessionId: session.id,
+      kind: 'approval',
+      title: 'write approval',
+      status: 'pending',
+      revision: 1,
+    },
+  ];
+  assert.equal(canArchiveSession(state, session), false);
+});
 test('free input is preserved without an invented reply or task', () => {
   const runtime = new PreviewRuntime();
   const before = runtime.getSnapshot().sessions[0]!.messages.length;

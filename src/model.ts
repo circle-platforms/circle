@@ -31,6 +31,7 @@ import { circleHome } from './paths.js';
 import { ModelCatalog, type ModelFacts } from './model_catalog.js';
 import { modelProfile, fitEffort, THINKING_BUDGET } from './model_profiles.js';
 import { priceCall } from './pricing.js';
+import { isNetworkFailure, networkError } from './net.js';
 import {
   checkRequestMedia,
   openAIContent,
@@ -100,11 +101,17 @@ export class GatewayModel implements ChatModel {
   }
   async complete(request: ModelRequest): Promise<ModelResponse> {
     checkRequestMedia(request.messages);
-    const response = await this.guard.execute(request, (current) =>
-      this.anthropic
-        ? this.completeAnthropic(current)
-        : this.completeOpenAI(current),
-    );
+    let response: ModelResponse;
+    try {
+      response = await this.guard.execute(request, (current) =>
+        this.anthropic
+          ? this.completeAnthropic(current)
+          : this.completeOpenAI(current),
+      );
+    } catch (error) {
+      if (request.signal.aborted || !isNetworkFailure(error)) throw error;
+      throw networkError(error, this.settings.auth.base_url);
+    }
     response.message.cost = priceCall(
       this.catalog.facts(
         response.message.model || this.model,

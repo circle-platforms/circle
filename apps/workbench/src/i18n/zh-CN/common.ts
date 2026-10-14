@@ -31,6 +31,8 @@ export const common: Record<string, string> = {
   '{n} request waiting for you': '{n} 个请求等待你处理',
   '{n} requests waiting for you': '{n} 个请求等待你处理',
   working: '工作中',
+  'waiting for you': '等待你处理',
+  interrupted: '已中断',
   // why the core asks
   'changes files in the workspace': '修改工作区内的文件',
   'changes files outside the workspace': '修改工作区外的文件',

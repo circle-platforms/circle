@@ -25,6 +25,7 @@ import { visibleMessages } from '../../workbench/src/model/state.ts';
 import { createServer } from 'node:http';
 import { ModelCatalog } from '../../../src/model_catalog.ts';
 import { loadSecrets } from '../../../src/secrets.ts';
+import { CheckpointStore } from '../../../src/checkpoint_store.ts';
 import type {
   RuntimeCommandName,
   RuntimeUpdate,
@@ -121,8 +122,8 @@ test('browser tools are available only when a browser port is connected', async 
   const tools = connected.model.requests[0]!.tools.filter((tool) =>
     tool.name.startsWith('browser_'),
   );
-  // The eleven that act on the browser, and recording and replaying a script of them
-  assert.equal(tools.length, 13);
+  // Twelve browser actions, including safe coordinate input, and recording/replay.
+  assert.equal(tools.length, 14);
   assert(
     ['browser_record', 'browser_replay'].every((name) =>
       tools.some((tool) => tool.name === name),
@@ -2504,5 +2505,577 @@ test('an approval for a new file carries its diff', async (t) => {
   assert.deepEqual(
     activeSession(f).changes?.map((change) => change.kind),
     ['added'],
+  );
+});
+
+test('an explicit provider preset bypasses discovery, saves editable fields and sends the selected id with its protocol to the actual endpoint', async (t) => {
+  for (const [provider, protocol, presetId] of [
+    ['bailian', 'openai', 'qwen3.8-max'],
+    ['bedrock-anthropic', 'anthropic', 'us.anthropic.claude-sonnet-5'],
+  ]) {
+    const s = await setup(t, []);
+    const seen: {
+      url: string;
+      headers: import('node:http').IncomingHttpHeaders;
+      body: Record<string, unknown>;
+    }[] = [];
+    const server = createServer(async (req, res) => {
+      let bytes = '';
+      for await (const chunk of req) bytes += chunk;
+      seen.push({
+        url: req.url!,
+        headers: req.headers,
+        body: bytes ? JSON.parse(bytes) : {},
+      });
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      if (protocol === 'openai') {
+        res.end(
+          'data: ' +
+            JSON.stringify({
+              choices: [
+                {
+                  index: 0,
+                  delta: { content: 'preset selected' },
+                  finish_reason: 'stop',
+                },
+              ],
+            }) +
+            '\n\ndata: [DONE]\n\n',
+        );
+      } else {
+        const events = [
+          {
+            type: 'message_start',
+            message: {
+              id: 'msg-fixture',
+              type: 'message',
+              role: 'assistant',
+              model: 'my-edited-id',
+              content: [],
+              stop_reason: null,
+              stop_sequence: null,
+              usage: { input_tokens: 1, output_tokens: 0 },
+            },
+          },
+          {
+            type: 'content_block_start',
+            index: 0,
+            content_block: { type: 'text', text: '' },
+          },
+          {
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'text_delta', text: 'preset selected' },
+          },
+          { type: 'content_block_stop', index: 0 },
+          {
+            type: 'message_delta',
+            delta: { stop_reason: 'end_turn', stop_sequence: null },
+            usage: { output_tokens: 1 },
+          },
+          { type: 'message_stop' },
+        ];
+        res.end(
+          events
+            .map(
+              (event) =>
+                `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+            )
+            .join(''),
+        );
+      }
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    t.after(() => {
+      server.closeAllConnections();
+      return new Promise<void>((done) => server.close(() => done()));
+    });
+    const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}/custom${protocol === 'openai' ? '/v1' : '/anthropic'}`;
+    const probe = await s.call('probe-connection', {
+      provider,
+      endpoint,
+      apiKey: 'local-key',
+    });
+    assert.equal(probe.ok, true);
+    assert.equal((probe.data as { status: string }).status, 'preset');
+    assert.ok((probe.data as { models: string[] }).models.includes(presetId!));
+    assert.equal(seen.length, 0);
+    assert.equal(loadSettings(s.home).initialized, false);
+    assert.equal(
+      (
+        await s.call('configure', {
+          endpoint,
+          protocol,
+          apiKey: 'local-key',
+          model: 'my-edited-id',
+        })
+      ).ok,
+      true,
+    );
+    assert.equal(loadSettings(s.home).auth.model, 'my-edited-id');
+    assert.equal(loadSettings(s.home).auth.base_url, endpoint);
+    assert.ok(
+      !s.controller.snapshot().models.some((model) => model.id === presetId),
+    );
+    await s.call('prompt', { text: 'use my selected model' });
+    await wait(
+      () =>
+        s.controller
+          .snapshot()
+          .sessions.some((session) =>
+            session.messages.some(
+              (message) => message.text === 'preset selected',
+            ),
+          ),
+      'actual preset endpoint answer',
+    );
+    assert.equal(
+      seen[0]!.url,
+      protocol === 'openai'
+        ? '/custom/v1/chat/completions'
+        : '/custom/anthropic/v1/messages',
+    );
+    assert.equal(seen[0]!.body.model, 'my-edited-id');
+    if (protocol === 'openai') {
+      assert.equal(seen[0]!.headers.authorization, 'Bearer local-key');
+    } else {
+      assert.equal(seen[0]!.headers['x-api-key'], 'local-key');
+      assert.equal(seen[0]!.headers['anthropic-version'], '2023-06-01');
+    }
+  }
+});
+
+test('switching back to a session that waits on an approval lands on it (#57)', async (t) => {
+  const f = await setup(t, [
+    {
+      message: assistant('', [
+        {
+          id: 'write-1',
+          name: 'write_file',
+          args: { file_path: 'result.txt', content: 'approved bytes' },
+        },
+      ]),
+    },
+    { message: assistant('written after approval') },
+  ]);
+  const aId = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('prompt', { text: 'write a file' })).ok, true);
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((row) => row.status === 'pending'),
+    'approval',
+  );
+  // The person visits another workspace mid-wait, as in the reported flow.
+  const other = join(f.root, 'workspace2');
+  await mkdir(other);
+  assert.equal((await f.call('open-workspace', { path: other })).ok, true);
+  const bId = f.controller.snapshot().activeSessionId;
+  assert.notEqual(bId, aId);
+  // Coming back must land on the session, not rebuild or refuse it: the
+  // runtime already holds it, and its turn waits on the very card to click.
+  const back = await f.call('select-session', { id: aId }, bId);
+  assert.equal(back.ok, true);
+  assert.equal(back.error, undefined);
+  assert.equal(f.controller.snapshot().activeSessionId, aId);
+  const row = f.controller
+    .snapshot()
+    .interactions.find((row) => row.status === 'pending');
+  assert.ok(row, 'the approval survived the round trip');
+  assert.equal(
+    (
+      await f.call(
+        'answer',
+        { id: row.id, revision: 999, answer: 'approve' },
+        aId,
+      )
+    ).ok,
+    false,
+  );
+  assert.equal(
+    (
+      await f.call(
+        'answer',
+        { id: row.id, revision: row.revision, answer: 'approve' },
+        bId,
+      )
+    ).ok,
+    false,
+  );
+  assert.equal(existsSync(join(f.workspace, 'result.txt')), false);
+  assert.equal(f.model.requests.length, 1);
+  assert.equal(
+    (
+      await f.call(
+        'answer',
+        { id: row.id, revision: 1, answer: 'approve' },
+        aId,
+      )
+    ).ok,
+    true,
+  );
+  await wait(
+    () =>
+      f.model.requests.length === 2 &&
+      f.controller.snapshot().sessions.find((session) => session.id === aId)!
+        .state === 'idle',
+    'the turn finishes on the answered approval',
+  );
+  assert.equal(
+    await readFile(join(f.workspace, 'result.txt'), 'utf8'),
+    'approved bytes',
+  );
+  assert.equal(
+    f.model.requests[1]!.messages.find(
+      (message) => message.tool_call_id === 'write-1',
+    )?.status,
+    'success',
+  );
+  assert.equal(
+    f.controller.snapshot().interactions.find((item) => item.id === row.id)
+      ?.status,
+    'recorded',
+  );
+});
+
+test('desktop file pagination past EOF is successful and survives restarting the controller (#21)', async (t) => {
+  const f = await setup(t, [
+    ...[2, 120, 0].map((offset, i) => ({
+      message: assistant('', [
+        {
+          id: `page-${i}`,
+          name: 'read_file',
+          args: { file_path: 'source.txt', offset, limit: 20 },
+        },
+      ]),
+    })),
+    { message: assistant('read both lines') },
+  ]);
+  await writeFile(join(f.workspace, 'source.txt'), 'alpha\nbeta\n');
+  const id = f.controller.snapshot().activeSessionId;
+  assert.equal(
+    (await f.call('prompt', { text: 'Read the file in pages' })).ok,
+    true,
+  );
+  await wait(
+    () =>
+      f.model.requests.length === 4 &&
+      f.controller.snapshot().sessions.find((session) => session.id === id)
+        ?.state === 'idle',
+    'the paged read finishes',
+  );
+  const results = f.model.requests[3]!.messages.filter(
+    (message) => message.role === 'tool',
+  );
+  assert.deepEqual(
+    results.map((message) => message.status),
+    ['success', 'success', 'success'],
+  );
+  assert.match(results[0]!.content, /offset 2.*2 lines/);
+  assert.match(results[1]!.content, /offset 120.*2 lines/);
+  assert.equal(results[2]!.content, '1: alpha\n2: beta');
+  await f.controller.close();
+  const restarted = new RuntimeController({
+    home: f.home,
+    workspace: f.workspace,
+    userHome: f.home,
+    model: new ScriptedModel([]),
+    emit: () => {},
+  });
+  try {
+    const stored = restarted
+      .snapshot()
+      .sessions.find((session) => session.id === id)!
+      .messages.filter((message) => message.tool);
+    assert.deepEqual(
+      stored.map((message) => [message.tool!.status, message.tool!.output]),
+      results.map((message) => [message.status, message.content]),
+    );
+  } finally {
+    await restarted.close();
+  }
+});
+
+test('desktop archive is durable presentation state and leaves core history and workspace bytes intact (#56)', async (t) => {
+  const f = await setup(t, [{ message: assistant('saved conversation') }]);
+  await writeFile(join(f.workspace, 'keep.txt'), 'project bytes');
+  await f.call('prompt', { text: 'keep this conversation' });
+  await wait(
+    () =>
+      f.controller.snapshot().sessions[0]!.state === 'idle' &&
+      f.model.requests.length === 1,
+    'conversation saved',
+  );
+  const id = f.controller.snapshot().activeSessionId;
+  const before = f.controller
+    .snapshot()
+    .sessions.find((session) => session.id === id)!.messages;
+  const coreBefore = new CheckpointStore(f.home);
+  const history = coreBefore.messages(id);
+  coreBefore.close();
+  assert.equal(
+    (await f.call('archive-session', { id, archived: true })).ok,
+    true,
+  );
+  for (const [name, payload] of [
+    ['set-plan-mode', { enabled: true }],
+    ['set-mode', { mode: 'plan' }],
+    ['select-branch', { messageId: before.at(-1)!.id }],
+    [
+      'label-branch',
+      { messageId: before.at(-1)!.id, label: 'must not change' },
+    ],
+  ] as const)
+    assert.equal((await f.call(name, payload)).ok, false, name);
+  assert.ok(
+    f.controller.snapshot().sessions.find((session) => session.id === id)!
+      .archivedAt,
+  );
+  assert.equal((await f.call('prompt', { text: 'do not send' })).ok, false);
+  assert.equal(f.model.requests.length, 1);
+  assert.equal(
+    await readFile(join(f.workspace, 'keep.txt'), 'utf8'),
+    'project bytes',
+  );
+  await f.controller.close();
+  const restarted = new RuntimeController({
+    home: f.home,
+    workspace: f.workspace,
+    userHome: f.home,
+    model: new ScriptedModel([]),
+    emit: () => {},
+  });
+  try {
+    assert.ok(
+      restarted.snapshot().sessions.find((session) => session.id === id)!
+        .archivedAt,
+    );
+    const withoutTurnUsage = (messages: typeof before) =>
+      messages.map(({ usage: _usage, ...message }) => message);
+    assert.deepEqual(
+      withoutTurnUsage(
+        restarted.snapshot().sessions.find((session) => session.id === id)!
+          .messages,
+      ),
+      withoutTurnUsage(before),
+    );
+    const coreAfter = new CheckpointStore(f.home);
+    assert.deepEqual(coreAfter.messages(id), history);
+    coreAfter.close();
+    const restored = await restarted.dispatch({
+      id: randomUUID(),
+      name: 'archive-session',
+      sessionId: id,
+      payload: { id, archived: false },
+    });
+    assert.equal(restored.ok, true);
+    assert.equal(
+      restarted.snapshot().sessions.find((session) => session.id === id)!
+        .archivedAt,
+      undefined,
+    );
+  } finally {
+    await restarted.close();
+  }
+});
+
+test('archive all rejects a busy workspace atomically and cannot strand a pending approval (#56)', async (t) => {
+  const f = await setup(t, [
+    {
+      message: assistant('', [
+        {
+          id: 'write',
+          name: 'write_file',
+          args: { file_path: 'blocked.txt', content: 'only after approval' },
+        },
+      ]),
+    },
+    { message: assistant('approved') },
+  ]);
+  const old = f.controller.snapshot().activeSessionId;
+  await f.call('new-session');
+  const id = f.controller.snapshot().activeSessionId;
+  const workspaceId = f.controller
+    .snapshot()
+    .sessions.find((session) => session.id === id)!.workspaceId;
+  await f.call('prompt', { text: 'request a write' });
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((row) => row.status === 'pending'),
+    'write approval',
+  );
+  const refused = await f.call('archive-workspace', { workspaceId });
+  assert.equal(refused.ok, false);
+  assert.match(refused.error!, /stop.*before archiving/);
+  assert.equal(
+    f.controller.snapshot().sessions.some((session) => session.archivedAt),
+    false,
+  );
+  assert.equal(
+    (await f.call('archive-session', { id, archived: true })).ok,
+    false,
+  );
+  const pending = f.controller
+    .snapshot()
+    .interactions.find((row) => row.status === 'pending')!;
+  await f.call('answer', {
+    id: pending.id,
+    revision: pending.revision,
+    answer: 'reject',
+  });
+  await wait(
+    () =>
+      f.controller.snapshot().sessions.find((session) => session.id === id)!
+        .state === 'idle',
+    'rejection finishes',
+  );
+  assert.equal(existsSync(join(f.workspace, 'blocked.txt')), false);
+  assert.equal((await f.call('archive-workspace', { workspaceId })).ok, true);
+  assert.ok(
+    f.controller.snapshot().sessions.find((session) => session.id === id)!
+      .archivedAt,
+  );
+  assert.ok(
+    f.controller.snapshot().sessions.find((session) => session.id === old)!
+      .archivedAt,
+  );
+});
+
+test('an inactive session with a real running background job cannot be archived or deleted (#56)', async (t) => {
+  const command = `"${process.execPath}" -e "setTimeout(()=>{},30000)"`;
+  const f = await setup(t, [
+    {
+      message: assistant('', [
+        {
+          id: 'background',
+          name: 'execute',
+          args: { command, background: true },
+        },
+      ]),
+    },
+    { message: assistant('background started') },
+  ]);
+  const id = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'start synthetic background work' });
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((item) => item.status === 'pending'),
+    'command approval',
+  );
+  const pending = f.controller
+    .snapshot()
+    .interactions.find((item) => item.status === 'pending')!;
+  await f.call('answer', {
+    id: pending.id,
+    revision: pending.revision,
+    answer: 'approve',
+  });
+  await wait(
+    () =>
+      f.model.requests.length === 2 &&
+      f.controller.snapshot().sessions.find((item) => item.id === id)?.state ===
+        'idle',
+    'foreground completes',
+  );
+  assert(
+    f.controller
+      .snapshot()
+      .jobs.some((job) => job.sessionId === id && job.state === 'running'),
+  );
+  const history = f.controller
+    .snapshot()
+    .sessions.find((item) => item.id === id)!.messages;
+  assert.equal((await f.call('new-session')).ok, true);
+  assert.equal(
+    (await f.call('archive-session', { id, archived: true })).ok,
+    false,
+  );
+  assert.equal((await f.call('delete-session', { id })).ok, false);
+  assert.deepEqual(
+    f.controller.snapshot().sessions.find((item) => item.id === id)!.messages,
+    history,
+  );
+  assert(
+    f.controller
+      .snapshot()
+      .jobs.some((job) => job.sessionId === id && job.state === 'running'),
+  );
+});
+
+test('completed desktop plans retain their core todos and produce one notice before the following answer (#5)', async (t) => {
+  const todos = [
+    { content: 'first', status: 'pending' },
+    { content: 'second', status: 'pending' },
+  ];
+  const done = todos.map((todo) => ({ ...todo, status: 'completed' }));
+  const f = await setup(t, [
+    ...[todos, done, done].map((items, index) => ({
+      message: assistant('', [
+        { id: `todos-${index}`, name: 'write_todos', args: { todos: items } },
+      ]),
+    })),
+    { message: assistant('answer after the completed plan') },
+    {
+      message: assistant('', [
+        { id: 'imported-todos', name: 'write_todos', args: { todos: done } },
+      ]),
+    },
+    { message: assistant('restored plan stays complete') },
+  ]);
+  await f.call('prompt', { text: 'complete both steps' });
+  await wait(
+    () =>
+      f.model.requests.length === 4 &&
+      f.controller.snapshot().sessions[0]!.state === 'idle',
+    'plan completes',
+  );
+  const session = f.controller.snapshot().sessions[0]!;
+  assert.deepEqual(
+    session.todos.map((todo) => todo.status),
+    ['completed', 'completed'],
+  );
+  const shown = visibleMessages(session);
+  const notices = shown.filter((message) => message.planCompleted === 2);
+  assert.equal(notices.length, 1);
+  assert(
+    shown.findIndex((message) => message.id === notices[0]!.id) <
+      shown.findIndex(
+        (message) => message.text === 'answer after the completed plan',
+      ),
+  );
+  assert.equal(
+    f.model.requests[3]!.messages.filter((message) => message.role === 'tool')
+      .length,
+    3,
+  );
+  const exported = await f.call('export');
+  assert.equal(
+    (
+      await f.call('import', {
+        content: (exported.data as { content: string }).content,
+      })
+    ).ok,
+    true,
+  );
+  const importedId = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'keep the restored completed plan' });
+  await wait(
+    () =>
+      f.model.requests.length === 6 &&
+      f.controller.snapshot().sessions.find((row) => row.id === importedId)
+        ?.state === 'idle',
+    'restored plan is unchanged',
+  );
+  assert.equal(
+    f.controller
+      .snapshot()
+      .sessions.find((row) => row.id === importedId)!
+      .messages.filter((message) => message.planCompleted).length,
+    0,
   );
 });

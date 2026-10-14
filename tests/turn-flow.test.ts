@@ -797,6 +797,8 @@ test('setup in the full-screen interface saves the URL that answered, and reques
     key('enter');
   };
   const done = app.initialize();
+  await until(() => app.state.dialog?.title === 'which provider?');
+  key('enter'); // custom endpoint
   await fill("What is the API's base URL?", base);
   await fill('What is the API key?', 'test-key');
   // The model step lists what the endpoint gave; enter takes the marked one
@@ -840,6 +842,8 @@ test('settings marked as set up but without a URL (an older OAuth sign-in) open 
     ui.input.close();
   });
   const done = app.initialize();
+  await until(() => app.state.dialog?.title === 'which provider?');
+  ui.handle({ type: 'key', key: 'enter', char: '' }); // custom endpoint
   await until(() => app.state.dialog?.title === "What is the API's base URL?");
   ui.handle({ type: 'key', key: 'escape', char: '' });
   assert.equal(await done, false);

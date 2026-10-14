@@ -1,0 +1,36 @@
+.project-actions,
+.session-row {
+  display: flex;
+  align-items: center;
+}
+.project-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  color: inherit;
+}
+.session-row .session-link {
+  flex: 1;
+  min-width: 0;
+}
+.session-row > .icon-button {
+  width: 24px;
+  height: 24px;
+  opacity: 0;
+}
+.session-row:hover > .icon-button,
+.session-row:focus-within > .icon-button,
+.session-row > .icon-button[data-state='open'] {
+  opacity: 1;
+}
+.project-header:focus-within .icon-button,
+.project-header .icon-button[data-state='open'] {
+  opacity: 1;
+}
+.session-menu [data-disabled] {
+  opacity: 0.5;
+  cursor: default;
+}

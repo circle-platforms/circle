@@ -72,6 +72,7 @@ jobs:
             apps/desktop/out/*.dmg
             apps/desktop/out/artifact-receipt.json
             apps/desktop/artifacts/
+            outputs/
           if-no-files-found: error
   package-other-platforms:
     strategy:
@@ -97,6 +98,9 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.dotnet\tools"
           & "$env:USERPROFILE\.dotnet\tools\wix.exe" extension add --global WixToolset.UI.wixext/5.0.2
       - run: npm --prefix apps/desktop run test:runtime
+      - name: Check Windows update observer isolation
+        if: runner.os == 'Windows'
+        run: node --test apps/desktop/test/update-harness.test.mjs apps/desktop/test/update-observer.test.mjs
       - run: npm --prefix apps/desktop run package
       # The release workflow installs and removes it; here it only has to build and validate
       - name: Build the MSI
@@ -115,8 +119,18 @@ jobs:
           export CIRCLE_DESKTOP_EXECUTABLE="$CIRCLE_DESKTOP_APP_PATH/Circle.exe"
           version="$(node -p "require('./package.json').version")"
           export CIRCLE_DESKTOP_UPDATE_MSI="$GITHUB_WORKSPACE/apps/desktop/out/circle-desktop-$version-windows-x64.msi"
+          export CIRCLE_DESKTOP_UPDATE_EVIDENCE_DIR="$RUNNER_TEMP/circle-update-evidence"
           npm --prefix apps/desktop run test:update
+      - name: Keep Windows update evidence
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: circle-desktop-windows-update-evidence
+          path: ${{ runner.temp }}/circle-update-evidence/
+          if-no-files-found: ignore
+          retention-days: 7
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        if: always()
         with:
           name: circle-desktop-${{ matrix.os }}-development
           path: apps/desktop/out/

@@ -645,6 +645,7 @@ const EDIT_TOOLS = ['write_file', 'edit_file', 'apply_patch', 'browser_record'];
 const BROWSER_ACTIONS: Record<string, string> = {
   browser_navigate: 'opens a page in the browser',
   browser_click: 'clicks in the browser',
+  browser_click_at: 'clicks in the browser',
   browser_type: 'types in the browser',
   browser_select: 'chooses an option in the browser',
   browser_press: 'presses a key in the browser',

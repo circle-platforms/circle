@@ -1,6 +1,22 @@
 // Simplified Chinese for the interface words in the dialogs files. English is the key.
 export const dialogs: Record<string, string> = {
   // the connection form
+  provider: '提供商',
+  'Use a Bedrock API key and choose your region in the base URL.':
+    '请使用 Bedrock API 密钥，并在 API 地址中选择你的地域。',
+  'custom endpoint': '自定义端点',
+  'Choose from provider presets next, or type a model id. The key and model are not checked.':
+    '下一步可选择提供商预设，或填写模型 ID。密钥和模型未经验证。',
+  'Next asks this endpoint for its online model list. You can also type a model id.':
+    '下一步会获取端点的线上模型列表，也可手填模型 ID。',
+  'Enter your resource base URL and deployment name. Public model names are not deployment names.':
+    '请填写资源的 API 地址和部署名。公开模型名不等于部署名。',
+  'provider presets ({date}); unverified': '提供商预设（{date}）；未经验证',
+  'These ids ship with Circle. Availability depends on your provider and account; you can enter another id.':
+    '这些 ID 随 Circle 发布。能否使用取决于提供商和账号；也可填写其他 ID。',
+  preset: '预设',
+  'Enter the deployment name from your provider console.':
+    '请填写提供商控制台中的部署名。',
   'API URL, key and model': 'API 地址、密钥和模型',
   'Circle answers with your own model endpoint. Enter its API URL, key and model to start.':
     'Circle 使用你自己的模型端点来回答。填写它的 API 地址、密钥和模型即可开始。',

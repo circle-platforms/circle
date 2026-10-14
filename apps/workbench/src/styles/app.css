@@ -925,6 +925,20 @@ pre {
   max-height: calc(4 * (1.8em + 4px));
   overflow: auto;
 }
+.plan-items:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.archive-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  color: var(--secondary);
+  border-top: 1px solid var(--border);
+  font-size: var(--ui-small);
+}
 .plan-items > div {
   display: flex;
   align-items: center;

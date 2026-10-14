@@ -3,12 +3,7 @@
 // and `circle --init` ask them on one card in the frame (SetupCard); /login asks them in its
 // list. Nothing is saved here: the caller saves `auth()` once a model is chosen.
 import { join } from 'node:path';
-import {
-  normalizeBaseUrl,
-  probeSummary,
-  resolveEndpoint,
-  type ProbeResult,
-} from '../probe.js';
+import { normalizeBaseUrl, resolveEndpoint } from '../probe.js';
 import {
   defaultAuth,
   keepsSavedKey,
@@ -24,10 +19,16 @@ import {
   type CardResult,
   type DialogState,
 } from '../ink/components/dialog_card.js';
+import {
+  connectionModels,
+  connectionSummary,
+  type ConnectionModels,
+} from '../connection_models.js';
+import { PROVIDER_PRESETS, providerPreset } from '../providers.js';
 import { displayPath } from './status_rows.js';
 
 export type SetupStep =
-  'url' | 'key' | 'probing' | 'protocol' | 'model' | 'done';
+  'provider' | 'url' | 'key' | 'probing' | 'protocol' | 'model' | 'done';
 // How many models the card shows at once
 const MODEL_ROWS = 8;
 const PROTOCOLS = ['openai', 'anthropic'] as const;
@@ -40,7 +41,8 @@ function dropLast(text: string): string {
 }
 
 export class SetupFlow {
-  step: SetupStep = 'url';
+  step: SetupStep = 'provider';
+  providerId = 'custom';
   baseUrl = '';
   apiKey = '';
   protocol = 'openai';
@@ -62,7 +64,8 @@ export class SetupFlow {
     private probe: (
       url: string,
       key: string,
-    ) => Promise<ProbeResult> = resolveEndpoint,
+      options?: { protocol?: string; timeout?: number },
+    ) => Promise<import('../probe.js').ProbeResult> = resolveEndpoint,
   ) {
     try {
       const previous = loadSettings(home);
@@ -75,6 +78,17 @@ export class SetupFlow {
     } catch {
       /* Nothing saved that can be read: nothing to keep. */
     }
+  }
+  chooseProvider(id: string): void {
+    const provider = providerPreset(id);
+    this.providerId = id;
+    this.baseUrl = provider.baseUrl || (id === 'custom' ? this.savedUrl : '');
+    this.protocol = provider.protocol ?? 'openai';
+    this.apiKey = '';
+    this.models = [];
+    this.focus = 0;
+    this.status = this.error = this.query = '';
+    this.step = 'url';
   }
   /** Whether an empty enter on the key keeps the saved one: on the saved host only. */
   get keepsKey(): boolean {
@@ -91,7 +105,10 @@ export class SetupFlow {
   }
   submitUrl(text: string): void {
     this.error = '';
-    const url = text.trim() || this.savedUrl;
+    const url =
+      text.trim() ||
+      this.baseUrl ||
+      (this.providerId === 'custom' ? this.savedUrl : '');
     if (!url) {
       this.error = 'Enter a URL';
       return;
@@ -115,20 +132,28 @@ export class SetupFlow {
       return;
     }
     this.apiKey = key;
-    this.status = 'discovering models…';
+    this.status =
+      providerPreset(this.providerId).source === 'preset'
+        ? 'provider presets; model and key are unverified'
+        : 'discovering models…';
     this.step = 'probing';
   }
   /** Ask the endpoint for its models; it can take seconds (2.5 s per request). */
   async runProbe(): Promise<void> {
-    let found: ProbeResult | undefined;
+    let found: ConnectionModels | undefined;
     try {
-      found = await this.probe(this.baseUrl, this.apiKey);
+      found = await connectionModels(
+        this.baseUrl,
+        this.apiKey,
+        this.providerId,
+        this.probe,
+      );
     } catch {
       found = undefined; // a probe that breaks is a failed probe
     }
     if (this.step === 'probing') this.applyProbe(found);
   }
-  applyProbe(found?: ProbeResult): void {
+  applyProbe(found?: ConnectionModels): void {
     found ??= {
       protocol: 'openai',
       models: [],
@@ -141,10 +166,13 @@ export class SetupFlow {
     this.models = [...found.models];
     // The URL that answered (`<url>/v1` when only that lists models)
     this.baseUrl = found.base_url || this.baseUrl;
-    this.status = probeSummary(found);
+    this.status = connectionSummary(found);
     this.focus = 0;
     this.query = '';
-    if (found.inferred || found.status === 'failed') {
+    if (
+      (found.inferred || found.status === 'failed') &&
+      !providerPreset(this.providerId).protocol
+    ) {
       this.focus = this.protocol === 'anthropic' ? 1 : 0;
       this.step = 'protocol';
     } else this.step = 'model';
@@ -245,6 +273,18 @@ export class SetupCard implements Card<SetupAnswer> {
       focus: 0,
       ...state,
     });
+    if (flow.step === 'provider') {
+      const top = Math.max(0, flow.focus - MODEL_ROWS + 1);
+      return card({
+        title: 'which provider?',
+        options: PROVIDER_PRESETS.slice(top, top + MODEL_ROWS).map(
+          (item) => item.name,
+        ),
+        keyless: true,
+        focus: flow.focus - top,
+        position: `(${flow.focus + 1}/${PROVIDER_PRESETS.length})`,
+      });
+    }
     if (flow.step === 'url')
       return card({
         title: "What is the API's base URL?",
@@ -256,7 +296,7 @@ export class SetupCard implements Card<SetupAnswer> {
           },
         ],
         input: this.input,
-        placeholder: flow.savedUrl ? `enter keeps ${flow.savedUrl}` : '',
+        placeholder: flow.baseUrl ? `enter keeps ${flow.baseUrl}` : '',
       });
     if (flow.step === 'key')
       return card({
@@ -363,7 +403,14 @@ export class SetupCard implements Card<SetupAnswer> {
       return { answer: 'leave' };
     const flow = this.flow;
     const step = flow.step;
-    if (step === 'url' || step === 'key') {
+    if (step === 'provider') {
+      if (key === 'up' || key === 'down')
+        flow.focus =
+          (flow.focus + (key === 'up' ? -1 : 1) + PROVIDER_PRESETS.length) %
+          PROVIDER_PRESETS.length;
+      else if (key === 'enter')
+        flow.chooseProvider(PROVIDER_PRESETS[flow.focus]!.id);
+    } else if (step === 'url' || step === 'key') {
       if (key === 'enter') {
         const text = this.input;
         this.input = '';

@@ -561,7 +561,8 @@ export type LeftOut =
   | 'warning'
   | 'tab'
   | 'upload'
-  | 'unknown element';
+  | 'unknown element'
+  | 'coordinate';
 const LEFT_OUT_WORDS: Record<LeftOut, [string, string]> = {
   look: [
     'look at the page (a snapshot, screenshot, tab list or hand-over)',
@@ -580,6 +581,10 @@ const LEFT_OUT_WORDS: Record<LeftOut, [string, string]> = {
   upload: [
     'upload (each one asks the user)',
     'uploads (each one asks the user)',
+  ],
+  coordinate: [
+    'coordinate click (not recorded)',
+    'coordinate clicks (not recorded)',
   ],
   'unknown element': [
     'action on an element no snapshot before it showed',
@@ -716,6 +721,9 @@ export function recordSteps(
       case 'browser_navigate':
         step = { navigate: String(args.url) };
         break;
+      case 'browser_click_at':
+        left.push('coordinate');
+        continue;
       case 'browser_click': {
         if (onWarning) {
           const clicked = elements.find((entry) => entry.ref === args.ref);

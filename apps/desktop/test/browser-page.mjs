@@ -298,6 +298,38 @@ try {
     run('guard-key'),
     /a password field takes only a saved secret/,
   );
+  // Coordinates use the same composed DOM hit-test as refs, with the captured layout.
+  for (const name of ['frame submit', 'shadow action', 'slotted action']) {
+    const point = await run('prepare', { ref: ref(name) });
+    const capture = await run('capture-state');
+    const target = await run('point', { x: point.x, y: point.y, capture });
+    assert.equal(target.name, name);
+    assert.equal(target.known, true);
+  }
+  const foreignFrame = page.locator('iframe').last();
+  await foreignFrame.scrollIntoViewIfNeeded();
+  const foreignRect = await foreignFrame.boundingBox();
+  await assert.rejects(
+    run('point', {
+      x: foreignRect.x + 10,
+      y: foreignRect.y + 10,
+      capture: await run('capture-state'),
+    }),
+    /cross-origin frame/,
+  );
+  const shadowPoint = await run('prepare', { ref: ref('shadow action') });
+  const oldShadow = await run('capture-state');
+  await page
+    .locator('#shadow')
+    .evaluate(
+      (node) =>
+        (node.shadowRoot.querySelector('button').textContent =
+          'changed action'),
+    );
+  await assert.rejects(
+    run('point', { x: shadowPoint.x, y: shadowPoint.y, capture: oldShadow }),
+    /screenshot is stale/,
+  );
   await page.evaluate(() => {
     for (let index = 0; index < 400; index++) {
       const long = document.createElement('p');

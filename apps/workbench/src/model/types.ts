@@ -72,6 +72,8 @@ export interface Message {
   tool?: ToolCall;
   label?: string;
   attachments?: Attachment[];
+  /** A runtime notice, separate from user/model text, for interface translation. */
+  planCompleted?: number;
   usage?: {
     input: number;
     output: number;
@@ -86,6 +88,8 @@ export interface Todo {
 }
 export interface Session {
   id: string;
+  /** Desktop-only organization; the core transcript and project files stay intact. */
+  archivedAt?: string;
   title: string;
   workspaceId: string;
   model: string;
@@ -160,6 +164,7 @@ export interface AgentRecord {
   sessionId: string;
   name: string;
   description: string;
+  activity?: string;
   status: 'running' | 'completed' | 'waiting';
   model: string;
   tokens: number;
@@ -293,6 +298,7 @@ export interface WorkbenchSnapshot {
     schema: unknown;
   }[];
   runtime?: {
+    network?: import('../../../../src/net').NetworkStatus;
     connected: boolean;
     configured: boolean;
     /** Whether a key is saved; the key itself never reaches the window. */

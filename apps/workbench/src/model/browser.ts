@@ -20,13 +20,21 @@ export const shownDialog = (
 ): BrowserDialog | undefined =>
   state?.dialogs?.find((dialog) => dialog.tab === state.tab);
 
+/** Attaching the first tab can happen after the human starts typing. */
+export const browserTabChanged = (
+  previous: string | undefined,
+  current: string | undefined,
+): boolean => previous !== undefined && previous !== current;
+
 /** Loading events must not replace an address the human is composing. */
 export function browserEventAddress(
   state: BrowserState,
   editing: boolean,
   wasOpened: boolean,
+  tabChanged = false,
 ): string | undefined {
-  if (editing || (!browserOpened(state) && !wasOpened)) return undefined;
+  if (!tabChanged && (editing || (!browserOpened(state) && !wasOpened)))
+    return undefined;
   const url = state.failure?.url ?? state.url;
   return url === 'about:blank' ? '' : url;
 }

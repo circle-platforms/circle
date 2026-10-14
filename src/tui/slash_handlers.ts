@@ -2,6 +2,7 @@
 // 0.5.0). SessionApp keeps /models, /login, /reload and /editor, which use its own state, and
 // routes every command through runCommand.
 import { randomUUID } from 'node:crypto';
+import { networkSummary } from '../net.js';
 import {
   mkdirSync,
   readFileSync,
@@ -495,6 +496,7 @@ function session(host: CommandHost): void {
       `${calls} tool calls · ${results} results`,
     `tokens   ↑ ${used.input_tokens.toLocaleString('en-US')}${cached} · ` +
       `↓ ${used.output_tokens.toLocaleString('en-US')} in this run`,
+    networkSummary(),
   ];
   if (host.shared) rows.push(`shared   ${host.shared}`);
   host.notice(rows.join('\n'));

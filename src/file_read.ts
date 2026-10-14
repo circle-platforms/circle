@@ -33,8 +33,6 @@ export async function readTextWindow(
   if (limit === 0)
     return 'System reminder: no lines were read because `limit` was 0. The file was not inspected and may have contents; retry with `limit` >= 1 to read it.';
   if (offset >= total)
-    throw new Error(
-      `Line offset ${offset} exceeds file length (${total} lines)`,
-    );
+    return `System reminder: no lines were read because offset ${offset} is at or past the end of the file (${total} lines). Valid zero-based offsets are 0..${total - 1}; retry from a valid offset.`;
   return window.join('\n');
 }

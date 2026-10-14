@@ -1,0 +1,6 @@
+
+> circle@1.5.0 format:check
+> prettier --check "src/**/*.ts" "tests/**/*.ts" "scripts/**/*.ts" "*.json"
+
+Checking formatting...
+All matched files use Prettier code style!

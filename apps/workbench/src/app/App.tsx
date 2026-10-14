@@ -595,10 +595,7 @@ export function App() {
       <div className="workbench">
         {desktopHost() && <div className="desktop-drag-region" />}
         <div className="desktop-sidebar">
-          <Sidebar
-            onSearch={() => setSearchOpen(true)}
-            onDialog={(kind) => onDialog(kind)}
-          />
+          <Sidebar onSearch={() => setSearchOpen(true)} onDialog={onDialog} />
         </div>
         <main className="workspace">
           <header className="topbar">
@@ -763,7 +760,7 @@ export function App() {
               setSearchOpen(true);
             }}
             onNavigate={() => setSidebarOpen(false)}
-            onDialog={(kind) => onDialog(kind)}
+            onDialog={onDialog}
           />
         </Modal>
         <Modal

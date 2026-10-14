@@ -1,3 +1,7 @@
+import {
+  connectionModels,
+  connectionSummary,
+} from '../../../src/connection_models.js';
 import { randomUUID, createHash } from 'node:crypto';
 import {
   mkdirSync,
@@ -49,6 +53,7 @@ import {
 } from '../../../src/browser/tools.js';
 import type {
   CertificateApproval,
+  CoordinateApproval,
   DownloadApproval,
   UploadApproval,
 } from '../../../src/browser/protocol.js';
@@ -59,11 +64,7 @@ import {
   saveSecret,
   secretNames,
 } from '../../../src/secrets.js';
-import {
-  normalizeBaseUrl,
-  probeSummary,
-  resolveEndpoint,
-} from '../../../src/probe.js';
+import { normalizeBaseUrl, resolveEndpoint } from '../../../src/probe.js';
 import { availableUpdate } from '../../../src/update.js';
 import { BUILTIN_SLASH } from '../../../src/tui/slash_commands.js';
 import { ModelCatalog } from '../../../src/model_catalog.js';
@@ -72,6 +73,10 @@ import { isSessionMode } from '../../../src/approvals.js';
 import { currentBranch } from '../../../src/git_info.js';
 import { formatCosts } from '../../../src/pricing.js';
 import { TurnStatus } from '../../../src/tui/turn_status.js';
+import { currentNetworkStatus } from '../../../src/net.js';
+import { SessionMetadata } from './session-metadata';
+import { PlanCompletionTracker } from '../../../src/plan_state.js';
+import { nextAgentActivity } from '../../../src/session_activity.js';
 import { formatElapsed, type TurnUsage } from '../../../src/tui/status_rows.js';
 import {
   approvalPreview,
@@ -189,6 +194,19 @@ export interface ControllerOptions {
 /** The IPC adapter delegates execution and persistence to the existing Circle core. */
 export class RuntimeController {
   readonly home: string;
+  private metadata: SessionMetadata;
+  private planCompletions = new Map<string, PlanCompletionTracker>();
+  private activities = new Map<string, string>();
+  private notices = new Map<
+    string,
+    {
+      id: string;
+      after: string | null;
+      text: string;
+      at: string;
+      planCompleted: number;
+    }[]
+  >();
   private runtimes = new Map<string, AgentRuntime>();
   // The last link an extension asked to open; the window opens each id once.
   private openRequest?: { id: string; url: string; sessionId: string };
@@ -249,6 +267,7 @@ export class RuntimeController {
   constructor(readonly options: ControllerOptions) {
     this.home = options.home;
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
+    this.metadata = new SessionMetadata(this.home);
     const saved = this.savedLocation();
     const workspace =
       options.workspace ?? saved?.workspace ?? join(this.home, 'workspace');
@@ -299,12 +318,19 @@ export class RuntimeController {
                   ? this.confirmUpload(runtime, approval, signal, callId)
                   : approval.kind === 'download'
                     ? this.confirmDownload(runtime, approval, signal, callId)
-                    : this.confirmCertificate(
-                        runtime,
-                        approval,
-                        signal,
-                        callId,
-                      ),
+                    : approval.kind === 'coordinate'
+                      ? this.confirmCoordinate(
+                          runtime,
+                          approval,
+                          signal,
+                          callId,
+                        )
+                      : this.confirmCertificate(
+                          runtime,
+                          approval,
+                          signal,
+                          callId,
+                        ),
               // Paths as the file tools take them (a credential file never goes), the
               // conversation to record and the values a replayed script takes
               ...runtimeBrowserOptions(() => runtime),
@@ -338,6 +364,9 @@ export class RuntimeController {
     }
     runtime.bus.subscribe((event) => this.event(runtime, event));
     this.runtimes.set(workspace, runtime);
+    const tracker = new PlanCompletionTracker();
+    tracker.reset(runtime.todos);
+    this.planCompletions.set(runtime.session.id, tracker);
     return runtime;
   }
   private persistLocation() {
@@ -445,11 +474,16 @@ export class RuntimeController {
         result.push(row);
       }
     }
-    for (const failure of this.failures.get(id) ?? []) {
+    for (const failure of [
+      ...(this.failures.get(id) ?? []),
+      ...(this.notices.get(id) ?? []),
+    ]) {
       // After the message it followed and that message's tool rows
       const at = result.findLastIndex(
         (row) =>
-          row.id === failure.after || row.id.startsWith(`${failure.after}:`),
+          row.id === failure.after ||
+          (row.role === 'tool' && row.parentId === failure.after) ||
+          row.id.startsWith(`${failure.after}:`),
       );
       const index =
         failure.after === null ? 0 : at < 0 ? result.length : at + 1;
@@ -459,6 +493,10 @@ export class RuntimeController {
         role: 'notice',
         text: failure.text,
         at: failure.at,
+        ...('planCompleted' in failure &&
+        typeof failure.planCompleted === 'number'
+          ? { planCompleted: failure.planCompleted }
+          : {}),
       });
     }
     const stream = this.streams.get(id);
@@ -502,13 +540,17 @@ export class RuntimeController {
             (call) => `${node.id}:${call.id}`,
           ),
         ]);
-      for (const failure of this.failures.get(row.id) ?? [])
+      for (const failure of [
+        ...(this.failures.get(row.id) ?? []),
+        ...(this.notices.get(row.id) ?? []),
+      ])
         if (failure.after === null || branchIds.includes(failure.after))
           branchIds.push(failure.id);
       const stream = this.streams.get(row.id);
       if (stream) branchIds.push(stream.id);
       return {
         id: row.id,
+        archivedAt: this.metadata.archivedAt(row.id),
         title: row.title || 'new session',
         workspaceId: identity(row.workspace),
         model: selected ? owner.harness.model.model : row.model,
@@ -583,6 +625,7 @@ export class RuntimeController {
         connected: !this.closing,
         processId: process.pid,
         coreVersion: VERSION,
+        network: currentNetworkStatus(),
         observedAt: new Date().toISOString(),
         configured: !!this.options.model || isReady(settings),
         hasKey: (this.keySaved ??= Boolean(this.savedKey())),
@@ -606,6 +649,7 @@ export class RuntimeController {
           id: row.id,
           sessionId: row.parent_id!,
           name: row.title || 'agent',
+          activity: this.activities.get(row.id),
           description: row.title,
           status: [...this.pending.values()].some(
             (pending) => pending.row.origin?.agent === row.id,
@@ -919,6 +963,30 @@ export class RuntimeController {
     const id = String(
       event.tags?.subagent ?? event.tags?.session_id ?? runtime.session.id,
     );
+    if (event.tags?.subagent)
+      this.activities.set(
+        id,
+        nextAgentActivity(this.activities.get(id), event),
+      );
+    if (!event.tags?.subagent && event.kind === 'todo_list') {
+      let tracker = this.planCompletions.get(id);
+      if (!tracker) {
+        tracker = new PlanCompletionTracker();
+        this.planCompletions.set(id, tracker);
+      }
+      const count = tracker.update(runtime.todos);
+      if (count !== undefined) {
+        const rows = this.notices.get(id) ?? [];
+        rows.push({
+          id: `plan-completed-${randomUUID()}`,
+          after: runtime.store.get(id)?.head ?? null,
+          text: `plan completed · ${count} steps`,
+          at: event.ts,
+          planCompleted: count,
+        });
+        this.notices.set(id, rows);
+      }
+    }
     if (event.kind === 'run_start') this.activeRuns.add(id);
     if (['run_end', 'run_error'].includes(event.kind))
       this.activeRuns.delete(id);
@@ -1155,6 +1223,34 @@ export class RuntimeController {
         ? 'always'
         : 'reject';
   }
+  private async confirmCoordinate(
+    runtime: AgentRuntime,
+    approval: CoordinateApproval,
+    signal: AbortSignal,
+    callId?: string,
+  ): Promise<'once' | 'reject'> {
+    if (runtime.policy.mode(runtime.session.id) === 'auto') return 'once';
+    const answer = await this.wait(
+      runtime,
+      {
+        kind: 'approval',
+        callId,
+        tool: 'browser_click_at',
+        title: 'browser_click_at · clicks a coordinate target',
+        reason: 'clicks a coordinate target',
+        target: approval.origin,
+        input: {
+          site: approval.origin,
+          x: approval.x,
+          y: approval.y,
+          element: approval.element,
+        },
+        choices: ['approve', 'reject'],
+      },
+      signal,
+    );
+    return answer === 'approve' ? 'once' : 'reject';
+  }
   /** The model would give a page files: the person sees which and where, every time. */
   private async confirmUpload(
     runtime: AgentRuntime,
@@ -1330,6 +1426,7 @@ export class RuntimeController {
             'select-session',
             'delete-session',
             'rename-session',
+            'archive-session',
             'answer',
           ].includes(command.name)
         )
@@ -1364,9 +1461,47 @@ export class RuntimeController {
     }
     return result;
   }
+  private assertArchivable(
+    id: string,
+    workspace: string,
+    action = 'archiving',
+  ): void {
+    const owner = this.runtimes.get(workspace);
+    if (
+      (owner?.session.id === id && owner.busy) ||
+      owner?.jobs.list(id).some((job) => job.status === 'running') ||
+      [...this.pending.values()].some((pending) => pending.row.sessionId === id)
+    )
+      throw Error(`stop this session before ${action} it`);
+  }
+  private resetPlan(runtime: AgentRuntime): void {
+    const tracker = new PlanCompletionTracker();
+    tracker.reset(runtime.todos);
+    this.planCompletions.set(runtime.session.id, tracker);
+  }
   private async execute(command: RuntimeCommand): Promise<unknown> {
     const p = command.payload;
     let runtime = this.active;
+    if (
+      this.metadata.archivedAt(runtime.session.id) &&
+      [
+        'prompt',
+        'shell',
+        'write-file',
+        'custom-command',
+        'load-skill',
+        'compact',
+        'share',
+        'select-branch',
+        'label-branch',
+        'set-plan-mode',
+        'set-mode',
+        'set-model',
+        'set-auto',
+        'set-effort',
+      ].includes(command.name)
+    )
+      throw Error('restore this session before continuing');
     switch (command.name) {
       case 'state':
         return this.snapshot();
@@ -1437,6 +1572,7 @@ export class RuntimeController {
       case 'new-session': {
         const previous = runtime.session.id;
         await runtime.newSession();
+        this.resetPlan(runtime);
         this.previous = previous;
         return { sessionId: runtime.session.id };
       }
@@ -1447,7 +1583,14 @@ export class RuntimeController {
         if (id === runtime.session.id) return { sessionId: id };
         this.previous = runtime.session.id;
         runtime = this.runtime(row.workspace);
-        await runtime.switchSession(id);
+        // The owner runtime already holds this session when the person
+        // switches back to a turn that waits on an approval: only the active
+        // pointer moves then. switchSession would rebuild a harness mid-turn
+        // and refuse it with 'a turn is running', locking the answer out.
+        if (runtime.session.id !== id) {
+          await runtime.switchSession(id);
+          this.resetPlan(runtime);
+        }
         this.active = runtime;
         return { sessionId: runtime.session.id };
       }
@@ -1455,17 +1598,37 @@ export class RuntimeController {
         const id = text(p.id, 'session', 200);
         const row = runtime.store.get(id);
         if (!row || row.parent_id) throw Error('session not found');
+        this.assertArchivable(id, row.workspace, 'deleting');
         const owner = this.runtimes.get(row.workspace);
         if (owner?.session.id === id) {
-          if (
-            owner.busy ||
-            owner.jobs.list(id).some((job) => job.status === 'running')
-          )
-            throw Error('stop this session before deleting it');
           await owner.newSession();
+          this.resetPlan(owner);
         }
         runtime.store.delete(id);
+        this.metadata.set([id], false);
         return {};
+      }
+      case 'archive-session': {
+        const id = text(p.id, 'session', 200);
+        const row = runtime.store.get(id);
+        if (!row || row.parent_id) throw Error('session not found');
+        const archive = flag(p.archived);
+        if (archive) this.assertArchivable(id, row.workspace);
+        this.metadata.set([id], archive);
+        return { sessionId: id, archivedAt: this.metadata.archivedAt(id) };
+      }
+      case 'archive-workspace': {
+        const workspaceId = text(p.workspaceId, 'workspace', 200);
+        const rows = runtime.store
+          .list()
+          .filter((row) => identity(row.workspace) === workspaceId);
+        if (!rows.length) throw Error('workspace not found');
+        for (const row of rows) this.assertArchivable(row.id, row.workspace);
+        this.metadata.set(
+          rows.map((row) => row.id),
+          true,
+        );
+        return { archived: rows.length };
       }
       case 'rename-session':
         if (!runtime.store.get(String(p.id ?? command.sessionId)))
@@ -1507,6 +1670,7 @@ export class RuntimeController {
           this.previous = previous;
         }
         runtime.policy.setYolo(runtime.session.id, false);
+        this.resetPlan(runtime);
         return { sessionId: runtime.session.id };
       }
       case 'label-branch': {
@@ -1603,12 +1767,18 @@ export class RuntimeController {
         const endpoint = this.endpointOf(p.endpoint);
         const key = this.keyFor(endpoint, p.apiKey);
         if (!key) throw Error('enter the API key for this endpoint');
-        const found = await resolveEndpoint(endpoint, key);
+        const found = await connectionModels(
+          endpoint,
+          key,
+          p.provider === undefined
+            ? 'custom'
+            : text(p.provider, 'provider', 100),
+        );
         const baseUrl = found.base_url || endpoint;
         this.probed = {
           baseUrl,
           protocol: found.protocol,
-          models: [...found.models],
+          models: found.status === 'preset' ? [] : [...found.models],
         };
         return {
           status: found.status,
@@ -1616,7 +1786,7 @@ export class RuntimeController {
           models: found.models,
           baseUrl,
           inferred: found.inferred,
-          summary: probeSummary(found),
+          summary: connectionSummary(found),
           detail: found.detail,
         };
       }
@@ -1869,6 +2039,7 @@ export class RuntimeController {
         await runtime.importSession(
           text(p.content, 'session export', 4_000_000),
         );
+        this.resetPlan(runtime);
         return { sessionId: runtime.session.id };
       case 'stop-job': {
         const id = text(p.id, 'job', 200);

@@ -40,6 +40,7 @@ export function planRows(
   width: number,
   start = planStart(todos),
   activity: 'running' | 'wait' | 'idle' = 'running',
+  focused = false,
 ): string[] {
   if (!todos.length) return [];
   const p = palette();
@@ -53,10 +54,11 @@ export function planRows(
       : todos.some((todo) => todo.status === 'in_progress')
         ? working
         : 'none';
-  const title = `${lamp === 'none' ? ' ' : ` ${statusLight(lamp)}${p.faint} `}Plan ${done}/${todos.length} `;
+  const border = focused ? p.em : p.faint;
+  const title = `${lamp === 'none' ? ' ' : ` ${statusLight(lamp)}${border} `}Plan ${done}/${todos.length} `;
   // The frame in the input box's own resting colour, `faint`, and nothing behind the steps.
   const rows = [
-    p.faint +
+    border +
       '┌─' +
       title +
       '─'.repeat(Math.max(0, width - stringWidth(title) - 3)) +
@@ -84,13 +86,13 @@ export function planRows(
     const label = ` ${String(start + index + 1).padStart(2)}  ${truncate(text, Math.max(1, width - 10))}`;
     const cell = ' ' + lightColor + glyph + p.reset + color + label;
     rows.push(
-      p.faint +
+      border +
         '│' +
         p.reset +
         color +
         pad(cell, width - 2) +
         p.reset +
-        p.faint +
+        border +
         '│' +
         p.reset,
     );
@@ -100,7 +102,7 @@ export function planRows(
       ? ` ${start + 1}–${start + shown.length} / ${todos.length} `
       : '';
   rows.push(
-    p.faint +
+    border +
       '└' +
       '─'.repeat(Math.max(0, width - stringWidth(range) - 3)) +
       range +

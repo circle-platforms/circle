@@ -43,6 +43,7 @@ import {
   withConnection,
 } from '../settings.js';
 import { resolveEndpoint } from '../probe.js';
+import { PROVIDER_PRESETS } from '../providers.js';
 import { SetupCard, SetupFlow } from './setup_flow.js';
 import { InputParser, type InputEvent } from '../ink/parse_keypress.js';
 import { ThemeWatch } from '../ink/theme_watch.js';
@@ -72,6 +73,10 @@ import {
 import { formatCosts } from '../pricing.js';
 import { SubagentNavigation, type SubagentView } from './subagents.js';
 import { TurnStatus } from './turn_status.js';
+import { PlanCompletionTracker, planVisible } from '../plan_state.js';
+import { nextAgentActivity } from '../session_activity.js';
+import { networkSummary } from '../net.js';
+import { terminalText } from '../ink/components/markdown_renderer.js';
 import { WelcomeState } from './welcome_state.js';
 import { windowTitle } from './status_rows.js';
 import { loadRemap } from '../keybindings.js';
@@ -107,7 +112,7 @@ import {
   updateNotice,
 } from '../update.js';
 import { PlanPanel } from '../ink/components/plan_panel.js';
-import { stripAnsi } from '../ink/string_width.js';
+import { stripAnsi, truncate } from '../ink/string_width.js';
 import { modelScope } from '../model_scope.js';
 import { resumeHint, runningJobs, stoppedJobsLine } from './exit_lines.js';
 import { ChromeBrowser, findBrowser } from '../browser/chrome.js';
@@ -172,6 +177,7 @@ export class SessionApp {
   );
   private backgroundCard = false;
   private agents = new SubagentNavigation();
+  private planCompletions = new Map<string, PlanCompletionTracker>();
   private agentActivity = new Map<
     string,
     {
@@ -179,6 +185,7 @@ export class SessionApp {
       name: string;
       background?: boolean;
       jobId?: string;
+      activity?: string;
     }
   >();
   private frameRows: string[] = [];
@@ -359,6 +366,18 @@ export class SessionApp {
         (shell) => shell.sessionId === this.runtime!.session.id,
       );
       this.state.todos = this.runtime.todos;
+      if (!this.planCompletions.has(this.runtime.session.id)) {
+        const tracker = new PlanCompletionTracker();
+        tracker.reset(this.runtime.todos);
+        this.planCompletions.set(this.runtime.session.id, tracker);
+        this.state.planFocused = false;
+      }
+      if (
+        !planVisible(this.state.todos) ||
+        this.state.dialog ||
+        this.state.picker
+      )
+        this.state.planFocused = false;
       this.plan.update(this.state.todos);
       this.state.planStart = this.plan.start;
       this.state.queue = this.runtime.harness.queuedShown;
@@ -427,6 +446,7 @@ export class SessionApp {
               id: session.id,
               name: activity?.name || session.title.split(':')[0] || 'subagent',
               description: session.title,
+              activity: activity?.activity,
               background: activity?.background,
               jobId: activity?.jobId,
               messages,
@@ -543,6 +563,16 @@ export class SessionApp {
         trusted,
         settingUp: this.settingUp,
       }),
+    );
+    this.state.welcome.splice(
+      -1,
+      0,
+      palette().dim +
+        truncate(
+          ' ' + terminalText(networkSummary()),
+          Math.max(12, (process.stdout.columns || 80) - 1),
+        ) +
+        palette().reset,
     );
     if (!this.started || Date.now() - this.titleAt < 1000) return;
     this.titleAt = Date.now();
@@ -733,6 +763,17 @@ export class SessionApp {
         }
       }
       if (event.kind === 'job_ended') this.jobWakeAt = Date.now() + 1000;
+      if (event.kind === 'todo_list' && !event.tags.subagent) {
+        const sessionId = this.runtime!.session.id;
+        let tracker = this.planCompletions.get(sessionId);
+        if (!tracker) {
+          tracker = new PlanCompletionTracker();
+          this.planCompletions.set(sessionId, tracker);
+        }
+        const completed = tracker.update(this.runtime!.todos);
+        if (completed !== undefined)
+          this.addNotice(`plan completed · ${completed} steps`);
+      }
       if (['job_started', 'job_updated', 'job_ended'].includes(event.kind))
         this.refreshJobsList();
       if (event.tags.subagent) {
@@ -755,6 +796,7 @@ export class SessionApp {
           name: String(event.tags.name || old?.name || 'subagent'),
           background: Boolean(event.tags.job_id) || old?.background,
           jobId: event.tags.job_id ? String(event.tags.job_id) : old?.jobId,
+          activity: nextAgentActivity(old?.activity, event),
         });
         this.activityVersion++;
         if (event.kind === 'llm_end')
@@ -1006,6 +1048,7 @@ export class SessionApp {
     this.state.picker = undefined;
     this.parked.park(this.state);
     this.state.dialog = state;
+    this.state.planFocused = false;
     this.state.waiting = true;
     return new Promise<T>((resolve, reject) => {
       const close = (): void => {
@@ -1057,6 +1100,23 @@ export class SessionApp {
     const auto = this.runtime?.policy.mode(this.runtime.session.id) === 'auto';
     if (approval.kind === 'certificate')
       return auto ? 'auto' : this.confirmCertificate(approval, signal);
+    if (approval.kind === 'coordinate') {
+      if (auto) return 'auto';
+      const choice = await this.askChoice(
+        'browser click',
+        [
+          approval.origin,
+          `target: ${approval.element}`,
+          `coordinates: ${approval.x}, ${approval.y}`,
+          approval.destructive
+            ? 'this target may delete content'
+            : 'this target has no confirmed action',
+        ].join('\n'),
+        ['allow once', 'reject'],
+        signal,
+      );
+      return choice === 'allow once' ? 'once' : 'reject';
+    }
     if (approval.kind === 'download') {
       // auto mode keeps what the model downloads; the other modes ask once per site
       if (auto) return 'once';
@@ -1156,6 +1216,34 @@ export class SessionApp {
         this.hover(event);
         return;
       }
+      if (
+        event.action === 'press' &&
+        event.button === 0 &&
+        !this.state.dialog &&
+        !this.state.picker
+      ) {
+        const top = this.frameRows.findIndex((row) =>
+          /^┌.*Plan \d+\//.test(stripAnsi(row)),
+        );
+        const bottom =
+          top < 0
+            ? -1
+            : this.frameRows.findIndex(
+                (row, index) => index > top && stripAnsi(row).startsWith('└'),
+              );
+        this.state.planFocused =
+          top >= 0 && event.y >= top && event.y <= bottom;
+        if (this.state.planFocused) {
+          this.agents.clear();
+          this.state.find = undefined;
+          if (this.history.query !== undefined) {
+            this.history.endSearch(false);
+            this.state.historySearch = undefined;
+          }
+          this.repaint();
+          return;
+        }
+      }
       if (this.pageButton(event)) return;
       if (this.stripClick(event)) return;
       if (this.selectionMouse(event)) return;
@@ -1233,6 +1321,7 @@ export class SessionApp {
     // a key or paste for the draft: a card that arrives now waits until typing pauses
     if (!this.state.dialog) this.interactions.typed();
     if (event.type === 'paste') {
+      this.state.planFocused = false;
       if (this.state.find && !this.state.dialog) {
         this.state.find.query += event.text;
         this.state.find.refresh(
@@ -1270,6 +1359,39 @@ export class SessionApp {
     }
     const key = this.remap[event.key] || event.key;
     const char = event.char;
+    if (
+      !this.state.dialog &&
+      !this.state.picker &&
+      !this.state.agentDetail &&
+      !this.state.jobDetail
+    ) {
+      if (key === 'alt+p' && planVisible(this.state.todos)) {
+        this.state.planFocused = !this.state.planFocused;
+        this.agents.clear();
+        this.state.find = undefined;
+        if (this.history.query !== undefined) {
+          this.history.endSearch(false);
+          this.state.historySearch = undefined;
+        }
+        this.flash(
+          this.state.planFocused ? 'plan · esc returns to input' : 'input',
+        );
+        this.repaint();
+        return;
+      }
+      if (this.state.planFocused) {
+        if (key === 'up' || key === 'down') {
+          this.plan.scroll(key === 'up' ? -1 : 1);
+          this.repaint();
+          return;
+        }
+        this.state.planFocused = false;
+        if (key === 'escape') {
+          this.repaint();
+          return;
+        }
+      }
+    }
     if (!this.state.dialog && !this.state.picker && this.state.find) {
       const find = this.state.find;
       if (['escape', 'ctrl+c', 'ctrl+f'].includes(key))
@@ -2196,7 +2318,7 @@ export class SessionApp {
         },
         leave,
       );
-      askUrl(list, flow.savedUrl);
+      askUrl(list, flow.baseUrl);
       // picker() painted the list before the question was put on it
       this.repaint();
     };
@@ -2272,9 +2394,20 @@ export class SessionApp {
           },
           leave,
         );
+      } else if (flow.step === 'provider') {
+        this.picker(
+          title(),
+          PROVIDER_PRESETS.map((item) => ({ key: item.id, label: item.name })),
+          (item) => {
+            flow.chooseProvider(item.key);
+            ask();
+          },
+          { hint: 'which provider?' },
+          leave,
+        );
       } else ask();
     };
-    ask();
+    next();
   }
   /** pbcopy, wl-copy or xclip (clip on Windows); false when none took the text. */
   private async copy(text: string): Promise<boolean> {

@@ -37,10 +37,8 @@ test('file pagination skips zero-based source lines and accepts CRLF, CR and EOF
       assert.equal(await read(3, 20), '4: four');
       assert.match(await read(0, 0), /no lines were read/);
       assert.match(await read(0, -3), /no lines were read/);
-      await assert.rejects(
-        read(4, 1),
-        /offset 4 exceeds file length \(4 lines\)/,
-      );
+      assert.match(await read(4, 1), /offset 4.*4 lines.*0\.\.3/);
+      assert.match(await read(120, 1), /offset 120.*4 lines.*0\.\.3/);
     }
   }
 });
