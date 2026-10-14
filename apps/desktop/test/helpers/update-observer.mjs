@@ -137,12 +137,11 @@ export function ownedProcesses(rows, owner, known = [], excluded = []) {
     changed = false;
     for (const row of rows) {
       if (selected.has(row.pid) || excluded.includes(row.pid)) continue;
-      const parent = selected.get(row.parentPid) ?? anchors.get(row.parentPid);
+      // Only a verified parent in this snapshot can authorize a new child.
+      // After a parent exits, its PID may have been reused and exited again.
+      // Previously verified children retain ownership through their own identity.
+      const parent = selected.get(row.parentPid);
       if (!parent) continue;
-      const liveParent = rows.find((candidate) => candidate.pid === parent.pid);
-      // A remembered parent may have exited; if its PID is alive with another
-      // identity it cannot authorize a new descendant.
-      if (liveParent && !sameProcess(liveParent, parent)) continue;
       if (!bornAfter(row, parent)) continue;
       selected.set(row.pid, row);
       changed = true;
