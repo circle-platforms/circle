@@ -96,12 +96,38 @@ const env = {
 delete env.ELECTRON_RUN_AS_NODE;
 let app;
 let cdp;
+let page;
+const inputDelay = Math.max(
+  0,
+  Math.min(2000, Number(process.env.CIRCLE_BROWSER_PAGE_INPUT_DELAY_MS) || 0),
+);
 let navigation = 0;
 const started = Date.now();
 const metadata = [];
+const completedInputEvents = [];
 const record = (value) => {
   metadata.push({ at: Date.now() - started, ...value });
   if (metadata.length > 200) metadata.shift();
+};
+const inputMetadata = async () => {
+  if (!app || !page) return {};
+  return {
+    native: await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      return {
+        visible: window.isVisible(),
+        windowFocused: window.isFocused(),
+        contentsFocused: window.webContents.isFocused(),
+        requests: globalThis.circleInputTrace ?? [],
+      };
+    }),
+    page: await page.evaluate(() => ({
+      visibility: document.visibilityState,
+      focused: document.hasFocus(),
+      currentEvents: window.circleInputEvents ?? [],
+    })),
+    completedInputEvents,
+  };
 };
 try {
   app = await electron.launch({
@@ -111,7 +137,7 @@ try {
     cwd: root,
     chromiumSandbox: true,
   });
-  const page = await app.firstWindow();
+  page = await app.firstWindow();
   await page.waitForLoadState('load');
   cdp = await page.context().newCDPSession(page);
   for (const method of [
@@ -292,47 +318,197 @@ try {
   assert(shadowTarget.x > 0 && shadowTarget.y > 0);
   const slottedTarget = await run('prepare', { ref: ref('slotted action') });
   assert(slottedTarget.x > 0 && slottedTarget.y > 0);
+  await page.evaluate(() => {
+    window.circleInputEvents = [];
+    for (const type of ['keydown', 'keyup', 'beforeinput', 'input'])
+      document.addEventListener(
+        type,
+        (event) => {
+          const target = event.target;
+          if (!['username', 'number'].includes(target.id)) return;
+          window.circleInputEvents.push({
+            at: performance.now(),
+            type,
+            target: target.id,
+            tag: target.tagName,
+            inputType: event.inputType,
+            code: event.code,
+            trusted: event.isTrusted,
+            prevented: event.defaultPrevented,
+            length: target.value.length,
+            selectionStart: target.selectionStart,
+            selectionEnd: target.selectionEnd,
+            active: document.activeElement === target,
+          });
+        },
+        true,
+      );
+  });
   await app.evaluate(async ({ BrowserWindow }) => {
     const contents = BrowserWindow.getAllWindows()[0].webContents;
     contents.debugger.attach('1.3');
+    globalThis.circleInputTrace = [];
   });
   const write = async (name, text) => {
     await run('focus', { ref: ref(name) });
-    await app.evaluate(async ({ BrowserWindow }, text) => {
-      const contents = BrowserWindow.getAllWindows()[0].webContents;
-      const select = {
-        key: 'a',
-        code: 'KeyA',
-        windowsVirtualKeyCode: 65,
-        modifiers: process.platform === 'darwin' ? 4 : 2,
-      };
-      await contents.debugger.sendCommand('Input.dispatchKeyEvent', {
-        type: 'rawKeyDown',
-        ...select,
-        commands: ['selectAll'],
-      });
-      await contents.debugger.sendCommand('Input.dispatchKeyEvent', {
-        type: 'keyUp',
-        ...select,
-      });
-      if (text)
-        await contents.debugger.sendCommand('Input.insertText', { text });
-      else {
-        const backspace = {
-          key: 'Backspace',
-          code: 'Backspace',
-          windowsVirtualKeyCode: 8,
+    const selector = name === 'username' ? '#username' : '#number';
+    const eventStart = await page.evaluate(
+      () => window.circleInputEvents.length,
+    );
+    await app.evaluate(
+      async ({ BrowserWindow }, { text, inputDelay }) => {
+        const contents = BrowserWindow.getAllWindows()[0].webContents;
+        const state = async () =>
+          contents.executeJavaScript(
+            `(() => {const target=document.activeElement;return {tag:target?.tagName,type:target?.type,focused:document.hasFocus(),visibility:document.visibilityState,selectionStart:target?.selectionStart,selectionEnd:target?.selectionEnd,length:['username','number'].includes(target?.id)?target.value.length:undefined}})()`,
+          );
+        const send = async (method, args) => {
+          const at = Date.now();
+          globalThis.circleInputTrace.push({
+            kind: 'request',
+            at,
+            method,
+            type: args.type,
+            code: args.code,
+            commands: args.commands,
+            textLength: args.text?.length,
+            state: await state(),
+          });
+          try {
+            await contents.debugger.sendCommand(method, args);
+            globalThis.circleInputTrace.push({
+              kind: 'ack',
+              at: Date.now(),
+              method,
+              type: args.type,
+              elapsed: Date.now() - at,
+              state: await state(),
+            });
+          } catch (error) {
+            globalThis.circleInputTrace.push({
+              kind: 'error',
+              at: Date.now(),
+              method,
+              type: args.type,
+              elapsed: Date.now() - at,
+              errorType: error.name,
+            });
+            throw error;
+          }
         };
-        await contents.debugger.sendCommand('Input.dispatchKeyEvent', {
+        const select = {
+          key: 'a',
+          code: 'KeyA',
+          windowsVirtualKeyCode: 65,
+          modifiers: process.platform === 'darwin' ? 4 : 2,
+        };
+        await send('Input.dispatchKeyEvent', {
           type: 'rawKeyDown',
-          ...backspace,
+          ...select,
+          commands: ['selectAll'],
         });
-        await contents.debugger.sendCommand('Input.dispatchKeyEvent', {
+        await send('Input.dispatchKeyEvent', {
           type: 'keyUp',
-          ...backspace,
+          ...select,
         });
-      }
-    }, text);
+        if (text) await send('Input.insertText', { text });
+        else {
+          const backspace = {
+            key: 'Backspace',
+            code: 'Backspace',
+            windowsVirtualKeyCode: 8,
+          };
+          const clear = async () => {
+            await send('Input.dispatchKeyEvent', {
+              type: 'rawKeyDown',
+              ...backspace,
+            });
+            await send('Input.dispatchKeyEvent', {
+              type: 'keyUp',
+              ...backspace,
+            });
+          };
+          if (inputDelay) {
+            // Test-only ordering fixture: return before the actual native key is sent.
+            // The effect still comes exclusively from the real CDP Backspace sequence.
+            globalThis.circlePendingInput = new Promise((resolve) =>
+              setTimeout(resolve, inputDelay),
+            )
+              .then(clear)
+              .catch((error) => {
+                globalThis.circleInputTrace.push({
+                  kind: 'deferred-error',
+                  errorType: error.name,
+                });
+                throw error;
+              });
+            void globalThis.circlePendingInput.catch(() => {});
+          } else await clear();
+        }
+      },
+      { text, inputDelay },
+    );
+    const immediate = await page.evaluate((selector) => {
+      const target = document.querySelector(selector);
+      return {
+        length: target.value.length,
+        selectionStart: target.selectionStart,
+        selectionEnd: target.selectionEnd,
+        active: document.activeElement === target,
+        focused: document.hasFocus(),
+      };
+    }, selector);
+    record({
+      kind: 'input-dispatch-returned',
+      target: name === 'username' ? 'username' : 'number',
+      expectedLength: text.length,
+      inputDelay,
+      state: immediate,
+    });
+    if (inputDelay && !text)
+      assert(
+        immediate.length > 0,
+        'the controlled native delay must actually expose the pre-effect state',
+      );
+    const effect = page.waitForFunction(
+      ({ selector, expected, eventStart }) => {
+        const target = document.querySelector(selector);
+        return (
+          target.value === expected &&
+          window.circleInputEvents
+            .slice(eventStart)
+            .some(
+              (event) =>
+                event.type === 'input' &&
+                event.target === target.id &&
+                event.trusted,
+            )
+        );
+      },
+      { selector, expected: text, eventStart },
+      { polling: 20, timeout: 10_000 },
+    );
+    if (inputDelay && !text) {
+      const dispatched = app.evaluate(async () => {
+        try {
+          await globalThis.circlePendingInput;
+        } finally {
+          globalThis.circlePendingInput = undefined;
+        }
+      });
+      await Promise.all([effect, dispatched]);
+    } else await effect;
+    completedInputEvents.push(
+      ...(await page.evaluate(
+        (eventStart) => window.circleInputEvents.slice(eventStart),
+        eventStart,
+      )),
+    );
+    record({
+      kind: 'input-effect-completed',
+      target: name === 'username' ? 'username' : 'number',
+      expectedLength: text.length,
+    });
   };
   await write('username', 'replacement username');
   assert.equal(
@@ -478,7 +654,13 @@ try {
   await writeFile(
     join(evidence, 'browser-page-metadata.json'),
     JSON.stringify(
-      { platform: process.platform, success: true, metadata },
+      {
+        platform: process.platform,
+        arch: process.arch,
+        success: true,
+        metadata,
+        input: await inputMetadata(),
+      },
       null,
       2,
     ),
@@ -487,7 +669,13 @@ try {
   await writeFile(
     join(evidence, 'browser-page-failure-metadata.json'),
     JSON.stringify(
-      { platform: process.platform, success: false, metadata },
+      {
+        platform: process.platform,
+        arch: process.arch,
+        success: false,
+        metadata,
+        input: await inputMetadata().catch(() => ({ unavailable: true })),
+      },
       null,
       2,
     ),

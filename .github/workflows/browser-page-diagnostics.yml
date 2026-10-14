@@ -1,0 +1,35 @@
+name: Browser page diagnostics
+on:
+  pull_request:
+    paths:
+      - 'apps/desktop/test/browser-page.mjs'
+      - 'src/browser/page.ts'
+      - '.github/workflows/browser-page-diagnostics.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  page-x64:
+    runs-on: macos-15-intel
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/desktop/package-lock.json
+      - run: npm ci
+      - run: npm --prefix apps/desktop ci
+      - run: node -e "console.log(require('./apps/desktop/node_modules/electron'))"
+      # This standalone fixture creates only local HTTP pages and isolated profiles.
+      - run: node apps/desktop/test/browser-page.mjs
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        if: always()
+        with:
+          name: circle-browser-page-x64-diagnostics
+          path: outputs/browser-regressions/*metadata.json
+          if-no-files-found: ignore
+          retention-days: 7
