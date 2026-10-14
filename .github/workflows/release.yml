@@ -216,7 +216,8 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: circle-desktop-${{ matrix.target }}-verification
+          # Not circle-*: publish takes every circle-* artifact as a release asset
+          name: verification-desktop-${{ matrix.target }}
           path: |
             apps/desktop/artifacts/
             outputs/browser-regressions/*metadata.json
@@ -249,9 +250,11 @@ jobs:
           node-version: '24.21.0'
           cache: npm
       - run: npm ci
+      # The packages only, not the checks' evidence
       - uses: actions/download-artifact@v7
         with:
           path: dist-release
+          pattern: circle-*
           merge-multiple: true
       - name: Checksums
         run: |
