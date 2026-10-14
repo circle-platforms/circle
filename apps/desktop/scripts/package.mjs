@@ -4,6 +4,10 @@ import { cp, mkdir, rm, readFile, writeFile, symlink } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join, relative } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { BETA, RELEASE } from '../src/channel.ts';
+// --beta (npm run package:beta) packages Circle (beta) to run beside a release on this
+// machine: a bundle id and data folder of its own, no updates and no release archive
+const channel = process.argv.includes('--beta') ? BETA : RELEASE;
 const root = fileURLToPath(new URL('..', import.meta.url));
 const outputRoot = process.env.CIRCLE_DESKTOP_OUTPUT_DIR ?? join(root, 'out');
 const stage = join(root, '.stage');
@@ -33,6 +37,7 @@ await writeFile(
       main: 'dist/main.cjs',
       description: manifest.description,
       license: 'Apache-2.0',
+      ...(channel.beta ? { channel: 'beta' } : {}),
     },
     null,
     2,
@@ -43,11 +48,11 @@ const arch = process.env.CIRCLE_DESKTOP_ARCH ?? process.arch;
 const paths = await packager({
   dir: stage,
   out: outputRoot,
-  name: 'Circle',
+  name: channel.name,
   platform,
   arch,
   electronVersion: manifest.devDependencies.electron,
-  appBundleId: 'com.qingshanfeihu.circle',
+  appBundleId: channel.id,
   appCategoryType: 'public.app-category.developer-tools',
   icon:
     platform === 'darwin'
@@ -65,20 +70,23 @@ const target = `${platform === 'win32' ? 'windows' : platform}-${arch}`;
 const asset = join(outputRoot, `circle-desktop-${version}-${target}`);
 const artifactPaths = paths.map((path) =>
   platform === 'darwin'
-    ? join(path, 'Circle.app/Contents/Resources/app.asar')
+    ? join(path, `${channel.name}.app/Contents/Resources/app.asar`)
     : join(path, 'resources/app.asar'),
 );
 const archives = [];
 if (platform === 'darwin' && process.platform === 'darwin') {
   // Packaging changes the bundle Electron's own ad-hoc signature covered; a copy with a broken
   // signature is "damaged" once downloaded. Sign the whole application again, ad hoc.
-  const bundle = join(paths[0], 'Circle.app');
+  const bundle = join(paths[0], `${channel.name}.app`);
   execFileSync('codesign', ['--force', '--deep', '--sign', '-', bundle], {
     stdio: 'inherit',
   });
   execFileSync('codesign', ['--verify', '--deep', '--strict', bundle], {
     stdio: 'inherit',
   });
+}
+if (platform === 'darwin' && process.platform === 'darwin' && !channel.beta) {
+  const bundle = join(paths[0], `${channel.name}.app`);
   const image = `${asset}.dmg`;
   const content = join(root, '.stage-dmg');
   await rm(content, { recursive: true, force: true });
@@ -118,7 +126,7 @@ if (platform === 'darwin' && process.platform === 'darwin') {
   }
   await rm(content, { recursive: true, force: true });
   archives.push(image);
-} else if (platform === 'linux') {
+} else if (platform === 'linux' && !channel.beta) {
   const archive = `${asset}.tar.gz`;
   execFileSync(
     'tar',

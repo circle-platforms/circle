@@ -5,6 +5,7 @@ import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { RELEASE } from '../src/channel.ts';
 import {
   ARCH,
   PACKAGE_SOURCE,
@@ -195,14 +196,15 @@ test('the Start menu entry starts Circle.exe with the application user model ID'
       ],
     ],
   );
-  // The same ID the application gives itself on Windows and is packaged with
+  // The same ID the release gives itself on Windows and is packaged with
+  assert.equal(RELEASE.id, 'com.qingshanfeihu.circle');
   const main = await readFile(join(desktop, 'src/main.ts'), 'utf8');
-  assert.match(main, /setAppUserModelId\('com\.qingshanfeihu\.circle'\)/);
+  assert.match(main, /setAppUserModelId\(channel\.id\)/);
   const packageScript = await readFile(
     join(desktop, 'scripts/package.mjs'),
     'utf8',
   );
-  assert.match(packageScript, /appBundleId: 'com\.qingshanfeihu\.circle'/);
+  assert.match(packageScript, /appBundleId: channel\.id,/);
   // A shortcut that is not advertised needs a per-user registry key path (ICE38, ICE43)
   const key = only(component, 'RegistryValue');
   assert.equal(key.attributes.Root, 'HKCU');

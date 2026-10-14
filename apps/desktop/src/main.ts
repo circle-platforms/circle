@@ -42,15 +42,29 @@ import {
 import type { DesktopAction, DesktopInfo, UpdateAction } from './contracts';
 import { installation, Updater } from './updater';
 import { releaseTag, updateCheckEnabled } from '../../../src/update.js';
-app.setName('Circle');
+import { channelOf } from './channel';
+// A release, or a beta that package:beta wrote into the packaged package.json
+const channel = channelOf(
+  (() => {
+    try {
+      return JSON.parse(
+        readFileSync(join(app.getAppPath(), 'package.json'), 'utf8'),
+      );
+    } catch {
+      return undefined;
+    }
+  })(),
+);
+app.setName(channel.name);
 // Windows shows notifications for the id the installer's Start menu shortcut carries.
-if (process.platform === 'win32')
-  app.setAppUserModelId('com.qingshanfeihu.circle');
+if (process.platform === 'win32') app.setAppUserModelId(channel.id);
 const dataPath =
   process.env.CIRCLE_WORKBENCH_DATA_DIR ??
-  (existsSync(join(app.getPath('appData'), 'Circle Workbench'))
-    ? join(app.getPath('appData'), 'Circle Workbench')
-    : join(app.getPath('appData'), 'Circle'));
+  (channel.beta
+    ? join(app.getPath('appData'), channel.folder)
+    : existsSync(join(app.getPath('appData'), 'Circle Workbench'))
+      ? join(app.getPath('appData'), 'Circle Workbench')
+      : join(app.getPath('appData'), channel.folder));
 app.setPath('userData', dataPath);
 // --no-sandbox contradicts enableSandbox(): the main process then crashes
 // with an access violation when the first child process starts
@@ -248,14 +262,16 @@ const updater = new Updater({
   version: app.getVersion(),
   home: join(dataPath, 'runtime-home'),
   folder: join(dataPath, 'updates'),
-  installation: app.isPackaged
-    ? installation(
-        process.platform,
-        process.arch,
-        process.execPath,
-        process.env.ProgramFiles,
-      )
-    : undefined,
+  // A beta does not replace itself: the release would take its place
+  installation:
+    app.isPackaged && !channel.beta
+      ? installation(
+          process.platform,
+          process.arch,
+          process.execPath,
+          process.env.ProgramFiles,
+        )
+      : undefined,
   platform: process.platform,
   request: (input, init) => net.fetch(input as string, init),
   latest: async (releases) =>
