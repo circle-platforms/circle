@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.5.0 - 2026-10-14
+
 ### Changed
 
 - **Auto mode asks nothing in the browser either.** Passing a certificate warning and giving a page files no longer ask in `auto` mode, and the model's result names the certificate it passed; in the desktop application a page's permission request and a site's request for a client certificate are refused without asking. Turning `auto` on says what it lets through.
