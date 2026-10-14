@@ -134,19 +134,20 @@ test(
   },
 );
 
+// The default store counted once each: NODE_EXTRA_CA_CERTS may repeat authorities Node.js
+// already has, and setting the store again, or merging it into a bundle, keeps one of each
+const authorities = () =>
+  new Set(
+    tls
+      .getCACertificates('default')
+      .map((pem) => new X509Certificate(pem).fingerprint256),
+  ).size;
+
 test(
   'configureNetwork adds settings files without replacing the system store',
   { skip: NO_OPENSSL },
   async (t) => {
     const { ca } = certificates(t);
-    // Counted once each: NODE_EXTRA_CA_CERTS may repeat authorities Node.js already has,
-    // and setting the store again keeps one of each
-    const authorities = () =>
-      new Set(
-        tls
-          .getCACertificates('default')
-          .map((pem) => new X509Certificate(pem).fingerprint256),
-      ).size;
     const before = authorities();
     const setup = configureNetwork({}, [ca]);
     assert.equal(setup.certificates, 1);
@@ -177,7 +178,7 @@ test(
     );
     const bundle = readFileSync(tool.bundle, 'utf8');
     assert.ok(bundle.includes('-----BEGIN CERTIFICATE-----'));
-    assert.equal(tool.authorities, tls.getCACertificates('default').length + 1);
+    assert.equal(tool.authorities, authorities() + 1);
     assert.ok(
       bundle.includes(
         readFileSync(ca, 'utf8').match(
@@ -197,7 +198,7 @@ test(
     assert.ok(merged!.bundle !== ca, 'SSL_CERT_FILE now points at the merge');
     assert.equal(
       countPem(readFileSync(merged!.bundle, 'utf8')),
-      tls.getCACertificates('default').length + 1,
+      authorities() + 1,
       'the hand-set file joins the merge',
     );
   },
