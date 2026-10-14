@@ -1,7 +1,7 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -2514,7 +2514,11 @@ async function setupScratch(
   t: TestContext,
   replies: ConstructorParameters<typeof ScriptedModel>[0],
 ) {
-  const root = await mkdtemp(join(tmpdir(), 'circle-core-desktop-'));
+  // One spelling for every path: on macOS the temp folder is a symlink, and the
+  // controller answers with realpath'd ones.
+  const root = realpathSync(
+    await mkdtemp(join(tmpdir(), 'circle-core-desktop-')),
+  );
   const home = join(root, 'home');
   await mkdir(home);
   saveSettings(defaultSettings(), home);
@@ -2643,8 +2647,42 @@ test('the default workspace refuses the data folder and cannot be set through sa
   assert.equal(loadSettings(f.home).workspace_folder, '');
 });
 
+test('the data folder keeps its protection when home is reached through a link', async (t) => {
+  const f = await setupScratch(t, []);
+  try {
+    symlinkSync(f.home, join(f.root, 'linked-home'), 'dir');
+  } catch {
+    return; // Windows without the symlink privilege: the direct check covers it.
+  }
+  const linked = new RuntimeController({
+    home: join(f.root, 'linked-home'),
+    userHome: f.home,
+    model: new ScriptedModel([]),
+    emit: () => {},
+  });
+  try {
+    const reply = await linked.dispatch({
+      id: randomUUID(),
+      name: 'set-default-workspace',
+      payload: { path: f.home },
+      sessionId: linked.snapshot().activeSessionId,
+    });
+    // The chosen path arrives realpath'd while home is the link's spelling: the
+    // guard must still see the data folder itself and refuse it.
+    assert.equal(reply.ok, false);
+    assert.match(String(reply.error), /data folder/);
+    assert.equal(loadSettings(f.home).workspace_folder, '');
+  } finally {
+    // Closed here, not in t.after: the fixture's own hook removes the folder first.
+    await linked.close();
+  }
+});
+
 test('startup prefers the last-used folder, then workspace_folder, then the scratch folder', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'circle-core-desktop-'));
+  // One spelling for every path, as in setupScratch: macOS temp folders are symlinks.
+  const root = realpathSync(
+    await mkdtemp(join(tmpdir(), 'circle-core-desktop-')),
+  );
   const home = join(root, 'home');
   const configured = join(root, 'configured');
   const lastUsed = join(root, 'last-used');

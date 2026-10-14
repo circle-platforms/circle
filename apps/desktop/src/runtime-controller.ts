@@ -297,12 +297,18 @@ export class RuntimeController {
   }
   // The default workspace may not expose the app's own data: not the data folder,
   // not a folder inside it, not a folder containing it. The scratch folder is the
-  // one exception: choosing it again resets the default.
+  // one exception: choosing it again resets the default. The data folder itself is
+  // compared by its real path: home may sit behind a link, while a chosen path
+  // always arrives realpath'd, and the two spellings would otherwise slip past.
   private acceptableDefaultFolder(target: string): boolean {
-    return (
-      this.isScratch(target) ||
-      (!folderContains(this.home, target) && !folderContains(target, this.home))
-    );
+    if (this.isScratch(target)) return true;
+    let home = this.home;
+    try {
+      home = realpathSync(home);
+    } catch {
+      /* Keep the spelling we were given. */
+    }
+    return !folderContains(home, target) && !folderContains(target, home);
   }
   // The configured default workspace, or undefined when the built-in scratch folder
   // is the default: no folder is configured, or the configured one is missing, is

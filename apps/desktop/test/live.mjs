@@ -121,8 +121,8 @@ const command = (name, payload = {}, sessionId) =>
     },
     { name, payload, sessionId },
   );
-async function waitFor(check, name) {
-  const deadline = Date.now() + 12_000;
+async function waitFor(check, name, milliseconds = 12_000) {
+  const deadline = Date.now() + milliseconds;
   while (!(await check())) {
     if (Date.now() > deadline) throw Error(`timed out: ${name}`);
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -700,11 +700,28 @@ try {
     .getByRole('heading', { name: 'default workspace', exact: true })
     .waitFor();
   await page.getByRole('button', { name: 'change…', exact: true }).click();
-  await waitFor(
-    async () =>
-      (await state()).settings.workspaceFolder === realpathSync(defaultTarget),
-    'the moved default workspace',
-  );
+  // The move crosses three processes, and perform() shows a failure only as a
+  // toast for four seconds: collect them so a timeout says what the app saw.
+  const toasts = new Set();
+  try {
+    await waitFor(
+      async () => {
+        for (const text of await page.locator('.toast').allInnerTexts())
+          toasts.add(text);
+        return (
+          (await state()).settings.workspaceFolder ===
+          realpathSync(defaultTarget)
+        );
+      },
+      'the moved default workspace',
+      30_000,
+    );
+  } catch (error) {
+    const current = await state();
+    throw Error(
+      `${error.message}: workspaceFolder stayed ${current.settings.workspaceFolder}, toasts: ${[...toasts].join(' | ') || 'none'}`,
+    );
+  }
   const moved = await state();
   assert.equal(moved.settings.oldWorkspaceFolder, scratch);
   assert.equal(
