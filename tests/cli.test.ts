@@ -138,6 +138,27 @@ interface Run {
   code: number | null;
   stdout: string;
   stderr: string;
+  lifecycle: {
+    pid?: number;
+    spawnedAt: number;
+    beforeMainAt?: number;
+    stdinOpenBeforeMain?: boolean;
+    stdinEndedByFixture: boolean;
+    warningAt?: number;
+    timedOutAt?: number;
+    exited: boolean;
+    code?: number | null;
+    signal?: NodeJS.Signals | null;
+    closedAt?: number;
+  };
+}
+class CliFixtureDeadline extends Error {
+  constructor(
+    readonly timeoutMs: number,
+    readonly lifecycle: Run['lifecycle'],
+  ) {
+    super(`CLI fixture exceeded ${timeoutMs}ms`);
+  }
 }
 // tsx by path, so the CLI can run from another current folder.
 const TSX = pathToFileURL(
@@ -152,10 +173,28 @@ function circle(
     cwd?: string;
     stdin?: string | null;
     env?: Record<string, string>;
+    startupDelayMs?: number;
+    timeoutMs?: number;
   } = {},
 ): Promise<Run> {
   return new Promise((done, reject) => {
-    const child = spawn(process.execPath, ['--import', TSX, CLI, ...args], {
+    const spawnedAt = Date.now();
+    const launch =
+      options.startupDelayMs === undefined
+        ? ['--import', TSX, CLI, ...args]
+        : [
+            '--import',
+            TSX,
+            '--input-type=module',
+            '-e',
+            `await new Promise(resolve=>setTimeout(resolve,${options.startupDelayMs}));
+             const {main}=await import(${JSON.stringify(pathToFileURL(CLI).href)});
+             process.stderr.write('circle fixture before main '+Date.now()+'\\n');
+             process.exitCode=await main(process.argv.slice(1));`,
+            '--',
+            ...args,
+          ];
+    const child = spawn(process.execPath, launch, {
       cwd: options.cwd ?? process.cwd(),
       env: {
         ...process.env,
@@ -168,16 +207,57 @@ function circle(
     });
     let stdout = '';
     let stderr = '';
+    const lifecycle: Run['lifecycle'] = {
+      pid: child.pid,
+      spawnedAt,
+      stdinEndedByFixture: false,
+      exited: false,
+    };
     child.stdout.on('data', (data) => (stdout += data));
-    child.stderr.on('data', (data) => (stderr += data));
-    child.once('error', reject);
-    child.once('close', (code) => {
-      clearTimeout(closer);
-      done({ code, stdout, stderr });
+    child.stderr.on('data', (data) => {
+      stderr += data;
+      const ready = stderr.match(/circle fixture before main (\d+)\n/);
+      if (ready && lifecycle.beforeMainAt === undefined) {
+        lifecycle.beforeMainAt = Number(ready[1]);
+        lifecycle.stdinOpenBeforeMain =
+          !child.stdin.writableEnded && !child.stdin.destroyed;
+      }
+      if (
+        lifecycle.warningAt === undefined &&
+        stderr.includes('nothing arrived on stdin within 3s')
+      )
+        lifecycle.warningAt = Date.now();
     });
-    const closer = setTimeout(() => child.stdin.end(), 10000);
+    let failure: Error | undefined;
+    let force: ReturnType<typeof setTimeout> | undefined;
+    child.once('error', (error) => (failure ??= error));
+    child.once('exit', (code, signal) => {
+      lifecycle.exited = true;
+      lifecycle.code = code;
+      lifecycle.signal = signal;
+    });
+    child.once('close', (code) => {
+      clearTimeout(deadline);
+      clearTimeout(force);
+      lifecycle.closedAt = Date.now();
+      if (failure) reject(failure);
+      else done({ code, stdout, stderr, lifecycle });
+    });
+    // A hung owned process fails; EOF must never make a null-stdin trial succeed.
+    const timeoutMs = options.timeoutMs ?? 30_000;
+    const deadline = setTimeout(() => {
+      lifecycle.timedOutAt = Date.now();
+      failure ??= new CliFixtureDeadline(timeoutMs, lifecycle);
+      child.kill();
+      force = setTimeout(() => {
+        if (!lifecycle.exited) child.kill('SIGKILL');
+        // Release only this failed child's output handles if a descendant held them.
+        child.stdout.destroy();
+        child.stderr.destroy();
+      }, 1000);
+    }, timeoutMs);
     if (options.stdin !== null) {
-      clearTimeout(closer);
+      lifecycle.stdinEndedByFixture = true;
       child.stdin.end(options.stdin ?? '');
     }
   });
@@ -588,6 +668,62 @@ test('a prompt goes on without stdin that stays open, and the folder must be tru
   assert.equal(unset.code, 2);
   assert.match(unset.stderr, /Circle is not set up yet/);
   assert.equal(endpoint.bodies.length, 1);
+});
+
+test('an open stdin survives a slow real CLI startup, waits three seconds and reaches the local gateway', async (t) => {
+  const home = scratch(t);
+  const workspace = realpathSync(scratch(t));
+  const endpoint = await gateway(t, [{ content: 'slow startup answered' }]);
+  setUp(home, endpoint.base, [workspace]);
+  const run = await circle(home, ['-p', 'slow startup prompt', workspace], {
+    stdin: null,
+    startupDelayMs: 10_001,
+    env: { CIRCLE_NO_UPDATE_CHECK: '1' },
+  });
+  t.diagnostic(
+    JSON.stringify({
+      cliFixture: run.lifecycle,
+      gatewayRequests: endpoint.bodies.length,
+    }),
+  );
+  assert.equal(run.code, 0, run.stderr);
+  assert.ok(run.lifecycle.beforeMainAt! - run.lifecycle.spawnedAt > 10_000);
+  assert.equal(run.lifecycle.stdinOpenBeforeMain, true);
+  assert.equal(run.lifecycle.stdinEndedByFixture, false);
+  assert.match(run.stderr, /nothing arrived on stdin within 3s/);
+  assert.ok(run.lifecycle.warningAt! - run.lifecycle.beforeMainAt! >= 3000);
+  assert.equal(endpoint.bodies.length, 1);
+  assert.equal(userText(endpoint.bodies[0]!), 'slow startup prompt');
+  assert.equal(run.stdout.trim(), 'slow startup answered');
+  assert.equal(run.lifecycle.exited, true);
+});
+
+test('the CLI fixture deadline rejects after its owned real child exits and sends no substitute EOF or gateway request', async (t) => {
+  const home = scratch(t);
+  const workspace = realpathSync(scratch(t));
+  const endpoint = await gateway(t, [{ content: 'must not be requested' }]);
+  setUp(home, endpoint.base, [workspace]);
+  await assert.rejects(
+    circle(home, ['-p', 'must not reach the model', workspace], {
+      stdin: null,
+      startupDelayMs: 10_001,
+      timeoutMs: 100,
+      env: { CIRCLE_NO_UPDATE_CHECK: '1' },
+    }),
+    (error) => {
+      assert.ok(error instanceof CliFixtureDeadline);
+      assert.equal(error.timeoutMs, 100);
+      assert.ok(error.lifecycle.pid! > 0);
+      assert.ok(error.lifecycle.timedOutAt! - error.lifecycle.spawnedAt >= 100);
+      assert.equal(error.lifecycle.stdinEndedByFixture, false);
+      assert.equal(error.lifecycle.exited, true);
+      assert.equal(error.lifecycle.code, null);
+      assert.ok(error.lifecycle.signal);
+      assert.ok(error.lifecycle.closedAt! >= error.lifecycle.timedOutAt!);
+      return true;
+    },
+  );
+  assert.equal(endpoint.bodies.length, 0);
 });
 
 test('the trust question asked line by line saves the folder, and no keeps it untrusted', async (t) => {
