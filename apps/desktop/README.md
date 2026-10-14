@@ -49,6 +49,8 @@ The desktop package includes the renderer, Circle runtime/dependencies, prompts,
 
 Quitting waits for Circle to cancel and close its owned jobs, then waits for its native process to exit. Renderer reload preserves that process. Window close remains separate from future C/D service control. The native browser is shared: the model acts in it with approval, and the person can take it over.
 
+Rejected address input shows `invalid address` and keeps the loaded page. Other navigation errors remain separate from address validation, including when Electron wraps the native error before it reaches the renderer.
+
 ## Check
 
 ```sh

@@ -14,6 +14,16 @@ export const browserOpened = (state?: BrowserState | null): boolean =>
     !!state.dialogs?.some((dialog) => dialog.tab === state.tab) ||
     (!!state.url && state.url !== 'about:blank'));
 
+/** Electron prefixes an IPC rejection with its channel and the remote error type. */
+export function invalidBrowserAddressError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.message === 'invalid browser address' ||
+    error.message ===
+      "Error invoking remote method 'circle:browser-navigate': Error: invalid browser address"
+  );
+}
+
 /** The dialog the shown tab waits on, if any. */
 export const shownDialog = (
   state?: BrowserState | null,

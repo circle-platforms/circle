@@ -98,6 +98,21 @@ jobs:
           & "$env:USERPROFILE\.dotnet\tools\wix.exe" extension add --global WixToolset.UI.wixext/5.0.2
       - run: npm --prefix apps/desktop run test:runtime
       - run: npm --prefix apps/desktop run package
+      - name: Check invalid browser addresses on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          node apps/desktop/test/browser-address.mjs
+          $env:CIRCLE_DESKTOP_APP_PATH = Join-Path $env:GITHUB_WORKSPACE 'apps/desktop/out/Circle-win32-x64'
+          $env:CIRCLE_DESKTOP_EXECUTABLE = Join-Path $env:CIRCLE_DESKTOP_APP_PATH 'Circle.exe'
+          node apps/desktop/test/browser-address.mjs
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        if: runner.os == 'Windows' && always()
+        with:
+          name: circle-windows-browser-address
+          path: apps/desktop/artifacts/browser-address/
+          if-no-files-found: ignore
       # The release workflow installs and removes it; here it only has to build and validate
       - name: Build the MSI
         if: runner.os == 'Windows'

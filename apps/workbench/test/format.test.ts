@@ -12,11 +12,40 @@ import {
   browserOpened,
   dialogSource,
   hasToolInput,
+  invalidBrowserAddressError,
   isSessionBrowser,
   shownDialog,
 } from '../src/model/browser.ts';
 
 // tests/desktop-format.test.ts in the root suite holds these equal to the terminal's.
+test('invalid addresses stay distinct from network failures after native IPC rejection', () => {
+  assert.equal(
+    invalidBrowserAddressError(new Error('invalid browser address')),
+    true,
+  );
+  assert.equal(
+    invalidBrowserAddressError(
+      new Error(
+        "Error invoking remote method 'circle:browser-navigate': Error: invalid browser address",
+      ),
+    ),
+    true,
+  );
+  for (const error of [
+    new Error(
+      "Error invoking remote method 'circle:browser-navigate': Error: net::ERR_CONNECTION_REFUSED",
+    ),
+    new Error(
+      "Error invoking remote method 'circle:browser-tabs': Error: invalid browser address",
+    ),
+    new Error('invalid browser address: network unreachable'),
+    { message: 'invalid browser address' },
+    'invalid browser address',
+    undefined,
+  ])
+    assert.equal(invalidBrowserAddressError(error), false);
+});
+
 test('the footer and busy word write numbers as the terminal does', () => {
   assert.deepEqual([0, 840, 1000, 12_345, 7_824_000].map(formatTokens), [
     '0',

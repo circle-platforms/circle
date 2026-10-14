@@ -21,6 +21,7 @@ import {
   browserEventAddress,
   browserOpened,
   downloadProgress,
+  invalidBrowserAddressError,
   shownDialog,
 } from '../model/browser';
 import { useBrowserState } from './useBrowserState';
@@ -137,7 +138,7 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
       // A string the address bar could not read is the person's to fix, not a
       // network failure; say which of the two it was.
       notify(
-        error instanceof Error && error.message === 'invalid browser address'
+        invalidBrowserAddressError(error)
           ? t('invalid address')
           : t('navigation failed'),
       );
