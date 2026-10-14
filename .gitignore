@@ -36,3 +36,6 @@ docs/.jekyll-cache/
 docs/.jekyll-metadata
 docs/.bundle/
 docs/vendor/
+
+# Evidence the native and regression checks write; CI uploads it as an artifact
+outputs/
