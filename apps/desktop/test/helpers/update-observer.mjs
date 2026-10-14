@@ -44,24 +44,39 @@ export function writeProgress(folder, kind, text) {
 function windows(action, value, folder) {
   const plan = join(folder, `process-${randomUUID()}.json`);
   json(plan, value);
-  const text = execFileSync(
-    'powershell.exe',
-    [
-      '-NoProfile',
-      '-NonInteractive',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-File',
-      native,
-      action,
-      plan,
-    ],
-    {
-      encoding: 'utf8',
-      timeout: action === 'dump' ? 55000 : 15000,
-      windowsHide: true,
-    },
-  );
+  let text;
+  try {
+    text = execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        native,
+        action,
+        plan,
+      ],
+      {
+        encoding: 'utf8',
+        timeout: action === 'dump' ? 55000 : 15000,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+  } catch (error) {
+    const tracePath = plan + '.trace.log';
+    let trace =
+      'native script did not write a trace (startup or launch may not have reached the script)';
+    try {
+      trace = readFileSync(tracePath, 'utf8');
+    } catch {
+      /* preserve the original bounded failure */
+    }
+    error.message += `\nnative ${action} trace (${tracePath}):\n${trace}`;
+    throw error;
+  }
   return text.trim() ? JSON.parse(text) : undefined;
 }
 function posixProcesses() {

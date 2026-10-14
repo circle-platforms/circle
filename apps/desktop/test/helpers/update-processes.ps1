@@ -1,34 +1,53 @@
 param([string]$Action, [string]$Plan)
 $ErrorActionPreference = 'Stop'
+function Trace([string]$Text) {
+  [IO.File]::AppendAllText(($Plan + '.trace.log'), ([DateTime]::UtcNow.ToString('o') + ' ' + $Text + [Environment]::NewLine))
+}
+Trace "script entered: $Action"
 $settings = Get-Content -Raw -LiteralPath $Plan | ConvertFrom-Json
+Trace 'plan read'
 
 function Identity([int]$Number, $NativeRow = $null) {
   $process = $null
   try {
+    Trace "identity ${Number}: before GetProcessById"
     $process = [Diagnostics.Process]::GetProcessById($Number)
+    Trace "identity ${Number}: process found"
     # Keep a process handle while reading creation time and executable. A process
     # that exits and has its PID reused must not become the target of Kill().
     $handle = $process.Handle
+    Trace "identity ${Number}: handle pinned"
     $native = $NativeRow
-    if (-not $native) { $native = Get-CimInstance Win32_Process -Filter "ProcessId = $Number" }
+    if (-not $native) {
+      Trace "identity ${Number}: before CIM"
+      $native = Get-CimInstance Win32_Process -Filter "ProcessId = $Number" -OperationTimeoutSec 5
+      Trace "identity ${Number}: CIM returned"
+    }
+    Trace "identity ${Number}: before MainModule"
+    $executable = $process.MainModule.FileName
+    Trace "identity ${Number}: MainModule returned"
+    $created = $process.StartTime.ToUniversalTime()
+    Trace "identity ${Number}: creation time read"
     return @{
       pid = $Number
       parentPid = [int]$native.ParentProcessId
-      executable = $process.MainModule.FileName
-      createdAt = $process.StartTime.ToUniversalTime().ToFileTimeUtc().ToString()
-      startedAt = $process.StartTime.ToUniversalTime().ToString('o')
+      executable = $executable
+      createdAt = $created.ToFileTimeUtc().ToString()
+      startedAt = $created.ToString('o')
       command = $native.CommandLine
     }
-  } catch { return $null } finally { if ($process) { $process.Dispose() } }
+  } catch { Trace "identity ${Number}: failed: $_"; return $null } finally { if ($process) { $process.Dispose() } }
 }
 
 switch ($Action) {
   'identity' { Identity $settings.pid | ConvertTo-Json -Compress -Depth 5 }
   'list' {
-    $rows = @(Get-CimInstance Win32_Process | ForEach-Object {
+    Trace 'list before CIM'
+    $rows = @(Get-CimInstance Win32_Process -OperationTimeoutSec 5 | ForEach-Object {
       $row = Identity ([int]$_.ProcessId) $_
       if ($row) { $row }
     })
+    Trace 'list CIM returned'
     ConvertTo-Json -InputObject $rows -Compress -Depth 5
   }
   'threads' {
@@ -75,3 +94,4 @@ switch ($Action) {
     @{ pid = $settings.owner.pid; terminated = $terminated } | ConvertTo-Json -Compress
   }
 }
+Trace "script completed: $Action"

@@ -21,7 +21,7 @@ async function fixture(t, source) {
       env: {
         ...Object.fromEntries(
           Object.entries(process.env).filter(([name]) =>
-            /^(PATH|SystemRoot|WINDIR|COMSPEC|TEMP|TMP|TMPDIR|USERPROFILE|HOME|LANG|LC_ALL|PATHEXT)$/i.test(
+            /^(PATH|SystemRoot|WINDIR|COMSPEC|TEMP|TMP|TMPDIR|USERPROFILE|HOME|LANG|LC_ALL|PATHEXT|PSModulePath|APPDATA|LOCALAPPDATA|ProgramFiles|ProgramFiles\(x86\)|ProgramW6432|SystemDrive|ALLUSERSPROFILE)$/i.test(
               name,
             ),
           ),
@@ -218,4 +218,31 @@ test('normal observer shutdown does not terminate the test process', async (t) =
   const end = await f.closed;
   assert.equal(end.code, 0, f.output());
   assert.match(f.output(), /stopped safely/);
+});
+
+test('Windows identity calls close stdin and preserve the native trace when a bounded query fails', async (t) => {
+  const f = await fixture(
+    t,
+    (folder) => `
+    import assert from 'node:assert/strict';import {registerHooks} from 'node:module';
+    Object.defineProperty(process,'platform',{value:'win32'});
+    const native=${JSON.stringify(`
+      import {appendFileSync} from 'node:fs';
+      export function spawn(){throw Error('not used')}
+      export function spawnSync(){throw Error('not used')}
+      export function execFileSync(command,args,options){
+        if(options.stdio?.[0]!=='ignore')throw Error('native stdin must be closed');
+        appendFileSync(args.at(-1)+'.trace.log','identity before CIM\\n');
+        throw Object.assign(Error('native query timed out'),{code:'ETIMEDOUT'});
+      }
+    `)};
+    registerHooks({resolve(specifier,context,next){if(specifier==='node:child_process')return{url:'data:text/javascript,'+encodeURIComponent(native),shortCircuit:true};return next(specifier,context)}});
+    const {processIdentity}=await import(${JSON.stringify(helper)});
+    assert.throws(()=>processIdentity(process.pid,${JSON.stringify(folder)}),error=>error.code==='ETIMEDOUT'&&error.message.includes('identity before CIM'));
+    console.log('native trace retained');
+  `,
+  );
+  const end = await f.closed;
+  assert.equal(end.code, 0, f.output());
+  assert.match(f.output(), /native trace retained/);
 });
