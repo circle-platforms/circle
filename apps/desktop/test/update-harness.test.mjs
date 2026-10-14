@@ -59,7 +59,9 @@ registerHooks({
 });
 `;
 
-function preflight(t, existing) {
+// `runner`: run as on a GitHub runner, which is thrown away after the job; else as on a
+// person's machine, whatever runs this test
+function preflight(t, existing, runner = false) {
   const root = mkdtempSync(join(tmpdir(), 'circle-update-preflight-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const programFiles = join(root, 'Program Files');
@@ -101,6 +103,7 @@ function preflight(t, existing) {
         CIRCLE_UPDATE_ACTIONS: actions,
         CIRCLE_HOME: join(root, 'home'),
         CIRCLE_WORKBENCH_DATA_DIR: join(root, 'data'),
+        GITHUB_ACTIONS: runner ? 'true' : '',
       },
       encoding: 'utf8',
       timeout: 10000,
@@ -179,4 +182,18 @@ test('update cleanup removes its own partially attempted installation', (t) => {
   );
   assert.deepEqual(removed[0].args.slice(2), ['/qn', '/norestart']);
   assert.deepEqual(removed.at(-1).args, ['/x', msi, '/qn', '/norestart']);
+});
+
+test('on a GitHub runner the cleanup leaves the partial installation, which goes with the runner', (t) => {
+  const { installed, result, actions } = preflight(t, false, true);
+  assert.match(result.stderr, /msiexec .* exited with 1603/);
+  assert.equal(existsSync(installed), true);
+  // The failed install and the evidence only: nothing is stopped and nothing uninstalled
+  assert.deepEqual(
+    actions.map((action) => [action.method, action.command, action.args[0]]),
+    [
+      ['spawnSync', 'msiexec.exe', '/i'],
+      ['execFileSync', 'tasklist', undefined],
+    ],
+  );
 });
