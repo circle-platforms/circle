@@ -299,7 +299,16 @@ export class LiveRuntime implements RuntimePort {
         if ((LOCAL_SETTINGS as readonly string[]).includes(key)) {
           Object.assign(this.settings, { [key]: requested.settings[key] });
           Object.assign(next.settings, { [key]: requested.settings[key] });
-        } else if (!['endpoint', 'protocol'].includes(key))
+        } else if (
+          // The connection has its own command; the default workspace only
+          // changes through the native folder dialog's grant.
+          ![
+            'endpoint',
+            'protocol',
+            'workspaceFolder',
+            'oldWorkspaceFolder',
+          ].includes(key)
+        )
           settings[key] = requested.settings[key];
       }
     if (
@@ -414,6 +423,7 @@ export class LiveRuntime implements RuntimePort {
         background: 'background',
         logout: 'logout',
         'open-workspace': 'open-workspace',
+        'set-default-workspace': 'set-default-workspace',
         reload: 'reload',
         'clear-queue': 'clear-queue',
         'write-file': 'write-file',

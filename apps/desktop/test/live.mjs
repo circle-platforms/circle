@@ -1,7 +1,7 @@
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +21,8 @@ const temp = await mkdtemp(join(tmpdir(), 'circle-native-live-'));
 const fixturePath = join(temp, 'model.json');
 const requestsPath = join(temp, 'requests.jsonl');
 const exportPath = join(temp, 'export.jsonl');
+const defaultTarget = join(temp, 'default-target');
+await mkdir(defaultTarget);
 const appPath = resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? root);
 const fixture = {
   requestsPath,
@@ -84,7 +86,10 @@ const env = {
   ...process.env,
   CIRCLE_WORKBENCH_DATA_DIR: join(temp, 'data'),
   CIRCLE_WORKBENCH_MODE: 'live',
-  CIRCLE_WORKBENCH_TEST_PROFILE: JSON.stringify({ exportPath }),
+  CIRCLE_WORKBENCH_TEST_PROFILE: JSON.stringify({
+    exportPath,
+    workspace: defaultTarget,
+  }),
   CIRCLE_DESKTOP_RUNTIME_FIXTURE: fixturePath,
 };
 delete env.ELECTRON_RUN_AS_NODE;
@@ -670,6 +675,54 @@ try {
     /400/,
   );
   checks.push('a failed turn leaves its error in the conversation');
+  // The default workspace moves only through the settings page and the native
+  // dialog's grant, never through a renderer-supplied path.
+  const gatewayHome = join(temp, 'gateway-data', 'runtime-home');
+  const scratch = join(gatewayHome, 'workspace');
+  assert.equal((await state()).settings.workspaceFolder, scratch);
+  assert.equal((await state()).settings.oldWorkspaceFolder, undefined);
+  await assert.rejects(
+    command('set-default-workspace', { path: defaultTarget }),
+    /not selected through the native dialog/,
+  );
+  await assert.rejects(
+    command('set-default-workspace', { workspaceGrant: 'forged' }),
+    /not selected through the native dialog/,
+  );
+  assert.equal((await state()).settings.workspaceFolder, scratch);
+  // Files from the run stay behind: the settings page names the folder to delete.
+  await writeFile(join(scratch, 'leftover.txt'), 'earlier work');
+  await page.evaluate(() => {
+    location.hash = '/page/settings';
+  });
+  await page.waitForURL((url) => url.hash === '#/page/settings');
+  await page
+    .getByRole('heading', { name: 'default workspace', exact: true })
+    .waitFor();
+  await page.getByRole('button', { name: 'change…', exact: true }).click();
+  await waitFor(
+    async () =>
+      (await state()).settings.workspaceFolder === realpathSync(defaultTarget),
+    'the moved default workspace',
+  );
+  const moved = await state();
+  assert.equal(moved.settings.oldWorkspaceFolder, scratch);
+  assert.equal(
+    moved.workspaces.find((row) => row.path === realpathSync(defaultTarget))
+      .trusted,
+    false,
+  );
+  await page
+    .getByText('keeps its sessions until you delete it by hand')
+    .waitFor();
+  assert.equal(
+    JSON.parse(await readFile(join(gatewayHome, 'settings.json'), 'utf8'))
+      .workspace_folder,
+    realpathSync(defaultTarget),
+  );
+  checks.push(
+    'the default workspace moves through the settings page and the native dialog grant, keeps the old folder and needs trust',
+  );
   await writeFile(
     join(
       output,

@@ -319,6 +319,25 @@ try {
   );
   await reset();
   await route('/page/settings');
+  // The default workspace section shows the fixture folder; the native picker
+  // exists only in the live app, never in the frontend preview.
+  const defaultWorkspace = page.locator('section.settings-block', {
+    has: page.getByRole('heading', {
+      name: 'default workspace',
+      exact: true,
+    }),
+  });
+  await defaultWorkspace.waitFor();
+  assert.match(await defaultWorkspace.innerText(), /\/workspace\/orbit-api/);
+  assert.equal(
+    await defaultWorkspace
+      .getByRole('button', { name: 'change…', exact: true })
+      .count(),
+    0,
+  );
+  checks.push(
+    'the preview settings name the default workspace without a picker',
+  );
   await page
     .getByRole('textbox', { name: 'keybindings json', exact: true })
     .fill('{"model.select":"f3"}');

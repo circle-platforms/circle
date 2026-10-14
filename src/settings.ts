@@ -45,6 +45,12 @@ export interface CircleSettings {
   models: Record<string, Record<string, unknown>>;
   double_escape: 'tree' | 'fork' | 'none';
   hide_thinking: boolean;
+  /**
+   * Where the desktop application starts its default workspace; "" is the
+   * built-in scratch folder inside the data folder. Desktop-only: the
+   * terminal ignores it, and a project may not set it.
+   */
+  workspace_folder: string;
   /** Named values, written %NAME% in a tool's arguments; the model also reads them. */
   variables: Record<string, string>;
   [key: string]: unknown;
@@ -76,6 +82,7 @@ export const defaultSettings = (): CircleSettings => ({
   models: {},
   double_escape: 'tree',
   hide_thinking: false,
+  workspace_folder: '',
   variables: {},
 });
 export const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -148,6 +155,10 @@ export function loadSettingsFromDict(
   settings.double_escape =
     double === 'fork' || double === 'none' ? double : 'tree';
   settings.hide_thinking = Boolean(raw.hide_thinking);
+  const folder =
+    typeof raw.workspace_folder === 'string' ? raw.workspace_folder.trim() : '';
+  settings.workspace_folder =
+    folder.length && folder.length <= 4096 ? folder : '';
   settings.variables = Object.fromEntries(
     Object.entries(isRecord(raw.variables) ? raw.variables : {}).filter(
       ([name, value]) =>

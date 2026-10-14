@@ -514,6 +514,7 @@ export function createFixtures(): WorkbenchSnapshot {
       variables: { BASE_URL: 'https://example.test', USER_NAME: 'admin' },
       secrets: ['API_TOKEN'],
       updateCheck: true,
+      workspaceFolder: '/workspace/orbit-api',
       textSize: 'default',
       keybindings: {},
     },

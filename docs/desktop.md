@@ -25,7 +25,7 @@ The layout follows Claude's:
 - **The top bar**: the session's title, whose menu has rename, details, find, the session tree, fork, clone, compact, export and share; the folder and its git branch; and on the right the side panels — terminal, files, changes, activity, browser and context — and ⋯ for search, theme, connection and help. A click opens a panel on the right, a second click closes it.
 - **The conversation**: your messages on the right, Circle's answers as plain text. The tool calls between two answers fold into one line, such as `ran 2 commands, edited calc.py +1 −1`; a click opens them, each with its output and, for a file change, its diff. Thinking folds to one line too. The time, the usage and a copy button show under a message when the pointer is on it.
 
-The app starts in a folder of its own, `workspace` inside its data folder, which it trusts. Open your own project with file → open folder, and trust it before Circle reads it or runs anything in it.
+The app starts in a folder of its own, `workspace` inside its data folder, which it trusts, or in the default workspace you chose in settings. Open your own project with file → open folder, and trust it before Circle reads it or runs anything in it.
 
 ## Asking and answering
 
@@ -81,6 +81,18 @@ As in Claude: on the left, + to attach files and the mode; on the right, the mod
 ## Outside the window
 
 While the window is in the background, Circle sends a system notification when a request needs you and when a turn ends or fails. On macOS the Dock icon counts the requests that wait. On Windows and Linux the taskbar shows a busy bar while Circle works.
+
+## The default workspace
+
+When the folder of the last run cannot be resumed, the app starts in its default workspace. That is `workspace` inside its data folder at first; settings → default workspace → change… picks another folder through the system's folder dialog, so it can live on another drive. The choice is saved as `workspace_folder` in the data folder's `settings.json`; the app refuses its own data folder, a folder inside it and a folder containing it.
+
+Changing the folder moves no files:
+
+- The new folder starts empty and, like any folder you open, needs trust before Circle reads it or runs anything in it.
+- The old folder keeps its files and its sessions; they stay listed and open while it exists. While the built-in `workspace` folder still holds files, settings names it, and you delete it by hand to reclaim the space.
+- Choosing the built-in `workspace` folder again resets the default.
+
+Session history, the `projects/` offload folders and updates stay in the data folder wherever the default workspace lives.
 
 ## Variables
 

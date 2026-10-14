@@ -145,6 +145,14 @@ export const pages: Record<string, string> = {
   'session defaults': '会话默认值',
   model: '模型',
   'double escape': '连按两次 escape',
+  'default workspace': '默认工作区',
+  folder: '文件夹',
+  'change…': '更改…',
+  'default workspace changed': '默认工作区已更改',
+  'changing the folder does not move your files; the new folder still needs trust':
+    '更改文件夹不会移动你的文件；新文件夹仍需要信任',
+  'the old default folder {path} keeps its sessions until you delete it by hand':
+    '旧的默认文件夹 {path} 仍保留其会话，需要手动删除',
   'workspace trust': '工作区信任',
   review: '查看',
   'protected files': '受保护的文件',

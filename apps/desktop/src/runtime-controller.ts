@@ -3,12 +3,13 @@ import {
   mkdirSync,
   existsSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   statSync,
   writeFileSync,
   unlinkSync,
 } from 'node:fs';
-import { basename, join, relative, isAbsolute } from 'node:path';
+import { basename, join, relative, isAbsolute, sep } from 'node:path';
 import { AgentRuntime, type InteractionContext } from '../../../src/runtime.js';
 import type {
   ChatModel,
@@ -21,6 +22,7 @@ import {
   loadSettings,
   settingsForRun,
   saveSettings,
+  saveSettingsChange,
   saveCredentials,
   clearCredentials,
   withConnection,
@@ -116,6 +118,18 @@ const text = (value: unknown, label: string, max = 1_000_000) => {
 const flag = (value: unknown) => {
   if (typeof value !== 'boolean') throw Error('boolean required');
   return value;
+};
+// True when child is parent itself or a folder inside it. relative() answers with an
+// absolute path when the two roots differ, as on separate Windows drives.
+const folderContains = (parent: string, child: string): boolean => {
+  if (parent === child) return true;
+  const relation = relative(parent, child);
+  return (
+    relation !== '' &&
+    !isAbsolute(relation) &&
+    relation !== '..' &&
+    !relation.startsWith(`..${sep}`)
+  );
 };
 // The app has room for longer diffs than the terminal's card.
 const DIFF_ROWS = 400;
@@ -246,17 +260,86 @@ export class RuntimeController {
     this.branches.set(path, { branch, at: Date.now() });
     return branch;
   }
+  // The effective default workspace and, when that is not the built-in scratch
+  // folder, the scratch folder's path if it still holds files: the settings page
+  // names it so the user can delete it by hand. Read at most every two seconds
+  // like branch(): snapshots follow tokens.
+  private defaultFolder?: { folder: string; stale?: string; at: number };
   constructor(readonly options: ControllerOptions) {
     this.home = options.home;
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
     const saved = this.savedLocation();
+    const settings = loadSettings(this.home);
     const workspace =
-      options.workspace ?? saved?.workspace ?? join(this.home, 'workspace');
+      options.workspace ??
+      saved?.workspace ??
+      this.configuredWorkspace(settings) ??
+      join(this.home, 'workspace');
     mkdirSync(workspace, { recursive: true });
     // The empty, app-owned scratch workspace is safe to initialize without user files.
     if (workspace === join(this.home, 'workspace'))
-      saveSettings(trustFolder(loadSettings(this.home), workspace), this.home);
+      saveSettings(trustFolder(settings, workspace), this.home);
     this.active = this.runtime(workspace, saved?.sessionId);
+  }
+  private scratchPath(): string {
+    return join(this.home, 'workspace');
+  }
+  // Whether a folder is the built-in scratch one, in either spelling: a stored
+  // path is realpath'd, while home may not be (a temp folder behind a symlink).
+  private isScratch(target: string): boolean {
+    const scratch = this.scratchPath();
+    if (target === scratch) return true;
+    try {
+      return target === realpathSync(scratch);
+    } catch {
+      return false;
+    }
+  }
+  // The default workspace may not expose the app's own data: not the data folder,
+  // not a folder inside it, not a folder containing it. The scratch folder is the
+  // one exception: choosing it again resets the default.
+  private acceptableDefaultFolder(target: string): boolean {
+    return (
+      this.isScratch(target) ||
+      (!folderContains(this.home, target) && !folderContains(target, this.home))
+    );
+  }
+  // The configured default workspace, or undefined when the built-in scratch folder
+  // is the default: no folder is configured, or the configured one is missing, is
+  // not a directory, or is one the app must not run in. Callers fall back silently.
+  private configuredWorkspace(settings: CircleSettings): string | undefined {
+    if (!settings.workspace_folder) return undefined;
+    try {
+      const target = realpathSync(settings.workspace_folder);
+      if (!statSync(target).isDirectory() || this.isScratch(target))
+        return undefined;
+      return this.acceptableDefaultFolder(target) ? target : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  private defaultWorkspace(settings: CircleSettings): {
+    folder: string;
+    stale?: string;
+  } {
+    if (this.defaultFolder && Date.now() - this.defaultFolder.at < 2000)
+      return this.defaultFolder;
+    const configured = this.configuredWorkspace(settings);
+    const scratch = this.scratchPath();
+    let stale: string | undefined;
+    if (configured) {
+      try {
+        if (readdirSync(scratch).length > 0) stale = scratch;
+      } catch {
+        /* The scratch folder is already gone: nothing to clean up. */
+      }
+    }
+    this.defaultFolder = {
+      folder: configured ?? scratch,
+      stale,
+      at: Date.now(),
+    };
+    return this.defaultFolder;
   }
   private savedLocation():
     { workspace: string; sessionId: string } | undefined {
@@ -477,6 +560,7 @@ export class RuntimeController {
     const runtime = this.active;
     const settings = runtime.options.settings;
     const savedSettings = loadSettings(this.home);
+    const defaultFolder = this.defaultWorkspace(savedSettings);
     const rows = runtime.store.list();
     const paths = [
       ...new Set([
@@ -769,6 +853,10 @@ export class RuntimeController {
         // Names only: a saved value never leaves the runtime
         secrets: secretNames(this.home),
         updateCheck: settings.update_check,
+        workspaceFolder: defaultFolder.folder,
+        ...(defaultFolder.stale
+          ? { oldWorkspaceFolder: defaultFolder.stale }
+          : {}),
         textSize: 'default',
         keybindings: {},
       },
@@ -1662,6 +1750,13 @@ export class RuntimeController {
         const data = p.settings as Record<string, unknown>;
         if (!data || typeof data !== 'object' || Array.isArray(data))
           throw Error('invalid settings');
+        if (
+          data.workspaceFolder !== undefined ||
+          data.oldWorkspaceFolder !== undefined
+        )
+          throw Error(
+            'the default workspace only changes through the native folder dialog',
+          );
         if (data.theme !== undefined) {
           if (!['auto', 'light', 'dark'].includes(String(data.theme)))
             throw Error('invalid theme');
@@ -1902,6 +1997,31 @@ export class RuntimeController {
       }
       case 'open-workspace': {
         const workspace = realpathSync(text(p.path, 'workspace', 8000));
+        const owner = this.runtime(workspace);
+        this.previous = runtime.session.id;
+        this.active = owner;
+        return {
+          workspaceId: identity(workspace),
+          sessionId: owner.session.id,
+        };
+      }
+      case 'set-default-workspace': {
+        // The path comes from the native dialog through the main process, exactly
+        // like open-workspace: the renderer never names one.
+        const workspace = realpathSync(text(p.path, 'workspace', 8000));
+        if (!statSync(workspace).isDirectory())
+          throw Error('the default workspace must be a folder');
+        if (!this.acceptableDefaultFolder(workspace))
+          throw Error(
+            'the default workspace may not be the Circle data folder or a folder inside it',
+          );
+        saveSettingsChange(this.home, (settings) => {
+          // Selecting the built-in scratch folder again resets the default.
+          settings.workspace_folder = this.isScratch(workspace)
+            ? ''
+            : workspace;
+        });
+        this.defaultFolder = undefined;
         const owner = this.runtime(workspace);
         this.previous = runtime.session.id;
         this.active = owner;

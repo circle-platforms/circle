@@ -17,6 +17,7 @@ import { ScriptedModel } from '../../../src/testing.ts';
 import { emptyUsage, type Message } from '../../../src/types.ts';
 import {
   saveSettings,
+  saveSettingsChange,
   loadSettings,
   trustFolder,
   defaultSettings,
@@ -2505,4 +2506,210 @@ test('an approval for a new file carries its diff', async (t) => {
     activeSession(f).changes?.map((change) => change.kind),
     ['added'],
   );
+});
+
+// A controller that starts on the built-in scratch workspace (home/workspace), as the
+// production runtime worker does: no options.workspace and no saved location.
+async function setupScratch(
+  t: TestContext,
+  replies: ConstructorParameters<typeof ScriptedModel>[0],
+) {
+  const root = await mkdtemp(join(tmpdir(), 'circle-core-desktop-'));
+  const home = join(root, 'home');
+  await mkdir(home);
+  saveSettings(defaultSettings(), home);
+  const model = new ScriptedModel(replies);
+  const controller = new RuntimeController({
+    home,
+    userHome: home,
+    model,
+    emit: () => {},
+  });
+  const call = (
+    name: RuntimeCommandName,
+    payload: Record<string, unknown> = {},
+    sessionId = controller.snapshot().activeSessionId,
+  ) => controller.dispatch({ id: randomUUID(), name, payload, sessionId });
+  t.after(async () => {
+    await controller.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  return {
+    root,
+    home,
+    scratch: join(home, 'workspace'),
+    model,
+    controller,
+    call,
+  };
+}
+const activeWorkspacePath = (controller: RuntimeController) => {
+  const snapshot = controller.snapshot();
+  const session = snapshot.sessions.find(
+    (row) => row.id === snapshot.activeSessionId,
+  )!;
+  return snapshot.workspaces.find((row) => row.id === session.workspaceId)!
+    .path;
+};
+
+test('set-default-workspace moves the default folder, keeps the old sessions and requires trust', async (t) => {
+  const f = await setupScratch(t, [
+    { message: assistant('answered in target') },
+  ]);
+  const target = join(f.root, 'target');
+  await mkdir(target);
+  await writeFile(join(f.scratch, 'notes.txt'), 'old work');
+
+  // It starts on the app-owned scratch folder: auto-trusted, named 'circle', and
+  // the settings block names it as the default workspace.
+  assert.equal(activeWorkspacePath(f.controller), f.scratch);
+  assert.equal(f.controller.snapshot().settings.workspaceFolder, f.scratch);
+  assert.equal(f.controller.snapshot().settings.oldWorkspaceFolder, undefined);
+  const scratchSessionId = f.controller.snapshot().activeSessionId;
+
+  const reply = await f.call('set-default-workspace', { path: target });
+  assert.equal(reply.ok, true);
+  assert.equal(loadSettings(f.home).workspace_folder, target);
+  assert.equal(activeWorkspacePath(f.controller), target);
+  assert.equal(f.controller.snapshot().settings.workspaceFolder, target);
+  // The scratch folder still holds files, so the settings page names it to delete.
+  assert.equal(f.controller.snapshot().settings.oldWorkspaceFolder, f.scratch);
+  const snapshot = f.controller.snapshot();
+  assert.equal(
+    snapshot.workspaces.find((row) => row.path === target)!.trusted,
+    false,
+  );
+  assert.equal(
+    snapshot.workspaces.find((row) => row.path === f.scratch)!.name,
+    'circle',
+  );
+  assert.equal(
+    JSON.parse(await readFile(join(f.home, 'desktop-session.json'), 'utf8'))
+      .workspace,
+    target,
+  );
+
+  // The new folder is like any folder the user opened: nothing runs before trust.
+  const refused = await f.call('prompt', { text: 'work in target' });
+  assert.equal(refused.ok, false);
+  assert.match(String(refused.error), /trust the workspace/);
+  assert.equal(f.model.requests.length, 0);
+  assert.equal((await f.call('trust', { enabled: true })).ok, true);
+  assert.ok(loadSettings(f.home).trusted_folders.includes(target));
+  assert.equal((await f.call('prompt', { text: 'work in target' })).ok, true);
+  await wait(
+    () => f.model.requests.length === 1,
+    'the model request in target',
+  );
+
+  // The old scratch session stays where it was and opens again.
+  assert.equal(
+    (await f.call('select-session', { id: scratchSessionId })).ok,
+    true,
+  );
+  assert.equal(activeWorkspacePath(f.controller), f.scratch);
+});
+
+test('the default workspace refuses the data folder and cannot be set through save-settings', async (t) => {
+  const f = await setupScratch(t, []);
+  await mkdir(join(f.home, 'projects'), { recursive: true });
+
+  const dataFolder = await f.call('set-default-workspace', { path: f.home });
+  assert.equal(dataFolder.ok, false);
+  assert.match(String(dataFolder.error), /data folder/);
+  const inside = await f.call('set-default-workspace', {
+    path: join(f.home, 'projects'),
+  });
+  assert.equal(inside.ok, false);
+  assert.match(String(inside.error), /data folder/);
+  assert.equal(loadSettings(f.home).workspace_folder, '');
+  assert.equal(activeWorkspacePath(f.controller), f.scratch);
+
+  // Choosing the built-in scratch folder again is a reset, not a failure.
+  const reset = await f.call('set-default-workspace', { path: f.scratch });
+  assert.equal(reset.ok, true);
+  assert.equal(loadSettings(f.home).workspace_folder, '');
+  assert.equal(f.controller.snapshot().settings.workspaceFolder, f.scratch);
+  assert.equal(f.controller.snapshot().settings.oldWorkspaceFolder, undefined);
+
+  // The generic settings command never carries the folder: only the native
+  // dialog's grant does, and a mixed batch is refused as a whole.
+  const refused = await f.call('save-settings', {
+    settings: { theme: 'dark', workspaceFolder: join(f.root, 'anywhere') },
+  });
+  assert.equal(refused.ok, false);
+  assert.match(String(refused.error), /native folder dialog/);
+  assert.equal(loadSettings(f.home).theme, 'auto');
+  assert.equal(loadSettings(f.home).workspace_folder, '');
+});
+
+test('startup prefers the last-used folder, then workspace_folder, then the scratch folder', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-core-desktop-'));
+  const home = join(root, 'home');
+  const configured = join(root, 'configured');
+  const lastUsed = join(root, 'last-used');
+  await mkdir(home);
+  await mkdir(configured);
+  await mkdir(lastUsed);
+  await mkdir(join(home, 'projects'));
+  saveSettings({ ...defaultSettings(), workspace_folder: configured }, home);
+  const open = () =>
+    new RuntimeController({
+      home,
+      userHome: home,
+      model: new ScriptedModel([]),
+      emit: () => {},
+    });
+  t.after(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  // The configured folder wins over the scratch one and is not auto-trusted.
+  const first = open();
+  assert.equal(activeWorkspacePath(first), configured);
+  assert.equal(loadSettings(home).trusted_folders.includes(configured), false);
+  assert.equal(
+    first.snapshot().workspaces.find((row) => row.path === configured)!.name,
+    'configured',
+  );
+  assert.equal(first.snapshot().settings.workspaceFolder, configured);
+
+  // A folder opened later is what the next start resumes.
+  assert.equal(
+    (
+      await first.dispatch({
+        id: randomUUID(),
+        name: 'open-workspace',
+        payload: { path: lastUsed },
+        sessionId: first.snapshot().activeSessionId,
+      })
+    ).ok,
+    true,
+  );
+  await first.close();
+  const resumed = open();
+  assert.equal(activeWorkspacePath(resumed), lastUsed);
+  await resumed.close();
+
+  // A configured folder that is gone falls back to the scratch folder, which the
+  // app auto-trusts again.
+  await rm(join(home, 'desktop-session.json'), { force: true });
+  saveSettingsChange(home, (settings) => {
+    settings.workspace_folder = join(root, 'unplugged');
+  });
+  const fallen = open();
+  assert.equal(activeWorkspacePath(fallen), join(home, 'workspace'));
+  assert.ok(
+    loadSettings(home).trusted_folders.includes(join(home, 'workspace')),
+  );
+  await fallen.close();
+
+  // A hand-edited value inside the data folder is ignored at startup.
+  await rm(join(home, 'desktop-session.json'), { force: true });
+  saveSettingsChange(home, (settings) => {
+    settings.workspace_folder = join(home, 'projects');
+  });
+  const inside = open();
+  assert.equal(activeWorkspacePath(inside), join(home, 'workspace'));
+  await inside.close();
 });
