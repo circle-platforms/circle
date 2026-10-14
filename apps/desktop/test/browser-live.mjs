@@ -7,15 +7,16 @@ import { createRequire } from 'node:module';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
 import { captureFailure } from './helpers/diagnostics.mjs';
+import { setViewport } from './helpers/viewport.mjs';
 
 // The conversation's browser, driven by a scripted model and by the person, against local
 // HTTPS sites with a self-signed certificate: everything a page asks for reaches both.
-const root = fileURLToPath(new URL('..', import.meta.url));
+const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
 const output = join(root, 'artifacts/browser-live');
 await mkdir(output, { recursive: true });
@@ -33,6 +34,7 @@ const errors = [];
 let app;
 let page;
 let requestsPath = join(temp, 'requests.jsonl');
+let viewportSizing;
 
 // Every request is local. The certificate exists only inside this test's scratch folder.
 await promisify(execFile)('openssl', [
@@ -497,7 +499,7 @@ async function launch() {
     chromiumSandbox: true,
     executablePath:
       process.env.CIRCLE_DESKTOP_EXECUTABLE ?? require('electron'),
-    args: [process.env.CIRCLE_DESKTOP_APP_PATH ?? root],
+    args: [resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? root)],
     cwd: root,
     env,
     timeout: 45_000,
@@ -510,11 +512,12 @@ async function launch() {
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   // Wide enough for the panel beside the conversation, as a window made on a small
   // screen is not; or as narrow as a check asks
-  await app.evaluate(({ BrowserWindow }, value) => {
-    const window = BrowserWindow.getAllWindows()[0];
-    window.show();
-    window.setContentSize(value, 900);
-  }, width);
+  viewportSizing = await setViewport(
+    app,
+    page,
+    { width, height: 900 },
+    { show: true },
+  );
   await page.waitForFunction((value) => innerWidth === value, width);
   // Electron shows alert and confirm as native boxes over the window; Circle must not.
   await app.evaluate(({ dialog }) => {
@@ -635,11 +638,7 @@ try {
     // page of fixed height left a gap: below the footer there is only the panel's own
     // padding (20) and the footer's margin (10)
     const blankBelow = async (height) => {
-      await app.evaluate(
-        ({ BrowserWindow }, size) =>
-          BrowserWindow.getAllWindows()[0].setContentSize(...size),
-        [width, height],
-      );
+      await setViewport(app, page, { width, height });
       // The screen may hold less than asked: wait until the window has settled
       let settled = -1;
       for (let tries = 0; tries < 20; tries++) {
@@ -1677,6 +1676,7 @@ try {
         dataIsolation: true,
         scriptedModel: true,
         localHttps: true,
+        viewportSizing,
         checks,
         errors,
         source: await sourceEvidence(),

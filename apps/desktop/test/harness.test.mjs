@@ -137,6 +137,62 @@ test('native viewport sizing asks a short display for the height it has', async 
   assert.equal(viewport.attempts, 1);
 });
 
+test('native viewport sizing corrects DPI rounding after fitting to the work area', async () => {
+  const sizes = [];
+  let actual = { width: 1280, height: 800 };
+  const window = {
+    show() {},
+    getBounds: () => ({ x: 0, y: 0, width: 1293, height: 835 }),
+    getSize: () => [actual.width + 13, actual.height + 35],
+    getContentSize: () => [actual.width, actual.height],
+    setContentSize(width, height) {
+      sizes.push({ width, height });
+      actual = { width: width + 1, height: height + 1 };
+    },
+  };
+  const app = {
+    evaluate: async (callback, input) =>
+      callback(
+        {
+          BrowserWindow: { getAllWindows: () => [window] },
+          screen: {
+            getDisplayMatching: () => ({
+              scaleFactor: 2,
+              workAreaSize: { width: 1440, height: 852 },
+            }),
+          },
+        },
+        input,
+      ),
+  };
+  const page = {
+    waitForFunction: async (_callback, input) => {
+      assert.ok(
+        Math.abs(actual.width - input.expected.width) <= input.rounding,
+      );
+      assert.ok(
+        Math.abs(actual.height - input.expected.height) <= input.rounding,
+      );
+      return { dispose: async () => {} };
+    },
+    evaluate: async () => actual,
+  };
+  const viewport = await setViewport(
+    app,
+    page,
+    { width: 1400, height: 900 },
+    { show: true },
+  );
+  assert.deepEqual(sizes, [
+    { width: 1400, height: 817 },
+    { width: 1399, height: 816 },
+  ]);
+  assert.deepEqual(viewport.target, { width: 1400, height: 817 });
+  assert.deepEqual(viewport.actual, viewport.target);
+  assert.equal(viewport.attempts, 2);
+  assertViewport(viewport.actual, viewport.target, 2);
+});
+
 test('native viewport sizing rejects a window that is substantially too small', async () => {
   const app = {
     evaluate: async () => ({
