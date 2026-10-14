@@ -32,4 +32,4 @@
 
 ## 平台边界
 
-本轮没有真实 Windows Terminal 的右边框、IME、字体、性能或按键试验，也没有 Windows MSI 或 Linux desktop 原生试验。跨平台 unit/fake-native 保护与历史 GitHub 评论里的通过记录，都不能充作本轮这些平台实测成功。GitHub 的关闭状态和修复验证是两类证据，分别保留。
+本轮没有真实 Windows Terminal 的右边框、IME、字体、性能或按键试验，也没有 Linux desktop 原生试验。发布后的 disposable Windows CI 已通过 observer 与正常 per-machine MSI 更新，详见 issue-validation.md；它不替代用户机器的原间歇故障和终端/界面实测。跨平台 unit/fake-native 保护与历史 GitHub 评论里的通过记录，都不能充作本轮这些平台实测成功。GitHub 的关闭状态和修复验证是两类证据，分别保留。
