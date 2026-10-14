@@ -58,6 +58,9 @@ jobs:
       - run: npm ci
       - run: npm --prefix apps/workbench ci
       - run: npm --prefix apps/desktop ci
+      # Electron 44 resolves its development binary lazily, after npm ci.
+      - name: Resolve the development Electron binary before configuring its sandbox
+        run: node -e "console.log(require('./apps/desktop/node_modules/electron'))"
       - name: Record the native test environment
         shell: bash
         run: |
