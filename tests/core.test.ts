@@ -1,4 +1,4 @@
-import { scratch, cleanup } from './helpers.js';
+import { scratch, cleanup, cancellationFixture } from './helpers.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
@@ -442,29 +442,39 @@ test('steering is consumed in the next request before follow-up starts', async (
   assert.equal(model.requests[1]!.messages.at(-1)!.content, 'steering');
   assert.equal(model.requests[2]!.messages.at(-1)!.content, 'follow-up');
 });
-test('cancel stops the actual shell process tree before a delayed child writes', async (t) => {
+test('cancel stops the actual shell process tree before a released child writes', async (t) => {
   const root = scratch(t);
   const sandbox = new Sandbox(root);
   const controller = new AbortController();
-  writeFileSync(
-    join(root, 'grandchild.cjs'),
-    "const fs = require('node:fs'); fs.writeFileSync('started', 'yes'); setTimeout(() => fs.writeFileSync('late', 'bad'), 1500);",
-  );
-  writeFileSync(
-    join(root, 'parent.cjs'),
-    "require('node:child_process').spawn(process.execPath, ['grandchild.cjs'], {stdio: 'ignore'}); setTimeout(() => {}, 10000);",
-  );
-  const command = `"${process.execPath}" "${join(root, 'parent.cjs')}"`;
-  const running = sandbox.execute(command, controller.signal);
+  const fixture = await cancellationFixture(t, root);
+  const running = sandbox.execute(fixture.command, controller.signal);
   cleanup(t, async () => {
     controller.abort();
+    await fixture.close();
     await running;
   });
-  for (let i = 0; i < 250 && !existsSync(join(root, 'started')); i++)
-    await delay(20);
+  const identity = await fixture.ready();
+  assert.ok(identity.pid > 0 && identity.parentPid > 0);
   assert.ok(existsSync(join(root, 'started')));
   controller.abort();
-  await running;
-  await delay(1700);
+  await fixture.exited(running);
+  assert.equal(await fixture.release(), 'closed');
   assert.equal(existsSync(join(root, 'late')), false);
+});
+
+test('the real cancellation fixture writes after its gate opens when the process tree stays alive', async (t) => {
+  const root = scratch(t);
+  const fixture = await cancellationFixture(t, root);
+  const controller = new AbortController();
+  const running = new Sandbox(root).execute(fixture.command, controller.signal);
+  cleanup(t, async () => {
+    controller.abort();
+    await fixture.close();
+    await running;
+  });
+  await fixture.ready();
+  assert.equal(existsSync(join(root, 'late')), false);
+  assert.equal(await fixture.release(), 'wrote');
+  assert.equal(readFileSync(join(root, 'late'), 'utf8'), 'bad');
+  assert.equal((await fixture.exited(running)).exit_code, 0);
 });
