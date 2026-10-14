@@ -1,4 +1,5 @@
 import { readFileSync, appendFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { RuntimeController } from './runtime-controller';
@@ -74,6 +75,8 @@ if (fixturePath) {
 const browser = new BrowserBridge((message) => port.postMessage(message));
 const controller = new RuntimeController({
   home,
+  // The supervisor keeps home as runtime-home inside the application's data folder
+  dataFolder: dirname(home),
   model,
   browser,
   userHome: home,

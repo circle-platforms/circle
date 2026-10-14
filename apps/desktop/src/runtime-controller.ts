@@ -193,6 +193,9 @@ interface Streaming {
 }
 export interface ControllerOptions {
   home: string;
+  /** The application's data folder, which holds home beside the updates and Chromium's
+   * own files: the default workspace may not be in it. Home when not given. */
+  dataFolder?: string;
   workspace?: string;
   userHome?: string;
   model?: ChatModel;
@@ -321,13 +324,13 @@ export class RuntimeController {
   // always arrives realpath'd, and the two spellings would otherwise slip past.
   private acceptableDefaultFolder(target: string): boolean {
     if (this.isScratch(target)) return true;
-    let home = this.home;
+    let data = this.options.dataFolder ?? this.home;
     try {
-      home = realpathSync(home);
+      data = realpathSync(data);
     } catch {
       /* Keep the spelling we were given. */
     }
-    return !folderContains(home, target) && !folderContains(target, home);
+    return !folderContains(data, target) && !folderContains(target, data);
   }
   // The configured default workspace, or undefined when the built-in scratch folder
   // is the default: no folder is configured, or the configured one is missing, is
@@ -2190,7 +2193,7 @@ export class RuntimeController {
           throw Error('the default workspace must be a folder');
         if (!this.acceptableDefaultFolder(workspace))
           throw Error(
-            'the default workspace may not be the Circle data folder or a folder inside it',
+            'the default workspace may not be the Circle data folder, a folder inside it or a folder that holds it',
           );
         saveSettingsChange(this.home, (settings) => {
           // Selecting the built-in scratch folder again resets the default.

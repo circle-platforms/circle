@@ -3220,6 +3220,47 @@ test('the default workspace refuses the data folder and cannot be set through sa
   assert.equal(loadSettings(f.home).workspace_folder, '');
 });
 
+test('the whole application data folder is refused, not only its runtime home', async (t) => {
+  // As the runtime worker runs: home is runtime-home inside the data folder, beside the
+  // updates folder the updater clears
+  const root = realpathSync(
+    await mkdtemp(join(tmpdir(), 'circle-core-desktop-')),
+  );
+  const data = join(root, 'Circle');
+  const home = join(data, 'runtime-home');
+  await mkdir(join(data, 'updates', 'projects'), { recursive: true });
+  await mkdir(join(root, 'elsewhere'));
+  await mkdir(home);
+  saveSettings(defaultSettings(), home);
+  const controller = new RuntimeController({
+    home,
+    dataFolder: data,
+    userHome: home,
+    model: new ScriptedModel([]),
+    emit: () => {},
+  });
+  t.after(async () => {
+    await controller.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const choose = (path: string) =>
+    controller.dispatch({
+      id: randomUUID(),
+      name: 'set-default-workspace',
+      payload: { path },
+      sessionId: controller.snapshot().activeSessionId,
+    });
+  for (const path of [data, join(data, 'updates', 'projects'), root]) {
+    const reply = await choose(path);
+    assert.equal(reply.ok, false, path);
+    assert.match(String(reply.error), /data folder/);
+  }
+  assert.equal(loadSettings(home).workspace_folder, '');
+  const accepted = await choose(join(root, 'elsewhere'));
+  assert.equal(accepted.ok, true, String(accepted.error));
+  assert.equal(loadSettings(home).workspace_folder, join(root, 'elsewhere'));
+});
+
 test('the data folder keeps its protection when home is reached through a link', async (t) => {
   const f = await setupScratch(t, []);
   try {
