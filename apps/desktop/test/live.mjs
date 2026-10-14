@@ -2,7 +2,7 @@ import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
@@ -23,6 +23,8 @@ const temp = await mkdtemp(join(tmpdir(), 'circle-native-live-'));
 const fixturePath = join(temp, 'model.json');
 const requestsPath = join(temp, 'requests.jsonl');
 const exportPath = join(temp, 'export.jsonl');
+const defaultTarget = join(temp, 'default-target');
+await mkdir(defaultTarget);
 const appPath = resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? root);
 const fixture = {
   requestsPath,
@@ -89,7 +91,10 @@ const env = {
   CIRCLE_NO_UPDATE_CHECK: '1',
   CIRCLE_NO_MODELS_REFRESH: '1',
   CIRCLE_WORKBENCH_MODE: 'live',
-  CIRCLE_WORKBENCH_TEST_PROFILE: JSON.stringify({ exportPath }),
+  CIRCLE_WORKBENCH_TEST_PROFILE: JSON.stringify({
+    exportPath,
+    workspace: defaultTarget,
+  }),
   CIRCLE_DESKTOP_RUNTIME_FIXTURE: fixturePath,
 };
 delete env.ELECTRON_RUN_AS_NODE;
@@ -184,8 +189,8 @@ const command = (name, payload = {}, sessionId) =>
     },
     { name, payload, sessionId },
   );
-async function waitFor(check, name) {
-  const deadline = Date.now() + 12_000;
+async function waitFor(check, name, milliseconds = 12_000) {
+  const deadline = Date.now() + milliseconds;
   lastWait = { name, startedAt: Date.now(), deadline };
   phase('wait started', { wait: name });
   while (!(await check())) {
@@ -881,6 +886,77 @@ try {
     /400/,
   );
   checks.push('a failed turn leaves its error in the conversation');
+  // The default workspace moves only through the settings page and the native
+  // dialog's grant, never through a renderer-supplied path.
+  // One folder, two spellings: the app realpaths paths through the Node inside
+  // Electron and this test through the Node that runs it, and on Windows the
+  // two do not always print the same string for the same folder. The run's
+  // temp name is unique, so its last two segments say which folder the app
+  // means; exact equality is compared only between app-side strings.
+  const movedTail = `${basename(temp)}/default-target`;
+  const movedInto = (value) =>
+    typeof value === 'string' &&
+    value.split(/[\\/]/).slice(-2).join('/') === movedTail;
+  const gatewayHome = join(temp, 'gateway-data', 'runtime-home');
+  const scratch = join(gatewayHome, 'workspace');
+  assert.equal((await state()).settings.workspaceFolder, scratch);
+  assert.equal((await state()).settings.oldWorkspaceFolder, undefined);
+  await assert.rejects(
+    command('set-default-workspace', { path: defaultTarget }),
+    /not selected through the native dialog/,
+  );
+  await assert.rejects(
+    command('set-default-workspace', { workspaceGrant: 'forged' }),
+    /not selected through the native dialog/,
+  );
+  assert.equal((await state()).settings.workspaceFolder, scratch);
+  // Files from the run stay behind: the settings page names the folder to delete.
+  await writeFile(join(scratch, 'leftover.txt'), 'earlier work');
+  await page.evaluate(() => {
+    location.hash = '/page/settings';
+  });
+  await page.waitForURL((url) => url.hash === '#/page/settings');
+  await page
+    .getByRole('heading', { name: 'default workspace', exact: true })
+    .waitFor();
+  await page.getByRole('button', { name: 'change…', exact: true }).click();
+  // The move crosses three processes, and perform() shows a failure only as a
+  // toast for four seconds: collect them so a timeout says what the app saw.
+  const toasts = new Set();
+  try {
+    await waitFor(
+      async () => {
+        for (const text of await page.locator('.toast').allInnerTexts())
+          toasts.add(text);
+        return movedInto((await state()).settings.workspaceFolder);
+      },
+      'the moved default workspace',
+      30_000,
+    );
+  } catch (error) {
+    const current = await state();
+    throw Error(
+      `${error.message}: workspaceFolder stayed ${current.settings.workspaceFolder}, wanted a folder ending ${movedTail}, toasts: ${[...toasts].join(' | ') || 'none'}`,
+    );
+  }
+  const moved = await state();
+  assert.equal(moved.settings.oldWorkspaceFolder, scratch);
+  assert.equal(
+    moved.workspaces.find((row) => row.path === moved.settings.workspaceFolder)
+      .trusted,
+    false,
+  );
+  await page
+    .getByText('keeps its sessions until you delete it by hand')
+    .waitFor();
+  assert.equal(
+    JSON.parse(await readFile(join(gatewayHome, 'settings.json'), 'utf8'))
+      .workspace_folder,
+    moved.settings.workspaceFolder,
+  );
+  checks.push(
+    'the default workspace moves through the settings page and the native dialog grant, keeps the old folder and needs trust',
+  );
   await writeFile(
     join(
       output,

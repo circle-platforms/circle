@@ -44,6 +44,29 @@ export function nativeAttachment(file: NativeFile): Attachment {
     truncated: file.truncated,
   };
 }
+// Seed the file list with a native selection's granted handles, replacing the
+// files of that workspace: reads still go through the grant, one file at a time.
+function adoptSelectedFiles(
+  runtime: RuntimePort,
+  selected: NativeWorkspace,
+  workspaceId: string,
+) {
+  runtime.change((state) => {
+    state.files = state.files.filter(
+      (file) => file.workspaceId !== workspaceId,
+    );
+    state.files.push(
+      ...selected.files.map((file) => ({
+        id: file.id,
+        workspaceId,
+        path: file.path,
+        content: '',
+        language: file.language,
+        nativeGrant: { workspaceId: selected.id, fileId: file.id },
+      })),
+    );
+  });
+}
 export async function openNativeWorkspace(
   runtime: RuntimePort,
 ): Promise<NativeWorkspace | null> {
@@ -55,21 +78,7 @@ export async function openNativeWorkspace(
     const result = (await runtime.request('open-workspace', {
       workspaceGrant: selected.id,
     })) as { workspaceId: string };
-    runtime.change((state) => {
-      state.files = state.files.filter(
-        (file) => file.workspaceId !== result.workspaceId,
-      );
-      state.files.push(
-        ...selected.files.map((file) => ({
-          id: file.id,
-          workspaceId: result.workspaceId,
-          path: file.path,
-          content: '',
-          language: file.language,
-          nativeGrant: { workspaceId: selected.id, fileId: file.id },
-        })),
-      );
-    });
+    adoptSelectedFiles(runtime, selected, result.workspaceId);
     return selected;
   }
   const existing = runtime
@@ -104,6 +113,22 @@ export async function openNativeWorkspace(
     .sessions.find((session) => session.workspaceId === id);
   if (session) await runtime.selectSession(session.id);
   else await runtime.newSession(id);
+  return selected;
+}
+// Change where the default workspace lives. The folder comes from the same native
+// dialog and grant indirection as openNativeWorkspace: the window never names a
+// path, and the runtime keeps and validates the chosen one.
+export async function setDefaultWorkspace(
+  runtime: RuntimePort,
+): Promise<NativeWorkspace | null> {
+  const host = desktopHost();
+  if (!host || runtime.mode !== 'live') return null;
+  const selected = await host.chooseWorkspace();
+  if (!selected) return null;
+  const result = (await runtime.request('set-default-workspace', {
+    workspaceGrant: selected.id,
+  })) as { workspaceId: string };
+  adoptSelectedFiles(runtime, selected, result.workspaceId);
   return selected;
 }
 export async function readNativeFile(runtime: RuntimePort, path: string) {

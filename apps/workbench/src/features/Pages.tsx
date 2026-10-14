@@ -1,4 +1,4 @@
-import { desktopHost } from '../host';
+import { desktopHost, setDefaultWorkspace } from '../host';
 import { validateKeybindings } from '../model/shortcuts';
 import { usePlugins } from '../plugins/context';
 import { pairing } from '../plugins/registry';
@@ -1329,6 +1329,40 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
             ))}
           </select>
         </div>
+      </section>
+      <section className="settings-block">
+        <h2>{t('default workspace')}</h2>
+        <div className="setting-row">
+          <span>
+            {t('folder')}
+            <small>{settings.workspaceFolder}</small>
+          </span>
+          {runtime.mode === 'live' && (
+            <Button
+              onClick={() =>
+                perform(async () => {
+                  if (await setDefaultWorkspace(runtime))
+                    notify(t('default workspace changed'));
+                })
+              }
+            >
+              {t('change…')}
+            </Button>
+          )}
+        </div>
+        <p className="panel-note">
+          {t(
+            'changing the folder does not move your files; the new folder still needs trust',
+          )}
+        </p>
+        {settings.oldWorkspaceFolder && (
+          <p className="panel-note">
+            {t(
+              'the old default folder {path} keeps its sessions until you delete it by hand',
+              { path: settings.oldWorkspaceFolder },
+            )}
+          </p>
+        )}
       </section>
       <section className="settings-block">
         <h2>{t('workspace trust')}</h2>

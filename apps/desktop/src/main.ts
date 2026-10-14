@@ -477,7 +477,10 @@ app
     handle('circle:runtime-command', (value) => {
       if (!runtime) throw Error('runtime not enabled');
       const command = validateRuntimeCommand(value);
-      if (command.name === 'open-workspace') {
+      if (
+        command.name === 'open-workspace' ||
+        command.name === 'set-default-workspace'
+      ) {
         const path = workspaceSelections.get(
           String(command.payload.workspaceGrant),
         );

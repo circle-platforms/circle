@@ -286,6 +286,18 @@ export interface Settings {
   /** Names of the saved secrets, used as %NAME%: never a value. */
   secrets: string[];
   updateCheck: boolean;
+  /**
+   * The folder new sessions start in when no other folder was opened: the
+   * configured default workspace, or the built-in scratch folder. It only
+   * changes through the native folder dialog, never through save-settings.
+   */
+  workspaceFolder: string;
+  /**
+   * The built-in scratch folder's path while a different default workspace is
+   * configured and the scratch folder still holds files: changing the default
+   * does not move anything, so the settings page names the folder to delete.
+   */
+  oldWorkspaceFolder?: string;
   textSize: TextSize;
   keybindings: Record<string, string | string[]>;
 }

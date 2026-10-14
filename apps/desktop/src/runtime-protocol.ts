@@ -34,6 +34,7 @@ export type RuntimeCommandName =
   | 'stop-job'
   | 'revoke-approval'
   | 'open-workspace'
+  | 'set-default-workspace'
   | 'load-skill'
   | 'close'
   | 'custom-command'
@@ -111,6 +112,7 @@ export const runtimeCommands = new Set<RuntimeCommandName>([
   'stop-job',
   'revoke-approval',
   'open-workspace',
+  'set-default-workspace',
   'load-skill',
   'close',
   'custom-command',
