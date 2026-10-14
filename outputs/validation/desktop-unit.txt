@@ -2,42 +2,42 @@
 > @circle/desktop@0.1.0 test
 > node --test test/policy.test.ts test/capture.test.ts test/sandbox-guard.test.ts test/msi.test.ts test/attention.test.ts test/harness.test.mjs test/update-harness.test.mjs test/update-observer.test.mjs
 
-✔ a new request is announced once and counted on the badge (1.843667ms)
-✔ the end of a turn is announced, an interrupted one is not, in the window language (0.119958ms)
-✔ the main process words follow the window language and the system at first (0.110375ms)
-✔ first compositor failure retries into a real returned image and discloses the failed attempt (51.900917ms)
-✔ an empty image cannot become a successful hashed observation (1.0545ms)
-✔ unavailable compositor frames stop after the bounded attempts with the errors intact (0.417708ms)
-✔ unrelated capture failures are returned without repeating the request (0.102375ms)
-✔ native viewport checks preserve the requested maximum at each display scale (1.459333ms)
-✔ native viewport sizing compensates for measured DPI rounding (1.752041ms)
-✔ native viewport sizing asks a short display for the height it has (0.172375ms)
-✔ native viewport sizing rejects a window that is substantially too small (0.318ms)
-✔ the MSI version is three numbers within what Windows Installer takes (1.41425ms)
-✔ the version Circle carries now can go into an MSI (4.79475ms)
-✔ the package installs for all users and replaces older and same versions (1.076458ms)
-✔ the whole packaged folder goes to Program Files\Circle (0.490208ms)
-✔ the Start menu entry starts Circle.exe with the application user model ID (1.954958ms)
-✔ Installed apps shows the icon and the project page (0.258625ms)
-✔ Restart Manager stays out of installing, updating and removing Circle (0.081375ms)
-✔ only the completion button can launch Circle, after an unchecked opt-in (0.1245ms)
-✔ the actual license is literal RTF, including braces, slashes and non-ASCII text (0.309334ms)
-✔ wix build and wix msi validate get the pinned arguments (0.630125ms)
-✔ the MSI and its checksum are named like the other release files (0.075334ms)
-✔ the receipt lists the MSI once (0.111875ms)
-✔ only the pinned WiX builds the MSI (0.161375ms)
-✔ CI installs the WiX the script expects and builds the MSI (3.276ms)
-✔ other hosts are refused before anything is written (0.164292ms)
-✔ the script stops on this host without touching the output folder (66.613334ms)
-✔ only the application frame URL is trusted (0.809625ms)
-✔ local protocol assets cannot escape the bundled renderer (0.23225ms)
-✔ exports require a filename and bounded content (0.421292ms)
-✔ external links only admit ordinary HTTP URLs (0.117959ms)
-✔ workspace grants reject unknown, cross-workspace and forged handles (10.363958ms)
-✔ workspace grants reject a granted path replaced by a filesystem link (2.522167ms)
-✔ workspace grants exclude directory links and reject replaced parent directories (4.635542ms)
-✔ native text preview discloses truncation and supports full import text (2.428ms)
-✔ chosen pictures and PDFs go whole up to 20 MB, other files up to 4 MB (22.079333ms)
+✔ a new request is announced once and counted on the badge (2.457417ms)
+✔ the end of a turn is announced, an interrupted one is not, in the window language (0.401792ms)
+✔ the main process words follow the window language and the system at first (0.328042ms)
+✔ first compositor failure retries into a real returned image and discloses the failed attempt (50.773917ms)
+✔ an empty image cannot become a successful hashed observation (0.458833ms)
+✔ unavailable compositor frames stop after the bounded attempts with the errors intact (0.179042ms)
+✔ unrelated capture failures are returned without repeating the request (0.285875ms)
+✔ native viewport checks preserve the requested maximum at each display scale (2.0235ms)
+✔ native viewport sizing compensates for measured DPI rounding (2.433209ms)
+✔ native viewport sizing asks a short display for the height it has (0.204208ms)
+✔ native viewport sizing rejects a window that is substantially too small (0.275083ms)
+✔ the MSI version is three numbers within what Windows Installer takes (1.727333ms)
+✔ the version Circle carries now can go into an MSI (4.298292ms)
+✔ the package installs for all users and replaces older and same versions (0.850959ms)
+✔ the whole packaged folder goes to Program Files\Circle (0.307792ms)
+✔ the Start menu entry starts Circle.exe with the application user model ID (2.987416ms)
+✔ Installed apps shows the icon and the project page (0.273709ms)
+✔ Restart Manager stays out of installing, updating and removing Circle (0.063166ms)
+✔ only the completion button can launch Circle, after an unchecked opt-in (0.24975ms)
+✔ the actual license is literal RTF, including braces, slashes and non-ASCII text (0.158208ms)
+✔ wix build and wix msi validate get the pinned arguments (0.505541ms)
+✔ the MSI and its checksum are named like the other release files (0.166958ms)
+✔ the receipt lists the MSI once (0.083583ms)
+✔ only the pinned WiX builds the MSI (0.123917ms)
+✔ CI installs the WiX the script expects and builds the MSI (3.104625ms)
+✔ other hosts are refused before anything is written (0.369833ms)
+✔ the script stops on this host without touching the output folder (72.701709ms)
+✔ only the application frame URL is trusted (0.900833ms)
+✔ local protocol assets cannot escape the bundled renderer (0.187542ms)
+✔ exports require a filename and bounded content (0.154917ms)
+✔ external links only admit ordinary HTTP URLs (0.067167ms)
+✔ workspace grants reject unknown, cross-workspace and forged handles (10.500417ms)
+✔ workspace grants reject a granted path replaced by a filesystem link (3.479417ms)
+✔ workspace grants exclude directory links and reject replaced parent directories (5.949709ms)
+✔ native text preview discloses truncation and supports full import text (1.69225ms)
+✔ chosen pictures and PDFs go whole up to 20 MB, other files up to 4 MB (22.982875ms)
 ▲ [WARNING] "import.meta" is not available with the "cjs" output format and will be empty [empty-import-meta]
 
     ../../src/update.ts:219:19:
@@ -46,20 +46,21 @@
 
   You need to set the output format to "esm" for "import.meta" to work correctly.
 
-✔ main process refuses a contradictory --no-sandbox switch, runs without it, and exits with an error when its start fails (15793.67475ms)
-✔ update preflight leaves an existing installation and its processes alone (72.705375ms)
-✔ update cleanup removes its own partially attempted installation (50.510792ms)
-✔ on a GitHub runner the cleanup leaves the partial installation, which goes with the runner (40.482541ms)
-✔ an independent observer captures a blocked Node, ignores heartbeat progress and ends only its owned processes (464.715375ms)
-✔ known ancestry rejects an unrelated older child and a reused parent identity (0.532667ms)
-✔ real stage progress postpones capture and allows a healthy owned process to stop normally (632.903083ms)
-✔ an observer refuses a reused PID identity and leaves that live process alone (102.5345ms)
-✔ normal observer shutdown does not terminate the test process (229.026875ms)
-ℹ tests 45
+✔ main process refuses a contradictory --no-sandbox switch, runs without it, and exits with an error when its start fails (15774.269166ms)
+✔ update preflight leaves an existing installation and its processes alone (77.727917ms)
+✔ update cleanup removes its own partially attempted installation (56.632084ms)
+✔ on a GitHub runner the cleanup leaves the partial installation, which goes with the runner (42.427666ms)
+✔ an independent observer captures a blocked Node, ignores heartbeat progress and ends only its owned processes (474.354417ms)
+✔ known ancestry rejects an unrelated older child and a reused parent identity (0.476416ms)
+✔ real stage progress postpones capture and allows a healthy owned process to stop normally (681.910459ms)
+✔ an observer refuses a reused PID identity and leaves that live process alone (153.820292ms)
+✔ normal observer shutdown does not terminate the test process (165.749709ms)
+✔ Windows identity calls close stdin and preserve the native trace when a bounded query fails (27.8505ms)
+ℹ tests 46
 ℹ suites 0
-ℹ pass 45
+ℹ pass 46
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 15885.6595
+ℹ duration_ms 15890.740292
