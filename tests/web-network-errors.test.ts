@@ -56,6 +56,52 @@ test('network diagnostics retain nested and aggregate causes while hiding creden
   assert.equal(networkError(cyclic, 'fixture.invalid').cause, cyclic);
 });
 
+test('a proxy failure is named by its status and words, not by digits in an address', () => {
+  const kind = (error: unknown) =>
+    /^(\S+(?: response)?) failure on/.exec(
+      networkError(error, 'fixture.invalid').message,
+    )?.[1];
+  const refused = (address: string) =>
+    new TypeError('fetch failed', {
+      cause: Object.assign(new Error(`connect ECONNREFUSED ${address}`), {
+        code: 'ECONNREFUSED',
+      }),
+    });
+  assert.equal(kind(refused('10.0.0.4:4071')), 'connection');
+  assert.equal(kind(refused('192.0.2.1:8407')), 'connection');
+  // As undici reports a CONNECT tunnel the proxy refused, with or without 407
+  for (const status of [407, 502])
+    assert.equal(
+      kind(
+        new TypeError('fetch failed', {
+          cause: Object.assign(
+            new Error(`Proxy response (${status}) !== 200 when HTTP Tunneling`),
+            { code: 'UND_ERR_ABORTED' },
+          ),
+        }),
+      ),
+      'proxy',
+    );
+  assert.equal(
+    kind(Object.assign(new Error('HTTP 407'), { status: 407 })),
+    'proxy',
+  );
+});
+
+test('a timeout from AbortSignal.timeout carries no numeric DOMException code', () => {
+  const timeout = new DOMException(
+    'The operation was aborted due to timeout',
+    'TimeoutError',
+  );
+  assert.equal(timeout.code, 23);
+  const error = networkError(timeout, 'fixture.invalid');
+  assert.equal(
+    error.message,
+    'timeout failure on fixture.invalid: The operation was aborted due to timeout',
+  );
+  assert.equal((error as NodeJS.ErrnoException).code, undefined);
+});
+
 test('network diagnostics retain named and IPv6 hosts with non-default ports', () => {
   for (const [host, expected] of [
     ['fixture.invalid:8443', 'fixture.invalid:8443'],

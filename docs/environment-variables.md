@@ -27,7 +27,7 @@ The endpoint key is **not** read from the environment. Circle reads it only from
 
 ## Web access
 
-The [web tools](tools.md#reading-and-searching), `websearch` and `web_fetch`, use the same proxy configuration as Circle's other HTTPS requests. The CLI applies it at startup through `http.setGlobalProxyFromEnv` on Node.js 24.14 and later; the shipped runtime is 24.21. Set the proxy variables before starting Circle:
+The [web tools](tools.md#reading-and-searching), `websearch` and `webfetch`, use the same proxy configuration as Circle's other HTTPS requests. The CLI applies it at startup through `http.setGlobalProxyFromEnv` on Node.js 24.14 and later; the shipped runtime is 24.21. Set the proxy variables before starting Circle:
 
 | Variable                         | Effect                                                                                                                             | Default |
 | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------- |

@@ -303,11 +303,17 @@ function errorChain(
     if (!current || typeof current !== 'object' || seen.has(current)) continue;
     seen.add(current);
     const value = current as Error & {
-      code?: string;
+      code?: unknown;
       status?: number;
       errors?: unknown[];
     };
-    found.push(value);
+    // A DOMException's legacy numeric code (23 for a timeout) says nothing a reader can use
+    found.push({
+      message: value.message,
+      code: typeof value.code === 'string' ? value.code : undefined,
+      name: value.name,
+      status: value.status,
+    });
     pending.push(
       value.cause,
       ...(Array.isArray(value.errors) ? value.errors : []),
@@ -378,7 +384,10 @@ export function networkError(error: unknown, host: string): Error {
     ? 'TLS'
     : /ENOTFOUND|EAI_AGAIN/.test(codes)
       ? 'DNS'
-      : /PROXY|PRX|407/.test(codes + ' ' + messages) ||
+      : // undici says "Proxy response (502) !== 200 when HTTP Tunneling"; a 407 is only
+        // a status, not digits inside an address or a port
+        /PROXY|PRX/.test(codes) ||
+          /\bproxy\b|\(407\)|\bHTTP 407\b/i.test(messages) ||
           chain.some((value) => value.status === 407)
         ? 'proxy'
         : /TIMEDOUT|TIMEOUT/.test(codes) ||
