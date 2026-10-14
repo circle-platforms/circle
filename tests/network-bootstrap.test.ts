@@ -10,6 +10,7 @@ import type { Duplex } from 'node:stream';
 import { build } from 'esbuild';
 import { cp } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { scratch, cleanup } from './helpers.js';
 import {
   defaultSettings,
@@ -292,7 +293,7 @@ test(
       if(value.type==='update' && !prompted){prompted=true;queueMicrotask(()=>listeners[0]({data:{id:'request',name:'prompt',sessionId:value.update.snapshot.activeSessionId,payload:{text:'hello'}}}));}
       if(value.type==='update' && value.update.snapshot.sessions.some(s=>s.messages.some(m=>m.text==='worker network ready'))){console.log('worker network ready');queueMicrotask(()=>listeners[0]({data:{id:'close',name:'close',payload:{}}}));setTimeout(()=>process.exit(0),100);}
     }}});
-    await import(${JSON.stringify(bundle)});
+    await import(${JSON.stringify(pathToFileURL(bundle).href)});
   `;
     const out = await child(['--input-type=module', '-e', wrapper], {
       ...cleanEnv(home),
