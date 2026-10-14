@@ -1,3 +1,7 @@
+import {
+  connectionModels,
+  connectionSummary,
+} from '../../../src/connection_models.js';
 import { randomUUID, createHash } from 'node:crypto';
 import {
   mkdirSync,
@@ -59,11 +63,7 @@ import {
   saveSecret,
   secretNames,
 } from '../../../src/secrets.js';
-import {
-  normalizeBaseUrl,
-  probeSummary,
-  resolveEndpoint,
-} from '../../../src/probe.js';
+import { normalizeBaseUrl, resolveEndpoint } from '../../../src/probe.js';
 import { availableUpdate } from '../../../src/update.js';
 import { BUILTIN_SLASH } from '../../../src/tui/slash_commands.js';
 import { ModelCatalog } from '../../../src/model_catalog.js';
@@ -1603,12 +1603,18 @@ export class RuntimeController {
         const endpoint = this.endpointOf(p.endpoint);
         const key = this.keyFor(endpoint, p.apiKey);
         if (!key) throw Error('enter the API key for this endpoint');
-        const found = await resolveEndpoint(endpoint, key);
+        const found = await connectionModels(
+          endpoint,
+          key,
+          p.provider === undefined
+            ? 'custom'
+            : text(p.provider, 'provider', 100),
+        );
         const baseUrl = found.base_url || endpoint;
         this.probed = {
           baseUrl,
           protocol: found.protocol,
-          models: [...found.models],
+          models: found.status === 'preset' ? [] : [...found.models],
         };
         return {
           status: found.status,
@@ -1616,7 +1622,7 @@ export class RuntimeController {
           models: found.models,
           baseUrl,
           inferred: found.inferred,
-          summary: probeSummary(found),
+          summary: connectionSummary(found),
           detail: found.detail,
         };
       }

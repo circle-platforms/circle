@@ -4,7 +4,9 @@
 // keeps only the answers.
 import { createInterface } from 'node:readline';
 import { Writable } from 'node:stream';
-import { normalizeBaseUrl, probeSummary, resolveEndpoint } from './probe.js';
+import { normalizeBaseUrl } from './probe.js';
+import { connectionModels, connectionSummary } from './connection_models.js';
+import { PROVIDER_PRESETS } from './providers.js';
 import {
   defaultAuth,
   defaultSettings,
@@ -148,10 +150,24 @@ export async function runLineInit(
         savedKey = '';
       }
     }
-    const typedUrl = await io.ask(
-      `API URL${savedUrl ? ` [${savedUrl}]` : ''}: `,
+    const providerName = await pick(
+      io,
+      'which provider?',
+      PROVIDER_PRESETS.map((item) => item.name),
     );
-    const url = typedUrl?.trim() || savedUrl;
+    if (!providerName) {
+      io.say('Setup was not finished.');
+      return undefined;
+    }
+    const provider = PROVIDER_PRESETS.find(
+      (item) => item.name === providerName,
+    )!;
+    const defaultUrl =
+      provider.baseUrl || (provider.id === 'custom' ? savedUrl : '');
+    const typedUrl = await io.ask(
+      `API URL${defaultUrl ? ` [${defaultUrl}]` : ''}: `,
+    );
+    const url = typedUrl?.trim() || defaultUrl;
     // A key saved for another host is not sent to this one
     const keep = Boolean(savedKey) && keepsSavedKey(previous, url);
     const typedKey =
@@ -183,11 +199,12 @@ export async function runLineInit(
       io.say('Enter the key for this endpoint: the saved one is for another.');
       return undefined;
     }
-    io.say('Asking the endpoint for its models…');
-    const found = await resolveEndpoint(base, key);
-    io.say(probeSummary(found));
+    if (provider.source === 'endpoint')
+      io.say('Asking the endpoint for its models…');
+    const found = await connectionModels(base, key, provider.id);
+    io.say(connectionSummary(found));
     const protocol =
-      found.inferred || found.status === 'failed'
+      (found.inferred || found.status === 'failed') && !provider.protocol
         ? await pick(io, 'Which kind of API is it?', ['openai', 'anthropic'])
         : found.protocol;
     const model = protocol && (await pickModel(io, found.models));

@@ -796,9 +796,12 @@ async function setupScreen(
         key: name,
         char: Array.from(name).length === 1 ? name : '',
       });
+    const done = app.initialize(true);
+    assert.equal(app.state.dialog?.title, 'which provider?');
+    key('enter'); // explicit custom endpoint
     return {
       app,
-      done: app.initialize(true),
+      done,
       key,
       type: (text) => {
         for (const char of text) key(char);

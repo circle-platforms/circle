@@ -90,7 +90,7 @@ export async function resolveEndpoint(
     const bases =
       protocol === 'anthropic'
         ? [normalizeBaseUrl(base, 'anthropic')]
-        : /\/v\d+(beta\d*)?$/.test(new URL(base).pathname)
+        : /\/v\d+(beta\d*)?(?:\/|$)/.test(new URL(base).pathname)
           ? [base]
           : [base, base + '/v1'];
     for (const resolved of bases) {
@@ -99,25 +99,68 @@ export async function resolveEndpoint(
           protocol === 'anthropic'
             ? { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
             : { Authorization: `Bearer ${apiKey}` };
-        const response = await fetch(
+        const url = new URL(
           resolved + (protocol === 'anthropic' ? '/v1/models' : '/models'),
-          { headers, signal: AbortSignal.timeout(options.timeout ?? 2500) },
         );
-        if (!response.ok) {
-          failures.push(`http ${response.status}`);
+        const ids: string[] = [];
+        const cursors = new Set<string>();
+        let problem = '';
+        // Keep the default page size for compatible gateways; follow every has_more page.
+        // A failed later page must not be reported as a complete online list.
+        for (let page = 0; ; page++) {
+          if (page === 1000) {
+            problem = 'model pagination limit exceeded';
+            break;
+          }
+          const response = await fetch(url, {
+            headers,
+            signal: AbortSignal.timeout(options.timeout ?? 2500),
+          });
+          if (!response.ok) {
+            problem = `http ${response.status}`;
+            break;
+          }
+          const body: unknown = await response.json();
+          const data =
+            body && typeof body === 'object'
+              ? (body as {
+                  data?: unknown;
+                  has_more?: unknown;
+                  last_id?: unknown;
+                })
+              : undefined;
+          const items =
+            protocol === 'openai' && Array.isArray(body) ? body : data?.data;
+          if (
+            !Array.isArray(items) ||
+            items.some(
+              (item) => typeof item?.id !== 'string' || !item.id.trim(),
+            )
+          ) {
+            problem = 'invalid model list';
+            break;
+          }
+          ids.push(...items.map((item) => String(item.id)));
+          if (protocol !== 'anthropic' || !data?.has_more) break;
+          const cursor = data.last_id;
+          if (
+            data.has_more !== true ||
+            !items.length ||
+            typeof cursor !== 'string' ||
+            !cursor.trim() ||
+            cursors.has(cursor)
+          ) {
+            problem = 'invalid model pagination';
+            break;
+          }
+          cursors.add(cursor);
+          url.searchParams.set('after_id', cursor);
+        }
+        if (problem) {
+          failures.push(problem);
           continue;
         }
-        const data = (await response.json()) as { data?: { id?: unknown }[] };
-        if (
-          !Array.isArray(data.data) ||
-          data.data.some(
-            (item) => typeof item?.id !== 'string' || !item.id.trim(),
-          )
-        ) {
-          failures.push('invalid model list');
-          continue;
-        }
-        const models = [...new Set(data.data.map((item) => String(item.id)))];
+        const models = [...new Set(ids)];
         const result: ProbeResult = {
           protocol,
           models,

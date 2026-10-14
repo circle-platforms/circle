@@ -674,6 +674,8 @@ test('with --init the welcome shows no model and unlit lamps until a new one is 
   };
   const enter = (): void => ui.handle({ type: 'key', key: 'enter', char: '' });
   const setup = app.initialize(true);
+  await until(() => app.state.dialog?.title === 'which provider?');
+  enter(); // custom endpoint
   await until(() => app.state.dialog?.title === "What is the API's base URL?");
   let plain = frame().map(stripAnsi);
   assert.ok(

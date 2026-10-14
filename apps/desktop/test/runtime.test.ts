@@ -2506,3 +2506,140 @@ test('an approval for a new file carries its diff', async (t) => {
     ['added'],
   );
 });
+
+test('an explicit provider preset bypasses discovery, saves editable fields and sends the selected id with its protocol to the actual endpoint', async (t) => {
+  for (const [provider, protocol, presetId] of [
+    ['bailian', 'openai', 'qwen3.8-max'],
+    ['bedrock-anthropic', 'anthropic', 'us.anthropic.claude-sonnet-5'],
+  ]) {
+    const s = await setup(t, []);
+    const seen: {
+      url: string;
+      headers: import('node:http').IncomingHttpHeaders;
+      body: Record<string, unknown>;
+    }[] = [];
+    const server = createServer(async (req, res) => {
+      let bytes = '';
+      for await (const chunk of req) bytes += chunk;
+      seen.push({
+        url: req.url!,
+        headers: req.headers,
+        body: bytes ? JSON.parse(bytes) : {},
+      });
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      if (protocol === 'openai') {
+        res.end(
+          'data: ' +
+            JSON.stringify({
+              choices: [
+                {
+                  index: 0,
+                  delta: { content: 'preset selected' },
+                  finish_reason: 'stop',
+                },
+              ],
+            }) +
+            '\n\ndata: [DONE]\n\n',
+        );
+      } else {
+        const events = [
+          {
+            type: 'message_start',
+            message: {
+              id: 'msg-fixture',
+              type: 'message',
+              role: 'assistant',
+              model: 'my-edited-id',
+              content: [],
+              stop_reason: null,
+              stop_sequence: null,
+              usage: { input_tokens: 1, output_tokens: 0 },
+            },
+          },
+          {
+            type: 'content_block_start',
+            index: 0,
+            content_block: { type: 'text', text: '' },
+          },
+          {
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'text_delta', text: 'preset selected' },
+          },
+          { type: 'content_block_stop', index: 0 },
+          {
+            type: 'message_delta',
+            delta: { stop_reason: 'end_turn', stop_sequence: null },
+            usage: { output_tokens: 1 },
+          },
+          { type: 'message_stop' },
+        ];
+        res.end(
+          events
+            .map(
+              (event) =>
+                `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+            )
+            .join(''),
+        );
+      }
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    t.after(() => {
+      server.closeAllConnections();
+      return new Promise<void>((done) => server.close(() => done()));
+    });
+    const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}/custom${protocol === 'openai' ? '/v1' : '/anthropic'}`;
+    const probe = await s.call('probe-connection', {
+      provider,
+      endpoint,
+      apiKey: 'local-key',
+    });
+    assert.equal(probe.ok, true);
+    assert.equal((probe.data as { status: string }).status, 'preset');
+    assert.ok((probe.data as { models: string[] }).models.includes(presetId!));
+    assert.equal(seen.length, 0);
+    assert.equal(loadSettings(s.home).initialized, false);
+    assert.equal(
+      (
+        await s.call('configure', {
+          endpoint,
+          protocol,
+          apiKey: 'local-key',
+          model: 'my-edited-id',
+        })
+      ).ok,
+      true,
+    );
+    assert.equal(loadSettings(s.home).auth.model, 'my-edited-id');
+    assert.equal(loadSettings(s.home).auth.base_url, endpoint);
+    assert.ok(
+      !s.controller.snapshot().models.some((model) => model.id === presetId),
+    );
+    await s.call('prompt', { text: 'use my selected model' });
+    await wait(
+      () =>
+        s.controller
+          .snapshot()
+          .sessions.some((session) =>
+            session.messages.some(
+              (message) => message.text === 'preset selected',
+            ),
+          ),
+      'actual preset endpoint answer',
+    );
+    assert.equal(
+      seen[0]!.url,
+      protocol === 'openai'
+        ? '/custom/v1/chat/completions'
+        : '/custom/anthropic/v1/messages',
+    );
+    assert.equal(seen[0]!.body.model, 'my-edited-id');
+    if (protocol === 'openai') {
+      assert.equal(seen[0]!.headers.authorization, 'Bearer local-key');
+    } else {
+      assert.equal(seen[0]!.headers['x-api-key'], 'local-key');
+      assert.equal(seen[0]!.headers['anthropic-version'], '2023-06-01');
+    }
+  }
+});

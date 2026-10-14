@@ -353,6 +353,26 @@ try {
   const modelListKeys = [];
   let modelListDown = false;
   gateway = createServer(async (req, res) => {
+    if (req.url?.startsWith('/anthropic/v1/models')) {
+      assert.equal(req.headers['x-api-key'], 'native-local-key');
+      assert.equal(req.headers['anthropic-version'], '2023-06-01');
+      const url = new URL(req.url, 'http://fixture');
+      res.setHeader('Content-Type', 'application/json');
+      res.end(
+        JSON.stringify(
+          url.searchParams.has('after_id')
+            ? { data: [{ id: 'claude-page-21' }], has_more: false }
+            : {
+                data: Array.from({ length: 20 }, (_, i) => ({
+                  id: `claude-page-${i + 1}`,
+                })),
+                has_more: true,
+                last_id: 'claude-page-20',
+              },
+        ),
+      );
+      return;
+    }
     if (req.url === '/v1/models') {
       modelListKeys.push(req.headers.authorization);
       if (modelListDown) {
@@ -361,7 +381,7 @@ try {
         return;
       }
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ data: [{ id: 'native-fixture-model' }] }));
+      res.end(JSON.stringify([{ id: 'native-fixture-model' }]));
       return;
     }
     if (req.url !== '/v1/chat/completions') {
@@ -428,6 +448,85 @@ try {
   await page.getByRole('textbox', { name: 'base url', exact: true }).waitFor();
   assert.equal((await state()).runtime.configured, false);
   checks.push('a first start without a model opens the connection form');
+  for (const theme of ['dark', 'light']) {
+    await command('save-settings', { settings: { theme } });
+    await page.waitForFunction(
+      (value) => document.documentElement.dataset.theme === value,
+      theme,
+    );
+    await page.screenshot({ path: join(output, `provider-form-${theme}.png`) });
+  }
+  // A preset source is selected by the human before any request, never substituted on failure.
+  const providerBox = page.getByRole('combobox', {
+    name: 'provider',
+    exact: true,
+  });
+  await providerBox.selectOption('bailian');
+  assert.equal(
+    await page
+      .getByRole('textbox', { name: 'base url', exact: true })
+      .inputValue(),
+    'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  );
+  await page
+    .getByRole('textbox', { name: 'base url', exact: true })
+    .fill(`http://127.0.0.1:${gateway.address().port}/v1`);
+  await page
+    .getByRole('textbox', { name: 'api key', exact: true })
+    .fill('native-local-key');
+  await page.getByRole('button', { name: 'next', exact: true }).click();
+  await page
+    .getByRole('option', { name: 'qwen3.8-max preset', exact: true })
+    .waitFor();
+  assert.equal(modelListKeys.length, 0);
+  await page
+    .getByText('provider presets (2026-10-14); unverified', { exact: true })
+    .waitFor();
+  for (const theme of ['dark', 'light']) {
+    await command('save-settings', { settings: { theme } });
+    await page.waitForFunction(
+      (value) => document.documentElement.dataset.theme === value,
+      theme,
+    );
+    await page.screenshot({
+      path: join(output, `provider-presets-${theme}.png`),
+    });
+  }
+  await page
+    .getByRole('combobox', { name: 'search models', exact: true })
+    .fill('account-custom-id');
+  await page
+    .getByRole('option', {
+      name: 'use “account-custom-id” not listed',
+      exact: true,
+    })
+    .waitFor();
+  assert.equal((await state()).runtime.configured, false);
+  await page.getByRole('button', { name: 'back', exact: true }).click();
+  // An explicit Anthropic provider keeps its protocol and follows the second online page.
+  await providerBox.selectOption('anthropic');
+  await page
+    .getByRole('textbox', { name: 'base url', exact: true })
+    .fill(`http://127.0.0.1:${gateway.address().port}/anthropic/v1`);
+  await page
+    .getByRole('textbox', { name: 'api key', exact: true })
+    .fill('native-local-key');
+  await page.getByRole('button', { name: 'next', exact: true }).click();
+  await page
+    .getByText('discovered 21 models (anthropic)', { exact: true })
+    .waitFor();
+  await page
+    .getByRole('combobox', { name: 'search models', exact: true })
+    .fill('claude-page-21');
+  await page
+    .getByRole('option', { name: 'claude-page-21', exact: true })
+    .waitFor();
+  await page.getByRole('button', { name: 'back', exact: true }).click();
+  await providerBox.selectOption('custom');
+  checks.push(
+    'explicit provider presets bypass discovery, allow edited ids in both themes, and Anthropic discovery includes the 21st model',
+  );
+
   await page
     .getByRole('textbox', { name: 'base url', exact: true })
     .fill(`http://127.0.0.1:${gateway.address().port}/v1`);

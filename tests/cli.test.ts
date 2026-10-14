@@ -626,7 +626,7 @@ test('line setup keeps the saved key only on the saved host; another host needs 
     const output = new PassThrough();
     let shown = '';
     output.on('data', (data) => (shown += data));
-    input.end(text);
+    input.end('1\n' + text); // custom endpoint
     const result = await runLineInit(home, terminalPrompter(input, output));
     return { result, shown };
   };
@@ -711,6 +711,7 @@ test(
     );
     let output = '';
     const answers: [RegExp, string][] = [
+      [/number: \s*$/, '1\r'], // custom endpoint
       [/API URL: \s*$/, endpoint.base + '/v1\r'],
       [/API KEY: \s*$/, 'secret-key\r'],
       [/model: \s*$/, '2\r'],

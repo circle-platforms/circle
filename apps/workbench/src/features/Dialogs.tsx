@@ -13,6 +13,11 @@ import {
   Terminal,
   X,
 } from 'lucide-react';
+import {
+  PROVIDER_PRESETS,
+  providerPreset,
+  PROVIDER_PRESET_DATE,
+} from '../../../../src/providers';
 import { VERSION } from '../../../../src/version';
 import { useRuntime } from '../app/context';
 import { t, tn } from '../i18n';
@@ -90,7 +95,7 @@ function desktopShortcuts(): [string, string][] {
 // What the runtime's probe-connection answers (src/probe.ts resolveEndpoint): the kind of
 // API, the models it lists and the URL that answered. Never the key.
 interface ConnectionProbe {
-  status: 'discovered' | 'empty' | 'failed';
+  status: 'discovered' | 'empty' | 'failed' | 'preset';
   protocol: 'openai' | 'anthropic';
   models: string[];
   baseUrl: string;
@@ -111,6 +116,8 @@ const hostOf = (url: string): string => {
 function ConnectionWizard({ onClose }: { onClose: () => void }) {
   const { snapshot, runtime, notify } = useRuntime();
   const current = currentSession(snapshot);
+  const [providerId, setProviderId] = useState('custom');
+  const provider = providerPreset(providerId);
   const [endpoint, setEndpoint] = useState(snapshot.settings.endpoint);
   const [secret, setSecret] = useState('');
   const [busy, setBusy] = useState(false);
@@ -174,6 +181,7 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
         const found = (await runtime.request('probe-connection', {
           endpoint: endpoint.trim(),
           apiKey: secret,
+          provider: providerId,
         })) as ConnectionProbe;
         setProtocol(found.protocol === 'anthropic' ? 'anthropic' : 'openai');
         setQuery('');
@@ -253,6 +261,51 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
           </p>
         )}
         <label>
+          {t('provider')}
+          <select
+            aria-label={t('provider')}
+            value={providerId}
+            disabled={busy}
+            onChange={(event) => {
+              const next = providerPreset(event.target.value);
+              setProviderId(next.id);
+              setEndpoint(
+                next.baseUrl ||
+                  (next.id === 'custom' ? snapshot.settings.endpoint : ''),
+              );
+              setSecret('');
+              setError('');
+            }}
+          >
+            {PROVIDER_PRESETS.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.id === 'custom' ? t('custom endpoint') : item.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="panel-note">
+          {provider.source === 'preset'
+            ? t(
+                'Choose from provider presets next, or type a model id. The key and model are not checked.',
+              )
+            : t(
+                'Next asks this endpoint for its online model list. You can also type a model id.',
+              )}
+        </p>
+        {provider.id === 'bedrock-anthropic' && (
+          <p className="panel-note">
+            {t('Use a Bedrock API key and choose your region in the base URL.')}
+          </p>
+        )}
+        {(provider.id === 'azure' || provider.id === 'foundry-anthropic') && (
+          <p className="panel-note">
+            {t(
+              'Enter your resource base URL and deployment name. Public model names are not deployment names.',
+            )}
+          </p>
+        )}
+        <label>
           {t('base url')}
           <input
             type="url"
@@ -302,23 +355,34 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
       <div className="connection-banner">
         <span>
           <i />
-          {manual
-            ? probe.detail
-              ? t('model discovery failed ({detail})', {
-                  detail: probe.detail,
-                })
-              : t('model discovery failed')
-            : probe.models.length
-              ? tn(
-                  probe.models.length,
-                  'discovered {n} model ({protocol})',
-                  'discovered {n} models ({protocol})',
-                  { protocol: probe.protocol },
-                )
-              : t('the endpoint listed no models')}
+          {probe.status === 'preset'
+            ? t('provider presets ({date}); unverified', {
+                date: PROVIDER_PRESET_DATE,
+              })
+            : manual
+              ? probe.detail
+                ? t('model discovery failed ({detail})', {
+                    detail: probe.detail,
+                  })
+                : t('model discovery failed')
+              : probe.models.length
+                ? tn(
+                    probe.models.length,
+                    'discovered {n} model ({protocol})',
+                    'discovered {n} models ({protocol})',
+                    { protocol: probe.protocol },
+                  )
+                : t('the endpoint listed no models')}
         </span>
         <code>{manual ? endpoint.trim() : probe.baseUrl}</code>
       </div>
+      {probe.status === 'preset' && (
+        <p className="panel-note">
+          {t(
+            'These ids ship with Circle. Availability depends on your provider and account; you can enter another id.',
+          )}
+        </p>
+      )}
       {listed ? (
         <>
           <SearchInput
@@ -368,6 +432,9 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
                     ? choice.id
                     : t('use “{model}”', { model: choice.id })}
                 </span>
+                {choice.listed && probe.status === 'preset' && (
+                  <small>{t('preset')}</small>
+                )}
                 {choice.listed && choice.id === current.model && (
                   <small>{t('current')}</small>
                 )}
@@ -383,7 +450,7 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
         </>
       ) : (
         <>
-          {manual && (
+          {manual && !provider.protocol && (
             <div className="field-label">
               {t('kind of API')}
               <div
@@ -420,9 +487,11 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
             />
           </label>
           <p className="panel-note">
-            {t(
-              'The endpoint did not list its models, so the id is not checked: type the one your provider documents.',
-            )}
+            {probe.status === 'preset'
+              ? t('Enter the deployment name from your provider console.')
+              : t(
+                  'The endpoint did not list its models, so the id is not checked: type the one your provider documents.',
+                )}
           </p>
         </>
       )}

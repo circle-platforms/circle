@@ -43,6 +43,7 @@ import {
   withConnection,
 } from '../settings.js';
 import { resolveEndpoint } from '../probe.js';
+import { PROVIDER_PRESETS } from '../providers.js';
 import { SetupCard, SetupFlow } from './setup_flow.js';
 import { InputParser, type InputEvent } from '../ink/parse_keypress.js';
 import { ThemeWatch } from '../ink/theme_watch.js';
@@ -2196,7 +2197,7 @@ export class SessionApp {
         },
         leave,
       );
-      askUrl(list, flow.savedUrl);
+      askUrl(list, flow.baseUrl);
       // picker() painted the list before the question was put on it
       this.repaint();
     };
@@ -2272,9 +2273,20 @@ export class SessionApp {
           },
           leave,
         );
+      } else if (flow.step === 'provider') {
+        this.picker(
+          title(),
+          PROVIDER_PRESETS.map((item) => ({ key: item.id, label: item.name })),
+          (item) => {
+            flow.chooseProvider(item.key);
+            ask();
+          },
+          { hint: 'which provider?' },
+          leave,
+        );
       } else ask();
     };
-    ask();
+    next();
   }
   /** pbcopy, wl-copy or xclip (clip on Windows); false when none took the text. */
   private async copy(text: string): Promise<boolean> {
