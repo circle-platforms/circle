@@ -165,6 +165,27 @@ const TSX = pathToFileURL(
   join(process.cwd(), 'node_modules', 'tsx', 'dist', 'loader.mjs'),
 ).href;
 const CLI = join(process.cwd(), 'src', 'cli.ts');
+// A proxy or extra certificates in the developer's own shell make Circle write a network
+// line to standard error; a test that needs them passes them in options.env.
+const NETWORK_VARIABLES = new Set([
+  'HTTPS_PROXY',
+  'https_proxy',
+  'HTTP_PROXY',
+  'http_proxy',
+  'NO_PROXY',
+  'no_proxy',
+  'NODE_USE_ENV_PROXY',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'NODE_EXTRA_CA_CERTS',
+  'CIRCLE_TRUST_CERTS',
+]);
+const inheritedEnv = () =>
+  Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([name]) => !NETWORK_VARIABLES.has(name),
+    ),
+  );
 // The real CLI in a child process. `stdin` is written and closed; null leaves it open.
 function circle(
   home: string,
@@ -197,7 +218,7 @@ function circle(
     const child = spawn(process.execPath, launch, {
       cwd: options.cwd ?? process.cwd(),
       env: {
-        ...process.env,
+        ...inheritedEnv(),
         CIRCLE_HOME: home,
         CIRCLE_NO_MODELS_REFRESH: '1',
         CIRCLE_JOB_WAIT: '0',
@@ -837,7 +858,7 @@ test(
       ],
       {
         env: {
-          ...process.env,
+          ...inheritedEnv(),
           CIRCLE_HOME: home,
           CIRCLE_NO_MODELS_REFRESH: '1',
           CIRCLE_JOB_WAIT: '0',

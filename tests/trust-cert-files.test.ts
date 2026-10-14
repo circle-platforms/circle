@@ -4,6 +4,7 @@
 import { scratch } from './helpers.js';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { X509Certificate } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer as createHttpsServer, type Server } from 'node:https';
 import { join } from 'node:path';
@@ -138,12 +139,20 @@ test(
   { skip: NO_OPENSSL },
   async (t) => {
     const { ca } = certificates(t);
-    const before = tls.getCACertificates('default').length;
+    // Counted once each: NODE_EXTRA_CA_CERTS may repeat authorities Node.js already has,
+    // and setting the store again keeps one of each
+    const authorities = () =>
+      new Set(
+        tls
+          .getCACertificates('default')
+          .map((pem) => new X509Certificate(pem).fingerprint256),
+      ).size;
+    const before = authorities();
     const setup = configureNetwork({}, [ca]);
     assert.equal(setup.certificates, 1);
-    assert.equal(tls.getCACertificates('default').length, before + 1);
+    assert.equal(authorities(), before + 1);
     setup.restore();
-    assert.equal(tls.getCACertificates('default').length, before);
+    assert.equal(authorities(), before);
   },
 );
 
