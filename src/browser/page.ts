@@ -97,6 +97,18 @@ export function browserPage(command: string, args: Record<string, any>) {
         el.textContent,
     ).slice(0, 500);
   };
+  // The name is the field's placeholder, a hint at what to type rather than a label
+  const hint = (el: Element) => {
+    const field = el as HTMLInputElement;
+    return (
+      !!el.getAttribute('placeholder') &&
+      !el.getAttribute('aria-label') &&
+      !el.getAttribute('aria-labelledby') &&
+      !field.labels?.length &&
+      !el.getAttribute('alt') &&
+      !el.getAttribute('title')
+    );
+  };
   const role = (el: Element): string => {
     const explicit = el.getAttribute('role');
     if (explicit) return explicit;
@@ -465,6 +477,7 @@ export function browserPage(command: string, args: Record<string, any>) {
       // The element as the snapshot shows it, read as the action uses it
       role: role(el),
       name: name(el),
+      hint: hint(el),
       origin: el.ownerDocument.location.origin,
       password:
         el.localName === 'input' &&

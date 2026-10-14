@@ -19,6 +19,8 @@ export const quote = (value: string) => JSON.stringify(value);
 export interface PageElement {
   role: string;
   name: string;
+  /** The name is only the field's placeholder ("Search…", "请输入"), not a label. */
+  hint?: boolean;
 }
 /** The element an action acted on, as the snapshot shows it: `e28 link "Host settings"`. */
 export function actedOn(ref: string, element: PageElement): string {
@@ -32,7 +34,10 @@ export function describedOther(
   description: unknown,
   element: PageElement,
 ): string {
-  return typeof description !== 'string' || describes(description, element)
+  // A placeholder says what to type, not what the field is: any description may fit
+  return typeof description !== 'string' ||
+    element.hint ||
+    describes(description, element)
     ? ''
     : ` — you described it as ${quote(description.trim())}; check the snapshot`;
 }

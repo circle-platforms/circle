@@ -13,6 +13,7 @@ import type {
   BrowserResult,
 } from '../src/browser/protocol.js';
 import {
+  snapshotHas,
   formatScript,
   parseScript,
   recordSteps,
@@ -1409,4 +1410,22 @@ test('in a conversation the model records its browser actions to a file, and ano
     'from',
     'to',
   ]);
+});
+
+test('expect and absent read the page, not what its fields hold', () => {
+  const snapshot = [
+    '| [e101] textbox "请输入" value="circle-retest" | [e102] textbox "请输入" value="" |',
+    '[e5] button "删除"',
+    'The list is empty',
+  ].join('\n');
+  assert.equal(snapshotHas(snapshot, 'circle-retest'), false);
+  assert.equal(snapshotHas(snapshot, 'The list is   empty'), true);
+  assert.equal(snapshotHas(snapshot, '删除'), true);
+  assert.equal(
+    snapshotHas(
+      '[e1] textbox "Name" value="a \\"quoted\\" text" | done',
+      'quoted',
+    ),
+    false,
+  );
 });

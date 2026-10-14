@@ -523,8 +523,14 @@ export function findElement(
   ];
 }
 /** Whether a snapshot's text holds a text, spaces aside. */
+/**
+ * Whether a page shows the text: its words and its elements' names, not what its fields hold
+ * (`value="…"`), so that text the script typed is not taken for the page's answer.
+ */
 export const snapshotHas = (snapshot: string, wanted: string): boolean =>
-  collapse(snapshot).includes(collapse(wanted));
+  collapse(snapshot.replace(/ value="(?:[^"\\]|\\.)*"/g, '')).includes(
+    collapse(wanted),
+  );
 /** The tab a result shows, by its id, from the Page line. */
 export const shownTab = (text: string): string | undefined =>
   resultSections(text)

@@ -327,7 +327,9 @@ export function browserTools(
     }
     if (typeof result.origin === 'string')
       sites.set(context.sessionId, result.origin);
-    pages.set(context.sessionId, result.text);
+    // Only a result with a snapshot says what the refs are (a screenshot's does not)
+    if (result.text.includes('### Snapshot'))
+      pages.set(context.sessionId, result.text);
     return result;
   };
   const tool = (

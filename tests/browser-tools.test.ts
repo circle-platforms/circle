@@ -225,6 +225,12 @@ test('a click that deletes on a page, or accepting a dialog that says so, asks e
     async request(_session, action, args) {
       requests.push(`${action} ${String(args.ref ?? args.url ?? '')}`.trim());
       // Deleting opens the page's own confirmation
+      // A list of tabs has no snapshot: what the refs are stays as the last snapshot said
+      if (action === 'tabs')
+        return {
+          text: '### Tabs\n- t1 (shown) "virtual services"',
+          origin: 'https://device.lan',
+        };
       const text =
         action === 'click' && args.ref === 'e5'
           ? `Clicked e5 button "删除". It opened dialog d1.\n${page}\n### Dialogs waiting\n- [d1] confirm · tab t1 · from https://device.lan: "确定删除选中的虚拟服务吗？" → browser_dialog`
@@ -243,6 +249,7 @@ test('a click that deletes on a page, or accepting a dialog that says so, asks e
   const model = new ScriptedModel([
     step('open', 'browser_navigate', { url: 'https://device.lan/vs' }),
     step('select', 'browser_click', { ref: 'e4', element: 'vs3' }),
+    step('tabs', 'browser_tabs', { action: 'list' }),
     // The model calls it something else: the page's name decides
     step('delete', 'browser_click', { ref: 'e5', element: 'the button' }),
     step('confirm', 'browser_dialog', { accept: true }),
@@ -290,6 +297,7 @@ test('a click that deletes on a page, or accepting a dialog that says so, asks e
   assert.deepEqual(requests, [
     'navigate https://device.lan/vs',
     'click e4',
+    'tabs',
     'click e5',
     'dialog',
     'click e6',

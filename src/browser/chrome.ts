@@ -706,8 +706,9 @@ export class ChromeBrowser implements BrowserPort {
         if (!params.frame.parentId) {
           tab.frameUrl = params.frame.url;
           tab.world = undefined;
-          // Past the warning to its site: by whom, for the model's next result
-          if (tab.warning && tab.frameUrl === tab.warning.url)
+          // Past the warning to its site, wherever on that host it went on to (a site that
+          // sends / to /login): by whom, for the model's next result
+          if (tab.warning && hostOf(tab.frameUrl) === tab.warning.host)
             tab.conversation.events.push(
               `certificate warning for ${tab.warning.host}: ${
                 tab.proceeding === 'approved'

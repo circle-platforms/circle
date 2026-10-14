@@ -111,3 +111,21 @@ test('a control or dialog that deletes is told by its words, and a ref by the sn
   assert.match(waitingDialog(page, 'd2'), /\[d2\] alert/);
   assert.equal(waitingDialog('no dialogs'), '');
 });
+
+test('a field named only by its placeholder fits any description', () => {
+  assert.equal(
+    describedOther('IP列表名称 筛选输入框', {
+      role: 'textbox',
+      name: '请输入',
+      hint: true,
+    }),
+    '',
+  );
+  assert.match(
+    describedOther('IP列表名称 筛选输入框', {
+      role: 'textbox',
+      name: '请输入',
+    }),
+    /you described it as/,
+  );
+});

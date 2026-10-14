@@ -1519,6 +1519,11 @@ test(
           res.writeHead(401, { 'www-authenticate': 'Basic realm="Lab"' });
           return res.end();
         }
+        // A site that sends its root on to another page, as a device sends / to /login
+        if (req.url === '/start') {
+          res.writeHead(302, { location: '/' });
+          return res.end();
+        }
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         res.end(
           '<!doctype html><title>Login</title><form method="post"><label>User <input name="user"></label><label>Password <input name="pass" type="password"></label><button>Sign in</button></form>',
@@ -1614,7 +1619,11 @@ test(
     );
 
     // On this network the same certificate is passed, here by auto mode, and the secret typed
-    const localPage = await open('local', `https://127.0.0.1:${port}/`, 'auto');
+    const localPage = await open(
+      'local',
+      `https://127.0.0.1:${port}/start`,
+      'auto',
+    );
     assert.match(
       localPage,
       /- certificate warning for 127\.0\.0\.1:\d+: Circle proceeded in auto mode, without asking \(sha256 [0-9A-F:]+\)/,
