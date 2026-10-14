@@ -9,7 +9,7 @@ import { defaultSettings } from '../src/settings.js';
 import { SessionApp } from '../src/tui/session_app.js';
 import { rpcMessage } from '../src/rpc_codec.js';
 import { validateMessages } from '../src/session_graph.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, cancellationFixture } from './helpers.js';
 const command = (
   root: string,
   code: string,
@@ -131,38 +131,34 @@ test('quiet foreground and background commands make real effects without enterin
 
 test('cancellation stops a real user process tree, blocks concurrent model starts and does not share an incomplete result', async (t) => {
   const root = scratch(t);
+  const fixture = await cancellationFixture(t, root);
   const runtime = new AgentRuntime({
     workspace: root,
     home: root,
     settings: defaultSettings(),
     model: new ScriptedModel(),
   });
-  cleanup(t, () => runtime.close());
-  writeFileSync(
-    join(root, 'child.cjs'),
-    "require('node:fs').writeFileSync('ready', 'yes'); setTimeout(() => require('node:fs').writeFileSync('late', 'bad'), 1500);",
-  );
-  const running = runtime.userShells.run(
-    command(
-      root,
-      "require('node:child_process').spawn(process.execPath, ['child.cjs'], {stdio:'ignore'}); setTimeout(() => {}, 10000);",
-    ),
-  );
+  cleanup(t, async () => {
+    const closing = runtime.close();
+    await fixture.close();
+    await closing;
+  });
+  const running = runtime.userShells.run(fixture.command);
   // Observe rejection immediately so intentional cancellation is never unhandled.
   const outcome = running.then(
     () => 'finished',
     () => 'stopped',
   );
-  await until(() => existsSync(join(root, 'ready')));
+  await fixture.ready();
   assert.equal(runtime.busy, true);
   await assert.rejects(
     runtime.harness.run('must not start'),
     /user command is running/,
   );
-  await runtime.cancel();
+  await fixture.exited(runtime.cancel());
   assert.equal(await outcome, 'stopped');
   assert.equal(runtime.busy, false);
-  await delay(1700);
+  assert.equal(await fixture.release(), 'closed');
   assert.equal(existsSync(join(root, 'late')), false);
   assert.equal(runtime.harness.messages.length, 0);
   assert.equal(runtime.userShells.views[0]!.status, 'stopped');
