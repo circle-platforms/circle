@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { _electron as electron } from 'playwright';
 
 // A local model gateway reads the real preceding screenshot result. It never calls a model.
-const root = fileURLToPath(new URL('..', import.meta.url));
+const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
 const temp = await mkdtemp(join(tmpdir(), 'circle-coordinate-live-'));
 const output = join(root, 'artifacts/browser-coordinate-live');
@@ -160,7 +160,7 @@ try {
   app = await electron.launch({
     executablePath:
       process.env.CIRCLE_DESKTOP_EXECUTABLE ?? require('electron'),
-    args: [process.env.CIRCLE_DESKTOP_APP_PATH ?? root],
+    args: [resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? root)],
     cwd: root,
     env,
     chromiumSandbox: true,

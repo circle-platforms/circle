@@ -1,6 +1,65 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { assertViewport, setViewport } from './helpers/viewport.mjs';
+
+for (const { entryName, overridden } of [
+  'browser-coordinate-live.mjs',
+  'extensions-native.mjs',
+].flatMap((entryName) =>
+  [false, true].map((overridden) => ({ entryName, overridden })),
+)) {
+  test(`${entryName} normalizes the ${overridden ? 'overridden' : 'default'} application path before launching`, (t) => {
+    const temp = mkdtempSync(join(tmpdir(), 'circle-coordinate-launch-'));
+    t.after(() => rmSync(temp, { recursive: true, force: true }));
+    const capture = join(temp, 'launch.json');
+    const hook = join(temp, 'launch-hook.mjs');
+    const native = `
+      import { writeFileSync } from 'node:fs';
+      export const _electron = { async launch(options) {
+        writeFileSync(${JSON.stringify(capture)}, JSON.stringify({ args: options.args, cwd: options.cwd }));
+        throw Error('native launch captured');
+      } };
+    `;
+    writeFileSync(
+      hook,
+      `import { registerHooks } from 'node:module';
+       registerHooks({ resolve(specifier, context, nextResolve) {
+         if (specifier === 'playwright') return {
+           url: 'data:text/javascript,' + encodeURIComponent(${JSON.stringify(native)}), shortCircuit: true
+         };
+         return nextResolve(specifier, context);
+       } });`,
+    );
+    const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
+    const entry = fileURLToPath(new URL(entryName, import.meta.url));
+    const env = {
+      ...process.env,
+      CIRCLE_DESKTOP_EXECUTABLE: 'fixture-electron-not-started',
+      CIRCLE_HOME: join(temp, 'home'),
+      CIRCLE_WORKBENCH_DATA_DIR: join(temp, 'data'),
+    };
+    delete env.CIRCLE_DESKTOP_APP_PATH;
+    const override = join(temp, 'package with spaces') + sep;
+    if (overridden) env.CIRCLE_DESKTOP_APP_PATH = override;
+    const result = spawnSync(
+      process.execPath,
+      ['--import', pathToFileURL(hook).href, entry],
+      { env, encoding: 'utf8', timeout: 10_000, windowsHide: true },
+    );
+    assert.ifError(result.error);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /native launch captured/);
+    assert.deepEqual(JSON.parse(readFileSync(capture, 'utf8')), {
+      args: [overridden ? resolve(override) : root],
+      cwd: root,
+    });
+  });
+}
 
 test('native viewport checks preserve the requested maximum at each display scale', () => {
   const target = { width: 800, height: 650 };

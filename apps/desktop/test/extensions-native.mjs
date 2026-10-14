@@ -5,12 +5,12 @@
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
-const root = fileURLToPath(new URL('..', import.meta.url));
+const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
 const output = join(root, 'artifacts/extensions');
 await mkdir(output, { recursive: true });
@@ -89,7 +89,7 @@ try {
     chromiumSandbox: true,
     executablePath:
       process.env.CIRCLE_DESKTOP_EXECUTABLE ?? require('electron'),
-    args: [process.env.CIRCLE_DESKTOP_APP_PATH ?? root],
+    args: [resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? root)],
     cwd: root,
     env,
     timeout: 45_000,
