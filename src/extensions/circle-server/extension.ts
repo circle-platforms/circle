@@ -775,6 +775,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
     return data;
   }
 
+  // One line per event. The server projects event payloads to metadata: short strings such
+  // as status, outcome, waitingReason, decision, code or state stay inline, and an error or
+  // reason is reduced to its code; bodies are only reachable through the event's content
+  // reference. Older servers still send the full payload, whose string fields print the same.
   function eventLine(event: ServerEvent): string {
     const payload = event.payload ?? {};
     const parts: string[] = [];
@@ -782,12 +786,23 @@ export async function register(api: ExtensionAPI): Promise<void> {
       'phase',
       'to',
       'status',
+      'outcome',
+      'waitingReason',
+      'decision',
+      'code',
+      'state',
       'message',
       'question',
       'reason',
       'workerId',
     ])
-      if (typeof payload[key] === 'string') parts.push(String(payload[key]));
+      if (typeof payload[key] === 'string' && !parts.includes(String(payload[key])))
+        parts.push(String(payload[key]));
+    for (const key of ['reason', 'error']) {
+      const value = payload[key];
+      if (isRecord(value) && typeof value.code === 'string' && !parts.includes(value.code))
+        parts.push(value.code);
+    }
     return `  ${event.taskId} · ${event.seq} · ${event.kind}${parts.length ? ' · ' + parts.join(' · ') : ''}`;
   }
 

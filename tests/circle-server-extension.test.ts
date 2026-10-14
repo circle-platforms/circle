@@ -113,16 +113,40 @@ async function fakeServer(t: Parameters<typeof scratch>[0]) {
     }
     if (url.pathname === '/v1/tasks/task_one/events') {
       const after = Number(url.searchParams.get('after'));
+      // Payloads as the server projects them: metadata only, an error reduced to its code,
+      // the body behind a content reference.
       const events = [
-        { seq: 1, taskId: 'task_one', kind: 'task.accepted', payload: {} },
+        {
+          seq: 1,
+          taskId: 'task_one',
+          kind: 'task.accepted',
+          payload: { inputRevisionId: 'inrev_1' },
+        },
         {
           seq: 2,
           taskId: 'task_one',
+          kind: 'task.waiting-input',
+          payload: {
+            requestId: 'pin_1',
+            inputRevisionId: 'inrev_1',
+            waitingReason: 'gateway-refused',
+            reason: { code: 'GATEWAY_REFUSED' },
+            error: { code: 'GATEWAY_REFUSED' },
+          },
+          content: {
+            sha256: 'd'.repeat(64),
+            size: 96,
+            downloadPath: '/v1/tasks/task_one/events/2/content',
+          },
+        },
+        {
+          seq: 3,
+          taskId: 'task_one',
           kind: 'task.delivered',
-          payload: { phase: 'delivered' },
+          payload: { inputRevisionId: 'inrev_1', status: 'succeeded' },
         },
       ].filter((event) => event.seq > after);
-      delivered ||= events.some((event) => event.seq === 2);
+      delivered ||= events.some((event) => event.seq === 3);
       return send(200, {
         data: { events, after: events.at(-1)?.seq ?? after },
       });
@@ -323,7 +347,14 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
   );
   assert.ok(
     lines.some((line) =>
-      /task_one · 2 · task\.delivered · delivered/.test(line),
+      /task_one · 2 · task\.waiting-input · gateway-refused · GATEWAY_REFUSED$/.test(
+        line,
+      ),
+    ),
+  );
+  assert.ok(
+    lines.some((line) =>
+      /task_one · 3 · task\.delivered · succeeded$/.test(line),
     ),
   );
   assert.ok(
@@ -369,7 +400,7 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
   await command.handler('tasks', context);
   assert.match(
     lines.at(-1)!,
-    /task_one · delivered · mindmap-compile: LBX-HA\.xmind · seen to 2/,
+    /task_one · delivered · mindmap-compile: LBX-HA\.xmind · seen to 3/,
   );
   const ours = () =>
     host.statuses().find((item) => item.extension === 'circle-server');
