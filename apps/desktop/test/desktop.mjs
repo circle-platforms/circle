@@ -214,12 +214,25 @@ try {
     }),
     browserIdentity.id,
   );
+  // A non-web scheme is refused as an address the bar cannot read, not as a
+  // network failure; and a bare host the person typed is accepted, completed
+  // with https (#67).
   await assert.rejects(
     () =>
       page.evaluate(() =>
         window.circleDesktop.browserNavigate('session1', 'file:///etc/passwd'),
       ),
-    /http/,
+    /invalid browser address/,
+  );
+  const bareHost = await page.evaluate(() =>
+    window.circleDesktop
+      .browserNavigate('session1', '127.0.0.1:1')
+      .then(() => 'opened')
+      .catch((error) => String((error && error.message) || error)),
+  );
+  assert.ok(
+    !bareHost.includes('invalid browser address'),
+    'a bare host must pass address parsing: ' + bareHost,
   );
   await page.getByRole('button', { name: 'files panel', exact: true }).click();
   checks.push(
