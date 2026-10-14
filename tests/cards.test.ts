@@ -372,8 +372,8 @@ test('a card waits until typing has paused for a second, keys typed meanwhile st
   s.type('n');
   await delay(200);
   assert.equal(s.app.state.dialog, undefined);
-  s.type('y');
   const last = Date.now();
+  s.type('y');
   assert.equal(s.app.state.draft, 'helnylo');
   assert.match(s.screen(), /› helny▏lo/);
   await until(() => Boolean(s.app.state.dialog), 3000);
@@ -796,9 +796,12 @@ async function setupScreen(
         key: name,
         char: Array.from(name).length === 1 ? name : '',
       });
+    const done = app.initialize(true);
+    assert.equal(app.state.dialog?.title, 'which provider?');
+    key('enter'); // explicit custom endpoint
     return {
       app,
-      done: app.initialize(true),
+      done,
       key,
       type: (text) => {
         for (const char of text) key(char);

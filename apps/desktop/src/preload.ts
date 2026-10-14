@@ -9,6 +9,17 @@ const actions = new Set<DesktopAction>([
   'open-folder',
   'help',
 ]);
+// Electron turns a rejected invoke into `Error invoking remote method
+// '<channel>': Error: <message>`, which the address bar could not match
+// against the main process's own sentence; raise that message instead.
+const raiseBrowserError = (error: unknown): never => {
+  const message = error instanceof Error ? error.message : String(error);
+  const inner =
+    /Error invoking remote method '[^']+':\s*(?:Error:\s*)?(.*)$/s.exec(
+      message,
+    );
+  throw Error(inner?.[1] ? inner[1] : message);
+};
 const bridge: DesktopBridge = {
   apiVersion: 1,
   info: () => ipcRenderer.invoke('circle:info'),
@@ -23,6 +34,8 @@ const bridge: DesktopBridge = {
   },
   chooseFiles: (purpose) => ipcRenderer.invoke('circle:choose-files', purpose),
   chooseWorkspace: () => ipcRenderer.invoke('circle:choose-workspace'),
+  revealWorkspace: (workspaceId) =>
+    ipcRenderer.invoke('circle:reveal-workspace', workspaceId),
   readWorkspaceFile: (workspaceId, fileId) =>
     ipcRenderer.invoke('circle:read-workspace-file', workspaceId, fileId),
   listWorkspace: (workspaceId) =>
@@ -34,7 +47,9 @@ const bridge: DesktopBridge = {
     ipcRenderer.invoke('circle:window-control', action),
   browserState: (id) => ipcRenderer.invoke('circle:browser-state', id),
   browserNavigate: (id, url) =>
-    ipcRenderer.invoke('circle:browser-navigate', id, url),
+    ipcRenderer
+      .invoke('circle:browser-navigate', id, url)
+      .catch(raiseBrowserError),
   browserBounds: (id, bounds, visible) =>
     ipcRenderer.invoke('circle:browser-bounds', id, bounds, visible),
   browserHide: (id) => ipcRenderer.invoke('circle:browser-hide', id),

@@ -36,6 +36,7 @@ const REASONS: Record<string, () => string> = {
   'trusts an untrusted certificate': () => t('trusts an untrusted certificate'),
   'gives the page files': () => t('gives the page files'),
   'keeps a download': () => t('keeps a download'),
+  'clicks a coordinate target': () => t('clicks a coordinate target'),
 };
 export const requestReason = (reason?: string) =>
   reason ? (REASONS[reason]?.() ?? reason) : '';

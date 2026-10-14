@@ -3,6 +3,7 @@ export interface SubagentView {
   id: string;
   name: string;
   description: string;
+  activity?: string;
   messages: Message[];
   state: 'running' | 'waiting' | 'done' | 'error' | 'interrupted';
   started: number;

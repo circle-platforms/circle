@@ -184,6 +184,18 @@ export const BUILTIN_TOOL_INFO = [
     kind: 'browser',
   },
   {
+    name: 'browser_click_at',
+    get description() {
+      return t('Click a visible control without an element ref');
+    },
+    get detail() {
+      return t(
+        'Use CSS coordinates from the latest screenshot. Changed screenshots are refused; unknown or destructive targets ask once. Coordinate clicks are not recorded.',
+      );
+    },
+    kind: 'browser',
+  },
+  {
     name: 'browser_type',
     get description() {
       return t('Type text into a browser element');

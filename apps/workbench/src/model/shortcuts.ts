@@ -7,6 +7,7 @@ export const KEY_ACTIONS = {
   'model.cycle': 'ctrl+p',
   'mode.cycle': 'shift+tab',
   'thinking.cycle': 'alt+t',
+  'plan.focus': 'alt+p',
   'thinking.toggle': 'ctrl+t',
   'tools.expand': 'ctrl+o',
   'editor.external': 'ctrl+g',

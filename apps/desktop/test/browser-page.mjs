@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -18,6 +18,8 @@ if (process.env.CIRCLE_DESKTOP_EXECUTABLE) {
 }
 const require = createRequire(import.meta.url);
 const root = fileURLToPath(new URL('..', import.meta.url));
+const evidence = join(root, '../../outputs/browser-regressions');
+await mkdir(evidence, { recursive: true });
 const temp = await mkdtemp(join(tmpdir(), 'circle-browser-page-'));
 const source = await build({
   entryPoints: [join(root, '../../src/browser/page.ts')],
@@ -83,7 +85,7 @@ await writeFile(
   main,
   `const {app,BrowserWindow}=require('electron');
   app.setPath('userData', ${JSON.stringify(join(temp, 'data'))});
-  app.whenReady().then(async()=>{const window=new BrowserWindow({show:false,width:1100,height:850,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});await window.loadURL(${JSON.stringify(url)});});
+  app.whenReady().then(async()=>{const window=new BrowserWindow({show:false,width:1100,height:850,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});const contents=window.webContents;globalThis.circleNativeEvents=[];globalThis.circleNativeState=()=>{const main=contents.mainFrame;const frame=f=>f?{process:f.processId,routing:f.routingId,tree:f.frameTreeNodeId,main:f===main,detached:f.detached}:null;return {type:contents.getType(),mainFrame:frame(main),focusedFrame:frame(contents.focusedFrame),frames:main.framesInSubtree.map(frame)}};const record=(kind,extra={})=>circleNativeEvents.push({at:Date.now(),kind,...extra,state:circleNativeState()});window.on('ready-to-show',()=>record('ready-to-show'));for(const event of ['dom-ready','did-finish-load','did-stop-loading','focus','blur'])contents.on(event,()=>record(event));contents.on('before-input-event',(event,input)=>record('before-input-event',{type:input.type,code:input.code,prevented:event.defaultPrevented}));await window.loadURL(${JSON.stringify(url)});});
   app.on('window-all-closed',()=>app.quit());`,
 );
 const env = {
@@ -93,6 +95,42 @@ const env = {
 };
 delete env.ELECTRON_RUN_AS_NODE;
 let app;
+let cdp;
+let page;
+const inputDelay = Math.max(
+  0,
+  Math.min(2000, Number(process.env.CIRCLE_BROWSER_PAGE_INPUT_DELAY_MS) || 0),
+);
+let navigation = 0;
+const started = Date.now();
+const metadata = [];
+const completedInputEvents = [];
+const record = (value) => {
+  metadata.push({ at: Date.now() - started, ...value });
+  if (metadata.length > 200) metadata.shift();
+};
+const inputMetadata = async () => {
+  if (!app || !page) return {};
+  return {
+    native: await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      return {
+        visible: window.isVisible(),
+        windowFocused: window.isFocused(),
+        contentsFocused: window.webContents.isFocused(),
+        requests: globalThis.circleInputTrace ?? [],
+        frame: globalThis.circleNativeState(),
+        events: globalThis.circleNativeEvents,
+      };
+    }),
+    page: await page.evaluate(() => ({
+      visibility: document.visibilityState,
+      focused: document.hasFocus(),
+      currentEvents: window.circleInputEvents ?? [],
+    })),
+    completedInputEvents,
+  };
+};
 try {
   app = await electron.launch({
     executablePath: require('electron'),
@@ -101,27 +139,113 @@ try {
     cwd: root,
     chromiumSandbox: true,
   });
-  const page = await app.firstWindow();
+  page = await app.firstWindow();
   await page.waitForLoadState('load');
-  const run = async (command, args = {}) => {
-    const result = await app.evaluate(
-      ({ BrowserWindow }, { script, command, args }) =>
-        BrowserWindow.getAllWindows()[0].webContents.executeJavaScriptInIsolatedWorld(
-          999,
-          [
-            {
-              code:
-                script +
-                '\n(async()=>{try{return {ok:true,value:await CirclePage.browserPage(' +
-                JSON.stringify(command) +
-                ',' +
-                JSON.stringify(args) +
-                ')}}catch(error){return {ok:false,error:error.message}}})()',
-            },
-          ],
-        ),
-      { script, command, args },
+  cdp = await page.context().newCDPSession(page);
+  for (const method of [
+    'Runtime.executionContextsCleared',
+    'Page.loadEventFired',
+  ])
+    cdp.on(method, () => record({ kind: 'event', method }));
+  cdp.on('Runtime.executionContextCreated', ({ context }) =>
+    record({
+      kind: 'event',
+      method: 'Runtime.executionContextCreated',
+      context: context.id,
+      frame: context.auxData?.frameId,
+      isDefault: context.auxData?.isDefault,
+    }),
+  );
+  cdp.on('Runtime.executionContextDestroyed', ({ executionContextId }) =>
+    record({
+      kind: 'event',
+      method: 'Runtime.executionContextDestroyed',
+      context: executionContextId,
+    }),
+  );
+  cdp.on('Page.frameNavigated', ({ frame }) => {
+    if (!frame.parentId) navigation++;
+    record({
+      kind: 'event',
+      method: 'Page.frameNavigated',
+      frame: frame.id,
+      loader: frame.loaderId,
+      main: !frame.parentId,
+    });
+  });
+  for (const method of ['Page.frameStartedLoading', 'Page.frameStoppedLoading'])
+    cdp.on(method, ({ frameId }) =>
+      record({ kind: 'event', method, frame: frameId }),
     );
+  cdp.on('Animation.animationStarted', ({ animation }) =>
+    record({
+      kind: 'event',
+      method: 'Animation.animationStarted',
+      animation: animation.id,
+      type: animation.type,
+      duration: animation.source?.duration,
+      delay: animation.source?.delay,
+    }),
+  );
+  cdp.on('Animation.animationCanceled', ({ id }) =>
+    record({
+      kind: 'event',
+      method: 'Animation.animationCanceled',
+      animation: id,
+    }),
+  );
+  await Promise.all(
+    ['Runtime.enable', 'Page.enable', 'Animation.enable'].map((method) =>
+      cdp.send(method),
+    ),
+  );
+  const run = async (command, args = {}) => {
+    // Only timing/context/animation metadata is retained: no page text, URLs,
+    // expressions, argument values, input, screenshot pixels or returned values.
+    const at = Date.now();
+    const boundary = navigation;
+    record({
+      kind: 'command',
+      method: 'executeJavaScriptInIsolatedWorld',
+      world: 999,
+      command,
+    });
+    let result;
+    try {
+      result = await app.evaluate(
+        ({ BrowserWindow }, { script, command, args }) =>
+          BrowserWindow.getAllWindows()[0].webContents.executeJavaScriptInIsolatedWorld(
+            999,
+            [
+              {
+                code:
+                  script +
+                  '\n(async()=>{try{return {ok:true,value:await CirclePage.browserPage(' +
+                  JSON.stringify(command) +
+                  ',' +
+                  JSON.stringify(args) +
+                  ')}}catch(error){return {ok:false,error:error.message}}})()',
+              },
+            ],
+          ),
+        { script, command, args },
+      );
+    } catch (error) {
+      record({
+        kind: 'command-error',
+        command,
+        elapsed: Date.now() - at,
+        navigationChanged: boundary !== navigation,
+      });
+      throw error;
+    }
+    record({
+      kind: 'response',
+      command,
+      elapsed: Date.now() - at,
+      ok: result.ok,
+      navigationChanged: boundary !== navigation,
+    });
     if (!result.ok) throw Error(result.error);
     return result.value;
   };
@@ -196,47 +320,263 @@ try {
   assert(shadowTarget.x > 0 && shadowTarget.y > 0);
   const slottedTarget = await run('prepare', { ref: ref('slotted action') });
   assert(slottedTarget.x > 0 && slottedTarget.y > 0);
+  await page.evaluate(() => {
+    window.circleInputEvents = [];
+    for (const type of ['keydown', 'keyup', 'beforeinput', 'input'])
+      document.addEventListener(
+        type,
+        (event) => {
+          const target = event.target;
+          if (!['username', 'number'].includes(target.id)) return;
+          window.circleInputEvents.push({
+            at: performance.now(),
+            type,
+            target: target.id,
+            tag: target.tagName,
+            inputType: event.inputType,
+            code: event.code,
+            trusted: event.isTrusted,
+            prevented: event.defaultPrevented,
+            length: target.value.length,
+            selectionStart: target.selectionStart,
+            selectionEnd: target.selectionEnd,
+            active: document.activeElement === target,
+          });
+        },
+        true,
+      );
+  });
   await app.evaluate(async ({ BrowserWindow }) => {
     const contents = BrowserWindow.getAllWindows()[0].webContents;
     contents.debugger.attach('1.3');
+    globalThis.circleInputTrace = [];
   });
-  const write = async (name, text) => {
+  const dispatchWrite = async (name, text, deadline) => {
+    const target = await run('prepare', { ref: ref(name), typing: true });
+    const overlayBoundary = navigation;
+    assert.equal(
+      await run('overlay', {
+        ...target,
+        typing: true,
+        click: false,
+        label: 'fixture input',
+        color: 'CanvasText',
+        background: 'Canvas',
+        foreground: 'CanvasText',
+        tint: 'transparent',
+      }),
+      true,
+    );
+    assert.equal(
+      navigation,
+      overlayBoundary,
+      'type preparation overlay must acknowledge the same document',
+    );
+    await run('prepare', { ref: ref(name), typing: true });
     await run('focus', { ref: ref(name) });
-    await app.evaluate(async ({ BrowserWindow }, text) => {
-      const contents = BrowserWindow.getAllWindows()[0].webContents;
-      const select = {
-        key: 'a',
-        code: 'KeyA',
-        windowsVirtualKeyCode: 65,
-        modifiers: process.platform === 'darwin' ? 4 : 2,
-      };
-      await contents.debugger.sendCommand('Input.dispatchKeyEvent', {
-        type: 'rawKeyDown',
-        ...select,
-        commands: ['selectAll'],
-      });
-      await contents.debugger.sendCommand('Input.dispatchKeyEvent', {
-        type: 'keyUp',
-        ...select,
-      });
-      if (text)
-        await contents.debugger.sendCommand('Input.insertText', { text });
-      else {
-        const backspace = {
-          key: 'Backspace',
-          code: 'Backspace',
-          windowsVirtualKeyCode: 8,
+    await run('guard-key');
+    const selector = name === 'username' ? '#username' : '#number';
+    const eventStart = await page.evaluate(
+      () => window.circleInputEvents.length,
+    );
+    await app.evaluate(
+      async ({ BrowserWindow }, { text, inputDelay, script, fieldRef }) => {
+        const contents = BrowserWindow.getAllWindows()[0].webContents;
+        const guard = async (command, args = {}) => {
+          const at = Date.now();
+          const result = await contents.executeJavaScriptInIsolatedWorld(999, [
+            {
+              code:
+                script +
+                '\n(async()=>{try{return {ok:true,value:await CirclePage.browserPage(' +
+                JSON.stringify(command) +
+                ',' +
+                JSON.stringify(args) +
+                ')}}catch(error){return {ok:false,error:error.message}}})()',
+            },
+          ]);
+          globalThis.circleInputTrace.push({
+            kind: 'guard',
+            command,
+            at,
+            elapsed: Date.now() - at,
+            ok: result.ok,
+          });
+          if (!result.ok) throw Error(result.error);
         };
-        await contents.debugger.sendCommand('Input.dispatchKeyEvent', {
+        const state = async () =>
+          contents.executeJavaScript(
+            `(() => {const target=document.activeElement;return {tag:target?.tagName,type:target?.type,focused:document.hasFocus(),visibility:document.visibilityState,selectionStart:target?.selectionStart,selectionEnd:target?.selectionEnd,length:['username','number'].includes(target?.id)?target.value.length:undefined}})()`,
+          );
+        const send = async (method, args) => {
+          const at = Date.now();
+          globalThis.circleInputTrace.push({
+            kind: 'request',
+            at,
+            method,
+            type: args.type,
+            code: args.code,
+            commands: args.commands,
+            textLength: args.text?.length,
+            state: await state(),
+            nativeFrame: globalThis.circleNativeState(),
+          });
+          try {
+            await contents.debugger.sendCommand(method, args);
+            globalThis.circleInputTrace.push({
+              kind: 'ack',
+              at: Date.now(),
+              method,
+              type: args.type,
+              elapsed: Date.now() - at,
+              state: await state(),
+            });
+          } catch (error) {
+            globalThis.circleInputTrace.push({
+              kind: 'error',
+              at: Date.now(),
+              method,
+              type: args.type,
+              elapsed: Date.now() - at,
+              errorType: error.name,
+            });
+            throw error;
+          }
+        };
+        const select = {
+          key: 'a',
+          code: 'KeyA',
+          windowsVirtualKeyCode: 65,
+          modifiers: process.platform === 'darwin' ? 4 : 2,
+        };
+        await send('Input.dispatchKeyEvent', {
           type: 'rawKeyDown',
-          ...backspace,
+          ...select,
+          commands: ['selectAll'],
         });
-        await contents.debugger.sendCommand('Input.dispatchKeyEvent', {
+        await send('Input.dispatchKeyEvent', {
           type: 'keyUp',
-          ...backspace,
+          ...select,
         });
-      }
-    }, text);
+        await guard('guard-type', { ref: fieldRef });
+        if (text) await send('Input.insertText', { text });
+        else {
+          const backspace = {
+            key: 'Backspace',
+            code: 'Backspace',
+            windowsVirtualKeyCode: 8,
+          };
+          const clear = async () => {
+            await guard('guard-key', { key: 'Backspace' });
+            await send('Input.dispatchKeyEvent', {
+              type: 'rawKeyDown',
+              ...backspace,
+            });
+            await send('Input.dispatchKeyEvent', {
+              type: 'keyUp',
+              ...backspace,
+            });
+          };
+          if (inputDelay) {
+            // Test-only ordering fixture: return before the actual native key is sent.
+            // The effect still comes exclusively from the real CDP Backspace sequence.
+            globalThis.circlePendingInput = new Promise((resolve) =>
+              setTimeout(resolve, inputDelay),
+            )
+              .then(clear)
+              .catch((error) => {
+                globalThis.circleInputTrace.push({
+                  kind: 'deferred-error',
+                  errorType: error.name,
+                });
+                throw error;
+              });
+            void globalThis.circlePendingInput.catch(() => {});
+          } else await clear();
+        }
+      },
+      { text, inputDelay, script, fieldRef: ref(name) },
+    );
+    const immediate = await page.evaluate((selector) => {
+      const target = document.querySelector(selector);
+      return {
+        length: target.value.length,
+        selectionStart: target.selectionStart,
+        selectionEnd: target.selectionEnd,
+        active: document.activeElement === target,
+        focused: document.hasFocus(),
+      };
+    }, selector);
+    record({
+      kind: 'input-dispatch-returned',
+      target: name === 'username' ? 'username' : 'number',
+      expectedLength: text.length,
+      inputDelay,
+      state: immediate,
+    });
+    if (inputDelay && !text)
+      assert(
+        immediate.length > 0,
+        'the controlled native delay must actually expose the pre-effect state',
+      );
+    const effect = page.waitForFunction(
+      ({ selector, expected, eventStart }) => {
+        const target = document.querySelector(selector);
+        return (
+          target.value === expected &&
+          window.circleInputEvents
+            .slice(eventStart)
+            .some(
+              (event) =>
+                event.type === 'input' &&
+                event.target === target.id &&
+                event.trusted &&
+                event.inputType ===
+                  (expected === '' ? 'deleteContentBackward' : 'insertText'),
+            )
+        );
+      },
+      { selector, expected: text, eventStart },
+      { polling: 20, timeout: Math.max(1, deadline - Date.now()) },
+    );
+    if (inputDelay && !text) {
+      const dispatched = app.evaluate(async () => {
+        try {
+          await globalThis.circlePendingInput;
+        } finally {
+          globalThis.circlePendingInput = undefined;
+        }
+      });
+      await Promise.all([effect, dispatched]);
+    } else await effect;
+    completedInputEvents.push(
+      ...(await page.evaluate(
+        (eventStart) => window.circleInputEvents.slice(eventStart),
+        eventStart,
+      )),
+    );
+    record({
+      kind: 'input-effect-completed',
+      target: name === 'username' ? 'username' : 'number',
+      expectedLength: text.length,
+    });
+  };
+  const write = async (name, text) => {
+    const deadline = Date.now() + 10_000;
+    let timer;
+    try {
+      await Promise.race([
+        dispatchWrite(name, text, deadline),
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(Error('real input did not complete within 10000ms')),
+            Math.max(1, deadline - Date.now()),
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   };
   await write('username', 'replacement username');
   assert.equal(
@@ -276,7 +616,13 @@ try {
     label: 'overlay should be excluded',
     click: true,
   };
-  await run('overlay', overlay);
+  const overlayNavigation = navigation;
+  assert.equal(await run('overlay', overlay), true);
+  assert.equal(
+    navigation,
+    overlayNavigation,
+    'overlay acknowledgement must come from the same document',
+  );
   assert.equal(await page.locator('[data-circle-browser-overlay]').count(), 1);
   assert.equal(
     await page
@@ -297,6 +643,38 @@ try {
   await assert.rejects(
     run('guard-key'),
     /a password field takes only a saved secret/,
+  );
+  // Coordinates use the same composed DOM hit-test as refs, with the captured layout.
+  for (const name of ['frame submit', 'shadow action', 'slotted action']) {
+    const point = await run('prepare', { ref: ref(name) });
+    const capture = await run('capture-state');
+    const target = await run('point', { x: point.x, y: point.y, capture });
+    assert.equal(target.name, name);
+    assert.equal(target.known, true);
+  }
+  const foreignFrame = page.locator('iframe').last();
+  await foreignFrame.scrollIntoViewIfNeeded();
+  const foreignRect = await foreignFrame.boundingBox();
+  await assert.rejects(
+    run('point', {
+      x: foreignRect.x + 10,
+      y: foreignRect.y + 10,
+      capture: await run('capture-state'),
+    }),
+    /cross-origin frame/,
+  );
+  const shadowPoint = await run('prepare', { ref: ref('shadow action') });
+  const oldShadow = await run('capture-state');
+  await page
+    .locator('#shadow')
+    .evaluate(
+      (node) =>
+        (node.shadowRoot.querySelector('button').textContent =
+          'changed action'),
+    );
+  await assert.rejects(
+    run('point', { x: shadowPoint.x, y: shadowPoint.y, capture: oldShadow }),
+    /screenshot is stale/,
   );
   await page.evaluate(() => {
     for (let index = 0; index < 400; index++) {
@@ -341,7 +719,38 @@ try {
   console.log(
     'PASS browser page: visible DOM, isolated refs, frames and shadow roots, password guards, obstruction, real input, closed overlay and bounded snapshots; refs only for own actions and stable across snapshots',
   );
+  await writeFile(
+    join(evidence, 'browser-page-metadata.json'),
+    JSON.stringify(
+      {
+        platform: process.platform,
+        arch: process.arch,
+        success: true,
+        metadata,
+        input: await inputMetadata(),
+      },
+      null,
+      2,
+    ),
+  );
+} catch (error) {
+  await writeFile(
+    join(evidence, 'browser-page-failure-metadata.json'),
+    JSON.stringify(
+      {
+        platform: process.platform,
+        arch: process.arch,
+        success: false,
+        metadata,
+        input: await inputMetadata().catch(() => ({ unavailable: true })),
+      },
+      null,
+      2,
+    ),
+  );
+  throw error;
 } finally {
+  await cdp?.detach().catch(() => {});
   await app?.close();
   await Promise.all([
     new Promise((resolve) => server.close(resolve)),

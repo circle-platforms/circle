@@ -1,5 +1,11 @@
 // Simplified Chinese for the interface words in the pages files. English is the key.
 export const pages: Record<string, string> = {
+  'network trust': '网络信任',
+  '{n} authority': '{n} 张证书',
+  '{n} authorities': '{n} 张证书',
+  'proxy enabled': '已启用代理',
+  'direct connection': '直接连接',
+  'child process bundle': '子进程证书包',
   // page titles
   sessions: '会话',
   models: '模型',

@@ -132,6 +132,16 @@ const document = `<!doctype html>
 const authorizations = [];
 let releaseHeld = () => {};
 const handler = async (request, response) => {
+  if (request.url === '/close-opener' || request.url === '/close-popup') {
+    response.writeHead(200, { 'Content-Type': 'text/html' });
+    response.end(
+      request.url === '/close-popup'
+        ? '<title>Self closing popup</title><button onclick="window.close()">close</button>'
+        : '<title>Close fixture opener</title><button onclick="window.open(\'/close-popup\')">open</button>',
+    );
+    return;
+  }
+
   if (request.url === '/auth') {
     const sent = request.headers.authorization ?? '';
     authorizations.push(
@@ -1428,6 +1438,72 @@ try {
       "auto mode takes the browser back once the person stops, says so to the model, and refuses a page's permission request without asking",
     );
     assert.deepEqual(errors, []);
+    // The address draft belongs to the shown tab, even when navigation fails before loading.
+    const draftAddress = page.getByRole('textbox', {
+      name: 'browser address',
+      exact: true,
+    });
+    const priorBrowser = await browserState(sessionId);
+    await draftAddress.fill('invalid://circle-fixture');
+    await draftAddress.press('Enter');
+    await page.getByText('invalid address', { exact: true }).waitFor();
+    const rejectedAddress = await browserState(sessionId);
+    assert.equal(rejectedAddress.url, priorBrowser.url);
+    assert.equal(rejectedAddress.tab, priorBrowser.tab);
+    await page.getByRole('button', { name: 'new tab', exact: true }).click();
+    await waitFor(
+      async () => (await draftAddress.inputValue()) === '',
+      'new tab clears failed address draft',
+    );
+    await page.evaluate(
+      ({ id, tab }) => window.circleDesktop.browserTabs(id, 'select', tab),
+      { id: sessionId, tab: priorBrowser.tab },
+    );
+    await waitFor(
+      async () => (await draftAddress.inputValue()) === priorBrowser.url,
+      'switch restores real tab address',
+    );
+    checks.push(
+      'failed address drafts clear on new tabs and follow the selected tab',
+    );
+    await app.evaluate(() => {
+      globalThis.closeErrors = [];
+      globalThis.closeListener = (error) =>
+        globalThis.closeErrors.push(error.message);
+      process.on('uncaughtException', globalThis.closeListener);
+    });
+    await page.evaluate(
+      ({ id, url }) => window.circleDesktop.browserNavigate(id, url),
+      { id: sessionId, url: url + 'close-opener' },
+    );
+    const openerState = await browserState(sessionId);
+    await native('void window.open("/close-popup")');
+    await waitFor(
+      async () =>
+        (await browserState(sessionId)).tabs.length ===
+        openerState.tabs.length + 1,
+      'popup adopted',
+    );
+    await native('window.close()');
+    await waitFor(
+      async () =>
+        (await browserState(sessionId)).tabs.length === openerState.tabs.length,
+      'self-closed popup removed',
+    );
+    assert.deepEqual(await app.evaluate(() => globalThis.closeErrors), []);
+    await app.evaluate(() =>
+      process.removeListener('uncaughtException', globalThis.closeListener),
+    );
+    const closedState = await browserState(sessionId);
+    assert.ok(closedState.tabs.some((tab) => tab.id === closedState.tab));
+    await page.evaluate(
+      ({ id, url }) => window.circleDesktop.browserNavigate(id, url),
+      { id: sessionId, url },
+    );
+    assert.equal((await browserState(sessionId)).url, url);
+    checks.push(
+      'a popup can close itself without a main-process exception; tabs, address and subsequent navigation recover',
+    );
     await page.screenshot({ path: join(output, 'browser-live.png') });
     await app.close();
     app = undefined;

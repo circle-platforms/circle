@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { agentActivityText } from '../src/model/activity.ts';
+import { setLanguage } from '../src/i18n/index.ts';
+import { planVisible } from '../../../src/plan_state.ts';
 import {
   contextPercent,
   formatBusyElapsed,
@@ -10,11 +13,39 @@ import {
   browserApprovalInput,
   browserEventAddress,
   browserOpened,
+  browserTabChanged,
   dialogSource,
   hasToolInput,
   isSessionBrowser,
   shownDialog,
 } from '../src/model/browser.ts';
+
+test('completed plans hide in either renderer, except while their plan-exit decision waits', () => {
+  assert.equal(planVisible([{ status: 'completed' }]), false);
+  assert.equal(planVisible([{ status: 'completed' }], true), true);
+  assert.equal(planVisible([{ status: 'pending' }]), true);
+});
+
+test('agent activity localizes interface state, keeps real tool text and gives waiting priority', (t) => {
+  t.after(() => setLanguage('en'));
+  const agent = {
+    status: 'running' as const,
+    activity: 'Read(notes.txt)',
+    description: 'old task description',
+  };
+  assert.equal(agentActivityText(agent), 'Read(notes.txt)');
+  assert.equal(
+    agentActivityText({ ...agent, status: 'waiting' }),
+    'waiting for you',
+  );
+  setLanguage('zh-CN');
+  assert.equal(agentActivityText(agent), 'Read(notes.txt)');
+  assert.equal(
+    agentActivityText({ ...agent, status: 'waiting' }),
+    '等待你处理',
+  );
+  assert.equal(agentActivityText({ ...agent, activity: 'working' }), '工作中');
+});
 
 // tests/desktop-format.test.ts in the root suite holds these equal to the terminal's.
 test('the footer and busy word write numbers as the terminal does', () => {
@@ -162,4 +193,73 @@ test('late blank browser events preserve the address being entered and back can 
     typedAddress,
   );
   assert.equal(browserEventAddress(state, false, true), '');
+});
+
+test('changing browser tabs replaces a failed draft, including a new empty tab', () => {
+  const blank = {
+    sessionId: 'browser:conversation1',
+    tab: 't2',
+    url: 'about:blank',
+    title: '',
+    loading: false,
+    canGoBack: false,
+    canGoForward: false,
+  };
+  assert.equal(browserEventAddress(blank, true, false, true), '');
+  assert.equal(
+    browserEventAddress(
+      { ...blank, url: 'https://localhost/other' },
+      true,
+      true,
+      true,
+    ),
+    'https://localhost/other',
+  );
+  assert.equal(
+    browserEventAddress(
+      { ...blank, tab: undefined, url: '' },
+      true,
+      false,
+      true,
+    ),
+    '',
+  );
+  assert.equal(
+    browserEventAddress(
+      { ...blank, url: 'https://localhost/loading' },
+      true,
+      true,
+      false,
+    ),
+    undefined,
+  );
+});
+
+test('the first blank browser tab arriving after address input preserves the draft', () => {
+  const state = {
+    sessionId: 'browser:conversation1',
+    tab: 't1',
+    url: 'about:blank',
+    title: '',
+    loading: false,
+    canGoBack: false,
+    canGoForward: false,
+  };
+  const draft = 'http://127.0.0.1:8765/fixture';
+  let previous: string | undefined;
+  let editing = true;
+  let address = draft;
+  for (const next of [state, { ...state, loading: true }]) {
+    const changed = browserTabChanged(previous, next.tab);
+    if (changed) editing = false;
+    previous = next.tab;
+    address = browserEventAddress(next, editing, false, changed) ?? address;
+    assert.equal(address, draft);
+    assert.equal(editing, true);
+  }
+  const nextTab = { ...state, tab: 't2' };
+  const changed = browserTabChanged(previous, nextTab.tab);
+  assert.equal(changed, true);
+  assert.equal(browserEventAddress(nextTab, editing, false, changed), '');
+  assert.equal(browserTabChanged('t2', undefined), true);
 });

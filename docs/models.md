@@ -8,15 +8,17 @@ Circle talks to a model endpoint that you provide. It does not include one. You 
 
 ## Connect an endpoint
 
-The first time you run `circle`, setup asks three questions:
+The first time you run `circle`, setup first asks you to choose a provider (or a custom endpoint), then asks three questions:
 
-1. The API base URL. For an OpenAI-style endpoint, give the path with its version, such as `https://gateway.example/v1`. For an Anthropic-style endpoint, give the gateway root.
+1. The API base URL. The chosen provider fills its SDK base URL and protocol; the URL remains editable. Keep vendor prefixes and versions, such as `/v2` or `/v1beta/openai`. DeepSeek uses `https://api.deepseek.com`. Anthropic bases accept a trailing `/v1`, which Circle removes.
 2. The key. It shows as dots.
 3. The model.
 
 When Circle was set up before, an empty `enter` keeps the saved URL. It keeps the saved key only while the URL stays on the saved endpoint's host and port, such as another path on the same gateway; a URL on another host needs its key typed, so a key is never sent to a provider it was not given for.
 
-Between the key and the model, Circle asks the endpoint for its model list, with a two-and-a-half-second timeout per request. OpenAI discovery tries `<base>/models` with a bearer token, then `<base>/v1/models` if the base has no version suffix. Anthropic discovery uses `<base>/v1/models` with `x-api-key`, without doubling an existing `/v1`. A URL containing `anthropic` makes Anthropic the first protocol tried; otherwise OpenAI is first. The URL that answered is the one saved. When the endpoint lists its models, the model question is that list: type to search it, and a model it does not list can still be used, from the row `use "…"`. When it cannot be asked, Circle asks whether the API is OpenAI-style or Anthropic-style, and you type the model id your provider documents. A typed id is not checked, and no model list is ever made up.
+For providers with online discovery and custom endpoints, between the key and the model Circle asks the endpoint for its model list, with a two-and-a-half-second timeout per request. OpenAI discovery tries `<base>/models` with a bearer token, then `<base>/v1/models` if the base has no version segment. Both `data[].id` and a bare array of model objects (Together) are accepted. Anthropic discovery uses `<base>/v1/models` with `x-api-key`, without doubling an existing `/v1`, with `anthropic-version: 2023-06-01`. It follows `has_more` with `after_id=last_id`, including models after the default first 20. A failed later page or repeated cursor fails discovery rather than returning a partial list. For custom endpoints, a URL containing `anthropic` makes Anthropic the first protocol tried; otherwise OpenAI is first. The URL that answered is the one saved. When the endpoint lists its models, the model question is that list: type to search it, and a model it does not list can still be used, from the row `use "…"`. When it cannot be asked, Circle asks whether the API is OpenAI-style or Anthropic-style, and you type the model id your provider documents. A typed id is not checked, and discovery failure never substitutes a preset list.
+
+Providers without a compatible model list use an explicitly labelled list of released preset ids, selected before discovery. They do not send a model-list request. Pick an id or enter your own; the URL, protocol and chosen model are saved only after selection. The key and model are unverified until used. The preset source and date are documented in [Provider presets](development/provider-presets.md); they do not claim to be the account's online list. Azure OpenAI and Foundry require your resource URL and deployment name, so their preset lists are empty. Vertex needs a dedicated adapter and is not offered as a generic Anthropic provider.
 
 Without the full-screen interface (`-p` or `--line` in a terminal before Circle is set up), the same questions are asked line by line, and the listed models are numbered to pick from. The desktop application asks them in its connection form; see [The desktop application](desktop.md#first-start).
 
@@ -41,7 +43,7 @@ A model cannot be switched while a turn runs. The footer shows cost and context 
 
 ## Change the endpoint or the key
 
-Type `/login` in a session. It asks the same questions as setup, on its list's own line, with the saved URL filled in to keep or edit. An empty `enter` on the key keeps the saved key while the URL stays on the saved host; for another host it asks for the key. The session switches to the new model at once, and the connection is saved as with setup. `esc` on the key goes back to the URL; anywhere else it leaves `/login`. Nothing is saved before a model is given.
+Type `/login` in a session. It asks the same questions as setup, on its list's own line, starting with the provider choice, then the saved or preset URL to keep or edit. An empty `enter` on the key keeps the saved key while the URL stays on the saved host; for another host it asks for the key. The session switches to the new model at once, and the connection is saved as with setup. `esc` on the key goes back to the URL; anywhere else it leaves `/login`. Nothing is saved before a model is given.
 
 Outside a session, `circle --init` runs the same setup. Both keep your other settings. See [CLI](cli.md#setting-up-again).
 
@@ -72,13 +74,13 @@ If an endpoint rejects a parameter Circle sent (thinking, reasoning effort, stre
 
 Circle retries transient failures for you. While it does, the busy line says why and which try it is on, such as `Retrying… · timeout 3/10`.
 
-| Failure | Retries | Gives up after |
-|---|---|---|
-| Timeout: no answer within `CIRCLE_LLM_TIMEOUT` (45 seconds), a stream with no content for `CIRCLE_LLM_STALL_TIMEOUT` (180 seconds), or 408, 504 or 524 | 10 | no time limit |
-| Rate limit (429) | 5 | 10 minutes |
-| Server error (409, other 5xx) | 6 | 5 minutes |
-| Network error (connection refused, reset or dropped) | 6 | 5 minutes |
-| Error inside an accepted stream | 3 | 2 minutes |
+| Failure                                                                                                                                                | Retries | Gives up after |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- | -------------- |
+| Timeout: no answer within `CIRCLE_LLM_TIMEOUT` (45 seconds), a stream with no content for `CIRCLE_LLM_STALL_TIMEOUT` (180 seconds), or 408, 504 or 524 | 10      | no time limit  |
+| Rate limit (429)                                                                                                                                       | 5       | 10 minutes     |
+| Server error (409, other 5xx)                                                                                                                          | 6       | 5 minutes      |
+| Network error (connection refused, reset or dropped)                                                                                                   | 6       | 5 minutes      |
+| Error inside an accepted stream                                                                                                                        | 3       | 2 minutes      |
 
 The wait between tries doubles each time up to a cap (2 minutes for rate limits, 30 seconds otherwise). If the endpoint sends `Retry-After`, `retry-after-ms` or says how long to wait in its error message, Circle uses that. After a timeout the next try also waits twice as long for the answer to start, up to 5 minutes (Node.js's own limit), and twice as long for content in the stream, up to 8 times as long. A timeout or a dropped connection is retried even after part of the answer came: that part is dropped and the answer starts again. Other failures after the answer has started are not retried, and neither are 402, quota or billing errors, other 4xx errors, or certificate and TLS errors. When the retries run out, the error says how many were made. `esc` stops a request and a wait alike.
 

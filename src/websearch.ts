@@ -1,4 +1,5 @@
 import { decodeHTML } from 'entities';
+import { networkError } from './net.js';
 export type FetchFunction = typeof fetch;
 export function stripTags(text: string): string {
   return decodeHTML(
@@ -91,7 +92,7 @@ export async function webSearch(
 ): Promise<string> {
   const text = query.trim();
   if (!text) throw new Error('query is required');
-  let last = '';
+  const failures: Error[] = [];
   for (const host of [
     'https://lite.duckduckgo.com/lite/',
     'https://html.duckduckgo.com/html/',
@@ -111,12 +112,16 @@ export async function webSearch(
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const body = await limitedBody(response, 500000);
       if (body.text) return parseSearchHtml(body.text, text, numResults);
+      throw new Error('empty body');
     } catch (error) {
       signal.throwIfAborted();
-      last = error instanceof Error ? error.message : String(error);
+      failures.push(networkError(error, host));
     }
   }
-  throw new Error('search failed: ' + (last || 'empty body'));
+  throw new Error(
+    'search failed: ' + failures.map((error) => error.message).join('; '),
+    { cause: new AggregateError(failures, 'both search endpoints failed') },
+  );
 }
 export function blockedHost(host: string): boolean {
   const value = host.toLowerCase().replace(/^\[|\]$/g, '');
@@ -154,14 +159,19 @@ export async function webFetch(
     if (blockedHost(url.hostname))
       throw new Error(`refusing to fetch local/private host '${url.hostname}'`);
     signal.throwIfAborted();
-    response = await request(url, {
-      redirect: 'manual',
-      signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]),
-      headers: {
-        'User-Agent': 'Circle/0.1 (+local coding agent)',
-        Accept: 'text/*,application/json',
-      },
-    });
+    try {
+      response = await request(url, {
+        redirect: 'manual',
+        signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]),
+        headers: {
+          'User-Agent': 'Circle/0.1 (+local coding agent)',
+          Accept: 'text/*,application/json',
+        },
+      });
+    } catch (error) {
+      signal.throwIfAborted();
+      throw networkError(error, url.hostname);
+    }
     if (![301, 302, 303, 307, 308].includes(response.status)) break;
     const location = response.headers.get('location');
     await response.body?.cancel();
@@ -170,8 +180,14 @@ export async function webFetch(
     if (redirect === 10) throw new Error('too many redirects');
   }
   if (!response?.ok)
-    throw new Error(`HTTP ${response?.status} fetching ${url}`);
-  const body = await limitedBody(response, 500000);
+    throw networkError(new Error(`HTTP ${response?.status}`), url.hostname);
+  let body: Awaited<ReturnType<typeof limitedBody>>;
+  try {
+    body = await limitedBody(response, 500000);
+  } catch (error) {
+    signal.throwIfAborted();
+    throw networkError(error, url.hostname);
+  }
   const type = response.headers.get('content-type')?.toLowerCase() || 'unknown';
   let rendered = body.text;
   if (type.includes('json')) {

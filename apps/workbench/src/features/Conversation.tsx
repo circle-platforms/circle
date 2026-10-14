@@ -1,4 +1,6 @@
 import { matchingAction } from '../model/shortcuts';
+import { planVisible } from '../../../../src/plan_state';
+import { agentActivityText } from '../model/activity';
 import { usePlugins } from '../plugins/context';
 import { PluginBoundary } from '../plugins/Boundary';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -130,6 +132,8 @@ export function Conversation({
   const [planCollapsed, setPlanCollapsed] = useState(false);
   useEffect(() => setPlanCollapsed(false), [session.id]);
   const planItems = useRef<HTMLDivElement>(null);
+  // Native snapshots recreate arrays; unrelated events must not undo manual scrolling.
+  const planVersion = JSON.stringify(session.todos);
   // The plan shows a few rows: the step under way, or else the next one, stays in sight
   useEffect(() => {
     const list = planItems.current;
@@ -143,7 +147,7 @@ export function Conversation({
     if (box.top < view.top) list.scrollTop += box.top - view.top;
     else if (box.bottom > view.bottom)
       list.scrollTop += box.bottom - view.bottom;
-  }, [session.todos, planCollapsed]);
+  }, [planVersion, planCollapsed]);
   // Pictures and PDFs pasted or dropped on the box go with the message, as attached ones do
   const addMedia = async (files: File[]) => {
     for (const file of files) {
@@ -312,6 +316,7 @@ export function Conversation({
       const current = latestView.current.session;
       const control = event.ctrlKey || event.metaKey;
       const mapped = matchingAction(event, snapshot.settings.keybindings);
+      if (current.archivedAt && mapped !== 'find') return;
       if (mapped) {
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -325,7 +330,10 @@ export function Conversation({
         };
         if (commands[mapped]) act(() => runtime.command(commands[mapped]!));
         else if (mapped === 'find') setFinding((value) => !value);
-        else if (mapped === 'history.search') onCommand();
+        else if (mapped === 'plan.focus') {
+          setPlanCollapsed(false);
+          requestAnimationFrame(() => planItems.current?.focus());
+        } else if (mapped === 'history.search') onCommand();
         else if (mapped === 'exit') onDialog('exit');
         else if (mapped === 'secret.enter') onDialog('secret');
         else if (mapped === 'suspend' || mapped === 'job.background') {
@@ -380,6 +388,18 @@ export function Conversation({
               }),
             );
         }
+        return;
+      }
+      if (
+        event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === 'p'
+      ) {
+        event.preventDefault();
+        setPlanCollapsed(false);
+        requestAnimationFrame(() => planItems.current?.focus());
         return;
       }
       if (control && event.key.toLowerCase() === 'f') {
@@ -609,7 +629,13 @@ export function Conversation({
                   }
                 >
                   {item.message.role === 'notice' ? (
-                    <div className="transcript-notice">{item.message.text}</div>
+                    <div className="transcript-notice">
+                      {item.message.planCompleted === undefined
+                        ? item.message.text
+                        : t('plan completed · {n} steps', {
+                            n: item.message.planCompleted,
+                          })}
+                    </div>
                   ) : (
                     <MessageView
                       message={item.message}
@@ -671,434 +697,505 @@ export function Conversation({
           )}
         </div>
       </div>
-      <div className="composer-area">
-        {session.todos.length > 0 && (
-          <div className="plan">
-            <button
-              className="plan-title"
-              aria-label={t('toggle plan')}
-              aria-expanded={!planCollapsed}
-              onClick={() => setPlanCollapsed((value) => !value)}
-            >
-              <span>{t('plan')}</span>
+      {session.archivedAt && (
+        <div className="archive-banner" data-testid="archive-banner">
+          <span>{t('archived conversation · read only')}</span>
+          <Button
+            onClick={() =>
+              perform(async () => {
+                await runtime.request('archive-session', {
+                  id: session.id,
+                  archived: false,
+                });
+              })
+            }
+          >
+            {t('restore conversation')}
+          </Button>
+        </div>
+      )}
+      {!session.archivedAt && (
+        <div className="composer-area">
+          {planVisible(
+            session.todos,
+            pending.some(
+              (item) =>
+                item.kind === 'plan-exit' ||
+                (item.kind === 'question' &&
+                  item.choices?.includes('implement plan')),
+            ),
+          ) && (
+            <div className="plan">
+              <button
+                className="plan-title"
+                aria-label={t('toggle plan')}
+                aria-expanded={!planCollapsed}
+                onClick={() => setPlanCollapsed((value) => !value)}
+              >
+                <span>{t('plan')}</span>
+                <span>
+                  {
+                    session.todos.filter((todo) => todo.status === 'completed')
+                      .length
+                  }{' '}
+                  / {session.todos.length}
+                  {planCollapsed ? (
+                    <ChevronRight size={12} />
+                  ) : (
+                    <ChevronDown size={12} />
+                  )}
+                </span>
+              </button>
+              {!planCollapsed && (
+                <div
+                  className="plan-items"
+                  ref={planItems}
+                  tabIndex={0}
+                  role="region"
+                  aria-label={t('plan steps')}
+                  onClick={() => planItems.current?.focus()}
+                  onKeyDown={(event) => {
+                    if (event.nativeEvent.isComposing) return;
+                    if (
+                      !event.ctrlKey &&
+                      !event.altKey &&
+                      !event.metaKey &&
+                      (event.key === 'ArrowUp' || event.key === 'ArrowDown')
+                    ) {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      const list = event.currentTarget;
+                      const height =
+                        list.firstElementChild?.getBoundingClientRect()
+                          .height ?? 24;
+                      list.scrollTop +=
+                        (event.key === 'ArrowUp' ? -1 : 1) * height;
+                    } else if (event.key === 'Escape') {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      input.current?.focus();
+                    } else if (
+                      event.key.length === 1 &&
+                      !event.ctrlKey &&
+                      !event.metaKey &&
+                      !event.altKey
+                    ) {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setDraft(session.draft + event.key);
+                      input.current?.focus();
+                    }
+                  }}
+                >
+                  {session.todos.map((todo) => (
+                    <div key={todo.id} className={todo.status}>
+                      <span>
+                        {todo.status === 'completed' ? (
+                          <Check size={12} />
+                        ) : (
+                          <i />
+                        )}
+                      </span>
+                      {todo.text}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {pending.length > 0 && (
+            <button className="interaction-summary" onClick={showRequest}>
+              <Status value="waiting" />
               <span>
-                {
-                  session.todos.filter((todo) => todo.status === 'completed')
-                    .length
-                }{' '}
-                / {session.todos.length}
-                {planCollapsed ? (
-                  <ChevronRight size={12} />
-                ) : (
-                  <ChevronDown size={12} />
+                {tn(
+                  pending.length,
+                  '{n} request waiting for you',
+                  '{n} requests waiting for you',
                 )}
               </span>
+              <ArrowRight size={13} />
             </button>
-            {!planCollapsed && (
-              <div className="plan-items" ref={planItems}>
-                {session.todos.map((todo) => (
-                  <div key={todo.id} className={todo.status}>
-                    <span>
-                      {todo.status === 'completed' ? (
-                        <Check size={12} />
-                      ) : (
-                        <i />
-                      )}
-                    </span>
-                    {todo.text}
-                  </div>
+          )}
+          {session.queue.length > 0 && (
+            <div className="queue">
+              {session.queue.map((item) => (
+                <div key={item.id}>
+                  <span>{QUEUE_KIND[item.kind]?.() ?? item.kind}</span>
+                  <p>{item.text}</p>
+                  <IconButton
+                    label={t('remove queued {kind}', {
+                      kind: QUEUE_KIND[item.kind]?.() ?? item.kind,
+                    })}
+                    onClick={() =>
+                      perform(() =>
+                        runtime.change((state) => {
+                          currentSession(state).queue = currentSession(
+                            state,
+                          ).queue.filter((queued) => queued.id !== item.id);
+                        }),
+                      )
+                    }
+                  >
+                    <X size={12} />
+                  </IconButton>
+                </div>
+              ))}
+              <button
+                className="text-button"
+                onClick={() =>
+                  perform(() =>
+                    runtime.change((state) => {
+                      const target = currentSession(state);
+                      target.draft =
+                        target.queue.map((item) => item.text).join('\n') +
+                        '\n' +
+                        target.draft;
+                      target.queue = [];
+                    }),
+                  )
+                }
+              >
+                {t('return queued messages to draft')}
+              </button>
+            </div>
+          )}
+          <div
+            className="composer"
+            data-mode={sessionMode(session)}
+            data-state={session.state}
+            onDragOver={(event) => {
+              if (Array.from(event.dataTransfer.types).includes('Files'))
+                event.preventDefault();
+            }}
+            onDrop={(event) => {
+              const files = mediaFiles(event.dataTransfer.files);
+              if (!files.length) return;
+              event.preventDefault();
+              void addMedia(files);
+            }}
+          >
+            {!dismissed && completions.length > 0 && (
+              <div
+                className="completion-list"
+                role="listbox"
+                aria-label={t('input completions')}
+              >
+                {completions.map((item, index) => (
+                  <button
+                    key={item.name}
+                    role="option"
+                    aria-selected={index === completionIndex}
+                    className={index === completionIndex ? 'selected' : ''}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => chooseCompletion(index)}
+                  >
+                    <span>{item.name}</span>
+                    <small>{item.description}</small>
+                  </button>
                 ))}
               </div>
             )}
-          </div>
-        )}
-        {pending.length > 0 && (
-          <button className="interaction-summary" onClick={showRequest}>
-            <Status value="waiting" />
-            <span>
-              {tn(
-                pending.length,
-                '{n} request waiting for you',
-                '{n} requests waiting for you',
-              )}
-            </span>
-            <ArrowRight size={13} />
-          </button>
-        )}
-        {session.queue.length > 0 && (
-          <div className="queue">
-            {session.queue.map((item) => (
-              <div key={item.id}>
-                <span>{QUEUE_KIND[item.kind]?.() ?? item.kind}</span>
-                <p>{item.text}</p>
-                <IconButton
-                  label={t('remove queued {kind}', {
-                    kind: QUEUE_KIND[item.kind]?.() ?? item.kind,
-                  })}
-                  onClick={() =>
-                    perform(() =>
-                      runtime.change((state) => {
-                        currentSession(state).queue = currentSession(
-                          state,
-                        ).queue.filter((queued) => queued.id !== item.id);
-                      }),
-                    )
-                  }
-                >
-                  <X size={12} />
-                </IconButton>
-              </div>
-            ))}
-            <button
-              className="text-button"
-              onClick={() =>
-                perform(() =>
-                  runtime.change((state) => {
-                    const target = currentSession(state);
-                    target.draft =
-                      target.queue.map((item) => item.text).join('\n') +
-                      '\n' +
-                      target.draft;
-                    target.queue = [];
-                  }),
-                )
-              }
-            >
-              {t('return queued messages to draft')}
-            </button>
-          </div>
-        )}
-        <div
-          className="composer"
-          data-mode={sessionMode(session)}
-          data-state={session.state}
-          onDragOver={(event) => {
-            if (Array.from(event.dataTransfer.types).includes('Files'))
-              event.preventDefault();
-          }}
-          onDrop={(event) => {
-            const files = mediaFiles(event.dataTransfer.files);
-            if (!files.length) return;
-            event.preventDefault();
-            void addMedia(files);
-          }}
-        >
-          {!dismissed && completions.length > 0 && (
-            <div
-              className="completion-list"
-              role="listbox"
-              aria-label={t('input completions')}
-            >
-              {completions.map((item, index) => (
-                <button
-                  key={item.name}
-                  role="option"
-                  aria-selected={index === completionIndex}
-                  className={index === completionIndex ? 'selected' : ''}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => chooseCompletion(index)}
-                >
-                  <span>{item.name}</span>
-                  <small>{item.description}</small>
-                </button>
-              ))}
-            </div>
-          )}
-          <textarea
-            ref={input}
-            rows={1}
-            aria-label={t('message')}
-            placeholder={t('Ask anything, or describe a change…')}
-            value={session.draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onPaste={(event) => {
-              const files = mediaFiles(event.clipboardData.files);
-              if (files.length) {
-                event.preventDefault();
-                void addMedia(files);
-                return;
-              }
-              const text = event.clipboardData.getData('text');
-              if (text.length > 800 || text.split('\n').length > 3) {
-                event.preventDefault();
-                const id = crypto.randomUUID();
-                const marker = `[pasted text ${session.attachments.filter((file) => file.kind === 'paste').length + 1} · ${text.split('\n').length} lines]`;
-                perform(() =>
-                  runtime.change((state) => {
-                    const target = currentSession(state);
-                    target.attachments.push({
-                      id,
-                      name: marker,
-                      kind: 'paste',
-                      content: text,
-                    });
-                    target.draft += marker;
-                  }),
-                );
-              }
-            }}
-            onKeyDown={(event) => {
-              if (event.nativeEvent.isComposing) return;
-              if (!dismissed && completions.length) {
-                if (['ArrowDown', 'ArrowUp'].includes(event.key)) {
+            <textarea
+              ref={input}
+              rows={1}
+              aria-label={t('message')}
+              placeholder={t('Ask anything, or describe a change…')}
+              value={session.draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onPaste={(event) => {
+                const files = mediaFiles(event.clipboardData.files);
+                if (files.length) {
                   event.preventDefault();
-                  setCompletionIndex(
-                    (index) =>
-                      (index +
-                        (event.key === 'ArrowDown' ? 1 : -1) +
-                        completions.length) %
-                      completions.length,
+                  void addMedia(files);
+                  return;
+                }
+                const text = event.clipboardData.getData('text');
+                if (text.length > 800 || text.split('\n').length > 3) {
+                  event.preventDefault();
+                  const id = crypto.randomUUID();
+                  const marker = `[pasted text ${session.attachments.filter((file) => file.kind === 'paste').length + 1} · ${text.split('\n').length} lines]`;
+                  perform(() =>
+                    runtime.change((state) => {
+                      const target = currentSession(state);
+                      target.attachments.push({
+                        id,
+                        name: marker,
+                        kind: 'paste',
+                        content: text,
+                      });
+                      target.draft += marker;
+                    }),
+                  );
+                }
+              }}
+              onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing) return;
+                if (!dismissed && completions.length) {
+                  if (['ArrowDown', 'ArrowUp'].includes(event.key)) {
+                    event.preventDefault();
+                    setCompletionIndex(
+                      (index) =>
+                        (index +
+                          (event.key === 'ArrowDown' ? 1 : -1) +
+                          completions.length) %
+                        completions.length,
+                    );
+                    return;
+                  }
+                  if (
+                    event.key === 'Tab' ||
+                    (event.key === 'Enter' && !event.shiftKey)
+                  ) {
+                    event.preventDefault();
+                    chooseCompletion(
+                      completionIndex,
+                      event.key === 'Enter' && slash,
+                    );
+                    return;
+                  }
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    setDismissed(true);
+                    return;
+                  }
+                }
+                // shift+tab: the next approval mode, as in other coding agents.
+                if (event.shiftKey && event.key === 'Tab') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setMode(nextMode(sessionMode(session)));
+                  return;
+                }
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  if (session.draft.endsWith('\\'))
+                    setDraft(session.draft.slice(0, -1) + '\n');
+                  else
+                    act(() =>
+                      runtime.send(event.altKey ? 'follow-up' : 'steering'),
+                    );
+                  return;
+                }
+                if (event.ctrlKey && event.key === 'q') {
+                  event.preventDefault();
+                  act(() => runtime.send('follow-up'));
+                  return;
+                }
+                if (event.ctrlKey && event.key === 'j') {
+                  event.preventDefault();
+                  setDraft(session.draft + '\n');
+                  return;
+                }
+                if (event.altKey && event.key === 'ArrowUp') {
+                  event.preventDefault();
+                  perform(() =>
+                    runtime.change((state) => {
+                      const target = currentSession(state);
+                      target.draft =
+                        target.queue.map((item) => item.text).join('\n') +
+                        '\n' +
+                        target.draft;
+                      target.queue = [];
+                    }),
                   );
                   return;
                 }
-                if (
-                  event.key === 'Tab' ||
-                  (event.key === 'Enter' && !event.shiftKey)
-                ) {
+                if (event.key === '?' && !session.draft) {
                   event.preventDefault();
-                  chooseCompletion(
-                    completionIndex,
-                    event.key === 'Enter' && slash,
-                  );
+                  onDialog('hotkeys');
                   return;
                 }
                 if (event.key === 'Escape') {
                   event.preventDefault();
-                  setDismissed(true);
-                  return;
-                }
-              }
-              // shift+tab: the next approval mode, as in other coding agents.
-              if (event.shiftKey && event.key === 'Tab') {
-                event.preventDefault();
-                event.stopPropagation();
-                setMode(nextMode(sessionMode(session)));
-                return;
-              }
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                if (session.draft.endsWith('\\'))
-                  setDraft(session.draft.slice(0, -1) + '\n');
-                else
-                  act(() =>
-                    runtime.send(event.altKey ? 'follow-up' : 'steering'),
-                  );
-                return;
-              }
-              if (event.ctrlKey && event.key === 'q') {
-                event.preventDefault();
-                act(() => runtime.send('follow-up'));
-                return;
-              }
-              if (event.ctrlKey && event.key === 'j') {
-                event.preventDefault();
-                setDraft(session.draft + '\n');
-                return;
-              }
-              if (event.altKey && event.key === 'ArrowUp') {
-                event.preventDefault();
-                perform(() =>
-                  runtime.change((state) => {
-                    const target = currentSession(state);
-                    target.draft =
-                      target.queue.map((item) => item.text).join('\n') +
-                      '\n' +
-                      target.draft;
-                    target.queue = [];
-                  }),
-                );
-                return;
-              }
-              if (event.key === '?' && !session.draft) {
-                event.preventDefault();
-                onDialog('hotkeys');
-                return;
-              }
-              if (event.key === 'Escape') {
-                event.preventDefault();
-                if (session.state === 'waiting') {
-                  perform(() =>
-                    runtime.change((state) => {
-                      currentSession(state).state = 'paused';
-                    }),
-                  );
-                  runtime.request('abort');
-                } else if (session.draft) setDraft('');
-                else {
-                  if (
-                    Date.now() - lastEscape.current < 500 &&
-                    snapshot.settings.doubleEscape !== 'none'
-                  )
-                    onDialog(snapshot.settings.doubleEscape);
-                  lastEscape.current = Date.now();
-                }
-                return;
-              }
-              if (
-                event.key === 'ArrowUp' &&
-                event.currentTarget.selectionStart === 0
-              ) {
-                const history = session.messages
-                  .filter((message) => message.role === 'user')
-                  .map((message) => message.text)
-                  .reverse();
-                if (history.length) {
-                  event.preventDefault();
-                  if (historyIndex === -1) savedDraft.current = session.draft;
-                  const next = Math.min(historyIndex + 1, history.length - 1);
-                  setHistoryIndex(next);
-                  setDraft(history[next]!);
-                }
-              } else if (event.key === 'ArrowDown' && historyIndex >= 0) {
-                event.preventDefault();
-                const history = session.messages
-                  .filter((message) => message.role === 'user')
-                  .map((message) => message.text)
-                  .reverse();
-                const next = historyIndex - 1;
-                setHistoryIndex(next);
-                setDraft(next < 0 ? savedDraft.current : (history[next] ?? ''));
-              }
-            }}
-          />
-          {session.attachments.length > 0 && (
-            <div className="attachment-strip">
-              {session.attachments.map((file) => (
-                <FileChip
-                  key={file.id}
-                  name={file.name}
-                  onClick={() => onPanel('context', file.id)}
-                  onRemove={() =>
+                  if (session.state === 'waiting') {
                     perform(() =>
                       runtime.change((state) => {
-                        currentSession(state).attachments = currentSession(
-                          state,
-                        ).attachments.filter((item) => item.id !== file.id);
+                        currentSession(state).state = 'paused';
+                      }),
+                    );
+                    runtime.request('abort');
+                  } else if (session.draft) setDraft('');
+                  else {
+                    if (
+                      Date.now() - lastEscape.current < 500 &&
+                      snapshot.settings.doubleEscape !== 'none'
+                    )
+                      onDialog(snapshot.settings.doubleEscape);
+                    lastEscape.current = Date.now();
+                  }
+                  return;
+                }
+                if (
+                  event.key === 'ArrowUp' &&
+                  event.currentTarget.selectionStart === 0
+                ) {
+                  const history = session.messages
+                    .filter((message) => message.role === 'user')
+                    .map((message) => message.text)
+                    .reverse();
+                  if (history.length) {
+                    event.preventDefault();
+                    if (historyIndex === -1) savedDraft.current = session.draft;
+                    const next = Math.min(historyIndex + 1, history.length - 1);
+                    setHistoryIndex(next);
+                    setDraft(history[next]!);
+                  }
+                } else if (event.key === 'ArrowDown' && historyIndex >= 0) {
+                  event.preventDefault();
+                  const history = session.messages
+                    .filter((message) => message.role === 'user')
+                    .map((message) => message.text)
+                    .reverse();
+                  const next = historyIndex - 1;
+                  setHistoryIndex(next);
+                  setDraft(
+                    next < 0 ? savedDraft.current : (history[next] ?? ''),
+                  );
+                }
+              }}
+            />
+            {session.attachments.length > 0 && (
+              <div className="attachment-strip">
+                {session.attachments.map((file) => (
+                  <FileChip
+                    key={file.id}
+                    name={file.name}
+                    onClick={() => onPanel('context', file.id)}
+                    onRemove={() =>
+                      perform(() =>
+                        runtime.change((state) => {
+                          currentSession(state).attachments = currentSession(
+                            state,
+                          ).attachments.filter((item) => item.id !== file.id);
+                        }),
+                      )
+                    }
+                  />
+                ))}
+              </div>
+            )}
+            <div className="composer-send">
+              {session.state === 'waiting' ? (
+                <IconButton
+                  label={t('pause conversation')}
+                  onClick={() => {
+                    perform(() =>
+                      runtime.change((state) => {
+                        currentSession(state).state = 'paused';
+                      }),
+                    );
+                    runtime.request('abort');
+                  }}
+                >
+                  <Square size={13} />
+                </IconButton>
+              ) : session.state === 'paused' ? (
+                <IconButton
+                  label={t('resume conversation')}
+                  onClick={() => {
+                    perform(() =>
+                      runtime.change((state) => {
+                        currentSession(state).state = 'waiting';
+                      }),
+                    );
+                    runtime.request('resume');
+                  }}
+                >
+                  <Play size={14} />
+                </IconButton>
+              ) : null}
+              <button
+                className="send"
+                aria-label={t('send message')}
+                disabled={!session.draft.trim()}
+                onClick={() => act(() => runtime.send())}
+              >
+                <ArrowUp size={16} />
+              </button>
+            </div>
+          </div>
+          {/* Under the box, as Claude has it: attach and mode on the left, model,
+            thinking depth and the context ring on the right. */}
+          <div className="composer-footbar">
+            <div>
+              <IconButton label={t('attach files')} onClick={onAttach}>
+                <Plus size={16} />
+              </IconButton>
+              <ModeMenu session={session} onMode={setMode} />
+              {contributions.map(({ plugin, widget }) => (
+                <PluginBoundary key={widget.id} name={plugin.title}>
+                  <widget.component sessionId={session.id} />
+                </PluginBoundary>
+              ))}
+            </div>
+            <div>
+              {runtime.mode === 'live' && !snapshot.runtime?.configured ? (
+                <button
+                  className="footbar-button attention"
+                  onClick={() => onDialog('connect')}
+                >
+                  {t('connect a model')}
+                </button>
+              ) : (
+                <ModelMenu
+                  session={session}
+                  models={snapshot.models}
+                  enabled={snapshot.settings.enabledModels}
+                  onModel={(id) =>
+                    perform(() =>
+                      runtime.change((state) => {
+                        currentSession(state).model = id;
                       }),
                     )
                   }
+                  onManage={() => act(() => runtime.command('models'))}
                 />
-              ))}
-            </div>
-          )}
-          <div className="composer-send">
-            {session.state === 'waiting' ? (
-              <IconButton
-                label={t('pause conversation')}
-                onClick={() => {
-                  perform(() =>
-                    runtime.change((state) => {
-                      currentSession(state).state = 'paused';
-                    }),
-                  );
-                  runtime.request('abort');
-                }}
-              >
-                <Square size={13} />
-              </IconButton>
-            ) : session.state === 'paused' ? (
-              <IconButton
-                label={t('resume conversation')}
-                onClick={() => {
-                  perform(() =>
-                    runtime.change((state) => {
-                      currentSession(state).state = 'waiting';
-                    }),
-                  );
-                  runtime.request('resume');
-                }}
-              >
-                <Play size={14} />
-              </IconButton>
-            ) : null}
-            <button
-              className="send"
-              aria-label={t('send message')}
-              disabled={!session.draft.trim()}
-              onClick={() => act(() => runtime.send())}
-            >
-              <ArrowUp size={16} />
-            </button>
-          </div>
-        </div>
-        {/* Under the box, as Claude has it: attach and mode on the left, model,
-            thinking depth and the context ring on the right. */}
-        <div className="composer-footbar">
-          <div>
-            <IconButton label={t('attach files')} onClick={onAttach}>
-              <Plus size={16} />
-            </IconButton>
-            <ModeMenu session={session} onMode={setMode} />
-            {contributions.map(({ plugin, widget }) => (
-              <PluginBoundary key={widget.id} name={plugin.title}>
-                <widget.component sessionId={session.id} />
-              </PluginBoundary>
-            ))}
-          </div>
-          <div>
-            {runtime.mode === 'live' && !snapshot.runtime?.configured ? (
-              <button
-                className="footbar-button attention"
-                onClick={() => onDialog('connect')}
-              >
-                {t('connect a model')}
-              </button>
-            ) : (
-              <ModelMenu
+              )}
+              <EffortMenu
                 session={session}
-                models={snapshot.models}
-                enabled={snapshot.settings.enabledModels}
-                onModel={(id) =>
+                onEffort={(effort) =>
                   perform(() =>
                     runtime.change((state) => {
-                      currentSession(state).model = id;
+                      currentSession(state).effort = effort;
                     }),
                   )
                 }
-                onManage={() => act(() => runtime.command('models'))}
               />
-            )}
-            <EffortMenu
-              session={session}
-              onEffort={(effort) =>
-                perform(() =>
-                  runtime.change((state) => {
-                    currentSession(state).effort = effort;
-                  }),
-                )
-              }
-            />
-            <ContextRing
-              session={session}
-              jobs={jobs}
-              onCompact={() => act(() => runtime.command('compact'))}
-              onJobs={() => onPanel('activity')}
-              onDetails={() =>
-                onDialog(runtime.mode === 'live' ? 'session' : 'preview')
-              }
-            />
+              <ContextRing
+                session={session}
+                jobs={jobs}
+                onCompact={() => act(() => runtime.command('compact'))}
+                onJobs={() => onPanel('activity')}
+                onDetails={() =>
+                  onDialog(runtime.mode === 'live' ? 'session' : 'preview')
+                }
+              />
+            </div>
           </div>
+          {(jobs.length > 0 || agents.length > 0) && (
+            <div className="running-strip">
+              {agents.slice(0, 2).map((agent) => (
+                <button key={agent.id} onClick={() => onAgent(agent.id)}>
+                  <span className="agent-dot" />
+                  <strong>{agent.name}</strong>
+                  <span>{agentActivityText(agent)}</span>
+                </button>
+              ))}
+              {jobs.slice(0, 2).map((job) => (
+                <button
+                  key={job.id}
+                  onClick={() => onPanel('activity', job.id)}
+                >
+                  <Status value={job.state} />
+                  <strong>{job.id}</strong>
+                  <span>{job.title}</span>
+                  <small>{job.elapsed}</small>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-        {(jobs.length > 0 || agents.length > 0) && (
-          <div className="running-strip">
-            {agents.slice(0, 2).map((agent) => (
-              <button key={agent.id} onClick={() => onAgent(agent.id)}>
-                <span className="agent-dot" />
-                <strong>{agent.name}</strong>
-                <span>{agent.description}</span>
-              </button>
-            ))}
-            {jobs.slice(0, 2).map((job) => (
-              <button key={job.id} onClick={() => onPanel('activity', job.id)}>
-                <Status value={job.state} />
-                <strong>{job.id}</strong>
-                <span>{job.title}</span>
-                <small>{job.elapsed}</small>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+      )}
     </section>
   );
 }

@@ -3,6 +3,7 @@ import type { LampState } from '../ink/theme.js';
 import { wrap, pad, truncate, truncateStyled } from '../ink/string_width.js';
 import type { Message, Usage } from '../types.js';
 import type { Todo } from '../tools.js';
+import { planVisible } from '../plan_state.js';
 import { dialogRows, type DialogState } from '../ink/components/dialog_card.js';
 import type { Picker } from '../ink/components/picker.js';
 import { planRows } from '../ink/components/plan_panel.js';
@@ -79,6 +80,7 @@ export interface ScreenState {
   acceptEdits?: boolean;
   todos: Todo[];
   planStart?: number;
+  planFocused?: boolean;
   queue?: { steering: string[]; followUp: string[] };
   userShells?: UserShellView[];
   showThinking: boolean;
@@ -539,13 +541,19 @@ export function renderScreen(
   } = stripRows(state, width, height);
   // The plan frame stays up while a card asks: the plan-exit card is about it, so the plan
   // you would implement sits above the card instead of being hidden by it.
-  if (state.todos.length) {
+  if (
+    planVisible(
+      state.todos,
+      Boolean(state.dialog?.options.includes('implement plan')),
+    )
+  ) {
     bottom.push(
       ...planRows(
         state.todos,
         width,
         state.planStart,
         state.waiting ? 'wait' : state.busy ? 'running' : 'idle',
+        state.planFocused,
       ),
     );
   }

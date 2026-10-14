@@ -674,6 +674,8 @@ test('with --init the welcome shows no model and unlit lamps until a new one is 
   };
   const enter = (): void => ui.handle({ type: 'key', key: 'enter', char: '' });
   const setup = app.initialize(true);
+  await until(() => app.state.dialog?.title === 'which provider?');
+  enter(); // custom endpoint
   await until(() => app.state.dialog?.title === "What is the API's base URL?");
   let plain = frame().map(stripAnsi);
   assert.ok(
@@ -802,10 +804,7 @@ test('a press on a subagent row in the strip opens its page, as in 0.5.0', async
     opened = app.state.agentDetail?.id;
   };
   await app.submit('look');
-  assert.match(
-    row,
-    /^ ● general-purpose·\w+ +look around +\d+s · \d+ tokens $/,
-  );
+  assert.match(row, /^ ● general-purpose·\w+ +working +\d+s · \d+ tokens $/);
   assert.equal(header, undefined);
   assert.equal(opened, app.state.subagents![0]!.id);
   assert.equal(app.state.agentDetail?.id, opened);

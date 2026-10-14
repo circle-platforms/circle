@@ -98,9 +98,10 @@ export function agentName(agent: Pick<SubagentView, 'id' | 'name'>): string {
   const tail = agent.id.replace(/[^0-9A-Za-z]/g, '').slice(-8);
   return tail ? `${agent.name}·${tail}` : agent.name;
 }
-// What it is doing: waiting on you, else the task it was given.
+// What it is doing now; old/restored records without activity keep their task label.
 export function agentActivity(agent: SubagentView): string {
   if (agent.state === 'waiting') return 'waiting for you';
+  if (agent.activity) return agent.activity;
   const prefix = `${agent.name}: `;
   const task = agent.description.startsWith(prefix)
     ? agent.description.slice(prefix.length)

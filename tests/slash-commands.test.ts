@@ -91,6 +91,62 @@ async function session(
   };
   return { app, ui, runtime, model, home, workspace, copied, key, screen };
 }
+test('TUI resume and continue refuse a waiting approval without losing it (#57)', async (t) => {
+  const { app, runtime, model, workspace, key } = await session(t, [
+    answer('original conversation'),
+    {
+      message: {
+        id: 'write-request',
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'approval-write',
+            name: 'write_file',
+            args: { file_path: 'approved.txt', content: 'approved TUI bytes' },
+          },
+        ],
+      },
+    },
+    answer('approval completed'),
+  ]);
+  await app.submit('save the original conversation');
+  const previous = runtime.session.id;
+  await app.submit('/new');
+  const current = runtime.session.id;
+  const running = app.submit('write after permission');
+  await until(() => Boolean(app.state.dialog));
+  const approval = app.state.dialog;
+  assert(approval);
+  await app.submit(`/resume ${previous}`);
+  assert.equal(runtime.session.id, current);
+  assert.equal(app.state.dialog, approval);
+  await app.submit('/continue');
+  assert.equal(runtime.session.id, current);
+  assert.equal(app.state.dialog, approval);
+  assert.equal(existsSync(join(workspace, 'approved.txt')), false);
+  await key('enter');
+  await running;
+  assert.equal(
+    readFileSync(join(workspace, 'approved.txt'), 'utf8'),
+    'approved TUI bytes',
+  );
+  assert.equal(
+    model.requests
+      .at(-1)!
+      .messages.find((message) => message.tool_call_id === 'approval-write')
+      ?.status,
+    'success',
+  );
+  await app.submit(`/resume ${previous}`);
+  assert.equal(runtime.session.id, previous);
+  assert(
+    runtime.harness.messages.some(
+      (message) => message.content === 'original conversation',
+    ),
+  );
+});
+
 const said = (request: { messages: Message[] }): string[] =>
   request.messages
     .filter((message) => !message.internal)
@@ -876,6 +932,7 @@ test('/logout clears the key and the connection and keeps the session open', asy
   // /login takes no provider (Circle signs in only with an API URL and key): it asks for
   // the URL, with nothing saved to fill in
   await app.submit('/login openai');
+  await key('enter'); // custom endpoint
   const rows = app.state.picker!.rows(120).map((row) => stripAnsi(row).trim());
   assert.deepEqual(rows, [
     'Sign in',
@@ -1108,6 +1165,7 @@ test("/login asks for the URL and the key on its list, lists the endpoint's mode
     stripAnsi(open()!.rows(120)[index]!).trim();
   const line = (): string => row(1);
   await app.submit('/login');
+  await key('enter'); // custom endpoint
   assert.equal(open()!.title, 'Sign in');
   assert.equal(app.state.dialog, undefined);
   assert.equal(
@@ -1126,6 +1184,7 @@ test("/login asks for the URL and the key on its list, lists the endpoint's mode
   await key('escape');
   assert.equal(open(), undefined);
   await app.submit('/login');
+  await key('enter'); // custom endpoint
   const picker = open()!;
   await key('ctrl+u');
   await typed('nonsense');
@@ -1195,6 +1254,7 @@ test("/login asks for the URL and the key on its list, lists the endpoint's mode
   assert.equal(app.state.model, 'gamma');
   // Again on the same host: an empty enter keeps the saved URL and key
   await app.submit('/login');
+  await key('enter'); // custom endpoint
   assert.equal(line(), `base url: ${base}/v1▏  enter continues · esc closes`);
   await key('enter');
   assert.equal(

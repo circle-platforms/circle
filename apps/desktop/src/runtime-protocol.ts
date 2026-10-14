@@ -10,6 +10,8 @@ export type RuntimeCommandName =
   | 'select-session'
   | 'delete-session'
   | 'rename-session'
+  | 'archive-session'
+  | 'archive-workspace'
   | 'fork'
   | 'clone'
   | 'select-branch'
@@ -85,6 +87,8 @@ export const runtimeCommands = new Set<RuntimeCommandName>([
   'select-session',
   'delete-session',
   'rename-session',
+  'archive-session',
+  'archive-workspace',
   'fork',
   'clone',
   'select-branch',

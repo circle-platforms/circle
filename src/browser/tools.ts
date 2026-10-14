@@ -118,7 +118,8 @@ const element = {
 
 /**
  * Asks the person whether the model may pass a certificate warning (once, for good, or not)
- * or give a page files (once or not). `auto`: auto mode answered without asking, as once.
+ * or give a page files (once or not), or click an unknown/destructive coordinate target
+ * once. `auto`: auto mode answered without asking, as once.
  */
 export type BrowserConfirm = (
   sessionId: string,
@@ -310,7 +311,9 @@ export function browserTools(
         throw Error(
           approval.kind === 'upload'
             ? 'the user did not allow giving the page these files'
-            : 'the user did not approve proceeding past the certificate warning',
+            : approval.kind === 'coordinate'
+              ? 'the user did not allow clicking this coordinate target'
+              : 'the user did not approve proceeding past the certificate warning',
         );
       result = await browser.request(
         context.sessionId,
@@ -319,7 +322,10 @@ export function browserTools(
           ...args,
           approval: {
             token: approval.token,
-            scope: approval.kind === 'upload' ? 'once' : decision,
+            scope:
+              approval.kind === 'upload' || approval.kind === 'coordinate'
+                ? 'once'
+                : decision,
           },
         },
         context.signal,
@@ -403,6 +409,29 @@ export function browserTools(
       'ref',
       'element',
     ]),
+    tool(
+      'browser_click_at',
+      'click_at',
+      'unknown',
+      {
+        x: {
+          type: 'number',
+          minimum: 0,
+          description: 'Horizontal viewport coordinate in CSS pixels',
+        },
+        y: {
+          type: 'number',
+          minimum: 0,
+          description: 'Vertical viewport coordinate in CSS pixels',
+        },
+        screenshotId: {
+          type: 'string',
+          description:
+            'The id from the latest browser_screenshot; a changed page needs a new screenshot',
+        },
+      },
+      ['x', 'y', 'screenshotId'],
+    ),
     tool(
       'browser_type',
       'type',

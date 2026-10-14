@@ -7,6 +7,7 @@ export const browserActions = [
   'navigate',
   'snapshot',
   'click',
+  'click_at',
   'type',
   'select',
   'press',
@@ -32,6 +33,8 @@ export interface BrowserResult {
   origin?: string;
   /** A PNG, base64, for `screenshot`. */
   image?: string;
+  /** The latest screenshot's CSS viewport, for coordinate input. */
+  screenshot?: { id: string; width: number; height: number };
   /**
    * The action needs the person's approval first: the model pressed "proceed" on a
    * certificate warning, or would give a page files. The runtime asks, then repeats the
@@ -40,7 +43,17 @@ export interface BrowserResult {
   approval?: BrowserApproval;
 }
 export type BrowserApproval =
-  CertificateApproval | UploadApproval | DownloadApproval;
+  CertificateApproval | UploadApproval | DownloadApproval | CoordinateApproval;
+/** A coordinate hit-test found an unknown or destructive target: the person allows it once. */
+export interface CoordinateApproval {
+  kind: 'coordinate';
+  token: string;
+  origin: string;
+  x: number;
+  y: number;
+  element: string;
+  destructive: boolean;
+}
 /**
  * Files an action of the model's downloaded from a site not yet allowed to download in
  * this conversation: kept only if the person says so.

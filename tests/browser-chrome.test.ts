@@ -13,6 +13,7 @@ import { createServer as createHttp, type Server } from 'node:http';
 import { createServer as createHttps } from 'node:https';
 import { join } from 'node:path';
 import { ChromeBrowser, findBrowser } from '../src/browser/chrome.js';
+import type { CdpPipe } from '../src/browser/cdp.js';
 import { browserTools, runtimeBrowserOptions } from '../src/browser/tools.js';
 import { formatScript, parseScript } from '../src/browser/script.js';
 import { saveSecret } from '../src/secrets.js';
@@ -24,7 +25,13 @@ import type {
   CertificateApproval,
 } from '../src/browser/protocol.js';
 import { emptyUsage } from '../src/types.js';
+import { getEventListeners } from 'node:events';
 import { cleanup, scratch as made } from './helpers.js';
+import {
+  BrowserFixture,
+  BrowserFixtureDeadline,
+  type BrowserFixtureRecord,
+} from './browser-fixture.js';
 
 // The terminal's browser, driven for real: a Chrome or Edge without a window, local HTTP and
 // HTTPS sites with a certificate made for this test, nothing from the network.
@@ -137,6 +144,675 @@ const listen = (server: Server) =>
       resolve((server.address() as { port: number }).port),
     ),
   );
+
+/** The simulated person hands back a page they have actually finished opening. */
+async function humanNavigation(
+  cdp: Pick<CdpPipe, 'on'>,
+  session: string,
+  url: string,
+  signal: AbortSignal,
+  action: () => Promise<unknown>,
+): Promise<void> {
+  const lifecycle = new AbortController();
+  const active = AbortSignal.any([signal, lifecycle.signal]);
+  const loaded = new Promise<void>((resolve, reject) => {
+    let frame: string | undefined;
+    const seen: string[] = [];
+    let stop = () => {};
+    const finish = (error?: unknown) => {
+      clearTimeout(timer);
+      stop();
+      active.removeEventListener('abort', aborted);
+      if (error) reject(error);
+      else resolve();
+    };
+    const aborted = () => finish(active.reason ?? Error('handoff stopped'));
+    const timer = setTimeout(
+      () =>
+        finish(
+          Error(
+            `the human navigation did not finish in 10 s; ${seen.join(', ')}`,
+          ),
+        ),
+      10_000,
+    );
+    stop = cdp.on((event) => {
+      if (event.method === 'Circle.closed')
+        return finish(Error('browser closed before human navigation finished'));
+      if (event.sessionId !== session) return;
+      if (
+        event.method === 'Page.frameNavigated' &&
+        !event.params.frame.parentId
+      ) {
+        seen.push(
+          `frame ${event.params.frame.id} committed ${event.params.frame.url === url ? 'the expected URL' : 'another URL'}`,
+        );
+        if (event.params.frame.url === url) frame = event.params.frame.id;
+      }
+      if (event.method === 'Page.frameStoppedLoading') {
+        seen.push(`frame ${event.params.frameId} stopped loading`);
+        if (frame && event.params.frameId === frame) finish();
+      }
+    });
+    active.addEventListener('abort', aborted, { once: true });
+    if (active.aborted) aborted();
+  });
+  try {
+    await Promise.all([
+      loaded,
+      Promise.resolve().then(() => {
+        active.throwIfAborted();
+        return action();
+      }),
+    ]);
+  } finally {
+    lifecycle.abort(Error('human navigation wait ended'));
+  }
+}
+
+test('human navigation observes a rejected CDP send and removes the navigation listener', async () => {
+  const listeners = new Set<Parameters<CdpPipe['on']>[0]>();
+  const cdp = {
+    on: (listener: Parameters<CdpPipe['on']>[0]) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  const controller = new AbortController();
+  const failure = Error('fixture send rejected');
+  await assert.rejects(
+    humanNavigation(
+      cdp,
+      'session',
+      'http://fixture/b',
+      controller.signal,
+      async () => {
+        throw failure;
+      },
+    ),
+    (error) => error === failure,
+  );
+  assert.equal(listeners.size, 0);
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+});
+
+test('aborted human navigation removes its event listener and retains the abort reason', async () => {
+  const listeners = new Set<Parameters<CdpPipe['on']>[0]>();
+  const cdp = {
+    on: (listener: Parameters<CdpPipe['on']>[0]) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  const controller = new AbortController();
+  let sent!: () => void;
+  const started = new Promise<void>((resolve) => (sent = resolve));
+  const pending = humanNavigation(
+    cdp,
+    'session',
+    'http://fixture/b',
+    controller.signal,
+    () => {
+      sent();
+      return new Promise(() => {});
+    },
+  );
+  const failure = Error('fixture handoff stopped');
+  const rejected = assert.rejects(pending, (error) => error === failure);
+  await started;
+  controller.abort(failure);
+  await rejected;
+  assert.equal(listeners.size, 0);
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+});
+
+/** Diagnostics contain protocol metadata only, never expressions, input, URLs or results. */
+function browserProtocolTrace(chrome: ChromeBrowser) {
+  const internal = chrome as unknown as {
+    cdp?: CdpPipe;
+    send: (
+      method: string,
+      params?: Record<string, unknown>,
+      session?: string,
+    ) => Promise<any>;
+  };
+  const started = Date.now();
+  const records: Record<string, unknown>[] = [];
+  const pending = new Map<number, Record<string, unknown>>();
+  let next = 0;
+  let watched: CdpPipe | undefined;
+  const add = (record: Record<string, unknown>) => {
+    records.push({ at: Date.now() - started, ...record });
+    if (records.length > 160) records.shift();
+  };
+  const send = internal.send.bind(chrome);
+  internal.send = (method, params = {}, session) => {
+    if (internal.cdp && internal.cdp !== watched) {
+      watched = internal.cdp;
+      watched.on((event) => {
+        const detail = event.params;
+        const common = {
+          kind: 'event',
+          method: event.method,
+          session: event.sessionId,
+        };
+        if (event.method === 'Runtime.executionContextCreated')
+          add({
+            ...common,
+            context: detail.context.id,
+            frame: detail.context.auxData?.frameId,
+            isDefault: detail.context.auxData?.isDefault,
+          });
+        else if (event.method === 'Runtime.executionContextDestroyed')
+          add({ ...common, context: detail.executionContextId });
+        else if (event.method === 'Page.frameNavigated')
+          add({
+            ...common,
+            frame: detail.frame.id,
+            loader: detail.frame.loaderId,
+            main: !detail.frame.parentId,
+          });
+        else if (
+          ['Page.frameStartedLoading', 'Page.frameStoppedLoading'].includes(
+            event.method,
+          )
+        )
+          add({ ...common, frame: detail.frameId });
+        else if (
+          [
+            'Runtime.executionContextsCleared',
+            'Page.loadEventFired',
+            'Circle.closed',
+          ].includes(event.method)
+        )
+          add(common);
+        else if (event.method === 'Animation.animationStarted')
+          add({
+            ...common,
+            animation: detail.animation.id,
+            type: detail.animation.type,
+            duration: detail.animation.source?.duration,
+            delay: detail.animation.source?.delay,
+          });
+        else if (event.method === 'Animation.animationCanceled')
+          add({ ...common, animation: detail.id });
+      });
+    }
+    const id = ++next;
+    const at = Date.now();
+    const request = {
+      id,
+      method,
+      session,
+      context: params.contextId,
+      awaitPromise: params.awaitPromise,
+    };
+    pending.set(id, { ...request, started: at });
+    add({ kind: 'request', ...request });
+    if (method === 'Page.enable')
+      void send('Animation.enable', {}, session).catch(() => {});
+    return send(method, params, session).then(
+      (value) => {
+        pending.delete(id);
+        add({
+          kind: 'response',
+          id,
+          method,
+          elapsed: Date.now() - at,
+          exception: !!value?.exceptionDetails,
+        });
+        return value;
+      },
+      (error) => {
+        pending.delete(id);
+        add({ kind: 'request-error', id, method, elapsed: Date.now() - at });
+        throw error;
+      },
+    );
+  };
+  return () => ({
+    pending: [...pending.values()].map(({ started: at, ...request }) => ({
+      ...request,
+      elapsed: Date.now() - Number(at),
+    })),
+    recent: records,
+  });
+}
+
+/** Immediate, bounded-fixture records contain identities and protocol state only. */
+function browserFixture(
+  chrome: ChromeBrowser,
+  budgetMs: number,
+  report: (record: BrowserFixtureRecord) => void = (record) =>
+    process.stderr.write(JSON.stringify({ browserFixture: record }) + '\n'),
+) {
+  const internal = chrome as unknown as {
+    child?: ChildProcess;
+    conversations: Map<
+      string,
+      {
+        active?: string;
+        tabs: Map<
+          string,
+          {
+            session: string;
+            dialogs: { id: string; type: string }[];
+            intercepting?: boolean;
+            chooser?: unknown;
+          }
+        >;
+      }
+    >;
+  };
+  const protocol = browserProtocolTrace(chrome);
+  return new BrowserFixture({
+    budgetMs,
+    report,
+    close: () => chrome.close(),
+    state: () => ({
+      process: internal.child
+        ? {
+            pid: internal.child.pid,
+            exitCode: internal.child.exitCode,
+            signalCode: internal.child.signalCode,
+          }
+        : undefined,
+      conversations: [...internal.conversations].map(([id, conversation]) => ({
+        id,
+        active: conversation.active,
+        tabs: [...conversation.tabs].map(([id, tab]) => ({
+          id,
+          session: tab.session,
+          dialogs: tab.dialogs.map(({ id, type }) => ({ id, type })),
+          intercepting: tab.intercepting,
+          chooser: !!tab.chooser,
+        })),
+      })),
+      pending: protocol().pending.map((entry) => {
+        const { method, session, elapsed } = entry as Record<string, unknown>;
+        return { method, session, elapsed };
+      }),
+    }),
+  });
+}
+
+test(
+  'a fixture deadline closes its owned real Chrome and rejects the original pending CDP request',
+  { skip: executable ? false : 'no Chrome, Edge or Chromium is installed' },
+  async (t) => {
+    const temp = made(t, 'circle-chrome-fixture-deadline-');
+    const site = createHttp((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<!doctype html><title>local pending fixture</title>');
+    });
+    const url = `http://127.0.0.1:${await listen(site)}`;
+    t.after(() => site.close());
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: join(temp, 'downloads'),
+    });
+    const records: BrowserFixtureRecord[] = [];
+    const fixture = browserFixture(
+      chrome,
+      60_000 + 15_000 + 5000 + 3000,
+      (record) => records.push(record),
+    );
+    cleanup(t, () => fixture.close());
+    await fixture.run({ phase: 'prepare local page', action: 'navigate' }, () =>
+      chrome.request('deadline', 'navigate', { url }, fixture.signal),
+    );
+    const internal = chrome as unknown as {
+      child: ChildProcess;
+      conversations: Map<string, { tabs: Map<string, { session: string }> }>;
+      send: (
+        method: string,
+        params?: Record<string, unknown>,
+        session?: string,
+      ) => Promise<any>;
+    };
+    const child = internal.child;
+    const tab = internal.conversations.get('deadline')!.tabs.get('t1')!;
+    const pending = internal.send(
+      'Runtime.evaluate',
+      {
+        expression: 'window.circlePendingFixture = true; new Promise(() => {})',
+        awaitPromise: true,
+        returnByValue: true,
+      },
+      tab.session,
+    );
+    const observed = pending.then(
+      () => ({ rejected: false, error: undefined }),
+      (error: unknown) => ({ rejected: true, error }),
+    );
+    const marker = await fixture.run(
+      {
+        phase: 'verify pending evaluation started',
+        method: 'Runtime.evaluate',
+        session: tab.session,
+      },
+      () =>
+        internal.send(
+          'Runtime.evaluate',
+          { expression: 'window.circlePendingFixture', returnByValue: true },
+          tab.session,
+        ),
+      5000,
+    );
+    assert.equal(
+      marker.result.value,
+      true,
+      'the real pending evaluation started',
+    );
+    // A broken fixture bound must fail this test without hanging the whole suite.
+    let fallback = false;
+    let fallbackClose: Promise<void> | undefined;
+    const watchdog = setTimeout(
+      () => {
+        fallback = true;
+        fallbackClose = fixture.close();
+        fallbackClose.catch(() => {});
+      },
+      200 + 2000 + 3000 + 1000,
+    );
+    try {
+      await assert.rejects(
+        fixture.run(
+          {
+            phase: 'never-resolving real evaluation',
+            method: 'Runtime.evaluate',
+            session: tab.session,
+          },
+          () => pending,
+          200,
+        ),
+        (error) => {
+          assert.ok(error instanceof BrowserFixtureDeadline);
+          assert.equal(error.limitMs, 200);
+          assert.equal(error.fixturePhase.method, 'Runtime.evaluate');
+          assert.equal(error.fixturePhase.session, tab.session);
+          assert.equal(error.fixturePhase.status, 'timeout');
+          assert.ok(fixture.signal.aborted);
+          return true;
+        },
+      );
+    } finally {
+      clearTimeout(watchdog);
+      await fallbackClose;
+    }
+    assert.equal(fallback, false, 'the fixture phase deadline owns shutdown');
+    const result = await observed;
+    assert.equal(result.rejected, true);
+    assert.match(String(result.error), /browser was closed/);
+    assert.ok(child.exitCode !== null || child.signalCode !== null);
+    assert.throws(() => process.kill(child.pid!, 0), { code: 'ESRCH' });
+    assert.ok(records.some((record) => record.status === 'late-rejection'));
+    assert.ok(records.some((record) => record.status === 'cleanup-after'));
+    const serialized = JSON.stringify(records);
+    assert.equal(serialized.includes('circlePendingFixture'), false);
+    assert.equal(serialized.includes(url), false);
+    assert.equal(serialized.includes('expression'), false);
+  },
+);
+
+test('fixture phases share one deadline and never dispatch a later action after it', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  const records: BrowserFixtureRecord[] = [];
+  let closed = 0;
+  const fixture = new BrowserFixture({
+    budgetMs: 100,
+    state: () => ({ tab: 't1', session: 'fixture-session', dialogs: [] }),
+    close: async () => {
+      closed++;
+    },
+    report: (record) => records.push(record),
+  });
+  cleanup(t, () => fixture.close());
+  let finishFirst!: () => void;
+  const first = fixture.run(
+    { phase: 'first completed action', action: 'snapshot' },
+    () => new Promise<void>((resolve) => (finishFirst = resolve)),
+  );
+  await Promise.resolve();
+  t.mock.timers.tick(60);
+  finishFirst();
+  await first;
+  let rejectSecond!: (error: Error) => void;
+  const second = fixture.run(
+    { phase: 'second pending action', action: 'snapshot' },
+    () => new Promise<void>((_resolve, reject) => (rejectSecond = reject)),
+    1000,
+  );
+  const rejected = assert.rejects(second, (error) => {
+    assert.ok(error instanceof BrowserFixtureDeadline);
+    assert.equal(error.limitMs, 100);
+    assert.equal(error.fixturePhase.elapsed, 100);
+    assert.equal(error.fixturePhase.phase, 'second pending action');
+    return true;
+  });
+  await Promise.resolve();
+  t.mock.timers.tick(39);
+  assert.equal(fixture.signal.aborted, false);
+  t.mock.timers.tick(1);
+  await rejected;
+  let dispatched = false;
+  await assert.rejects(
+    fixture.run({ phase: 'too late' }, async () => {
+      dispatched = true;
+    }),
+    (error) => error === fixture.signal.reason,
+  );
+  assert.equal(dispatched, false);
+  assert.equal(closed, 1);
+  rejectSecond(Error('late CDP failure'));
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.ok(records.some((record) => record.status === 'late-rejection'));
+  assert.equal(getEventListeners(fixture.signal, 'abort').length, 0);
+});
+
+test(
+  'the TUI agent clears real text and number inputs with empty browser_type calls and trusted input events',
+  { skip: executable ? false : 'no Chrome, Edge or Chromium is installed' },
+  async (t) => {
+    const root = made(t, 'circle-chrome-empty-type-');
+    const site = createHttp((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end(`<!doctype html><title>empty type fixture</title>
+        <label>Text field <input id="text" type="text"></label>
+        <label>Number field <input id="number" type="number"></label>
+        <script>
+          window.inputEvents = [];
+          for (const input of document.querySelectorAll('input'))
+            input.addEventListener('input', event => window.inputEvents.push({
+              id: input.id, value: input.value, trusted: event.isTrusted,
+              inputType: event.inputType
+            }));
+        </script>`);
+    });
+    const url = `http://127.0.0.1:${await listen(site)}/`;
+    t.after(() => site.close());
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: join(root, 'downloads'),
+    });
+    cleanup(t, () => chrome.close());
+    const internal = chrome as unknown as {
+      conversations: Map<string, { tabs: Map<string, { session: string }> }>;
+      send: (
+        method: string,
+        params: Record<string, unknown>,
+        session?: string,
+      ) => Promise<any>;
+    };
+    let runtime: AgentRuntime;
+    const read = async () => {
+      const tab = [
+        ...internal.conversations.get(runtime.session.id)!.tabs.values(),
+      ][0]!;
+      // Read only: typing and clearing use the actual agent tool, never a DOM write.
+      const result = await internal.send(
+        'Runtime.evaluate',
+        {
+          expression:
+            'JSON.stringify({text:document.getElementById("text").value,number:document.getElementById("number").value,events:window.inputEvents})',
+          returnByValue: true,
+        },
+        tab.session,
+      );
+      return JSON.parse(result.result.value) as {
+        text: string;
+        number: string;
+        events: {
+          id: string;
+          value: string;
+          trusted: boolean;
+          inputType: string;
+        }[];
+      };
+    };
+    const operations = [
+      {
+        id: 'fill-text',
+        field: 'text',
+        label: 'Text field',
+        text: 'actual text bytes',
+      },
+      {
+        id: 'fill-number',
+        field: 'number',
+        label: 'Number field',
+        text: '12345',
+      },
+      { id: 'clear-text', field: 'text', label: 'Text field', text: '' },
+      { id: 'clear-number', field: 'number', label: 'Number field', text: '' },
+    ] as const;
+    const observed: { id: string; value: string; inputType: string }[] = [];
+    const check = async (operation: (typeof operations)[number]) => {
+      const state = await read();
+      assert.equal(
+        state[operation.field],
+        operation.text,
+        `${operation.id} must change the actual DOM value`,
+      );
+      const event = state.events.at(-1)!;
+      assert.equal(event.id, operation.field);
+      assert.equal(event.value, operation.text);
+      assert.equal(
+        event.trusted,
+        true,
+        'the page received a real browser input event',
+      );
+      if (operation.text === '') {
+        assert.equal(Buffer.byteLength(state[operation.field]), 0);
+        assert.equal(event.inputType, 'deleteContentBackward');
+      }
+      observed.push({
+        id: operation.id,
+        value: event.value,
+        inputType: event.inputType,
+      });
+    };
+    const model = new ScriptedModel([
+      {
+        message: {
+          id: 'open-empty-type',
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: 'open', name: 'browser_navigate', args: { url } }],
+        },
+      },
+      ...operations.map(
+        (operation, index) =>
+          async (request: import('../src/types.js').ModelRequest) => {
+            if (index) await check(operations[index - 1]!);
+            const shown = request.messages
+              .filter((message) => message.role === 'tool')
+              .at(-1)!.content;
+            const ref = new RegExp(
+              `\\[(e\\d+)\\][^\\n]*"${operation.label}"`,
+            ).exec(shown)?.[1];
+            assert(ref, `the real snapshot names ${operation.label}`);
+            return {
+              message: {
+                id: operation.id,
+                role: 'assistant' as const,
+                content: '',
+                tool_calls: [
+                  {
+                    id: operation.id,
+                    name: 'browser_type',
+                    args: {
+                      ref,
+                      element: operation.label,
+                      text: operation.text,
+                    },
+                  },
+                ],
+              },
+              usage: emptyUsage(),
+            };
+          },
+      ),
+      async () => {
+        await check(operations.at(-1)!);
+        return {
+          message: {
+            id: 'empty-type-finished',
+            role: 'assistant',
+            content: 'real input values checked',
+          },
+          usage: emptyUsage(),
+        };
+      },
+    ]);
+    runtime = new AgentRuntime({
+      workspace: root,
+      home: root,
+      settings: defaultSettings(),
+      model,
+      headless: true,
+      extraTools: browserTools(
+        chrome,
+        runtimeBrowserOptions(() => runtime),
+      ),
+    });
+    cleanup(t, () => runtime.close());
+    runtime.policy.setYolo(runtime.session.id, true);
+    await runtime.harness.run('fill and then clear both inputs');
+    assert.equal(
+      model.requests.length,
+      6,
+      'each real tool result reached the next model request',
+    );
+    const stored = runtime.store.messages(runtime.session.id);
+    assert.equal(stored.filter((message) => message.role === 'tool').length, 5);
+    assert.deepEqual(
+      stored
+        .flatMap((message) => message.tool_calls ?? [])
+        .filter((call) => call.id.startsWith('clear-'))
+        .map((call) => call.args.text),
+      ['', ''],
+    );
+    assert.deepEqual(
+      (await read()).events.map((event) => event.id),
+      ['text', 'number', 'text', 'number'],
+    );
+    const version = await internal.send('Browser.getVersion', {});
+    t.diagnostic(
+      JSON.stringify({
+        adapter: 'TUI ChromeBrowser',
+        browser: version.product,
+        platform: process.platform,
+        arch: process.arch,
+        node: process.version,
+        observed,
+      }),
+    );
+  },
+);
 
 test(
   'the terminal browser reads and acts on pages, answers dialogs, follows tabs and passes certificate warnings only with approval',
@@ -254,20 +930,27 @@ test(
     });
     const trustFile = join(temp, 'browser-certificates.json');
     const downloads = join(temp, 'downloads');
-    const start = () =>
-      new ChromeBrowser({
+    const traces = new WeakMap<
+      ChromeBrowser,
+      ReturnType<typeof browserProtocolTrace>
+    >();
+    const start = () => {
+      const browser = new ChromeBrowser({
         executable: executable!,
         trustFile,
         headless: true,
         downloads,
       });
+      traces.set(browser, browserProtocolTrace(browser));
+      return browser;
+    };
     let chrome = start();
     cleanup(t, () => chrome.close());
     const signal = new AbortController().signal;
     // A failure names the step it happened at
     // A failure names the step it happened at, and what the browser was in: a failure
     // seen only in a CI log has to say enough
-    const internals = chrome as unknown as {
+    type DebugBrowser = {
       cdp: {
         send: (
           method: string,
@@ -281,13 +964,22 @@ test(
           active?: string;
           tabs: Map<
             string,
-            { session: string; interceptFailure?: string; dialogs: unknown[] }
+            {
+              session: string;
+              world?: number;
+              loading: boolean;
+              network: Set<string>;
+              lastNetwork: number;
+              interceptFailure?: string;
+              dialogs: unknown[];
+            }
           >;
         }
       >;
       stderr: string[];
     };
     const diagnose = async () => {
+      const internals = chrome as unknown as DebugBrowser;
       const within = (promise: Promise<unknown>) =>
         Promise.race([
           promise.then(
@@ -299,6 +991,7 @@ test(
           ),
         ]);
       const lines: string[] = [];
+      lines.push(`protocol metadata ${JSON.stringify(traces.get(chrome)?.())}`);
       const conversation = internals.conversations.get('conversation-1');
       const shown = conversation?.active
         ? conversation.tabs.get(conversation.active)
@@ -318,10 +1011,10 @@ test(
               .then((reply) => reply.result?.value),
           );
         lines.push(
-          `interception ${shown.interceptFailure ?? 'taken'}; dialogs ${shown.dialogs.length}`,
+          `context ${shown.world}; loading ${shown.loading}; network ${shown.network.size}; quiet ${Date.now() - shown.lastNetwork} ms; interception ${shown.interceptFailure ?? 'taken'}; dialogs ${shown.dialogs.length}`,
         );
         lines.push(
-          `visibility ${await see('document.visibilityState + " focus " + document.hasFocus()')}`,
+          `visibility ${await see('document.visibilityState + " focus " + document.hasFocus() + " ready " + document.readyState')}`,
         );
         lines.push(
           `bringToFront ${await within(internals.cdp.send('Page.bringToFront', {}, shown.session))}`,
@@ -338,7 +1031,7 @@ test(
             .then((reply) =>
               reply.targetInfos?.map(
                 (info: { type: string; url: string; attached: boolean }) =>
-                  `${info.type} ${info.url} ${info.attached ? 'attached' : ''}`,
+                  `${info.type} ${info.attached ? 'attached' : 'unattached'}`,
               ),
             ),
         )}`,
@@ -350,7 +1043,7 @@ test(
       chrome
         .request('conversation-1', action, args, signal)
         .catch(async (error: Error) => {
-          error.message = `${action} ${JSON.stringify(args)}: ${error.message}\n${await diagnose()}`;
+          error.message = `${action} (argument keys: ${Object.keys(args).join(', ')}): ${error.message}\n${await diagnose()}`;
           throw error;
         });
     const ref = (text: string, pattern: RegExp) => {
@@ -678,6 +1371,10 @@ test(
     // ---- the browser's own certificate warning, which only the person lets the model pass
     const host = `127.0.0.1:${ports[0]}`;
     const warned = await act('navigate', { url: `https://${host}/` });
+    await assert.rejects(
+      act('click_at', { x: 10, y: 10, screenshotId: 'forged-warning-capture' }),
+      /coordinate clicks are not allowed on certificate warnings/,
+    );
     assert.match(
       warned.text,
       /certificate is not trusted: the tab shows the browser's certificate warning instead \(net::ERR_CERT_AUTHORITY_INVALID\)/,
@@ -979,9 +1676,12 @@ test(
     const temp = made(t, 'circle-chrome-handoff-');
     const site = createHttp((req, res) => {
       res.writeHead(200, { 'content-type': 'text/html' });
-      res.end(
-        `<!doctype html><title>${req.url === '/b' ? 'Signed in' : 'Sign in'}</title><input aria-label="Code">`,
-      );
+      const finish = () =>
+        res.end(
+          `<!doctype html><title>${req.url === '/b' ? 'Signed in' : 'Sign in'}</title><input aria-label="Code">`,
+        );
+      if (req.url === '/b') setTimeout(finish, 1500);
+      else finish();
     });
     const base = `http://127.0.0.1:${await listen(site)}`;
     t.after(() => site.close());
@@ -991,9 +1691,10 @@ test(
       headless: true,
       downloads: temp,
       // The person types a code and goes on, in the window: Circle sees none of it
-      handoff: async (reason) => {
+      handoff: async (reason, signal) => {
         reasons.push(reason);
         const internals = chrome as unknown as {
+          cdp: CdpPipe;
           conversations: Map<
             string,
             { tabs: Map<string, { session: string }> }
@@ -1005,14 +1706,23 @@ test(
           ) => Promise<unknown>;
         };
         const tab = internals.conversations.get('c')!.tabs.get('t1')!;
-        await internals.send(
-          'Runtime.evaluate',
-          {
-            expression: `document.querySelector('input').value = 'typed-by-the-person'; location.href = '/b'`,
-          },
+        // Subscribe before initiating navigation so an immediately cached page cannot
+        // commit between the action and our listener. A slow response exceeds the old
+        // fixed 800 ms wait, but ownership remains with the person until actual load.
+        await humanNavigation(
+          internals.cdp,
           tab.session,
+          `${base}/b`,
+          signal,
+          () =>
+            internals.send(
+              'Runtime.evaluate',
+              {
+                expression: `document.querySelector('input').value = 'typed-by-the-person'; location.href = '/b'`,
+              },
+              tab.session,
+            ),
         );
-        await new Promise((resolve) => setTimeout(resolve, 800));
       },
     });
     cleanup(t, () => chrome.close());
@@ -1187,12 +1897,44 @@ test(
       headless: true,
       downloads,
     });
-    cleanup(t, () => chrome.close());
-    const signal = new AbortController().signal;
-    const act = (action: BrowserAction, args: Record<string, unknown> = {}) =>
-      chrome.request('c', action, args, signal).catch((error: Error) => {
-        error.message = `${action} ${JSON.stringify(args)}: ${error.message}`;
-        throw error;
+    // One shared budget: existing 60s startup, the five provenance sections'
+    // 15s idle + 5s page + 3s download waits, two 10s held-download waits, and
+    // the unchanged fixed pauses below (1s + 2.5s + .8s + .5s + .5s).
+    const budget = 60_000 + 5 * (15_000 + 5000 + 3000) + 2 * 10_000 + 5300;
+    const fixture = browserFixture(chrome, budget);
+    cleanup(t, () => fixture.close());
+    const signal = AbortSignal.any([t.signal, fixture.signal]);
+    let section = 'blob download';
+    let firstAction = true;
+    const actionBudget = 15_000 + 2 * 5000 + 3000;
+    const act = (
+      action: BrowserAction,
+      args: Record<string, unknown> = {},
+      bound = actionBudget,
+    ) => {
+      const limit = firstAction
+        ? 60_000 + actionBudget
+        : Math.min(actionBudget, bound);
+      firstAction = false;
+      return fixture.run(
+        { phase: section, action },
+        () => chrome.request('c', action, args, signal),
+        limit,
+      );
+    };
+    const pause = (ms: number) =>
+      new Promise<void>((resolve, reject) => {
+        const aborted = () => {
+          clearTimeout(timer);
+          signal.removeEventListener('abort', aborted);
+          reject(signal.reason);
+        };
+        const timer = setTimeout(() => {
+          signal.removeEventListener('abort', aborted);
+          resolve();
+        }, ms);
+        signal.addEventListener('abort', aborted, { once: true });
+        if (signal.aborted) aborted();
       });
     const ref = (text: string, pattern: RegExp) => {
       const match = text.match(pattern);
@@ -1206,8 +1948,9 @@ test(
     const held = async (result: Awaited<ReturnType<typeof act>>) => {
       const end = Date.now() + 10_000;
       while (!result.approval && Date.now() < end) {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-        result = await act('snapshot');
+        await pause(250);
+        if (Date.now() >= end) break;
+        result = await act('snapshot', {}, end - Date.now());
       }
       return result;
     };
@@ -1219,7 +1962,7 @@ test(
       element: 'make',
     });
     // The page makes the file after the click: asked with this result or the next
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await pause(1000);
     const made2 = make.approval ? make : await act('snapshot');
     assert.equal(made2.approval?.kind, 'download');
     assert.equal((made2.approval as { site: string }).site, base);
@@ -1234,13 +1977,14 @@ test(
     );
 
     // ---- a download a page starts a moment after the model's click is still the model's
+    section = 'late download';
     const late = await act('navigate', { url: `${base}/late` });
     const clicked = await act('click', {
       ref: ref(late.text, /\[(e\d+)\] button "Later"/),
       element: 'later',
     });
     assert.equal(clicked.approval, undefined);
-    await new Promise((resolve) => setTimeout(resolve, 2500));
+    await pause(2500);
     const after = await act('snapshot');
     assert.equal(after.approval?.kind, 'download');
     assert.equal((after.approval as { site: string }).site, base);
@@ -1250,6 +1994,7 @@ test(
     assert.equal(existsSync(join(downloads, 'mine.bin')), false);
 
     // ---- files from two sites are asked about site by site
+    section = 'two download sites';
     const two = await act('navigate', { url: `${base}/two` });
     const both = await act('click', {
       ref: ref(two.text, /\[(e\d+)\] button "Both"/),
@@ -1279,8 +2024,9 @@ test(
     assert.equal(existsSync(join(downloads, discardedName)), false);
 
     // ---- a dialog in another tab is answered only with that site's allowance
+    section = 'other tab dialog';
     const opened = await act('tabs', { action: 'new', url: otherBase });
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    await pause(800);
     const asking = await act('snapshot');
     const dialog = ref(asking.text, /\[(d\d+)\] confirm/);
     void opened;
@@ -1307,6 +2053,7 @@ test(
     await act('tabs', { action: 'close', tab: 't2' });
 
     // ---- a dialog that ends Circle's click ends its hold on the page's file choosers too
+    section = 'person file picker after alert';
     const files = await act('navigate', { url: `${base}/alert` });
     const saved = await act('click', {
       ref: ref(files.text, /\[(e\d+)\] button "Save"/),
@@ -1326,21 +2073,35 @@ test(
     };
     const tab = internals.conversations.get('c')!.tabs.get('t1')!;
     // The person closes the alert and opens the file picker themselves
-    await internals.send(
-      'Page.handleJavaScriptDialog',
-      { accept: true },
-      tab.session,
-    );
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    await internals.send(
-      'Runtime.evaluate',
+    await fixture.run(
       {
-        expression: `document.querySelector('input[type=file]').click()`,
-        userGesture: true,
+        phase: section,
+        method: 'Page.handleJavaScriptDialog',
+        session: tab.session,
       },
-      tab.session,
+      () =>
+        internals.send(
+          'Page.handleJavaScriptDialog',
+          { accept: true },
+          tab.session,
+        ),
+      5000,
     );
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await pause(500);
+    await fixture.run(
+      { phase: section, method: 'Runtime.evaluate', session: tab.session },
+      () =>
+        internals.send(
+          'Runtime.evaluate',
+          {
+            expression: `document.querySelector('input[type=file]').click()`,
+            userGesture: true,
+          },
+          tab.session,
+        ),
+      5000,
+    );
+    await pause(500);
     assert.equal(tab.chooser, undefined);
   },
 );
@@ -1947,5 +2708,373 @@ test(
     assert.deepEqual(deletes, ['b', 'b']);
     // The delete asked when the model clicked it, and the replay that clicks it again asked too
     assert.deepEqual(forced, ['browser_click', 'browser_replay']);
+  },
+);
+
+test(
+  'a download navigation waits for a delayed download-start event instead of claiming Loaded',
+  { skip },
+  async (t) => {
+    const temp = made(t, 'circle-download-start-');
+    const site = createHttp((_req, res) => {
+      res.writeHead(200, {
+        'content-type': 'application/octet-stream',
+        'content-disposition': 'attachment; filename="late.bin"',
+      });
+      res.end('late bytes');
+    });
+    const url = `http://127.0.0.1:${await listen(site)}/download`;
+    t.after(() => site.close());
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: join(temp, 'downloads'),
+    });
+    cleanup(t, () => chrome.close());
+    const internals = chrome as unknown as {
+      event: (pipe: unknown, event: { method: string }) => void;
+    };
+    const navigationResponses: unknown[] = [];
+    const send = (chrome as any).send.bind(chrome);
+    (chrome as any).send = async (method: string, ...args: unknown[]) => {
+      const reply = await send(method, ...args);
+      if (method === 'Page.navigate') navigationResponses.push(reply);
+      return reply;
+    };
+    const event = internals.event.bind(chrome);
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    t.after(() => timers.forEach(clearTimeout));
+    internals.event = (pipe, value) => {
+      if (value.method.startsWith('Browser.download'))
+        timers.push(setTimeout(() => event(pipe, value), 1600));
+      else event(pipe, value);
+    };
+    const asked = await chrome.request(
+      'c',
+      'navigate',
+      { url },
+      new AbortController().signal,
+    );
+    assert.equal(asked.approval?.kind, 'download');
+    assert.match(asked.text, /started download/);
+    assert.doesNotMatch(asked.text, /Loaded\./);
+    assert.equal(existsSync(join(temp, 'downloads', 'late.bin')), false);
+    t.diagnostic(
+      JSON.stringify({
+        platform: process.platform,
+        navigationResponses,
+        downloadStartDeliveryDelayMs: 1600,
+      }),
+    );
+  },
+);
+
+test(
+  'coordinate clicks reach non-semantic controls, confirm their actual target once, and reject stale screenshots',
+  { skip },
+  async (t) => {
+    const temp = made(t, 'circle-coordinate-click-');
+    const hits: string[] = [];
+    const site = createHttp((req, res) => {
+      if (req.url?.startsWith('/hit')) {
+        hits.push(req.url);
+        res.end('yes');
+        return;
+      }
+      res.setHeader('Content-Type', 'text/html');
+      res.end(
+        '<!doctype html><title>coordinates</title><style>body{height:2400px}span{display:inline-block;width:80px;height:30px}</style><table><tr><td>members</td><td><span id="missing">...</span></td></tr></table><button id="delete">Delete configuration</button><button id="open">open popup</button><script>document.querySelector("#missing").addEventListener("click",()=>fetch("/hit-unknown"));document.querySelector("#delete").addEventListener("click",()=>fetch("/hit-delete"));document.querySelector("#open").addEventListener("click",()=>window.open("/popup"));</script>',
+      );
+    });
+    const url = `http://127.0.0.1:${await listen(site)}/`;
+    t.after(() => site.close());
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: join(temp, 'downloads'),
+      mode: () => 'manual',
+    });
+    cleanup(t, () => chrome.close());
+    const signal = new AbortController().signal;
+    const act = (action: BrowserAction, args: Record<string, unknown> = {}) =>
+      chrome.request('c', action, args, signal);
+    const page = async <T>(expression: string): Promise<T> => {
+      const internal = chrome as any;
+      return internal.evaluate(
+        internal.conversations
+          .get('c')
+          .tabs.get(internal.conversations.get('c').active),
+        expression,
+        signal,
+      );
+    };
+    const shown = await act('navigate', { url });
+    assert.match(shown.text, /\| members \| \.\.\. \|/);
+    assert.doesNotMatch(shown.text, /\[e\d+\].*"\.\.\."/);
+    const point = await page<{ x: number; y: number }>(
+      '(()=>{const r=document.querySelector("#missing").getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()',
+    );
+    const shot = await act('screenshot');
+    assert.ok(shot.screenshot?.id);
+    assert.match(shot.text, /CSS pixels/);
+    await assert.rejects(
+      act('click_at', { x: -1, y: point.y, screenshotId: shot.screenshot!.id }),
+      /inside the screenshot viewport/,
+    );
+    const args = { ...point, screenshotId: shot.screenshot!.id };
+    const asked = await act('click_at', args);
+    assert.equal(asked.approval?.kind, 'coordinate');
+    assert.deepEqual(hits, []);
+    assert.equal((asked.approval as any).element, '...');
+    const clicked = await act('click_at', {
+      ...args,
+      approval: { token: asked.approval!.token, scope: 'once' },
+    });
+    assert.match(clicked.text, /Clicked at.*span "\.\.\."/);
+    assert.deepEqual(hits, ['/hit-unknown']);
+    await assert.rejects(act('click_at', args), /screenshot is stale/);
+    const deletion = await page<{ x: number; y: number }>(
+      '(()=>{const r=document.querySelector("#delete").getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()',
+    );
+    const deleteShot = await act('screenshot');
+    const deleteAsk = await act('click_at', {
+      ...deletion,
+      screenshotId: deleteShot.screenshot!.id,
+    });
+    assert.equal(deleteAsk.approval?.kind, 'coordinate');
+    assert.equal((deleteAsk.approval as any).destructive, true);
+    assert.deepEqual(hits, ['/hit-unknown']);
+    const scrolled = await act('screenshot');
+    await page('window.scrollTo(0,100)');
+    await assert.rejects(
+      act('click_at', { ...point, screenshotId: scrolled.screenshot!.id }),
+      /screenshot is stale/,
+    );
+    await page('window.scrollTo(0,0)');
+    const changed = await act('screenshot');
+    await page('document.querySelector("#missing").textContent="changed"');
+    await assert.rejects(
+      act('click_at', { ...point, screenshotId: changed.screenshot!.id }),
+      /screenshot is stale/,
+    );
+    const switched = await act('screenshot');
+    await act('tabs', { action: 'new' });
+    await act('tabs', { action: 'select', tab: 't1' });
+    await assert.rejects(
+      act('click_at', { ...point, screenshotId: switched.screenshot!.id }),
+      /screenshot is stale/,
+    );
+    const resized = await act('screenshot');
+    const internal = chrome as any;
+    const activeTab = internal.conversations.get('c').tabs.get('t1');
+    await internal.send(
+      'Emulation.setDeviceMetricsOverride',
+      { width: 800, height: 600, deviceScaleFactor: 1, mobile: false },
+      activeTab.session,
+    );
+    await assert.rejects(
+      act('click_at', { ...point, screenshotId: resized.screenshot!.id }),
+      /screenshot is stale/,
+    );
+    const resizedShot = await act('screenshot');
+    assert.equal(resizedShot.screenshot!.width, 800);
+    assert.equal(resizedShot.screenshot!.height, 600);
+    await internal.send(
+      'Emulation.clearDeviceMetricsOverride',
+      {},
+      activeTab.session,
+    );
+    const navigated = await act('screenshot');
+    await act('navigate', { url: url + 'new' });
+    await assert.rejects(
+      act('click_at', { ...point, screenshotId: navigated.screenshot!.id }),
+      /screenshot is stale/,
+    );
+  },
+);
+
+test(
+  'coordinate clicks recheck a hover-changed destructive target before mouse press',
+  { skip },
+  async (t) => {
+    const temp = made(t, 'circle-coordinate-hover-');
+    const hits: string[] = [];
+    const site = createHttp((req, res) => {
+      if (req.url?.startsWith('/hit')) {
+        hits.push(req.url);
+        res.end('yes');
+        return;
+      }
+      res.setHeader('Content-Type', 'text/html');
+      res.end(
+        '<!doctype html><title>hover fixture</title><button style="margin:100px;width:220px;height:60px">Show details</button><script>const b=document.querySelector("button");b.addEventListener("mouseenter",()=>{b.textContent="Delete configuration";b.dataset.delete="yes"});b.addEventListener("click",()=>fetch("/hit-"+b.dataset.delete));</script>',
+      );
+    });
+    const url = `http://127.0.0.1:${await listen(site)}/`;
+    t.after(() => site.close());
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: join(temp, 'downloads'),
+      mode: () => 'manual',
+    });
+    cleanup(t, () => chrome.close());
+    const signal = new AbortController().signal;
+    const act = (action: BrowserAction, args: Record<string, unknown> = {}) =>
+      chrome.request('c', action, args, signal);
+    await act('navigate', { url });
+    const shot = await act('screenshot');
+    const point = { x: 218, y: 138 };
+    await assert.rejects(
+      act('click_at', { ...point, screenshotId: shot.screenshot!.id }),
+      /screenshot.*(?:stale|changed)/,
+    );
+    assert.deepEqual(
+      hits,
+      [],
+      'hover must not be followed by a mouse press on the changed target',
+    );
+    const next = await act('screenshot');
+    const args = { ...point, screenshotId: next.screenshot!.id };
+    const asked = await act('click_at', args);
+    assert.equal(asked.approval?.kind, 'coordinate');
+    assert.equal((asked.approval as any).destructive, true);
+    assert.equal((asked.approval as any).element, 'Delete configuration');
+    assert.deepEqual(hits, []);
+    await act('click_at', {
+      ...args,
+      approval: { token: asked.approval!.token, scope: 'once' },
+    });
+    assert.deepEqual(hits, ['/hit-yes']);
+  },
+);
+
+test(
+  'scrolling a nested document container invalidates coordinate captures',
+  { skip },
+  async (t) => {
+    const temp = made(t, 'circle-coordinate-nested-scroll-');
+    const hits: string[] = [];
+    const site = createHttp((req, res) => {
+      if (req.url?.startsWith('/hit')) {
+        hits.push(req.url);
+        res.end('yes');
+        return;
+      }
+      res.setHeader('Content-Type', 'text/html');
+      res.end(
+        '<!doctype html><title>nested scroll</title><style>#s{width:300px;height:100px;overflow:auto;margin:180px}button{display:block;height:100px;width:280px}</style><div id=s><button id=a>Open first</button><button id=b>Open second</button><button id=c>Other</button></div><script>for(const b of document.querySelectorAll("button"))b.onclick=()=>fetch("/hit-"+b.id);</script>',
+      );
+    });
+    const url = `http://127.0.0.1:${await listen(site)}/`;
+    t.after(() => site.close());
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: join(temp, 'downloads'),
+      mode: () => 'manual',
+    });
+    cleanup(t, () => chrome.close());
+    const signal = new AbortController().signal;
+    await chrome.request('c', 'navigate', { url }, signal);
+    const shot = await chrome.request('c', 'screenshot', {}, signal);
+    const internal = chrome as any;
+    const tab = internal.conversations.get('c').tabs.get('t1');
+    await internal.evaluate(
+      tab,
+      'document.querySelector("#s").scrollTop=100',
+      signal,
+    );
+    await assert.rejects(
+      chrome.request(
+        'c',
+        'click_at',
+        { x: 328, y: 230, screenshotId: shot.screenshot!.id },
+        signal,
+      ),
+      /screenshot is stale/,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await assert.rejects(
+      chrome.request(
+        'c',
+        'click_at',
+        { x: 328, y: 230, screenshotId: shot.screenshot!.id },
+        signal,
+      ),
+      /screenshot is stale/,
+    );
+    assert.deepEqual(hits, []);
+    const next = await chrome.request('c', 'screenshot', {}, signal);
+    await chrome.request(
+      'c',
+      'click_at',
+      { x: 328, y: 230, screenshotId: next.screenshot!.id },
+      signal,
+    );
+    assert.deepEqual(hits, ['/hit-b']);
+  },
+);
+
+test(
+  'a page can close its own popup and the terminal browser reports the closed tab and continues',
+  { skip },
+  async (t) => {
+    const temp = made(t, 'circle-popup-close-');
+    const cookies: string[] = [];
+    const site = createHttp((req, res) => {
+      cookies.push(req.headers.cookie ?? '');
+      res.setHeader('Content-Type', 'text/html');
+      res.setHeader('Set-Cookie', 'fixture=kept; SameSite=Lax');
+      res.end(
+        req.url === '/popup'
+          ? '<title>popup</title><button onclick="window.close()">close this page</button>'
+          : '<title>opener</title><button onclick="window.open(\'/popup\')">open popup</button>',
+      );
+    });
+    const url = `http://127.0.0.1:${await listen(site)}/`;
+    t.after(() => site.close());
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: join(temp, 'downloads'),
+    });
+    cleanup(t, () => chrome.close());
+    const signal = new AbortController().signal;
+    await chrome.request('c', 'navigate', { url }, signal);
+    const opened = await chrome.request(
+      'c',
+      'click',
+      { ref: 'e1', element: 'open popup' },
+      signal,
+    );
+    assert.match(opened.text, /t2 \(shown\)/);
+    const closed = await chrome.request(
+      'c',
+      'click',
+      { ref: 'e1', element: 'close this page' },
+      signal,
+    );
+    assert.match(closed.text, /tab t2 was closed/);
+    const listed = await chrome.request(
+      'c',
+      'tabs',
+      { action: 'list' },
+      signal,
+    );
+    assert.match(listed.text, /t1 \(shown\)/);
+    assert.doesNotMatch(listed.text, /t2/);
+    const after = await chrome.request(
+      'c',
+      'navigate',
+      { url: url + 'after' },
+      signal,
+    );
+    assert.match(after.text, /opener/);
+    assert.ok(cookies.at(-1)?.includes('fixture=kept'));
+    await assert.rejects(
+      chrome.request('c', 'tabs', { action: 'select', tab: 't2' }, signal),
+      /no tab t2/,
+    );
   },
 );

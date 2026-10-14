@@ -610,3 +610,89 @@ test('a replay whose script clicks a control that deletes asks every time in man
     false,
   );
 });
+
+test('coordinate confirmations are once only, cannot be model supplied, and rejection reaches the next request', async (t) => {
+  const root = scratch(t);
+  const seen: Record<string, unknown>[] = [];
+  const port: BrowserPort = {
+    async request(_id, action, args) {
+      seen.push({ ...args });
+      if ((args.approval as any)?.token === 'private-coordinate-token')
+        return {
+          text: 'Clicked actual span "...".',
+          origin: 'https://device.lan',
+        };
+      return {
+        text: 'Coordinate approval needed.',
+        approval: {
+          kind: 'coordinate',
+          token: 'private-coordinate-token',
+          origin: 'https://device.lan',
+          element: '...',
+          x: 12,
+          y: 34,
+          destructive: false,
+        },
+      };
+    },
+  };
+  const model = new ScriptedModel([
+    {
+      message: {
+        id: 'a',
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'allow',
+            name: 'browser_click_at',
+            args: { x: 12, y: 34, screenshotId: 'capture1' },
+          },
+        ],
+      },
+    },
+    {
+      message: {
+        id: 'b',
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'reject',
+            name: 'browser_click_at',
+            args: { x: 12, y: 34, screenshotId: 'capture2' },
+          },
+        ],
+      },
+    },
+    { message: { id: 'c', role: 'assistant', content: 'done' } },
+  ]);
+  const decisions: ('always' | 'reject')[] = ['always', 'reject'];
+  const runtime = new AgentRuntime({
+    home: root,
+    workspace: root,
+    settings: trustFolder(defaultSettings(), root),
+    model,
+    extraTools: browserTools(port, { confirm: async () => decisions.shift()! }),
+  });
+  cleanup(t, () => runtime.close());
+  runtime.policy.setYolo(runtime.session.id, true);
+  await runtime.harness.run('click fixture');
+  assert.equal((seen[1]!.approval as any).scope, 'once');
+  assert.match(
+    String(
+      model.requests[2]!.messages.find((m) => m.tool_call_id === 'reject')!
+        .content,
+    ),
+    /did not allow clicking/,
+  );
+  assert.equal(
+    JSON.stringify(model.requests).includes('private-coordinate-token'),
+    false,
+  );
+  const schema = runtime.allTools.find((t) => t.name === 'browser_click_at')!
+    .parameters as any;
+  assert.deepEqual(schema.required, ['x', 'y', 'screenshotId']);
+  assert.equal(schema.additionalProperties, false);
+  assert.equal(Object.hasOwn(schema.properties, 'approval'), false);
+});

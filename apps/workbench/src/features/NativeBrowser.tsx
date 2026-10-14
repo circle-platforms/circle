@@ -20,6 +20,7 @@ import { currentSession } from '../model/state';
 import {
   browserEventAddress,
   browserOpened,
+  browserTabChanged,
   downloadProgress,
   shownDialog,
 } from '../model/browser';
@@ -59,6 +60,10 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
   const active = useRef(false);
   const wasOpened = useRef(false);
   const editingAddress = useRef(false);
+  const addressTab = useRef<string | undefined>(undefined);
+  const navigationVersion = useRef(0);
+  const currentIdentity = useRef({ session: id, tab: state?.tab });
+  currentIdentity.current = { session: id, tab: state?.tab };
   const updateBounds = useRef<() => void>(() => {});
   const host = desktopHost()!;
   const opened = browserOpened(state);
@@ -71,6 +76,8 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
     active.current = false;
     wasOpened.current = false;
     editingAddress.current = false;
+    addressTab.current = undefined;
+    navigationVersion.current++;
     setUrl('');
     setCapture(null);
     const update = () => {
@@ -110,6 +117,13 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
   // The page's own view shows once a page is open; it follows the shown tab.
   useEffect(() => {
     if (!state) return;
+    const tabChanged = browserTabChanged(addressTab.current, state.tab);
+    if (tabChanged) {
+      editingAddress.current = false;
+      wasOpened.current = false;
+      setCapture(null);
+    }
+    addressTab.current = state.tab;
     if (opened !== active.current) {
       active.current = opened;
       requestAnimationFrame(() => updateBounds.current());
@@ -118,23 +132,38 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
       state,
       editingAddress.current,
       wasOpened.current,
+      tabChanged,
     );
     if (address !== undefined) setUrl(address);
     wasOpened.current = wasOpened.current || opened;
   }, [state, opened]);
   const navigate = async (target: string) => {
+    const identity = currentIdentity.current;
+    const version = ++navigationVersion.current;
     editingAddress.current = false;
     try {
       active.current = true;
       setCapture(null);
       await host.browserNavigate(id, target);
       requestAnimationFrame(() => updateBounds.current());
-    } catch {
+    } catch (error) {
+      if (
+        version !== navigationVersion.current ||
+        identity.session !== currentIdentity.current.session ||
+        identity.tab !== currentIdentity.current.tab
+      )
+        return;
       if (!['back', 'forward', 'reload'].includes(target)) {
         setUrl(target);
         editingAddress.current = true;
       }
-      notify(t('navigation failed'));
+      // A string the address bar could not read is the person's to fix, not a
+      // network failure; say which of the two it was.
+      notify(
+        error instanceof Error && error.message === 'invalid browser address'
+          ? t('invalid address')
+          : t('navigation failed'),
+      );
     }
   };
   // A link an extension asked for opens as soon as it is given; typing in the address

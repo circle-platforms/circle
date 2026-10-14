@@ -68,6 +68,9 @@ import {
 import { Markdown } from '../components/Markdown';
 import { UpdateControl } from './Update';
 import { VariablesSettings } from './VariablesSettings';
+import { SessionMenu } from '../components/SessionMenus';
+import { canArchiveSession } from '../model/session-management';
+import { NetworkStatus } from './NetworkStatus';
 import { BUILTIN_TOOL_INFO } from '../model/tool-info';
 import { TEXT_SIZES, textSizes } from '../theme';
 import { LANGUAGES, languageChoice, setLanguage, t, tn } from '../i18n';
@@ -132,10 +135,12 @@ function SessionsPage({ onSession, onDialog }: Props) {
   const { snapshot, runtime, perform } = useRuntime();
   const [search, setSearch] = useState('');
   const [all, setAll] = useState(false);
+  const [archived, setArchived] = useState(false);
   const current = currentSession(snapshot);
   const sessions = snapshot.sessions.filter(
     (session) =>
       (all || session.workspaceId === current.workspaceId) &&
+      Boolean(session.archivedAt) === archived &&
       (session.title + ' ' + session.id)
         .toLowerCase()
         .includes(search.toLowerCase()),
@@ -167,6 +172,11 @@ function SessionsPage({ onSession, onDialog }: Props) {
           label={t('search sessions')}
         />
         <Switch label={t('all workspaces')} checked={all} onChange={setAll} />
+        <Switch
+          label={t('archived sessions')}
+          checked={archived}
+          onChange={setArchived}
+        />
       </div>
       <div className="records">
         {sessions.map((session) => (
@@ -193,6 +203,7 @@ function SessionsPage({ onSession, onDialog }: Props) {
                 </small>
               </span>
               {session.id === current.id && <Badge>{t('open')}</Badge>}
+              {session.archivedAt && <Badge>{t('archived')}</Badge>}
             </button>
             <IconButton
               label={t('pin {title}', { title: session.title })}
@@ -209,6 +220,7 @@ function SessionsPage({ onSession, onDialog }: Props) {
             >
               <Pin size={14} fill={session.pinned ? 'currentColor' : 'none'} />
             </IconButton>
+            <SessionMenu session={session} onDialog={onDialog} />
             <IconButton
               label={t('rename {title}', { title: session.title })}
               onClick={() => onDialog('rename', session.id)}
@@ -217,7 +229,10 @@ function SessionsPage({ onSession, onDialog }: Props) {
             </IconButton>
             <IconButton
               label={t('delete {title}', { title: session.title })}
-              disabled={session.id === current.id}
+              disabled={
+                session.id === current.id ||
+                !canArchiveSession(snapshot, session)
+              }
               onClick={() => onDialog('delete-session', session.id)}
             >
               <Trash2 size={14} />
@@ -1352,6 +1367,9 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
             "Circle's built-in protections remain in force when a runtime is connected.",
           )}
         </p>
+      </section>
+      <section className="settings-block">
+        <NetworkStatus />
       </section>
       <VariablesSettings />
       <section className="settings-block">

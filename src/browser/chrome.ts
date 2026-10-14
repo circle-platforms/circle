@@ -1,3 +1,15 @@
+import {
+  checkCoordinateTarget,
+  checkScreenshot,
+  coordinateApproval,
+  screenshotCapture,
+  screenshotDescription,
+  screenshotMetadata,
+  type CoordinateTarget,
+  type PageCaptureState,
+  type ScreenshotCapture,
+} from './coordinates.js';
+import { waitForDownloadStart, type NavigationOutcome } from './navigation.js';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID, X509Certificate } from 'node:crypto';
 import {
@@ -191,6 +203,7 @@ interface Tab {
     };
   };
   closed: boolean;
+  screenshot?: ScreenshotCapture;
   /** Circle's clicks get file choosers; turned off again once no dialog holds the page. */
   intercepting?: boolean;
   /** Why the browser did not take file chooser interception, when it did not. */
@@ -530,6 +543,7 @@ export class ChromeBrowser implements BrowserPort {
   }
   private forget(tab: Tab) {
     tab.closed = true;
+    tab.screenshot = undefined;
     for (const wake of tab.wake) wake();
     this.byTarget.delete(tab.targetId);
     this.bySession.delete(tab.session);
@@ -1198,25 +1212,34 @@ export class ChromeBrowser implements BrowserPort {
     );
   }
   // ---- loading
-  private async load(tab: Tab, url: string, signal?: AbortSignal) {
+  private async load(
+    tab: Tab,
+    url: string,
+    signal?: AbortSignal,
+  ): Promise<NavigationOutcome> {
+    tab.screenshot = undefined;
     tab.warning = undefined;
     tab.failure = undefined;
     const dialog = this.dialogOpens(tab);
     let error = '';
+    let downloaded = false;
     try {
       const result = await this.limit(
         Promise.race([
-          this.send<{ errorText?: string }>(
+          this.send<{ errorText?: string; isDownload?: boolean }>(
             'Page.navigate',
             { url },
             tab.session,
           ),
-          dialog.opened.then(() => ({}) as { errorText?: string }),
+          dialog.opened.then(
+            () => ({}) as { errorText?: string; isDownload?: boolean },
+          ),
         ]),
         signal,
         30000,
       );
       error = result.errorText ?? '';
+      downloaded = result.isDownload === true;
     } catch (cause) {
       signal?.throwIfAborted();
       if (!tab.dialogs.length) {
@@ -1239,6 +1262,11 @@ export class ChromeBrowser implements BrowserPort {
       (error === 'ERR_TIMED_OUT' || tab.frameUrl.startsWith('chrome-error:'))
     )
       await this.failed(tab, url, error, signal);
+    return downloaded
+      ? 'download'
+      : error.includes('ERR_ABORTED')
+        ? 'aborted'
+        : 'page';
   }
   /**
    * The browser shows its error page in the tab, however the load began (a link, a script,
@@ -1552,6 +1580,9 @@ export class ChromeBrowser implements BrowserPort {
   ): Promise<BrowserResult> {
     if (action === 'tabs') {
       const which = args.action;
+      if (which !== 'list')
+        for (const entry of conversation.tabs.values())
+          entry.screenshot = undefined;
       let text = '';
       if (which === 'new') {
         await this.start();
@@ -1582,6 +1613,8 @@ export class ChromeBrowser implements BrowserPort {
     const tab = await this.activeTab(conversation);
     await this.onScreen(tab, signal);
     if (action === 'handoff') {
+      for (const entry of conversation.tabs.values())
+        entry.screenshot = undefined;
       if (!this.options.handoff)
         throw Error('there is no one to hand the browser to here');
       if (this.options.mode?.(conversation.id) === 'plan')
@@ -1739,6 +1772,12 @@ export class ChromeBrowser implements BrowserPort {
       );
       try {
         await delay(50, undefined, { signal });
+        const capturedState = await this.js<PageCaptureState>(
+          tab,
+          'capture-state',
+          {},
+          signal,
+        );
         const { data } = await this.limit(
           this.send<{ data: string }>(
             'Page.captureScreenshot',
@@ -1749,8 +1788,18 @@ export class ChromeBrowser implements BrowserPort {
           10000,
           'Page.captureScreenshot',
         );
+        if (
+          JSON.stringify(capturedState) !==
+          JSON.stringify(await this.js(tab, 'capture-state', {}, signal))
+        )
+          throw Error(
+            'the page changed during capture; take a new browser_screenshot',
+          );
+        const capture = screenshotCapture(capturedState);
+        tab.screenshot = capture;
         return {
-          text: `tab ${tab.id} · ${quote(tab.title)} · ${tab.url}\nbrowser screenshot`,
+          text: `tab ${tab.id} · ${quote(tab.title)} · ${tab.url}\nbrowser screenshot\n${screenshotDescription(capture)}`,
+          screenshot: screenshotMetadata(capture),
           image: data,
         };
       } finally {
@@ -1771,13 +1820,19 @@ export class ChromeBrowser implements BrowserPort {
       if (typeof urlValue !== 'string' || urlValue.length > 4096)
         throw Error('invalid browser URL');
       const downloads = conversation.nextDownload;
+      let outcome: NavigationOutcome = 'page';
       if (['back', 'forward', 'reload'].includes(urlValue))
         await this.history(tab, urlValue, signal);
       else {
         const url = webUrl(urlValue);
         if (!url) throw Error('only http or https navigation is supported');
-        await this.load(tab, url, signal);
+        outcome = await this.load(tab, url, signal);
       }
+      await waitForDownloadStart(
+        outcome,
+        () => conversation.nextDownload > downloads,
+        signal,
+      );
       await this.downloadsDone(conversation, signal);
       const text =
         conversation.nextDownload > downloads
@@ -1788,13 +1843,17 @@ export class ChromeBrowser implements BrowserPort {
               ? `The page could not be loaded: ${tab.failure.error}.`
               : tab.dialogs.length
                 ? dialogOpened(tab.dialogs[0]!)
-                : 'Loaded.';
+                : outcome === 'aborted'
+                  ? 'Navigation was aborted; the page was not loaded.'
+                  : 'Loaded.';
       return { text: await this.result(conversation, text, signal) };
     }
     // Allowed on one site, an action does nothing on another: the page went elsewhere since
     // the model looked (the person, a redirect, a script)
     if (
-      ['click', 'type', 'select', 'press', 'upload'].includes(action) &&
+      ['click', 'click_at', 'type', 'select', 'press', 'upload'].includes(
+        action,
+      ) &&
       typeof args.site === 'string' &&
       args.site &&
       this.site(tab) !== args.site
@@ -1953,6 +2012,86 @@ export class ChromeBrowser implements BrowserPort {
       ),
     };
   }
+  private async clickAt(
+    conversation: Conversation,
+    tab: Tab,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<BrowserResult> {
+    if (tab.warning)
+      throw Error(
+        'coordinate clicks are not allowed on certificate warnings; use browser_click with a ref',
+      );
+    const capture = checkScreenshot(tab.screenshot, args);
+    const point = await this.js<CoordinateTarget>(
+      tab,
+      'point',
+      { x: args.x, y: args.y, capture: capture.state },
+      signal,
+    );
+    const approval = coordinateApproval(
+      capture,
+      args,
+      point,
+      this.options.mode?.(conversation.id),
+    );
+    if (approval) return approval;
+    await this.js(
+      tab,
+      'overlay',
+      {
+        ...point,
+        label: `click ${shownName(point, undefined)}`,
+        click: true,
+        ...this.overlayColors(),
+      },
+      signal,
+    );
+    const current = await this.js<CoordinateTarget>(
+      tab,
+      'point',
+      { x: args.x, y: args.y, capture: capture.state },
+      signal,
+    );
+    checkCoordinateTarget(point, current);
+    tab.screenshot = undefined;
+    await this.input(
+      tab,
+      'Input.dispatchMouseEvent',
+      { type: 'mouseMoved', x: current.x, y: current.y },
+      signal,
+    );
+    // A real mouseenter may replace the action; never press based on the pre-hover target.
+    const hovered = await this.js<CoordinateTarget>(
+      tab,
+      'point',
+      { x: args.x, y: args.y, capture: capture.state },
+      signal,
+    );
+    checkCoordinateTarget(point, hovered);
+    for (const type of ['mousePressed', 'mouseReleased'])
+      await this.input(
+        tab,
+        'Input.dispatchMouseEvent',
+        {
+          type,
+          x: current.x,
+          y: current.y,
+          button: 'left',
+          clickCount: 1,
+        },
+        signal,
+      );
+    await this.idle(tab, signal);
+    await this.downloadsDone(conversation, signal);
+    return {
+      text: await this.result(
+        conversation,
+        `Clicked at (${current.x}, ${current.y}): ${current.role}${current.name ? ` ${quote(current.name)}` : ''}.`,
+        signal,
+      ),
+    };
+  }
   private async act(
     conversation: Conversation,
     tab: Tab,
@@ -1962,6 +2101,8 @@ export class ChromeBrowser implements BrowserPort {
   ): Promise<BrowserResult> {
     const warningBefore = tab.warning?.token;
     const choosersBefore = conversation.nextChooser;
+    if (action === 'click_at')
+      return this.clickAt(conversation, tab, args, signal);
     let text = '';
     if (action === 'press') {
       if (typeof args.key !== 'string') throw Error('invalid browser key');

@@ -553,6 +553,15 @@ app
       if (selected) workspaceSelections.set(selected.id, selected.path);
       return selected;
     });
+    handle('circle:reveal-workspace', (workspaceId) => {
+      if (!runtime || typeof workspaceId !== 'string')
+        throw Error('invalid workspace');
+      const workspace = runtime
+        .state()
+        .snapshot.workspaces.find((row) => row.id === workspaceId);
+      if (!workspace) throw Error('workspace not found');
+      if (!fixtureProfile) shell.showItemInFolder(workspace.path);
+    });
     // The files of the folder the runtime works in, when it is trusted: the app's own
     // workspace, or one you opened and trusted. Reads still go through granted handles.
     handle('circle:list-workspace', async (workspaceId) => {

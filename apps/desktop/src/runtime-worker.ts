@@ -7,6 +7,7 @@ import type { BrowserReply } from '../../../src/browser/protocol.js';
 import { ScriptedModel } from '../../../src/testing.js';
 import { emptyUsage, type ModelResponse } from '../../../src/types.js';
 import { ModelCatalog } from '../../../src/model_catalog.js';
+import { initializeNetwork } from '../../../src/network_bootstrap.js';
 
 type Port = {
   postMessage(value: unknown): void;
@@ -16,6 +17,7 @@ const port = (process as unknown as { parentPort: Port }).parentPort;
 if (!port) throw Error('Circle runtime needs its native parent process');
 const home = process.env.CIRCLE_DESKTOP_RUNTIME_HOME;
 if (!home) throw Error('Circle runtime home is missing');
+initializeNetwork(home);
 const fixturePath = process.env.CIRCLE_DESKTOP_RUNTIME_FIXTURE;
 let model: ScriptedModel | undefined;
 if (fixturePath) {

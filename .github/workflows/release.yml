@@ -214,6 +214,15 @@ jobs:
             "${run[@]}" npm --prefix apps/desktop run test:update
           fi
       - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: circle-desktop-${{ matrix.target }}-verification
+          path: |
+            apps/desktop/artifacts/
+            outputs/browser-regressions/*metadata.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - uses: actions/upload-artifact@v7
         if: failure() && runner.os == 'Windows'
         with:
           name: circle-desktop-msi-logs

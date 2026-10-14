@@ -43,6 +43,7 @@ Press `?` in an empty input box, or run `/hotkeys`, to see the shortcuts in the 
 | `ctrl+p` | Switch to the next model for this session. See [Choose a model](models.md#switch-models). |
 | `shift+tab` | Switch to the next session mode: manual, accept edits, read-only, auto. See [Modes](usage.md#modes). |
 | `alt+t` | Switch to the next thinking depth for this session. |
+| `alt+p` | Focus the plan. `↑` / `↓` scroll its steps; `esc` returns to the input without stopping the turn. Clicking the plan also focuses it. Cards and lists keep their own keys. |
 
 The input box grows with what you type: a line break starts a new row and a long line wraps at a space. It grows to 30% of the screen's height (at least five rows), then scrolls to keep the cursor in view. In a draft of several rows, `↑` and `↓` move between the rows; on the first row `↑` goes to earlier messages, and once you are going through them, `↑` and `↓` keep doing that.
 
@@ -222,6 +223,7 @@ A key named there does that action everywhere, in a card or a list too, and no l
 | `model.cycle` | `ctrl+p` |
 | `mode.cycle` | `shift+tab` |
 | `thinking.cycle` | `alt+t` |
+| `plan.focus` | `alt+p` |
 | `thinking.toggle` | `ctrl+t` |
 | `tools.expand` | `ctrl+o` |
 | `editor.external` | `ctrl+g` |

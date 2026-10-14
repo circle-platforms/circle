@@ -1,4 +1,5 @@
 import { desktopHost } from '../host';
+import { agentActivityText } from '../model/activity';
 import { NativeBrowser } from './NativeBrowser';
 import { usePlugins } from '../plugins/context';
 import { PluginBoundary } from '../plugins/Boundary';
@@ -608,7 +609,7 @@ export function ActivityPanel({
                   <Users size={15} />
                   <span>
                     <strong>{agent.name}</strong>
-                    <small>{agent.description}</small>
+                    <small>{agentActivityText(agent)}</small>
                   </span>
                   <Status value={agent.status} />
                 </button>

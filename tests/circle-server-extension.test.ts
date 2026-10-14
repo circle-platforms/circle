@@ -29,7 +29,10 @@ async function until(predicate: () => boolean, timeout = 5000): Promise<void> {
 }
 
 // A stand-in server with the routes the connector calls, recording what it was sent.
-async function fakeServer(t: Parameters<typeof scratch>[0]) {
+async function fakeServer(
+  t: Parameters<typeof scratch>[0],
+  beforeDownload?: () => Promise<void>,
+) {
   const workbook = Buffer.from('PK\u0003\u0004 synthetic workbook bytes');
   const seen: { method: string; path: string; auth?: string; body: Buffer }[] =
     [];
@@ -222,6 +225,7 @@ async function fakeServer(t: Parameters<typeof scratch>[0]) {
     if (url.pathname === '/v1/tasks/task_one/reconcile')
       return send(200, { data: { operationId: 'op_1', status: 'reconciled' } });
     if (url.pathname === '/v1/artifacts/art_1/content') {
+      await beforeDownload?.();
       response.writeHead(200, {
         'content-type': 'application/octet-stream',
         'x-content-sha256': sha256(workbook),
@@ -348,6 +352,25 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
   );
 
   // The view a paired desktop page reads: the connection, the tasks and recent lines.
+  const latestSave = lines.filter((line) => line.startsWith('✓ saved')).at(-1)!;
+  // The files are saved synchronously; showStatus publishes after an asynchronous token
+  // read. A returned command is not a barrier for that background projection.
+  await until(() => {
+    const latest = host.view('circle-server') as
+      Record<string, any> | undefined;
+    return (
+      latest?.tasks?.find(
+        (task: { taskId: string }) => task.taskId === 'task_one',
+      )?.saved === true && latest?.recent?.includes(latestSave)
+    );
+  });
+  const persisted = JSON.parse(
+    readFileSync(
+      join(home, 'extension_data', 'circle-server', 'tasks.json'),
+      'utf8',
+    ),
+  );
+  assert.equal(persisted.task_one.saved, true);
   const view = host.view('circle-server') as Record<string, any>;
   assert.equal(view.username, 'tester');
   assert.equal(view.scopeId, 'scp_lab');
@@ -376,6 +399,103 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
     async () => command.handler('packs', context),
     /not signed in/,
   );
+});
+
+test('a checked file and tasks.json precede the latest asynchronous connector view', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  writeFileSync(
+    join(workspace, 'map.xmind'),
+    Buffer.from('projection fixture'),
+  );
+  let releaseDownload!: () => void;
+  const download = new Promise<void>((resolve) => {
+    releaseDownload = resolve;
+  });
+  let downloading = false;
+  const server = await fakeServer(t, async () => {
+    downloading = true;
+    await download;
+  });
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { 'circle-server': { enabled: true } },
+    secret: async (request) => submitAnswer(home, request.id, PASSWORD),
+  }).load();
+  cleanup(t, () => host.close());
+  let releaseProjection!: () => void;
+  const projection = new Promise<void>((resolve) => {
+    releaseProjection = resolve;
+  });
+  cleanup(t, () => {
+    releaseDownload();
+    releaseProjection();
+  });
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (line: string) => lines.push(line),
+    append: (line: string) => lines.push(line),
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('server')!;
+  await command.handler(`login ${server.url} tester`, context);
+  await command.handler('submit mindmap-compile map.xmind', context);
+  await until(() => downloading);
+  await until(() =>
+    (
+      host.view('circle-server') as Record<string, any> | undefined
+    )?.tasks?.some((task: { taskId: string }) => task.taskId === 'task_one'),
+  );
+  const token = ExtensionSecrets.prototype.get;
+  // Keep the real secret-file read and masking, but hold its completion so the actual
+  // showStatus path is observably behind the real file/task changes.
+  t.mock.method(
+    ExtensionSecrets.prototype,
+    'get',
+    async function (this: ExtensionSecrets, name: string) {
+      const value = await token.call(this, name);
+      if (name === 'token') await projection;
+      return value;
+    },
+  );
+  releaseDownload();
+  await until(() => lines.some((line) => line.startsWith('✓ saved')));
+  assert.deepEqual(
+    readFileSync(join(workspace, 'cases.xlsx')),
+    server.workbook,
+  );
+  const persisted = JSON.parse(
+    readFileSync(
+      join(home, 'extension_data', 'circle-server', 'tasks.json'),
+      'utf8',
+    ),
+  );
+  assert.equal(persisted.task_one.saved, true);
+  assert.equal(persisted.task_one.seq, 2);
+  assert.equal(
+    (host.view('circle-server') as Record<string, any>).tasks.find(
+      (task: { taskId: string }) => task.taskId === 'task_one',
+    ).saved,
+    undefined,
+  );
+  const latestSave = lines.find((line) => line.startsWith('✓ saved'))!;
+  releaseProjection();
+  await until(() => {
+    const latest = host.view('circle-server') as Record<string, any>;
+    return (
+      latest.tasks.find(
+        (task: { taskId: string }) => task.taskId === 'task_one',
+      )?.saved === true && latest.recent.includes(latestSave)
+    );
+  });
+  assert.equal(lines.filter((line) => line.startsWith('✓ saved')).length, 1);
+  assert.ok(!JSON.stringify(host.view('circle-server')).includes(TOKEN));
 });
 
 test('the connector tools let a model list packs, hand over a file and get the checked result', async (t) => {

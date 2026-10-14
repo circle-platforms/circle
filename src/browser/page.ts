@@ -10,6 +10,12 @@ export function browserPage(command: string, args: Record<string, any>) {
     ids: WeakMap<Target, string>;
     next: number;
     snapshots: number;
+    document: string;
+    revision: number;
+    observer?: MutationObserver;
+    observedRoots?: WeakSet<Node>;
+    scrollIds?: WeakMap<Element, number>;
+    nextScroll: number;
     overlay?: HTMLElement;
     pointer?: HTMLElement;
     bubble?: HTMLElement;
@@ -26,9 +32,112 @@ export function browserPage(command: string, args: Record<string, any>) {
     ids: new WeakMap(),
     next: 0,
     snapshots: 0,
+    document: `${Date.now()}-${Math.random()}`,
+    revision: 0,
+    nextScroll: 0,
     x: 24,
     y: 24,
   });
+  const observe = (records: MutationRecord[]) => {
+    if (
+      records.some((record) => {
+        const target =
+          record.target.nodeType === Node.ELEMENT_NODE
+            ? (record.target as Element)
+            : record.target.parentElement;
+        if (target?.closest('[data-circle-browser-overlay]')) return false;
+        const changed = [
+          ...Array.from(record.addedNodes),
+          ...Array.from(record.removedNodes),
+        ];
+        return (
+          !changed.length ||
+          changed.some(
+            (node) =>
+              node.nodeType !== Node.ELEMENT_NODE ||
+              !(node as Element).hasAttribute('data-circle-browser-overlay'),
+          )
+        );
+      })
+    )
+      state.revision++;
+  };
+  if (!state.observer) {
+    state.observer = new MutationObserver(observe);
+    state.observer.observe(document, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    });
+    state.observedRoots = new WeakSet([document]);
+    state.scrollIds = new WeakMap();
+    document.addEventListener('visibilitychange', () => state.revision++);
+    document.addEventListener(
+      'scroll',
+      (event) => {
+        // Main viewport offsets are compared directly; late viewport events must not
+        // invalidate an otherwise current capture. Nested containers have no such fields.
+        if (event.target !== document) state.revision++;
+      },
+      true,
+    );
+  }
+  const captureState = () => {
+    const nestedScroll: [number, number, number][] = [];
+    const roots = (root: Document | ShadowRoot, depth = 0) => {
+      if (depth > 20) return;
+      for (const el of Array.from(root.querySelectorAll('*')).slice(0, 15000)) {
+        if (el.hasAttribute('data-circle-browser-overlay')) continue;
+        if (
+          el !== document.scrollingElement &&
+          (el.scrollLeft || el.scrollTop)
+        ) {
+          let id = state.scrollIds!.get(el);
+          if (!id) {
+            id = ++state.nextScroll;
+            state.scrollIds!.set(el, id);
+          }
+          nestedScroll.push([id, el.scrollLeft, el.scrollTop]);
+        }
+        const child =
+          el.shadowRoot ||
+          (['iframe', 'frame'].includes(el.localName)
+            ? (el as HTMLIFrameElement).contentDocument
+            : null);
+        if (!child) continue;
+        if (!state.observedRoots!.has(child)) {
+          state.observedRoots!.add(child);
+          state.observer!.observe(child, {
+            subtree: true,
+            childList: true,
+            attributes: true,
+            characterData: true,
+          });
+          child.addEventListener('scroll', () => state.revision++, true);
+          if (child.nodeType === Node.DOCUMENT_NODE)
+            (child as Document).defaultView?.addEventListener(
+              'resize',
+              () => state.revision++,
+            );
+          state.revision++;
+        }
+        roots(child, depth + 1);
+      }
+    };
+    roots(document);
+    observe(state.observer!.takeRecords());
+    return {
+      document: state.document,
+      revision: state.revision,
+      width: innerWidth,
+      height: innerHeight,
+      scrollX,
+      scrollY,
+      nestedScroll,
+    };
+  };
+  if (command === 'capture-state') return captureState();
   const deadline = performance.now() + 2000;
   let visited = 0;
   const clean = (value: string | null | undefined) =>
@@ -413,6 +522,81 @@ export function browserPage(command: string, args: Record<string, any>) {
     };
     walk(document.body || document.documentElement);
     return lines.join('\n') + (truncated ? '\n… snapshot truncated' : '');
+  }
+  if (command === 'point') {
+    const current = captureState();
+    if (JSON.stringify(current) !== JSON.stringify(args.capture))
+      throw Error('the screenshot is stale; take a new browser_screenshot');
+    const x = Number(args.x),
+      y = Number(args.y);
+    if (
+      !Number.isFinite(x) ||
+      !Number.isFinite(y) ||
+      x < 0 ||
+      y < 0 ||
+      x >= innerWidth ||
+      y >= innerHeight
+    )
+      throw Error('click coordinates are outside the viewport');
+    let doc = document,
+      localX = x,
+      localY = y;
+    let el = hit(doc, localX, localY);
+    for (
+      let depth = 0;
+      el && ['iframe', 'frame'].includes(el.localName) && depth < 20;
+      depth++
+    ) {
+      const frame = el as HTMLIFrameElement;
+      const child = frame.contentDocument;
+      if (!child)
+        throw Error(
+          'coordinate clicks cannot inspect a cross-origin frame; open its address as a page first',
+        );
+      const rect = frame.getBoundingClientRect();
+      localX =
+        (localX - rect.left) /
+          (rect.width / (frame.offsetWidth || rect.width)) -
+        frame.clientLeft;
+      localY =
+        (localY - rect.top) /
+          (rect.height / (frame.offsetHeight || rect.height)) -
+        frame.clientTop;
+      doc = child;
+      el = hit(doc, localX, localY);
+    }
+    if (!el || hidden(el))
+      throw Error('there is no visible element at these coordinates');
+    let target = el;
+    for (
+      let node: Element | null = el;
+      node && node.ownerDocument === doc;
+      node = parent(node)
+    ) {
+      if (actionable(node)) {
+        target = node;
+        break;
+      }
+    }
+    if (target.matches(':disabled') || target.closest('[inert]'))
+      throw Error('the element is disabled');
+    let ref = state.ids.get(target);
+    if (!ref) {
+      ref = `e${++state.next}`;
+      state.ids.set(target, ref);
+    }
+    state.refs.set(ref, target);
+    return {
+      ref,
+      x,
+      y,
+      width: 1,
+      height: 1,
+      role: role(target),
+      name: name(target),
+      known: actionable(target),
+      origin: target.ownerDocument.location.origin,
+    };
   }
   if (command === 'prepare') {
     const el = field();

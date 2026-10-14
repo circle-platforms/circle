@@ -1,0 +1,31 @@
+{
+  "revision": "38027513b892fbc45eb7c729cd42ea29c76c99e0",
+  "check": {
+    "tests": 542,
+    "pass": 534,
+    "fail": 0,
+    "skipped": 8,
+    "url": "https://github.com/circle-platforms/circle/actions/runs/38531942867/job/115745635347"
+  },
+  "desktop": {
+    "runtime": {
+      "tests": 56,
+      "pass": 55,
+      "fail": 0,
+      "skipped": 1
+    },
+    "observer": {
+      "tests": 9,
+      "pass": 9,
+      "fail": 0,
+      "skipped": 0
+    },
+    "msiUpdateChecks": 6,
+    "from": "1.5.0",
+    "to": "1.5.1",
+    "url": "https://github.com/circle-platforms/circle/actions/runs/38531942729/job/115745638770"
+  },
+  "artifactUrl": "https://github.com/circle-platforms/circle/actions/runs/38531942729/artifacts/11878578973",
+  "updateEvidenceArtifactCreated": false,
+  "originalIntermittentHangReproduced": false
+}

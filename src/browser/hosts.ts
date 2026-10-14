@@ -54,6 +54,27 @@ export function webUrl(value: string): string | undefined {
     return undefined;
   }
 }
+/** What the address bar opens: a full http(s) URL, or a bare host the person
+ * means to reach over https — `example.com`, `example.com/x`, `localhost:8080`,
+ * `10.0.0.5:8443`. A space, another scheme, a single word or a non-host string
+ * stays refused, so a mistyped or hostile string never silently opens a page. */
+export function addressBarInput(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed || /\s/.test(trimmed)) return undefined;
+  const direct = webUrl(trimmed);
+  if (direct) return direct;
+  // An explicit non-web scheme (javascript:, file:, data:, mailto:, ftp:) is
+  // refused, never rewritten. A colon followed by digits is a port on a bare
+  // host (localhost:8080), not a scheme.
+  if (/^[a-z][a-z0-9+.-]*:(?!\d)/i.test(trimmed)) return undefined;
+  // No scheme: complete with https only when the first part looks like a host.
+  const hostname = (trimmed.split(/[/?#]/)[0] ?? '').replace(/:\d+$/, '');
+  const looksLikeHost =
+    hostname === 'localhost' ||
+    /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) ||
+    (hostname.includes('.') && /^[a-z0-9.-]+$/i.test(hostname));
+  return looksLikeHost ? webUrl('https://' + trimmed) : undefined;
+}
 
 /** A page's site: `https://host:port` for a web address, else nothing. */
 /**

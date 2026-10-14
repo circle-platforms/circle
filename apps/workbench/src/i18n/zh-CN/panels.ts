@@ -95,6 +95,7 @@ export const panels: Record<string, string> = {
   'save to disk': '保存到磁盘',
   // the native browser
   'navigation failed': '打开页面失败',
+  'invalid address': '地址无效，请输入完整网址',
   'browser address': '浏览器地址',
   'navigate browser': '打开网址',
   'open a page': '打开一个页面',

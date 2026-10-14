@@ -52,6 +52,8 @@ export interface DesktopBridge {
     purpose: 'attach' | 'import' | 'source',
   ) => Promise<NativeFile[]>;
   chooseWorkspace: () => Promise<NativeWorkspace | null>;
+  /** Reveal only a workspace identity already known to the native runtime. */
+  revealWorkspace: (workspaceId: string) => Promise<void>;
   readWorkspaceFile: (
     workspaceId: string,
     fileId: string,
@@ -248,6 +250,7 @@ export interface BrowserCertificate {
   fingerprint: string;
 }
 export interface BrowserCapture extends BrowserState {
+  screenshot?: { id: string; width: number; height: number };
   dataUrl: string;
   sha256: string;
   observedAt: string;

@@ -29,6 +29,10 @@ export const conversation: Record<string, string> = {
     '本地对话已暂停 · 远端状态未确认',
   // the plan and the queue
   'toggle plan': '展开或收起计划',
+  'plan steps': '计划步骤',
+  'plan completed · {n} steps': '计划已完成 · {n} 个步骤',
+  'archived conversation · read only': '已归档对话 · 只读',
+  'restore conversation': '恢复对话',
   steering: '插话',
   'follow-up': '追加消息',
   'remove queued {kind}': '移除排队中的{kind}',
