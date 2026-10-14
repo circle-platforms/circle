@@ -1,4 +1,5 @@
 import { decodeHTML } from 'entities';
+import { networkError, networkErrorReason } from './net.js';
 export type FetchFunction = typeof fetch;
 export function stripTags(text: string): string {
   return decodeHTML(
@@ -83,27 +84,26 @@ export async function limitedBody(
   }
   return { text: Buffer.concat(chunks).toString('utf8'), truncated };
 }
-/** A network error's code, which a failed fetch hides under `fetch failed`. */
+/** The useful causes of both failed requests and interrupted response streams. */
 export function fetchErrorReason(error: unknown): string {
-  if (error instanceof Error && error.message === 'fetch failed') {
-    const cause = error.cause as
-      { code?: string; message?: string } | undefined;
-    if (cause?.code) return cause.code;
-    if (cause?.message) return cause.message;
-  }
-  return error instanceof Error ? error.message : String(error);
+  return networkErrorReason(error);
 }
 /** A network failure the machine may fix with a proxy, as opposed to a site
  * that answered with an error of its own. */
 export function unreachableReason(reason: string): boolean {
   return (
-    /ECONN|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|aborted due to timeout|socket hang up/i.test(
+    /ECONN|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|UND_ERR_(?:CONNECT_TIMEOUT|HEADERS_TIMEOUT|BODY_TIMEOUT|SOCKET)|TimeoutError|aborted due to timeout|socket hang up/i.test(
       reason,
     ) || reason === 'fetch failed'
   );
 }
 const PROXY_HINT =
-  '; the endpoint is unreachable from this network — if you go through a proxy, set HTTPS_PROXY and NODE_USE_ENV_PROXY=1 before starting Circle (see docs/environment-variables.md)';
+  '; the endpoint is unreachable from this network — if you go through a proxy, set HTTPS_PROXY before starting Circle (see docs/environment-variables.md)';
+function webError(error: unknown, host: string): Error {
+  const result = networkError(error, host);
+  if (unreachableReason(fetchErrorReason(error))) result.message += PROXY_HINT;
+  return result;
+}
 export async function webSearch(
   query: string,
   signal: AbortSignal,
@@ -112,7 +112,7 @@ export async function webSearch(
 ): Promise<string> {
   const text = query.trim();
   if (!text) throw new Error('query is required');
-  const failures: string[] = [];
+  const failures: Error[] = [];
   for (const host of [
     'https://lite.duckduckgo.com/lite/',
     'https://html.duckduckgo.com/html/',
@@ -132,16 +132,15 @@ export async function webSearch(
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const body = await limitedBody(response, 500000);
       if (body.text) return parseSearchHtml(body.text, text, numResults);
+      throw new Error('empty body');
     } catch (error) {
       signal.throwIfAborted();
-      failures.push(`${new URL(host).host}: ${fetchErrorReason(error)}`);
+      failures.push(webError(error, host));
     }
   }
-  const summary = failures.join('; ') || 'empty body';
   throw new Error(
-    'search failed: ' +
-      summary +
-      (unreachableReason(summary) ? PROXY_HINT : ''),
+    'search failed: ' + failures.map((error) => error.message).join('; '),
+    { cause: new AggregateError(failures, 'both search endpoints failed') },
   );
 }
 export function blockedHost(host: string): boolean {
@@ -191,22 +190,34 @@ export async function webFetch(
       });
     } catch (error) {
       signal.throwIfAborted();
-      const reason = fetchErrorReason(error);
-      throw new Error(
-        `fetch failed for ${url.host}: ${reason}` +
-          (unreachableReason(reason) ? PROXY_HINT : ''),
-      );
+      throw webError(error, url.host);
     }
     if (![301, 302, 303, 307, 308].includes(response.status)) break;
     const location = response.headers.get('location');
-    await response.body?.cancel();
+    try {
+      await response.body?.cancel();
+    } catch (error) {
+      signal.throwIfAborted();
+      throw webError(error, url.host);
+    }
     if (!location) throw new Error('redirect has no location');
     url = new URL(location, url);
     if (redirect === 10) throw new Error('too many redirects');
   }
   if (!response?.ok)
-    throw new Error(`HTTP ${response?.status} fetching ${url}`);
-  const body = await limitedBody(response, 500000);
+    throw webError(
+      Object.assign(new Error(`HTTP ${response?.status}`), {
+        status: response?.status,
+      }),
+      url.host,
+    );
+  let body: Awaited<ReturnType<typeof limitedBody>>;
+  try {
+    body = await limitedBody(response, 500000);
+  } catch (error) {
+    signal.throwIfAborted();
+    throw webError(error, url.host);
+  }
   const type = response.headers.get('content-type')?.toLowerCase() || 'unknown';
   let rendered = body.text;
   if (type.includes('json')) {

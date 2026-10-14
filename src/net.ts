@@ -188,6 +188,114 @@ export function isCertificateError(error: unknown): boolean {
 export const TLS_HINT =
   'the TLS certificate could not be verified; if your network inspects HTTPS, set SSL_CERT_FILE to its CA bundle';
 
+function errorChain(
+  error: unknown,
+): { message?: string; code?: string; name?: string; status?: number }[] {
+  const found: {
+    message?: string;
+    code?: string;
+    name?: string;
+    status?: number;
+  }[] = [];
+  const pending = [error];
+  const seen = new Set<unknown>();
+  while (pending.length && found.length < 12) {
+    const current = pending.shift();
+    if (!current || typeof current !== 'object' || seen.has(current)) continue;
+    seen.add(current);
+    const value = current as Error & {
+      code?: string;
+      status?: number;
+      errors?: unknown[];
+    };
+    found.push(value);
+    pending.push(
+      value.cause,
+      ...(Array.isArray(value.errors) ? value.errors : []),
+    );
+  }
+  return found;
+}
+
+// Keep useful causes without echoing proxy credentials, URL queries or authorization.
+export function safeNetworkText(text: string): string {
+  return text
+    .replace(/https?:\/\/[^\s'"<>)]+/gi, (raw) => {
+      try {
+        const url = new URL(raw);
+        return `${url.protocol}//${url.host}`;
+      } catch {
+        return '[URL]';
+      }
+    })
+    .replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9+/=._-]+/gi, '[credentials]')
+    .replace(
+      /\b(?:api[_-]?key|token|password|authorization)\s*[:=]\s*[^\s,;]+/gi,
+      '[credentials]',
+    );
+}
+
+export function networkErrorReason(error: unknown): string {
+  return (
+    [
+      ...new Set(
+        errorChain(error)
+          .map((value) =>
+            safeNetworkText(
+              [value.code, value.message].filter(Boolean).join(': '),
+            ),
+          )
+          .filter(Boolean),
+      ),
+    ].join('; ') || safeNetworkText(String(error))
+  );
+}
+
+/** Describe the endpoint and retain the complete original cause for callers. */
+export function networkError(error: unknown, host: string): Error {
+  const chain = errorChain(error);
+  let target = host;
+  try {
+    target = new URL(/^https?:\/\//i.test(host) ? host : `https://${host}`)
+      .host;
+  } catch {
+    target = host.replace(/[^a-zA-Z0-9.:[\]-]/g, '');
+  }
+  const codes = chain.map((value) => value.code ?? '').join(' ');
+  const messages = chain.map((value) => value.message ?? '').join(' ');
+  const tlsFailure =
+    /ERR_TLS|ERR_SSL|CERT|SELF_SIGNED|UNABLE_TO_(VERIFY|GET_ISSUER)/.test(
+      codes,
+    );
+  const kind = tlsFailure
+    ? 'TLS'
+    : /ENOTFOUND|EAI_AGAIN/.test(codes)
+      ? 'DNS'
+      : /PROXY|PRX|407/.test(codes + ' ' + messages) ||
+          chain.some((value) => value.status === 407)
+        ? 'proxy'
+        : /TIMEDOUT|TIMEOUT/.test(codes) ||
+            chain.some((value) => /TimeoutError/.test(value.name ?? ''))
+          ? 'timeout'
+          : /\bHTTP \d{3}\b/.test(messages) ||
+              chain.some((value) => typeof value.status === 'number')
+            ? 'HTTP'
+            : /empty body/i.test(messages)
+              ? 'empty response'
+              : 'connection';
+  const result = new Error(
+    `${kind} failure on ${target}: ${networkErrorReason(error)}${tlsFailure ? `; ${certificateHint()}` : ''}`,
+    { cause: error },
+  );
+  const specific = chain.find((value) => value.code);
+  if (specific?.code) Object.assign(result, { code: specific.code });
+  const status = chain.find(
+    (value) => typeof value.status === 'number',
+  )?.status;
+  if (status !== undefined) Object.assign(result, { status });
+  return result;
+}
+
 export interface ToolTrust {
   bundle: string;
   authorities: number;

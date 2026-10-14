@@ -216,9 +216,14 @@ test('a web failure names the endpoint and the real network error, and hints at 
   await assert.rejects(
     webSearch('q', new AbortController().signal, 5, blocked),
     (error: Error) =>
-      error.message.includes('lite.duckduckgo.com: ECONNREFUSED') &&
-      error.message.includes('html.duckduckgo.com: ECONNREFUSED') &&
-      error.message.includes('NODE_USE_ENV_PROXY'),
+      /connection failure on lite.duckduckgo.com:.*ECONNREFUSED/.test(
+        error.message,
+      ) &&
+      /connection failure on html.duckduckgo.com:.*ECONNREFUSED/.test(
+        error.message,
+      ) &&
+      error.message.includes('HTTPS_PROXY') &&
+      error.cause instanceof AggregateError,
   );
   const answered = async (): Promise<Response> =>
     new Response('nope', { status: 500 });
@@ -226,7 +231,7 @@ test('a web failure names the endpoint and the real network error, and hints at 
     webSearch('q', new AbortController().signal, 5, answered),
     (error: Error) =>
       error.message.includes('HTTP 500') &&
-      !error.message.includes('NODE_USE_ENV_PROXY'),
+      !error.message.includes('HTTPS_PROXY'),
   );
   await assert.rejects(
     webFetch(
@@ -235,6 +240,6 @@ test('a web failure names the endpoint and the real network error, and hints at 
       new AbortController().signal,
       blocked,
     ),
-    /fetch failed for example\.test: ECONNREFUSED[\s\S]*NODE_USE_ENV_PROXY/,
+    /connection failure on example\.test:.*ECONNREFUSED[\s\S]*HTTPS_PROXY/,
   );
 });
