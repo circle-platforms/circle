@@ -2013,6 +2013,62 @@ test(
 );
 
 test(
+  'a first navigation replaced by a no-content response reports the response and saves no download',
+  { skip },
+  async (t) => {
+    const temp = made(t, 'circle-download-intercepted-');
+    const hits: string[] = [];
+    const site = createHttp((req, res) => {
+      hits.push(req.url ?? '');
+      if (req.url === '/intercepted') {
+        res.writeHead(204, 'Intercepted by a local download integration');
+        res.end();
+      } else {
+        res.setHeader('content-type', 'text/html');
+        res.end('<!doctype html><title>ordinary page</title>ready');
+      }
+    });
+    const base = `http://127.0.0.1:${await listen(site)}`;
+    t.after(() => site.close());
+    const downloads = join(temp, 'downloads');
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads,
+    });
+    cleanup(t, () => chrome.close());
+    const signal = new AbortController().signal;
+    const aborted = await chrome.request(
+      'c',
+      'navigate',
+      { url: `${base}/intercepted` },
+      signal,
+    );
+    assert.equal(aborted.approval, undefined);
+    assert.match(
+      aborted.text,
+      /Navigation was aborted; the page was not loaded\./,
+    );
+    assert.match(
+      aborted.text,
+      /HTTP 204 \("Intercepted by a local download integration"\)/,
+    );
+    assert.doesNotMatch(aborted.text, /Loaded\.|started download/);
+    assert.equal(existsSync(downloads), false);
+    assert.deepEqual(hits, ['/intercepted']);
+    // The browser can still open an ordinary page after the aborted navigation.
+    const loaded = await chrome.request(
+      'c',
+      'navigate',
+      { url: `${base}/page` },
+      signal,
+    );
+    assert.match(loaded.text, /Loaded\./);
+    assert.doesNotMatch(loaded.text, /HTTP 204|Intercepted by/);
+  },
+);
+
+test(
   'coordinate clicks reach non-semantic controls, confirm their actual target once, and reject stale screenshots',
   { skip },
   async (t) => {

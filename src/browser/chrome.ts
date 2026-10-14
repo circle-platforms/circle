@@ -178,6 +178,7 @@ interface Tab {
   frameUrl: string;
   /** The main frame's last document request, and why it failed if it did. */
   document?: { id: string; url: string };
+  documentResponse?: { status: number; statusText: string };
   documentError?: { url: string; error: string };
   /** The isolated world Circle's page script runs in, for this document. */
   world?: number;
@@ -768,7 +769,15 @@ export class ChromeBrowser implements BrowserPort {
         if (params.type === 'Document' && params.frameId === tab.targetId) {
           tab.document = { id: params.requestId, url: params.request.url };
           tab.documentError = undefined;
+          tab.documentResponse = undefined;
         }
+        break;
+      case 'Network.responseReceived':
+        if (tab.document && params.requestId === tab.document.id)
+          tab.documentResponse = {
+            status: params.response.status,
+            statusText: params.response.statusText ?? '',
+          };
         break;
       case 'Network.loadingFailed':
         if (tab.document && params.requestId === tab.document.id)
@@ -1220,6 +1229,7 @@ export class ChromeBrowser implements BrowserPort {
     tab.screenshot = undefined;
     tab.warning = undefined;
     tab.failure = undefined;
+    tab.documentResponse = undefined;
     const dialog = this.dialogOpens(tab);
     let error = '';
     let downloaded = false;
@@ -1844,7 +1854,7 @@ export class ChromeBrowser implements BrowserPort {
               : tab.dialogs.length
                 ? dialogOpened(tab.dialogs[0]!)
                 : outcome === 'aborted'
-                  ? 'Navigation was aborted; the page was not loaded.'
+                  ? `Navigation was aborted; the page was not loaded.${tab.documentResponse ? ` The browser received HTTP ${tab.documentResponse.status}${tab.documentResponse.statusText ? ` (${quote(tab.documentResponse.statusText)})` : ''}.` : ''}`
                   : 'Loaded.';
       return { text: await this.result(conversation, text, signal) };
     }
