@@ -375,6 +375,208 @@ function browserProtocolTrace(chrome: ChromeBrowser) {
 }
 
 test(
+  'the TUI agent clears real text and number inputs with empty browser_type calls and trusted input events',
+  { skip: executable ? false : 'no Chrome, Edge or Chromium is installed' },
+  async (t) => {
+    const root = made(t, 'circle-chrome-empty-type-');
+    const site = createHttp((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end(`<!doctype html><title>empty type fixture</title>
+        <label>Text field <input id="text" type="text"></label>
+        <label>Number field <input id="number" type="number"></label>
+        <script>
+          window.inputEvents = [];
+          for (const input of document.querySelectorAll('input'))
+            input.addEventListener('input', event => window.inputEvents.push({
+              id: input.id, value: input.value, trusted: event.isTrusted,
+              inputType: event.inputType
+            }));
+        </script>`);
+    });
+    const url = `http://127.0.0.1:${await listen(site)}/`;
+    t.after(() => site.close());
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: join(root, 'downloads'),
+    });
+    cleanup(t, () => chrome.close());
+    const internal = chrome as unknown as {
+      conversations: Map<string, { tabs: Map<string, { session: string }> }>;
+      send: (
+        method: string,
+        params: Record<string, unknown>,
+        session?: string,
+      ) => Promise<any>;
+    };
+    let runtime: AgentRuntime;
+    const read = async () => {
+      const tab = [
+        ...internal.conversations.get(runtime.session.id)!.tabs.values(),
+      ][0]!;
+      // Read only: typing and clearing use the actual agent tool, never a DOM write.
+      const result = await internal.send(
+        'Runtime.evaluate',
+        {
+          expression:
+            'JSON.stringify({text:document.getElementById("text").value,number:document.getElementById("number").value,events:window.inputEvents})',
+          returnByValue: true,
+        },
+        tab.session,
+      );
+      return JSON.parse(result.result.value) as {
+        text: string;
+        number: string;
+        events: {
+          id: string;
+          value: string;
+          trusted: boolean;
+          inputType: string;
+        }[];
+      };
+    };
+    const operations = [
+      {
+        id: 'fill-text',
+        field: 'text',
+        label: 'Text field',
+        text: 'actual text bytes',
+      },
+      {
+        id: 'fill-number',
+        field: 'number',
+        label: 'Number field',
+        text: '12345',
+      },
+      { id: 'clear-text', field: 'text', label: 'Text field', text: '' },
+      { id: 'clear-number', field: 'number', label: 'Number field', text: '' },
+    ] as const;
+    const observed: { id: string; value: string; inputType: string }[] = [];
+    const check = async (operation: (typeof operations)[number]) => {
+      const state = await read();
+      assert.equal(
+        state[operation.field],
+        operation.text,
+        `${operation.id} must change the actual DOM value`,
+      );
+      const event = state.events.at(-1)!;
+      assert.equal(event.id, operation.field);
+      assert.equal(event.value, operation.text);
+      assert.equal(
+        event.trusted,
+        true,
+        'the page received a real browser input event',
+      );
+      if (operation.text === '') {
+        assert.equal(Buffer.byteLength(state[operation.field]), 0);
+        assert.equal(event.inputType, 'deleteContentBackward');
+      }
+      observed.push({
+        id: operation.id,
+        value: event.value,
+        inputType: event.inputType,
+      });
+    };
+    const model = new ScriptedModel([
+      {
+        message: {
+          id: 'open-empty-type',
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: 'open', name: 'browser_navigate', args: { url } }],
+        },
+      },
+      ...operations.map(
+        (operation, index) =>
+          async (request: import('../src/types.js').ModelRequest) => {
+            if (index) await check(operations[index - 1]!);
+            const shown = request.messages
+              .filter((message) => message.role === 'tool')
+              .at(-1)!.content;
+            const ref = new RegExp(
+              `\\[(e\\d+)\\][^\\n]*"${operation.label}"`,
+            ).exec(shown)?.[1];
+            assert(ref, `the real snapshot names ${operation.label}`);
+            return {
+              message: {
+                id: operation.id,
+                role: 'assistant' as const,
+                content: '',
+                tool_calls: [
+                  {
+                    id: operation.id,
+                    name: 'browser_type',
+                    args: {
+                      ref,
+                      element: operation.label,
+                      text: operation.text,
+                    },
+                  },
+                ],
+              },
+              usage: emptyUsage(),
+            };
+          },
+      ),
+      async () => {
+        await check(operations.at(-1)!);
+        return {
+          message: {
+            id: 'empty-type-finished',
+            role: 'assistant',
+            content: 'real input values checked',
+          },
+          usage: emptyUsage(),
+        };
+      },
+    ]);
+    runtime = new AgentRuntime({
+      workspace: root,
+      home: root,
+      settings: defaultSettings(),
+      model,
+      headless: true,
+      extraTools: browserTools(
+        chrome,
+        runtimeBrowserOptions(() => runtime),
+      ),
+    });
+    cleanup(t, () => runtime.close());
+    runtime.policy.setYolo(runtime.session.id, true);
+    await runtime.harness.run('fill and then clear both inputs');
+    assert.equal(
+      model.requests.length,
+      6,
+      'each real tool result reached the next model request',
+    );
+    const stored = runtime.store.messages(runtime.session.id);
+    assert.equal(stored.filter((message) => message.role === 'tool').length, 5);
+    assert.deepEqual(
+      stored
+        .flatMap((message) => message.tool_calls ?? [])
+        .filter((call) => call.id.startsWith('clear-'))
+        .map((call) => call.args.text),
+      ['', ''],
+    );
+    assert.deepEqual(
+      (await read()).events.map((event) => event.id),
+      ['text', 'number', 'text', 'number'],
+    );
+    const version = await internal.send('Browser.getVersion', {});
+    t.diagnostic(
+      JSON.stringify({
+        adapter: 'TUI ChromeBrowser',
+        browser: version.product,
+        platform: process.platform,
+        arch: process.arch,
+        node: process.version,
+        observed,
+      }),
+    );
+  },
+);
+
+test(
   'the terminal browser reads and acts on pages, answers dialogs, follows tabs and passes certificate warnings only with approval',
   { skip },
   async (t) => {

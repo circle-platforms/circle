@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'apps/desktop/test/browser-page.mjs'
+      - 'apps/desktop/test/browser-input-native.mjs'
+      - 'apps/desktop/test/browser-input-focus.mjs'
       - 'src/browser/page.ts'
       - '.github/workflows/browser-page-diagnostics.yml'
   workflow_dispatch:
@@ -24,8 +26,14 @@ jobs:
       - run: npm ci
       - run: npm --prefix apps/desktop ci
       - run: node -e "console.log(require('./apps/desktop/node_modules/electron'))"
+      # Compare actual adapter effects and raw CDP focus/target routing first.
+      # Keep all evidence even when an earlier comparison fails.
+      - run: node apps/desktop/test/browser-input-native.mjs
+      - run: node apps/desktop/test/browser-input-focus.mjs
+        if: always()
       # This standalone fixture creates only local HTTP pages and isolated profiles.
       - run: node apps/desktop/test/browser-page.mjs
+        if: always()
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         if: always()
         with:
