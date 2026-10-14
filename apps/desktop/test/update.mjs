@@ -337,7 +337,14 @@ try {
   // restarts the machine when a file it removes is in use: nothing may still run from the
   // folder, and it must not restart.
   // A pre-existing copy never belongs to this check; a failed install may leave files.
-  if (installationAttempted && existsSync(join(programFiles, 'Circle'))) {
+  // A GitHub runner is thrown away after the job, with what the check installed: there the
+  // silent uninstall is left out, as it once hung after every check had passed. Removing an
+  // MSI is checked on its own, in the release workflow's install-and-remove step.
+  if (
+    installationAttempted &&
+    !process.env.GITHUB_ACTIONS &&
+    existsSync(join(programFiles, 'Circle'))
+  ) {
     stage('stopping what runs from the installed folder');
     spawnSync(
       'powershell.exe',
