@@ -27,6 +27,7 @@ export type PageId =
 export type DialogId =
   | 'rename'
   | 'delete-session'
+  | 'delete-workspace'
   | 'tree'
   | 'fork'
   | 'session'
@@ -140,6 +141,8 @@ export interface Workspace {
   branch: string;
   trusted: boolean;
   origin?: 'native' | 'preview';
+  /** The app-owned workspace the runtime starts in; it cannot be removed. */
+  builtIn?: boolean;
   instructions: { name: string; content: string }[];
 }
 export interface WorkspaceFile {

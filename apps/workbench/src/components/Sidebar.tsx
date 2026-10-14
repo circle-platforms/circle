@@ -1,6 +1,7 @@
 import { desktopHost, openNativeWorkspace } from '../host';
 import { useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { DropdownMenu } from 'radix-ui';
 import {
   Plus,
   Search,
@@ -14,11 +15,12 @@ import {
   Terminal,
   FolderPlus,
   SlidersHorizontal,
+  MoreHorizontal,
 } from 'lucide-react';
 import { useRuntime } from '../app/context';
 import { usePlugins } from '../plugins/context';
 import { currentSession, sessionTitle } from '../model/state';
-import type { DialogId } from '../model/types';
+import type { DialogId, PanelId } from '../model/types';
 import { IconButton } from './common';
 import { t } from '../i18n';
 import { UpdateChip } from '../features/Update';
@@ -48,10 +50,12 @@ export function Sidebar({
   onSearch,
   onNavigate,
   onDialog,
+  onPanel,
 }: {
   onSearch: () => void;
   onNavigate?: () => void;
-  onDialog?: (dialog: DialogId) => void;
+  onDialog?: (dialog: DialogId, choice?: string) => void;
+  onPanel?: (panel: PanelId) => void;
 }) {
   const { snapshot, runtime, perform, notify } = useRuntime();
   // The pages of the extensions that are on, such as circle-server's
@@ -177,28 +181,132 @@ export function Sidebar({
                 >
                   <Plus size={13} />
                 </IconButton>
+                <DropdownMenu.Root>
+                  <DropdownMenu.Trigger asChild>
+                    <button
+                      className="icon-button"
+                      aria-label={t('more {name}', { name: workspace.name })}
+                    >
+                      <MoreHorizontal size={13} />
+                    </button>
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Portal>
+                    <DropdownMenu.Content
+                      className="dropdown"
+                      align="start"
+                      sideOffset={4}
+                    >
+                      <DropdownMenu.Item
+                        onSelect={() => newSession(workspace.id)}
+                      >
+                        {t('new session in {name}', { name: workspace.name })}
+                      </DropdownMenu.Item>
+                      {desktopHost() && (
+                        <DropdownMenu.Item
+                          onSelect={() =>
+                            void perform(async () => {
+                              await desktopHost()?.revealWorkspace(
+                                workspace.id,
+                              );
+                            })
+                          }
+                        >
+                          {t('show in folder')}
+                        </DropdownMenu.Item>
+                      )}
+                      {!workspace.builtIn && (
+                        <DropdownMenu.Item
+                          onSelect={() =>
+                            onDialog?.('delete-workspace', workspace.id)
+                          }
+                        >
+                          {t('delete workspace')}
+                        </DropdownMenu.Item>
+                      )}
+                    </DropdownMenu.Content>
+                  </DropdownMenu.Portal>
+                </DropdownMenu.Root>
               </div>
               {(open ? sessions : sessions.slice(0, SHOWN)).map((session) => (
-                <NavLink
-                  key={session.id}
-                  className={({ isActive }) =>
-                    isActive ? 'session-link active' : 'session-link'
-                  }
-                  to={`/session/${session.id}`}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    perform(async () => {
-                      await goSession(session.id);
-                    });
-                  }}
-                >
-                  <span>{sessionTitle(session.title)}</span>
-                  {waiting.has(session.id) ? (
-                    <i className="attention-dot" />
-                  ) : session.state === 'waiting' ? (
-                    <i className="running-dot" />
-                  ) : null}
-                </NavLink>
+                <div className="session-row" key={session.id}>
+                  <NavLink
+                    className={({ isActive }) =>
+                      isActive ? 'session-link active' : 'session-link'
+                    }
+                    to={`/session/${session.id}`}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      perform(async () => {
+                        await goSession(session.id);
+                      });
+                    }}
+                  >
+                    <span>{sessionTitle(session.title)}</span>
+                    {waiting.has(session.id) ? (
+                      <i className="attention-dot" />
+                    ) : session.state === 'waiting' ? (
+                      <i className="running-dot" />
+                    ) : null}
+                  </NavLink>
+                  <DropdownMenu.Root>
+                    <DropdownMenu.Trigger asChild>
+                      <button
+                        className="icon-button"
+                        aria-label={t('more {title}', {
+                          title: sessionTitle(session.title),
+                        })}
+                      >
+                        <MoreHorizontal size={13} />
+                      </button>
+                    </DropdownMenu.Trigger>
+                    <DropdownMenu.Portal>
+                      <DropdownMenu.Content
+                        className="dropdown"
+                        align="start"
+                        sideOffset={4}
+                      >
+                        <DropdownMenu.Item
+                          onSelect={() =>
+                            perform(() =>
+                              runtime.change((state) => {
+                                const target = state.sessions.find(
+                                  (item) => item.id === session.id,
+                                );
+                                if (target) target.pinned = !target.pinned;
+                              }),
+                            )
+                          }
+                        >
+                          {session.pinned ? t('unpin') : t('pin')}
+                        </DropdownMenu.Item>
+                        <DropdownMenu.Item
+                          onSelect={() =>
+                            perform(async () => {
+                              if (session.id !== current.id)
+                                await goSession(session.id);
+                              onPanel?.('files');
+                            })
+                          }
+                        >
+                          {t('show all files')}
+                        </DropdownMenu.Item>
+                        <DropdownMenu.Item
+                          onSelect={() => onDialog?.('rename', session.id)}
+                        >
+                          {t('rename')}
+                        </DropdownMenu.Item>
+                        <DropdownMenu.Item
+                          disabled={session.id === current.id}
+                          onSelect={() =>
+                            onDialog?.('delete-session', session.id)
+                          }
+                        >
+                          {t('delete')}
+                        </DropdownMenu.Item>
+                      </DropdownMenu.Content>
+                    </DropdownMenu.Portal>
+                  </DropdownMenu.Root>
+                </div>
               ))}
               {sessions.length > SHOWN && (
                 <button

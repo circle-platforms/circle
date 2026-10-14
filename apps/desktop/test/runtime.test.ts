@@ -2334,3 +2334,110 @@ test('an approval for a new file carries its diff', async (t) => {
     ['added'],
   );
 });
+
+test('delete-workspace forgets a folder and keeps the files on disk (#56)', async (t) => {
+  const f = await setup(t, [{ message: assistant('idle model') }]);
+  const project = join(f.root, 'guarded');
+  await mkdir(project);
+  await writeFile(join(project, 'keep.txt'), 'precious bytes');
+  const opened = await f.call('open-workspace', { path: project });
+  assert.equal(opened.ok, true, opened.error);
+  const workspaceId = (opened.data as { workspaceId: string }).workspaceId;
+  // Two conversations there: deleting one alone would not hide the folder.
+  assert.equal((await f.call('new-session')).ok, true);
+  assert.equal(
+    f.controller
+      .snapshot()
+      .sessions.filter((session) => session.workspaceId === workspaceId).length,
+    2,
+  );
+  const deleted = await f.call('delete-workspace', { workspaceId });
+  assert.equal(deleted.ok, true, deleted.error);
+  const after = f.controller.snapshot();
+  assert.equal(
+    after.workspaces.some((workspace) => workspace.id === workspaceId),
+    false,
+  );
+  assert.equal(
+    after.sessions.some((session) => session.workspaceId === workspaceId),
+    false,
+  );
+  // The app lands on its own scratch workspace, marked built-in and shown as
+  // such even though a temp alias hides the home path from a naive compare.
+  const builtIn = after.workspaces.find((workspace) => workspace.builtIn);
+  assert.ok(builtIn, 'the scratch workspace appears once the app falls back');
+  const active = after.sessions.find(
+    (session) => session.id === after.activeSessionId,
+  )!;
+  assert.equal(active.workspaceId, builtIn.id);
+  // The first workspace's conversations survive the sibling's removal.
+  assert.equal(
+    after.sessions.some(
+      (session) =>
+        session.workspaceId !== workspaceId &&
+        session.workspaceId !== builtIn.id,
+    ),
+    true,
+  );
+  assert.equal(existsSync(join(project, 'keep.txt')), true);
+});
+
+test('delete-workspace refuses a running folder and the built-in one (#56)', async (t) => {
+  const f = await setup(t, [
+    {
+      message: assistant('', [
+        {
+          id: 'write-1',
+          name: 'write_file',
+          args: { file_path: 'a.txt', content: 'x' },
+        },
+      ]),
+    },
+    { message: assistant('after approval') },
+  ]);
+  const start = f.controller.snapshot();
+  const startId = start.sessions.find(
+    (session) => session.id === start.activeSessionId,
+  )!.workspaceId;
+  // A turn of the workspace waits at the approval gate: it cannot be removed.
+  assert.equal((await f.call('prompt', { text: 'write a file' })).ok, true);
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((row) => row.status === 'pending'),
+    'approval',
+  );
+  const blocked = await f.call('delete-workspace', { workspaceId: startId });
+  assert.equal(blocked.ok, false);
+  assert.equal(
+    blocked.error,
+    'stop the running session before deleting its workspace',
+  );
+  // Answer the card, and the same call goes through once the turn rests.
+  const row = f.controller
+    .snapshot()
+    .interactions.find((item) => item.status === 'pending')!;
+  assert.equal(
+    (await f.call('answer', { id: row.id, revision: 1, answer: 'approve' })).ok,
+    true,
+  );
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .sessions.find((session) => session.id === row.sessionId)!.state ===
+      'idle',
+    'the turn settles',
+  );
+  const deleted = await f.call('delete-workspace', { workspaceId: startId });
+  assert.equal(deleted.ok, true, deleted.error);
+  // The scratch workspace the app fell back to is the built-in one, and it
+  // refuses the same call.
+  const builtIn = f.controller
+    .snapshot()
+    .workspaces.find((workspace) => workspace.builtIn)!;
+  const refused = await f.call('delete-workspace', { workspaceId: builtIn.id });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.error, 'the built-in workspace stays');
+});

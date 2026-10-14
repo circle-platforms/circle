@@ -35,6 +35,7 @@ export const downloadFile = saveExport;
 const NAMES: Record<DialogId, () => string> = {
   rename: () => t('rename session'),
   'delete-session': () => t('delete session'),
+  'delete-workspace': () => t('delete workspace'),
   tree: () => t('session tree'),
   fork: () => t('fork session'),
   session: () => t('session details'),
@@ -449,7 +450,9 @@ export function DialogHost({
   const workspace = snapshot.workspaces.find(
     (item) =>
       item.id ===
-      (dialog === 'trust' && selection ? selection : target.workspaceId),
+      (['trust', 'delete-workspace'].includes(dialog ?? '') && selection
+        ? selection
+        : target.workspaceId),
   )!;
   const [title, setTitle] = useState('');
   const [editor, setEditor] = useState('');
@@ -586,6 +589,55 @@ export function DialogHost({
               }
             >
               {t('delete local session')}
+            </Button>
+          </div>
+        </>
+      )}
+      {dialog === 'delete-workspace' && (
+        <>
+          <p className="dialog-paragraph">
+            {runtime.mode === 'live'
+              ? t('Delete “{name}” and its {n} sessions? Files on disk stay.', {
+                  name: workspace.name,
+                  n: snapshot.sessions.filter(
+                    (item) => item.workspaceId === workspace.id,
+                  ).length,
+                })
+              : `Delete “${workspace.name}” and its sessions from this browser preview?`}
+          </p>
+          <div className="dialog-actions">
+            <Button onClick={onClose}>{t('keep workspace')}</Button>
+            <Button
+              className="danger"
+              onClick={() =>
+                perform(async () => {
+                  if (runtime.mode === 'live')
+                    await runtime.request('delete-workspace', {
+                      workspaceId: workspace.id,
+                    });
+                  else {
+                    const others = runtime
+                      .getSnapshot()
+                      .workspaces.filter((item) => item.id !== workspace.id);
+                    if (!others.length)
+                      throw Error('another workspace must stay open');
+                    runtime.change((state) => {
+                      state.sessions = state.sessions.filter(
+                        (item) => item.workspaceId !== workspace.id,
+                      );
+                      state.workspaces = state.workspaces.filter(
+                        (item) => item.id !== workspace.id,
+                      );
+                    });
+                    // The preview keeps an open conversation, as the runtime does.
+                    await runtime.newSession(others[0].id);
+                  }
+                  onSession();
+                  onClose();
+                })
+              }
+            >
+              {t('delete workspace')}
             </Button>
           </div>
         </>

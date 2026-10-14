@@ -2351,6 +2351,14 @@ pre {
   background: var(--active);
   color: var(--fg);
 }
+.dropdown [data-disabled] {
+  opacity: 45%;
+  cursor: default;
+}
+.dropdown [data-disabled][data-highlighted] {
+  background: none;
+  color: var(--secondary);
+}
 .tooltip {
   z-index: 110;
   background: var(--fg);
@@ -3666,6 +3674,7 @@ pre {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  margin-right: auto;
 }
 .project-header .icon-button {
   width: 24px;
@@ -3674,6 +3683,25 @@ pre {
 }
 .project-header:hover .icon-button,
 .project-header .icon-button:focus-visible {
+  opacity: 1;
+}
+.session-row {
+  display: flex;
+  align-items: center;
+}
+.session-row .session-link {
+  flex: 1;
+  min-width: 0;
+}
+.session-row .icon-button {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  margin-right: 4px;
+  opacity: 0;
+}
+.session-row:hover .icon-button,
+.session-row .icon-button:focus-visible {
   opacity: 1;
 }
 .session-link {

@@ -21,7 +21,7 @@ The models page lists what the saved endpoint offered when it was connected or l
 
 The layout follows Claude's:
 
-- **The sidebar**: search, a new session, customize (skills, commands, MCP servers, extensions, tools and approvals) and all sessions; then your folders, each with its sessions and a + for a new one; open folder; and at the bottom the connection and settings.
+- **The sidebar**: search, a new session, customize (skills, commands, MCP servers, extensions, tools and approvals) and all sessions; then your folders, each with its sessions and a + for a new one; open folder; and at the bottom the connection and settings. Hovering a folder or a session reveals a ⋯: the folder's holds a new session there, show it in the file manager (desktop only), and delete the folder, which forgets its saved conversations but leaves its files on disk; the app's own starting folder cannot be deleted. A session's ⋯ holds pin, show all files, rename and delete.
 - **The top bar**: the session's title, whose menu has rename, details, find, the session tree, fork, clone, compact, export and share; the folder and its git branch; and on the right the side panels — terminal, files, changes, activity, browser and context — and ⋯ for search, theme, connection and help. A click opens a panel on the right, a second click closes it.
 - **The conversation**: your messages on the right, Circle's answers as plain text. The tool calls between two answers fold into one line, such as `ran 2 commands, edited calc.py +1 −1`; a click opens them, each with its output and, for a file change, its diff. Thinking folds to one line too. The time, the usage and a copy button show under a message when the pointer is on it.
 
@@ -31,13 +31,13 @@ The app starts in a folder of its own, `workspace` inside its data folder, which
 
 When Circle wants to change a file or run a command, the request appears in the conversation, right under the call it is for: the command, or the change as a diff with line numbers. Answer it there:
 
-| Answer | What it does |
-|---|---|
-| allow once | Runs this call. |
-| allow for this session | Runs this call, and in this session does not ask again for the same thing: the same command, or file changes inside the workspace. For the browser it reads **allow on *site* for this session** and covers that site. |
-| allow “…” commands | For a command: allows commands starting with the same words, in this session. |
-| reject | Does not run it; the model is told. |
-| reject and explain | Does not run it, and tells the model what to do instead. |
+| Answer                 | What it does                                                                                                                                                                                                           |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| allow once             | Runs this call.                                                                                                                                                                                                        |
+| allow for this session | Runs this call, and in this session does not ask again for the same thing: the same command, or file changes inside the workspace. For the browser it reads **allow on _site_ for this session** and covers that site. |
+| allow “…” commands     | For a command: allows commands starting with the same words, in this session.                                                                                                                                          |
+| reject                 | Does not run it; the model is told.                                                                                                                                                                                    |
+| reject and explain     | Does not run it, and tells the model what to do instead.                                                                                                                                                               |
 
 A question from the model appears the same way, with its choices and a box for your own answer. While a request waits, the frame around the input box is orange and still, and the bar above the box says how many wait; click it to scroll to the first.
 
@@ -45,12 +45,12 @@ A question from the model appears the same way, with its choices and a box for y
 
 The button under the input box, on the left, shows how this session asks. Click it to choose, or press `shift+tab` in the input box to move to the next one.
 
-| Mode | What it does |
-|---|---|
-| manual | Asks before each file change and command. The default. |
-| accept edits | Changes files inside the workspace without asking. Commands, deletes and changes outside the workspace still ask. |
-| plan | Read-only: Circle researches and writes a plan to `plan.md`, and changes nothing else. When it is done it asks whether to implement the plan, and whether to accept edits while it does. |
-| auto | Runs every call without asking, including the ones Circle always asks about. Read [Security](security.md#auto-mode) first. |
+| Mode         | What it does                                                                                                                                                                             |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| manual       | Asks before each file change and command. The default.                                                                                                                                   |
+| accept edits | Changes files inside the workspace without asking. Commands, deletes and changes outside the workspace still ask.                                                                        |
+| plan         | Read-only: Circle researches and writes a plan to `plan.md`, and changes nothing else. When it is done it asks whether to implement the plan, and whether to accept edits while it does. |
+| auto         | Runs every call without asking, including the ones Circle always asks about. Read [Security](security.md#auto-mode) first.                                                               |
 
 The mode belongs to the session, as in the terminal; see [Modes](usage.md#modes).
 
@@ -62,9 +62,9 @@ A finished file change shows its diff when its line is opened. The changes panel
 
 ## The browser panel
 
-Each conversation has its own sandboxed browser, which you and Circle use together: what one does, the other sees. Open the browser panel from the top bar and enter an HTTP or HTTPS address, or ask Circle to use it. The panel has tabs, back, forward and reload. The model's [browser tools](tools.md#the-browser) open pages, read them, click, type, choose options, press keys, take screenshots, answer a page's dialogs, manage tabs and give pages files. While Circle acts, a click on the page or **take over** under it gives you the browser once that action ends; **hand back** returns it. See [Taking turns](tools.md#taking-turns). Downloads go to the system's Downloads folder and are listed under the page, with **show in folder**; one that Circle's action started from a site not yet allowed shows **waiting for approval** until you answer the card in the conversation (**keep**, **allow downloads from *site* for this session** or **discard**); when a click of Circle's opens a file chooser, **choose…** under the page lets you pick the files instead of Circle. A site that asks for a user name and password gets a sign-in over the page, which you or Circle can answer; a page that asks for the camera, your location, notifications and the like asks under the page, with **allow** and **block**, and only you answer; a site that asks for a client certificate lists yours in the page's place, and only you choose one, or **send none**. They can reach local devices and private addresses as well as public sites. They are available to the main agent only.
+Each conversation has its own sandboxed browser, which you and Circle use together: what one does, the other sees. Open the browser panel from the top bar and enter an HTTP or HTTPS address, or ask Circle to use it. The panel has tabs, back, forward and reload. The model's [browser tools](tools.md#the-browser) open pages, read them, click, type, choose options, press keys, take screenshots, answer a page's dialogs, manage tabs and give pages files. While Circle acts, a click on the page or **take over** under it gives you the browser once that action ends; **hand back** returns it. See [Taking turns](tools.md#taking-turns). Downloads go to the system's Downloads folder and are listed under the page, with **show in folder**; one that Circle's action started from a site not yet allowed shows **waiting for approval** until you answer the card in the conversation (**keep**, **allow downloads from _site_ for this session** or **discard**); when a click of Circle's opens a file chooser, **choose…** under the page lets you pick the files instead of Circle. A site that asks for a user name and password gets a sign-in over the page, which you or Circle can answer; a page that asks for the camera, your location, notifications and the like asks under the page, with **allow** and **block**, and only you answer; a site that asks for a client certificate lists yours in the page's place, and only you choose one, or **send none**. They can reach local devices and private addresses as well as public sites. They are available to the main agent only.
 
-Before Circle acts on a page, an approval card shows the site and the URL, element or text involved. **Allow on *site* for this session** covers all browser actions on that site in that conversation, and another site asks again; reading the page and taking a screenshot do not ask. In plan mode those two reads work, and the other browser tools are refused. When Circle starts using the browser the panel opens and shows **Circle is operating** at the bottom, unless you are on another page of the application or the window is narrow (1050 pixels or less), where the panel would cover the conversation and its requests; open it from the top bar there. In the page, a pointer moves to what Circle clicks, with a ripple, and a field it types into is outlined, with a label saying what it does. The pointer fades after a few seconds and stays out of snapshots and screenshots.
+Before Circle acts on a page, an approval card shows the site and the URL, element or text involved. **Allow on _site_ for this session** covers all browser actions on that site in that conversation, and another site asks again; reading the page and taking a screenshot do not ask. In plan mode those two reads work, and the other browser tools are refused. When Circle starts using the browser the panel opens and shows **Circle is operating** at the bottom, unless you are on another page of the application or the window is narrow (1050 pixels or less), where the panel would cover the conversation and its requests; open it from the top bar there. In the page, a pointer moves to what Circle clicks, with a ripple, and a field it types into is outlined, with a label saying what it does. The pointer fades after a few seconds and stays out of snapshots and screenshots.
 
 A page's alert, confirm, prompt or "leave site?" question appears over its tab, on a picture of the page as it stopped, with the site it came from; a tab waiting on one is marked. While Circle is working it appears in the conversation too. You can answer it in either place, or Circle can; the first answer counts, and Circle is told who gave it. No dialog appears over the whole window.
 

@@ -597,7 +597,8 @@ export function App() {
         <div className="desktop-sidebar">
           <Sidebar
             onSearch={() => setSearchOpen(true)}
-            onDialog={(kind) => onDialog(kind)}
+            onDialog={(kind, choice) => onDialog(kind, choice)}
+            onPanel={onPanel}
           />
         </div>
         <main className="workspace">
@@ -763,7 +764,11 @@ export function App() {
               setSearchOpen(true);
             }}
             onNavigate={() => setSidebarOpen(false)}
-            onDialog={(kind) => onDialog(kind)}
+            onDialog={(kind, choice) => {
+              setSidebarOpen(false);
+              onDialog(kind, choice);
+            }}
+            onPanel={onPanel}
           />
         </Modal>
         <Modal

@@ -264,6 +264,12 @@ export class RuntimeController {
     }
     return undefined;
   }
+  /** The app-owned scratch workspace the runtime starts in and falls back to.
+   * Compared through realpath: /var and /private/var alias on macOS. */
+  private builtInWorkspace(): string {
+    const path = join(this.home, 'workspace');
+    return existsSync(path) ? realpathSync(path) : path;
+  }
   private runtime(workspace: string, sessionId?: string): AgentRuntime {
     workspace = realpathSync(workspace);
     const existing = this.runtimes.get(workspace);
@@ -582,11 +588,12 @@ export class RuntimeController {
       },
       workspaces: paths.map((path) => ({
         id: identity(path),
-        name: path === join(this.home, 'workspace') ? 'circle' : basename(path),
+        name: path === this.builtInWorkspace() ? 'circle' : basename(path),
         path,
         branch: this.branch(path),
         trusted: isFolderTrusted(settings, path),
         origin: 'native',
+        builtIn: path === this.builtInWorkspace(),
         instructions: [],
       })),
       sessions,
@@ -1897,6 +1904,48 @@ export class RuntimeController {
           workspaceId: identity(workspace),
           sessionId: owner.session.id,
         };
+      }
+      case 'delete-workspace': {
+        const workspaceId = text(p.workspaceId, 'workspace id', 200);
+        // The list is what snapshot() derives: every session row's workspace,
+        // plus the active one. Deleting all of them hides the folder again.
+        const all = runtime.store.list();
+        const paths = [
+          ...new Set([
+            ...all.map((row) => row.workspace),
+            runtime.options.workspace,
+          ]),
+        ];
+        const path = paths.find(
+          (candidate) => identity(candidate) === workspaceId,
+        );
+        if (!path) throw Error('workspace not found');
+        const builtIn = this.builtInWorkspace();
+        if (path === builtIn) throw Error('the built-in workspace stays');
+        const owner = this.runtimes.get(path);
+        const doomed = all.filter((row) => row.workspace === path);
+        if (
+          owner &&
+          (owner.busy ||
+            doomed.some((row) =>
+              owner.jobs.list(row.id).some((job) => job.status === 'running'),
+            ))
+        )
+          throw Error('stop the running session before deleting its workspace');
+        if (owner) {
+          // Move off the folder first, then close its runtime while its rows
+          // still exist, and delete the rows. The app-owned scratch workspace
+          // is created here when the controller itself started elsewhere.
+          if (owner === this.active) {
+            mkdirSync(builtIn, { recursive: true });
+            this.active = this.runtime(builtIn);
+            this.previous = this.active.session.id;
+          }
+          await owner.close();
+          this.runtimes.delete(path);
+        }
+        for (const row of doomed) this.active.store.delete(row.id);
+        return { workspaceId };
       }
       case 'load-skill': {
         const skill = runtime.skills.find((skill) => skill.name === p.name);

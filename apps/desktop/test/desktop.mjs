@@ -287,6 +287,36 @@ try {
   await page
     .getByRole('heading', { name: 'new session', exact: true })
     .waitFor();
+  // The sidebar menus (#56): the folder's ⋯ offers its actions, a session's ⋯
+  // reaches rename, and the rename dialog opens on the session it was called for.
+  await page
+    .locator('.project-header')
+    .first()
+    .getByRole('button', { name: /^more / })
+    .click();
+  await page.getByRole('menuitem', { name: /^new session in / }).waitFor();
+  await page
+    .getByRole('menuitem', { name: 'delete workspace', exact: true })
+    .waitFor();
+  await page.keyboard.press('Escape');
+  await page
+    .locator('.session-row')
+    .first()
+    .getByRole('button', { name: /^more / })
+    .click();
+  await page
+    .getByRole('menuitem', { name: 'show all files', exact: true })
+    .waitFor();
+  await page.getByRole('menuitem', { name: 'rename', exact: true }).click();
+  await page
+    .getByRole('dialog')
+    .getByRole('heading', { name: 'rename session', exact: true })
+    .waitFor();
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'cancel' })
+    .click();
+  checks.push('sidebar folder and session menus open and wire their actions');
   // The side panel starts closed; the top bar's files icon opens it.
   const files = page.getByRole('button', { name: 'files panel', exact: true });
   if ((await files.getAttribute('aria-pressed')) !== 'true')

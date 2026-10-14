@@ -122,6 +122,8 @@ export interface DesktopBridge {
   ) => Promise<BrowserState>;
   /** Shows a download in the system's file manager. */
   browserReveal: (sessionId: string, download: string) => Promise<void>;
+  /** Shows the folder of an open workspace, by its id, in the file manager. */
+  revealWorkspace: (workspaceId: string) => Promise<void>;
   /** The person takes the browser from Circle, or hands it back. */
   browserControl: (
     sessionId: string,

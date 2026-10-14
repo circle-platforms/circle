@@ -414,6 +414,7 @@ export class LiveRuntime implements RuntimePort {
         background: 'background',
         logout: 'logout',
         'open-workspace': 'open-workspace',
+        'delete-workspace': 'delete-workspace',
         reload: 'reload',
         'clear-queue': 'clear-queue',
         'write-file': 'write-file',

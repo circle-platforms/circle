@@ -55,6 +55,7 @@ export const dialogs: Record<string, string> = {
   // shared buttons
   cancel: '取消',
   save: '保存',
+  'keep workspace': '保留工作区',
   // rename and delete
   'session name': '会话名称',
   'Delete “{title}” from this browser preview?':
@@ -155,6 +156,8 @@ export const dialogs: Record<string, string> = {
   'response sent to Circle': '答复已发送给 Circle',
   'Delete “{title}” and its saved conversation?':
     '删除“{title}”及其保存的对话？',
+  'Delete “{name}” and its {n} sessions? Files on disk stay.':
+    '删除“{name}”及其 {n} 个会话？磁盘上的文件保持不变。',
   'Quitting stops Circle and the background jobs it started.':
     '退出会停止 Circle 及其启动的后台任务。',
   'send; while Circle works, it reads it after its current step':

@@ -656,6 +656,18 @@ app
       if (!browsers) throw Error('window not ready');
       shell.showItemInFolder(browsers.downloadPath(id, download));
     });
+    // The person reveals a workspace folder in the system's file manager. The
+    // renderer names only the workspace id; the main process resolves the path
+    // from the runtime's own snapshot, so a page can never ask for any file.
+    handle('circle:reveal-workspace', (value) => {
+      if (!runtime) throw Error('runtime not enabled');
+      const id = String(value);
+      const workspace = runtime
+        .state()
+        .snapshot.workspaces.find((item) => item.id === id);
+      if (!workspace) throw Error('workspace not found');
+      shell.showItemInFolder(workspace.path);
+    });
     updater.subscribe((state) =>
       window?.webContents.send('circle:update', state),
     );

@@ -63,6 +63,8 @@ const bridge: DesktopBridge = {
     ipcRenderer.invoke('circle:browser-permission', id, request, allow),
   browserReveal: (id, download) =>
     ipcRenderer.invoke('circle:browser-reveal', id, download),
+  revealWorkspace: (workspaceId) =>
+    ipcRenderer.invoke('circle:reveal-workspace', workspaceId),
   browserControl: (id, action) =>
     ipcRenderer.invoke('circle:browser-control', id, action),
   onBrowserEvent: (listener) => {
