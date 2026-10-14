@@ -7,7 +7,9 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
+import { waitDesktopReady } from './helpers/desktop-readiness.mjs';
 import {
   assertViewport,
   readViewport,
@@ -82,7 +84,10 @@ const fixture = {
 await writeFile(fixturePath, JSON.stringify(fixture));
 const env = {
   ...process.env,
+  CIRCLE_HOME: join(temp, 'home'),
   CIRCLE_WORKBENCH_DATA_DIR: join(temp, 'data'),
+  CIRCLE_NO_UPDATE_CHECK: '1',
+  CIRCLE_NO_MODELS_REFRESH: '1',
   CIRCLE_WORKBENCH_MODE: 'live',
   CIRCLE_WORKBENCH_TEST_PROFILE: JSON.stringify({ exportPath }),
   CIRCLE_DESKTOP_RUNTIME_FIXTURE: fixturePath,
@@ -95,6 +100,69 @@ if (process.env.CIRCLE_DESKTOP_EXECUTABLE)
       : '/usr/bin:/bin:/usr/sbin:/sbin';
 const checks = [];
 const errors = [];
+const diagnosticEvents = [];
+const phases = [];
+const gatewayRequests = [];
+const gatewayEvents = [];
+let largePicture;
+let lastWait;
+const phase = (name, details = {}) =>
+  phases.push({ name, at: new Date().toISOString(), ...details });
+const observe = (target) => {
+  target.on('pageerror', (error) => errors.push(String(error)));
+  target.on('console', (message) => {
+    if (message.type() === 'error')
+      diagnosticEvents.push({
+        kind: 'console',
+        message: message.text().slice(0, 2000),
+      });
+  });
+  target.on('crash', () => diagnosticEvents.push({ kind: 'renderer crash' }));
+};
+const imageMetadata = (content) =>
+  (Array.isArray(content) ? content : []).flatMap((part) => {
+    if (part.type !== 'image_url') return [];
+    const encoded = /^data:([^;,]+);base64,(.*)$/s.exec(
+      part.image_url?.url ?? '',
+    );
+    if (!encoded) return [{ type: 'image_url', inline: false }];
+    const bytes = Buffer.from(encoded[2], 'base64');
+    const png =
+      bytes.length >= 24 &&
+      bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'));
+    return [
+      {
+        mime: encoded[1],
+        bytes: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+        width: png ? bytes.readUInt32BE(16) : undefined,
+        height: png ? bytes.readUInt32BE(20) : undefined,
+      },
+    ];
+  });
+const scenario = (text) => {
+  for (const [prefix, label] of [
+    ['and this screenshot', 'large picture'],
+    ['what is in the picture', 'small picture'],
+    ['stream a long answer', 'streaming'],
+    ['refuse this', 'HTTP refusal'],
+  ])
+    if (typeof text === 'string' && text.startsWith(prefix)) return label;
+  return 'other fixture input';
+};
+const requestMetadata = (data) => {
+  const text = Array.isArray(data.messages.at(-1)?.content)
+    ? data.messages.at(-1).content.find((part) => part.type === 'text')?.text
+    : data.messages.at(-1)?.content;
+  return {
+    model: data.model,
+    messages: data.messages.length,
+    lastRole: data.messages.at(-1)?.role,
+    scenario: scenario(text),
+    textCharacters: typeof text === 'string' ? text.length : undefined,
+    images: imageMetadata(data.messages.at(-1)?.content),
+  };
+};
 let app;
 let page;
 let gateway;
@@ -118,14 +186,24 @@ const command = (name, payload = {}, sessionId) =>
   );
 async function waitFor(check, name) {
   const deadline = Date.now() + 12_000;
+  lastWait = { name, startedAt: Date.now(), deadline };
+  phase('wait started', { wait: name });
   while (!(await check())) {
     if (Date.now() > deadline) throw Error(`timed out: ${name}`);
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+  phase('wait completed', {
+    wait: name,
+    elapsedMs: Date.now() - lastWait.startedAt,
+  });
 }
 async function send(value) {
+  const metadata = { scenario: scenario(value), characters: value.length };
+  phase('fill message', metadata);
   await page.getByRole('textbox', { name: 'message', exact: true }).fill(value);
+  phase('click send message', metadata);
   await page.getByRole('button', { name: 'send message', exact: true }).click();
+  phase('send click completed', metadata);
 }
 try {
   app = await electron.launch({
@@ -138,7 +216,7 @@ try {
     timeout: 45_000,
   });
   page = await app.firstWindow();
-  page.on('pageerror', (error) => errors.push(String(error)));
+  observe(page);
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   if (process.env.CIRCLE_DESKTOP_TEST_WIDTH) {
     viewportSizing = await setViewport(
@@ -335,6 +413,7 @@ try {
     timeout: 45_000,
   });
   page = await app.firstWindow();
+  observe(page);
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   const restored = await state();
   assert.equal(restored.activeSessionId, imported);
@@ -349,10 +428,30 @@ try {
   );
   await app.close();
   app = undefined;
-  const gatewayRequests = [];
   const modelListKeys = [];
   let modelListDown = false;
   gateway = createServer(async (req, res) => {
+    const event = {
+      id: gatewayEvents.length + 1,
+      method: req.method,
+      path: req.url?.split('?')[0],
+      startedAt: new Date().toISOString(),
+      bodyBytes: 0,
+    };
+    gatewayEvents.push(event);
+    req.on('aborted', () => {
+      event.aborted = true;
+    });
+    req.on('error', (error) => {
+      event.requestError = String(error);
+    });
+    res.on('finish', () => {
+      event.finishedAt = new Date().toISOString();
+      event.status = res.statusCode;
+    });
+    res.on('close', () => {
+      event.closedAt = new Date().toISOString();
+    });
     if (req.url?.startsWith('/anthropic/v1/models')) {
       assert.equal(req.headers['x-api-key'], 'native-local-key');
       assert.equal(req.headers['anthropic-version'], '2023-06-01');
@@ -390,8 +489,13 @@ try {
       return;
     }
     let body = '';
-    for await (const chunk of req) body += chunk;
+    for await (const chunk of req) {
+      body += chunk;
+      event.bodyBytes += Buffer.byteLength(chunk);
+    }
     const data = JSON.parse(body);
+    event.parsedAt = new Date().toISOString();
+    event.request = requestMetadata(data);
     gatewayRequests.push(data);
     assert.equal(req.headers.authorization, 'Bearer native-local-key');
     const last = data.messages.at(-1);
@@ -431,6 +535,7 @@ try {
   await new Promise((resolve) => gateway.listen(0, '127.0.0.1', resolve));
   const gatewayEnv = {
     ...env,
+    CIRCLE_HOME: join(temp, 'gateway-home'),
     CIRCLE_WORKBENCH_DATA_DIR: join(temp, 'gateway-data'),
   };
   delete gatewayEnv.CIRCLE_DESKTOP_RUNTIME_FIXTURE;
@@ -444,6 +549,7 @@ try {
     timeout: 45_000,
   });
   page = await app.firstWindow();
+  observe(page);
   // Nothing is set up yet, so the connection form opens by itself.
   await page.getByRole('textbox', { name: 'base url', exact: true }).waitFor();
   assert.equal((await state()).runtime.configured, false);
@@ -679,6 +785,7 @@ try {
   );
   checks.push('a pasted picture reaches the next model request as an image');
   // A screenshot-sized picture of several megabytes goes too, scaled down by the core
+  phase('large picture generation and paste');
   const pastedBytes = await page.evaluate(async () => {
     const canvas = new OffscreenCanvas(2000, 1500);
     const context = canvas.getContext('2d');
@@ -705,8 +812,12 @@ try {
     return blob.size;
   });
   assert.ok(pastedBytes > 5_000_000, `pasted ${pastedBytes} bytes`);
+  largePicture = { pastedBytes, width: 2000, height: 1500 };
+  phase('large picture paste dispatched', largePicture);
   await page.getByText('screen.png', { exact: true }).waitFor();
+  phase('large picture attachment visible');
   const before = gatewayRequests.length;
+  largePicture.gatewayRequestsBeforeSend = before;
   await send('and this screenshot');
   await waitFor(
     async () =>
@@ -715,6 +826,7 @@ try {
     'large picture sent',
   );
   const large = gatewayRequests.at(-1).messages.at(-1);
+  largePicture.sent = imageMetadata(large.content);
   const largeText = large.content.find((part) => part.type === 'text').text;
   assert.match(
     largeText,
@@ -790,6 +902,9 @@ try {
         renderer,
         checks,
         errors,
+        phases,
+        largePicture,
+        gatewayEvents,
       },
       null,
       2,
@@ -803,10 +918,134 @@ try {
     ),
   );
 } catch (error) {
+  const diagnostics = {
+    at: new Date().toISOString(),
+    error: String(error),
+    checks,
+    lastWait,
+    phases,
+    largePicture,
+    errors,
+    diagnosticEvents,
+    gatewayRequests: gatewayRequests.map(requestMetadata),
+    gatewayEvents,
+  };
+  const failurePath = join(output, 'failure.json');
+  // Preserve the gateway's actual effects before a possibly stalled IPC sample.
+  await writeFile(failurePath, JSON.stringify(diagnostics, null, 2) + '\n');
+  const sample = (read, label) =>
+    waitDesktopReady(read, () => true, {
+      label,
+      timeoutMs: 2000,
+      stableMs: 0,
+    })
+      .then((value) => value.sample)
+      .catch((error) => ({ unavailable: String(error) }));
+  const [runtime, renderer, native] = await Promise.all([
+    sample(async () => {
+      const snapshot = await state();
+      return {
+        activeSessionId: snapshot.activeSessionId,
+        activeSessionState: snapshot.sessions.find(
+          (session) => session.id === snapshot.activeSessionId,
+        )?.state,
+        firstSession: {
+          id: snapshot.sessions[0]?.id,
+          state: snapshot.sessions[0]?.state,
+        },
+        sessions: snapshot.sessions.map((session) => ({
+          id: session.id,
+          state: session.state,
+          draftCharacters: session.draft.length,
+          messages: session.messages.slice(-4).map((message) => ({
+            id: message.id,
+            role: message.role,
+            textCharacters: message.text.length,
+          })),
+          attachments: session.attachments.map((item) => ({
+            name: item.name,
+            kind: item.kind,
+            mime: item.mime,
+            size: item.size,
+            contentCharacters: item.content?.length,
+          })),
+          queue: session.queue.map((item) => ({
+            kind: item.kind,
+            textCharacters: item.text.length,
+          })),
+        })),
+        runtime: {
+          configured: snapshot.runtime.configured,
+          connected: snapshot.runtime.connected,
+        },
+      };
+    }, 'failure runtime metadata'),
+    sample(
+      () =>
+        page.evaluate(() => {
+          const input = document.querySelector(
+            'textarea[aria-label="message"]',
+          );
+          const send = document.querySelector(
+            'button[aria-label="send message"]',
+          );
+          const rect = send?.getBoundingClientRect();
+          return {
+            url: location.href,
+            visibility: document.visibilityState,
+            focused: document.hasFocus(),
+            activeElement: document.activeElement?.getAttribute('aria-label'),
+            draftCharacters: input?.value.length,
+            send: send
+              ? {
+                  disabled: send.disabled,
+                  visible: send.checkVisibility(),
+                  rect: {
+                    x: rect.x,
+                    y: rect.y,
+                    width: rect.width,
+                    height: rect.height,
+                  },
+                }
+              : undefined,
+            attachments: {
+              count:
+                document.querySelector('.attachment-strip')?.children.length ??
+                0,
+              hasScreenPicture:
+                document
+                  .querySelector('.attachment-strip')
+                  ?.textContent?.includes('screen.png') ?? false,
+            },
+            notices: [
+              ...document.querySelectorAll('.transcript-notice,.toast'),
+            ].map((element) => ({ characters: element.textContent?.length })),
+          };
+        }),
+      'failure renderer metadata',
+    ),
+    sample(
+      () =>
+        app.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows().map((window) => ({
+            visible: window.isVisible(),
+            focused: window.isFocused(),
+            minimized: window.isMinimized(),
+            bounds: window.getBounds(),
+            loading: window.webContents.isLoading(),
+          })),
+        ),
+      'failure native metadata',
+    ),
+  ]);
+  Object.assign(diagnostics, { runtime, renderer, native });
+  await writeFile(failurePath, JSON.stringify(diagnostics, null, 2) + '\n');
+  console.error(JSON.stringify(diagnostics));
   if (page)
-    await page
-      .screenshot({ path: join(output, 'failure.png') })
-      .catch(() => {});
+    await sample(async () => {
+      await page.screenshot({ path: join(output, 'failure.png') });
+      return 'saved';
+    }, 'failure screenshot');
   throw error;
 } finally {
   if (app) await app.close();

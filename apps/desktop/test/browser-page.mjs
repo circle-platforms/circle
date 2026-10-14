@@ -349,7 +349,21 @@ try {
     contents.debugger.attach('1.3');
     globalThis.circleInputTrace = [];
   });
-  const write = async (name, text) => {
+  const dispatchWrite = async (name, text, deadline) => {
+    // This is a Playwright-owned hidden BrowserWindow, not the production tab's
+    // WebContentsView. Explicitly prepare its native input target; isFocused()
+    // stays false for a hidden window, so only real trusted effects confirm it.
+    record({ kind: 'fixture-input-focus-request' });
+    const focus = await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      window.webContents.focus();
+      return {
+        visible: window.isVisible(),
+        windowFocused: window.isFocused(),
+        contentsFocused: window.webContents.isFocused(),
+      };
+    });
+    record({ kind: 'fixture-input-focus-returned', state: focus });
     await run('focus', { ref: ref(name) });
     const selector = name === 'username' ? '#username' : '#number';
     const eventStart = await page.evaluate(
@@ -481,12 +495,14 @@ try {
               (event) =>
                 event.type === 'input' &&
                 event.target === target.id &&
-                event.trusted,
+                event.trusted &&
+                event.inputType ===
+                  (expected === '' ? 'deleteContentBackward' : 'insertText'),
             )
         );
       },
       { selector, expected: text, eventStart },
-      { polling: 20, timeout: 10_000 },
+      { polling: 20, timeout: Math.max(1, deadline - Date.now()) },
     );
     if (inputDelay && !text) {
       const dispatched = app.evaluate(async () => {
@@ -509,6 +525,23 @@ try {
       target: name === 'username' ? 'username' : 'number',
       expectedLength: text.length,
     });
+  };
+  const write = async (name, text) => {
+    const deadline = Date.now() + 10_000;
+    let timer;
+    try {
+      await Promise.race([
+        dispatchWrite(name, text, deadline),
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(Error('real input did not complete within 10000ms')),
+            Math.max(1, deadline - Date.now()),
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   };
   await write('username', 'replacement username');
   assert.equal(

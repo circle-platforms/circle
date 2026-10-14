@@ -2,6 +2,10 @@ import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
 import { observePage, captureFailure } from './helpers/diagnostics.mjs';
 import { readViewport, setViewport } from './helpers/viewport.mjs';
 import { waitBrowserState } from './helpers/browser-state.mjs';
+import {
+  waitDesktopReady,
+  freshBrowserCapture,
+} from './helpers/desktop-readiness.mjs';
 import { createServer } from 'node:http';
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
@@ -32,7 +36,10 @@ const exportPath = join(temp, 'export.md');
 const profile = { files: [attachment], workspace, exportPath };
 const env = {
   ...process.env,
+  CIRCLE_HOME: join(temp, 'home'),
   CIRCLE_WORKBENCH_DATA_DIR: join(temp, 'data'),
+  CIRCLE_NO_UPDATE_CHECK: '1',
+  CIRCLE_NO_MODELS_REFRESH: '1',
   CIRCLE_WORKBENCH_MODE: 'preview',
   CIRCLE_WORKBENCH_TEST_PROFILE: JSON.stringify(profile),
 };
@@ -51,6 +58,82 @@ let app;
 let page;
 let originalClipboard;
 let viewportSizing;
+let nativeWindowId;
+let startupReadiness;
+let browserPanelReadiness;
+let captureReadiness;
+const nativeState = (childId) =>
+  app.evaluate(
+    async ({ BrowserWindow }, { windowId, childId }) => {
+      const window = windowId
+        ? BrowserWindow.fromId(windowId)
+        : BrowserWindow.getAllWindows()[0];
+      if (!window) throw Error('the test native window was not found');
+      const [width, height] = window.getContentSize();
+      const child = childId
+        ? window.contentView.children.find(
+            (view) => view.webContents?.id === childId,
+          )
+        : undefined;
+      return {
+        id: window.id,
+        visible: window.isVisible(),
+        minimized: window.isMinimized(),
+        bounds: window.getBounds(),
+        content: { width, height },
+        child: child
+          ? {
+              id: child.webContents.id,
+              visible: child.getVisible(),
+              bounds: child.getBounds(),
+              url: child.webContents.getURL(),
+              title: child.webContents.getTitle(),
+              loading: child.webContents.isLoading(),
+              viewport: await child.webContents.executeJavaScript(
+                '({width:innerWidth,height:innerHeight,readyState:document.readyState})',
+              ),
+            }
+          : undefined,
+      };
+    },
+    { windowId: nativeWindowId, childId },
+  );
+const panelState = async () => ({
+  native: await nativeState(),
+  renderer: await page
+    .getByRole('button', { name: 'browser panel', exact: true })
+    .evaluate((button) => {
+      const inspect = (element) => {
+        if (!element) return undefined;
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return {
+          visible: element.checkVisibility({
+            opacityProperty: true,
+            visibilityProperty: true,
+          }),
+          rect: {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+          },
+          display: style.display,
+          visibility: style.visibility,
+          opacity: style.opacity,
+        };
+      };
+      return {
+        button: {
+          ...inspect(button),
+          enabled: !button.disabled,
+          pressed: button.getAttribute('aria-pressed'),
+        },
+        inspector: inspect(document.querySelector('.inspector')),
+        viewport: { width: innerWidth, height: innerHeight },
+      };
+    }),
+});
 const route = async (path) => {
   await page.evaluate((value) => {
     location.hash = value;
@@ -73,6 +156,40 @@ try {
   await page
     .getByRole('heading', { name: 'Fix the reconnect race', exact: true })
     .waitFor({ timeout: 30000 });
+  // DOM readiness does not prove the initially hidden native window was shown.
+  // This harness owns the window; disclose any intervention instead of treating
+  // it as evidence that production's ready-to-show lifecycle worked.
+  const startupDeadline = Date.now() + 10000;
+  const initialWindow = (
+    await waitDesktopReady(nativeState, () => true, {
+      label: 'initial native window',
+      stableMs: 0,
+    })
+  ).sample;
+  nativeWindowId = initialWindow.id;
+  startupReadiness = {
+    initial: initialWindow,
+    harnessShow: !initialWindow.visible,
+  };
+  let showRequested = initialWindow.visible;
+  startupReadiness.shown = await waitDesktopReady(
+    async () => {
+      if (!showRequested) {
+        showRequested = true;
+        await app.evaluate(
+          ({ BrowserWindow }, id) => BrowserWindow.fromId(id).show(),
+          nativeWindowId,
+        );
+      }
+      return nativeState();
+    },
+    (state) => state.visible && !state.minimized,
+    {
+      label: 'test native window shown',
+      timeoutMs: Math.max(1, startupDeadline - Date.now()),
+      stableMs: 0,
+    },
+  );
   if (process.env.CIRCLE_DESKTOP_CHECK_NARROW) {
     await page.waitForURL(/^circle:\/\/workbench/);
     viewportSizing = await setViewport(app, page, { width: 1024, height: 650 });
@@ -117,17 +234,25 @@ try {
   checks.push(
     'native application origin, isolated data and restricted renderer',
   );
-  if (
-    !(await page
-      .getByRole('button', { name: 'browser panel', exact: true })
-      .isVisible())
-  )
-    await page
-      .getByRole('button', { name: 'toggle inspector', exact: true })
-      .click();
+  const panelDeadline = Date.now() + 10000;
+  browserPanelReadiness = await waitDesktopReady(
+    panelState,
+    ({ native, renderer }) =>
+      native.visible &&
+      !native.minimized &&
+      renderer.button.visible &&
+      renderer.button.enabled &&
+      renderer.button.rect.width > 0 &&
+      renderer.button.rect.height > 0,
+    { label: 'browser panel actionability', stableMs: 50 },
+  );
+  await writeFile(
+    join(output, 'browser-panel-readiness.json'),
+    JSON.stringify(browserPanelReadiness, null, 2) + '\n',
+  );
   await page
     .getByRole('button', { name: 'browser panel', exact: true })
-    .click();
+    .click({ timeout: Math.max(1, panelDeadline - Date.now()) });
   await page
     .getByRole('textbox', { name: 'browser address', exact: true })
     .fill(siteUrl);
@@ -162,9 +287,29 @@ try {
   assert.equal(browserIdentity.contextIsolation, true);
   assert.ok(!browserIdentity.preload);
   assert.equal(browserState.url, siteUrl + '/');
-  const firstCapture = await page.evaluate(() =>
-    window.circleDesktop.browserCapture('session1'),
+  captureReadiness = await freshBrowserCapture(
+    async () => ({
+      state: await page.evaluate(() =>
+        window.circleDesktop.browserState('session1'),
+      ),
+      renderer: await page.evaluate(() => {
+        const rect = document
+          .querySelector('.native-browser-viewport')
+          ?.getBoundingClientRect();
+        return {
+          width: innerWidth,
+          height: innerHeight,
+          rect: rect
+            ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+            : undefined,
+        };
+      }),
+      native: await nativeState(browserIdentity.id),
+    }),
+    () => page.evaluate(() => window.circleDesktop.browserCapture('session1')),
+    { url: siteUrl + '/', title: 'Circle native browser fixture' },
   );
+  const firstCapture = captureReadiness.capture;
   assert.match(firstCapture.dataUrl, /^data:image\/png;base64,/);
   assert.equal(firstCapture.sha256.length, 64);
   assert.ok(firstCapture.attempts >= 1 && firstCapture.attempts <= 8);
@@ -474,6 +619,14 @@ try {
         frameOrigin: 'circle://workbench',
         isolation: preferences,
         browserIdentity,
+        startupReadiness,
+        browserPanelReadiness,
+        captureReadiness: {
+          last: captureReadiness.last,
+          reads: captureReadiness.reads,
+          captures: captureReadiness.captures,
+          rejected: captureReadiness.rejected,
+        },
         browserCapture: {
           sha256: firstCapture.sha256,
           attempts: firstCapture.attempts,
@@ -493,26 +646,71 @@ try {
     JSON.stringify({ checks: checks.length, errors, packaged: info.packaged }),
   );
 } catch (error) {
+  const captureEvidence = error.readiness ?? captureReadiness;
+  const readiness = {
+    error: String(error),
+    startupReadiness,
+    browserPanelReadiness,
+    captureReadiness: captureEvidence
+      ? {
+          last: captureEvidence.last,
+          reads: captureEvidence.reads,
+          captures: captureEvidence.captures,
+          rejected: captureEvidence.rejected,
+        }
+      : undefined,
+  };
+  // Save the already-observed state before asking a potentially stalled IPC
+  // endpoint for any further diagnostics. Extra evidence cannot replace the
+  // original failure or keep its bounded rejection waiting indefinitely.
+  await writeFile(
+    join(output, 'readiness-failure.json'),
+    JSON.stringify(readiness, null, 2) + '\n',
+  );
+  readiness.panel = await waitDesktopReady(panelState, () => true, {
+    label: 'failure DOM/native state',
+    timeoutMs: 2000,
+    stableMs: 0,
+  })
+    .then((result) => result.sample)
+    .catch((error) => ({ unavailable: String(error) }));
+  await writeFile(
+    join(output, 'readiness-failure.json'),
+    JSON.stringify(readiness, null, 2) + '\n',
+  );
+  console.error(JSON.stringify({ readiness }));
   if (app)
     console.error(
       JSON.stringify(
-        await app
-          .evaluate(({ BrowserWindow }) =>
-            BrowserWindow.getAllWindows().map((window) => ({
-              visible: window.isVisible(),
-              bounds: window.getBounds(),
-              children: window.contentView.children.map((view) => ({
-                bounds: view.getBounds(),
-                visible: view.getVisible(),
-                title: view.webContents?.getTitle(),
-                loading: view.webContents?.isLoading(),
+        await waitDesktopReady(
+          () =>
+            app.evaluate(({ BrowserWindow }) =>
+              BrowserWindow.getAllWindows().map((window) => ({
+                visible: window.isVisible(),
+                bounds: window.getBounds(),
+                children: window.contentView.children.map((view) => ({
+                  bounds: view.getBounds(),
+                  visible: view.getVisible(),
+                  title: view.webContents?.getTitle(),
+                  loading: view.webContents?.isLoading(),
+                })),
               })),
-            })),
-          )
-          .catch(() => []),
+            ),
+          () => true,
+          { label: 'failure native snapshot', timeoutMs: 2000, stableMs: 0 },
+        )
+          .then((result) => result.sample)
+          .catch((error) => ({ unavailable: String(error) })),
       ),
     );
-  await captureFailure(page, error, errors, output);
+  await waitDesktopReady(
+    async () => {
+      await captureFailure(page, error, errors, output);
+      return true;
+    },
+    () => true,
+    { label: 'failure renderer snapshot', timeoutMs: 2000, stableMs: 0 },
+  ).catch((error) => console.error(String(error)));
   throw error;
 } finally {
   if (app) {

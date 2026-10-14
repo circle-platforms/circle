@@ -15,7 +15,7 @@
     "test:runtime": "node ../../node_modules/tsx/dist/cli.mjs --test test/runtime.test.ts test/updater.test.ts test/browser-warning.test.ts",
     "test:live": "node test/live.mjs && node test/browser-live.mjs && node test/browser-coordinate-live.mjs && node test/ui-issues.mjs && node test/session-management.mjs && node test/network-native.mjs && node test/connection-issues.mjs",
     "test:clipboard": "node test/system-clipboard.mjs",
-    "test:desktop": "node --test test/browser-state.test.mjs && node test/desktop.mjs && node test/browser-page.mjs && node test/browser-lifecycle.mjs && node test/browser-address.mjs",
+    "test:desktop": "node --test test/browser-state.test.mjs test/desktop-readiness.test.mjs && node test/desktop.mjs && node test/browser-page.mjs && node test/browser-lifecycle.mjs && node test/browser-address.mjs",
     "format:check": "prettier --check src test scripts package.json tsconfig.json",
     "typecheck": "tsc --noEmit",
     "test:interface": "node test/interface.mjs",

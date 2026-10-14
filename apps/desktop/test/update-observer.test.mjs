@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -11,9 +11,26 @@ const helper = new URL('./helpers/update-observer.mjs', import.meta.url).href;
 const helperPath = fileURLToPath(
   new URL('./helpers/update-observer.mjs', import.meta.url),
 );
+function heartbeatProducer(write, intervalMs = 40) {
+  let stopped = false;
+  let pending = Promise.resolve();
+  const timer = setInterval(() => {
+    pending = pending.then(() => (stopped ? undefined : write()));
+    // Preserve failures for stop() without an unhandled rejection while the
+    // independent observer is still collecting evidence.
+    pending.catch(() => {});
+  }, intervalMs);
+  return {
+    async stop() {
+      stopped = true;
+      clearInterval(timer);
+      await pending;
+    },
+  };
+}
 async function fixture(t, source) {
   const folder = await mkdtemp(join(tmpdir(), 'circle-update-observer-'));
-  t.after(() => rm(folder, { recursive: true, force: true }));
+  const cleanup = [];
   const child = spawn(
     process.execPath,
     ['--input-type=module', '-e', source(folder)],
@@ -38,8 +55,14 @@ async function fixture(t, source) {
   const closed = new Promise((resolve) =>
     child.once('close', (code, signal) => resolve({ code, signal })),
   );
-  t.after(() => {
-    if (child.exitCode === null && child.signalCode === null) child.kill();
+  t.after(async () => {
+    try {
+      await Promise.all(cleanup.map((stop) => stop()));
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+      await closed;
+      await rm(folder, { recursive: true, force: true });
+    }
   });
   const ended = Promise.race([
     closed,
@@ -51,8 +74,53 @@ async function fixture(t, source) {
       timeout.unref();
     }),
   ]);
-  return { folder, child, closed: ended, output: () => output };
+  return { folder, child, cleanup, closed: ended, output: () => output };
 }
+
+test('heartbeat shutdown drains an in-flight file write before its directory is removed', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const folder = await mkdtemp(join(tmpdir(), 'circle-heartbeat-drain-'));
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  let release;
+  let started;
+  let writes = 0;
+  const entered = new Promise((resolve) => (started = resolve));
+  const gate = new Promise((resolve) => (release = resolve));
+  const producer = heartbeatProducer(async () => {
+    writes++;
+    started();
+    await writeFile(join(folder, 'heartbeat.json'), 'heartbeat');
+    await gate;
+    await appendFile(join(folder, 'progress.log'), 'still waiting\n');
+  });
+  t.mock.timers.tick(40);
+  await entered;
+  let drained = false;
+  const stopping = producer.stop().then(() => (drained = true));
+  await Promise.resolve();
+  assert.equal(drained, false);
+  release();
+  await stopping;
+  assert.equal(
+    await readFile(join(folder, 'progress.log'), 'utf8'),
+    'still waiting\n',
+  );
+  await rm(folder, { recursive: true });
+  t.mock.timers.tick(400);
+  await producer.stop();
+  assert.equal(writes, 1);
+});
+
+test('heartbeat shutdown reports a write failure instead of leaving an unhandled rejection', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const failure = Error('fixture write failed');
+  const producer = heartbeatProducer(async () => {
+    throw failure;
+  });
+  t.mock.timers.tick(40);
+  await Promise.resolve();
+  await assert.rejects(producer.stop(), (error) => error === failure);
+});
 
 test('an independent observer captures a blocked Node, ignores heartbeat progress and ends only its owned processes', async (t) => {
   const f = await fixture(
@@ -71,13 +139,12 @@ test('an independent observer captures a blocked Node, ignores heartbeat progres
     stdio: 'ignore',
   });
   t.after(() => sentinel.kill());
-  const timer = setInterval(async () => {
+  const producer = heartbeatProducer(async () => {
     await writeFile(
       join(f.folder, 'heartbeat.json'),
       JSON.stringify({ kind: 'heartbeat', time: Date.now() }),
     );
     // The independent producer keeps the log moving while the target event loop is stuck.
-    const { appendFile } = await import('node:fs/promises');
     await appendFile(
       join(f.folder, 'progress.log'),
       JSON.stringify({
@@ -86,10 +153,10 @@ test('an independent observer captures a blocked Node, ignores heartbeat progres
         text: 'still waiting',
       }) + '\n',
     );
-  }, 40);
-  t.after(() => clearInterval(timer));
+  });
+  f.cleanup.push(() => producer.stop());
   const end = await f.closed;
-  clearInterval(timer);
+  await producer.stop();
   assert.notEqual(end.code, 0, f.output());
   assert.match(f.output(), /observer ready/);
   let evidence;
