@@ -27,6 +27,11 @@ import type {
 import { emptyUsage } from '../src/types.js';
 import { getEventListeners } from 'node:events';
 import { cleanup, scratch as made } from './helpers.js';
+import {
+  BrowserFixture,
+  BrowserFixtureDeadline,
+  type BrowserFixtureRecord,
+} from './browser-fixture.js';
 
 // The terminal's browser, driven for real: a Chrome or Edge without a window, local HTTP and
 // HTTPS sites with a certificate made for this test, nothing from the network.
@@ -373,6 +378,239 @@ function browserProtocolTrace(chrome: ChromeBrowser) {
     recent: records,
   });
 }
+
+/** Immediate, bounded-fixture records contain identities and protocol state only. */
+function browserFixture(
+  chrome: ChromeBrowser,
+  budgetMs: number,
+  report: (record: BrowserFixtureRecord) => void = (record) =>
+    process.stderr.write(JSON.stringify({ browserFixture: record }) + '\n'),
+) {
+  const internal = chrome as unknown as {
+    child?: ChildProcess;
+    conversations: Map<
+      string,
+      {
+        active?: string;
+        tabs: Map<
+          string,
+          {
+            session: string;
+            dialogs: { id: string; type: string }[];
+            intercepting?: boolean;
+            chooser?: unknown;
+          }
+        >;
+      }
+    >;
+  };
+  const protocol = browserProtocolTrace(chrome);
+  return new BrowserFixture({
+    budgetMs,
+    report,
+    close: () => chrome.close(),
+    state: () => ({
+      process: internal.child
+        ? {
+            pid: internal.child.pid,
+            exitCode: internal.child.exitCode,
+            signalCode: internal.child.signalCode,
+          }
+        : undefined,
+      conversations: [...internal.conversations].map(([id, conversation]) => ({
+        id,
+        active: conversation.active,
+        tabs: [...conversation.tabs].map(([id, tab]) => ({
+          id,
+          session: tab.session,
+          dialogs: tab.dialogs.map(({ id, type }) => ({ id, type })),
+          intercepting: tab.intercepting,
+          chooser: !!tab.chooser,
+        })),
+      })),
+      pending: protocol().pending.map((entry) => {
+        const { method, session, elapsed } = entry as Record<string, unknown>;
+        return { method, session, elapsed };
+      }),
+    }),
+  });
+}
+
+test(
+  'a fixture deadline closes its owned real Chrome and rejects the original pending CDP request',
+  { skip: executable ? false : 'no Chrome, Edge or Chromium is installed' },
+  async (t) => {
+    const temp = made(t, 'circle-chrome-fixture-deadline-');
+    const site = createHttp((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<!doctype html><title>local pending fixture</title>');
+    });
+    const url = `http://127.0.0.1:${await listen(site)}`;
+    t.after(() => site.close());
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: join(temp, 'downloads'),
+    });
+    const records: BrowserFixtureRecord[] = [];
+    const fixture = browserFixture(
+      chrome,
+      60_000 + 15_000 + 5000 + 3000,
+      (record) => records.push(record),
+    );
+    cleanup(t, () => fixture.close());
+    await fixture.run({ phase: 'prepare local page', action: 'navigate' }, () =>
+      chrome.request('deadline', 'navigate', { url }, fixture.signal),
+    );
+    const internal = chrome as unknown as {
+      child: ChildProcess;
+      conversations: Map<string, { tabs: Map<string, { session: string }> }>;
+      send: (
+        method: string,
+        params?: Record<string, unknown>,
+        session?: string,
+      ) => Promise<any>;
+    };
+    const child = internal.child;
+    const tab = internal.conversations.get('deadline')!.tabs.get('t1')!;
+    const pending = internal.send(
+      'Runtime.evaluate',
+      {
+        expression: 'window.circlePendingFixture = true; new Promise(() => {})',
+        awaitPromise: true,
+        returnByValue: true,
+      },
+      tab.session,
+    );
+    const observed = pending.then(
+      () => ({ rejected: false, error: undefined }),
+      (error: unknown) => ({ rejected: true, error }),
+    );
+    const marker = await fixture.run(
+      {
+        phase: 'verify pending evaluation started',
+        method: 'Runtime.evaluate',
+        session: tab.session,
+      },
+      () =>
+        internal.send(
+          'Runtime.evaluate',
+          { expression: 'window.circlePendingFixture', returnByValue: true },
+          tab.session,
+        ),
+      5000,
+    );
+    assert.equal(
+      marker.result.value,
+      true,
+      'the real pending evaluation started',
+    );
+    // A broken fixture bound must fail this test without hanging the whole suite.
+    let fallback = false;
+    let fallbackClose: Promise<void> | undefined;
+    const watchdog = setTimeout(
+      () => {
+        fallback = true;
+        fallbackClose = fixture.close();
+        fallbackClose.catch(() => {});
+      },
+      200 + 2000 + 3000 + 1000,
+    );
+    try {
+      await assert.rejects(
+        fixture.run(
+          {
+            phase: 'never-resolving real evaluation',
+            method: 'Runtime.evaluate',
+            session: tab.session,
+          },
+          () => pending,
+          200,
+        ),
+        (error) => {
+          assert.ok(error instanceof BrowserFixtureDeadline);
+          assert.equal(error.limitMs, 200);
+          assert.equal(error.fixturePhase.method, 'Runtime.evaluate');
+          assert.equal(error.fixturePhase.session, tab.session);
+          assert.equal(error.fixturePhase.status, 'timeout');
+          assert.ok(fixture.signal.aborted);
+          return true;
+        },
+      );
+    } finally {
+      clearTimeout(watchdog);
+      await fallbackClose;
+    }
+    assert.equal(fallback, false, 'the fixture phase deadline owns shutdown');
+    const result = await observed;
+    assert.equal(result.rejected, true);
+    assert.match(String(result.error), /browser was closed/);
+    assert.ok(child.exitCode !== null || child.signalCode !== null);
+    assert.throws(() => process.kill(child.pid!, 0), { code: 'ESRCH' });
+    assert.ok(records.some((record) => record.status === 'late-rejection'));
+    assert.ok(records.some((record) => record.status === 'cleanup-after'));
+    const serialized = JSON.stringify(records);
+    assert.equal(serialized.includes('circlePendingFixture'), false);
+    assert.equal(serialized.includes(url), false);
+    assert.equal(serialized.includes('expression'), false);
+  },
+);
+
+test('fixture phases share one deadline and never dispatch a later action after it', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  const records: BrowserFixtureRecord[] = [];
+  let closed = 0;
+  const fixture = new BrowserFixture({
+    budgetMs: 100,
+    state: () => ({ tab: 't1', session: 'fixture-session', dialogs: [] }),
+    close: async () => {
+      closed++;
+    },
+    report: (record) => records.push(record),
+  });
+  cleanup(t, () => fixture.close());
+  let finishFirst!: () => void;
+  const first = fixture.run(
+    { phase: 'first completed action', action: 'snapshot' },
+    () => new Promise<void>((resolve) => (finishFirst = resolve)),
+  );
+  await Promise.resolve();
+  t.mock.timers.tick(60);
+  finishFirst();
+  await first;
+  let rejectSecond!: (error: Error) => void;
+  const second = fixture.run(
+    { phase: 'second pending action', action: 'snapshot' },
+    () => new Promise<void>((_resolve, reject) => (rejectSecond = reject)),
+    1000,
+  );
+  const rejected = assert.rejects(second, (error) => {
+    assert.ok(error instanceof BrowserFixtureDeadline);
+    assert.equal(error.limitMs, 100);
+    assert.equal(error.fixturePhase.elapsed, 100);
+    assert.equal(error.fixturePhase.phase, 'second pending action');
+    return true;
+  });
+  await Promise.resolve();
+  t.mock.timers.tick(39);
+  assert.equal(fixture.signal.aborted, false);
+  t.mock.timers.tick(1);
+  await rejected;
+  let dispatched = false;
+  await assert.rejects(
+    fixture.run({ phase: 'too late' }, async () => {
+      dispatched = true;
+    }),
+    (error) => error === fixture.signal.reason,
+  );
+  assert.equal(dispatched, false);
+  assert.equal(closed, 1);
+  rejectSecond(Error('late CDP failure'));
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.ok(records.some((record) => record.status === 'late-rejection'));
+  assert.equal(getEventListeners(fixture.signal, 'abort').length, 0);
+});
 
 test(
   'the TUI agent clears real text and number inputs with empty browser_type calls and trusted input events',
@@ -1659,12 +1897,44 @@ test(
       headless: true,
       downloads,
     });
-    cleanup(t, () => chrome.close());
-    const signal = new AbortController().signal;
-    const act = (action: BrowserAction, args: Record<string, unknown> = {}) =>
-      chrome.request('c', action, args, signal).catch((error: Error) => {
-        error.message = `${action} ${JSON.stringify(args)}: ${error.message}`;
-        throw error;
+    // One shared budget: existing 60s startup, the five provenance sections'
+    // 15s idle + 5s page + 3s download waits, two 10s held-download waits, and
+    // the unchanged fixed pauses below (1s + 2.5s + .8s + .5s + .5s).
+    const budget = 60_000 + 5 * (15_000 + 5000 + 3000) + 2 * 10_000 + 5300;
+    const fixture = browserFixture(chrome, budget);
+    cleanup(t, () => fixture.close());
+    const signal = AbortSignal.any([t.signal, fixture.signal]);
+    let section = 'blob download';
+    let firstAction = true;
+    const actionBudget = 15_000 + 2 * 5000 + 3000;
+    const act = (
+      action: BrowserAction,
+      args: Record<string, unknown> = {},
+      bound = actionBudget,
+    ) => {
+      const limit = firstAction
+        ? 60_000 + actionBudget
+        : Math.min(actionBudget, bound);
+      firstAction = false;
+      return fixture.run(
+        { phase: section, action },
+        () => chrome.request('c', action, args, signal),
+        limit,
+      );
+    };
+    const pause = (ms: number) =>
+      new Promise<void>((resolve, reject) => {
+        const aborted = () => {
+          clearTimeout(timer);
+          signal.removeEventListener('abort', aborted);
+          reject(signal.reason);
+        };
+        const timer = setTimeout(() => {
+          signal.removeEventListener('abort', aborted);
+          resolve();
+        }, ms);
+        signal.addEventListener('abort', aborted, { once: true });
+        if (signal.aborted) aborted();
       });
     const ref = (text: string, pattern: RegExp) => {
       const match = text.match(pattern);
@@ -1678,8 +1948,9 @@ test(
     const held = async (result: Awaited<ReturnType<typeof act>>) => {
       const end = Date.now() + 10_000;
       while (!result.approval && Date.now() < end) {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-        result = await act('snapshot');
+        await pause(250);
+        if (Date.now() >= end) break;
+        result = await act('snapshot', {}, end - Date.now());
       }
       return result;
     };
@@ -1691,7 +1962,7 @@ test(
       element: 'make',
     });
     // The page makes the file after the click: asked with this result or the next
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await pause(1000);
     const made2 = make.approval ? make : await act('snapshot');
     assert.equal(made2.approval?.kind, 'download');
     assert.equal((made2.approval as { site: string }).site, base);
@@ -1706,13 +1977,14 @@ test(
     );
 
     // ---- a download a page starts a moment after the model's click is still the model's
+    section = 'late download';
     const late = await act('navigate', { url: `${base}/late` });
     const clicked = await act('click', {
       ref: ref(late.text, /\[(e\d+)\] button "Later"/),
       element: 'later',
     });
     assert.equal(clicked.approval, undefined);
-    await new Promise((resolve) => setTimeout(resolve, 2500));
+    await pause(2500);
     const after = await act('snapshot');
     assert.equal(after.approval?.kind, 'download');
     assert.equal((after.approval as { site: string }).site, base);
@@ -1722,6 +1994,7 @@ test(
     assert.equal(existsSync(join(downloads, 'mine.bin')), false);
 
     // ---- files from two sites are asked about site by site
+    section = 'two download sites';
     const two = await act('navigate', { url: `${base}/two` });
     const both = await act('click', {
       ref: ref(two.text, /\[(e\d+)\] button "Both"/),
@@ -1751,8 +2024,9 @@ test(
     assert.equal(existsSync(join(downloads, discardedName)), false);
 
     // ---- a dialog in another tab is answered only with that site's allowance
+    section = 'other tab dialog';
     const opened = await act('tabs', { action: 'new', url: otherBase });
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    await pause(800);
     const asking = await act('snapshot');
     const dialog = ref(asking.text, /\[(d\d+)\] confirm/);
     void opened;
@@ -1779,6 +2053,7 @@ test(
     await act('tabs', { action: 'close', tab: 't2' });
 
     // ---- a dialog that ends Circle's click ends its hold on the page's file choosers too
+    section = 'person file picker after alert';
     const files = await act('navigate', { url: `${base}/alert` });
     const saved = await act('click', {
       ref: ref(files.text, /\[(e\d+)\] button "Save"/),
@@ -1798,21 +2073,35 @@ test(
     };
     const tab = internals.conversations.get('c')!.tabs.get('t1')!;
     // The person closes the alert and opens the file picker themselves
-    await internals.send(
-      'Page.handleJavaScriptDialog',
-      { accept: true },
-      tab.session,
-    );
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    await internals.send(
-      'Runtime.evaluate',
+    await fixture.run(
       {
-        expression: `document.querySelector('input[type=file]').click()`,
-        userGesture: true,
+        phase: section,
+        method: 'Page.handleJavaScriptDialog',
+        session: tab.session,
       },
-      tab.session,
+      () =>
+        internals.send(
+          'Page.handleJavaScriptDialog',
+          { accept: true },
+          tab.session,
+        ),
+      5000,
     );
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await pause(500);
+    await fixture.run(
+      { phase: section, method: 'Runtime.evaluate', session: tab.session },
+      () =>
+        internals.send(
+          'Runtime.evaluate',
+          {
+            expression: `document.querySelector('input[type=file]').click()`,
+            userGesture: true,
+          },
+          tab.session,
+        ),
+      5000,
+    );
+    await pause(500);
     assert.equal(tab.chooser, undefined);
   },
 );

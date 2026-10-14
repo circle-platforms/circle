@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 import { _electron as electron } from 'playwright';
 
 // One diagnostic experiment, not a substitute for the production adapter's tests.
@@ -13,6 +14,15 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const output = join(root, '../../outputs/browser-regressions');
 const require = createRequire(import.meta.url);
 const temp = await mkdtemp(join(tmpdir(), 'circle-input-focus-'));
+const bundle = await build({
+  entryPoints: [join(root, '../../src/browser/page.ts')],
+  bundle: true,
+  write: false,
+  format: 'iife',
+  globalName: 'CirclePage',
+  target: 'chrome144',
+});
+const pageScript = bundle.outputFiles[0].text;
 await mkdir(output, { recursive: true });
 const server = createServer((request, response) => {
   response.setHeader('Content-Type', 'text/html');
@@ -29,7 +39,7 @@ await writeFile(
   main,
   `const {app,BrowserWindow}=require('electron');
 app.setPath('userData',${JSON.stringify(join(temp, 'data'))});
-globalThis.newInputWindow=async()=>{const window=new BrowserWindow({show:false,width:1100,height:850,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});globalThis.inputWindow=window;await window.loadURL(${JSON.stringify(url)});};
+globalThis.newInputWindow=async()=>{const window=new BrowserWindow({show:false,width:1100,height:850,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});globalThis.inputWindow=window;const contents=window.webContents;globalThis.inputNativeEvents=[];globalThis.inputNativeState=()=>{const main=contents.mainFrame;const frame=f=>f?{process:f.processId,routing:f.routingId,tree:f.frameTreeNodeId,main:f===main,detached:f.detached}:null;return {type:contents.getType(),mainFrame:frame(main),focusedFrame:frame(contents.focusedFrame),frames:main.framesInSubtree.map(frame)}};const record=(kind,extra={})=>inputNativeEvents.push({at:Date.now(),kind,...extra,state:inputNativeState()});window.on('ready-to-show',()=>record('ready-to-show'));for(const event of ['dom-ready','did-finish-load','did-stop-loading','focus','blur'])contents.on(event,()=>record(event));contents.on('before-input-event',(event,input)=>record('before-input-event',{type:input.type,code:input.code,prevented:event.defaultPrevented}));await window.loadURL(${JSON.stringify(url)});};
 app.whenReady().then(()=>newInputWindow());
 app.on('window-all-closed',()=>{});`,
 );
@@ -135,6 +145,7 @@ try {
         requests: [],
         contexts: [],
         events: [],
+        protocol: [],
       };
       results.push(row);
       let cdp;
@@ -242,6 +253,48 @@ try {
             clearTimeout(timer);
           }
         };
+        const shared = async (command, args = {}) => {
+          const at = Date.now();
+          const entry = { command, at };
+          row.protocol.push(entry);
+          const result = await limited(() =>
+            app.evaluate(
+              async (_, { pageScript, command, args }) =>
+                inputWindow.webContents.executeJavaScriptInIsolatedWorld(999, [
+                  {
+                    code:
+                      pageScript +
+                      '\n(async()=>{try{return {ok:true,value:await CirclePage.browserPage(' +
+                      JSON.stringify(command) +
+                      ',' +
+                      JSON.stringify(args) +
+                      ')}}catch(error){return {ok:false,error:error.message}}})()',
+                  },
+                ]),
+              { pageScript, command, args },
+            ),
+          );
+          entry.elapsed = Date.now() - at;
+          entry.ok = result.ok;
+          if (!result.ok) throw Error(result.error);
+          return result.value;
+        };
+        let refs;
+        const positive = !(
+          mode === 'hidden' && transport === 'electron-debugger'
+        );
+        if (positive) {
+          const snapshot = await shared('snapshot');
+          refs = Object.fromEntries(
+            ['username', 'number'].map((id) => {
+              const line = snapshot
+                .split('\n')
+                .find((line) => line.includes(JSON.stringify(id)));
+              assert(line, 'shared snapshot must expose fixture field');
+              return [id, /\[(e\d+)\]/.exec(line)[1]];
+            }),
+          );
+        }
         const send = async (method, args, id, expected, since) => {
           const start = Date.now();
           const request = {
@@ -254,6 +307,9 @@ try {
           };
           row.requests.push(request);
           try {
+            request.native = await limited(() =>
+              app.evaluate(() => inputNativeState()),
+            );
             // A stuck transport must not prevent the other diagnostic combinations.
             await limited(
               () =>
@@ -299,21 +355,52 @@ try {
           );
           const requestStart = row.requests.length;
           try {
-            // Match browserPage's isolated-world focus/select behavior without changing a value.
-            await limited(() =>
-              app.evaluate(
-                async (_, id) =>
-                  inputWindow.webContents.executeJavaScriptInIsolatedWorld(
-                    999,
-                    [
-                      {
-                        code: `(()=>{const field=document.getElementById(${JSON.stringify(id)});field.focus();if(field.type!=='number')field.select();return document.activeElement===field})()`,
-                      },
-                    ],
-                  ),
-                id,
-              ),
-            );
+            if (positive) {
+              const target = await shared('prepare', {
+                ref: refs[id],
+                typing: true,
+              });
+              await shared('overlay', {
+                ...target,
+                typing: true,
+                click: false,
+                label: 'fixture input',
+                color: 'CanvasText',
+                background: 'Canvas',
+                foreground: 'CanvasText',
+                tint: 'transparent',
+              });
+              await shared('prepare', { ref: refs[id], typing: true });
+              await shared('focus', { ref: refs[id] });
+              await shared('guard-key');
+            } else {
+              // The cold negative control retains its original bare input path.
+              await limited(() =>
+                app.evaluate(
+                  async (_, id) =>
+                    inputWindow.webContents.executeJavaScriptInIsolatedWorld(
+                      999,
+                      [
+                        {
+                          code: `(()=>{const field=document.getElementById(${JSON.stringify(id)});field.focus();if(field.type!=='number')field.select();return document.activeElement===field})()`,
+                        },
+                      ],
+                    ),
+                  id,
+                ),
+              );
+              if (requireKeyboard)
+                check.nativeFocusAfterDom = await limited(() =>
+                  app.evaluate(() => {
+                    inputWindow.webContents.focus();
+                    return {
+                      visible: inputWindow.isVisible(),
+                      windowFocused: inputWindow.isFocused(),
+                      contentsFocused: inputWindow.webContents.isFocused(),
+                    };
+                  }),
+                );
+            }
             const select = {
               key: 'a',
               code: 'KeyA',
@@ -334,6 +421,7 @@ try {
               expected,
               since,
             );
+            if (positive) await shared('guard-type', { ref: refs[id] });
             if (operation === 'replace')
               await send(
                 'Input.insertText',
@@ -343,6 +431,7 @@ try {
                 since,
               );
             else {
+              if (positive) await shared('guard-key', { key: 'Backspace' });
               const backspace = {
                 key: 'Backspace',
                 code: 'Backspace',
@@ -481,6 +570,10 @@ try {
         row.events = await limited(() =>
           page.evaluate(() => window.circleInputFocusEvents),
         );
+        row.nativeEvents = await app.evaluate(() => inputNativeEvents);
+        row.preparation = positive
+          ? 'shared prepare/overlay/prepare/focus/guards'
+          : 'bare cold input';
         row.passed =
           row.elapsed <= 10_000 &&
           (mode !== 'visible-focused' || row.visibleFocusEstablished) &&
