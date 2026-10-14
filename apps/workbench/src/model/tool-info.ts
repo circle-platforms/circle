@@ -278,6 +278,30 @@ export const BUILTIN_TOOL_INFO = [
     kind: 'browser',
   },
   {
+    name: 'browser_record',
+    get description() {
+      return t("Record the conversation's browser actions as a script");
+    },
+    get detail() {
+      return t(
+        "Write this conversation's browser actions to a script file in Circle's own format, each element kept by its role and name. Writing the file asks as writing any file does.",
+      );
+    },
+    kind: 'browser',
+  },
+  {
+    name: 'browser_replay',
+    get description() {
+      return t('Replay a recorded browser script');
+    },
+    get detail() {
+      return t(
+        "Run a script's steps in the conversation's browser without the model in between, waiting for each element. It acts only on the site it starts on, which you allow as for other browser actions, and stops at the first step that cannot be done.",
+      );
+    },
+    kind: 'browser',
+  },
+  {
     name: 'execute',
     get description() {
       return t('Run a shell command in the workspace');

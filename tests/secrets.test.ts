@@ -12,6 +12,9 @@ import {
   secretNames,
   secretsPath,
   expandVariables,
+  secretRedactor,
+  standsIn,
+  written,
 } from '../src/secrets.js';
 import {
   ApprovalPolicy,
@@ -322,6 +325,159 @@ test('a secret that is also a plain variable is not hidden behind the secret nam
     (message) => message.role === 'tool',
   )!;
   assert.equal(result.content, 'field: admin %LAB_TOKEN%');
+});
+
+test('a value stands in text only as a whole word, and what the person and the model wrote leaves out notices and command output', () => {
+  assert.equal(standsIn('用户名 admin，登录后告诉我', 'admin'), true);
+  assert.equal(standsIn('admin', 'admin'), true);
+  assert.equal(standsIn('value="admin"', 'admin'), true);
+  assert.equal(standsIn('the administrator', 'admin'), false);
+  assert.equal(standsIn('sysadmin', 'admin'), false);
+  assert.equal(standsIn('admin_2 or 管理admin', 'admin'), false);
+  assert.equal(standsIn('sysadmin, then admin', 'admin'), true);
+  assert.equal(standsIn('', 'admin'), false);
+  assert.equal(standsIn('anything', ''), false);
+  assert.deepEqual(
+    written([
+      { id: '1', role: 'user', content: 'sign in as admin' },
+      {
+        id: '2',
+        role: 'assistant',
+        content: 'typing',
+        tool_calls: [
+          {
+            id: 'c',
+            name: 'fill',
+            args: { fields: [{ text: 'admin' }], password: '%PASS%', n: 3 },
+          },
+        ],
+      },
+      {
+        id: '3',
+        role: 'tool',
+        content: 'page shows hunter2',
+        tool_call_id: 'c',
+      },
+      {
+        id: '4',
+        role: 'user',
+        content: 'job printed hunter2',
+        internal: 'job_notice',
+      },
+      {
+        id: '5',
+        role: 'user',
+        content: '!cat notes',
+        shell: { command: 'cat notes', output: 'hunter2', exit_code: 0 },
+      },
+    ]),
+    ['sign in as admin', 'typing', 'admin', '%PASS%'],
+  );
+  const redact = secretRedactor(() => ({
+    PASS: 'admin',
+    TOKEN: 'token-value-1',
+  }));
+  let read = 0;
+  const known = () => {
+    read += 1;
+    return ['sign in as admin'];
+  };
+  assert.equal(
+    redact('value="admin" token-value-1', {}, known),
+    'value="admin" %TOKEN%',
+  );
+  // Inside another word in what was written, or with nothing written, the value is hidden
+  assert.equal(
+    redact('value="admin"', {}, () => ['the administrator']),
+    'value="%PASS%"',
+  );
+  assert.equal(redact('value="admin"'), 'value="%PASS%"');
+  // What was written is read only when a secret's value is in the text
+  read = 0;
+  assert.equal(redact('nothing secret here', {}, known), 'nothing secret here');
+  assert.equal(read, 0);
+});
+
+test('a user name that is also the password stays as the person and the model wrote it, in a page and in a background notice', async (t) => {
+  const root = scratch(t);
+  // A lab device whose password is its user name; the person names the user in the prompt
+  saveSecret(root, 'LAB_PASSWORD', 'admin');
+  saveSecret(root, 'LAB_TOKEN', 'token-value-1');
+  const fields: Record<string, string> = { user: '', password: '' };
+  const form: Tool = {
+    name: 'fill_field',
+    description: 'types into a sign-in form and shows the form',
+    effect: 'read',
+    parameters: {
+      type: 'object',
+      properties: { field: { type: 'string' }, text: { type: 'string' } },
+      required: ['field', 'text'],
+    },
+    run: async (args) => {
+      fields[String(args.field)] = String(args.text);
+      return [
+        `textbox "user" value="${fields.user}"`,
+        `password "password" ${fields.password ? 'filled' : 'empty'}`,
+        'session token-value-1',
+      ].join('\n');
+    },
+  };
+  const step = (id: string, name: string, args: Record<string, unknown>) => ({
+    message: {
+      id,
+      role: 'assistant' as const,
+      content: '',
+      tool_calls: [{ id, name, args }],
+    },
+  });
+  const model = new ScriptedModel([
+    step('user', 'fill_field', { field: 'user', text: 'admin' }),
+    step('password', 'fill_field', {
+      field: 'password',
+      text: '%LAB_PASSWORD%',
+    }),
+    step('job', 'execute', {
+      command: 'echo signed in as admin with %LAB_TOKEN%',
+      background: true,
+    }),
+    { message: { id: 'first', role: 'assistant', content: 'signed in' } },
+    { message: { id: 'second', role: 'assistant', content: 'seen' } },
+  ]);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: trustFolder(defaultSettings(), root),
+    model,
+    extraTools: [form],
+    approve: async () => 'approve',
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.harness.run('sign in to the lab device as admin');
+  const end = Date.now() + 10000;
+  while (
+    runtime.jobs.list().some((job) => job.status === 'running') &&
+    Date.now() < end
+  )
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  await runtime.harness.run('anything new?');
+  // The page got the password; the model reads the user name it typed, not the secret's name
+  assert.deepEqual(fields, { user: 'admin', password: 'admin' });
+  const last = model.requests.at(-1)!.messages;
+  const result = (id: string) =>
+    last.find((message) => message.tool_call_id === id)!.content;
+  assert.equal(
+    result('password'),
+    'textbox "user" value="admin"\npassword "password" filled\nsession %LAB_TOKEN%',
+  );
+  const notice = last.find((message) => message.internal === 'job_notice');
+  assert(notice, 'the background notice reached the model');
+  assert.match(String(notice.content), /signed in as admin with %LAB_TOKEN%/);
+  // In history too: no tool result or notice shows the user name as the secret
+  const stored = runtime.store
+    .messages(runtime.session.id)
+    .filter((message) => message.role === 'tool' || message.internal);
+  assert.equal(JSON.stringify(stored).includes('%LAB_PASSWORD%'), false);
+  assert.equal(JSON.stringify(model.requests).includes('token-value-1'), false);
 });
 
 test('a secret question that is not answered asks again rather than pointing to a file', async (t) => {

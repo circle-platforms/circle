@@ -917,8 +917,12 @@ pre {
   color: var(--muted);
 }
 .plan-items {
-  padding: 0 12px 9px;
-  max-height: 90px;
+  position: relative;
+  padding: 0 12px;
+  /* Whole rows, so none is cut in half; the space under them is a margin, outside the
+     scrolled rows. The step under way is scrolled into sight. */
+  margin-bottom: 9px;
+  max-height: calc(4 * (1.8em + 4px));
   overflow: auto;
 }
 .plan-items > div {
@@ -2715,7 +2719,7 @@ pre {
     max-height: 46px;
   }
   .plan-items {
-    max-height: 65px;
+    max-height: calc(3 * (1.8em + 4px));
   }
   .tool-head {
     gap: 6px;
@@ -3042,9 +3046,15 @@ pre {
 :root:not([data-desktop='darwin']) .desktop-drag-region {
   display: none;
 }
+.native-browser {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
 .native-browser-viewport {
   position: relative;
-  height: min(640px, max(320px, calc(100vh - 300px)));
+  /* Fills the panel under the bars, so nothing is left blank below the footer */
+  flex: 1 0 320px;
   margin: 12px -5px 0;
   border: 1px solid var(--border);
   border-radius: 6px;

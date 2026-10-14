@@ -366,6 +366,9 @@ async function createWindow() {
     process.env.CIRCLE_WORKBENCH_DATA_DIR
       ? join(dataPath, 'downloads')
       : app.getPath('downloads'),
+    // How the person handed over the browser: auto mode takes it back by itself
+    (id) =>
+      runtime?.state().snapshot.sessions.find((row) => row.id === id)?.mode,
   );
   runtime?.onBrowser((request, signal) => {
     if (!browsers) throw Error('the browser is closed');
@@ -468,6 +471,8 @@ app
       }
       if (command.name === 'close')
         throw Error('use the application quit action');
+      // A message to Circle hands back the browser the person had
+      if (command.name === 'prompt') browsers?.personWrote(command.sessionId);
       return runtime.command(command);
     });
     handle('circle:choose-files', async (purpose) => {

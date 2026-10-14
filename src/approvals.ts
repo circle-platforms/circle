@@ -637,7 +637,8 @@ export const SESSION_MODES: readonly SessionMode[] = [
 ];
 export const isSessionMode = (value: unknown): value is SessionMode =>
   SESSION_MODES.includes(value as SessionMode);
-const EDIT_TOOLS = ['write_file', 'edit_file', 'apply_patch'];
+// browser_record writes a script file as write_file writes any file
+const EDIT_TOOLS = ['write_file', 'edit_file', 'apply_patch', 'browser_record'];
 // The browser tools that act on a page. "Allow for this session" covers them on one site,
 // the one the action acts on (`site`, which the tools add): another site asks again. A rule
 // for every site, from before sites were told apart, still covers them all.
@@ -649,6 +650,8 @@ const BROWSER_ACTIONS: Record<string, string> = {
   browser_press: 'presses a key in the browser',
   browser_dialog: 'answers a dialog in the browser',
   browser_tabs: "manages the browser's tabs",
+  // Every step of the script, on the site it starts on: it acts on no other
+  browser_replay: 'runs a recorded browser script',
 };
 /** The tool name an approval rule is kept under: `browser` for every browser action. */
 export const ruleTool = (tool: string): string =>
@@ -754,6 +757,15 @@ export class ApprovalPolicy {
       );
     if (Object.hasOwn(BROWSER_ACTIONS, tool)) {
       const site = typeof args.site === 'string' ? args.site : '';
+      // A click on a control that deletes, clears or resets something, or accepting a dialog
+      // that says so, asks every time, as a deleting command does: a rule for the site does
+      // not cover it, and only auto mode stops asking (the tools add `deletes`)
+      if (typeof args.deletes === 'string' && args.deletes)
+        return review(
+          'ASK_FORCED',
+          `${BROWSER_ACTIONS[tool]}, which can delete: ${JSON.stringify(args.deletes)}`,
+          { warn_delete: true },
+        );
       return review('ASK', BROWSER_ACTIONS[tool]!, {
         pattern: site ? 'site:' + site : '*',
         scope: site ? `browser control on ${site}` : 'browser control',

@@ -164,6 +164,55 @@ try {
   await page.getByRole('button', { name: 'toggle plan', exact: true }).click();
   assert.equal(await page.locator('.plan-items').count(), 1);
   checks.push('plan folds in place without changing its records');
+  // A long plan shows whole rows, with the step under way in sight
+  const message = page.getByRole('textbox', { name: 'message', exact: true });
+  await message.fill('x');
+  await page.waitForFunction(() =>
+    localStorage.getItem('circle.workbench.preview.v1'),
+  );
+  await message.fill('');
+  await page.evaluate(() => {
+    const key = 'circle.workbench.preview.v1';
+    const saved = JSON.parse(localStorage.getItem(key));
+    saved.sessions.find((row) => row.id === 'session1').todos = Array.from(
+      { length: 7 },
+      (_, index) => ({
+        id: 'long' + index,
+        text: 'Step ' + (index + 1),
+        status: index < 5 ? 'completed' : index === 5 ? 'running' : 'pending',
+      }),
+    );
+    localStorage.setItem(key, JSON.stringify(saved));
+  });
+  await page.reload();
+  await page.locator('.plan-items .running').waitFor();
+  const plan = await page.evaluate(() => {
+    const list = document.querySelector('.plan-items');
+    // The list scrolls exactly its rows: whatever shows between its edges is a row
+    const box = list.getBoundingClientRect();
+    return {
+      top: box.top,
+      bottom: box.bottom,
+      rows: [...list.children].map((row) => {
+        const rect = row.getBoundingClientRect();
+        return { status: row.className, top: rect.top, bottom: rect.bottom };
+      }),
+    };
+  });
+  const shown = plan.rows.filter(
+    (row) => row.bottom > plan.top + 1 && row.top < plan.bottom - 1,
+  );
+  for (const row of shown)
+    assert(
+      row.top >= plan.top - 1 && row.bottom <= plan.bottom + 1,
+      `a plan row is cut: ${JSON.stringify({ row, plan: [plan.top, plan.bottom] })}`,
+    );
+  assert(shown.some((row) => row.status === 'running'));
+  assert(shown.length >= 3 && shown.length < 7, `rows shown: ${shown.length}`);
+  checks.push(
+    'a long plan shows whole rows and keeps the step under way in sight',
+  );
+  await reset();
   await page
     .getByRole('textbox', { name: 'message', exact: true })
     .fill('keep this draft');

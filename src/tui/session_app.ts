@@ -111,7 +111,7 @@ import { stripAnsi } from '../ink/string_width.js';
 import { modelScope } from '../model_scope.js';
 import { resumeHint, runningJobs, stoppedJobsLine } from './exit_lines.js';
 import { ChromeBrowser, findBrowser } from '../browser/chrome.js';
-import { browserTools } from '../browser/tools.js';
+import { browserTools, runtimeBrowserOptions } from '../browser/tools.js';
 import type {
   BrowserApproval,
   CertificateApproval,
@@ -682,6 +682,7 @@ export class SessionApp {
         headless: process.env.CIRCLE_BROWSER_HEADLESS === '1',
         handoff: (reason, signal) =>
           this.interactions.run(() => this.handBrowser(reason, signal), signal),
+        mode: () => this.runtime?.mode,
       });
     this.runtime = new AgentRuntime({
       ...options,
@@ -695,11 +696,7 @@ export class SessionApp {
                   signal,
                   false,
                 ),
-              files: (path) => {
-                const full = this.runtime!.sandbox.resolvePath(path);
-                this.runtime!.sandbox.checkCredentialPath(full);
-                return full;
-              },
+              ...runtimeBrowserOptions(() => this.runtime!),
             })
           : []),
       ],
@@ -1035,15 +1032,19 @@ export class SessionApp {
       this.repaint();
     });
   }
-  /** Circle hands the person the browser window; the card stays until they hand it back. */
+  /**
+   * Circle hands the person the browser window; the card stays until they continue, or in
+   * auto mode until the page moves on.
+   */
   private async handBrowser(reason: string, signal: AbortSignal) {
+    const auto = this.runtime?.mode === 'auto';
     await this.askChoice(
       'browser',
       [
         `Circle hands you the browser${reason ? `: ${reason}` : ''}`,
-        'Use the browser window. Circle does not see what you do there; when you hand it back it learns where the tabs went, never what you typed.',
+        `Use the browser window. Circle does not see what you do there; it learns where the tabs went, never what you typed. ${auto ? 'Circle goes on by itself once the page moves on, or choose continue.' : 'When you are done, choose continue.'}`,
       ].join('\n'),
-      ['hand back'],
+      ['continue'],
       signal,
     );
   }
@@ -1051,13 +1052,14 @@ export class SessionApp {
   private async confirmBrowser(
     approval: BrowserApproval,
     signal: AbortSignal,
-  ): Promise<'once' | 'always' | 'reject'> {
+  ): Promise<'once' | 'always' | 'reject' | 'auto'> {
+    // Auto mode passes a warning and gives files without asking
+    const auto = this.runtime?.policy.mode(this.runtime.session.id) === 'auto';
     if (approval.kind === 'certificate')
-      return this.confirmCertificate(approval, signal);
+      return auto ? 'auto' : this.confirmCertificate(approval, signal);
     if (approval.kind === 'download') {
       // auto mode keeps what the model downloads; the other modes ask once per site
-      if (this.runtime?.policy.mode(this.runtime.session.id) === 'auto')
-        return 'once';
+      if (auto) return 'once';
       const always = 'allow downloads from this site for this session';
       const choice = await this.askChoice(
         'download',
@@ -1077,6 +1079,7 @@ export class SessionApp {
           ? 'always'
           : 'reject';
     }
+    if (auto) return 'once';
     const choice = await this.askChoice(
       'upload',
       [

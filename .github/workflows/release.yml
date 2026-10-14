@@ -206,13 +206,13 @@ jobs:
           fi
           "${run[@]}" npm --prefix apps/desktop run test:desktop
           "${run[@]}" npm --prefix apps/desktop run test:live
-          # It updates itself to a newer package: the bundle on macOS, the installed MSI on
-          # Windows (installed and removed again by the check); Linux shows the release page
-          if [ "$RUNNER_OS" = Windows ]; then
-            version="$(node -p "require('./package.json').version")"
-            export CIRCLE_DESKTOP_UPDATE_MSI="$GITHUB_WORKSPACE/apps/desktop/out/circle-desktop-$version-windows-x64.msi"
+          # It updates itself to a newer package: the bundle on macOS; Linux shows the release
+          # page. The installed MSI's update on Windows runs in the Desktop workbench workflow
+          # only: a runner machine that stops answering under it, as some did while Windows
+          # Installer used Restart Manager (#45), must not hold a release.
+          if [ "$RUNNER_OS" != Windows ]; then
+            "${run[@]}" npm --prefix apps/desktop run test:update
           fi
-          "${run[@]}" npm --prefix apps/desktop run test:update
       - uses: actions/upload-artifact@v7
         if: failure() && runner.os == 'Windows'
         with:

@@ -202,7 +202,7 @@ export function buildSystemPrompt(
             variables.map(([name, value]) => `- ${name} = ${value}`).join('\n')
           : '') +
         (catalog.secrets?.length
-          ? `\nSecrets, which you know only by name: ${catalog.secrets.join(', ')}. Use them the same way; wherever a secret's value appears in output you read %NAME% instead.`
+          ? `\nSecrets, which you know only by name: ${catalog.secrets.join(', ')}. Use them the same way; where a tool's output has a secret's value you read %NAME% instead, unless that value is text you or the user wrote in this conversation.`
           : '') +
         '\n</variables>',
     );

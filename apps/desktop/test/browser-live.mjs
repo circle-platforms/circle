@@ -108,6 +108,7 @@ const document = `<!doctype html>
 <a id="status" href="/status" target="_blank">Status in new tab</a>
 <button id="delete" onclick="document.querySelector('#delete-result').textContent = confirm('Delete the configuration?') ? 'deleted' : 'kept'">Delete configuration</button>
 <output id="delete-result"></output>
+<button id="restart" onclick="window.restarts = (window.restarts || 0) + 1">Restart device</button>
 <script>
   const shadowButton = document.createElement('button');
   shadowButton.textContent = 'Shadow action';
@@ -301,6 +302,14 @@ await script([
     call('answer-alert', 'browser_dialog', { accept: true }),
   ]),
   answer('edge-done', 'browser edge cases checked'),
+  // The model believes e11 is another button: the result names the one it clicked
+  calls('described-other', [
+    call('described-other', 'browser_click', {
+      ref: 'e11',
+      element: 'Factory reset',
+    }),
+  ]),
+  answer('described-done', 'clicked what e11 is'),
   calls('delete', [
     call('delete', 'browser_click', { ref: 'e10', element: 'Delete' }),
   ]),
@@ -394,6 +403,23 @@ await script([
   answer('later-done', 'clicked later'),
   calls('later-look', [call('later-look', 'browser_snapshot', {})]),
   answer('later-look-done', 'looked after the download'),
+  // Auto mode: the person's turn with the browser ends by itself, and a page's permission
+  // request is refused without asking
+  calls('auto-handoff', [
+    call('auto-handoff', 'browser_handoff', {
+      reason: 'type the code from your phone',
+    }),
+  ]),
+  answer('auto-back', 'auto mode took the browser back'),
+  calls('auto-permission-nav', [
+    call('auto-permission-nav', 'browser_navigate', {
+      url: otherUrl + 'permission',
+    }),
+  ]),
+  calls('auto-permission-ask', [
+    call('auto-permission-ask', 'browser_click', { ref: 'e1', element: 'Ask' }),
+  ]),
+  answer('auto-permission-done', 'auto mode refused notifications'),
 ]);
 const env = {
   ...process.env,
@@ -595,6 +621,43 @@ try {
       .waitFor();
     await page.getByTestId('browser-insecure').waitFor();
     assert.equal((await browserState(sessionId)).insecure, true);
+    // The page fills the panel, also in a window as tall as the screen allows, where a
+    // page of fixed height left a gap: below the footer there is only the panel's own
+    // padding (20) and the footer's margin (10)
+    const blankBelow = async (height) => {
+      await app.evaluate(
+        ({ BrowserWindow }, size) =>
+          BrowserWindow.getAllWindows()[0].setContentSize(...size),
+        [width, height],
+      );
+      // The screen may hold less than asked: wait until the window has settled
+      let settled = -1;
+      for (let tries = 0; tries < 20; tries++) {
+        const now = await page.evaluate(() => innerHeight);
+        if (now === settled) break;
+        settled = now;
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+      return page.evaluate(() => {
+        const bottom = (selector) =>
+          document.querySelector(selector).getBoundingClientRect().bottom;
+        return {
+          height: innerHeight,
+          blank: bottom('.inspector-body') - bottom('.native-browser-footer'),
+        };
+      });
+    };
+    const tallest = await app.evaluate(
+      ({ screen }) => screen.getPrimaryDisplay().workAreaSize.height,
+    );
+    for (const height of [tallest, 900]) {
+      const panel = await blankBelow(height);
+      assert(
+        panel.blank <= 32,
+        `blank under the browser panel: ${JSON.stringify(panel)}`,
+      );
+    }
+    // Back to the size the window started at: 900 high, or what a smaller screen allows
     const firstSnapshot = await textOf('proceed');
     assert.match(firstSnapshot, /Circle proceeded, approved by the user/);
     for (const text of [
@@ -650,6 +713,19 @@ try {
       false,
     );
     assert.match(await textOf('submit'), /Submitted admin as maintainer/);
+    // Each result names the element as the snapshot does, never the secret
+    assert.match(
+      await textOf('password-secret'),
+      /### Result\nTyped secret FIXTURE_PASSWORD into e2 password "Password"\./,
+    );
+    assert.match(
+      await textOf('role'),
+      /### Result\nChose "maintainer" in e3 combobox "Role"\./,
+    );
+    assert.match(
+      await textOf('submit'),
+      /### Result\nClicked e4 button "Log in"\./,
+    );
     const overlay = await native(`(() => {
     const host = document.querySelector('[data-circle-browser-overlay]');
     return {exists: Boolean(host), closed: Boolean(host) && host.shadowRoot === null, pointerEvents: host && getComputedStyle(host).pointerEvents};
@@ -720,8 +796,42 @@ try {
       'prompt, confirm and alert wait in the tab for browser_dialog, each named with its message and origin; no native box appears; passwords, covered controls, frames and shadow roots behave as before',
     );
 
+    // ---- a ref the model took for another element: the result names the one clicked
+    await send('press the factory reset button');
+    await page.getByText('clicked what e11 is', { exact: true }).waitFor();
+    assert.match(
+      await textOf('described-other'),
+      /### Result\nClicked e11 button "Restart device" — you described it as "Factory reset"; check the snapshot\./,
+    );
+    assert.equal(await native('window.restarts || 0'), 1);
+    // The pointer's label shows the person the page's name too
+    assert.equal(
+      await app.evaluate(async ({ BrowserWindow }) => {
+        const views = BrowserWindow.getAllWindows()[0].contentView.children;
+        const view = views.find((view) => view.getVisible()) ?? views[0];
+        return view.webContents.executeJavaScriptInIsolatedWorld(1001, [
+          { code: 'window.circleBrowser.bubble.textContent' },
+        ]);
+      }),
+      'click Restart device',
+    );
+    checks.push(
+      "an action's result names the element its ref acted on, as the snapshot does, and says when the model described another; the pointer shows the page's name",
+    );
+
     // ---- a dialog the person answers in the conversation while the model works
     await send('delete the configuration, then look again');
+    // A click that deletes asks every time, though the site is allowed for the session
+    const deleting = approval('which can delete');
+    await deleting.waitFor();
+    assert.match(await deleting.innerText(), /Delete configuration/);
+    assert.equal(
+      await deleting.getByRole('button', { name: /for this session/ }).count(),
+      0,
+    );
+    await deleting
+      .getByRole('button', { name: 'allow once', exact: true })
+      .click();
     const asked = page.getByTestId('browser-dialog-request');
     await asked.waitFor();
     assert.match(await asked.innerText(), /Delete the configuration\?/);
@@ -873,7 +983,7 @@ try {
     await page.getByText('file chooser waiting', { exact: true }).waitFor();
     assert.match(
       await textOf('upload-ref'),
-      /Gave "notes\.txt" \(17 B\) to e1 "Attachment"\./,
+      /Gave "notes\.txt" \(17 B\) to e1 file "Attachment"\./,
     );
     assert.match(
       await textOf('add-logs'),
@@ -905,9 +1015,23 @@ try {
     await send('hand me the browser');
     const handoffCard = page.getByTestId('browser-handoff-request');
     await handoffCard.waitFor();
-    const band = page.getByTestId('browser-control');
-    await band.waitFor();
-    assert.match(await band.innerText(), /sign in with your security key/);
+    // What Circle waits for is said in the conversation; the panel only says who has it
+    assert.match(
+      await handoffCard.innerText(),
+      /sign in with your security key/,
+    );
+    assert.match(
+      await handoffCard.innerText(),
+      /When you are done, continue here or send a message/,
+    );
+    await page.getByTestId('browser-user').waitFor();
+    assert.equal(await page.getByTestId('browser-control').count(), 0);
+    assert.equal(
+      await page
+        .getByRole('button', { name: 'hand back', exact: true })
+        .count(),
+      0,
+    );
     assert.equal((await browserState(sessionId)).control, 'user');
     const bar = page.getByRole('textbox', {
       name: 'browser address',
@@ -920,7 +1044,7 @@ try {
       'the person goes elsewhere',
     );
     await handoffCard
-      .getByRole('button', { name: 'hand back', exact: true })
+      .getByRole('button', { name: 'continue', exact: true })
       .click();
     await page.getByText('browser handed back', { exact: true }).waitFor();
     assert.match(
@@ -956,13 +1080,19 @@ try {
     });
     assert.equal(masked, 0);
     await page.getByTestId('browser-pending').waitFor();
-    await band.waitFor();
     // The model's next look waits for the browser back, then shows the page as it is;
-    // the panel says so once that look is waiting, not before
+    // a message to Circle hands it back, and reaches the model with the page
     await handoffCard.waitFor();
-    await page.getByTestId('browser-waiting').waitFor();
-    await band.getByRole('button', { name: 'hand back', exact: true }).click();
+    await waitFor(
+      async () => (await browserState(sessionId)).waiting === true,
+      "Circle's next look waits",
+    );
+    await send('done, go on');
     await page.getByText('takeover checked', { exact: true }).waitFor();
+    assert(
+      JSON.stringify((await requests()).at(-1)).includes('done, go on'),
+      'the message reached the model',
+    );
     assert.match(await textOf('slow-nav'), /the user took over the browser/);
     assert.match(
       await textOf('after-takeover'),
@@ -1230,6 +1360,73 @@ try {
     checks.push(
       'the same certificate on another port warns again, and the person passes it in the tab without an approval',
     );
+
+    // ---- auto mode: the person's turn with the browser ends by itself once they stop,
+    // and a page's permission request is refused without asking
+    const setMode = (mode) =>
+      page.evaluate(async (mode) => {
+        const current = await window.circleDesktop.runtimeState();
+        return window.circleDesktop.runtimeCommand({
+          id: crypto.randomUUID(),
+          name: 'set-mode',
+          payload: { mode },
+          sessionId: current.snapshot.activeSessionId,
+        });
+      }, mode);
+    await setMode('auto');
+    await send('hand me the browser in auto mode');
+    await handoffCard.waitFor();
+    assert.match(
+      await handoffCard.innerText(),
+      /Circle goes on by itself once you are done/,
+    );
+    // The person types in the page, then stops
+    const typed = await app.evaluate(({ BrowserWindow }, address) => {
+      const tab = BrowserWindow.getAllWindows()[0].contentView.children.find(
+        (view) => view.webContents.getURL().startsWith(address),
+      );
+      if (!tab) return false;
+      for (const type of ['keyDown', 'char', 'keyUp'])
+        tab.webContents.sendInputEvent({ type, keyCode: 'a' });
+      return true;
+    }, otherUrl);
+    assert.equal(typed, true);
+    const stopped = Date.now();
+    await page
+      .getByText('auto mode took the browser back', { exact: true })
+      .waitFor({ timeout: 30_000 });
+    assert(Date.now() - stopped >= 4000, 'it waits for the person to stop');
+    const autoBack = await textOf('auto-handoff');
+    assert.match(
+      autoBack,
+      /### Result\nCircle took the browser back in auto mode\./,
+    );
+    assert.match(
+      autoBack,
+      /- auto mode: Circle took the browser back, as the user stopped/,
+    );
+    await send('ask for notifications on the other port');
+    await page
+      .getByText('auto mode refused notifications', { exact: true })
+      .waitFor();
+    assert.match(
+      await textOf('auto-permission-ask'),
+      new RegExp(
+        `auto mode: ${new URL(otherUrl).origin} asked for notifications; Circle refused it without asking`,
+      ),
+    );
+    assert.equal(await page.getByTestId('browser-permission').count(), 0);
+    assert(
+      (await state()).interactions.every((row) => row.status !== 'pending'),
+    );
+    assert.equal(
+      await native(`document.getElementById('out').textContent`),
+      'notifications: denied',
+    );
+    await setMode('manual');
+    checks.push(
+      "auto mode takes the browser back once the person stops, says so to the model, and refuses a page's permission request without asking",
+    );
     assert.deepEqual(errors, []);
     await page.screenshot({ path: join(output, 'browser-live.png') });
     await app.close();
@@ -1299,11 +1496,38 @@ try {
     app = undefined;
 
     requestsPath = join(temp, 'trusted-requests.jsonl');
+    // A recorded script for the form on the other port, whose certificate this start has
+    // not seen: the replay passes the warning, types a secret by name and submits
+    const replayPath = join(temp, 'fixture.circle-browser.json');
+    await writeFile(
+      replayPath,
+      JSON.stringify({
+        circle: 'browser-script/1',
+        name: 'fixture form',
+        steps: [
+          { navigate: otherUrl },
+          { proceed: 'certificate' },
+          { type: { role: 'textbox', name: 'Username' }, text: 'replayed' },
+          {
+            type: { role: 'password', name: 'Password' },
+            text: '%FIXTURE_PASSWORD%',
+          },
+          {
+            select: { role: 'combobox', name: 'Role' },
+            values: ['maintainer'],
+          },
+          { click: { role: 'button', name: 'Log in' } },
+          { expect: 'Submitted admin as maintainer' },
+        ],
+      }),
+    );
     await script([
       calls('trusted-navigate', [
         call('trusted-navigate', 'browser_navigate', { url }),
       ]),
       answer('trusted-done', 'trusted site opened'),
+      calls('replay', [call('replay', 'browser_replay', { path: replayPath })]),
+      answer('replay-done', 'replay finished'),
     ]);
     await launch();
     await send('open the trusted site');
@@ -1314,6 +1538,53 @@ try {
     assert.equal((await browserState(sessionId)).insecure, true);
     checks.push(
       'a certificate trusted for good opens without a warning after another restart',
+    );
+
+    // ---- a recorded script replayed: one approval for its site, the warning approved
+    const before = posts.length;
+    await send('replay the fixture form');
+    const replayCard = approval('runs a recorded browser script');
+    await replayCard.waitFor();
+    assert.match(await replayCard.innerText(), /browser_replay/);
+    assert(
+      (await replayCard.innerText()).includes(new URL(otherUrl).origin),
+      'the card names the site the script starts on',
+    );
+    await replayCard
+      .getByRole('button', { name: 'allow once', exact: true })
+      .click();
+    await approval('trusts an untrusted certificate')
+      .getByRole('button', { name: 'allow once', exact: true })
+      .click();
+    await page.getByText('replay finished', { exact: true }).waitFor();
+    const replayed = await textOf('replay');
+    assert.match(
+      replayed,
+      /^Replayed "fixture form": steps 1–7 of 7 done\./,
+      replayed,
+    );
+    assert.match(replayed, /\n2\. Clicked e\d+ link "Proceed to /);
+    assert.match(
+      replayed,
+      /Typed secret FIXTURE_PASSWORD into e2 password "Password"\./,
+    );
+    assert.match(replayed, /Circle proceeded, approved by the user/);
+    assert.match(
+      replayed,
+      /\n7\. The page shows "Submitted admin as maintainer"\./,
+    );
+    assert.equal(posts.length, before + 1);
+    assert.deepEqual(posts.at(-1), {
+      username: 'replayed',
+      password: 'secret-from-circle',
+      role: 'maintainer',
+    });
+    assert.equal(
+      (await readFile(requestsPath, 'utf8')).includes('secret-from-circle'),
+      false,
+    );
+    checks.push(
+      "a recorded browser script replays in the panel without the model in between: one approval for the site it starts on, Circle's certificate warning passed with the person's approval, a secret typed by name, and the form's POST reaches the site",
     );
     assert.deepEqual(errors, []);
   }

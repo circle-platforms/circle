@@ -76,3 +76,22 @@ export const siteOf = (url: string): string => {
     return '';
   }
 };
+
+/** An address's host as URL.host writes it, lower case; nothing for no address. */
+export function hostOf(url: string): string {
+  try {
+    return new URL(url).host.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+/**
+ * Why a saved secret goes into no page on this host, or nothing: on a public address whose
+ * certificate was not trusted the page may be someone's in between, as it may not on this
+ * network. Asked before a secret is typed or a sign-in answered with one, in every mode.
+ */
+export function secretRefused(host: string, untrusted: boolean): string {
+  return untrusted && host && !privateHost(host)
+    ? `a saved secret goes into no page on ${host}: its certificate is not trusted and it is a public address, so the page may not be the site's. Tell the user; nothing was typed.`
+    : '';
+}

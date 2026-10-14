@@ -32,6 +32,7 @@ const REASONS: Record<string, () => string> = {
   'presses a key in the browser': () => t('presses a key in the browser'),
   'answers a dialog in the browser': () => t('answers a dialog in the browser'),
   "manages the browser's tabs": () => t("manages the browser's tabs"),
+  'runs a recorded browser script': () => t('runs a recorded browser script'),
   'trusts an untrusted certificate': () => t('trusts an untrusted certificate'),
   'gives the page files': () => t('gives the page files'),
   'keeps a download': () => t('keeps a download'),
@@ -60,6 +61,14 @@ const BROWSER_FIELDS: Record<string, () => string> = {
   field: () => t('field'),
   files: () => t('files'),
   paths: () => t('files'),
+  // A recorded script: the file, and which of its steps
+  path: () => t('file'),
+  name: () => t('name'),
+  first: () => t('first step'),
+  last: () => t('last step'),
+  variables: () => t('variables'),
+  from: () => t('from step'),
+  to: () => t('to step'),
 };
 export function BrowserApproval({
   input,

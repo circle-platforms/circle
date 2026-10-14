@@ -129,6 +129,21 @@ export function Conversation({
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [planCollapsed, setPlanCollapsed] = useState(false);
   useEffect(() => setPlanCollapsed(false), [session.id]);
+  const planItems = useRef<HTMLDivElement>(null);
+  // The plan shows a few rows: the step under way, or else the next one, stays in sight
+  useEffect(() => {
+    const list = planItems.current;
+    const step =
+      list?.querySelector<HTMLElement>(':scope > .running') ??
+      list?.querySelector<HTMLElement>(':scope > .pending');
+    if (!list || !step) return;
+    // From the boxes, which keep fractions of a pixel: the rows shown stay whole
+    const view = list.getBoundingClientRect();
+    const box = step.getBoundingClientRect();
+    if (box.top < view.top) list.scrollTop += box.top - view.top;
+    else if (box.bottom > view.bottom)
+      list.scrollTop += box.bottom - view.bottom;
+  }, [session.todos, planCollapsed]);
   // Pictures and PDFs pasted or dropped on the box go with the message, as attached ones do
   const addMedia = async (files: File[]) => {
     for (const file of files) {
@@ -633,6 +648,7 @@ export function Conversation({
             <BrowserHandoffRequest
               sessionId={session.id}
               reason={browser.handoff}
+              auto={session.mode === 'auto'}
             />
           )}
           {clock && clockAt < 0 && <TurnRow turn={clock} />}
@@ -679,7 +695,7 @@ export function Conversation({
               </span>
             </button>
             {!planCollapsed && (
-              <div className="plan-items">
+              <div className="plan-items" ref={planItems}>
                 {session.todos.map((todo) => (
                   <div key={todo.id} className={todo.status}>
                     <span>

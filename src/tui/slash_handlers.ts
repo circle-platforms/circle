@@ -303,9 +303,7 @@ function yolo(host: CommandHost, args: string): void {
   );
   host.runtime.policy.setYolo(host.runtime.session.id, enabled);
   host.notice(
-    enabled
-      ? 'Auto on · tool calls run without asking'
-      : 'Auto off · asking for each call again',
+    enabled ? MODE_NOTICES.auto : 'Auto off · asking for each call again',
   );
 }
 
@@ -314,7 +312,8 @@ const MODE_NOTICES: Record<SessionMode, string> = {
   'accept-edits':
     'Accept edits · workspace file edits run without asking, commands and deletes still ask',
   plan: 'Read-only on · writes and shell are blocked, /plan.md is allowed',
-  auto: 'Auto on · tool calls run without asking',
+  // Turning it on says what it lets through
+  auto: 'Auto on · nothing asks: commands that delete, certificate warnings and uploads go ahead · use it where that is safe',
 };
 // The modes as the frame's corner word spells them.
 const MODE_WORDS: Record<SessionMode, string> = {
@@ -327,7 +326,7 @@ const MODE_META: Record<SessionMode, string> = {
   manual: 'asking before each change and command',
   'accept-edits': 'workspace edits run without asking',
   plan: 'writes and shell are blocked · plan.md is allowed',
-  auto: 'tool calls run without asking',
+  auto: 'nothing asks · deletes, certificate warnings and uploads included',
 };
 
 // /mode with no argument moves to the next mode; shift+tab does the same.

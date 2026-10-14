@@ -16,6 +16,8 @@ import {
   MAX_SECRET,
   secretNames,
   secretRedactor,
+  written,
+  type Redactor,
 } from './secrets.js';
 import { buildSystemPrompt } from './system_prompt.js';
 import { Harness, type ApprovalDecision } from './harness.js';
@@ -151,7 +153,7 @@ export class AgentRuntime {
   readonly sandbox: Sandbox;
   readonly jobs: JobRegistry;
   /** Hides secrets' values in what the model reads, from calls and background jobs. */
-  readonly redact: (text: string, used?: Record<string, string>) => string;
+  readonly redact: Redactor;
   readonly catalog: ModelCatalog;
   private childJobOwners = new Map<string, import('./jobs.js').JobOwner>();
   private closing = false;
@@ -225,7 +227,8 @@ export class AgentRuntime {
       () => loadSecrets(this.options.home),
       () => this.options.settings.variables ?? {},
     );
-    this.jobs.redact = this.redact;
+    this.jobs.redact = (text, sessionId) =>
+      this.redact(text, {}, () => written(this.store.messages(sessionId)));
     this.userShells = new UserShells(this.jobs, this.store, {
       sessionId: () => this.session.id,
       busy: () => this.busy,

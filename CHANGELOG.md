@@ -4,6 +4,28 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.5.0 - 2026-10-14
+
+### Changed
+
+- **Auto mode asks nothing in the browser either.** Passing a certificate warning and giving a page files no longer ask in `auto` mode, and the model's result names the certificate it passed; in the desktop application a page's permission request and a site's request for a client certificate are refused without asking. Turning `auto` on says what it lets through.
+- **The Windows installer leaves other programs alone.** Installing, updating and removing Circle no longer go through Windows' Restart Manager, which closes programs that hold files the installer replaces; Circle's own update already waits for Circle to end. Quit Circle before you remove it, or Windows removes the files it holds at the next restart. Updating from 1.4.1 or earlier still removes the old version through it once.
+- **You give the browser back by going on in the conversation.** The desktop panel's **hand back** button is gone: **continue** on the card in the conversation, or any message to Circle, returns the browser, and in `auto` mode Circle takes it back by itself once you stop or the page moves on. The model no longer hands you the browser for a certificate warning, a dialog or a stale element, and plan mode hands nothing over.
+
+### Added
+
+- **Record what Circle did in the browser as a script, and replay it.** Asked to save a browser session for reuse, a model had no way but to rebuild it from the site's HTTP requests or to install another browser tool. `browser_record` now writes the conversation's browser actions to a file in Circle's own format (`"circle": "browser-script/1"`), each element kept by its role and name as the snapshot shows it, with `nth` among equals, values as `%NAME%`, and a certificate warning passed as a `proceed` step; the model then cleans it up and adds `expect` checks. `browser_replay` runs such a file step by step without the model in between, waiting for each element, typing secrets as secrets, asking once for the site it starts on and acting on no other, and stops at the first step that cannot be done with the page as it is, so that the model fixes the file and goes on `from` that step. In the desktop application and in the terminal's browser. See [Recording and replaying](docs/tools.md#recording-and-replaying).
+- **A click that deletes on a page asks every time** in manual and accept-edits mode, though the site is allowed for the session: a control named 删除, 清空, Delete, Remove, Reset and the like, or accepting a dialog that says so. `auto` mode does not ask.
+- **A saved secret goes into no page on a public address whose certificate was not trusted**, typed or given to a sign-in, in every mode; on this network it is typed as before.
+
+### Fixed
+
+- **The terminal's browser forgot who passed a certificate warning when the site sent its page on**, as a device sends `/` to `/login`: the model was not told whether the user or Circle proceeded. It is told now for any page on that host.
+- **A browser action's result repeated the model's own words for the element instead of naming the one it acted on.** A model that took ref `e28` for the network menu was told `Clicked e28 "网络菜单".` when it had clicked the host settings link, and went on believing it. A click, typing, a choice or a file given to a ref now names the element as the snapshot shows it, read from the page at that moment (`Clicked e28 link "主机设置".`), and says when the model described another one: `— you described it as "网络菜单"; check the snapshot`. The pointer's label and the field in an upload's approval show the page's name too. In the desktop application and in the terminal's browser. See [Tools](docs/tools.md#the-browser).
+- **A user name that is also the password showed to the model as the secret's name.** With a password such as `admin` saved as a secret, a sign-in page's user name field read `value="%NAME%"` after the model typed `admin` into it, so the model took the name for text typed by mistake, deleted part of the user name and failed to sign in; it also told the model what the password was. A secret's value now stays as written where it stands as a word in what you or the model wrote in the conversation, in a tool's result and in a background job's notice.
+- **The desktop browser panel left a blank band under its footer** in a tall window: the page had a fixed height. It now fills the panel under the bars.
+- **The desktop plan showed three and a half rows**, cutting the fourth in half, and the step under way could be scrolled out of sight. It now shows whole rows and keeps the step under way, or else the next one, in sight.
+
 ## 1.4.1 - 2026-10-13
 
 ### Fixed
