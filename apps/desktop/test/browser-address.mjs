@@ -101,10 +101,7 @@ try {
           return error.message;
         }
       }, target);
-      assert.equal(
-        rejected,
-        "Error invoking remote method 'circle:browser-navigate': Error: invalid browser address",
-      );
+      assert.equal(rejected, 'invalid browser address');
       const toast = page.locator('.toast[role="status"]');
       if (await toast.isVisible()) await toast.waitFor({ state: 'hidden' });
       await address.fill(target);

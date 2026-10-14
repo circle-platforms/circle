@@ -234,6 +234,20 @@ try {
     !bareHost.includes('invalid browser address'),
     'a bare host must pass address parsing: ' + bareHost,
   );
+  // And through the real address bar: typing an unreadable address notifies
+  // the person with the invalid-address message, not a network failure (#67).
+  await page
+    .getByRole('textbox', { name: 'browser address', exact: true })
+    .fill('file:///etc/passwd');
+  await page
+    .getByRole('button', { name: 'navigate browser', exact: true })
+    .click();
+  await page
+    .getByRole('status')
+    .getByText('invalid address', { exact: true })
+    .waitFor();
+  await page.waitForFunction(() => !document.querySelector('.toast'));
+  checks.push('the address bar says invalid address, not navigation failed');
   await page.getByRole('button', { name: 'files panel', exact: true }).click();
   checks.push(
     'sandboxed native browser keeps one session identity across panel switches',
