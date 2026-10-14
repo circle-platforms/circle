@@ -89,7 +89,7 @@ The input box changes colour and behaviour depending on who has to act.
 | Frame | Meaning |
 |---|---|
 | Faint and still | Idle. Type. |
-| Rainbow, moving | The model is working. A label on the top edge shows the busy word, elapsed time and tokens: `Brewing… · 12.4s · ↓ 1.9k`. While a model request is tried again it says why and which try: `Retrying… · timeout 3/10 · 4m 2s · ↓ 0`. `CIRCLE_TUI_SHIMMER=0` keeps the frame still. |
+| Rainbow, moving | The model is working. A label on the top edge shows the busy word, elapsed time and tokens: `Brewing… · 12s · ↓ 1.9k`. While a model request is tried again it says why and which try: `Retrying… · timeout 3/10 · 4m 2s · ↓ 0`. `CIRCLE_TUI_SHIMMER=0` keeps the frame still. |
 | Yellow and still | It is your turn. A card is showing and Circle is waiting for you. |
 
 A card that only says what Circle is doing, such as `Looking for models…` during setup, keeps a faint frame.

@@ -201,7 +201,7 @@ test('compaction runs in a row above the input box, before what waits to be read
     let rows = renderScreen(state, 100, 24);
     let plain = rows.map(stripAnsi);
     const top = plain.findIndex((row) => row.startsWith('╭'));
-    assert.match(plain[top]!, /^╭──Brewing… · \d+\.\ds · ↓ 0─/);
+    assert.match(plain[top]!, /^╭──Brewing… · \d+s · ↓ 0─/);
     assert.equal(plain[top - 1]!.trim(), 'steering: look at the tests');
     const row = plain[top - 2]!;
     assert.match(row, /^ auto-compacting · [█░]{16} summarizing · \d+s +$/);

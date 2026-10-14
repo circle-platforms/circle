@@ -208,7 +208,7 @@ test('the busy word is a Python verb with the turn time and written tokens, and 
   );
   assert.equal(
     busyLabel('Pondering', 12.44, 1900),
-    'Pondering… · 12.4s · ↓ 1.9k',
+    'Pondering… · 12s · ↓ 1.9k',
   );
   assert.equal(busyLabel('Brewing', 75, 12), 'Brewing… · 1m 15s · ↓ 12');
   for (const [name, p] of PALETTES) {
@@ -220,7 +220,7 @@ test('the busy word is a Python verb with the turn time and written tokens, and 
     state.started = Date.now() - 12_400;
     const rows = renderScreen(state, 80, 20);
     const top = rows.find((row) => stripAnsi(row).startsWith('╭'))!;
-    assert.match(stripAnsi(top), /^╭──Pondering… · 12\.\d+s · ↓ 1\.9k─+╮ *$/);
+    assert.match(stripAnsi(top), /^╭──Pondering… · 12s · ↓ 1\.9k─+╮ *$/);
     assert.ok(!rows.some((row) => stripAnsi(row).includes('Brewing')));
     // Each cell is coloured by its place on the perimeter plus the flow: one colour per cell,
     // a slow sweep, the same gradient on the edges and the label.
@@ -990,7 +990,7 @@ test('an attached session shows the busy verb while it works and the turn line a
   assert.ok(rendered.some((row) => stripAnsi(row).includes('cache 0.0%')));
   await app.submit('hello');
   const verbs = BUSY_VERBS.join('|');
-  assert.match(label, new RegExp(`^╭──(${verbs})… · \\d+\\.\\ds · ↓ 0─`));
+  assert.match(label, new RegExp(`^╭──(${verbs})… · \\d+s · ↓ 0─`));
   ui.repaint();
   const plain = rendered.map(stripAnsi);
   const answer = plain.findIndex((row) => row.startsWith(' ● done'));

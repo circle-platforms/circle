@@ -26,7 +26,8 @@ export function pickBusyVerb(random = Math.random): string {
   return BUSY_VERBS[Math.floor(random() * BUSY_VERBS.length)] ?? 'Brewing';
 }
 
-// The busy word's clock: `12.4s`, `3m 5s`, `1h 2m`.
+// A thought's clock, in tenths under a minute: `6.3s`, `3m 5s`, `1h 2m`. The desktop
+// application's turn clock keeps it.
 export function formatBusyElapsed(seconds: number): string {
   const value = Math.max(0, seconds);
   if (value < 60) return `${value.toFixed(1)}s`;
@@ -34,7 +35,7 @@ export function formatBusyElapsed(seconds: number): string {
   if (minutes < 60) return `${minutes}m ${Math.floor(value) % 60}s`;
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
-// The strip's and the turn line's clock: `12s`, `3m 5s`, `1h 2m`.
+// The clock of the busy word, the strip and the turn line: `12s`, `3m 5s`, `1h 2m`.
 export function formatElapsed(seconds: number): string {
   const value = Math.max(0, seconds);
   if (value < 60) return `${Math.round(value)}s`;
@@ -57,14 +58,14 @@ function formatWindow(value: number): string {
     : formatTokens(value);
 }
 
-// `Brewing… · 12.4s · ↓ 1.9k`: the turn's word, its time and the tokens it has written.
+// `Brewing… · 12s · ↓ 1.9k`: the turn's word, its time and the tokens it has written.
 export function busyLabel(
   verb: string,
   seconds: number,
   tokens: number,
   detail?: string,
 ): string {
-  return `${verb}… · ${detail ? detail + ' · ' : ''}${formatBusyElapsed(seconds)} · ↓ ${formatTokens(tokens)}`;
+  return `${verb}… · ${detail ? detail + ' · ' : ''}${formatElapsed(seconds)} · ↓ ${formatTokens(tokens)}`;
 }
 
 // A folder as people write it: the home folder is `~`.

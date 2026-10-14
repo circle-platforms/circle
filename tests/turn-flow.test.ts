@@ -568,7 +568,7 @@ test('while a model request is tried again the busy line says which try and why,
   const first = s.app.submit('go');
   await until(() => s.app.state.flash === 'Retry 3/10 in 8.0s');
   const waiting = s.screen();
-  assert.match(waiting, /Retrying… · timeout 3\/10 · [\d.]+s · ↓ 0/);
+  assert.match(waiting, /Retrying… · timeout 3\/10 · \d+s · ↓ 0/);
   assert.doesNotMatch(waiting, /half a rep/);
   release();
   await first;
