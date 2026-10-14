@@ -85,7 +85,7 @@ await writeFile(
   main,
   `const {app,BrowserWindow}=require('electron');
   app.setPath('userData', ${JSON.stringify(join(temp, 'data'))});
-  app.whenReady().then(async()=>{const window=new BrowserWindow({show:false,width:1100,height:850,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});await window.loadURL(${JSON.stringify(url)});});
+  app.whenReady().then(async()=>{const window=new BrowserWindow({show:false,width:1100,height:850,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});const contents=window.webContents;globalThis.circleNativeEvents=[];globalThis.circleNativeState=()=>{const main=contents.mainFrame;const frame=f=>f?{process:f.processId,routing:f.routingId,tree:f.frameTreeNodeId,main:f===main,detached:f.detached}:null;return {type:contents.getType(),mainFrame:frame(main),focusedFrame:frame(contents.focusedFrame),frames:main.framesInSubtree.map(frame)}};const record=(kind,extra={})=>circleNativeEvents.push({at:Date.now(),kind,...extra,state:circleNativeState()});window.on('ready-to-show',()=>record('ready-to-show'));for(const event of ['dom-ready','did-finish-load','did-stop-loading','focus','blur'])contents.on(event,()=>record(event));contents.on('before-input-event',(event,input)=>record('before-input-event',{type:input.type,code:input.code,prevented:event.defaultPrevented}));await window.loadURL(${JSON.stringify(url)});});
   app.on('window-all-closed',()=>app.quit());`,
 );
 const env = {
@@ -119,6 +119,8 @@ const inputMetadata = async () => {
         windowFocused: window.isFocused(),
         contentsFocused: window.webContents.isFocused(),
         requests: globalThis.circleInputTrace ?? [],
+        frame: globalThis.circleNativeState(),
+        events: globalThis.circleNativeEvents,
       };
     }),
     page: await page.evaluate(() => ({
@@ -350,28 +352,58 @@ try {
     globalThis.circleInputTrace = [];
   });
   const dispatchWrite = async (name, text, deadline) => {
+    const target = await run('prepare', { ref: ref(name), typing: true });
+    const overlayBoundary = navigation;
+    assert.equal(
+      await run('overlay', {
+        ...target,
+        typing: true,
+        click: false,
+        label: 'fixture input',
+        color: 'CanvasText',
+        background: 'Canvas',
+        foreground: 'CanvasText',
+        tint: 'transparent',
+      }),
+      true,
+    );
+    assert.equal(
+      navigation,
+      overlayBoundary,
+      'type preparation overlay must acknowledge the same document',
+    );
+    await run('prepare', { ref: ref(name), typing: true });
     await run('focus', { ref: ref(name) });
-    // This is a Playwright-owned hidden BrowserWindow, not the production tab's
-    // WebContentsView. Prepare native input after DOM focus/select; isFocused()
-    // stays false for a hidden window, so only real trusted effects confirm it.
-    record({ kind: 'fixture-input-focus-request' });
-    const focus = await app.evaluate(({ BrowserWindow }) => {
-      const window = BrowserWindow.getAllWindows()[0];
-      window.webContents.focus();
-      return {
-        visible: window.isVisible(),
-        windowFocused: window.isFocused(),
-        contentsFocused: window.webContents.isFocused(),
-      };
-    });
-    record({ kind: 'fixture-input-focus-returned', state: focus });
+    await run('guard-key');
     const selector = name === 'username' ? '#username' : '#number';
     const eventStart = await page.evaluate(
       () => window.circleInputEvents.length,
     );
     await app.evaluate(
-      async ({ BrowserWindow }, { text, inputDelay }) => {
+      async ({ BrowserWindow }, { text, inputDelay, script, fieldRef }) => {
         const contents = BrowserWindow.getAllWindows()[0].webContents;
+        const guard = async (command, args = {}) => {
+          const at = Date.now();
+          const result = await contents.executeJavaScriptInIsolatedWorld(999, [
+            {
+              code:
+                script +
+                '\n(async()=>{try{return {ok:true,value:await CirclePage.browserPage(' +
+                JSON.stringify(command) +
+                ',' +
+                JSON.stringify(args) +
+                ')}}catch(error){return {ok:false,error:error.message}}})()',
+            },
+          ]);
+          globalThis.circleInputTrace.push({
+            kind: 'guard',
+            command,
+            at,
+            elapsed: Date.now() - at,
+            ok: result.ok,
+          });
+          if (!result.ok) throw Error(result.error);
+        };
         const state = async () =>
           contents.executeJavaScript(
             `(() => {const target=document.activeElement;return {tag:target?.tagName,type:target?.type,focused:document.hasFocus(),visibility:document.visibilityState,selectionStart:target?.selectionStart,selectionEnd:target?.selectionEnd,length:['username','number'].includes(target?.id)?target.value.length:undefined}})()`,
@@ -387,6 +419,7 @@ try {
             commands: args.commands,
             textLength: args.text?.length,
             state: await state(),
+            nativeFrame: globalThis.circleNativeState(),
           });
           try {
             await contents.debugger.sendCommand(method, args);
@@ -425,6 +458,7 @@ try {
           type: 'keyUp',
           ...select,
         });
+        await guard('guard-type', { ref: fieldRef });
         if (text) await send('Input.insertText', { text });
         else {
           const backspace = {
@@ -433,6 +467,7 @@ try {
             windowsVirtualKeyCode: 8,
           };
           const clear = async () => {
+            await guard('guard-key', { key: 'Backspace' });
             await send('Input.dispatchKeyEvent', {
               type: 'rawKeyDown',
               ...backspace,
@@ -460,7 +495,7 @@ try {
           } else await clear();
         }
       },
-      { text, inputDelay },
+      { text, inputDelay, script, fieldRef: ref(name) },
     );
     const immediate = await page.evaluate((selector) => {
       const target = document.querySelector(selector);
