@@ -7,6 +7,7 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 ### Changed
 
 - **Auto mode asks nothing in the browser either.** Passing a certificate warning and giving a page files no longer ask in `auto` mode, and the model's result names the certificate it passed; in the desktop application a page's permission request and a site's request for a client certificate are refused without asking. Turning `auto` on says what it lets through.
+- **The Windows installer leaves other programs alone.** Installing, updating and removing Circle no longer go through Windows' Restart Manager, which closes programs that hold files the installer replaces; Circle's own update already waits for Circle to end. Quit Circle before you remove it, or Windows removes the files it holds at the next restart. Updating from 1.4.1 or earlier still removes the old version through it once.
 - **You give the browser back by going on in the conversation.** The desktop panel's **hand back** button is gone: **continue** on the card in the conversation, or any message to Circle, returns the browser, and in `auto` mode Circle takes it back by itself once you stop or the page moves on. The model no longer hands you the browser for a certificate warning, a dialog or a stale element, and plan mode hands nothing over.
 
 ### Added

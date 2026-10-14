@@ -208,8 +208,8 @@ jobs:
           "${run[@]}" npm --prefix apps/desktop run test:live
           # It updates itself to a newer package: the bundle on macOS; Linux shows the release
           # page. The installed MSI's update on Windows runs in the Desktop workbench workflow
-          # only: Windows Installer replacing a Circle that has just run sometimes stops the
-          # runner itself (#45), and a release must not wait on that.
+          # only: a runner machine that stops answering under it, as some did while Windows
+          # Installer used Restart Manager (#45), must not hold a release.
           if [ "$RUNNER_OS" != Windows ]; then
             "${run[@]}" npm --prefix apps/desktop run test:update
           fi
