@@ -1,6 +1,7 @@
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
 import { observePage, captureFailure } from './helpers/diagnostics.mjs';
 import { readViewport, setViewport } from './helpers/viewport.mjs';
+import { waitBrowserState } from './helpers/browser-state.mjs';
 import { createServer } from 'node:http';
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
@@ -134,12 +135,13 @@ try {
     .getByRole('button', { name: 'navigate browser', exact: true })
     .click();
   await page.getByText('native browser', { exact: true }).waitFor();
-  await page.waitForFunction(async () => {
-    const state = await window.circleDesktop.browserState('session1');
-    return !state.loading && state.title === 'Circle native browser fixture';
-  });
-  const browserState = await page.evaluate(() =>
-    window.circleDesktop.browserState('session1'),
+  const browserState = await waitBrowserState(
+    page,
+    'session1',
+    (state) =>
+      state.url === siteUrl + '/' &&
+      !state.loading &&
+      state.title === 'Circle native browser fixture',
   );
   const browserIdentity = await app.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows()[0];

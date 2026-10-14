@@ -14,7 +14,7 @@
     "test": "node --test test/policy.test.ts test/capture.test.ts test/sandbox-guard.test.ts test/msi.test.ts test/attention.test.ts test/harness.test.mjs test/update-harness.test.mjs",
     "test:runtime": "node ../../node_modules/tsx/dist/cli.mjs --test test/runtime.test.ts test/updater.test.ts test/browser-warning.test.ts",
     "test:live": "node test/live.mjs && node test/browser-live.mjs",
-    "test:desktop": "node test/desktop.mjs && node test/browser-page.mjs && node test/browser-address.mjs",
+    "test:desktop": "node --test test/browser-state.test.mjs && node test/desktop.mjs && node test/browser-page.mjs && node test/browser-address.mjs",
     "format:check": "prettier --check src test scripts package.json tsconfig.json",
     "typecheck": "tsc --noEmit",
     "test:interface": "node test/interface.mjs",

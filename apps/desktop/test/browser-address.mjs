@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { _electron as electron } from 'playwright';
+import { waitBrowserState } from './helpers/browser-state.mjs';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
@@ -39,6 +40,7 @@ const cases = [];
 const errors = [];
 let app;
 let page;
+let activeCase;
 try {
   app = await electron.launch({
     chromiumSandbox: true,
@@ -83,16 +85,34 @@ try {
       name: 'browser address',
       exact: true,
     });
-    await address.fill(siteUrl);
+    const loadedUrl = `${siteUrl}?theme=${theme}`;
+    await address.fill(loadedUrl);
     await address.press('Enter');
-    await page.waitForFunction(async () => {
-      const state = await window.circleDesktop.browserState('session1');
-      return !state.loading && state.title === 'Circle address fixture';
-    });
+    await waitBrowserState(
+      page,
+      'session1',
+      (state) =>
+        state.url === loadedUrl &&
+        !state.loading &&
+        state.title === 'Circle address fixture',
+    );
     for (const target of [
       'file:///circle-invalid-address-fixture.txt',
       'invalid://fixture',
     ]) {
+      const before = await page.evaluate(() =>
+        window.circleDesktop.browserState('session1'),
+      );
+      activeCase = {
+        theme,
+        target,
+        loadedUrl,
+        before,
+        stage: 'native rejection',
+      };
+      assert.equal(before.url, loadedUrl);
+      assert.equal(before.title, 'Circle address fixture');
+      assert.ok(before.tab);
       const rejected = await page.evaluate(async (target) => {
         try {
           await window.circleDesktop.browserNavigate('session1', target);
@@ -101,7 +121,15 @@ try {
           return error.message;
         }
       }, target);
+      activeCase.rejected = rejected;
       assert.equal(rejected, 'invalid browser address');
+      const afterBridge = await page.evaluate(() =>
+        window.circleDesktop.browserState('session1'),
+      );
+      activeCase.afterBridge = afterBridge;
+      assert.equal(afterBridge.url, loadedUrl);
+      assert.equal(afterBridge.tab, before.tab);
+      activeCase.stage = 'address input';
       const toast = page.locator('.toast[role="status"]');
       if (await toast.isVisible()) await toast.waitFor({ state: 'hidden' });
       await address.fill(target);
@@ -112,18 +140,23 @@ try {
       const state = await page.evaluate(() =>
         window.circleDesktop.browserState('session1'),
       );
+      activeCase.afterInput = state;
       assert.equal(
         state.url,
-        siteUrl,
+        loadedUrl,
         'invalid input must preserve the actual loaded page',
       );
       assert.equal(state.title, 'Circle address fixture');
+      assert.equal(state.tab, before.tab);
       cases.push({
         theme,
         target,
         rejected,
         notification: await toast.innerText(),
         loadedUrl: state.url,
+        beforeUrl: before.url,
+        afterBridgeUrl: afterBridge.url,
+        tab: state.tab,
       });
       await page.screenshot({
         path: join(
@@ -151,6 +184,14 @@ try {
     }),
   );
 } catch (error) {
+  await writeFile(
+    join(output, 'failure.json'),
+    JSON.stringify(
+      { error: String(error), activeCase, cases, errors },
+      null,
+      2,
+    ),
+  );
   if (page)
     await page
       .screenshot({ path: join(output, 'failure.png') })
