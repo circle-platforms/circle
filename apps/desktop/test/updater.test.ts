@@ -19,6 +19,7 @@ import {
   installation,
   releasesUrl,
   Updater,
+  WINDOWS_INSTALLER,
   type Installation,
 } from '../src/updater';
 
@@ -255,6 +256,105 @@ test('an update is checked, downloaded, checked against its checksum, handed to 
   assert.deepEqual(readdirSync(folder), windows ? ['install.log'] : []);
   assert.deepEqual(await after.check(), { phase: 'current' });
 });
+
+test(
+  'the Windows installer preserves the relaunched argv through real PowerShell',
+  { skip: !windows },
+  async (t) => {
+    const root = scratch(t);
+    const folder = join(root, 'updates');
+    const target = join(root, 'owned-empty-app');
+    mkdirSync(folder);
+    mkdirSync(target);
+    const staged = join(folder, INSTALLER);
+    writeFileSync(staged, 'a stand-in package; never passed to native msiexec');
+    writeFileSync(
+      join(folder, 'ready.json'),
+      JSON.stringify({ version: '1.1.0', staged }),
+    );
+    const marker = join(root, 'argv.json');
+    const script = join(root, 'argument recorder.cjs');
+    writeFileSync(
+      script,
+      `require('node:fs').writeFileSync(${JSON.stringify(marker)}, JSON.stringify(process.argv.slice(2)));`,
+    );
+    const expected = [
+      '--fixture-path',
+      'C:\\sample\\directory with spaces',
+      '--label',
+      'literal "quoted" marker',
+      '',
+      'one\targument',
+      'C:\\space at end\\',
+      'C:\\space at end' + '\\'.repeat(2),
+      'one backslash before a quote: ' + '\\' + '"',
+      'two backslashes before a quote: ' + '\\'.repeat(2) + '"',
+      'three backslashes before a quote: ' + '\\'.repeat(3) + '"',
+      'two adjacent quotes: ""',
+      'plain\\path',
+      '临时 工作区\\',
+      '$() & | ^ %UNCHANGED%',
+    ];
+    let quits = 0;
+    const updater = new Updater({
+      version: '1.0.0',
+      home: join(root, 'home'),
+      folder,
+      installation: {
+        kind: 'msi',
+        target,
+        executable: process.execPath,
+        asset: (version) => `circle-desktop-${version}-windows-x64.msi`,
+      },
+      platform: 'win32',
+      pid: 2 ** 30,
+      msiexec: recorder(join(root, 'synthetic-msiexec'), join(root, 'msi-ran')),
+      args: [script, ...expected],
+      launch: (command, args) => {
+        // A console recorder stands in for the graphical app. Keep all test children hidden;
+        // argument handling and the complete updater script still execute unchanged.
+        const installer = args[args.indexOf('-File') + 1]!;
+        assert.equal(readFileSync(installer, 'utf8'), WINDOWS_INSTALLER);
+        writeFileSync(
+          installer,
+          WINDOWS_INSTALLER.replace(
+            "$ErrorActionPreference = 'Stop'",
+            `$ErrorActionPreference = 'Stop'
+function Start-Process {
+  [CmdletBinding()]
+  param([Parameter(Position=0)][string]$FilePath, [string]$WorkingDirectory,
+    [string[]]$ArgumentList, [switch]$Wait, [switch]$PassThru,
+    [string]$RedirectStandardOutput, [string]$RedirectStandardError, [string]$WindowStyle)
+  $PSBoundParameters['WindowStyle'] = 'Hidden'
+  Microsoft.PowerShell.Management\\Start-Process @PSBoundParameters
+}`,
+          ),
+        );
+        const launched = spawnSync(command, args, {
+          encoding: 'utf8',
+          windowsHide: true,
+          timeout: 15000,
+        });
+        assert.equal(
+          launched.status,
+          0,
+          launched.stderr || launched.error?.message,
+        );
+      },
+      quit: () => quits++,
+    });
+    assert.equal((await updater.start()).phase, 'ready');
+    assert.equal((await updater.install()).phase, 'installing');
+    assert.equal(quits, 1);
+    await until(() => existsSync(marker));
+    assert.deepEqual(JSON.parse(readFileSync(marker, 'utf8')), expected);
+    assert.ok(existsSync(join(root, 'msi-ran')));
+    assert.match(
+      readFileSync(join(folder, 'install.log'), 'utf8'),
+      /installed/,
+    );
+  },
+);
 
 test(
   'the macOS installer puts the new bundle in place of the old one and starts it',
