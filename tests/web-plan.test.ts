@@ -206,3 +206,35 @@ test('delete remains a forced headless approval, and leaving plan mode requires 
   await runtime.harness.run('finish plan');
   assert.equal(runtime.harness.planMode, true);
 });
+
+test('a web failure names the endpoint and the real network error, and hints at the proxy only for network errors', async () => {
+  const blocked = async (): Promise<Response> => {
+    throw Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('connect'), { code: 'ECONNREFUSED' }),
+    });
+  };
+  await assert.rejects(
+    webSearch('q', new AbortController().signal, 5, blocked),
+    (error: Error) =>
+      error.message.includes('lite.duckduckgo.com: ECONNREFUSED') &&
+      error.message.includes('html.duckduckgo.com: ECONNREFUSED') &&
+      error.message.includes('NODE_USE_ENV_PROXY'),
+  );
+  const answered = async (): Promise<Response> =>
+    new Response('nope', { status: 500 });
+  await assert.rejects(
+    webSearch('q', new AbortController().signal, 5, answered),
+    (error: Error) =>
+      error.message.includes('HTTP 500') &&
+      !error.message.includes('NODE_USE_ENV_PROXY'),
+  );
+  await assert.rejects(
+    webFetch(
+      'https://example.test/doc',
+      'text',
+      new AbortController().signal,
+      blocked,
+    ),
+    /fetch failed for example\.test: ECONNREFUSED[\s\S]*NODE_USE_ENV_PROXY/,
+  );
+});

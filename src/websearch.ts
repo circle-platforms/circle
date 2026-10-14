@@ -83,6 +83,27 @@ export async function limitedBody(
   }
   return { text: Buffer.concat(chunks).toString('utf8'), truncated };
 }
+/** A network error's code, which a failed fetch hides under `fetch failed`. */
+export function fetchErrorReason(error: unknown): string {
+  if (error instanceof Error && error.message === 'fetch failed') {
+    const cause = error.cause as
+      { code?: string; message?: string } | undefined;
+    if (cause?.code) return cause.code;
+    if (cause?.message) return cause.message;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+/** A network failure the machine may fix with a proxy, as opposed to a site
+ * that answered with an error of its own. */
+export function unreachableReason(reason: string): boolean {
+  return (
+    /ECONN|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|aborted due to timeout|socket hang up/i.test(
+      reason,
+    ) || reason === 'fetch failed'
+  );
+}
+const PROXY_HINT =
+  '; the endpoint is unreachable from this network — if you go through a proxy, set HTTPS_PROXY and NODE_USE_ENV_PROXY=1 before starting Circle (see docs/environment-variables.md)';
 export async function webSearch(
   query: string,
   signal: AbortSignal,
@@ -91,7 +112,7 @@ export async function webSearch(
 ): Promise<string> {
   const text = query.trim();
   if (!text) throw new Error('query is required');
-  let last = '';
+  const failures: string[] = [];
   for (const host of [
     'https://lite.duckduckgo.com/lite/',
     'https://html.duckduckgo.com/html/',
@@ -113,10 +134,15 @@ export async function webSearch(
       if (body.text) return parseSearchHtml(body.text, text, numResults);
     } catch (error) {
       signal.throwIfAborted();
-      last = error instanceof Error ? error.message : String(error);
+      failures.push(`${new URL(host).host}: ${fetchErrorReason(error)}`);
     }
   }
-  throw new Error('search failed: ' + (last || 'empty body'));
+  const summary = failures.join('; ') || 'empty body';
+  throw new Error(
+    'search failed: ' +
+      summary +
+      (unreachableReason(summary) ? PROXY_HINT : ''),
+  );
 }
 export function blockedHost(host: string): boolean {
   const value = host.toLowerCase().replace(/^\[|\]$/g, '');
@@ -154,14 +180,23 @@ export async function webFetch(
     if (blockedHost(url.hostname))
       throw new Error(`refusing to fetch local/private host '${url.hostname}'`);
     signal.throwIfAborted();
-    response = await request(url, {
-      redirect: 'manual',
-      signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]),
-      headers: {
-        'User-Agent': 'Circle/0.1 (+local coding agent)',
-        Accept: 'text/*,application/json',
-      },
-    });
+    try {
+      response = await request(url, {
+        redirect: 'manual',
+        signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]),
+        headers: {
+          'User-Agent': 'Circle/0.1 (+local coding agent)',
+          Accept: 'text/*,application/json',
+        },
+      });
+    } catch (error) {
+      signal.throwIfAborted();
+      const reason = fetchErrorReason(error);
+      throw new Error(
+        `fetch failed for ${url.host}: ${reason}` +
+          (unreachableReason(reason) ? PROXY_HINT : ''),
+      );
+    }
     if (![301, 302, 303, 307, 308].includes(response.status)) break;
     const location = response.headers.get('location');
     await response.body?.cancel();
