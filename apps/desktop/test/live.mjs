@@ -1,8 +1,8 @@
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
-import { existsSync, realpathSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { basename, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
@@ -677,6 +677,15 @@ try {
   checks.push('a failed turn leaves its error in the conversation');
   // The default workspace moves only through the settings page and the native
   // dialog's grant, never through a renderer-supplied path.
+  // One folder, two spellings: the app realpaths paths through the Node inside
+  // Electron and this test through the Node that runs it, and on Windows the
+  // two do not always print the same string for the same folder. The run's
+  // temp name is unique, so its last two segments say which folder the app
+  // means; exact equality is compared only between app-side strings.
+  const movedTail = `${basename(temp)}/default-target`;
+  const movedInto = (value) =>
+    typeof value === 'string' &&
+    value.split(/[\\/]/).slice(-2).join('/') === movedTail;
   const gatewayHome = join(temp, 'gateway-data', 'runtime-home');
   const scratch = join(gatewayHome, 'workspace');
   assert.equal((await state()).settings.workspaceFolder, scratch);
@@ -708,10 +717,7 @@ try {
       async () => {
         for (const text of await page.locator('.toast').allInnerTexts())
           toasts.add(text);
-        return (
-          (await state()).settings.workspaceFolder ===
-          realpathSync(defaultTarget)
-        );
+        return movedInto((await state()).settings.workspaceFolder);
       },
       'the moved default workspace',
       30_000,
@@ -719,13 +725,13 @@ try {
   } catch (error) {
     const current = await state();
     throw Error(
-      `${error.message}: workspaceFolder stayed ${current.settings.workspaceFolder}, toasts: ${[...toasts].join(' | ') || 'none'}`,
+      `${error.message}: workspaceFolder stayed ${current.settings.workspaceFolder}, wanted a folder ending ${movedTail}, toasts: ${[...toasts].join(' | ') || 'none'}`,
     );
   }
   const moved = await state();
   assert.equal(moved.settings.oldWorkspaceFolder, scratch);
   assert.equal(
-    moved.workspaces.find((row) => row.path === realpathSync(defaultTarget))
+    moved.workspaces.find((row) => row.path === moved.settings.workspaceFolder)
       .trusted,
     false,
   );
@@ -735,7 +741,7 @@ try {
   assert.equal(
     JSON.parse(await readFile(join(gatewayHome, 'settings.json'), 'utf8'))
       .workspace_folder,
-    realpathSync(defaultTarget),
+    moved.settings.workspaceFolder,
   );
   checks.push(
     'the default workspace moves through the settings page and the native dialog grant, keeps the old folder and needs trust',
