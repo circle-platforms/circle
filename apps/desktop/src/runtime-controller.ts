@@ -1435,7 +1435,11 @@ export class RuntimeController {
         if (id === runtime.session.id) return { sessionId: id };
         this.previous = runtime.session.id;
         runtime = this.runtime(row.workspace);
-        await runtime.switchSession(id);
+        // The owner runtime already holds this session when the person
+        // switches back to a turn that waits on an approval: only the active
+        // pointer moves then. switchSession would rebuild a harness mid-turn
+        // and refuse it with 'a turn is running', locking the answer out.
+        if (runtime.session.id !== id) await runtime.switchSession(id);
         this.active = runtime;
         return { sessionId: runtime.session.id };
       }

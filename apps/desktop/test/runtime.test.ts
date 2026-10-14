@@ -2334,3 +2334,64 @@ test('an approval for a new file carries its diff', async (t) => {
     ['added'],
   );
 });
+
+test('switching back to a session that waits on an approval lands on it (#57)', async (t) => {
+  const f = await setup(t, [
+    {
+      message: assistant('', [
+        {
+          id: 'write-1',
+          name: 'write_file',
+          args: { file_path: 'result.txt', content: 'approved bytes' },
+        },
+      ]),
+    },
+    { message: assistant('written after approval') },
+  ]);
+  const aId = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('prompt', { text: 'write a file' })).ok, true);
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((row) => row.status === 'pending'),
+    'approval',
+  );
+  // The person visits another workspace mid-wait, as in the reported flow.
+  const other = join(f.root, 'workspace2');
+  await mkdir(other);
+  assert.equal((await f.call('open-workspace', { path: other })).ok, true);
+  const bId = f.controller.snapshot().activeSessionId;
+  assert.notEqual(bId, aId);
+  // Coming back must land on the session, not rebuild or refuse it: the
+  // runtime already holds it, and its turn waits on the very card to click.
+  const back = await f.call('select-session', { id: aId }, bId);
+  assert.equal(back.ok, true);
+  assert.equal(back.error, undefined);
+  assert.equal(f.controller.snapshot().activeSessionId, aId);
+  const row = f.controller
+    .snapshot()
+    .interactions.find((row) => row.status === 'pending');
+  assert.ok(row, 'the approval survived the round trip');
+  assert.equal(
+    (
+      await f.call(
+        'answer',
+        { id: row.id, revision: 1, answer: 'approve' },
+        aId,
+      )
+    ).ok,
+    true,
+  );
+  await wait(
+    () =>
+      f.model.requests.length === 2 &&
+      f.controller.snapshot().sessions.find((session) => session.id === aId)!
+        .state === 'idle',
+    'the turn finishes on the answered approval',
+  );
+  assert.equal(
+    await readFile(join(f.workspace, 'result.txt'), 'utf8'),
+    'approved bytes',
+  );
+});
