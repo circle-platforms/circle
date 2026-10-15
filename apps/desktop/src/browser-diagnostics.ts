@@ -59,6 +59,18 @@ export class BrowserDiagnostics {
   dispose() {
     this.clearWatches();
   }
+  invalidateConnection() {
+    // DevTools can resume, navigate and finish requests while this CDP client
+    // is detached. Old object and script ids cannot survive that ownership gap.
+    this.scriptUrls.clear();
+    this.state.debugger.paused = false;
+    this.state.debugger.stackFrames = [];
+    for (const breakpoint of this.state.debugger.breakpoints)
+      breakpoint.verified = false;
+    for (const request of this.state.network)
+      if (request.duration === undefined && !request.error)
+        request.error = 'diagnostic connection interrupted before completion';
+  }
   resetEpoch() {
     this.epoch = randomUUID();
     this.eventSequence = 0;
