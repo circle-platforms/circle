@@ -19,7 +19,6 @@ jobs:
       run:
         shell: pwsh
     env:
-      CIRCLE_HOME: ${{ runner.temp }}/circle-query-probe-${{ github.run_id }}-${{ github.run_attempt }}
       CIRCLE_NO_UPDATE_CHECK: '1'
       CIRCLE_NO_MODELS_REFRESH: '1'
       CIRCLE_QUERY_PROBE: '1'
@@ -30,11 +29,15 @@ jobs:
           node-version: '24.21.0'
           cache: npm
       - name: Install locked dependencies
+        env:
+          CIRCLE_HOME: ${{ runner.temp }}/circle-query-probe-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           New-Item -ItemType Directory -Path $env:CIRCLE_HOME -Force | Out-Null
           npm.cmd ci
           exit $LASTEXITCODE
       - name: Check with the query probe
+        env:
+          CIRCLE_HOME: ${{ runner.temp }}/circle-query-probe-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           $probePath = Join-Path $env:GITHUB_WORKSPACE 'scripts/windows-process-query-probe.ts'
           if (!(Test-Path -LiteralPath $probePath -PathType Leaf)) {
