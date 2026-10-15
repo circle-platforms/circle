@@ -17,25 +17,28 @@ test('patch planning uses one supplied snapshot and never writes, including move
   writeFileSync(join(workspace, 'a.txt'), 'disk content differs\n');
   writeFileSync(join(workspace, 'delete.txt'), 'delete from disk\n');
   const sandbox = new Sandbox(workspace);
+  const canonicalWorkspace = realpathSync.native(workspace);
   const patch =
     '*** Begin Patch\n*** Update File: a.txt\n*** Move to: moved.txt\n@@\n-snapshot\n+updated\n*** Delete File: delete.txt\n*** End Patch';
   assert.deepEqual(
     patchFilePaths(patch, sandbox),
-    ['a.txt', 'moved.txt', 'delete.txt'].map((path) => join(workspace, path)),
+    ['a.txt', 'moved.txt', 'delete.txt'].map((path) =>
+      join(canonicalWorkspace, path),
+    ),
   );
   const planned = planPatch(patch, sandbox, (path) =>
-    path === join(workspace, 'a.txt')
+    path === join(canonicalWorkspace, 'a.txt')
       ? 'snapshot\n'
-      : path === join(workspace, 'delete.txt')
+      : path === join(canonicalWorkspace, 'delete.txt')
         ? 'snapshot delete\n'
         : null,
   );
   assert.deepEqual(
     planned.map(({ path, content }) => [path, content]),
     [
-      [join(workspace, 'moved.txt'), 'updated\n'],
-      [join(workspace, 'a.txt'), null],
-      [join(workspace, 'delete.txt'), null],
+      [join(canonicalWorkspace, 'moved.txt'), 'updated\n'],
+      [join(canonicalWorkspace, 'a.txt'), null],
+      [join(canonicalWorkspace, 'delete.txt'), null],
     ],
   );
   assert.equal(
