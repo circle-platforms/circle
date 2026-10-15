@@ -9,7 +9,7 @@ import {
   unlink,
   writeFile,
 } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { promisify } from 'node:util';
 import { AgentRuntime } from '../../../src/runtime.ts';
@@ -193,6 +193,77 @@ test('a bad candidate fails independently of the worker completion claim', async
     false,
   );
 });
+
+for (const review of [false, true]) {
+  test(`workspace and data-directory aliases preserve real verification boundaries: ${review ? 'independent review' : 'trusted command'}`, async (t) => {
+    const f = await fixture(t, { explicitOracle: !review });
+    const alias = join(f.root, 'directory-alias');
+    try {
+      await symlink(
+        f.root,
+        alias,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+    } catch (error) {
+      if (
+        process.platform === 'win32' &&
+        (error as NodeJS.ErrnoException).code === 'EPERM'
+      )
+        return t.skip('directory symlink privilege unavailable');
+      throw error;
+    }
+    const workspace = join(alias, basename(f.workspace));
+    const model = new ScriptedModel([
+      {
+        message: response('', [
+          { id: 'source', name: 'read_file', args: { file_path: 'value.txt' } },
+        ]),
+      },
+      {
+        message: response(
+          JSON.stringify({
+            checks: [
+              {
+                criterion,
+                status: 'passed',
+                evidence:
+                  'Read the actual fixed source through the workspace alias',
+                sources: [{ path: 'value.txt', line: 1 }],
+              },
+            ],
+          }),
+        ),
+      },
+    ]);
+    const verify = createTaskVerifier({
+      workspace,
+      dataDir: join(alias, 'data'),
+      ...(review
+        ? {
+            createReviewer: () =>
+              new AgentRuntime({
+                workspace,
+                home: join(f.root, 'reviewer-home'),
+                userHome: join(f.root, 'reviewer-home'),
+                settings: defaultSettings(),
+                model,
+              }),
+          }
+        : {}),
+    });
+    await writeFile(join(f.workspace, 'value.txt'), 'fixed\n');
+    const context = await f.context();
+    context.worktree = workspace;
+    const task = { ...f.task, spec: { ...f.task.spec, workspace } };
+    const checks = await verify(task, context);
+    assert.equal(
+      checks.find((check) => check.criterion === criterion)?.status,
+      'passed',
+      JSON.stringify(checks),
+    );
+    assert.deepEqual(await readdir(f.dataDir), []);
+  });
+}
 
 test('changed package scripts cannot replace the trusted oracle with a fake green command', async (t) => {
   const f = await fixture(t);

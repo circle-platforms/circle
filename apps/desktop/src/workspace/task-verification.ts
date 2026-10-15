@@ -462,7 +462,9 @@ async function verificationTree(
     createHash('sha256').update(patch).digest('hex') !== context.changes.sha256
   )
     throw Error('candidate patch changed before verification');
-  const directory = await mkdtemp(join(options.dataDir, 'verification-'));
+  const directory = await realpath(
+    await mkdtemp(join(options.dataDir, 'verification-')),
+  );
   const worktree = join(directory, 'workspace');
   const pinnedPatch = join(directory, 'candidate.patch');
   let added = false;
@@ -656,6 +658,7 @@ async function review(
       evidence:
         'No trusted command oracle or independent reviewer covers this acceptance criterion. The worker completion claim is not verification.',
     }));
+  const reviewRoot = await realpath(context.worktree);
   const runtime = await options.createReviewer(task, context);
   const originalIds = new Set([
     task.spec.sessionId,
@@ -668,10 +671,7 @@ async function review(
     runtime.jobs.list().some((job) => job.status === 'running')
   )
     throw Error('verification requires a fresh independent reviewer session');
-  if (
-    (await realpath(runtime.options.workspace)) !==
-    (await realpath(context.worktree))
-  ) {
+  if ((await realpath(runtime.options.workspace)) !== reviewRoot) {
     await runtime.close();
     throw Error('reviewer must inspect this task workspace');
   }
@@ -712,7 +712,7 @@ async function review(
     );
     context.signal.throwIfAborted();
     const messages = runtime.harness.messages;
-    const sources = readEvidence(messages, context.worktree);
+    const sources = readEvidence(messages, reviewRoot);
     const artifact = join(
       context.artifactDirectory,
       `independent-review-${randomUUID()}.json`,
@@ -746,7 +746,7 @@ async function review(
             try {
               const entry = object(source);
               return typeof entry.path === 'string'
-                ? [sourcePath(context.worktree, entry.path)]
+                ? [sourcePath(reviewRoot, entry.path)]
                 : [];
             } catch {
               return [];
@@ -756,7 +756,7 @@ async function review(
       const grounded =
         references.length > 0 &&
         references.every(
-          (path) => inside(context.worktree, path) && sources.has(path),
+          (path) => inside(reviewRoot, path) && sources.has(path),
         );
       const valid =
         check &&
@@ -825,6 +825,8 @@ export function createTaskVerifier(
     if ((await realpath(task.spec.workspace)) !== workspace)
       throw Error('task belongs to another authorized workspace');
     await mkdir(options.dataDir, { recursive: true, mode: 0o700 });
+    if (inside(workspace, await realpath(options.dataDir)))
+      throw Error('verification data must be outside the candidate workspace');
     await mkdir(context.artifactDirectory, { recursive: true, mode: 0o700 });
     const common = async (path: string) =>
       realpath(
