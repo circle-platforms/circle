@@ -23,6 +23,25 @@ export function toolSummary(rows: Message[]): {
   removed: number;
 } {
   const tools = rows.flatMap((row) => (row.tool ? [row.tool] : []));
+  const pending = tools.filter((tool) => tool.status === 'waiting').length;
+  const running = tools.filter((tool) => tool.status === 'running').length;
+  if (pending || running)
+    return {
+      text: [
+        pending
+          ? tn(
+              pending,
+              '{n} tool waiting for approval',
+              '{n} tools waiting for approval',
+            )
+          : '',
+        running ? tn(running, '{n} tool running', '{n} tools running') : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      added: 0,
+      removed: 0,
+    };
   const count = (names: string[]) =>
     tools.filter((tool) => names.includes(tool.name));
   const parts: string[] = [];
@@ -102,6 +121,12 @@ export function ToolGroup({
     ['running', 'waiting'].includes(tool.status),
   );
   const failed = tools.filter((tool) => tool.status === 'error').length;
+  const cancelled = tools.filter(
+    (tool) => String(tool.status) === 'cancelled',
+  ).length;
+  const rejected = tools.filter(
+    (tool) => String(tool.status) === 'rejected',
+  ).length;
   const [open, setOpen] = useSessionDisclosure(
     'group:' + rows[0]?.id,
     expanded,
@@ -127,6 +152,12 @@ export function ToolGroup({
           <span className="failed">
             {tn(failed, '{n} failed', '{n} failed')}
           </span>
+        )}
+        {cancelled > 0 && (
+          <span>{tn(cancelled, '{n} cancelled', '{n} cancelled')}</span>
+        )}
+        {rejected > 0 && (
+          <span>{tn(rejected, '{n} rejected', '{n} rejected')}</span>
         )}
         {running && !open && (
           <code className="tool-running">

@@ -8,7 +8,14 @@ import {
 import { parsePreviewBundle } from '../model/transfer';
 import { usePlugins } from '../plugins/context';
 import { PluginBoundary } from '../plugins/Boundary';
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Group, Panel, Separator } from 'react-resizable-panels';
 import { DropdownMenu, Tooltip } from 'radix-ui';
@@ -53,8 +60,17 @@ import {
 import { Markdown } from '../components/Markdown';
 import { ToolMessage } from '../components/ToolMessage';
 import { Conversation } from '../features/Conversation';
+import {
+  DeveloperWorkbench,
+  type WorkbenchLayout,
+} from '../features/DeveloperWorkbench';
+import { SourceNavigation } from '../components/SourceNavigation';
 import { Inspector, PanelButtons } from '../features/Panels';
-import { FileViewer } from '../features/FileViewer';
+const FileViewer = lazy(() =>
+  import('../features/FileViewer').then((module) => ({
+    default: module.FileViewer,
+  })),
+);
 import { ManagementPage } from '../features/Pages';
 import { DialogHost, InteractionDialog } from '../features/Dialogs';
 import { applyTheme } from '../theme';
@@ -104,6 +120,26 @@ export function App() {
   const [panel, setPanel] = useState<PanelId>('files');
   const [selection, setSelection] = useState('');
   const [file, setFile] = useState<string | null>(null);
+  const [sourceLine, setSourceLine] = useState<number | undefined>();
+  const [sourceColumn, setSourceColumn] = useState<number | undefined>();
+  const [layout, setLayout] = useState<WorkbenchLayout>(() => {
+    try {
+      return localStorage.getItem('circle-workbench-layout') === 'developer'
+        ? 'developer'
+        : 'task';
+    } catch {
+      return 'task';
+    }
+  });
+  const changeLayout = (next: WorkbenchLayout) => {
+    setLayout(next);
+    try {
+      localStorage.setItem('circle-workbench-layout', next);
+    } catch {
+      /* private mode */
+    }
+  };
+  const [quickOpen, setQuickOpen] = useState(false);
   const [agent, setAgent] = useState<string | null>(null);
   const [dialog, setDialog] = useState<DialogId | null>(null);
   const [dialogSelection, setDialogSelection] = useState('');
@@ -111,6 +147,8 @@ export function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [finding, setFinding] = useState(false);
   const [search, setSearch] = useState('');
+  const [searchCursor, setSearchCursor] = useState(0);
+  useEffect(() => setSearchCursor(0), [search, searchOpen, quickOpen]);
   const page = location.pathname.startsWith('/page/')
     ? (location.pathname.slice(6) as PageId)
     : null;
@@ -155,10 +193,12 @@ export function App() {
     };
     return host.onBrowserEvent(show);
   }, [session.id, onPage, narrow]);
-  const onFile = async (path: string) => {
+  const onFile = async (path: string, line?: number, column?: number) => {
     try {
-      await readNativeFile(runtime, path);
+      if (runtime.mode !== 'live') await readNativeFile(runtime, path);
       setFile(path);
+      setSourceLine(line);
+      setSourceColumn(column);
       setAgent(null);
       if (narrow) setInspectorOpen(false);
       onSessionRoute();
@@ -450,6 +490,17 @@ export function App() {
         !document.querySelector('[role="dialog"]')
       ) {
         event.preventDefault();
+        setQuickOpen(false);
+        setSearchOpen(true);
+      } else if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === 'p' &&
+        !document.querySelector('[role="dialog"]')
+      ) {
+        event.preventDefault();
+        setQuickOpen(true);
+        setSearch('');
         setSearchOpen(true);
       }
     };
@@ -480,8 +531,6 @@ export function App() {
       onDialog={onDialog}
       onPanel={onPanel}
     />
-  ) : file ? (
-    <FileViewer path={file} onClose={() => setFile(null)} />
   ) : activeAgent ? (
     <section className="agent-record">
       <header>
@@ -519,18 +568,43 @@ export function App() {
       </div>
     </section>
   ) : (
-    <Conversation
-      onDialog={onDialog}
-      onPanel={onPanel}
-      onAgent={setAgent}
+    <DeveloperWorkbench
+      layout={layout}
+      sessionId={session.id}
+      editor={
+        file ? (
+          <Suspense fallback={<p role="status">{t('opening file…')}</p>}>
+            <FileViewer
+              path={file}
+              line={sourceLine}
+              column={sourceColumn}
+              onClose={() => setFile(null)}
+            />
+          </Suspense>
+        ) : null
+      }
       onFile={onFile}
-      onAttach={() => pickFiles()}
-      onCommand={() => {
-        setSearch('');
-        setSearchOpen(true);
+      onSession={(id) => {
+        void perform(async () => {
+          await runtime.selectSession(id);
+          navigate(`/session/${id}`);
+        });
       }}
-      finding={finding}
-      setFinding={setFinding}
+      conversation={
+        <Conversation
+          onDialog={onDialog}
+          onPanel={onPanel}
+          onAgent={setAgent}
+          onFile={onFile}
+          onAttach={() => pickFiles()}
+          onCommand={() => {
+            setSearch('');
+            setSearchOpen(true);
+          }}
+          finding={finding}
+          setFinding={setFinding}
+        />
+      }
     />
   );
   // The session's own actions, under its title as Claude has them.
@@ -564,6 +638,18 @@ export function App() {
     />
   );
   const searchItems = [
+    ...[
+      { id: 'new', label: t('new conversation') },
+      { id: 'compact', label: t('compact context') },
+      { id: 'fork', label: t('fork') },
+      { id: 'export', label: t('export') },
+      { id: 'name', label: t('rename') },
+    ].map((command) => ({
+      id: 'command-' + command.id,
+      label: command.label,
+      detail: t('command'),
+      run: () => act(() => runtime.command(command.id)),
+    })),
     ...pluginPages.map(({ page }) => ({
       id: 'plugin-' + page.id,
       label: page.title,
@@ -614,240 +700,298 @@ export function App() {
           },
         })),
     ),
-  ].filter((item) =>
-    (item.label + ' ' + item.detail)
-      .toLowerCase()
-      .includes(search.toLowerCase()),
+  ].filter(
+    (item) =>
+      (!quickOpen || item.detail === t('file')) &&
+      (item.label + ' ' + item.detail)
+        .toLowerCase()
+        .includes(search.toLowerCase()),
   );
   return (
-    <Tooltip.Provider delayDuration={300}>
-      <div className="workbench">
-        {desktopHost() && <div className="desktop-drag-region" />}
-        <div className="desktop-sidebar">
-          <Sidebar onSearch={() => setSearchOpen(true)} onDialog={onDialog} />
-        </div>
-        <main className="workspace">
-          <header className="topbar">
-            <div className="topbar-title">
-              <span className="mobile-only">
-                <IconButton
-                  label={t('open navigation')}
-                  onClick={() => setSidebarOpen(true)}
-                >
-                  <PanelLeft size={16} />
-                </IconButton>
-              </span>
-              {page || file || agent ? (
-                <span className="page-title">
-                  {page
-                    ? (PAGE_NAMES[page]?.() ?? page)
-                    : file
-                      ? file
-                      : t('agent record')}
+    <SourceNavigation onFile={onFile}>
+      <Tooltip.Provider delayDuration={300}>
+        <div className="workbench">
+          {desktopHost() && <div className="desktop-drag-region" />}
+          <div className="desktop-sidebar">
+            <Sidebar onSearch={() => setSearchOpen(true)} onDialog={onDialog} />
+          </div>
+          <main className="workspace">
+            <header className="topbar">
+              <div className="topbar-title">
+                <span className="mobile-only">
+                  <IconButton
+                    label={t('open navigation')}
+                    onClick={() => setSidebarOpen(true)}
+                  >
+                    <PanelLeft size={16} />
+                  </IconButton>
                 </span>
-              ) : (
+                {page || file || agent ? (
+                  <span className="page-title">
+                    {page
+                      ? (PAGE_NAMES[page]?.() ?? page)
+                      : file
+                        ? file
+                        : t('agent record')}
+                  </span>
+                ) : (
+                  <DropdownMenu.Root>
+                    <h1 className="session-title">
+                      <DropdownMenu.Trigger asChild>
+                        <button>
+                          <span>{sessionTitle(session.title)}</span>
+                          <ChevronDown size={14} />
+                        </button>
+                      </DropdownMenu.Trigger>
+                    </h1>
+                    <DropdownMenu.Portal>
+                      <DropdownMenu.Content
+                        className="dropdown"
+                        align="start"
+                        sideOffset={6}
+                      >
+                        {SESSION_ACTIONS.map(([label, run]) => (
+                          <DropdownMenu.Item key={label()} onSelect={run}>
+                            {label()}
+                          </DropdownMenu.Item>
+                        ))}
+                      </DropdownMenu.Content>
+                    </DropdownMenu.Portal>
+                  </DropdownMenu.Root>
+                )}
+                <span className="project-chip" title={workspace.path}>
+                  <Folder size={12} />
+                  {workspace.name}
+                  {workspace.branch && (
+                    <>
+                      <GitBranch size={11} />
+                      {workspace.branch}
+                    </>
+                  )}
+                </span>
+              </div>
+              <div className="topbar-actions">
+                {!page && (
+                  <div
+                    className="layout-toggle"
+                    role="group"
+                    aria-label={t('workspace layout')}
+                  >
+                    <button
+                      aria-pressed={layout === 'task'}
+                      onClick={() => changeLayout('task')}
+                    >
+                      {t('task layout')}
+                    </button>
+                    <button
+                      aria-pressed={layout === 'developer'}
+                      onClick={() => changeLayout('developer')}
+                    >
+                      {t('developer layout')}
+                    </button>
+                  </div>
+                )}
+                {!page && (
+                  <PanelButtons
+                    panel={panel}
+                    open={inspectorOpen}
+                    onPanel={(id) => onPanel(id)}
+                    onClose={() => setInspectorOpen(false)}
+                  />
+                )}
                 <DropdownMenu.Root>
-                  <h1 className="session-title">
-                    <DropdownMenu.Trigger asChild>
-                      <button>
-                        <span>{sessionTitle(session.title)}</span>
-                        <ChevronDown size={14} />
-                      </button>
-                    </DropdownMenu.Trigger>
-                  </h1>
+                  <DropdownMenu.Trigger asChild>
+                    <button className="icon-button" aria-label={t('more')}>
+                      <MoreHorizontal size={16} />
+                    </button>
+                  </DropdownMenu.Trigger>
                   <DropdownMenu.Portal>
                     <DropdownMenu.Content
                       className="dropdown"
-                      align="start"
+                      align="end"
                       sideOffset={6}
                     >
-                      {SESSION_ACTIONS.map(([label, run]) => (
-                        <DropdownMenu.Item key={label()} onSelect={run}>
-                          {label()}
-                        </DropdownMenu.Item>
-                      ))}
+                      <DropdownMenu.Item onSelect={() => setSearchOpen(true)}>
+                        {t('search')}
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item
+                        onSelect={() =>
+                          perform(() =>
+                            runtime.change((state) => {
+                              state.settings.theme =
+                                document.documentElement.dataset.theme ===
+                                'dark'
+                                  ? 'light'
+                                  : 'dark';
+                            }),
+                          )
+                        }
+                      >
+                        {document.documentElement.dataset.theme === 'dark'
+                          ? t('light theme')
+                          : t('dark theme')}
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item
+                        onSelect={() =>
+                          onDialog(
+                            runtime.mode === 'live' ? 'connect' : 'preview',
+                          )
+                        }
+                      >
+                        {t('connection')}
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item
+                        onSelect={() => navigate('/page/help')}
+                      >
+                        {t('help')}
+                      </DropdownMenu.Item>
                     </DropdownMenu.Content>
                   </DropdownMenu.Portal>
                 </DropdownMenu.Root>
-              )}
-              <span className="project-chip" title={workspace.path}>
-                <Folder size={12} />
-                {workspace.name}
-                {workspace.branch && (
+              </div>
+            </header>
+            <div className="workspace-content">
+              <Group orientation="horizontal" id="workbench-columns">
+                <Panel
+                  id="main"
+                  defaultSize={inspectorVisible && !narrow ? '68%' : '100%'}
+                  minSize="38%"
+                >
+                  <div className="main-stack">{content}</div>
+                </Panel>
+                {inspectorVisible && !narrow && (
                   <>
-                    <GitBranch size={11} />
-                    {workspace.branch}
+                    <Separator
+                      className="resize-handle"
+                      aria-label={t('resize inspector')}
+                    />
+                    <Panel
+                      id="inspector"
+                      minSize={290}
+                      maxSize="50%"
+                      defaultSize="32%"
+                    >
+                      {inspector}
+                    </Panel>
                   </>
                 )}
-              </span>
-            </div>
-            <div className="topbar-actions">
-              {!page && (
-                <PanelButtons
-                  panel={panel}
-                  open={inspectorOpen}
-                  onPanel={(id) => onPanel(id)}
-                  onClose={() => setInspectorOpen(false)}
-                />
-              )}
-              <DropdownMenu.Root>
-                <DropdownMenu.Trigger asChild>
-                  <button className="icon-button" aria-label={t('more')}>
-                    <MoreHorizontal size={16} />
-                  </button>
-                </DropdownMenu.Trigger>
-                <DropdownMenu.Portal>
-                  <DropdownMenu.Content
-                    className="dropdown"
-                    align="end"
-                    sideOffset={6}
-                  >
-                    <DropdownMenu.Item onSelect={() => setSearchOpen(true)}>
-                      {t('search')}
-                    </DropdownMenu.Item>
-                    <DropdownMenu.Item
-                      onSelect={() =>
-                        perform(() =>
-                          runtime.change((state) => {
-                            state.settings.theme =
-                              document.documentElement.dataset.theme === 'dark'
-                                ? 'light'
-                                : 'dark';
-                          }),
-                        )
-                      }
-                    >
-                      {document.documentElement.dataset.theme === 'dark'
-                        ? t('light theme')
-                        : t('dark theme')}
-                    </DropdownMenu.Item>
-                    <DropdownMenu.Item
-                      onSelect={() =>
-                        onDialog(
-                          runtime.mode === 'live' ? 'connect' : 'preview',
-                        )
-                      }
-                    >
-                      {t('connection')}
-                    </DropdownMenu.Item>
-                    <DropdownMenu.Item onSelect={() => navigate('/page/help')}>
-                      {t('help')}
-                    </DropdownMenu.Item>
-                  </DropdownMenu.Content>
-                </DropdownMenu.Portal>
-              </DropdownMenu.Root>
-            </div>
-          </header>
-          <div className="workspace-content">
-            <Group orientation="horizontal" id="workbench-columns">
-              <Panel
-                id="main"
-                defaultSize={inspectorVisible && !narrow ? '68%' : '100%'}
-                minSize="38%"
-              >
-                <div className="main-stack">{content}</div>
-              </Panel>
-              {inspectorVisible && !narrow && (
-                <>
-                  <Separator
-                    className="resize-handle"
-                    aria-label={t('resize inspector')}
-                  />
-                  <Panel
-                    id="inspector"
-                    minSize={290}
-                    maxSize="50%"
-                    defaultSize="32%"
-                  >
-                    {inspector}
-                  </Panel>
-                </>
-              )}
-            </Group>
-            {/* A narrow window lays the panel over the conversation, on the right,
+              </Group>
+              {/* A narrow window lays the panel over the conversation, on the right,
                 and keeps the top bar's icons usable. */}
-            {inspectorVisible && narrow && (
-              <div
-                className="inspector-overlay"
-                onKeyDown={(event) => {
-                  if (event.key === 'Escape') setInspectorOpen(false);
-                }}
-              >
-                {inspector}
-              </div>
-            )}
-          </div>
-        </main>
-        <Modal
-          open={sidebarOpen}
-          onOpenChange={setSidebarOpen}
-          title={t('navigation')}
-        >
-          <Sidebar
-            onSearch={() => {
-              setSidebarOpen(false);
-              setSearchOpen(true);
+              {inspectorVisible && narrow && (
+                <div
+                  className="inspector-overlay"
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') setInspectorOpen(false);
+                  }}
+                >
+                  {inspector}
+                </div>
+              )}
+            </div>
+          </main>
+          <Modal
+            open={sidebarOpen}
+            onOpenChange={setSidebarOpen}
+            title={t('navigation')}
+          >
+            <Sidebar
+              onSearch={() => {
+                setSidebarOpen(false);
+                setSearchOpen(true);
+              }}
+              onNavigate={() => setSidebarOpen(false)}
+              onDialog={onDialog}
+            />
+          </Modal>
+          <Modal
+            open={searchOpen}
+            onOpenChange={setSearchOpen}
+            title={quickOpen ? t('quick open') : t('search')}
+          >
+            <SearchInput
+              value={search}
+              onChange={setSearch}
+              label={t('global search')}
+              inputProps={{
+                onKeyDown: (event) => {
+                  if (event.nativeEvent.isComposing) return;
+                  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    setSearchCursor((value) =>
+                      Math.max(
+                        0,
+                        Math.min(
+                          searchItems.length - 1,
+                          value + (event.key === 'ArrowDown' ? 1 : -1),
+                        ),
+                      ),
+                    );
+                  } else if (
+                    event.key === 'Enter' &&
+                    searchItems[searchCursor]
+                  ) {
+                    event.preventDefault();
+                    searchItems[searchCursor]!.run();
+                    setSearchOpen(false);
+                    setSearch('');
+                  }
+                },
+              }}
+              placeholder={
+                quickOpen
+                  ? t('search workspace files')
+                  : t('sessions, files, pages or past messages')
+              }
+            />
+            <div className="search-results">
+              {searchItems.map((item, index) => (
+                <button
+                  key={item.id}
+                  className={index === searchCursor ? 'selected' : undefined}
+                  onMouseEnter={() => setSearchCursor(index)}
+                  onClick={() => {
+                    item.run();
+                    setSearchOpen(false);
+                    setSearch('');
+                  }}
+                >
+                  <Search size={14} />
+                  <span>
+                    <strong>{item.label}</strong>
+                    <small>{item.detail}</small>
+                  </span>
+                  <ArrowUpRight size={12} />
+                </button>
+              ))}
+            </div>
+          </Modal>
+          <DialogHost
+            dialog={dialog}
+            selection={dialogSelection}
+            onClose={() => setDialog(null)}
+            onSession={onSession}
+          />
+          <InteractionDialog
+            item={
+              interaction
+                ? (snapshot.interactions.find(
+                    (item) => item.id === interaction.id,
+                  ) ?? null)
+                : null
+            }
+            onClose={() => {
+              setInteraction(null);
+              if (narrow) setInspectorOpen(false);
             }}
-            onNavigate={() => setSidebarOpen(false)}
-            onDialog={onDialog}
           />
-        </Modal>
-        <Modal
-          open={searchOpen}
-          onOpenChange={setSearchOpen}
-          title={t('search')}
-        >
-          <SearchInput
-            value={search}
-            onChange={setSearch}
-            label={t('global search')}
-            placeholder={t('sessions, files, pages or past messages')}
-          />
-          <div className="search-results">
-            {searchItems.map((item) => (
-              <button
-                key={item.id}
-                onClick={() => {
-                  item.run();
-                  setSearchOpen(false);
-                  setSearch('');
-                }}
-              >
-                <Search size={14} />
-                <span>
-                  <strong>{item.label}</strong>
-                  <small>{item.detail}</small>
-                </span>
-                <ArrowUpRight size={12} />
-              </button>
-            ))}
-          </div>
-        </Modal>
-        <DialogHost
-          dialog={dialog}
-          selection={dialogSelection}
-          onClose={() => setDialog(null)}
-          onSession={onSession}
-        />
-        <InteractionDialog
-          item={
-            interaction
-              ? (snapshot.interactions.find(
-                  (item) => item.id === interaction.id,
-                ) ?? null)
-              : null
-          }
-          onClose={() => {
-            setInteraction(null);
-            if (narrow) setInspectorOpen(false);
-          }}
-        />
-        {notice && (
-          <div className="toast" role="status">
-            {notice}
-          </div>
-        )}
-      </div>
-    </Tooltip.Provider>
+          {notice && (
+            <div className="toast" role="status">
+              {notice}
+            </div>
+          )}
+        </div>
+      </Tooltip.Provider>
+    </SourceNavigation>
   );
 }

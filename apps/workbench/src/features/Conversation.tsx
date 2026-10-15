@@ -32,6 +32,8 @@ import type { Attachment, DialogId, Message, PanelId } from '../model/types';
 import { Button, IconButton, FileChip, Status } from '../components/common';
 import { Markdown } from '../components/Markdown';
 import { ToolGroup, TurnRow } from '../components/ToolGroup';
+import { WindowedList } from '../components/WindowedList';
+import type { ReactNode, RefObject } from 'react';
 import { MessageView } from '../components/MessageView';
 import {
   BrowserDialogRequest,
@@ -102,6 +104,31 @@ function groupMessages(messages: Message[]): TranscriptItem[] {
   }
   return items;
 }
+const transcriptKey = (item: TranscriptItem) =>
+  item.kind === 'tools' ? item.id : item.message.id;
+function TranscriptList({
+  items,
+  renderItem,
+  scrollRef,
+  revealIndex,
+}: {
+  items: TranscriptItem[];
+  renderItem: (item: TranscriptItem, index: number) => ReactNode;
+  scrollRef: RefObject<HTMLElement | null>;
+  revealIndex?: number;
+}) {
+  return items.length < 500 ? (
+    items.map(renderItem)
+  ) : (
+    <WindowedList
+      items={items}
+      itemKey={transcriptKey}
+      renderItem={renderItem}
+      scrollRef={scrollRef}
+      revealIndex={revealIndex}
+    />
+  );
+}
 // How a queued message goes: steering joins the running turn, a follow-up waits for its end.
 const QUEUE_KIND: Record<string, () => string> = {
   steering: () => t('steering'),
@@ -132,6 +159,10 @@ export function Conversation({
   const input = useRef<HTMLTextAreaElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const column = useRef<HTMLDivElement>(null);
+  const [editingQueue, setEditingQueue] = useState<{
+    id: string;
+    text: string;
+  } | null>(null);
   const [find, setFind] = useState('');
   const [findIndex, setFindIndex] = useState(0);
   const [completionIndex, setCompletionIndex] = useState(0);
@@ -206,6 +237,7 @@ export function Conversation({
   const savedDraft = useRef('');
   useEffect(() => {
     setHistoryIndex(-1);
+    setEditingQueue(null);
     savedDraft.current = '';
     lastEscape.current = 0;
     setFind('');
@@ -354,10 +386,18 @@ export function Conversation({
   useEffect(() => setFinding(false), [session.id, messages.length]);
   useEffect(() => {
     if (find && matches.length) {
-      const target = scroller.current?.querySelector(
-        `[data-message-id="${matches[findIndex % matches.length]?.id}"]`,
-      );
-      target?.scrollIntoView({ block: 'center' });
+      let frame = 0;
+      frame = requestAnimationFrame(() => {
+        frame = requestAnimationFrame(() => {
+          const id = matches[findIndex % matches.length]?.id;
+          if (!id) return;
+          const target = scroller.current?.querySelector(
+            `[data-message-id="${CSS.escape(id)}"]`,
+          );
+          target?.scrollIntoView({ block: 'center' });
+        });
+      });
+      return () => cancelAnimationFrame(frame);
     }
   }, [find, findIndex]);
   useEffect(() => {
@@ -634,70 +674,90 @@ export function Conversation({
               </div>
             </div>
           ) : (
-            items.map((item, index) =>
-              item.kind === 'tools' ? (
-                <div key={item.id} data-message-id={item.rows[0]!.id}>
-                  <ToolGroup
-                    rows={item.rows}
-                    expanded={
-                      session.expandTools ||
-                      (!!find &&
-                        item.rows.some(
-                          (row) =>
-                            row.id === matches[findIndex % matches.length]?.id,
-                        ))
-                    }
-                    onAgent={onAgent}
-                    onFile={onFile}
-                    turn={index === clockAt ? clock : undefined}
-                  >
-                    {pending
-                      .filter(
-                        (request) =>
-                          request.kind === 'approval' &&
-                          !!request.callId &&
+            <TranscriptList
+              items={items}
+              scrollRef={scroller}
+              revealIndex={
+                find && matches.length
+                  ? items.findIndex((item) =>
+                      item.kind === 'tools'
+                        ? item.rows.some(
+                            (row) =>
+                              row.id ===
+                              matches[findIndex % matches.length]?.id,
+                          )
+                        : item.message.id ===
+                          matches[findIndex % matches.length]?.id,
+                    )
+                  : undefined
+              }
+              renderItem={(item, index) =>
+                item.kind === 'tools' ? (
+                  <div key={item.id} data-message-id={item.rows[0]!.id}>
+                    <ToolGroup
+                      rows={item.rows}
+                      expanded={
+                        session.expandTools ||
+                        (!!find &&
                           item.rows.some(
-                            (row) => row.tool?.id === request.callId,
-                          ),
-                      )
-                      .map((request) => (
-                        <InlineRequest
-                          key={request.id}
-                          item={request}
-                          onSecret={() => onDialog('secret')}
-                        />
-                      ))}
-                  </ToolGroup>
-                </div>
-              ) : (
-                <div
-                  key={item.message.id}
-                  data-message-id={item.message.id}
-                  className={
-                    find &&
-                    matches[findIndex % matches.length]?.id === item.message.id
-                      ? 'find-match'
-                      : ''
-                  }
-                >
-                  {item.message.role === 'notice' ? (
-                    <div className="transcript-notice">
-                      {item.message.planCompleted === undefined
-                        ? item.message.text
-                        : t('plan completed · {n} steps', {
-                            n: item.message.planCompleted,
-                          })}
-                    </div>
-                  ) : (
-                    <MessageView
-                      message={item.message}
-                      showThinking={session.showThinking}
-                      onAttachment={() => onPanel('context')}
-                    />
-                  )}
-                </div>
-              ),
-            )
+                            (row) =>
+                              row.id ===
+                              matches[findIndex % matches.length]?.id,
+                          ))
+                      }
+                      onAgent={onAgent}
+                      onFile={onFile}
+                      turn={index === clockAt ? clock : undefined}
+                    >
+                      {pending
+                        .filter(
+                          (request) =>
+                            request.kind === 'approval' &&
+                            !!request.callId &&
+                            item.rows.some(
+                              (row) => row.tool?.id === request.callId,
+                            ),
+                        )
+                        .map((request) => (
+                          <InlineRequest
+                            key={request.id}
+                            item={request}
+                            onSecret={() => onDialog('secret')}
+                          />
+                        ))}
+                    </ToolGroup>
+                  </div>
+                ) : (
+                  <div
+                    key={item.message.id}
+                    data-message-id={item.message.id}
+                    className={
+                      find &&
+                      matches[findIndex % matches.length]?.id ===
+                        item.message.id
+                        ? 'find-match'
+                        : ''
+                    }
+                  >
+                    {item.message.role === 'notice' ? (
+                      <div className="transcript-notice">
+                        {item.message.planCompleted === undefined
+                          ? item.message.text
+                          : t('plan completed · {n} steps', {
+                              n: item.message.planCompleted,
+                            })}
+                      </div>
+                    ) : (
+                      <MessageView
+                        message={item.message}
+                        showThinking={session.showThinking}
+                        onAttachment={() => onPanel('context')}
+                      />
+                    )}
+                  </div>
+                )
+              }
+            />
           )}
           {loose.map((item) => (
             <InlineRequest
@@ -880,7 +940,74 @@ export function Conversation({
               {session.queue.map((item) => (
                 <div key={item.id}>
                   <span>{QUEUE_KIND[item.kind]?.() ?? item.kind}</span>
-                  <p>{item.text}</p>
+                  {editingQueue?.id === item.id ? (
+                    <div className="queue-editor">
+                      <textarea
+                        aria-label={t('edit queued message')}
+                        value={editingQueue.text}
+                        onChange={(event) =>
+                          setEditingQueue({
+                            id: item.id,
+                            text: event.target.value,
+                          })
+                        }
+                        onKeyDown={(event) => {
+                          if (event.key === 'Escape') {
+                            event.stopPropagation();
+                            setEditingQueue(null);
+                          }
+                        }}
+                      />
+                      <div>
+                        <Button
+                          disabled={!editingQueue.text.trim()}
+                          onClick={() => {
+                            const text = editingQueue.text;
+                            void perform(async () => {
+                              if (runtime.mode === 'live')
+                                await runtime.request(
+                                  'edit-queued',
+                                  {
+                                    kind: item.kind,
+                                    index: Number(item.id.split('-').at(-1)),
+                                    text: item.text,
+                                    updatedText: text,
+                                  },
+                                  session.id,
+                                );
+                              else
+                                runtime.change((state) => {
+                                  const target = state.sessions.find(
+                                    (value) => value.id === session.id,
+                                  );
+                                  const queued = target?.queue.find(
+                                    (entry) => entry.id === item.id,
+                                  );
+                                  if (queued) queued.text = text;
+                                });
+                              setEditingQueue(null);
+                            });
+                          }}
+                        >
+                          {t('save queued message')}
+                        </Button>
+                        <Button onClick={() => setEditingQueue(null)}>
+                          {t('cancel')}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <p>{item.text}</p>
+                      <Button
+                        onClick={() =>
+                          setEditingQueue({ id: item.id, text: item.text })
+                        }
+                      >
+                        {t('edit queued message')}
+                      </Button>
+                    </>
+                  )}
                   <IconButton
                     label={t('remove queued {kind}', {
                       kind: QUEUE_KIND[item.kind]?.() ?? item.kind,
