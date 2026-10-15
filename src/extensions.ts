@@ -123,7 +123,10 @@ export interface ExtensionServices {
   signal?: AbortSignal;
   /** Work of the extension that the host waits for when it closes. */
   track?: (work: Promise<unknown>) => void;
+  /** Called when an extension adds or removes a tool after it loaded. */
+  onTools?: () => void;
 }
+const live = new WeakSet<ExtensionAPI>();
 const settled = (): void => undefined;
 export class ExtensionAPI {
   readonly ToolError = ToolError;
@@ -321,6 +324,7 @@ export class ExtensionAPI {
       );
     if (typeof execute !== 'function')
       throw new ExtensionError(`tool '${name}': execute must be callable`);
+    if (live.has(this)) this.reservedTools.add(name);
     this.ext.tools.push({
       name,
       description: description || name,
@@ -330,6 +334,16 @@ export class ExtensionAPI {
       run: (args, context) =>
         this.tracked(this.runTool(execute, args, context)),
     });
+    if (live.has(this)) this.services?.onTools?.();
+  }
+  /** Removes a tool this extension registered. A running session sees it gone from its next turn. */
+  unregisterTool(name: string): boolean {
+    const index = this.ext.tools.findIndex((tool) => tool.name === name);
+    if (index < 0) return false;
+    this.ext.tools.splice(index, 1);
+    this.reservedTools.delete(name);
+    if (live.has(this)) this.services?.onTools?.();
+    return true;
   }
   private async runTool(
     execute: (
@@ -484,6 +498,8 @@ export interface ExtensionHostOptions {
   onStatus?: () => void;
   /** Where api.openUrl opens a link; without it openUrl fails. */
   openUrl?: (url: string) => Promise<void>;
+  /** Called when a loaded extension adds or removes a tool. */
+  onTools?: () => void;
   /** Shows a masked card for api.askSecret; without it askSecret fails. */
   secret?: ExtensionServices['secret'];
   secretTimeoutMs?: number;
@@ -575,27 +591,28 @@ export class ExtensionHost {
         );
         if (!isRecord(module) || typeof module.register !== 'function')
           throw new ExtensionError('extension defines no register(api)');
-        await module.register(
-          new ExtensionAPI(
-            ext,
-            tools,
-            commands,
-            this.options.jobs,
-            this.options.jobOwner,
-            {
-              home: this.options.home,
-              workspace: this.options.workspace,
-              secret: this.options.secret,
-              secretTimeoutMs: this.options.secretTimeoutMs,
-              settings: this.options.settings?.[discovered.name],
-              onStatus: this.options.onStatus,
-              openUrl: this.options.openUrl,
-              signal: this.controller.signal,
-              track: (work) => this.track(work),
-            },
-          ),
+        const api = new ExtensionAPI(
+          ext,
+          tools,
+          commands,
+          this.options.jobs,
+          this.options.jobOwner,
+          {
+            home: this.options.home,
+            workspace: this.options.workspace,
+            secret: this.options.secret,
+            secretTimeoutMs: this.options.secretTimeoutMs,
+            settings: this.options.settings?.[discovered.name],
+            onStatus: this.options.onStatus,
+            openUrl: this.options.openUrl,
+            onTools: this.options.onTools,
+            signal: this.controller.signal,
+            track: (work) => this.track(work),
+          },
         );
+        await module.register(api);
         for (const tool of ext.tools) tools.add(tool.name);
+        live.add(api);
         for (const command of ext.commands) commands.add(command.name);
       } catch (error) {
         ext.error =

@@ -60,7 +60,7 @@ When a [background job](background-jobs.md) the model started ends while nothing
 
 `--model`, `--thinking`, `--tools`, `--exclude-tools`, `--no-tools`, `--system-prompt`, `--append-system-prompt`, `--no-context-files`, `--name`, `--session`, `--session-id`, `--fork`, `-c`, `--no-session` and `--yolo` apply as usual. Messages and `@files` on the command line are refused, and so are `-r` and `--line`: send prompts as commands.
 
-Nobody can answer an approval card, so calls are decided as in [print mode](cli.md#print-mode): without `--yolo`, a call that would ask is not run and the model is told why; with `--yolo` it runs, except the calls that always ask. A question from the model comes back to it as text to ask in its answer. MCP servers, extensions and custom commands are not loaded. The folder must be trusted and Circle set up already; see [Print mode](cli.md#print-mode).
+Nobody can answer an approval card, so calls are decided as in [print mode](cli.md#print-mode): without `--yolo`, a call that would ask is not run and the model is told why; with `--yolo` it runs, except the calls that always ask. A question from the model comes back to it as text to ask in its answer. MCP servers and extensions load only with `--extensions` (`circle --mode rpc --extensions`); custom commands are not loaded. The folder must be trusted and Circle set up already; see [Print mode](cli.md#print-mode).
 
 ## When the input closes
 

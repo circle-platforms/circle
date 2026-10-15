@@ -1,6 +1,6 @@
 {
   "name": "circle",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "private": true,
   "description": "A terminal coding agent for your own model endpoint",
   "license": "Apache-2.0",

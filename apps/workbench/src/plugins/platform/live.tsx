@@ -9,11 +9,11 @@ import {
   Page,
   Status,
 } from '../../components/common';
-import { serverView } from '../server';
+import { hubView } from '../hub';
 import type { WorkbenchPlugin } from '../types';
 
-// The four platform objects as the paired circle-server extension last read them from the
-// server (/server refresh). The server decides what you may see; nothing here is local.
+// The four platform objects as the paired hub extension last read them from the
+// server (/hub refresh). The server decides what you may see; nothing here is local.
 interface Objects {
   refreshedAt: string;
   work: {
@@ -69,17 +69,36 @@ interface Objects {
     contractVersion?: string;
     requiredOperations?: string[];
   }[];
+  tools?: { name: string; remote: string; write: boolean }[];
+  skillPacks?: {
+    skillPackId?: string;
+    id?: string;
+    version?: string;
+    status?: string;
+  }[];
+  background?: { toolReads: number; indexing: number; indexingOpen: number };
+  bots?: {
+    assetId: string;
+    name: string;
+    lifecycle: string;
+    trigger: string;
+    triggerLifecycle?: string;
+    mine: boolean;
+    owner: string;
+    runs: number;
+    fresh: number;
+  }[];
 }
 const short = (hash?: string) => (hash ? hash.slice(0, 12) + '…' : '');
 
 function useObjects() {
   const { snapshot, runtime, perform } = useRuntime();
-  const view = serverView(snapshot.extensions);
+  const view = hubView(snapshot.extensions);
   const objects = (view as { objects?: Objects } | undefined)?.objects;
-  // Every action is the extension's own /server command; its lines go to the conversation.
+  // Every action is the extension's own /hub command; its lines go to the conversation.
   const run = (args: string) =>
     perform(async () => {
-      await runtime.command('server', args);
+      await runtime.command('hub', args);
     });
   return { view, objects, run };
 }
@@ -101,8 +120,7 @@ function Frame({
     >
       {!view?.signedIn ? (
         <EmptyState title="not signed in">
-          Sign in on the circle-server page; the server decides what you may
-          see.
+          Sign in on the hub page; the server decides what you may see.
         </EmptyState>
       ) : !objects ? (
         <EmptyState title="nothing read yet">
@@ -128,102 +146,109 @@ export function WorkLivePage() {
       title="work"
       description="C · tasks as the server holds them: their phase, what they wait on, and approvals bound to an input revision."
     >
-      {(objects, run) =>
-        objects.work.length ? (
-          <div className="extension-list">
-            {objects.work.map((task) => (
-              <article className="extension-card" key={task.taskId}>
-                <div className="detail-title">
-                  <div>
-                    <h2>{task.title || task.taskId}</h2>
-                    <p>
-                      {task.taskId} · input {task.inputRevisionId}
-                      {task.capabilityPackId
-                        ? ' · ' + task.capabilityPackId
-                        : ''}
-                    </p>
-                  </div>
-                  <Status value={task.phase} />
-                  <Button
-                    aria-label={`follow ${task.taskId}`}
-                    onClick={() => run(`task ${task.taskId}`)}
-                  >
-                    follow
-                  </Button>
-                </div>
-                {task.pendingInputs.map((item) => (
-                  <form
-                    key={item.requestId}
-                    className="form-stack"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      const answer = answers[item.requestId]?.trim();
-                      if (answer) run(`respond ${task.taskId} ${answer}`);
-                    }}
-                  >
-                    <p>{item.question}</p>
-                    <input
-                      aria-label={`answer ${item.requestId}`}
-                      value={answers[item.requestId] ?? ''}
-                      onChange={(event) =>
-                        setAnswers({
-                          ...answers,
-                          [item.requestId]: event.target.value,
-                        })
-                      }
-                    />
-                    <Button
-                      type="submit"
-                      aria-label={`send answer ${item.requestId}`}
-                    >
-                      answer
-                    </Button>
-                  </form>
-                ))}
-                {task.approvals.map((approval) => (
-                  <div className="detail-title" key={approval.approvalId}>
+      {(objects, run) => (
+        <>
+          {objects.work.length ? (
+            <div className="extension-list">
+              {objects.work.map((task) => (
+                <article className="extension-card" key={task.taskId}>
+                  <div className="detail-title">
                     <div>
-                      <h2>approval {approval.approvalId}</h2>
+                      <h2>{task.title || task.taskId}</h2>
                       <p>
-                        {approval.status} · asked by {approval.applicantId}
-                        {approval.approvedBy
-                          ? ' · decided by ' + approval.approvedBy
-                          : ''}{' '}
-                        · input {approval.inputRevisionId} · target{' '}
-                        {short(approval.targetIdentity)}
+                        {task.taskId} · input {task.inputRevisionId}
+                        {task.capabilityPackId
+                          ? ' · ' + task.capabilityPackId
+                          : ''}
                       </p>
                     </div>
-                    {approval.status === 'open' && (
-                      <>
-                        <Button
-                          aria-label={`approve ${approval.approvalId}`}
-                          onClick={() =>
-                            run(`approve ${task.taskId} ${approval.approvalId}`)
-                          }
-                        >
-                          approve
-                        </Button>
-                        <Button
-                          aria-label={`reject ${approval.approvalId}`}
-                          onClick={() =>
-                            run(`reject ${task.taskId} ${approval.approvalId}`)
-                          }
-                        >
-                          reject
-                        </Button>
-                      </>
-                    )}
+                    <Status value={task.phase} />
+                    <Button
+                      aria-label={`follow ${task.taskId}`}
+                      onClick={() => run(`task ${task.taskId}`)}
+                    >
+                      follow
+                    </Button>
                   </div>
-                ))}
-              </article>
-            ))}
-          </div>
-        ) : (
-          <EmptyState title="no work">
-            Nothing you may read on this server yet.
-          </EmptyState>
-        )
-      }
+                  {task.pendingInputs.map((item) => (
+                    <form
+                      key={item.requestId}
+                      className="form-stack"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        const answer = answers[item.requestId]?.trim();
+                        if (answer) run(`respond ${task.taskId} ${answer}`);
+                      }}
+                    >
+                      <p>{item.question}</p>
+                      <input
+                        aria-label={`answer ${item.requestId}`}
+                        value={answers[item.requestId] ?? ''}
+                        onChange={(event) =>
+                          setAnswers({
+                            ...answers,
+                            [item.requestId]: event.target.value,
+                          })
+                        }
+                      />
+                      <Button
+                        type="submit"
+                        aria-label={`send answer ${item.requestId}`}
+                      >
+                        answer
+                      </Button>
+                    </form>
+                  ))}
+                  {task.approvals.map((approval) => (
+                    <div className="detail-title" key={approval.approvalId}>
+                      <div>
+                        <h2>approval {approval.approvalId}</h2>
+                        <p>
+                          {approval.status} · asked by {approval.applicantId}
+                          {approval.approvedBy
+                            ? ' · decided by ' + approval.approvedBy
+                            : ''}{' '}
+                          · input {approval.inputRevisionId} · target{' '}
+                          {short(approval.targetIdentity)}
+                        </p>
+                      </div>
+                      {approval.status === 'open' && (
+                        <>
+                          <Button
+                            aria-label={`approve ${approval.approvalId}`}
+                            onClick={() =>
+                              run(
+                                `approve ${task.taskId} ${approval.approvalId}`,
+                              )
+                            }
+                          >
+                            approve
+                          </Button>
+                          <Button
+                            aria-label={`reject ${approval.approvalId}`}
+                            onClick={() =>
+                              run(
+                                `reject ${task.taskId} ${approval.approvalId}`,
+                              )
+                            }
+                          >
+                            reject
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </article>
+              ))}
+            </div>
+          ) : (
+            <EmptyState title="no work">
+              Nothing you may read on this server yet.
+            </EmptyState>
+          )}
+          <Background objects={objects} />
+        </>
+      )}
     </Frame>
   );
 }
@@ -355,77 +380,206 @@ export function MethodsLivePage() {
       title="methods"
       description="E · the server's capability packs, at the versions it runs. Hand one a file of this workspace."
     >
-      {(objects, run) =>
-        objects.methods.length ? (
-          <div className="extension-list">
-            {objects.methods.map((pack) => (
-              <article className="extension-card" key={pack.capabilityPackId}>
-                <div className="detail-title">
-                  <div>
-                    <h2>
-                      {pack.capabilityPackId} {pack.version ?? ''}
-                    </h2>
-                    <p>
-                      {pack.title ?? ''}
-                      {pack.contractVersion ? ' · ' + pack.contractVersion : ''}
-                      {pack.inputFormats?.length
-                        ? ' · ' + pack.inputFormats.join(', ')
-                        : ''}
-                    </p>
+      {(objects, run) => (
+        <>
+          {objects.methods.length ? (
+            <div className="extension-list">
+              {objects.methods.map((pack) => (
+                <article className="extension-card" key={pack.capabilityPackId}>
+                  <div className="detail-title">
+                    <div>
+                      <h2>
+                        {pack.capabilityPackId} {pack.version ?? ''}
+                      </h2>
+                      <p>
+                        {pack.title ?? ''}
+                        {pack.contractVersion
+                          ? ' · ' + pack.contractVersion
+                          : ''}
+                        {pack.inputFormats?.length
+                          ? ' · ' + pack.inputFormats.join(', ')
+                          : ''}
+                      </p>
+                    </div>
                   </div>
-                </div>
-                <form
-                  className="form-stack"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    const file = files[pack.capabilityPackId]?.trim();
-                    if (file) run(`submit ${pack.capabilityPackId} ${file}`);
-                  }}
-                >
-                  <input
-                    aria-label={`file for ${pack.capabilityPackId}`}
-                    placeholder="file in the workspace"
-                    value={files[pack.capabilityPackId] ?? ''}
-                    onChange={(event) =>
-                      setFiles({
-                        ...files,
-                        [pack.capabilityPackId]: event.target.value,
-                      })
-                    }
-                  />
-                  <Button
-                    type="submit"
-                    aria-label={`hand over to ${pack.capabilityPackId}`}
+                  <form
+                    className="form-stack"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      const file = files[pack.capabilityPackId]?.trim();
+                      if (file) run(`submit ${pack.capabilityPackId} ${file}`);
+                    }}
                   >
-                    hand over
-                  </Button>
-                </form>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <EmptyState title="no capability packs">
-            The server lists none you may use.
-          </EmptyState>
-        )
-      }
+                    <input
+                      aria-label={`file for ${pack.capabilityPackId}`}
+                      placeholder="file in the workspace"
+                      value={files[pack.capabilityPackId] ?? ''}
+                      onChange={(event) =>
+                        setFiles({
+                          ...files,
+                          [pack.capabilityPackId]: event.target.value,
+                        })
+                      }
+                    />
+                    <Button
+                      type="submit"
+                      aria-label={`hand over to ${pack.capabilityPackId}`}
+                    >
+                      hand over
+                    </Button>
+                  </form>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <EmptyState title="no capability packs">
+              The server lists none you may use.
+            </EmptyState>
+          )}
+          <ServerTools objects={objects} run={run} />
+        </>
+      )}
     </Frame>
+  );
+}
+
+// The tasks the work list leaves out: the model's server tool calls and the knowledge
+// indexing of what they read, which finishes after the read itself.
+function Background({ objects }: { objects: Objects }) {
+  const {
+    toolReads = 0,
+    indexing = 0,
+    indexingOpen = 0,
+  } = objects.background ?? {};
+  if (!toolReads && !indexing) return null;
+  // At most the latest 100 of each are read, so 100 means at least that many.
+  const count = (n: number) => (n >= 100 ? '100+' : String(n));
+  return (
+    <p className="panel-note">
+      Not listed: {count(toolReads)} server tool read(s) and {count(indexing)}{' '}
+      knowledge indexing job(s)
+      {indexingOpen
+        ? `, ${indexingOpen} still indexing; search may not show their knowledge yet`
+        : ''}
+      .
+    </p>
+  );
+}
+
+// What else the server offers: the tools the model has from it, pushed skill packs, and
+// the bots that run them. A bot's buttons are its /hub bot commands.
+function ServerTools({
+  objects,
+  run,
+}: {
+  objects: Objects;
+  run: (args: string) => void;
+}) {
+  const tools = objects.tools ?? [];
+  const packs = objects.skillPacks ?? [];
+  const bots = objects.bots ?? [];
+  return (
+    <>
+      <p className="panel-note">
+        {tools.length
+          ? `${tools.length} server tools the model can use: ` +
+            tools
+              .map(
+                (tool) => `${tool.remote}${tool.write ? ' (asks first)' : ''}`,
+              )
+              .join(', ')
+          : 'This server offers the model no tools.'}
+      </p>
+      {packs.length > 0 && (
+        <div className="extension-list">
+          {packs.map((pack) => (
+            <article
+              className="extension-card"
+              key={pack.skillPackId ?? pack.id}
+            >
+              <div className="detail-title">
+                <div>
+                  <h2>
+                    skill pack {pack.id ?? pack.skillPackId}{' '}
+                    {pack.version ?? ''}
+                  </h2>
+                  <p>{pack.skillPackId}</p>
+                </div>
+                <Status value={pack.status ?? 'unknown'} />
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+      {bots.length > 0 && (
+        <div className="extension-list">
+          {bots.map((bot) => (
+            <article className="extension-card" key={bot.assetId}>
+              <div className="detail-title">
+                <div>
+                  <h2>bot {bot.name}</h2>
+                  <p>
+                    {bot.assetId} · {bot.trigger}
+                    {bot.mine
+                      ? ` · ${bot.runs} run(s)${bot.fresh ? `, ${bot.fresh} new` : ''}`
+                      : ` · owner ${bot.owner}`}
+                  </p>
+                </div>
+                <Status value={bot.lifecycle} />
+                {bot.mine && (
+                  <Button
+                    aria-label={`runs of ${bot.assetId}`}
+                    onClick={() => run(`bot runs ${bot.assetId}`)}
+                  >
+                    runs
+                  </Button>
+                )}
+                {bot.mine && bot.lifecycle === 'approved' && (
+                  <Button
+                    aria-label={`start ${bot.assetId}`}
+                    onClick={() => run(`bot start ${bot.assetId}`)}
+                  >
+                    start
+                  </Button>
+                )}
+                {bot.mine && bot.lifecycle === 'running' && (
+                  <Button
+                    aria-label={`stop ${bot.assetId}`}
+                    onClick={() => run(`bot stop ${bot.assetId}`)}
+                  >
+                    stop
+                  </Button>
+                )}
+                {!bot.mine && bot.lifecycle === 'draft' && (
+                  <Button
+                    aria-label={`approve ${bot.assetId}`}
+                    onClick={() => run(`bot approve ${bot.assetId}`)}
+                  >
+                    approve
+                  </Button>
+                )}
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
 
 const paired = {
   apiVersion: 1 as const,
   version: '0.1.0',
-  runtimeExtension: 'circle-server',
+  runtimeExtension: 'hub',
 };
-/** B, C, D and E as the server holds them, paired with the circle-server extension. */
+/** B, C, D and E as the server holds them, paired with the hub extension. */
 export const livePlatformPlugins: WorkbenchPlugin[] = [
   {
     ...paired,
     id: 'knowledge',
     title: 'knowledge',
     description:
-      'B · sources, artifacts and evidence of your tasks on circle-server, by revision and SHA-256.',
+      'B · sources, artifacts and evidence of your tasks on hub, by revision and SHA-256.',
     icon: BookOpen,
     pages: [
       {
@@ -441,7 +595,7 @@ export const livePlatformPlugins: WorkbenchPlugin[] = [
     id: 'work',
     title: 'work',
     description:
-      'C · tasks on circle-server: phases, questions they wait on and approvals bound to a revision.',
+      'C · tasks on hub: phases, questions they wait on and approvals bound to a revision.',
     icon: Workflow,
     pages: [
       { id: 'work', title: 'work', icon: Workflow, component: WorkLivePage },
@@ -452,7 +606,7 @@ export const livePlatformPlugins: WorkbenchPlugin[] = [
     id: 'execution',
     title: 'execution',
     description:
-      'D · operations circle-server workers ran, with their leases and outcomes.',
+      'D · operations hub workers ran, with their leases and outcomes.',
     icon: Server,
     pages: [
       {
@@ -468,7 +622,7 @@ export const livePlatformPlugins: WorkbenchPlugin[] = [
     id: 'methods',
     title: 'methods',
     description:
-      'E · capability packs circle-server runs, at their versions; hand one a file.',
+      'E · capability packs hub runs, at their versions; hand one a file.',
     icon: Blocks,
     pages: [
       {
