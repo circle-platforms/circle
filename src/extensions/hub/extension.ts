@@ -495,7 +495,9 @@ export async function register(api: ExtensionAPI): Promise<void> {
       bots: botViews,
       background,
     };
-    api.background(showStatus());
+    // A command that read them (/hub refresh) returns once the view shows them: the
+    // desktop's pages read the view, not the command's lines.
+    await showStatus();
     return { tasks: tasks.length, packs: methods.length };
   }
   // A context whose lines are also kept for the view.
@@ -521,13 +523,19 @@ export async function register(api: ExtensionAPI): Promise<void> {
 
   // The footer line: where you are signed in, and how many tasks this window follows.
   let statusRun = 0;
+  let latestStatus: Promise<void> = Promise.resolve();
   // Called in the background from many places; a status line that cannot be read now (the
-  // secrets file busy or gone) is simply not redrawn.
-  async function showStatus(): Promise<void> {
+  // secrets file busy or gone) is simply not redrawn. Awaited, it returns once this call or
+  // a later one has drawn, so the view shows at least what was true when it was called.
+  function showStatus(): Promise<void> {
     // Nobody looks once the extension is closed, and its files may be going.
-    if (api.signal.aborted) return;
-    // Several refreshes may overlap; only the latest one draws.
+    if (api.signal.aborted) return Promise.resolve();
+    // Several refreshes may overlap; only the latest one draws, and the others wait for it.
     const run = ++statusRun;
+    latestStatus = drawStatus(run);
+    return latestStatus;
+  }
+  async function drawStatus(run: number): Promise<void> {
     const config = readConfig();
     let signedIn: boolean;
     try {
@@ -535,7 +543,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     } catch {
       return;
     }
-    if (run !== statusRun) return;
+    if (run !== statusRun) return latestStatus;
     publishView(signedIn);
     if (!config || !signedIn) {
       api.setStatus(config ? 'hub · signed out' : null);
