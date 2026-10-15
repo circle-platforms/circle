@@ -34,6 +34,7 @@ export type BrowserDiagnosticRequest =
       url?: string;
       line?: number;
       reference?: string;
+      expectedPauseEpoch?: number;
     };
 export type BrowserDiagnosticDomain =
   'console' | 'network' | 'storage' | 'debug' | 'lifecycle';
@@ -71,6 +72,7 @@ export interface BrowserDiagnosticState {
   network: BrowserNetworkEntry[];
   debugger: {
     paused: boolean;
+    pauseEpoch: number;
     stackFrames: {
       id: string;
       name: string;
@@ -118,7 +120,7 @@ export function validateBrowserDiagnosticRequest(
     watch: ['tab', 'subscription', 'domains', 'enabled'],
     storage: ['kind', 'origin', 'operation', 'key', 'value'],
     viewport: ['width', 'height', 'mobile'],
-    debug: ['command', 'url', 'line', 'reference'],
+    debug: ['command', 'url', 'line', 'reference', 'expectedPauseEpoch'],
   };
   if (
     typeof r.action !== 'string' ||
@@ -167,6 +169,12 @@ export function validateBrowserDiagnosticRequest(
       typeof r.origin !== 'string')
   )
     throw Error('invalid storage request');
+  if (
+    r.expectedPauseEpoch !== undefined &&
+    (!Number.isSafeInteger(r.expectedPauseEpoch) ||
+      Number(r.expectedPauseEpoch) < 0)
+  )
+    throw Error('invalid browser pause epoch');
   if (r.mobile !== undefined && typeof r.mobile !== 'boolean')
     throw Error('invalid viewport mode');
   if (

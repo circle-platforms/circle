@@ -45,6 +45,10 @@ jobs:
             app: Circle-linux-x64
             executable: Circle-linux-x64/Circle
     runs-on: ${{ matrix.runner }}
+    env:
+      CIRCLE_NATIVE_JOURNEY_WEB_DEBUG: '1'
+      # PUSH measures browser Console/CDP/IPC delivery, not a remote Git push.
+      CIRCLE_NATIVE_JOURNEY_PUSH: '1'
     # Both application modes and both viewport widths run on each native architecture.
     # Existing two-width live suites plus the full native journey in both modes.
     timeout-minutes: 60
@@ -83,6 +87,14 @@ jobs:
       - run: npm --prefix apps/workbench run format:check
       - run: npm --prefix apps/desktop run format:check
       - run: npm --prefix apps/workbench test
+      - name: Run the renderer component regression journeys on Linux
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          unset CIRCLE_TEST_BROWSER_CHANNEL
+          node apps/workbench/node_modules/playwright/cli.js install --with-deps chromium
+          npm --prefix apps/workbench run test:components
       - run: npm --prefix apps/desktop test
         timeout-minutes: 5
       - name: Verify native developer tool resources
@@ -144,6 +156,10 @@ jobs:
       matrix:
         os: [windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      CIRCLE_NATIVE_JOURNEY_WEB_DEBUG: '1'
+      # PUSH measures browser Console/CDP/IPC delivery, not a remote Git push.
+      CIRCLE_NATIVE_JOURNEY_PUSH: '1'
     # Two native journeys (12m each), existing MSI/update budget (15m),
     # installation, runtime tests, packaging and artifact upload headroom.
     timeout-minutes: 65

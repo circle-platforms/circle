@@ -1,7 +1,6 @@
 import { spawn, execFile } from 'node:child_process';
-import { existsSync, realpathSync } from 'node:fs';
-import { dirname, join, relative, resolve, sep } from 'node:path';
-import { expandUser } from './paths.js';
+import { relative, resolve, sep } from 'node:path';
+import { canonicalPath, expandUser } from './paths.js';
 import {
   classifyCommand,
   DEFAULT_CREDENTIAL_FILES,
@@ -40,21 +39,17 @@ export function shellEnvironment(
   );
 }
 function resolvedTarget(path: string): string {
-  if (existsSync(path)) return realpathSync(path);
-  const parent = dirname(path);
-  return parent === path
-    ? path
-    : join(
-        resolvedTarget(parent),
-        path.slice(parent.length + (parent.endsWith(sep) ? 0 : 1)),
-      );
+  return canonicalPath(path);
 }
 export class Sandbox {
+  readonly workspace: string;
   constructor(
-    readonly workspace: string,
+    workspace: string,
     readonly offloadRoot?: string,
     readonly credentialFiles = DEFAULT_CREDENTIAL_FILES,
-  ) {}
+  ) {
+    this.workspace = canonicalPath(workspace);
+  }
   resolvePath(raw: string): string {
     if (raw.replace(/\\/g, '/').split('/').includes('..'))
       throw new Error('Path traversal not allowed');

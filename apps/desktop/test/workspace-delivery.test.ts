@@ -1,3 +1,5 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, chmod, readFile, rm } from 'node:fs/promises';
@@ -15,6 +17,15 @@ test('local gh adapter reports checks and refuses ready on failing CI', async ()
     );
     await chmod(gh, 0o755);
     const s = new DeliveryService(root, gh);
+    if (process.platform === 'win32')
+      s.gh = async (args) =>
+        (
+          await promisify(execFile)(process.execPath, [gh, ...args], {
+            cwd: root,
+            encoding: 'utf8',
+            env: { ...process.env, GH_PROMPT_DISABLED: '1' },
+          })
+        ).stdout;
     await s.git.git(['init']);
     const status = (await s.call('status')) as { authenticated: boolean };
     assert.equal(status.authenticated, true);

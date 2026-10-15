@@ -44,6 +44,27 @@ async function git(workspace: string, ...args: string[]) {
     await exec('git', ['-C', workspace, ...args], { encoding: 'utf8' })
   ).stdout.trim();
 }
+function fixtureDelivery(
+  workspace: string,
+  ghPath: string,
+  platform = process.platform,
+): DeliveryService {
+  const service = new DeliveryService(workspace, ghPath);
+  if (platform === 'win32')
+    service.gh = async (args) =>
+      (
+        await exec(process.execPath, [ghPath, ...args], {
+          cwd: workspace,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            GH_PROMPT_DISABLED: '1',
+            GH_NO_UPDATE_NOTIFIER: '1',
+          },
+        })
+      ).stdout;
+  return service;
+}
 
 async function fixture(t: Parameters<typeof scratch>[0]) {
   const root = await realpath(scratch(t, 'circle-cycle-ports-'));
@@ -246,7 +267,7 @@ test('real scripted tasks integrate and repair failing CI on one draft PR withou
     createGit: (path: string) =>
       trackPush(new GitWorkspaceService(path, { identity, signoff: true })),
     createDelivery: (path: string) => {
-      const service = new DeliveryService(path, f.ghPath);
+      const service = fixtureDelivery(path, f.ghPath);
       trackPush(service.git);
       return service;
     },
@@ -636,7 +657,7 @@ test('trusted already-pushed publishing verifies the remote HEAD while renderer 
     owned = join(f.root, 'owned-delivery');
   await git(f.workspace, 'worktree', 'add', '--detach', owned, f.baseline);
   await git(owned, 'switch', '-c', 'codex/trusted-published-head');
-  const delivery = new DeliveryService(owned, f.ghPath);
+  const delivery = fixtureDelivery(owned, f.ghPath);
   const run = delivery.git.git.bind(delivery.git);
   let pushes = 0;
   delivery.git.git = async (args, input) => {
@@ -747,7 +768,7 @@ test('requesting review rechecks the candidate after CI and restores draft if th
   await git(f.workspace, 'worktree', 'add', '--detach', owned, f.baseline);
   await git(owned, 'switch', '-c', 'codex/ready-race');
   await git(owned, 'push', '--set-upstream', 'origin', 'codex/ready-race');
-  const delivery = new DeliveryService(owned, f.ghPath);
+  const delivery = fixtureDelivery(owned, f.ghPath);
   const initial = {
     created: 1,
     ready: 0,
@@ -906,7 +927,7 @@ test('requesting review treats legitimate skipping as neutral while requiring a 
   await git(f.workspace, 'worktree', 'add', '--detach', owned, f.baseline);
   await git(owned, 'switch', '-c', 'codex/neutral-checks');
   await git(owned, 'push', '--set-upstream', 'origin', 'codex/neutral-checks');
-  const delivery = new DeliveryService(owned, f.ghPath);
+  const delivery = fixtureDelivery(owned, f.ghPath);
   for (const buckets of [
     ['pass', 'skipping'],
     ['skipping'],
@@ -948,4 +969,41 @@ test('requesting review treats legitimate skipping as neutral while requiring a 
       JSON.stringify(buckets),
     );
   }
+});
+
+test('the Windows fake-gh route runs a real Node subprocess and preserves literal PR arguments', async (t) => {
+  const f = await fixture(t),
+    owned = join(f.root, 'portable-gh-owned');
+  await git(f.workspace, 'worktree', 'add', '--detach', owned, f.baseline);
+  await git(owned, 'switch', '-c', 'codex/windows-gh-fixture');
+  const delivery = fixtureDelivery(owned, f.ghPath, 'win32');
+  const state = (await delivery.call('status')) as {
+    authenticated: boolean;
+    version: string;
+  };
+  assert.equal(state.authenticated, true);
+  assert.match(state.version, /gh version 2\.83\.2/);
+  const title = 'Literal "title" $() and spaces',
+    body = 'first line\nsecond line with spaces and quotes \'"';
+  await delivery.call('publish', {
+    revision: (await delivery.git.snapshot()).revision,
+    title,
+    body,
+  });
+  const record = JSON.parse(await readFile(f.ghState, 'utf8'));
+  assert.equal(record.created, 1);
+  const create = record.calls.find(
+    (args: string[]) => args[0] === 'pr' && args[1] === 'create',
+  );
+  assert.ok(create);
+  assert.equal(create[create.indexOf('--title') + 1], title);
+  assert.equal(create[create.indexOf('--body') + 1], body);
+  assert.equal(
+    await git(f.workspace, 'status', '--porcelain=v1'),
+    f.originalStatus,
+  );
+  assert.deepEqual(
+    await readFile(join(f.workspace, '.git', 'index')),
+    f.originalIndex,
+  );
 });

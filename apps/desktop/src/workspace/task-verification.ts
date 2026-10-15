@@ -790,7 +790,7 @@ export function createTaskVerifier(
   task: TaskRecord,
   context: TaskVerificationContext,
 ) => Promise<TaskVerificationCheck[]> {
-  const workspace = realpathSync(options.workspace);
+  const workspace = realpathSync.native(options.workspace);
   if (!isAbsolute(options.dataDir))
     throw Error('verification data directory must be absolute');
   if (options.runtimeExecutable && !isAbsolute(options.runtimeExecutable))

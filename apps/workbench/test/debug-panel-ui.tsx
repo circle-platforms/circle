@@ -1,6 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { DebugPanel } from '../src/components/DebugPanel';
+import { connectWorkspaceStreams } from '../src/model/workspace-client';
+const workspaceId = 'debug-ui-fixture';
+let eventSequence = 0;
 const listeners = new Set<(event: any) => void>();
 const pending = new Map<
   number,
@@ -26,7 +29,19 @@ const fixture = ((window as any).debugFixture = {
   },
   pause: (sessionId: string, pauseId: number) => {
     states[sessionId] = { ...states[sessionId], pauseId };
-    for (const listener of listeners) listener({ sessionId, service: 'debug' });
+    const seq = ++eventSequence;
+    for (const listener of listeners)
+      listener({
+        workspaceId,
+        sessionId,
+        service: 'debug',
+        resourceId: sessionId,
+        epoch: 'fixture',
+        seq,
+        cursor: { seq, offset: seq },
+        at: new Date().toISOString(),
+        data: {},
+      });
   },
 });
 (window as any).circleDesktop = {
@@ -36,6 +51,8 @@ const fixture = ((window as any).debugFixture = {
     if (method === hold)
       return new Promise((resolve) => pending.set(++seq, { command, resolve }));
     let data: any = {};
+    if (method === 'replay')
+      data = { events: [], cursor: { offset: 0, seq: 0 }, hasMore: false };
     if (method === 'snapshot') data = states[session];
     if (method === 'stackTrace')
       data = {
@@ -77,6 +94,7 @@ const fixture = ((window as any).debugFixture = {
 };
 function Harness() {
   const [session, setSession] = useState('A');
+  useEffect(() => connectWorkspaceStreams(workspaceId, session), [session]);
   fixture.session = setSession;
   return (
     <>

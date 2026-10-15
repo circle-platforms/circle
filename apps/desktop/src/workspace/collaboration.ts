@@ -589,6 +589,7 @@ export class CollaborationScheduler {
       for (const task of this.store.list()) {
         if (
           task.state !== 'queued' ||
+          this.active.has(task.spec.id) ||
           !task.spec.dependencies.every(
             (id) => this.store.get(id)?.state === 'succeeded',
           )
@@ -612,7 +613,8 @@ export class CollaborationScheduler {
             ),
           )
           .finally(() => {
-            this.active.delete(task.spec.id);
+            if (this.active.get(task.spec.id)?.controller === controller)
+              this.active.delete(task.spec.id);
             releaseResource();
             releaseAgent();
             this.schedule();
@@ -723,6 +725,16 @@ export class CollaborationScheduler {
         cleanupErrors.push(cause);
         failedCleanups.push(cleanup);
       }
+    const attempt = this.store.get(id)!.attempt;
+    const unresolvedOperations = this.store
+      .operations()
+      .filter(
+        (operation) =>
+          operation.kind === 'task' &&
+          operation.taskId === id &&
+          operation.attempt === attempt &&
+          operation.state !== 'succeeded',
+      );
     if (cleanupErrors.length) {
       this.failedCleanups.set(id, failedCleanups);
       this.update(id, 'interrupted', {
@@ -731,6 +743,11 @@ export class CollaborationScheduler {
     } else if (controller.signal.aborted)
       this.update(id, 'cancelled', {
         reason: 'cancelled; executor and cleanup settled',
+      });
+    else if (unresolvedOperations.length)
+      this.update(id, 'needs_review', {
+        result: result?.result,
+        reason: `${unresolvedOperations.length} operation outcome${unresolvedOperations.length === 1 ? '' : 's'} require${unresolvedOperations.length === 1 ? 's' : ''} review; a completion claim cannot verify an unknown side effect`,
       });
     else if (error !== undefined)
       this.update(id, 'failed', { reason: message(error) });

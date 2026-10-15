@@ -1,3 +1,4 @@
+import { canonicalPath } from '../../../src/paths.js';
 import type { ResolveInputsRequest } from '../../../src/input_outbox.js';
 import { spawnPty } from './workspace/native-pty.js';
 import { createWorkspaceCyclePorts } from './workspace/cycle-ports.js';
@@ -402,7 +403,7 @@ export class RuntimeController {
     const scratch = this.scratchPath();
     if (target === scratch) return true;
     try {
-      return target === realpathSync(scratch);
+      return target === realpathSync.native(scratch);
     } catch {
       return false;
     }
@@ -416,7 +417,7 @@ export class RuntimeController {
     if (this.isScratch(target)) return true;
     let data = this.options.dataFolder ?? this.home;
     try {
-      data = realpathSync(data);
+      data = realpathSync.native(data);
     } catch {
       /* Keep the spelling we were given. */
     }
@@ -428,7 +429,7 @@ export class RuntimeController {
   private configuredWorkspace(settings: CircleSettings): string | undefined {
     if (!settings.workspace_folder) return undefined;
     try {
-      const target = realpathSync(settings.workspace_folder);
+      const target = realpathSync.native(settings.workspace_folder);
       if (!statSync(target).isDirectory() || this.isScratch(target))
         return undefined;
       return this.acceptableDefaultFolder(target) ? target : undefined;
@@ -477,7 +478,7 @@ export class RuntimeController {
     return undefined;
   }
   private runtime(workspace: string, sessionId?: string): AgentRuntime {
-    workspace = realpathSync(workspace);
+    workspace = realpathSync.native(workspace);
     const remembered = sessionId ?? this.workspaceSessions.get(workspace);
     const owner = remembered ? this.runtimes.get(remembered) : undefined;
     if (owner && this.runtimes.lifecycle(owner.session.id) === 'open')
@@ -624,7 +625,7 @@ export class RuntimeController {
     if (!this.closing) this.publish();
   }
   private bindWorkspace(workspace: string): void {
-    const canonical = realpathSync(workspace);
+    const canonical = realpathSync.native(workspace);
     const directory = statSync(canonical);
     if (!directory.isDirectory()) throw Error('workspace must be a directory');
     const previous = this.workspaceRoots.get(workspace);
@@ -635,18 +636,22 @@ export class RuntimeController {
         previous.ino !== directory.ino)
     )
       throw Error('workspace root changed; reopen and authorize the folder');
-    if (!previous)
-      this.workspaceRoots.set(workspace, {
-        canonical,
-        dev: directory.dev,
-        ino: directory.ino,
-      });
+    const canonicalBinding = this.workspaceRoots.get(canonical);
+    if (
+      canonicalBinding &&
+      (canonicalBinding.dev !== directory.dev ||
+        canonicalBinding.ino !== directory.ino)
+    )
+      throw Error('workspace root changed; reopen and authorize the folder');
+    const binding = { canonical, dev: directory.dev, ino: directory.ino };
+    if (!previous) this.workspaceRoots.set(workspace, binding);
+    if (!canonicalBinding) this.workspaceRoots.set(canonical, binding);
   }
   private workspaceRoot(workspace: string): string {
     const bound = this.workspaceRoots.get(workspace);
     if (!bound)
       throw Error('workspace authorization is missing; reopen the folder');
-    const canonical = realpathSync(workspace);
+    const canonical = realpathSync.native(workspace);
     const directory = statSync(canonical);
     if (
       canonical !== bound.canonical ||
@@ -756,7 +761,7 @@ export class RuntimeController {
       read: async (path, signal) => {
         const documents = this.services(workspace).documents;
         const document = await documents.snapshot(
-          relative(documents.root, path).split(sep).join('/'),
+          relative(documents.root, canonicalPath(path)).split(sep).join('/'),
           { signal },
         );
         return {
@@ -770,7 +775,9 @@ export class RuntimeController {
         const result = await documents.applyChanges(
           changes.map((change) => ({
             ...change,
-            path: relative(documents.root, change.path).split(sep).join('/'),
+            path: relative(documents.root, canonicalPath(change.path))
+              .split(sep)
+              .join('/'),
           })),
           { signal },
         );
@@ -834,7 +841,7 @@ export class RuntimeController {
           identity(root),
         ),
         createRuntime: (task, context) => {
-          this.taskWorkspaces.set(realpathSync(context.worktree), root);
+          this.taskWorkspaces.set(realpathSync.native(context.worktree), root);
           this.taskVerifier(root, task.spec.baseline);
           return this.createRuntime(context.worktree, undefined, task);
         },
@@ -1183,7 +1190,7 @@ export class RuntimeController {
           this.selectedSessionId === runtime.session.id,
         );
         const eventRoot =
-          this.taskWorkspaces.get(realpathSync(workspace)) ?? workspace;
+          this.taskWorkspaces.get(realpathSync.native(workspace)) ?? workspace;
         this.workspaceEvent(eventRoot, {
           workspaceId: identity(eventRoot),
           sessionId: task.spec.sessionId ?? runtime.session.id,
@@ -3269,7 +3276,7 @@ export class RuntimeController {
         return {};
       }
       case 'open-workspace': {
-        const workspace = realpathSync(text(p.path, 'workspace', 8000));
+        const workspace = realpathSync.native(text(p.path, 'workspace', 8000));
         const owner = this.runtime(workspace);
         this.selectRuntime(owner);
         return {
@@ -3280,7 +3287,7 @@ export class RuntimeController {
       case 'set-default-workspace': {
         // The path comes from the native dialog through the main process, exactly
         // like open-workspace: the renderer never names one.
-        const workspace = realpathSync(text(p.path, 'workspace', 8000));
+        const workspace = realpathSync.native(text(p.path, 'workspace', 8000));
         if (!statSync(workspace).isDirectory())
           throw Error('the default workspace must be a folder');
         if (!this.acceptableDefaultFolder(workspace))
@@ -3409,11 +3416,14 @@ export class RuntimeController {
             ? join(owner, '.circle', 'commands')
             : join(owner, 'commands');
         mkdirSync(folder, { recursive: true, mode: 0o700 });
-        const rel = relative(realpathSync(owner), realpathSync(folder));
+        const rel = relative(
+          realpathSync.native(owner),
+          realpathSync.native(folder),
+        );
         if (rel.startsWith('..') || isAbsolute(rel))
           throw Error('command folder leaves its owner');
-        const path = join(realpathSync(folder), name + '.md');
-        if (existsSync(path) && realpathSync(path) !== path)
+        const path = join(realpathSync.native(folder), name + '.md');
+        if (existsSync(path) && realpathSync.native(path) !== path)
           throw Error('linked commands must be edited in their source folder');
         const template = text(p.template, 'template', 120_000);
         const description = text(p.description ?? '', 'description', 1000);
@@ -3432,7 +3442,9 @@ export class RuntimeController {
         const path = text(p.path, 'path', 8000);
         const target = runtime.sandbox.resolvePath(path);
         const documents = this.services(runtime.options.workspace).documents;
-        const file = relative(documents.root, target);
+        const file = relative(documents.root, canonicalPath(target))
+          .split(sep)
+          .join('/');
         const expected =
           p.expectedRevision === undefined
             ? ((await documents.snapshot(file))?.revision ?? null)

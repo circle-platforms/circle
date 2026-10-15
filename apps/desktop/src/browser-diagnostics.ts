@@ -14,7 +14,12 @@ export class BrowserDiagnostics {
     owner: 'circle',
     console: [],
     network: [],
-    debugger: { paused: false, stackFrames: [], breakpoints: [] },
+    debugger: {
+      paused: false,
+      pauseEpoch: 0,
+      stackFrames: [],
+      breakpoints: [],
+    },
   };
   private sequence = 0;
   private scriptUrls = new Map<string, string>();
@@ -63,6 +68,7 @@ export class BrowserDiagnostics {
     // DevTools can resume, navigate and finish requests while this CDP client
     // is detached. Old object and script ids cannot survive that ownership gap.
     this.scriptUrls.clear();
+    this.state.debugger.pauseEpoch++;
     this.state.debugger.paused = false;
     this.state.debugger.stackFrames = [];
     for (const breakpoint of this.state.debugger.breakpoints)
@@ -229,6 +235,7 @@ export class BrowserDiagnostics {
       this.state.debugger = {
         ...this.state.debugger,
         paused: true,
+        pauseEpoch: this.state.debugger.pauseEpoch + 1,
         stackFrames: p.callFrames.map((f: any) => ({
           id: f.callFrameId,
           name: f.functionName || '(anonymous)',
@@ -247,6 +254,7 @@ export class BrowserDiagnostics {
       method === 'Debugger.resumed' ||
       method === 'Runtime.executionContextsCleared'
     ) {
+      this.state.debugger.pauseEpoch++;
       this.state.debugger.paused = false;
       this.state.debugger.stackFrames = [];
     }
@@ -275,6 +283,7 @@ export class BrowserDiagnostics {
               ? this.state.debugger
               : {
                   paused: this.state.debugger.paused,
+                  pauseEpoch: this.state.debugger.pauseEpoch,
                   stackFrames: [],
                   breakpoints: [],
                 },
@@ -389,6 +398,13 @@ export class BrowserDiagnostics {
         this.state.debugger.breakpoints =
           this.state.debugger.breakpoints.filter((b) => b.id !== r.reference);
       } else if (r.command === 'variables') {
+        const pauseEpoch = this.state.debugger.pauseEpoch;
+        const connectionEpoch = this.epoch;
+        if (
+          r.expectedPauseEpoch !== undefined &&
+          r.expectedPauseEpoch !== pauseEpoch
+        )
+          throw Error('stale browser pause');
         if (
           !this.state.debugger.stackFrames.some((f) =>
             f.scopes.some((s) => s.variablesReference === r.reference),
@@ -400,6 +416,13 @@ export class BrowserDiagnostics {
           ownProperties: true,
           generatePreview: true,
         });
+        if (
+          this.state.owner !== 'circle' ||
+          this.epoch !== connectionEpoch ||
+          !this.state.debugger.paused ||
+          this.state.debugger.pauseEpoch !== pauseEpoch
+        )
+          throw Error('browser pause changed while reading variables');
         result.variables = v.result.map((p: any) => ({
           name: p.name,
           value: String(p.value?.value ?? p.value?.description ?? ''),

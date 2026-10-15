@@ -1,3 +1,4 @@
+import { runtimeTestArguments } from './runtime-test-options.mjs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -62,16 +63,13 @@ if (process.argv.includes('--prepare-only')) {
     .map((name) => join(root, 'test', name));
   const result = spawnSync(
     process.execPath,
-    [
+    runtimeTestArguments(
       join(root, '../../node_modules/tsx/dist/cli.mjs'),
-      '--test',
-      // CI must retain per-test failure diagnostics before a later native
-      // handle leak or cancellation prevents the final summary from printing.
-      ...(process.env.CI && process.env.CI !== 'false'
-        ? ['--test-reporter=tap']
-        : []),
-      ...tests,
-    ],
+      tests,
+      {
+        ci: Boolean(process.env.CI && process.env.CI !== 'false'),
+      },
+    ),
     {
       stdio: 'inherit',
       env: {

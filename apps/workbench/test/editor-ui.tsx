@@ -1,6 +1,7 @@
 import '../src/styles/app.css';
 import { Tooltip } from 'radix-ui';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { connectWorkspaceStreams } from '../src/model/workspace-client';
 import { createRoot } from 'react-dom/client';
 import { setLanguage, locale } from '../src/i18n';
 import { RuntimeProvider } from '../src/app/context';
@@ -89,7 +90,16 @@ if (nativeFixture) {
         method: 'POST',
         body: JSON.stringify(command),
       });
-      return response.json();
+      const reply = await response.json();
+      if (command.payload?.service === 'events' && reply.ok) {
+        const session = currentSession(runtime.getSnapshot());
+        reply.data.events = reply.data.events.map((event: object) => ({
+          ...event,
+          workspaceId: session.workspaceId,
+          sessionId: session.id,
+        }));
+      }
+      return reply;
     },
   } as DesktopBridge;
   const { FileViewer } = await import('../src/features/FileViewer');
@@ -109,6 +119,16 @@ if (nativeFixture) {
   });
   Object.defineProperty(runtime, 'mode', { value: 'live' });
   function NativeFixture() {
+    useEffect(() => {
+      const session = currentSession(runtime.getSnapshot());
+      return connectWorkspaceStreams(
+        session.workspaceId,
+        session.id,
+        (error) => {
+          throw error;
+        },
+      );
+    }, []);
     const [target, setTarget] = useState('main.ts');
     return (
       <Tooltip.Provider>

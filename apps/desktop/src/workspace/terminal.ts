@@ -1,5 +1,6 @@
 import type { IPty } from 'node-pty';
-import { spawnPty } from './native-pty.ts';
+import { hasNativePtyProcessExited, spawnPty } from './native-pty.ts';
+import { ptyEnvironment } from './pty-environment.ts';
 import { randomUUID } from 'node:crypto';
 import {
   createReadStream,
@@ -244,14 +245,12 @@ export class TerminalManager {
         throw Error('readiness checks need a service command');
       const readiness = validateReadiness(options.readiness);
       const environment = validateEnvironment(options.env);
-      const effectiveEnvironment: NodeJS.ProcessEnv = {
-        ...process.env,
-        ...this.#options.env,
-      };
-      for (const [name, value] of Object.entries(environment ?? {})) {
-        if (value === null) delete effectiveEnvironment[name];
-        else effectiveEnvironment[name] = value;
-      }
+      const effectiveEnvironment = ptyEnvironment(
+        process.platform,
+        process.env,
+        this.#options.env,
+        environment,
+      );
       effectiveEnvironment.TERM = 'xterm-256color';
       if (readiness?.port && (await portOpen(readiness.port)))
         throw Error(`port ${readiness.port} is already in use`);
@@ -468,6 +467,7 @@ export class TerminalManager {
         if (!(await untilStopped(entry, 3000)))
           throw Error('terminal child process stop has not been confirmed');
       }
+      await drainObserver(entry);
       return clone(entry.snapshot);
     }
     if (entry.closing) return entry.closing;
@@ -479,6 +479,7 @@ export class TerminalManager {
         if (!(await untilStopped(entry, 3000)))
           throw Error('terminal stop has not been confirmed');
       }
+      await drainObserver(entry);
       return clone(entry.snapshot);
     })();
     return entry.closing;
@@ -871,6 +872,29 @@ export class TerminalManager {
   }
 }
 
+/** A stopped PTY can still have durable consumer events queued behind disk I/O. */
+async function drainObserver(entry: Entry): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      entry.observerQueue,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              Error(
+                'terminal event delivery did not finish after process exit',
+              ),
+            ),
+          5000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function makeEntry(snapshot: TerminalSnapshot): Entry {
   let resolveDone!: () => void;
   const done = new Promise<void>((resolve) => {
@@ -989,11 +1013,21 @@ async function terminateOwnedTree(
   const terminal = entry.pty;
   if (process.platform === 'win32') {
     if (!terminal) return;
+    if (hasNativePtyProcessExited(terminal)) {
+      if (!(await untilStopped(entry, 3000)))
+        throw Error(
+          'native terminal exited but its final output closure is unconfirmed',
+        );
+      return;
+    }
     // ConPTY's owning process is the only PID supplied; never accept arbitrary PIDs.
     await exec('taskkill', ['/pid', String(terminal.pid), '/T', '/F'], {
       windowsHide: true,
-    }).catch((error: NodeJS.ErrnoException) => {
-      if (entry.pty) throw error;
+    }).catch(async (error: NodeJS.ErrnoException) => {
+      // The debugger may have ended it between the native-exit check and
+      // taskkill. Success still requires its actual onExit and flushed logs.
+      if (entry.pty === terminal && !(await untilStopped(entry, 3000)))
+        throw error;
     });
     return;
   }

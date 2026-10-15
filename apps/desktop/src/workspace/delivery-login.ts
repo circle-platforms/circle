@@ -5,6 +5,17 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 const exec = promisify(execFile);
+type CredentialCommand = (
+  file: string,
+  args: string[],
+  options: {
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    encoding: 'utf8';
+    timeout: number;
+    maxBuffer: number;
+  },
+) => Promise<{ stdout: string }>;
 export interface LoginPty {
   onData(callback: (data: string) => void): unknown;
   onExit(callback: (event: { exitCode: number }) => void): unknown;
@@ -50,6 +61,7 @@ export class DeliveryLogin {
     executable: string,
     cwd: string,
     store?: CredentialStore,
+    private readonly credentialCommand: CredentialCommand = exec,
   ) {
     this.spawn = spawn;
     this.executable = executable;
@@ -126,7 +138,7 @@ export class DeliveryLogin {
         try {
           if (state.status === 'cancelled') return;
           if (exitCode !== 0) throw Error('authorization failed');
-          const result = await exec(
+          const result = await this.credentialCommand(
             this.executable,
             ['auth', 'token', '--hostname', 'github.com'],
             {

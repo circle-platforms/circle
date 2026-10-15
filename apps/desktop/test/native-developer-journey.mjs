@@ -1,3 +1,7 @@
+import {
+  browserDebugFixtureSource,
+  runNativeBrowserDebugJourney,
+} from './helpers/native-browser-debug-journey.mjs';
 import { nativeTaskJourneyFixture } from './helpers/native-task-fixture.mjs';
 import {
   preserveNativeClipboard,
@@ -70,8 +74,10 @@ await mkdir(repo, { recursive: true });
 const baseline = '# native journey\n\noriginal content\n';
 const program =
   "function fixture() {\n  const count = 3;\n  const next = count + 1;\n  console.log('DEBUG_RESULT', next);\n  return next;\n}\nfixture();\n";
-const browserSource =
-  "function browserFixture(){\n  console.error('JOURNEY_CONSOLE_SOURCE');\n}\nbrowserFixture();\nfetch('/api/data').then(r=>r.text()).then(v=>console.log(v));\nlocalStorage.setItem('journey','before');\nnew EventSource('/events').onmessage = event => console.log(event.data);\n";
+const browserDebugFixture = browserDebugFixtureSource(
+  "function browserFixture(){\n  console.error('JOURNEY_CONSOLE_SOURCE');\n}\nbrowserFixture();\nfetch('/api/data').then(r=>r.text()).then(v=>console.log(v));\nlocalStorage.setItem('journey','before');\nnew EventSource('/events').onmessage = event => console.log(event.data);\n",
+);
+const browserSource = browserDebugFixture.source;
 await Promise.all([
   writeFile(
     join(repo, 'AGENTS.md'),
@@ -330,6 +336,7 @@ for (const file of [
     'native-journey-platform',
     'native-clipboard',
     'native-task-fixture',
+    'native-browser-debug-journey',
   ].map((name) => 'helpers/' + name + '.mjs'),
 ]) {
   buildIdentity.driverFiles[file] = createHash('sha256')
@@ -1197,6 +1204,44 @@ try {
       });
     },
   );
+  if (process.env.CIRCLE_NATIVE_JOURNEY_WEB_DEBUG === '1')
+    await check(
+      'web GUI breakpoint refreshed locals source navigation and resume',
+      async () => {
+        if (!(await page.locator('.native-browser').isVisible()))
+          await page
+            .getByRole('button', { name: 'browser panel', exact: true })
+            .click();
+        await page
+          .getByRole('textbox', { name: 'browser address', exact: true })
+          .fill(origin);
+        await page
+          .getByRole('button', { name: 'navigate browser', exact: true })
+          .click();
+        const diagnostics = page.getByRole('button', {
+          name: 'page diagnostics',
+          exact: true,
+        });
+        if ((await diagnostics.getAttribute('aria-expanded')) !== 'true')
+          await diagnostics.click();
+        await until(
+          async () => browserStreams.size > 0,
+          'actual web debug fixture stream connected',
+        );
+        await runNativeBrowserDebugJourney({
+          page,
+          sessionId,
+          sourceURL: pathToFileURL(join(repo, 'browser-source.js')).href,
+          fixture: browserDebugFixture,
+          until,
+          output,
+          emit(marker) {
+            for (const stream of browserStreams)
+              stream.write('data: ' + marker + '\n\n');
+          },
+        });
+      },
+    );
   await check('English Chinese dark light and narrow UI', async () => {
     if (
       await page

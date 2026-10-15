@@ -13,7 +13,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
+import { DeliveryService } from '../src/workspace/delivery.ts';
 import { setTimeout as delay } from 'node:timers/promises';
 import { RuntimeController } from '../src/runtime-controller.ts';
 import { ScriptedModel } from '../../../src/testing.ts';
@@ -619,7 +621,7 @@ test('workspace journal failure cancels its producers and remains visible after 
   await f.call('prompt', { text: 'stay running while native journal fails' });
   await wait(() => f.model.requests.length === 1);
   const hash = createHash('sha256')
-    .update(realpathSync(f.workspace))
+    .update(realpathSync.native(f.workspace))
     .digest('hex');
   await mkdir(
     join(f.home, 'workspace-services', 'workspaces', hash, 'events.jsonl'),
@@ -881,11 +883,10 @@ test('controller task verification executes a pinned project oracle in an isolat
 test('controller isolates same-named cycles by session and repairs real PR checks before human merge', async (t) => {
   const tools = await mkdtemp(join(tmpdir(), 'circle-cycle-gh-'));
   t.after(() => rm(tools, { recursive: true, force: true }));
-  const gh = join(tools, 'gh');
+  const gh = join(tools, 'fake-gh.cjs');
   await writeFile(
     gh,
-    `#!${process.execPath}
-const fs=require('node:fs'),cp=require('node:child_process'),path=require('node:path'),crypto=require('node:crypto');
+    `const fs=require('node:fs'),cp=require('node:child_process'),path=require('node:path'),crypto=require('node:crypto');
 const args=process.argv.slice(2), key=crypto.createHash('sha256').update(process.cwd()).digest('hex'), state=path.join(${JSON.stringify(tools)},key+'.json');
 const git=(...args)=>cp.execFileSync('git',args,{encoding:'utf8'}).trim();
 fs.appendFileSync(${JSON.stringify(join(tools, 'calls'))},JSON.stringify(args)+'\\n');
@@ -900,7 +901,34 @@ else if(args[0]==='auth')console.log('authenticated');
 else if(args[0]==='--version')console.log('gh version 2.83.2');
 else process.exit(2);
 `,
-    { mode: 0o700 },
+    { mode: 0o600 },
+  );
+  const executeFixture = promisify(execFile);
+  const originalNodeOptions = process.env.NODE_OPTIONS;
+  const transports: { file: string; args: string[]; cwd: string }[] = [];
+  // Inject only the trusted CLI transport. Keep DeliveryService's real PR/CI
+  // state machine and every Git/TaskService operation. Windows does not execute
+  // a Unix shebang, so run the same fixture with Node on every platform.
+  t.mock.method(
+    DeliveryService.prototype,
+    'gh',
+    async function (this: DeliveryService, args: string[]) {
+      const argv = [gh, ...args];
+      transports.push({ file: process.execPath, args: argv, cwd: this.root });
+      return (
+        await executeFixture(process.execPath, argv, {
+          cwd: this.root,
+          encoding: 'utf8',
+          maxBuffer: 8 * 1024 * 1024,
+          timeout: 120000,
+          env: {
+            ...process.env,
+            GH_PROMPT_DISABLED: '1',
+            GH_NO_UPDATE_NOTIFIER: '1',
+          },
+        })
+      ).stdout;
+    },
   );
   const handler = async (request: any) => ({
     message: request.messages.some((m: any) => m.role === 'tool')
@@ -1107,6 +1135,24 @@ else process.exit(2);
   const calls = await readFile(join(tools, 'calls'), 'utf8');
   assert.ok(calls.includes('"ready"'));
   assert.equal(calls.includes('"merge"'), false);
+  assert.ok(transports.length > 0);
+  assert.ok(
+    transports.every(
+      (call) => call.file === process.execPath && call.args[0] === gh,
+    ),
+  );
+  assert.ok(
+    transports.every(
+      (call) =>
+        realpathSync.native(call.cwd) !== realpathSync.native(f.workspace),
+    ),
+    'CLI operates only in the owned integration worktrees',
+  );
+  assert.equal(
+    process.env.NODE_OPTIONS,
+    originalNodeOptions,
+    'fixture transport does not change global Node options',
+  );
 });
 
 test('nested agent patch reports committed paths to the next model after a real competing disk write', async (t) => {
@@ -1130,7 +1176,7 @@ test('nested agent patch reports committed paths to the next model after a real 
   await writeFile(join(f.workspace, 'nested/b.ts'), 'old B\n');
   await f.service('documents', 'read', { path: 'nested/a.ts' });
   const documents = (f.controller as any).services(
-    realpathSync(f.workspace),
+    realpathSync.native(f.workspace),
   ).documents;
   const readTarget = documents.readTarget.bind(documents);
   let triggered = false;
@@ -1400,7 +1446,7 @@ test('late events after normal service disposal do not become storage failures o
     (await f.service('documents', 'read', { path: 'file.txt' })).ok,
     true,
   );
-  const root = realpathSync(f.workspace),
+  const root = realpathSync.native(f.workspace),
     controller = f.controller as any;
   const service = controller.workspaceServices.get(root);
   await service.dispose();
@@ -1437,4 +1483,138 @@ test('late events after normal service disposal do not become storage failures o
     'closing does not create a new service',
   );
   assert.equal(controller.workspaceStreamFailures.size, 0);
+});
+
+test('native controller mutations share a canonical root across actual filesystem path aliases', async (t) => {
+  const f = await setup(t);
+  await f.controller.close();
+  const canonical = realpathSync.native(f.workspace);
+  let alias: string;
+  if (process.platform === 'win32') {
+    const command = `for %I in ("${canonical}") do @echo %~sI`;
+    alias = execFileSync(
+      process.env.ComSpec ?? 'cmd.exe',
+      ['/d', '/c', command],
+      { encoding: 'utf8' },
+    ).trim();
+    assert.ok(
+      alias && realpathSync.native(alias) === canonical,
+      'Windows short name must resolve to the exact granted directory',
+    );
+    if (alias.toLowerCase() === canonical.toLowerCase()) {
+      assert.notEqual(
+        f.workspace.toLowerCase(),
+        canonical.toLowerCase(),
+        'runner fixture must expose a real 8.3 alias',
+      );
+      alias = f.workspace;
+    }
+  } else {
+    alias = join(f.root, 'project-alias');
+    await symlink(canonical, alias, 'dir');
+  }
+  await mkdir(join(canonical, 'nested'));
+  await writeFile(
+    join(canonical, 'nested/current.ts'),
+    'export const current = 0;\n',
+  );
+  saveSettings(trustFolder(defaultSettings(), canonical), f.home);
+  const model = new ScriptedModel([
+    {
+      message: assistant('', [
+        {
+          id: 'alias-create',
+          name: 'write_file',
+          args: {
+            file_path: 'nested/created.ts',
+            content: 'export const created = 42;\n',
+          },
+        },
+      ]),
+    },
+    { message: assistant('created using the native document coordinator') },
+  ]);
+  const controller = new RuntimeController({
+    home: f.home,
+    workspace: alias,
+    userHome: f.home,
+    model,
+    emit: () => {},
+  });
+  const call = (name: string, payload: Record<string, unknown> = {}) =>
+    controller.dispatch({
+      id: randomUUID(),
+      name,
+      sessionId: controller.snapshot().activeSessionId,
+      payload,
+    });
+  const document = (method: string, params: Record<string, unknown>) =>
+    call('workspace-service', { service: 'documents', method, params });
+  try {
+    const read = await document('read', { path: 'nested/current.ts' });
+    assert.equal(read.ok, true, read.error);
+    const mutations = (controller as any).fileMutations(canonical);
+    const aliasedRead = await mutations.read(join(alias, 'nested/current.ts'));
+    assert.equal(aliasedRead.revision, (read.data as any).revision);
+    await mutations.apply([
+      {
+        path: join(alias, 'nested/by-alias.ts'),
+        content: 'export const alias = true;\n',
+        expectedRevision: null,
+      },
+    ]);
+    assert.equal(
+      await readFile(join(canonical, 'nested/by-alias.ts'), 'utf8'),
+      'export const alias = true;\n',
+    );
+    assert.equal(
+      (await call('prompt', { text: 'create a nested file' })).ok,
+      true,
+    );
+    await wait(() =>
+      controller
+        .snapshot()
+        .interactions.some((row) => row.status === 'pending'),
+    );
+    const approval = controller
+      .snapshot()
+      .interactions.find((row) => row.status === 'pending')!;
+    await call('answer', {
+      id: approval.id,
+      revision: approval.revision,
+      answer: 'approve',
+    });
+    await wait(() => model.requests.length >= 2);
+    assert.equal(
+      await readFile(join(canonical, 'nested/created.ts'), 'utf8'),
+      'export const created = 42;\n',
+    );
+    const save = await document('save', {
+      path: 'nested/current.ts',
+      content: 'export const current = 1;\n',
+      expectedRevision: (read.data as any).revision,
+    });
+    assert.equal(save.ok, true, save.error);
+    assert.equal(
+      await readFile(join(canonical, 'nested/current.ts'), 'utf8'),
+      'export const current = 1;\n',
+    );
+    await assert.rejects(
+      () =>
+        mutations.apply([
+          {
+            path: join(f.root, 'outside.ts'),
+            content: 'escape',
+            expectedRevision: null,
+          },
+        ]),
+      /outside|invalid|workspace|path/i,
+    );
+    assert.equal(
+      await readFile(join(canonical, 'nested/created.ts'), 'utf8'),
+      'export const created = 42;\n',
+    );
+  } finally {
+    await controller.close();
+  }
 });
