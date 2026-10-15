@@ -7,13 +7,13 @@
   "main": "dist/main.cjs",
   "scripts": {
     "build": "npm run typecheck && npm --prefix ../workbench run build && node scripts/build.mjs",
-    "start": "electron .",
+    "start": "npm run tools:prepare && electron .",
     "dev": "npm run build && npm start",
     "package": "npm run build && node scripts/package.mjs",
     "package:beta": "npm run build && node scripts/package.mjs --beta",
     "package:msi": "node scripts/msi.ts",
-    "test": "node --test test/policy.test.ts test/capture.test.ts test/sandbox-guard.test.ts test/msi.test.ts test/channel.test.ts test/attention.test.ts test/harness.test.mjs test/update-harness.test.mjs",
-    "test:runtime": "node ../../node_modules/tsx/dist/cli.mjs --test test/runtime.test.ts test/updater.test.ts test/browser-warning.test.ts test/session-metadata.test.ts",
+    "test": "node --test test/policy.test.ts test/capture.test.ts test/sandbox-guard.test.ts test/msi.test.ts test/channel.test.ts test/attention.test.ts test/harness.test.mjs test/update-harness.test.mjs test/developer-toolchain.test.mjs",
+    "test:runtime": "node ../../node_modules/tsx/dist/cli.mjs --test test/runtime.test.ts test/updater.test.ts test/browser-warning.test.ts test/session-metadata.test.ts test/browser-diagnostics.test.ts test/workspace-*.test.ts test/collaboration.test.ts test/task-executor.test.ts",
     "test:live": "node test/live.mjs && node test/browser-live.mjs && node test/browser-coordinate-live.mjs && node test/ui-issues.mjs && node test/session-management.mjs && node test/parallel-sessions.mjs && node test/network-native.mjs && node test/connection-issues.mjs",
     "test:sessions": "node test/session-management.mjs && node test/parallel-sessions.mjs",
     "test:clipboard": "node test/system-clipboard.mjs",
@@ -23,7 +23,10 @@
     "test:interface": "node test/interface.mjs",
     "test:update": "node test/update.mjs",
     "test:msi": "node test/msi-package.mjs",
-    "test:extensions": "node test/extensions-native.mjs"
+    "test:extensions": "node test/extensions-native.mjs",
+    "tools:prepare": "node scripts/developer-toolchain.mjs",
+    "test:developer": "node test/developer-toolchain-smoke.mjs && node test/developer-debug-smoke.mjs",
+    "test:browser-diagnostics": "node test/browser-diagnostics-native.mjs"
   },
   "engines": {
     "node": ">=24"
@@ -41,5 +44,9 @@
   "dependencies": {
     "node-pty": "1.1.0",
     "typescript-language-server": "6.0.2"
+  },
+  "allowScripts": {
+    "node-pty": true,
+    "esbuild": true
   }
 }
