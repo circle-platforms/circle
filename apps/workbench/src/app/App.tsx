@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { useRuntime } from './context';
 import { currentSession, sessionText, sessionTitle } from '../model/state';
+import { workspaceLabel } from '../model/workspace-label';
 import type {
   Attachment,
   DialogId,
@@ -679,7 +680,7 @@ export function App() {
               {!page && (
                 <span className="project-chip" title={workspace.path}>
                   <Folder size={12} />
-                  {workspace.name}
+                  {workspaceLabel(workspace)}
                   {workspace.branch && (
                     <>
                       <GitBranch size={11} />

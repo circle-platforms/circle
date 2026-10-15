@@ -27,6 +27,8 @@ import { BUILTIN_SLASH } from '../../../../src/tui/slash_commands';
 import { slashText } from '../model/slash-text';
 import { useRuntime } from '../app/context';
 import { currentSession, visibleMessages, EFFORTS } from '../model/state';
+import { showTurnClock } from '../model/turn-line';
+import { workspaceLabel } from '../model/workspace-label';
 import { fullTime, shownTime } from '../model/time';
 import type { Attachment, DialogId, Message, PanelId } from '../model/types';
 import { Button, IconButton, FileChip, Status } from '../components/common';
@@ -497,7 +499,9 @@ export function Conversation({
   // The turn's clock goes on the row of its latest tools, as Claude's does; before any, on
   // a row of its own. Waiting for you, it stops.
   const items = groupMessages(messages);
-  const clock = pending.length ? undefined : session.turn;
+  const clock = showTurnClock(messages, pending.length, session.turn)
+    ? session.turn
+    : undefined;
   const asked = items.findLastIndex(
     (item) => item.kind !== 'tools' && item.message.role === 'user',
   );
@@ -565,7 +569,7 @@ export function Conversation({
                 title={workspace.path}
               >
                 <Status value={workspace.trusted ? 'trusted' : 'not trusted'} />
-                <strong>{workspace.name}</strong>
+                <strong>{workspaceLabel(workspace)}</strong>
                 <span>{workspace.path}</span>
               </button>
               <div className="welcome-context">
@@ -609,6 +613,9 @@ export function Conversation({
                           key={request.id}
                           item={request}
                           onSecret={() => onDialog('secret')}
+                          onSettled={() =>
+                            requestAnimationFrame(() => input.current?.focus())
+                          }
                         />
                       ))}
                   </ToolGroup>
@@ -650,6 +657,9 @@ export function Conversation({
               key={item.id}
               item={item}
               onSecret={() => onDialog('secret')}
+              onSettled={() =>
+                requestAnimationFrame(() => input.current?.focus())
+              }
             />
           ))}
           {session.turn &&

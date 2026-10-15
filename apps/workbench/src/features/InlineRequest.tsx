@@ -100,9 +100,12 @@ export function BrowserApproval({
 export function InlineRequest({
   item,
   onSecret,
+  onSettled,
 }: {
   item: Interaction;
   onSecret: () => void;
+  /** The buttons unmount once the answer is sent, so the composer takes the keys again. */
+  onSettled?: () => void;
 }) {
   const { runtime, perform, snapshot } = useRuntime();
   const workspaceId = snapshot.sessions.find(
@@ -119,6 +122,7 @@ export function InlineRequest({
   const finish = (answer: string) => {
     if (sent) return;
     setSent(true);
+    onSettled?.();
     perform(async () => {
       try {
         await runtime.answer(item.id, item.revision, answer);

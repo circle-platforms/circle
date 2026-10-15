@@ -107,10 +107,21 @@ test('a side request names the session and does not take the answer', async (t) 
     model.requests.filter((request) => request.effort === 'minimal').length,
     1,
   );
+  assert.match(
+    String(
+      model.requests.find((request) => request.effort === 'minimal')!
+        .messages[0]!.content,
+    ),
+    /Write the title in the same language as the user message/,
+  );
   assert.equal(model.requests.filter((request) => !request.effort).length, 1);
   model.releaseTitle();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(session.id)!.title, 'Login bug fix');
+  assert.equal(
+    model.requests.filter((request) => request.effort === 'minimal').length,
+    1,
+  );
 });
 
 test('a rename made while the title is pending wins', async (t) => {
@@ -123,6 +134,78 @@ test('a rename made while the title is pending wins', async (t) => {
   model.releaseTitle();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(session.id)!.title, 'Custom');
+});
+
+test('a prompt past sixteen characters asks for a title', async (t) => {
+  const root = scratch(t);
+  const model = new TitleModel('done', 'Login bug');
+  const { harness: run, store, session } = harness(root, model);
+  cleanup(t, () => store.close());
+  const prompt = 'fix the login bug';
+  assert.equal(prompt.length, 17);
+  await run.run(prompt);
+  assert.equal(
+    model.requests.filter((request) => request.effort === 'minimal').length,
+    1,
+  );
+  model.releaseTitle();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(store.get(session.id)!.title, 'Login bug');
+});
+
+test('a chinese prompt asks for a chinese title', async (t) => {
+  const root = scratch(t);
+  const model = new TitleModel('done', '登录错误说明');
+  const { harness: run, store } = harness(root, model);
+  cleanup(t, () => store.close());
+  const prompt = '请把登录失败时的五百错误改成可读的说明';
+  assert.ok(prompt.length > 16);
+  await run.run(prompt);
+  assert.match(
+    String(
+      model.requests.find((request) => request.effort === 'minimal')!
+        .messages[0]!.content,
+    ),
+    /Write the title in Simplified Chinese/,
+  );
+  model.releaseTitle();
+  await new Promise((resolve) => setImmediate(resolve));
+});
+
+test('a failed title request is tried once more after the turn', async (t) => {
+  const root = scratch(t);
+  let attempts = 0;
+  const model: ChatModel = {
+    model: 'title-model',
+    sideRequests: true,
+    async complete(request) {
+      if (request.effort === 'minimal') {
+        attempts += 1;
+        if (attempts === 1) throw new Error('gateway busy');
+        return {
+          message: {
+            id: 'title',
+            role: 'assistant',
+            content: 'Login bug fix',
+          },
+          usage: emptyUsage(),
+        };
+      }
+      request.token('done');
+      return {
+        message: { id: 'reply', role: 'assistant', content: 'done' },
+        usage: emptyUsage(),
+      };
+    },
+  };
+  const { harness: run, store, session } = harness(root, model);
+  cleanup(t, () => store.close());
+  const result = await run.run(LONG);
+  assert.equal(result.answer, 'done');
+  for (let i = 0; i < 8; i++)
+    await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(attempts, 2);
+  assert.equal(store.get(session.id)!.title, 'Login bug fix');
 });
 
 test('a short prompt keeps the fallback and skips the model', async (t) => {

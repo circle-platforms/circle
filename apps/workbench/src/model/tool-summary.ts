@@ -1,5 +1,62 @@
-import type { Message } from './types';
+import type { Message, ToolCall } from './types';
 import { locale, t, tn } from '../i18n/index.ts';
+
+type EditOutcome = 'waiting' | 'running' | 'rejected' | 'failed' | 'done';
+
+function editPhrase(
+  outcome: EditOutcome,
+  file: string | undefined,
+  count: number,
+) {
+  if (file) {
+    if (outcome === 'waiting') return t('waiting to edit {file}', { file });
+    if (outcome === 'running') return t('editing {file}', { file });
+    if (outcome === 'rejected')
+      return t('rejected an edit to {file}', { file });
+    if (outcome === 'failed') return t('failed to edit {file}', { file });
+    return t('edited {file}', { file });
+  }
+  if (outcome === 'waiting')
+    return tn(count, 'waiting to edit a file', 'waiting to edit {n} files');
+  if (outcome === 'running')
+    return tn(count, 'editing a file', 'editing {n} files');
+  if (outcome === 'rejected')
+    return tn(count, 'rejected an edit', 'rejected edits to {n} files');
+  if (outcome === 'failed')
+    return tn(count, 'failed to edit a file', 'failed to edit {n} files');
+  return tn(count, 'edited a file', 'edited {n} files');
+}
+
+function editOutcome(tool: ToolCall): EditOutcome {
+  if (tool.status === 'waiting') return 'waiting';
+  if (tool.status === 'running' || tool.status === 'unknown') return 'running';
+  if (
+    tool.status === 'error' &&
+    /user rejected this tool call/i.test(tool.output)
+  )
+    return 'rejected';
+  if (tool.status === 'error') return 'failed';
+  return 'done';
+}
+
+function editGroups(edits: ToolCall[]): [EditOutcome, ToolCall[]][] {
+  const order: EditOutcome[] = [
+    'waiting',
+    'running',
+    'rejected',
+    'failed',
+    'done',
+  ];
+  return order
+    .map(
+      (outcome) =>
+        [outcome, edits.filter((tool) => editOutcome(tool) === outcome)] as [
+          EditOutcome,
+          ToolCall[],
+        ],
+    )
+    .filter(([, group]) => group.length > 0);
+}
 
 const READS = ['read_file'];
 const EDITS = ['write_file', 'edit_file', 'apply_patch', 'delete'];
@@ -39,15 +96,15 @@ export function toolSummary(rows: Message[]): {
   if (symbols)
     parts.push(tn(symbols, 'looked up a symbol', 'looked up {n} symbols'));
   const edits = count(EDITS);
-  const files = [
-    ...new Set(edits.map((tool) => tool.filePath).filter(Boolean)),
-  ] as string[];
-  if (files.length === 1)
-    parts.push(t('edited {file}', { file: name(files[0]!) }));
-  else if (edits.length)
-    parts.push(
-      tn(files.length || edits.length, 'edited a file', 'edited {n} files'),
-    );
+  for (const [outcome, group] of editGroups(edits)) {
+    const files = [
+      ...new Set(group.map((tool) => tool.filePath).filter(Boolean)),
+    ] as string[];
+    if (files.length === 1)
+      parts.push(editPhrase(outcome, name(files[0]!), group.length));
+    else if (group.length)
+      parts.push(editPhrase(outcome, undefined, files.length || group.length));
+  }
   const agents = count(['task']).length;
   if (agents) parts.push(tn(agents, 'ran a subagent', 'ran {n} subagents'));
   const web = count(WEB).length;

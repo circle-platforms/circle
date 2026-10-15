@@ -1591,7 +1591,12 @@ test('saved API configuration, model selection and effort produce actual local g
     controller.snapshot().models.some((model) => model.id === 'fixture-two'),
   );
   assert.equal((await call('set-model', { modelId: 'fixture-two' })).ok, true);
+  assert.equal((await call('set-effort', { effort: 'default' })).ok, true);
+  assert.equal(controller.snapshot().sessions[0]!.effort, 'default');
+  assert.equal(controller.snapshot().settings.defaultEffort, 'default');
   assert.equal((await call('set-effort', { effort: 'high' })).ok, true);
+  assert.equal(controller.snapshot().sessions[0]!.effort, 'high');
+  assert.equal(controller.snapshot().settings.defaultEffort, 'high');
   assert.equal(
     (await call('prompt', { text: 'use the selected model' })).ok,
     true,

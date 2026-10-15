@@ -459,6 +459,14 @@ export class RuntimeController {
       throw error;
     }
   }
+  /** The saved thinking depth, on every open runtime except one that was just set. */
+  private applySharedEffort(saved: string, skip?: AgentRuntime): void {
+    const level = saved || 'default';
+    for (const owner of this.runtimes.values()) {
+      if (owner === skip || owner.isClosing) continue;
+      owner.applyThinkingChoice(level);
+    }
+  }
   private synchronizeSharedSettings(settings: CircleSettings): void {
     for (const owner of this.runtimes.values()) {
       if (
@@ -748,7 +756,7 @@ export class RuntimeController {
         workspaceId: identity(row.workspace),
         model: selected ? owner.harness.model.model : row.model,
         effort: ((selected
-          ? owner.thinkingLevel
+          ? owner.options.settings.default_thinking
           : savedSettings.default_thinking) || 'default') as Effort,
         draft: '',
         attachments: [],
@@ -2055,9 +2063,14 @@ export class RuntimeController {
         }
         return {};
       }
-      case 'set-effort':
-        runtime.setThinkingLevel(text(p.effort, 'effort', 20));
+      case 'set-effort': {
+        runtime.applyThinkingChoice(text(p.effort, 'effort', 20));
+        const settings = saveSettingsChange(this.home, (saved) => {
+          saved.default_thinking = runtime.options.settings.default_thinking;
+        });
+        this.applySharedEffort(settings.default_thinking, runtime);
         return {};
+      }
       case 'set-plan-mode':
         runtime.setPlanMode(flag(p.enabled));
         return {};
@@ -2317,6 +2330,8 @@ export class RuntimeController {
           }
         });
         this.synchronizeSharedSettings(settings);
+        if (data.defaultEffort !== undefined)
+          this.applySharedEffort(settings.default_thinking);
         if (data.variables !== undefined)
           for (const owner of this.runtimes.values()) {
             owner.options.settings.variables = { ...settings.variables };

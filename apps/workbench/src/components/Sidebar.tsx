@@ -18,6 +18,7 @@ import {
 import { useRuntime } from '../app/context';
 import { usePlugins } from '../plugins/context';
 import { currentSession, sessionTitle } from '../model/state';
+import { workspaceLabel } from '../model/workspace-label';
 import type { DialogId } from '../model/types';
 import { IconButton } from './common';
 import { t } from '../i18n';
@@ -230,11 +231,13 @@ export function Sidebar({
                     )
                   }
                 >
-                  {workspace.name}
+                  {workspaceLabel(workspace)}
                 </button>
                 <div className="project-actions">
                   <IconButton
-                    label={t('new session in {name}', { name: workspace.name })}
+                    label={t('new session in {name}', {
+                      name: workspaceLabel(workspace),
+                    })}
                     onClick={() => newSession(workspace.id)}
                   >
                     <Plus size={13} />
@@ -275,6 +278,7 @@ export function Sidebar({
                           session.title === 'new session' ? '' : session.title
                         }
                         autoFocus
+                        onFocus={(event) => event.currentTarget.select()}
                         onClick={(event) => event.preventDefault()}
                         onKeyDown={(event) => {
                           event.stopPropagation();

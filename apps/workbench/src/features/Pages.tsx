@@ -44,6 +44,7 @@ import {
 } from '../model/state';
 import { EFFORT_TEXT, MODE_TEXT } from './Composer';
 import { shownTime } from '../model/time';
+import { workspaceLabel } from '../model/workspace-label';
 import type {
   DialogId,
   PageId,
@@ -195,11 +196,11 @@ function SessionsPage({ onSession, onDialog }: Props) {
               <span>
                 <strong>{sessionTitle(session.title)}</strong>
                 <small>
-                  {
+                  {workspaceLabel(
                     snapshot.workspaces.find(
                       (workspace) => workspace.id === session.workspaceId,
-                    )?.name
-                  }{' '}
+                    ) ?? { name: '' },
+                  )}{' '}
                   · {shownTime(session.updatedAt)}
                 </small>
               </span>
@@ -1240,41 +1241,45 @@ function ApprovalsPage() {
         ))}
       </div>
       <p className="panel-note">{MODE_TEXT[sessionMode(session)].detail()}</p>
-      <div className="records">
-        {rules.map((rule) => (
-          <div className="record-row" key={rule.id}>
-            <div className="record-main">
-              <ShieldCheck size={16} />
-              <span>
-                <strong>{rule.description}</strong>
-                <small>
-                  {rule.kind} · {t('this session')}
-                </small>
-              </span>
+      {rules.length ? (
+        <div className="records">
+          {rules.map((rule) => (
+            <div className="record-row" key={rule.id}>
+              <div className="record-main">
+                <ShieldCheck size={16} />
+                <span>
+                  <strong>{rule.description}</strong>
+                  <small>
+                    {rule.kind} · {t('this session')}
+                  </small>
+                </span>
+              </div>
+              <Button
+                onClick={() =>
+                  perform(() => {
+                    runtime.change((state) => {
+                      state.approvalRules = state.approvalRules.filter(
+                        (item) => item.id !== rule.id,
+                      );
+                    });
+                    runtime.request('revoke-approval', { ruleId: rule.id });
+                  })
+                }
+              >
+                {t('revoke')}
+              </Button>
             </div>
-            <Button
-              onClick={() =>
-                perform(() => {
-                  runtime.change((state) => {
-                    state.approvalRules = state.approvalRules.filter(
-                      (item) => item.id !== rule.id,
-                    );
-                  });
-                  runtime.request('revoke-approval', { ruleId: rule.id });
-                })
-              }
-            >
-              {t('revoke')}
-            </Button>
-          </div>
-        ))}
-        {!rules.length && (
-          <div className="empty-state">
-            <h3>{t('no session rules')}</h3>
-          </div>
-        )}
-      </div>
-      <section className="settings-block">
+          ))}
+        </div>
+      ) : (
+        <EmptyState
+          title={t('no session rules')}
+          icon={<ShieldCheck size={25} />}
+        />
+      )}
+      <section
+        className={rules.length ? 'settings-block' : 'settings-block first'}
+      >
         <h2>{t('recent decisions')}</h2>
         {!snapshot.interactions.some(
           (item) => item.sessionId === session.id && item.status === 'recorded',
@@ -1494,7 +1499,7 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
         {snapshot.workspaces.map((workspace) => (
           <div className="setting-row" key={workspace.id}>
             <span>
-              {workspace.name}
+              {workspaceLabel(workspace)}
               <small>{workspace.path}</small>
             </span>
             <Status value={workspace.trusted ? 'trusted' : 'not trusted'} />

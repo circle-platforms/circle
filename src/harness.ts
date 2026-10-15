@@ -325,38 +325,57 @@ export class Harness {
   }
   /**
    * Ask the model for a short title after the fallback is already saved. A scripted model
-   * never sees this call. A rename that landed first is left alone.
+   * never sees this call. A rename that landed first is left alone. The call is not part
+   * of the turn, so its tokens are not added to the reply footer.
    */
   private generateTitle(display: string, fallback: string): void {
-    const model = this.options.model;
     const prompt = display.trim();
-    if (!model.sideRequests || prompt.length <= 40) return;
-    void model
-      .complete({
+    if (!this.options.model.sideRequests || prompt.length <= 16) return;
+    void this.requestTitle(prompt, fallback).then((applied) => {
+      if (applied) return;
+      // A gateway often refuses a second call while the turn is in flight. Try once more
+      // after that turn, still without making run() wait.
+      const pending = this.active;
+      const again = () => void this.requestTitle(prompt, fallback);
+      if (pending) void pending.finally(again);
+      else again();
+    });
+  }
+  /** True when the title is set or the user already renamed. False asks for one retry. */
+  private async requestTitle(
+    prompt: string,
+    fallback: string,
+  ): Promise<boolean> {
+    const han = prompt.match(/\p{Script=Han}/gu)?.length ?? 0;
+    const hint =
+      han >= 2
+        ? 'Write the title in Simplified Chinese.'
+        : 'Write the title in the same language as the user message.';
+    try {
+      const response = await this.options.model.complete({
         system: readPrompt('agent', 'title.md'),
         messages: [
           {
             id: 'title',
             role: 'user',
-            content: prompt.slice(0, 2000),
+            content: `${prompt.slice(0, 2000)}\n\n${hint}`,
           },
         ],
         tools: [],
         signal: AbortSignal.timeout(20_000),
         effort: 'minimal',
         token: () => {},
-      })
-      .then((response) => {
-        const title = sanitizeGeneratedTitle(response.message.content);
-        if (!title) return;
-        const current = this.options.store.get(this.sessionId);
-        if (!current || current.title !== fallback) return;
-        this.options.store.rename(this.sessionId, title);
-        this.bus.emit('info', { payload: { title } });
-      })
-      .catch(() => {
-        /* The fallback title stays. A side request must not fail the turn. */
       });
+      const title = sanitizeGeneratedTitle(response.message.content);
+      if (!title) return false;
+      const current = this.options.store.get(this.sessionId);
+      if (!current || current.title !== fallback) return true;
+      this.options.store.rename(this.sessionId, title);
+      this.bus.emit('info', { payload: { title } });
+      return true;
+    } catch {
+      return false;
+    }
   }
   private async runTurn(
     prompt: string | undefined,

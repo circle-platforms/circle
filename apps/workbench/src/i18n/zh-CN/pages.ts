@@ -239,6 +239,8 @@ export const pages: Record<string, string> = {
   secrets: '密钥',
   'Variables whose values the model never sees: it knows the name, and reads %NAME% wherever a value shows in output. A saved value is not shown again.':
     '模型看不到值的变量：模型只知道名字，输出里出现值的地方显示为 %NAME%。保存后的值不再显示。',
+  "The model knows a secret only by name. Where a tool's output shows the value, you read %NAME%, not the shell's $NAME. A saved value is not shown again.":
+    '模型只知道密钥的名字。工具输出里出现值的地方显示为 %NAME%，不是 shell 的 $NAME。保存后的值不再显示。',
   variable: '变量',
   value: '值',
   'new…': '新建…',
@@ -257,8 +259,8 @@ export const pages: Record<string, string> = {
     '变量名只能用大写字母、数字和下划线，并以字母开头',
   '{name} is already a variable': '已有名为 {name} 的变量',
   '{name} is already a secret': '已有名为 {name} 的密钥',
-  "Write %NAME% in a tool's arguments. Circle puts the value in when the tool runs. The model also reads the values.":
-    '在工具参数里写 %NAME%。工具执行时 Circle 会换成变量值。模型也能看到这些值。',
+  "A shell variable on this system is $NAME. In a tool's arguments write %NAME%, and Circle puts the value in when the tool runs. The model also reads the values.":
+    '本机 shell 变量写成 $NAME。工具参数里写 %NAME%，执行时 Circle 会换成变量值。模型也能看到这些值。',
   'add skill': '添加技能',
   'skill name': '技能名称',
   'skill description': '技能说明',

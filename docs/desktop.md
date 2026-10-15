@@ -108,13 +108,13 @@ Session history, the `projects/` offload folders and updates stay in the data fo
 
 ## Variables
 
-Settings → variables lists names and values as Windows lists environment variables, with **new…**, **edit…** and **delete** under each table; double-click a row to edit it. The model writes `%NAME%` in any tool's arguments and Circle puts the value in when the tool runs. The first table holds plain variables, whose values the model is told; they are `variables` in `settings.json`. The second holds secrets, whose values the model never sees and the page never shows again: to change one, enter a new value, or leave the value empty to keep it when you only rename it. In the dialog, **secret** decides which: it is ticked by itself for a name with a part such as `PASSWORD`, `TOKEN` or `KEY`, and ticking it while you edit a plain variable moves that variable to the secrets in one step. See [Secrets by name](security.md#secrets-by-name).
+Settings → variables lists names and values as Windows lists environment variables, with **new…**, **edit…** and **delete** under each table; double-click a row to edit it. The model writes `%NAME%` in any tool's arguments and Circle puts the value in when the tool runs. On Linux and macOS the shell's own form is `$NAME`; Circle's placeholder stays `%NAME%` on every system. The first table holds plain variables, whose values the model is told; they are `variables` in `settings.json`. The second holds secrets, whose values the model never sees and the page never shows again: to change one, enter a new value, or leave the value empty to keep it when you only rename it. In the dialog, **secret** decides which: it is ticked by itself for a name with a part such as `PASSWORD`, `TOKEN` or `KEY`, and ticking it while you edit a plain variable moves that variable to the secrets in one step. See [Secrets by name](security.md#secrets-by-name).
 
 ## Language and text size
 
 Settings → appearance:
 
-- **language**: follow system, English or 简体中文. Following the system, any Chinese system language gives Chinese. Menus, system dialogs and notifications follow. Only the interface is translated: what the model writes, tool output, file names and commands stay as they are.
+- **language**: follow system, English or 简体中文. Following the system, any Chinese system language gives Chinese. Menus and notifications follow. Only the interface is translated: what the model writes, tool output, file names and commands stay as they are. GTK file dialogs do not: their stock buttons (Cancel, Open, Recent, Home) are drawn from the locale data present when the process starts, which is before this script runs. Choosing 简体中文 in settings, Chromium's `--lang`, or setting `LANG` from inside the process does not relabel them. They are Chinese only when `zh_CN.UTF-8` is installed (`locale -a`) and Circle is started with that locale. Circle does not set `LC_ALL`. A test profile (`CIRCLE_WORKBENCH_TEST_PROFILE`) stays in English.
 - **text size**: small, default, large or larger. Interface and code text change together.
 
 The choice of language and text size is kept by the window, not in `settings.json`.

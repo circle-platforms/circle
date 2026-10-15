@@ -680,7 +680,7 @@ export class LiveRuntime implements RuntimePort {
       return {};
     }
     if (['effort', 'thinking'].includes(name) && args) {
-      if (!(EFFORTS as string[]).includes(args))
+      if (args !== 'default' && !(EFFORTS as string[]).includes(args))
         throw Error(t('unknown thinking depth'));
       await native('set-effort', { effort: args });
       return {};

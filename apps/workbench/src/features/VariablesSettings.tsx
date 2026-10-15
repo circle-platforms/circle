@@ -109,7 +109,7 @@ export function VariablesSettings() {
               "Written as Windows writes environment variables: %NAME% in a tool's arguments takes the value when the tool runs. The model also reads the values.",
             )
           : t(
-              "Write %NAME% in a tool's arguments. Circle puts the value in when the tool runs. The model also reads the values.",
+              "A shell variable on this system is $NAME. In a tool's arguments write %NAME%, and Circle puts the value in when the tool runs. The model also reads the values.",
             )}
       </p>
       <VariableTable
@@ -123,9 +123,13 @@ export function VariablesSettings() {
       />
       <h3>{t('secrets')}</h3>
       <p className="panel-note">
-        {t(
-          'Variables whose values the model never sees: it knows the name, and reads %NAME% wherever a value shows in output. A saved value is not shown again.',
-        )}
+        {document.documentElement.dataset.desktop === 'win32'
+          ? t(
+              'Variables whose values the model never sees: it knows the name, and reads %NAME% wherever a value shows in output. A saved value is not shown again.',
+            )
+          : t(
+              "The model knows a secret only by name. Where a tool's output shows the value, you read %NAME%, not the shell's $NAME. A saved value is not shown again.",
+            )}
       </p>
       <VariableTable
         label={t('secrets')}

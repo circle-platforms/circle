@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { join, basename } from 'node:path';
 import { readFileSync } from 'node:fs';
 import type { ChatModel, Message, ToolCall } from './types.js';
-import { GatewayModel, EFFORT_LEVELS } from './model.js';
+import { GatewayModel, EFFORT_LEVELS, defaultEffort } from './model.js';
 import { CheckpointStore, type Session } from './checkpoint_store.js';
 import {
   defaultPolicy,
@@ -1109,6 +1109,22 @@ export class AgentRuntime {
     if (this.baseModel instanceof GatewayModel) this.baseModel.effort = level;
     this.options.settings.default_thinking = level;
     this.refreshSystemPrompt();
+  }
+  /**
+   * A chosen depth, or `default` when the user has not chosen one. `default` clears
+   * the saved preference and sends the protocol's usual effort (Anthropic `medium`).
+   * A request already built keeps the depth it read. The next request uses this choice.
+   */
+  applyThinkingChoice(level: string): void {
+    const clearing = level === 'default' || level === '';
+    if (!clearing && !(EFFORT_LEVELS as readonly string[]).includes(level))
+      throw new Error('unknown thinking depth');
+    if (this.baseModel instanceof GatewayModel)
+      this.baseModel.effort = clearing
+        ? defaultEffort(this.baseModel.settings.auth.protocol, '')
+        : level;
+    this.options.settings.default_thinking = clearing ? '' : level;
+    if (!this.busy) this.refreshSystemPrompt();
   }
   stats(): {
     messages: number;

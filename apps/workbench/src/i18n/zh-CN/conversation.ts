@@ -22,6 +22,7 @@ export const conversation: Record<string, string> = {
   'close find': '关闭查找',
   // the transcript
   'what are we working on?': '我们要做什么？',
+  'work without a project': '不在项目中工作',
   'Start with a message, a file, or a question about your project.':
     '从一条消息、一个文件或一个关于项目的问题开始。',
   you: '你',

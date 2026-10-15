@@ -1990,9 +1990,13 @@ pre {
   margin-top: 28px;
   padding-top: 23px;
 }
+.main-stack:has(.settings-page) {
+  align-items: center;
+}
 .page.settings-page {
-  width: min(1080px, 100%);
+  width: min(720px, 100%);
   margin-inline: auto;
+  align-self: center;
 }
 .settings-block.first {
   margin-top: 0;
@@ -2428,7 +2432,8 @@ pre {
 }
 .toast {
   position: fixed;
-  bottom: 25px;
+  /* Above the composer, so a short notice does not cover the box. */
+  bottom: 140px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 120;
@@ -3462,7 +3467,10 @@ pre {
   line-height: 1.5;
   margin-top: 2px;
 }
-.viewing-tag {
+.record-main > span.viewing-tag {
+  flex: 0 0 auto;
+  margin-left: auto;
+  align-self: center;
   color: var(--muted);
   font-size: var(--ui-tiny);
   white-space: nowrap;
@@ -3481,6 +3489,10 @@ pre {
   align-items: center;
   gap: 8px;
   font-size: var(--ui-small);
+}
+.session-menu [role='menuitem'].danger,
+.session-menu [role='menuitem'].danger svg {
+  color: var(--negative);
 }
 .session-menu kbd {
   margin-left: auto;
@@ -3724,7 +3736,9 @@ pre {
   grid-template-columns: 252px minmax(0, 1fr);
 }
 .workbench.sidebar-collapsed {
-  grid-template-columns: 0 minmax(0, 1fr);
+  /* Hiding the sidebar takes it out of the grid. A zero first track would then
+     put the conversation in that track, so the transcript and composer vanish. */
+  grid-template-columns: minmax(0, 1fr);
 }
 .workbench.sidebar-collapsed .desktop-sidebar {
   display: none;
@@ -4009,7 +4023,7 @@ pre {
   opacity: 0;
   transition: opacity 0.15s ease;
 }
-.message.user .message-meta,
+.message .message-meta,
 .message:hover .message-meta,
 .message-meta:focus-within {
   opacity: 1;
@@ -4222,6 +4236,13 @@ pre {
   min-width: 220px;
   max-height: 360px;
   overflow: auto;
+}
+/* Seven effort rows, each with a description, are taller than the shared menu cap.
+   The later shared rule would otherwise scroll a list that already fits. */
+.footbar-menu.effort-menu {
+  min-width: 260px;
+  max-height: none;
+  overflow: visible;
 }
 .footbar-menu [role='menuitem'] {
   display: flex;

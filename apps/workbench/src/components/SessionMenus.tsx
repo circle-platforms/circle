@@ -22,6 +22,7 @@ import {
   workspaceSessions,
 } from '../model/session-management';
 import type { DialogId, Session, Workspace } from '../model/types';
+import { workspaceLabel } from '../model/workspace-label';
 import { t } from '../i18n';
 import { IconButton } from './common';
 import '../styles/session-management.css';
@@ -151,6 +152,7 @@ export function SessionMenu({
       />
       <DropdownMenu.Separator className="dropdown-separator" />
       <Item
+        className="danger"
         icon={Trash2}
         label={t('delete session')}
         disabled={
@@ -178,7 +180,11 @@ export function WorkspaceMenu({
   const { snapshot, runtime, perform } = useRuntime();
   const sessions = workspaceSessions(snapshot, workspace.id);
   return (
-    <Menu label={t('workspace actions for {name}', { name: workspace.name })}>
+    <Menu
+      label={t('workspace actions for {name}', {
+        name: workspaceLabel(workspace),
+      })}
+    >
       <Item
         icon={Plus}
         label={t('new session')}

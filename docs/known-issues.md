@@ -65,6 +65,7 @@ If your endpoint is slow or never answers, a turn can take a long time to give u
 
 ## Desktop application
 
+- **Linux file dialogs stay in English without a Chinese locale.** GTK draws Cancel, Open, Recent and Home from the locale installed when the process starts. Electron has already initialized GTK before Circle's script can set `LANG` or `--lang`, so switching to 简体中文 in the app does not relabel those buttons. Install `zh_CN.UTF-8` and start Circle with `LANG=zh_CN.UTF-8` for Chinese stock buttons. Many minimal installs, including this check, only have `C` and `en_US.UTF-8`. This was not verified against a live GTK dialog.
 - **It is not signed by Apple or Microsoft.** macOS asks once whether to open it (System Settings → Privacy & Security → Open Anyway), and Windows SmartScreen may stop it the first time (More info → Run anyway). See [Installation](installation.md#the-desktop-application).
 - **On Linux, its sandbox helper needs root once.** Where unprivileged user namespaces are restricted, as on Ubuntu 24.04 and later, Chromium's sandbox needs `chrome-sandbox` owned by root with the setuid bit; until then the application stops at start. [Installation](installation.md#the-desktop-application) has the two commands.
 - **On Linux it does not update itself.** Check now links to the release page: an update cannot keep `chrome-sandbox` owned by root, so the folder is replaced by hand. Releases up to 1.2.0 do not update themselves on any system; install the newer release over them once by hand.
