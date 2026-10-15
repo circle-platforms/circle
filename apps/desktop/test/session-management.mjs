@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { readModelRequests } from './helpers/model-requests.mjs';
+import { readViewport, setViewport } from './helpers/viewport.mjs';
 import {
   captureSessionFailure,
   cleanupSessionTest,
@@ -219,6 +220,74 @@ try {
     .waitFor();
   await page.keyboard.press('Escape');
   checks.push('sidebar pin is retained by the live presentation store');
+  const originalViewport = await readViewport(page);
+  const focusedRowViewport = await setViewport(app, page, {
+    width: 1024,
+    height: 684,
+  });
+  await writeFile(
+    join(output, 'focus-lifecycle-viewport.json'),
+    JSON.stringify(focusedRowViewport, null, 2) + '\n',
+  );
+  await menu().focus();
+  await page
+    .getByRole('tooltip')
+    .filter({ hasText: 'session actions for managed fixture A' })
+    .waitFor();
+  assert.equal(
+    (await command('archive-session', { id: a, archived: true })).ok,
+    true,
+  );
+  const restoredRows = () =>
+    page
+      .locator('.sidebar .session-link')
+      .filter({ hasText: 'managed fixture A' });
+  await until(
+    async () => (await restoredRows().count()) === 0,
+    'focused row removed',
+  );
+  assert.equal(
+    (await command('archive-session', { id: a, archived: false })).ok,
+    true,
+  );
+  await until(
+    async () => (await restoredRows().count()) > 0,
+    'focused row restored',
+  );
+  const restoredWorkspace = (await state()).workspaces.find(
+    (item) => item.id === current.workspaceId,
+  );
+  await page
+    .getByRole('button', {
+      name: `workspace actions for ${restoredWorkspace.name}`,
+      exact: true,
+    })
+    .click();
+  await page
+    .getByRole('menuitem', { name: 'archive all sessions', exact: true })
+    .waitFor();
+  await page.keyboard.press('Escape');
+  await page
+    .locator('.sidebar .session-link')
+    .filter({ hasText: 'managed fixture B' })
+    .first()
+    .click();
+  await until(
+    async () => (await state()).activeSessionId === b,
+    'restored row does not block B',
+  );
+  assert.equal(await page.getByRole('menu').count(), 0);
+  assert.equal(
+    await page
+      .getByRole('tooltip')
+      .filter({ hasText: 'session actions for managed fixture A' })
+      .count(),
+    0,
+  );
+  checks.push(
+    'removing a focused sidebar row releases its menu tooltip ownership',
+  );
+  await setViewport(app, page, originalViewport);
   await menu().click();
   await page
     .getByRole('menuitem', { name: 'archive session', exact: true })
