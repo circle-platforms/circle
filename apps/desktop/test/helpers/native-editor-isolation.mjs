@@ -66,7 +66,8 @@ export async function runNativeEditorIsolation({ page, workspace, output }) {
   };
   const appendSingleEdit = async (text) => {
     await page.locator('.file-view .view-lines').first().click();
-    await page.keyboard.press(`${modifier}+End`);
+    await page.keyboard.press(`${modifier}+a`);
+    await page.keyboard.press('ArrowRight');
     // EditContext applies input asynchronously; confirm the actual buffer before navigation/save.
     await page.keyboard.insertText(text);
     await until(
@@ -78,8 +79,8 @@ export async function runNativeEditorIsolation({ page, workspace, output }) {
   const save = () => page.keyboard.press(`${modifier}+s`);
   const a = 'isolation-a.ts',
     b = 'isolation-b.md';
-  const aMarker = '\n// DOCUMENT_A_UNSAVED\n',
-    bMarker = '\nDOCUMENT_B_SAVED\n';
+  const aMarker = 'DOCUMENT_A_UNSAVED',
+    bMarker = 'DOCUMENT_B_SAVED';
   assert.equal(await disk(a), files[a]);
   assert.equal(await disk(b), files[b]);
   await open(a, 'DOCUMENT_A_ONLY');
