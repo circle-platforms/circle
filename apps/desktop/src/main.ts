@@ -4,6 +4,7 @@ import {
   nativeHttpsUrl,
 } from './encrypted-credentials';
 import { BrowserSessions } from './browser';
+import { devToolsMenuShortcut } from './menu-shortcuts';
 import { RuntimeSupervisor } from './runtime-supervisor';
 import { validateRuntimeCommand } from './runtime-protocol';
 import {
@@ -210,7 +211,10 @@ function configureMenu() {
           accelerator: 'CmdOrCtrl+Shift+R',
           click: () => window?.webContents.reload(),
         },
-        role('toggleDevTools', 'Toggle Developer Tools'),
+        {
+          ...role('toggleDevTools', 'Toggle Developer Tools'),
+          ...devToolsMenuShortcut(process.platform),
+        },
         { type: 'separator' },
         role('resetZoom', 'Actual Size'),
         role('zoomIn', 'Zoom In'),
