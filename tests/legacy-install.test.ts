@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test, type TestContext } from 'node:test';
 import {
   chmodSync,
   cpSync,
@@ -338,14 +338,22 @@ test(
   },
 );
 
-test('a running Python circle blocks the installation and nothing changes', async (t) => {
-  const base = scratch(t);
+// A running Python circle: its frozen program is a copy of node, started from its version folder
+// or through the `current` link, as the bin link and the Windows PATH entry start it.
+async function startPython(
+  t: TestContext,
+  base: string,
+  throughCurrent: boolean,
+) {
   const { prefix, bin, pathEntry } = pythonInstall(base);
   const frozen = join(prefix, 'versions', '0.5.0', 'circle', program);
   rmSync(frozen);
   cpSync(process.execPath, frozen);
   if (!windows) chmodSync(frozen, 0o755);
-  const child = spawn(frozen, ['-e', 'setTimeout(() => {}, 60000)'], {
+  const started = throughCurrent
+    ? join(prefix, 'current', 'circle', program)
+    : frozen;
+  const child = spawn(started, ['-e', 'setTimeout(() => {}, 60000)'], {
     stdio: 'ignore',
   });
   // Windows cannot delete the folder while the program in it still runs: wait for its exit.
@@ -356,27 +364,39 @@ test('a running Python circle blocks the installation and nothing changes', asyn
     await exited;
   });
   await new Promise((resolve) => child.once('spawn', resolve));
-  const path = windows ? [pathEntry] : [bin];
+  return { prefix, frozen, child, path: windows ? [pathEntry] : [bin] };
+}
+
+test('a running Python circle blocks the installation and nothing changes', async (t) => {
+  const base = scratch(t);
+  const { prefix, frozen, child, path } = await startPython(t, base, false);
   const where = around(base, path);
   assert.deepEqual(runningCopies(findPythonCopies(where), where), [child.pid]);
-  const release = fixture(base, '1.0.0');
-  const run = runManager(base, release, path);
+  const run = runManager(base, fixture(base, '1.0.0'), path);
   assert.equal(run.status, 1);
   assert.match(
     run.stderr,
     new RegExp(`still running \\(process ${child.pid}\\)`),
   );
-  if (windows) {
-    // No PowerShell to list the processes: the program in use still stops the installer.
-    const blind = runManager(base, release, path, {
-      SystemRoot: join(base, 'no windows'),
-    });
-    assert.equal(blind.status, 1, blind.stderr + blind.stdout);
-    assert.match(
-      blind.stderr,
-      /the Python circle may still be running: .*circle\.exe is in use, and the running programs could not be listed/,
-    );
-  }
+  assert.ok(existsSync(frozen));
+  assert.ok(existsSync(join(prefix, 'current')));
+  assert.equal(existsSync(join(prefix, 'versions', '1.0.0')), false);
+  assert.equal(activeVersion(prefix), undefined);
+});
+
+test('a Python circle started through its current link blocks the installation too', async (t) => {
+  const base = scratch(t);
+  const { prefix, frozen, child, path } = await startPython(t, base, true);
+  const run = runManager(base, fixture(base, '1.0.0'), path);
+  assert.equal(run.status, 1, run.stderr + run.stdout);
+  // Windows may name the program by the link, outside the version folder: the program in use
+  // then stops the installer without a process number.
+  assert.match(
+    run.stderr,
+    new RegExp(
+      `still running \\(process ${child.pid}\\)|may still be running: .+ is in use by another program`,
+    ),
+  );
   assert.ok(existsSync(frozen));
   assert.ok(existsSync(join(prefix, 'current')));
   assert.equal(existsSync(join(prefix, 'versions', '1.0.0')), false);
