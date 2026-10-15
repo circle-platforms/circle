@@ -404,6 +404,7 @@ test('task bridge runs isolated writers and read-only reviewer while task approv
   await f.call('select-session', { id: parent });
   const until = Date.now() + 8000;
   let tasks: any[] = [];
+  const bridgeTimeline: unknown[] = [];
   while (Date.now() < until) {
     for (const row of f.controller
       .snapshot()
@@ -417,7 +418,10 @@ test('task bridge runs isolated writers and read-only reviewer while task approv
     }
     const list = await f.service('tasks', 'list', {}, parent);
     assert.equal(list.ok, true, list.error);
-    tasks = list.data as any[];
+    const nextTasks = list.data as any[];
+    if (JSON.stringify(tasks) !== JSON.stringify(nextTasks))
+      bridgeTimeline.push({ at: Date.now(), tasks: nextTasks });
+    tasks = nextTasks;
     if (
       tasks.every((task) =>
         ['needs_review', 'succeeded', 'failed'].includes(task.state),
@@ -426,12 +430,57 @@ test('task bridge runs isolated writers and read-only reviewer while task approv
       break;
     await delay(10);
   }
+  let bridgeFailureReceipt: string | undefined;
+  if (!tasks.every((task) => task.state === 'needs_review')) {
+    const directory = join(import.meta.dirname, '../artifacts/runtime');
+    await mkdir(directory, { recursive: true });
+    bridgeFailureReceipt = join(
+      directory,
+      `controller-task-bridge-failure-${randomUUID()}.json`,
+    );
+    await writeFile(
+      bridgeFailureReceipt,
+      JSON.stringify(
+        {
+          deadline: until,
+          observedAt: Date.now(),
+          tasks,
+          authoritativeAfterFailure: (
+            await f.service('tasks', 'list', {}, parent)
+          ).data,
+          timeline: bridgeTimeline,
+          interactions: f.controller.snapshot().interactions,
+          modelRequestCount: f.model.requests.length,
+          requests: f.model.requests,
+          events: f.events,
+          files: await Promise.all(
+            tasks.map(async (task) => ({
+              id: task.spec.id,
+              worktree: task.worktree,
+              content: task.worktree
+                ? await readFile(join(task.worktree, 'same.txt'), 'utf8').catch(
+                    (error) => String(error),
+                  )
+                : undefined,
+            })),
+          ),
+        },
+        null,
+        2,
+      ),
+    );
+  }
   assert.equal(tasks.length, 3);
   assert.ok(
     tasks.every((task) => task.state === 'needs_review'),
-    JSON.stringify(
-      tasks.map((t) => ({ id: t.spec.id, state: t.state, reason: t.reason })),
-    ),
+    JSON.stringify({
+      bridgeFailureReceipt,
+      tasks: tasks.map((t) => ({
+        id: t.spec.id,
+        state: t.state,
+        reason: t.reason,
+      })),
+    }),
   );
   assert.notEqual(tasks[0].worktree, tasks[1].worktree);
   for (const id of ['left', 'right'])
