@@ -75,6 +75,7 @@ async function fixture(t: Parameters<typeof scratch>[0]) {
   await mkdir(dataDir);
   await git(root, 'init', '--bare', '--initial-branch=main', remote);
   await git(workspace, 'init', '--initial-branch=main');
+  await git(workspace, 'config', 'core.autocrlf', 'false');
   await writeFile(
     join(workspace, 'app.cjs'),
     "exports.greeting='missing';exports.readyForCI=false;\n",
@@ -253,12 +254,43 @@ test('real scripted tasks integrate and repair failing CI on one draft PR withou
     };
     return service;
   };
+  const deepPorts = join(
+    f.dataDir,
+    'deep-' + 'd'.repeat(Math.max(1, 180 - f.dataDir.length)),
+  );
+  assert.ok(
+    join(
+      deepPorts,
+      'cycle-verification',
+      's'.repeat(64),
+      'u'.repeat(36),
+      'index-XXXXXX',
+    ).length > 260,
+    'fixture retains the failing native path depth',
+  );
   const portsOptions = {
     workspace: f.workspace,
-    dataDir: join(f.dataDir, 'ports'),
+    dataDir: deepPorts,
     sessionId: 'trusted-session',
     getTaskService: () => service,
-    verify,
+    verify: async (...args: Parameters<typeof verify>) => {
+      const [task, ctx] = args;
+      assert.ok(
+        join(ctx.artifactDirectory, 'index-XXXXXX').length < 240,
+        'private temp paths retain native Windows headroom',
+      );
+      const owner = JSON.parse(
+        await readFile(
+          join(ctx.artifactDirectory, 'verification.json'),
+          'utf8',
+        ),
+      );
+      assert.equal(owner.sessionId, 'trusted-session');
+      assert.equal(owner.workspace, ctx.worktree);
+      assert.equal(owner.head, ctx.changes.head);
+      assert.equal(task.spec.sessionId, owner.sessionId);
+      return verify(...args);
+    },
     withResource: <T>(
       resource: 'build' | 'ui' | 'browser',
       run: () => Promise<T>,
@@ -451,15 +483,19 @@ test('cycle adapter refuses unverified candidates, changed ownership and missing
   )) as { path: string };
   // Corrupt the real cycle manifest, not a different integration's manifest.
   const worktrees = await git(f.workspace, 'worktree', 'list', '--porcelain');
-  const cyclePath = worktrees
-    .split('\n')
-    .find(
-      (line) =>
-        line.startsWith('worktree ') &&
-        !line.endsWith(f.workspace) &&
-        !line.endsWith(integration.path),
-    )!
-    .slice(9);
+  const canonicalWorktrees = await Promise.all(
+    worktrees
+      .split('\n')
+      .filter((line) => line.startsWith('worktree '))
+      .map((line) => realpath(line.slice(9))),
+  );
+  const sourcePath = await realpath(f.workspace);
+  const otherIntegrationPath = await realpath(integration.path);
+  const cyclePath = canonicalWorktrees.find(
+    (candidate) =>
+      candidate !== sourcePath && candidate !== otherIntegrationPath,
+  );
+  assert.ok(cyclePath, 'the cycle owned integration must exist');
   const manifest = join(cyclePath, '..', 'owner.json');
   await rename(manifest, manifest + '.retained');
   await assert.rejects(
@@ -803,6 +839,11 @@ test('requesting review rechecks the candidate after CI and restores draft if th
     if (changeDuringChecks === 'local')
       await writeFile(join(owned, 'README.md'), 'baseline README\n');
   }
+  assert.equal(
+    (await delivery.git.snapshot()).entries.length,
+    0,
+    'restoring the fixture bytes must leave a clean candidate',
+  );
   await writeFile(
     f.ghState,
     JSON.stringify({ ...initial, changeDuringReady: true }),
