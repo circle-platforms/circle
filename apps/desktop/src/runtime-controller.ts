@@ -554,7 +554,9 @@ export class RuntimeController {
     if (errors.length)
       throw new AggregateError(errors, 'session task cleanup failed');
     for (const [id, root] of owned) {
-      await this.workspaceServices.get(root)?.releaseSession(id);
+      await this.workspaceServices
+        .get(this.workspaceRoots.get(root)?.canonical ?? root)
+        ?.releaseSession(id);
       if (id !== sessionId) await this.options.beforeDelete?.(id);
     }
   }

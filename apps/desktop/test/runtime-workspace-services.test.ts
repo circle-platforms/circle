@@ -770,3 +770,108 @@ test('pending operation review is restricted to its owning session and never rep
   );
   assert.equal((pending.data as any[]).length, 0);
 });
+test('controller task verification executes a pinned project oracle in an isolated candidate', async (t) => {
+  const handler = async (request: any) => ({
+    message: request.messages.some((m: any) => m.role === 'tool')
+      ? assistant('implemented answer')
+      : assistant('', [
+          {
+            id: 'oracle-write',
+            name: 'write_file',
+            args: { file_path: 'answer.txt', content: '42' },
+          },
+        ]),
+    usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+    },
+  });
+  const f = await setup(t, Array(15).fill(handler));
+  await mkdir(join(f.workspace, '.circle'));
+  await writeFile(
+    join(f.workspace, 'package.json'),
+    JSON.stringify({ scripts: { test: 'node verify.cjs' } }),
+  );
+  await writeFile(
+    join(f.workspace, 'verify.cjs'),
+    "if(require('node:fs').readFileSync('answer.txt','utf8')!=='42')process.exit(1)",
+  );
+  await writeFile(join(f.workspace, 'answer.txt'), '0');
+  await writeFile(
+    join(f.workspace, '.circle/verification.json'),
+    JSON.stringify({
+      version: 1,
+      checks: [
+        {
+          criterion: 'answer is 42',
+          script: 'test',
+          oraclePaths: ['verify.cjs'],
+        },
+      ],
+    }),
+  );
+  execFileSync('git', [
+    '-C',
+    f.workspace,
+    'add',
+    'package.json',
+    'verify.cjs',
+    'answer.txt',
+    '.circle/verification.json',
+  ]);
+  execFileSync('git', [
+    '-C',
+    f.workspace,
+    '-c',
+    'user.name=Fixture',
+    '-c',
+    'user.email=fixture@example.invalid',
+    'commit',
+    '-qm',
+    'Baseline',
+  ]);
+  const parent = f.controller.snapshot().activeSessionId;
+  const started = await f.service(
+    'tasks',
+    'enqueue',
+    {
+      operationId: 'controller-oracle',
+      tasks: [
+        {
+          id: 'oracle',
+          access: 'write',
+          prompt: 'write answer.txt with 42',
+          acceptanceCriteria: ['answer is 42'],
+        },
+      ],
+    },
+    parent,
+  );
+  assert.equal(started.ok, true, started.error);
+  let task: any;
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    for (const interaction of f.controller
+      .snapshot()
+      .interactions.filter((i) => i.status === 'pending'))
+      await f.call(
+        'answer',
+        {
+          id: interaction.id,
+          revision: interaction.revision,
+          answer: 'approve',
+        },
+        interaction.sessionId,
+      );
+    const list = await f.service('tasks', 'list', {}, parent);
+    task = (list.data as any[])?.[0];
+    if (task && ['succeeded', 'failed', 'needs_review'].includes(task.state))
+      break;
+    await delay(20);
+  }
+  assert.equal(task?.state, 'succeeded', JSON.stringify(task));
+  assert.equal(await readFile(join(f.workspace, 'answer.txt'), 'utf8'), '0');
+  assert.equal(await readFile(join(task.worktree, 'answer.txt'), 'utf8'), '42');
+});
