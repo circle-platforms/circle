@@ -1,6 +1,7 @@
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
 import { observePage, captureFailure } from './helpers/diagnostics.mjs';
 import { readViewport, setViewport } from './helpers/viewport.mjs';
+import { waitDesktopReady } from './helpers/desktop-readiness.mjs';
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
@@ -71,6 +72,116 @@ async function reset() {
   });
   await page
     .getByRole('heading', { name: 'Fix the reconnect race', exact: true })
+    .waitFor();
+}
+const homeMenuLayouts = [];
+async function checkHomeMenu(name, menu) {
+  if (name === 'project')
+    await page.waitForFunction(
+      () =>
+        document.activeElement?.getAttribute('aria-label') ===
+        'search projects',
+    );
+  await menu.getByRole('menuitem').first().focus();
+  await page.keyboard.press('End');
+  const { sample } = await waitDesktopReady(
+    () =>
+      menu.evaluate((content) => {
+        const rect = content.getBoundingClientRect();
+        const items = content.querySelectorAll('[role="menuitem"]');
+        const last = items[items.length - 1];
+        const item = last.getBoundingClientRect();
+        const style = getComputedStyle(content);
+        const clip = {
+          left: rect.left + parseFloat(style.borderLeftWidth),
+          right: rect.right - parseFloat(style.borderRightWidth),
+          top: rect.top + parseFloat(style.borderTopWidth),
+          bottom: rect.bottom - parseFloat(style.borderBottomWidth),
+        };
+        const inside =
+          rect.x >= 0 &&
+          rect.y >= 0 &&
+          rect.right <= innerWidth &&
+          rect.bottom <= innerHeight;
+        return {
+          theme: document.documentElement.dataset.theme,
+          side: content.getAttribute('data-side'),
+          viewport: {
+            width: innerWidth,
+            height: innerHeight,
+            dpr: devicePixelRatio,
+          },
+          rect: {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+          },
+          availableHeight: style.getPropertyValue(
+            '--radix-dropdown-menu-content-available-height',
+          ),
+          availableWidth: style.getPropertyValue(
+            '--radix-dropdown-menu-content-available-width',
+          ),
+          maxHeight: style.maxHeight,
+          scrollHeight: content.scrollHeight,
+          clientHeight: content.clientHeight,
+          scrollTop: content.scrollTop,
+          lastText: last.textContent,
+          lastRect: {
+            x: item.x,
+            y: item.y,
+            width: item.width,
+            height: item.height,
+          },
+          clip,
+          lastFocused: document.activeElement === last,
+          lastFullyVisible:
+            item.top >= clip.top &&
+            item.bottom <= clip.bottom &&
+            item.left >= clip.left &&
+            item.right <= clip.right,
+          inside,
+          positive: rect.width > 0 && rect.height > 0,
+        };
+      }),
+    (sample) =>
+      sample.positive &&
+      sample.inside &&
+      sample.lastFocused &&
+      sample.lastFullyVisible,
+    {
+      label: `home ${name} fits and its last item is reachable`,
+      timeoutMs: 10000,
+    },
+  );
+  assert.equal(sample.side, 'bottom');
+  assert.equal(sample.positive, true);
+  assert.equal(sample.inside, true);
+  assert.equal(sample.lastFocused, true);
+  assert.equal(sample.lastFullyVisible, true);
+  homeMenuLayouts.push({ name, ...sample });
+  await writeFile(
+    join(output, 'home-menu-layouts.json'),
+    JSON.stringify(homeMenuLayouts, null, 2),
+  );
+  await page.screenshot({
+    path: join(output, `home-menu-${sample.theme}-${name}.png`),
+  });
+}
+async function homeTheme(theme) {
+  await route('/page/settings');
+  await page.getByRole('button', { name: theme, exact: true }).click();
+  await page.waitForFunction(
+    (value) => document.documentElement.dataset.theme === value,
+    theme,
+  );
+  await route('/home');
+  await page
+    .getByRole('heading', {
+      name: 'what should we build in orbit-api?',
+      exact: true,
+    })
     .waitFor();
 }
 const expected = {
@@ -737,12 +848,23 @@ try {
     () => document.activeElement?.getAttribute('aria-label') === 'message',
   );
   checks.push('new session focuses the composer when home is already open');
+  const homeOriginalViewport = await readViewport(page);
+  const homeMenuViewport = await setViewport(application, page, {
+    width: 1024,
+    height: 684,
+  });
+  await writeFile(
+    join(output, 'home-menu-viewport.json'),
+    JSON.stringify(homeMenuViewport, null, 2),
+  );
+  await homeTheme('light');
   await page
     .getByRole('button', { name: 'approval mode', exact: true })
     .click();
   const modeMenu = page.locator('.mode-menu');
   await modeMenu.waitFor();
   assert.equal(await modeMenu.getAttribute('data-side'), 'bottom');
+  await checkHomeMenu('mode', modeMenu);
   await page.getByRole('menuitem', { name: /^manual/ }).waitFor();
   await page.keyboard.press('Escape');
   await page.waitForFunction(
@@ -752,6 +874,7 @@ try {
   const effortMenu = page.locator('.dropdown.footbar-menu');
   await effortMenu.waitFor();
   assert.equal(await effortMenu.getAttribute('data-side'), 'bottom');
+  await checkHomeMenu('effort', effortMenu);
   await page.getByRole('menuitem', { name: 'minimal', exact: true }).waitFor();
   await page.keyboard.press('Escape');
   await page.waitForFunction(
@@ -759,6 +882,14 @@ try {
   );
   checks.push(
     'home menus open downward and escape returns focus to the composer',
+  );
+  await page.getByRole('button', { name: 'model', exact: true }).click();
+  const homeModelMenu = page.locator('.dropdown.footbar-menu');
+  await homeModelMenu.waitFor();
+  await checkHomeMenu('model', homeModelMenu);
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(
+    () => document.activeElement?.getAttribute('aria-label') === 'message',
   );
   await thinking.click();
   await page.getByRole('menuitem', { name: 'extra high', exact: true }).click();
@@ -772,6 +903,7 @@ try {
   const projectMenu = page.locator('.project-menu');
   await projectMenu.waitFor();
   assert.equal(await projectMenu.getAttribute('data-side'), 'bottom');
+  await checkHomeMenu('project', projectMenu);
   await page
     .getByRole('textbox', { name: 'search projects', exact: true })
     .fill('zzznomatch');
@@ -792,6 +924,24 @@ try {
   checks.push(
     'a project search with no matches keeps open folder and no project',
   );
+  await homeTheme('dark');
+  for (const [name, label, selector] of [
+    ['mode', 'approval mode', '.mode-menu'],
+    ['effort', 'thinking depth', '.dropdown.footbar-menu'],
+    ['model', 'model', '.dropdown.footbar-menu'],
+    ['project', 'choose a project', '.project-menu'],
+  ]) {
+    await page.getByRole('button', { name: label, exact: true }).click();
+    const opened = page.locator(selector);
+    await opened.waitFor();
+    await checkHomeMenu(name, opened);
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(
+      () => document.activeElement?.getAttribute('aria-label') === 'message',
+    );
+  }
+  await homeTheme('light');
+  await setViewport(application, page, homeOriginalViewport);
   const heldDraft = page.getByRole('textbox', { name: 'message', exact: true });
   await heldDraft.fill('hold this');
   await projectButton.click();

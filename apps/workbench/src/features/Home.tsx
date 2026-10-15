@@ -331,8 +331,10 @@ export function Home({
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
                 <DropdownMenu.Content
-                  className="dropdown project-menu"
+                  className="dropdown project-menu home-menu"
                   side="bottom"
+                  avoidCollisions={false}
+                  collisionPadding={8}
                   align="start"
                   sideOffset={7}
                   onCloseAutoFocus={(event) => {

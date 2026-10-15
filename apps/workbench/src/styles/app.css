@@ -4216,6 +4216,30 @@ pre {
   justify-content: space-between;
   gap: 12px;
 }
+.dropdown.home-menu {
+  --home-menu-width: max(
+    1px,
+    var(--radix-dropdown-menu-content-available-width, calc(100vw - 16px))
+  );
+  --home-menu-height: max(
+    1px,
+    var(--radix-dropdown-menu-content-available-height, calc(100dvh - 16px))
+  );
+  max-width: var(--home-menu-width);
+  max-height: var(--home-menu-height);
+  overflow: auto;
+  scroll-padding-block: 5px;
+}
+.dropdown.home-menu.mode-menu {
+  min-width: min(290px, var(--home-menu-width));
+}
+.dropdown.home-menu.footbar-menu {
+  min-width: min(220px, var(--home-menu-width));
+  max-height: min(360px, var(--home-menu-height));
+}
+.dropdown.home-menu.project-menu {
+  min-width: min(260px, var(--home-menu-width));
+}
 .dropdown-separator {
   height: 1px;
   margin: 5px 4px;
