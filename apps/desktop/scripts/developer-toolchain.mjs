@@ -160,19 +160,30 @@ export async function prepareDeveloperTools(
   try {
     for (const spec of specs) {
       const destination = join(tools, spec.name);
+      const entry =
+        spec.name === 'node'
+          ? join('bin', platform === 'win32' ? 'node.exe' : 'node')
+          : spec.name === 'gh'
+            ? join('bin', platform === 'win32' ? 'gh.exe' : 'gh')
+            : join('src', 'dapDebugServer.js');
       // Only a verified receipt permits cache reuse; no system executable fallback.
       try {
         const cached = JSON.parse(
           await readFile(join(destination, 'circle-tool.json'), 'utf8'),
         );
         if (
+          cached.version === spec.version &&
+          cached.files?.[entry] &&
           cached.sha256 === spec.sha256 &&
           cached.target === target &&
           cached.format === 1 &&
           JSON.stringify(cached.files) ===
             JSON.stringify(await fileHashes(destination))
-        )
+        ) {
+          if (platform !== 'win32' && spec.name !== 'js-debug')
+            await chmod(join(destination, entry), 0o755);
           continue;
+        }
       } catch {}
       const bytes = await fetchArchive(spec.base + spec.file);
       verifyArchive(bytes, spec.sha256);

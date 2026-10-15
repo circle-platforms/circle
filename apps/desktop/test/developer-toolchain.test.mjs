@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { resetDesktopOutput } from '../scripts/build-output.mjs';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
@@ -107,3 +108,64 @@ test(
       assert.ok((await stat(join(folder, 'spawn-helper'))).mode & 0o111);
   },
 );
+
+test('desktop build cleanup preserves the tool cache and removes every old generated output', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-build-cache-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const tools = join(root, 'tools/node/bin');
+  await mkdir(tools, { recursive: true });
+  await writeFile(join(tools, 'node'), 'cached executable bytes');
+  await writeFile(
+    join(root, 'tools/node/circle-tool.json'),
+    '{"receipt":"preserved for revalidation"}',
+  );
+  await mkdir(join(root, 'renderer/assets'), { recursive: true });
+  await writeFile(join(root, 'renderer/assets/stale.js'), 'obsolete renderer');
+  await writeFile(join(root, 'main.cjs'), 'obsolete main');
+  await resetDesktopOutput(root);
+  assert.equal(
+    await readFile(join(tools, 'node'), 'utf8'),
+    'cached executable bytes',
+  );
+  assert.equal(
+    await readFile(join(root, 'tools/node/circle-tool.json'), 'utf8'),
+    '{"receipt":"preserved for revalidation"}',
+  );
+  await assert.rejects(stat(join(root, 'main.cjs')), { code: 'ENOENT' });
+  await assert.rejects(stat(join(root, 'renderer')), { code: 'ENOENT' });
+  await resetDesktopOutput(root);
+  assert.equal(
+    await readFile(join(tools, 'node'), 'utf8'),
+    'cached executable bytes',
+  );
+});
+
+test('an incomplete matching tool receipt cannot suppress preparation of a missing executable', async (t) => {
+  const dist = await mkdtemp(join(tmpdir(), 'circle-empty-tool-cache-'));
+  t.after(() => rm(dist, { recursive: true, force: true }));
+  await mkdir(join(dist, 'tools/node'), { recursive: true });
+  await writeFile(
+    join(dist, 'tools/node/circle-tool.json'),
+    JSON.stringify({
+      version: '24.21.0',
+      target: 'darwin-arm64',
+      format: 1,
+      sha256:
+        'bed7eea5325e1108f32ce5228ddd6a5f0f08a499ee42aa7442aea583702f6057',
+      files: {},
+    }),
+  );
+  let requested;
+  await assert.rejects(
+    prepareDeveloperTools(dist, {
+      platform: 'darwin',
+      arch: 'arm64',
+      fetchArchive: async (url) => {
+        requested = url;
+        throw Error('fixture download reached');
+      },
+    }),
+    /fixture download reached/,
+  );
+  assert.match(requested, /node-v24\.21\.0-darwin-arm64/);
+});
