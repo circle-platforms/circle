@@ -505,6 +505,12 @@ export function reasoningSummary(text: string): {
 // when its text is folded away; expanded, the text follows in faint. The row is not
 // tinted: blue is the terminal's slot, so it follows a dark or a light theme, and the
 // body is `faint`, already held to a contrast floor on that background.
+function visibleThought(text: string): boolean {
+  return (
+    text.replace(/[\s\u200b\u200c\u200d\ufeff\u2060\u00ad]/g, '').length > 0
+  );
+}
+
 export function thinkingRows(
   text: string,
   options: {
@@ -514,11 +520,13 @@ export function thinkingRows(
     width: number;
   },
 ): string[] {
+  if (!visibleThought(text)) return [];
   const p = palette();
   const { title, body } = reasoningSummary(text);
+  const seconds =
+    options.done && options.seconds !== undefined ? options.seconds : undefined;
   let header = options.done ? '∴ Thought' : '∴ Thinking';
-  if (options.done && options.seconds !== undefined)
-    header += ` ${formatBusyElapsed(options.seconds)}`;
+  if (seconds !== undefined) header += ` ${formatBusyElapsed(seconds)}`;
   if (title) header += ` · ${title}`;
   const style = sgrJoin(options.expanded ? p.reason_dim : p.reason, '\x1b[3m');
   const head: [string, string][] = [
@@ -527,10 +535,7 @@ export function thinkingRows(
   ];
   if (body && !options.expanded)
     head.push(
-      [
-        '',
-        options.done && options.seconds === undefined && !title ? ' ' : '  ',
-      ],
+      ['', options.done && seconds === undefined && !title ? ' ' : '  '],
       [p.faint, 'ctrl+t'],
     );
   const rows = [tintedRow(head, '', options.width)];

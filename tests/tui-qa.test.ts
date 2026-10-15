@@ -17,6 +17,7 @@ import { variableCopy, hotkeysText } from '../src/tui/slash_commands.js';
 import { Picker } from '../src/ink/components/picker.js';
 import { DEFAULT_DARK, buildPalette, setPalette } from '../src/ink/theme.js';
 import { SessionApp } from '../src/tui/session_app.js';
+import { AgentRuntime } from '../src/runtime.js';
 import { ScriptedModel } from '../src/testing.js';
 import { defaultSettings } from '../src/settings.js';
 import { emptyUsage, type ChatModel, type ModelRequest } from '../src/types.js';
@@ -208,6 +209,60 @@ test('renaming a session does not move it above a newer one', async (t) => {
   assert.deepEqual(
     store.list().map((session) => session.id),
     [newer.id, older.id],
+  );
+});
+
+test('opening a session does not move it above a later message', async (t) => {
+  const home = scratch(t);
+  const store = new CheckpointStore(home);
+  cleanup(t, () => store.close());
+  const older = store.create(home, 'model', 'older');
+  store.append(older.id, [
+    { id: 'u', role: 'user', content: 'first question from earlier today' },
+    { id: 'a', role: 'assistant', content: 'done' },
+  ]);
+  await delay(5);
+  const newer = store.create(home, 'model', 'newer');
+  store.append(newer.id, [
+    { id: 'u2', role: 'user', content: 'second question from later today' },
+    { id: 'a2', role: 'assistant', content: 'done' },
+  ]);
+  const order = [newer.id, older.id];
+  assert.deepEqual(
+    store.list().map((session) => session.id),
+    order,
+  );
+  store.append(older.id, [
+    {
+      id: 'mark',
+      role: 'user',
+      content: 'opened',
+      display: 'Interrupted',
+      internal: 'interrupted',
+    },
+  ]);
+  store.rename(older.id, 'repaired title');
+  assert.deepEqual(
+    store.list().map((session) => session.id),
+    order,
+  );
+  store.close();
+  const settings = defaultSettings();
+  settings.default_mode = 'plan';
+  const runtime = new AgentRuntime({
+    workspace: home,
+    home,
+    settings,
+    model: new ScriptedModel([]),
+    session: older.id,
+    headless: true,
+    localContext: false,
+    bundledExtensions: false,
+  });
+  cleanup(t, () => runtime.close());
+  assert.deepEqual(
+    runtime.store.list().map((session) => session.id),
+    order,
   );
 });
 

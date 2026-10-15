@@ -224,7 +224,11 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
     );
   };
   const thinking = (text: string, done: boolean, seconds?: number): void => {
-    if (!state.showThinking || !text.trim()) return;
+    if (
+      !state.showThinking ||
+      !text.replace(/[\s\u200b\u200c\u200d\ufeff\u2060\u00ad]/g, '')
+    )
+      return;
     gap('thinking');
     rows.push(
       ...thinkingRows(text, {

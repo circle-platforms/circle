@@ -29,6 +29,11 @@ export interface Session {
   head: string | null;
   created: number;
   updated: number;
+  /**
+   * When the last user or assistant message was written. `list` fills this in.
+   * Opening a session, a title repair and an internal marker do not move it.
+   */
+  activity?: number;
   parent_id: string | null;
   /** 1 after /name or /rename. Automatic titles stay unset and can be replaced. */
   title_locked?: number;
@@ -344,15 +349,21 @@ export class CheckpointStore {
     return unique[0];
   }
   list(workspace?: string, includeChildren = false): Session[] {
+    // Last message, not last open. A mode boundary or an interrupted marker
+    // written while opening must not jump the row to the top.
+    const activity = `COALESCE((SELECT MAX(c.created) FROM checkpoints c WHERE c.session_id = sessions.id AND json_extract(c.message, '$.role') IN ('user', 'assistant') AND IFNULL(json_extract(c.message, '$.internal'), '') = ''), sessions.created)`;
+    const hidden = includeChildren
+      ? ''
+      : "AND parent_id IS NULL AND NOT (head IS NULL AND title = '')";
     return (workspace
       ? this.db
           .prepare(
-            `SELECT * FROM sessions WHERE workspace = ? ${includeChildren ? '' : "AND parent_id IS NULL AND NOT (head IS NULL AND title = '')"} ORDER BY updated DESC`,
+            `SELECT sessions.*, ${activity} AS activity FROM sessions WHERE workspace = ? ${hidden} ORDER BY activity DESC, sessions.created DESC`,
           )
           .all(normalizeWorkspace(workspace))
       : this.db
           .prepare(
-            `SELECT * FROM sessions ${includeChildren ? '' : "WHERE parent_id IS NULL AND NOT (head IS NULL AND title = '')"} ORDER BY updated DESC`,
+            `SELECT sessions.*, ${activity} AS activity FROM sessions WHERE 1 = 1 ${hidden} ORDER BY activity DESC, sessions.created DESC`,
           )
           .all()) as unknown as Session[];
   }

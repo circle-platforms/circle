@@ -33,6 +33,7 @@ import type {
 } from '../ink/components/picker.js';
 import { palette } from '../ink/theme.js';
 import { stripAnsi } from '../ink/string_width.js';
+import { sessionRowLabel } from './session_label.js';
 import {
   isSessionMode,
   SESSION_MODES,
@@ -1420,9 +1421,14 @@ async function openSession(host: CommandHost, id: string): Promise<void> {
   if (host.openSession) await host.openSession(id);
   else await runtime.switchSession(id);
   host.previousSession = previous;
+  const title = (
+    host.runtime.store.get(host.runtime.session.id)?.title ||
+    source?.title ||
+    id
+  ).slice(0, 40);
   host.notice(
     host.runtime.session.id === id
-      ? `Resumed ${id} · ${(source?.title || id).slice(0, 40)}`
+      ? `Resumed ${id} · ${title}`
       : `Forked ${id} from ${shortPath(source?.workspace ?? '')} → ${host.runtime.session.id}`,
   );
 }
@@ -1472,13 +1478,19 @@ function sessionList(
   const sessions = everywhere
     ? runtime.store.list()
     : runtime.store.list(host.workspace);
+  const labels = new Map(
+    sessions.map((session) => [
+      session.id,
+      sessionRowLabel(session, sessions, runtime.store),
+    ]),
+  );
   host.picker(
     everywhere ? 'Sessions · every folder' : 'Sessions · this folder',
     sessions.map((session) => ({
       key: session.id,
-      label: session.title || '(untitled)',
+      label: labels.get(session.id) || session.title || '(untitled)',
       meta:
-        sessionAge(session.updated) +
+        sessionAge(session.activity ?? session.updated) +
         (host.sessionStatus?.(session.id)
           ? ` · ${host.sessionStatus(session.id)}`
           : '') +
@@ -1507,9 +1519,10 @@ function sessionList(
         // Both ask in the list; esc there leaves the session as it was.
         'ctrl+r': (item) => {
           if (!item) return;
+          const stored = runtime.store.get(item.key)?.title ?? '';
           host.state.picker?.ask(
             'Rename',
-            item.label === '(untitled)' ? '' : item.label,
+            stored,
             (text) => {
               const title = text.trim().replace(/\s+/g, ' ').slice(0, 80);
               if (!title) return;
@@ -1524,7 +1537,11 @@ function sessionList(
         },
         'ctrl+k': (item) => {
           if (!item) return;
-          const label = item.label.slice(0, 40);
+          const label = (
+            runtime.store.get(item.key)?.title ||
+            item.label.split(' · ')[0] ||
+            item.label
+          ).slice(0, 40);
           host.state.picker?.confirm(
             `${host.sessionStatus?.(item.key) ? 'Stop and delete' : 'Delete'} “${label}” and its messages?`,
             async () => {

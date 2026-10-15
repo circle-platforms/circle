@@ -1,5 +1,5 @@
 import { palette, sgrJoin } from '../theme.js';
-import { pad, truncate } from '../string_width.js';
+import { pad, stringWidth, truncate } from '../string_width.js';
 import { printable } from './dialog_card.js';
 export interface PickerItem {
   key: string;
@@ -244,17 +244,24 @@ export class Picker {
           ),
         );
     }
+    const headOf = (item: PickerItem): string =>
+      `${item.current ? '● ' : ''}${item.label}${item.current ? ' · current' : ''}`;
+    // The time (or any meta) starts in one column. CJK titles are wider than
+    // their character count, so the pad uses display width.
+    const metas = shown.some((item) => item.meta);
+    const widest = Math.max(
+      0,
+      ...shown.map((item) => stringWidth(headOf(item))),
+    );
+    const column = metas ? Math.min(widest, Math.max(8, width - 3 - 8)) : 0;
     shown.slice(top, top + maximum).forEach((item, index) => {
       const marked = index + top === this.focus;
+      const head = headOf(item);
+      const body = metas ? pad(truncate(head, column), column) : head;
+      const meta = item.meta ? `  ${item.meta}` : '';
       rows.push(
         sgrJoin(marked ? p.sel_bg : p.panel_bg, p.text) +
-          pad(
-            truncate(
-              ` ${marked ? '>' : ' '} ${item.current ? '● ' : ''}${item.label}${item.current ? ' · current' : ''}  ${item.meta || ''}`,
-              width,
-            ),
-            width,
-          ) +
+          pad(truncate(` ${marked ? '>' : ' '} ${body}${meta}`, width), width) +
           p.reset,
       );
     });

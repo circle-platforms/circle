@@ -65,7 +65,7 @@ import { addUsage, emptyUsage } from './types.js';
 import { UserShells } from './user_shell.js';
 import { toolCallLine } from './headless.js';
 import { canScreenshot, type ScreenshotOptions } from './screenshot.js';
-import { firstUserSource, titleNeedsRefresh } from './session_title.js';
+import { titleNeedsRefresh, userPrompts } from './session_title.js';
 const BUILTIN_TOOL_NAMES = new Set([
   'ls',
   'read_file',
@@ -1386,22 +1386,59 @@ export class AgentRuntime {
   }
   /**
    * Ask again when a finished session still has the trimmed first message, a
-   * cut-off prompt, or a title that reads as work already done. A greeting is
-   * not worth a request. A name from /name stays.
+   * cut of that message, several messages stuck together, or a title that
+   * reads as work already done. A greeting is not worth a request. A name
+   * from /name stays.
    */
   private refreshFallbackTitle(): void {
-    const session = this.store.get(this.session.id);
-    if (!session?.title || !session.head || session.title_locked) return;
+    void this.retitleSession(this.session.id);
+  }
+  /**
+   * The welcome list shows three other sessions. Ask for those titles once, one
+   * at a time, when a reply is already stored and the name is not locked.
+   * Opening them is not required. A model with no side request is left alone.
+   */
+  repairRecentTitles(): void {
+    if (this.closing || !this.harness.model.sideRequests) return;
+    const pending = this.store
+      .list(this.options.workspace)
+      .filter((session) => session.id !== this.session.id)
+      .slice(0, 3);
+    if (!pending.length) return;
+    void this.repairRecent(pending.map((session) => session.id));
+  }
+  private repairingRecent = false;
+  private async repairRecent(ids: string[]): Promise<void> {
+    if (this.repairingRecent) return;
+    this.repairingRecent = true;
+    try {
+      for (const id of ids) {
+        if (this.closing) return;
+        await this.retitleSession(id);
+      }
+    } finally {
+      this.repairingRecent = false;
+    }
+  }
+  private retitleSession(id: string): Promise<void> {
+    const session = this.store.get(id);
+    if (!session?.title || !session.head || session.title_locked)
+      return Promise.resolve();
     let messages;
     try {
       messages = this.store.messages(session.id);
     } catch {
-      return;
+      return Promise.resolve();
     }
-    const source = firstUserSource(messages);
-    if (!source || !titleNeedsRefresh(session.title, source)) return;
-    if (!messages.some((message) => message.role === 'assistant')) return;
-    this.harness.retitle(source, session.title);
+    const prompts = userPrompts(messages);
+    const source = prompts[0];
+    if (
+      !source ||
+      !titleNeedsRefresh(session.title, source, prompts.slice(1)) ||
+      !messages.some((message) => message.role === 'assistant')
+    )
+      return Promise.resolve();
+    return this.harness.retitle(prompts.join('\n'), session.title, session.id);
   }
   exportSession(): string {
     if (

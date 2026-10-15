@@ -365,7 +365,11 @@ export class Harness {
    * not a title. The prompt is wrapped as data, and a reply that answers the
    * user is discarded.
    */
-  private generateTitle(display: string, fallback: string): void {
+  private generateTitle(
+    display: string,
+    fallback: string,
+    sessionId = this.sessionId,
+  ): Promise<void> {
     // `this.model`, not the model passed at construction: /model and a reload replace it.
     const model = this.model;
     const prompt = display.trim();
@@ -381,17 +385,17 @@ export class Harness {
     const skip = titleSkipReason(prompt, model.sideRequests);
     if (skip === 'prompt too short') {
       titleTrace(`skipped (${skip})`);
-      return;
+      return Promise.resolve();
     }
     if (skip) {
       titleTrace(`skipped (${skip})`);
       report(skip);
-      return;
+      return Promise.resolve();
     }
     titleTrace(
       `request model=${model.model} chars=${prompt.length} maxTokens=${Harness.titleOutputTokens} thinking=disabled`,
     );
-    void model
+    return model
       .complete({
         system: readPrompt('agent', 'title.md'),
         messages: [
@@ -418,16 +422,19 @@ export class Harness {
           return;
         }
         const title = decision.title;
-        const current = this.options.store.get(this.sessionId);
-        if (!current || current.title !== fallback) {
-          titleTrace(
-            `discarded ${JSON.stringify(title)} (session title is ${JSON.stringify(current?.title ?? '')})`,
-          );
+        const current = this.options.store.get(sessionId);
+        if (!current || current.title_locked) return;
+        if (current.title !== fallback) {
+          // A repair that finished first already renamed it. The resume line
+          // still has the old title until this event.
+          this.bus.emit('info', {
+            payload: { title: current.title, session_id: sessionId },
+          });
           return;
         }
-        this.options.store.rename(this.sessionId, title);
+        this.options.store.rename(sessionId, title);
         titleTrace(`renamed to ${JSON.stringify(title)}`);
-        this.bus.emit('info', { payload: { title } });
+        this.bus.emit('info', { payload: { title, session_id: sessionId } });
       })
       .catch((error: unknown) => {
         // The fallback title stays. A side request must not fail the turn.
@@ -440,9 +447,16 @@ export class Harness {
       (this.thinkingAt !== undefined
         ? (Date.now() - this.thinkingAt) / 1000
         : undefined);
+    const thought = this.streamedThinking.replace(
+      /[\s\u200b\u200c\u200d\ufeff\u2060\u00ad]/g,
+      '',
+    );
     this.thinkingAt = undefined;
     this.thinkingSeconds = undefined;
-    return seconds === undefined ? {} : { thinking_seconds: seconds };
+    // An empty thinking token is not a thought. A real one keeps its clock,
+    // including a short one.
+    if (seconds === undefined || !thought) return {};
+    return { thinking_seconds: seconds };
   }
   /** What this step was about to send, when the endpoint never reported input tokens. */
   private estimateInputTokens(): number {
@@ -458,9 +472,18 @@ export class Harness {
   /**
    * Ask again for a title that is still the trimmed first message. The caller
    * has already checked that a turn was answered. A short prompt stays quiet.
+   * `sessionId` names another session when the recent list is repaired.
    */
-  retitle(display: string, storedTitle: string): void {
-    this.generateTitle(display, storedTitle);
+  retitle(
+    display: string,
+    storedTitle: string,
+    sessionId?: string,
+  ): Promise<void> {
+    return this.generateTitle(
+      display,
+      storedTitle,
+      sessionId ?? this.sessionId,
+    );
   }
   private flushTitle(): void {
     const pending = this.pendingTitle;
@@ -494,7 +517,9 @@ export class Harness {
     if (!session.title && shown?.display !== undefined) {
       const fallback = fallbackTitle(shown.display);
       this.options.store.rename(this.sessionId, fallback);
-      this.bus.emit('info', { payload: { title: fallback } });
+      this.bus.emit('info', {
+        payload: { title: fallback, session_id: this.sessionId },
+      });
       this.pendingTitle = { display: shown.display, fallback };
     }
     this.bus.emit('run_start', { payload: { message: prompt } });
@@ -551,8 +576,14 @@ export class Harness {
               this.bus.emit('info', { payload: { model_notice: event } }),
             token: (text, thinking) => {
               if (thinking) {
-                this.streamedThinking += text;
-                this.thinkingAt ??= Date.now();
+                const visible = text.replace(
+                  /[\s\u200b\u200c\u200d\ufeff\u2060\u00ad]/g,
+                  '',
+                );
+                if (visible) {
+                  this.streamedThinking += text;
+                  this.thinkingAt ??= Date.now();
+                }
               } else {
                 if (
                   this.thinkingAt !== undefined &&

@@ -779,6 +779,34 @@ export class SessionApp {
     this.addNotice(text);
     this.repaint();
   }
+  /** The resume line is written before a title repair returns. Replace it. */
+  private retitleNotice(sessionId: string, title: string): void {
+    const line = title.replace(/\s+/g, ' ').trim().slice(0, 40);
+    if (!sessionId || !line) return;
+    const escaped = sessionId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(
+      `^((?:Resumed|Continued) ${escaped})(?: · .*|)$`,
+    );
+    // The repair can finish on the runtime that started it, after the screen
+    // has moved to the opened session.
+    const states = [this.selectedView.state];
+    if (this.view.state !== this.selectedView.state)
+      states.push(this.view.state);
+    let changed = false;
+    for (const state of states) {
+      for (let index = state.notices.length - 1; index >= 0; index--) {
+        const note = state.notices[index];
+        const match = note?.match(pattern);
+        if (!match?.[1]) continue;
+        const next = `${match[1]} · ${line}`;
+        if (note === next) return;
+        state.notices[index] = next;
+        changed = true;
+        break;
+      }
+    }
+    if (changed) this.repaint();
+  }
   // A notice goes after the message on screen when it came, not under everything that
   // arrives later: `''` before the first message, nothing when no session is open yet.
   private addNotice(text: string): void {
@@ -940,6 +968,7 @@ export class SessionApp {
       this.fail(
         `Could not migrate ${error.thread || 'legacy data'}: ${error.message}`,
       );
+    runtime.repairRecentTitles();
     this.repaint();
   }
   private createRuntime(
@@ -1151,7 +1180,14 @@ export class SessionApp {
               this.notice('Model response may be truncated');
             else if (notice.event === 'repetition_stopped')
               this.notice('Model output was repeating; stopped the stream');
-          }
+          } else if (
+            event.kind === 'info' &&
+            typeof event.payload.title === 'string'
+          )
+            this.retitleNotice(
+              String(event.payload.session_id ?? event.run_id ?? ''),
+              String(event.payload.title),
+            );
           if (coalesce) this.requestRender();
           else this.repaint();
         });

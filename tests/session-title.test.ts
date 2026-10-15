@@ -20,6 +20,7 @@ import {
   titleConversation,
   titleNeedsRefresh,
   titleWorthy,
+  userPrompts,
 } from '../src/session_title.js';
 import { defaultSettings, saveCredentials } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
@@ -175,6 +176,45 @@ test('generated titles keep one short phrase and drop a reply', () => {
     false,
   );
   assert.equal(titleNeedsRefresh('hi', 'hi'), false);
+  assert.equal(
+    titleNeedsRefresh(
+      'hiFib demo',
+      'hiFib demonstration of tail recursion that prints a few numbers',
+    ),
+    true,
+  );
+  assert.equal(
+    titleNeedsRefresh(
+      'please explain to me briefly in two',
+      'please explain to me briefly in two sentences how this works today',
+    ),
+    true,
+  );
+  assert.equal(
+    titleNeedsRefresh('hiFib demo', 'hi', ['Fib demo of tail recursion']),
+    true,
+  );
+  assert.equal(
+    titleNeedsRefresh('please explain to me briefly in two', 'please explain', [
+      'to me briefly in two sentences how this works today',
+    ]),
+    true,
+  );
+  assert.equal(
+    titleNeedsRefresh('hi', 'hi', ['please explain tail recursion in detail']),
+    false,
+  );
+  assert.deepEqual(
+    userPrompts([
+      {
+        role: 'user',
+        display: 'please explain to me briefly in two',
+        content:
+          'please explain to me briefly in two sentences how this works today',
+      },
+    ]),
+    ['please explain to me briefly in two sentences how this works today'],
+  );
   assert.equal(sanitizeGeneratedTitle('请提供文件内容'), undefined);
   assert.equal(sanitizeGeneratedTitle('你可以粘贴一下'), undefined);
   assert.equal(titleWorthy('hi'), false);
@@ -1170,4 +1210,148 @@ test('opening a finished session replaces a cut-off or done-sounding title', asy
     kept.runtime.store.get(chosen.id)!.title,
     'Creating hello.txt with hi',
   );
+});
+
+test('opening repairs a mid-word cut, a shown cut, and a glued title', async (t) => {
+  const root = scratch(t);
+  const store = new CheckpointStore(root);
+  const fib = 'hiFib demonstration of tail recursion that prints a few numbers';
+  const explain =
+    'please explain to me briefly in two sentences how this works today';
+  const demo = store.create(root, 'scripted');
+  store.append(demo.id, [
+    { id: 'u', role: 'user', content: fib },
+    { id: 'a', role: 'assistant', content: 'Here is the demo.' },
+  ]);
+  store.rename(demo.id, 'hiFib demo');
+  const shown = store.create(root, 'scripted');
+  store.append(shown.id, [
+    {
+      id: 'u2',
+      role: 'user',
+      display: 'please explain to me briefly in two',
+      content: explain,
+    },
+    { id: 'a2', role: 'assistant', content: 'Two sentences.' },
+  ]);
+  store.rename(shown.id, 'please explain to me briefly in two');
+  const glued = store.create(root, 'scripted');
+  store.append(glued.id, [
+    { id: 'u3', role: 'user', content: 'hi' },
+    { id: 'a3', role: 'assistant', content: 'Hello.' },
+    { id: 'u4', role: 'user', content: 'Fib demo of tail recursion' },
+    { id: 'a4', role: 'assistant', content: 'Here it is.' },
+  ]);
+  store.rename(glued.id, 'hiFib demo');
+  store.close();
+  for (const id of [demo.id, shown.id, glued.id]) {
+    const model = new TitleModel('done', 'Tail recursion');
+    const runtime = new AgentRuntime({
+      workspace: root,
+      home: root,
+      settings: defaultSettings(),
+      model,
+      session: id,
+      headless: true,
+      localContext: false,
+      bundledExtensions: false,
+    });
+    cleanup(t, () => runtime.close());
+    assert.equal(
+      model.requests.filter(
+        (request) => request.maxTokens === Harness.titleOutputTokens,
+      ).length,
+      1,
+    );
+    model.releaseTitle();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(runtime.store.get(id)!.title, 'Tail recursion');
+  }
+});
+
+test('startup repairs a visible title and the resume line follows it', async (t) => {
+  const root = scratch(t);
+  const store = new CheckpointStore(root);
+  const explain =
+    'please explain to me briefly in two sentences how this works today';
+  const kept = store.create(root, 'title-model', 'older topic');
+  store.append(kept.id, [
+    {
+      id: 'u2',
+      role: 'user',
+      content: 'an earlier question about the build system',
+    },
+    { id: 'a2', role: 'assistant', content: 'earlier' },
+  ]);
+  await delay(5);
+  const cut = store.create(
+    root,
+    'title-model',
+    'please explain to me briefly in two',
+  );
+  store.append(cut.id, [
+    {
+      id: 'u',
+      role: 'user',
+      display: 'please explain to me briefly in two',
+      content: explain,
+    },
+    { id: 'a', role: 'assistant', content: 'Two sentences follow.' },
+  ]);
+  store.close();
+  const settings = defaultSettings();
+  const model = new TitleModel('done', 'Brief explanation');
+  const app = new SessionApp(root, root, settings);
+  const ui = app as unknown as {
+    screen: { render: () => void };
+    flashTimer?: ReturnType<typeof setTimeout>;
+    input: { close: () => void };
+    interactions: { close: () => void };
+    off?: () => void;
+    offSignals?: () => void;
+  };
+  ui.screen.render = () => {};
+  await app.attach({
+    workspace: root,
+    home: root,
+    settings,
+    model,
+    headless: true,
+  });
+  cleanup(t, async () => {
+    ui.off?.();
+    ui.offSignals?.();
+    if (ui.flashTimer) clearTimeout(ui.flashTimer);
+    ui.input.close();
+    ui.interactions.close();
+    await app.runtime?.close();
+  });
+  const titleCalls = () =>
+    model.requests.filter(
+      (request) => request.maxTokens === Harness.titleOutputTokens,
+    );
+  await until(() => titleCalls().length >= 1);
+  assert.equal(
+    app.runtime!.store.get(cut.id)!.title,
+    'please explain to me briefly in two',
+  );
+  const order = app.runtime!.store.list().map((session) => session.id);
+  assert.equal(order[0], cut.id);
+  await app.submit(`/resume ${cut.id}`);
+  assert.match(
+    app.state.notices.at(-1) ?? '',
+    /please explain to me briefly in two/,
+  );
+  model.releaseTitle();
+  await until(
+    () => app.runtime!.store.get(cut.id)!.title === 'Brief explanation',
+  );
+  await until(() =>
+    (app.state.notices.at(-1) ?? '').includes('Brief explanation'),
+  );
+  assert.deepEqual(
+    app.runtime!.store.list().map((session) => session.id),
+    order,
+  );
+  assert.equal(app.runtime!.store.get(kept.id)!.title, 'older topic');
 });

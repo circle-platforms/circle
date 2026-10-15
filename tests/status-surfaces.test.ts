@@ -765,6 +765,28 @@ test('thinking rows have no background on a dark theme and on a light one', () =
   }
 });
 
+test('a rejection with no thought does not draw Thought 0.0s', () => {
+  for (const text of ['', ' ', '\n', '\u200b'])
+    assert.deepEqual(
+      thinkingRows(text, {
+        done: true,
+        seconds: 0,
+        expanded: false,
+        width: 80,
+      }),
+      [],
+    );
+  const row = stripAnsi(
+    thinkingRows('**Check the notes**\n\nThe file has three lines.', {
+      done: true,
+      seconds: 1.2,
+      expanded: false,
+      width: 80,
+    })[0]!,
+  );
+  assert.match(row, /∴ Thought 1\.2s · Check the notes/);
+});
+
 test('a finished call that omitted cache fields reads cache N/A', async (t) => {
   const root = scratch(t);
   const settings = trustFolder(defaultSettings(), root);

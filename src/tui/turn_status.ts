@@ -109,11 +109,17 @@ export class TurnStatus {
       this.thinkingFrom = this.live = undefined;
       this.liveChars = 0;
     } else if (event.kind === 'llm_token') {
-      if (event.payload.thinking) this.thinkingFrom ??= now;
-      else {
+      const token = String(event.payload.text ?? '');
+      const visible = token.replace(
+        /[\s\u200b\u200c\u200d\ufeff\u2060\u00ad]/g,
+        '',
+      );
+      if (event.payload.thinking) {
+        if (visible) this.thinkingFrom ??= now;
+      } else {
         if (this.thinkingFrom !== undefined && this.live === undefined)
           this.live = (now - this.thinkingFrom) / 1000;
-        this.liveChars += String(event.payload.text ?? '').length;
+        this.liveChars += token.length;
       }
     } else if (event.kind === 'llm_end') {
       const message = event.payload.message as Message | undefined;
@@ -151,8 +157,13 @@ export class TurnStatus {
     if (event.kind === 'llm_start') this.agents.delete(agent);
     else if (event.kind === 'llm_token') {
       const round = this.agents.get(agent) ?? {};
-      if (event.payload.thinking) round.from ??= now;
-      else if (round.from !== undefined && round.live === undefined)
+      const visible = String(event.payload.text ?? '').replace(
+        /[\s\u200b\u200c\u200d\ufeff\u2060\u00ad]/g,
+        '',
+      );
+      if (event.payload.thinking) {
+        if (visible) round.from ??= now;
+      } else if (round.from !== undefined && round.live === undefined)
         round.live = (now - round.from) / 1000;
       this.agents.set(agent, round);
     } else if (event.kind === 'llm_end') {

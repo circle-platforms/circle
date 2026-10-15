@@ -12,7 +12,7 @@ import type { AddressInfo } from 'node:net';
 import { homedir } from 'node:os';
 import { join, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { stripAnsi } from '../src/ink/string_width.js';
+import { stringWidth, stripAnsi } from '../src/ink/string_width.js';
 import type { Picker } from '../src/ink/components/picker.js';
 import { SessionApp } from '../src/tui/session_app.js';
 import { renderScreen } from '../src/tui/render.js';
@@ -965,6 +965,38 @@ test('/logout clears the key and the connection and keeps the session open', asy
   ]);
   await key('escape');
   assert.equal(app.state.picker, undefined);
+});
+
+test('/resume tells identical titles apart and lines the times up', async (t) => {
+  const { app, key } = await session(t, [
+    answer('hello there'),
+    answer('ready now'),
+  ]);
+  await app.submit('hi');
+  await app.submit('/new');
+  await app.submit('hi');
+  await app.submit('/resume');
+  const picker = app.state.picker!;
+  const labels = picker.items.map((item) => item.label).sort();
+  assert.deepEqual(labels, ['hi · hello there', 'hi · ready now']);
+  picker.query = 'hello';
+  assert.deepEqual(
+    picker.matches().map((item) => item.label),
+    ['hi · hello there'],
+  );
+  picker.query = '';
+  await key('escape');
+  await app.submit('/name 尾递归解释');
+  await app.submit('/resume');
+  const rows = app.state
+    .picker!.rows(80)
+    .map((row) => stripAnsi(row))
+    .filter((row) => row.includes('尾递归解释') || /\bhi\b/.test(row));
+  const ages = rows.map((row) =>
+    stringWidth(row.slice(0, row.lastIndexOf('now'))),
+  );
+  assert.equal(ages.length, 2);
+  assert.equal(ages[0], ages[1]);
 });
 
 test('/continue after a restart opens the latest saved session', async (t) => {

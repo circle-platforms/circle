@@ -293,48 +293,107 @@ export function repairedTitle(
   return next && next !== title.trim() ? next : undefined;
 }
 
-function opensPrompt(title: string, prompt: string): boolean {
-  if (!prompt.startsWith(title) || prompt.length === title.length) return false;
-  const next = prompt[title.length] ?? '';
-  if (next !== ' ' && next !== '\t') return false;
-  return title.split(/\s+/).length >= 2 || cjkCount(title) >= 4;
-}
-
 function templatedRequest(title: string): boolean {
   if (ACTION_REQUEST.test(title) || ACTION_REQUEST_CJK.test(title))
     return false;
   return /(?:请求|\srequest)$/i.test(title);
 }
 
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
 /**
- * Ask again for a title that is still the trimmed first message, a cut-off
- * prompt, or a line that reads as work already done. A greeting is too short
- * to ask. The caller leaves a name the person chose alone.
+ * The title is the start of a longer prompt, including a cut that lands inside
+ * a word (`hiFib demo` from `hiFib demonstration…`, or the first words of a
+ * sentence). A greeting that is the whole message is not one of these.
  */
-export function titleNeedsRefresh(title: string, source: string): boolean {
-  const line = title.trim();
-  const prompt = source.replace(/\s+/g, ' ').trim();
-  if (!line || !prompt || !titleWorthy(prompt)) return false;
-  if (line === fallbackTitle(prompt)) return true;
-  if (/[()（）]/.test(line) || line.includes('@')) return true;
-  if (READS_AS_DONE.test(line) || /(?:…|\.\.\.)$/.test(line)) return true;
-  if (templatedRequest(line)) return true;
-  const words = prompt.split(' ');
-  if (words.length > 7 && words.slice(0, 7).join(' ') === line) return true;
-  return opensPrompt(line, prompt);
+function fragmentOf(title: string, prompt: string): boolean {
+  if (!prompt.startsWith(title) || prompt.length === title.length) return false;
+  if (title.split(' ').length >= 2 || cjkCount(title) >= 4 || title.length >= 8)
+    return true;
+  return titleWorthy(prompt);
+}
+
+/**
+ * The title is several user messages stuck together, in order, from the first.
+ * A title that is only the first message is not one of these.
+ */
+function gluedTitle(title: string, parts: string[]): boolean {
+  if (parts.length < 2) return false;
+  const first = parts[0]!;
+  let tight = first;
+  let spaced = first;
+  for (let index = 1; index < parts.length; index++) {
+    const part = parts[index]!;
+    tight += part;
+    spaced = `${spaced} ${part}`;
+    if (title === tight || title === spaced) return true;
+    if (title.length <= first.length || !title.startsWith(first)) continue;
+    if (fragmentOf(title, tight) || fragmentOf(title, spaced)) return true;
+  }
+  return false;
+}
+
+/**
+ * Ask again for a title that is still the trimmed first message, a prefix or
+ * cut of that message, several user messages stuck together, or a line that
+ * reads as work already done. A greeting as short as the message is left
+ * alone. The caller leaves a name the person chose alone. `later` is the
+ * user's following messages, one each.
+ */
+export function titleNeedsRefresh(
+  title: string,
+  source: string,
+  later: readonly string[] = [],
+): boolean {
+  const line = oneLine(title);
+  const prompts = [source, ...later].map(oneLine).filter(Boolean);
+  const prompt = prompts[0] ?? '';
+  if (!line || !prompt) return false;
+  const joined = prompts.join(' ');
+  if (!titleWorthy(prompt) && !(prompts.length > 1 && titleWorthy(joined)))
+    return false;
+  if (titleWorthy(prompt)) {
+    if (line === fallbackTitle(prompt)) return true;
+    if (/[()（）]/.test(line) || line.includes('@')) return true;
+    if (READS_AS_DONE.test(line) || /(?:…|\.\.\.)$/.test(line)) return true;
+    if (templatedRequest(line)) return true;
+    if (fragmentOf(line, prompt)) return true;
+  }
+  return prompts.length > 1 && gluedTitle(line, prompts);
+}
+
+type StoredUser = {
+  role: string;
+  content?: string;
+  display?: string;
+  internal?: string;
+};
+
+/**
+ * What the person wrote, one line per message. When the shown line is a cut of
+ * the stored prompt, the stored prompt is kept: a title such as
+ * `please explain to me briefly in two` is that cut.
+ */
+export function userPrompts(messages: StoredUser[]): string[] {
+  const prompts: string[] = [];
+  for (const message of messages) {
+    if (message.role !== 'user' || message.internal) continue;
+    const content = oneLine(message.content ?? '');
+    const display = oneLine(message.display ?? '');
+    let text = display || content;
+    if (content && display && content !== display) {
+      if (content.startsWith(display) || display.startsWith(content))
+        text = content.length >= display.length ? content : display;
+      else text = display;
+    } else text = content || display;
+    if (text) prompts.push(text);
+  }
+  return prompts;
 }
 
 /** The first thing the person wrote, which a stale title is rebuilt from. */
-export function firstUserSource(
-  messages: {
-    role: string;
-    content?: string;
-    display?: string;
-    internal?: string;
-  }[],
-): string {
-  const message = messages.find(
-    (item) => item.role === 'user' && !item.internal,
-  );
-  return (message?.display || message?.content || '').trim();
+export function firstUserSource(messages: StoredUser[]): string {
+  return userPrompts(messages)[0] ?? '';
 }
