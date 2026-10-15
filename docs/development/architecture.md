@@ -25,6 +25,7 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 | Module | What it does |
 |---|---|
 | `runtime.ts` | Puts a session together: the model, tools, MCP servers, extensions, policy, system prompt and session store. Switches, forks and imports sessions, and reloads integrations. |
+| `session_manager.ts`, `session_lock.ts` | Keep independent runtimes per conversation, coordinate deletion and shutdown, and hold heartbeat leases against concurrent writers in other Circle processes. UI selection does not own execution. |
 | `harness.ts` | The loop: one model request, then the tool calls it asked for, until the model stops. Steering messages are read before the next request; follow-ups start a new turn when one ends. `task` calls next to each other run together, other calls one after another. |
 | `system_prompt.ts` | Builds the system prompt from `prompts/`, the instruction files, skills, `SYSTEM.md` and `APPEND_SYSTEM.md`. |
 | `memory_sources.ts` | Finds the instruction files (`AGENTS.md`, `CLAUDE.md` and the like) for a folder. |

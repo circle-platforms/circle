@@ -5,6 +5,8 @@ export function canArchiveSession(
   session: Session,
 ): boolean {
   return (
+    session.lifecycle !== 'deleting' &&
+    !session.occupied &&
     session.state !== 'waiting' &&
     !snapshot.interactions.some(
       (item) => item.sessionId === session.id && item.status === 'pending',

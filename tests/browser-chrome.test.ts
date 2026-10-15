@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync, type ChildProcess } from 'node:child_process';
+import {
+  execFileSync,
+  spawn,
+  spawnSync,
+  type ChildProcess,
+} from 'node:child_process';
 import { X509Certificate } from 'node:crypto';
 import {
   existsSync,
@@ -137,6 +142,44 @@ test(
     assert.equal(child.killed, true);
   },
 );
+
+test('close returns only after the browser it stopped has exited, and kills one that will not stop', async (t) => {
+  // Stand-ins for a browser that does not close when asked: one is slow to finish once it is
+  // stopped, as a loaded Windows machine was; the other ignores the stop.
+  const programs = {
+    slow: "process.on('SIGTERM', () => setTimeout(() => process.exit(0), 700));",
+    deaf: "process.on('SIGTERM', () => {});",
+  };
+  const root = made(t);
+  const stopped = await Promise.all(
+    Object.values(programs).map(async (program) => {
+      const child = spawn(
+        process.execPath,
+        ['-e', `${program} setInterval(() => {}, 1000); console.log('ready');`],
+        { stdio: ['ignore', 'pipe', 'ignore'] },
+      );
+      t.after(() => void child.kill('SIGKILL'));
+      await new Promise((resolve) => child.stdout.once('data', resolve));
+      const chrome = new ChromeBrowser({
+        executable: process.execPath,
+        headless: true,
+        downloads: join(root, 'downloads'),
+      });
+      (chrome as unknown as { child: ChildProcess }).child = child;
+      await chrome.close();
+      return child;
+    }),
+  );
+  for (const child of stopped) {
+    assert.ok(child.exitCode !== null || child.signalCode !== null);
+    assert.throws(() => process.kill(child.pid!, 0), { code: 'ESRCH' });
+  }
+  if (process.platform !== 'win32') {
+    const [slow, deaf] = stopped;
+    assert.equal(slow!.exitCode, 0);
+    assert.equal(deaf!.signalCode, 'SIGKILL');
+  }
+});
 
 const listen = (server: Server) =>
   new Promise<number>((resolve) =>
@@ -514,7 +557,7 @@ test(
         fallbackClose = fixture.close();
         fallbackClose.catch(() => {});
       },
-      200 + 2000 + 3000 + 1000,
+      200 + 2000 + 3000 + 2000 + 1000 + 1000,
     );
     try {
       await assert.rejects(

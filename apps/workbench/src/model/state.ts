@@ -164,6 +164,7 @@ interface StoragePort {
 /** A browser-only model for exercising UI behavior. It never runs the Circle runtime. */
 export class PreviewRuntime implements RuntimePort {
   readonly mode = 'preview' as const;
+  presentationEpoch = 0;
   private snapshot: WorkbenchSnapshot;
   private listeners = new Set<() => void>();
   private storage?: StoragePort;
@@ -666,6 +667,7 @@ export class PreviewRuntime implements RuntimePort {
     return { notice: `unknown command /${name}` };
   };
   reset = () => {
+    this.presentationEpoch++;
     this.snapshot = createFixtures();
     this.storage?.removeItem(STORAGE_KEY);
     for (const listener of this.listeners) listener();

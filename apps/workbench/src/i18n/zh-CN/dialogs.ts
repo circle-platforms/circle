@@ -77,6 +77,9 @@ export const dialogs: Record<string, string> = {
     '要从这个浏览器预览中删除“{title}”吗？',
   'keep session': '保留会话',
   'delete local session': '删除本地会话',
+  'stop work and delete session': '停止任务并删除会话',
+  'Stop all work in “{title}”, then delete its saved conversation?':
+    '停止“{title}”中的所有任务，然后删除已保存的对话？',
   // the session tree and fork
   'search session tree': '搜索会话树',
   'user messages only': '仅用户消息',

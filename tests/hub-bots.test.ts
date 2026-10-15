@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ExtensionHost, bundledExtensionsRoot } from '../src/extensions.js';
+import { ExtensionSecrets } from '../src/extension_secrets.js';
 import { submitAnswer } from '../src/secret_prompt.js';
 
 const PASSWORD = 'pw-bots-3317-zz';
@@ -445,5 +446,42 @@ test('a bot is made from Circle as a schedule and a skill pack, approved by some
   assert.match(
     dev.lines.at(-2)!,
     /runs skp_1 on source\.changed of ast_builds as you/,
+  );
+});
+
+test('/hub refresh returns once the view shows what it read, however slowly the footer reads the sign-in', async (t) => {
+  const root = scratch(t);
+  const workspace = join(root, 'project');
+  mkdirSync(workspace, { recursive: true });
+  const server = await botServer(t);
+  // The footer and the view are drawn after a read of the sign-in from the secrets file,
+  // behind a lock other windows share. Slow those reads down, and not the ones the
+  // command's own requests make.
+  const get = ExtensionSecrets.prototype.get;
+  let slowed = 0;
+  t.mock.method(
+    ExtensionSecrets.prototype,
+    'get',
+    async function (this: ExtensionSecrets, name: string) {
+      const footer = /\bshowStatus\b/.test(new Error().stack ?? '');
+      const value = await get.call(this, name);
+      if (name === 'token' && footer) {
+        slowed += 1;
+        await delay(200);
+      }
+      return value;
+    },
+  );
+  const dev = await person(root, 'dev-home', workspace);
+  cleanup(t, () => dev.host.close());
+  await dev.run(`login ${server.url} developer`);
+  // Made after the sign-in read the objects, so only the refresh finds it.
+  await dev.run('bot every skp_1 1h --from 2026-10-12T00:00:00Z');
+  await dev.run('refresh');
+  assert.ok(slowed > 0, 'the footer read the sign-in');
+  const view = dev.host.view('hub') as Record<string, any> | undefined;
+  assert.deepEqual(
+    view?.objects?.bots?.map((item: { assetId: string }) => item.assetId),
+    ['ast_bot'],
   );
 });

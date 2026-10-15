@@ -99,6 +99,7 @@ export interface ScreenState {
   picker?: Picker;
   hiddenTurns: number;
   jobs?: Job[];
+  otherSessions?: { id: string; title: string; waiting: boolean }[];
   jobDetail?: Job;
   compaction?: CompactionProgress;
   contextInput?: number;
@@ -656,6 +657,27 @@ export function renderScreen(
       ),
     );
   bottom.push(...strip);
+  for (const session of (state.otherSessions ?? []).slice(0, 3))
+    bottom.push(
+      p.dim +
+        pad(
+          truncate(
+            ` ${statusLight(session.waiting ? 'wait' : 'running')} ${session.id.slice(-8)} · ${terminalText(session.title)} · ${session.waiting ? 'waiting for you' : 'running'}`,
+            width,
+          ),
+          width,
+        ) +
+        p.reset,
+    );
+  if ((state.otherSessions?.length ?? 0) > 3)
+    bottom.push(
+      p.faint +
+        pad(
+          ` … +${state.otherSessions!.length - 3} sessions · /resume`,
+          width,
+        ) +
+        p.reset,
+    );
   let transcript: string[];
   // A subagent's page: its band stays under the header, its record scrolls under the band.
   let band: DetailBand | undefined;
