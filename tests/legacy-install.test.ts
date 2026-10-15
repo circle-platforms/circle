@@ -353,9 +353,14 @@ async function startPython(
   const started = throughCurrent
     ? join(prefix, 'current', 'circle', program)
     : frozen;
-  const child = spawn(started, ['-e', 'setTimeout(() => {}, 60000)'], {
-    stdio: 'ignore',
-  });
+  const child = spawn(
+    started,
+    [
+      '-e',
+      "process.stdin.resume(); process.stdin.on('end', () => process.exit(0));",
+    ],
+    { stdio: ['pipe', 'ignore', 'ignore'] },
+  );
   // Windows cannot delete the folder while the program in it still runs: wait for its exit.
   cleanup(t, async () => {
     if (child.exitCode !== null || child.signalCode !== null) return;
@@ -481,9 +486,14 @@ test('on Windows a held program is looked up, and the list names the processes r
   assert.deepEqual(probed.sort(), [frozen, script].sort());
   assert.equal(asked.length, 1);
   assert.match(asked[0]!.command, /powershell\.exe$/);
-  assert.match(
-    asked[0]!.args.at(-1)!,
-    /^Get-CimInstance -ClassName Win32_Process -Property ProcessId,ExecutablePath /,
+  const query = asked[0]!.args.at(-1)!;
+  assert.match(query, /\[Diagnostics\.Process\]::GetProcessesByName/);
+  assert.doesNotMatch(query, /Get-CimInstance/);
+  const encoded = query.match(/FromBase64String\('([A-Za-z0-9+/=]+)'\)/)?.[1];
+  assert.ok(encoded);
+  assert.deepEqual(
+    JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')),
+    ['circle'],
   );
   assert.equal(asked[0]!.timeout, 30_000);
 });
@@ -619,4 +629,22 @@ test('installing keeps the newest three versions and the one it replaces', (t) =
     '1.1.0',
     'notes',
   ]);
+});
+
+test('Windows process lookup matches the same held program through a directory alias', (t) => {
+  const base = scratch(t);
+  const { copies, where, frozen } = windowsCopies(base);
+  const alias = join(base, 'version alias');
+  symlinkSync(
+    join(base, '用户 prefix', 'versions', '0.5.0'),
+    alias,
+    windows ? 'junction' : 'dir',
+  );
+  const running = runningCopies(
+    copies,
+    where,
+    () => processList([[41, join(alias, 'circle', 'circle.exe')]]),
+    (path) => (path === frozen ? 'EBUSY' : undefined),
+  );
+  assert.deepEqual(running, [41]);
 });
