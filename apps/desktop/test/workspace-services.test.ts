@@ -158,3 +158,50 @@ test('workspace routing preserves revisions, isolates terminal owners and persis
     await rm(data, { recursive: true, force: true });
   }
 });
+test('releasing one session waits for its PTY exit and preserves another session', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-session-release-'));
+  const data = await mkdtemp(
+    path.join(tmpdir(), 'circle-session-release-data-'),
+  );
+  const service = new WorkspaceServices({
+    workspaceRoot: root,
+    dataDir: data,
+    nodeExecutable: process.execPath,
+    runtimeExecutable: process.execPath,
+    adapterPath: 'unused',
+    ghPath: 'unused',
+    terminalEnv: {
+      HOME: root,
+      ZDOTDIR: root,
+      HISTFILE: path.join(root, '.history'),
+      ENV: '',
+      BASH_ENV: '',
+    },
+    emit: () => {},
+  });
+  try {
+    const a = (await service.call('session-a', 'terminal', 'create', {
+      shell: '/bin/sh',
+    })) as TerminalSnapshot;
+    const b = (await service.call('session-b', 'terminal', 'create', {
+      shell: '/bin/sh',
+    })) as TerminalSnapshot;
+    assert.equal(await service.hasActiveSession('session-a'), true);
+    assert.equal(await service.hasActiveSessionResources('session-b'), true);
+    await service.releaseSession('session-a');
+    assert.equal(await service.hasActiveSession('session-a'), false);
+    assert.throws(() => process.kill(a.pid!, 0));
+    assert.doesNotThrow(() => process.kill(b.pid!, 0));
+    assert.equal(await service.hasActiveSession('session-b'), true);
+    await service.call('session-b', 'terminal', 'write', {
+      id: b.id,
+      data: 'echo B_STILL_OWNED\r',
+    });
+    await service.releaseSession('session-b');
+    assert.throws(() => process.kill(b.pid!, 0));
+  } finally {
+    await service.dispose();
+    await rm(root, { recursive: true, force: true });
+    await rm(data, { recursive: true, force: true });
+  }
+});

@@ -47,6 +47,9 @@ export class WorkspaceServices {
   private pending = Promise.resolve();
   private failure?: Error;
   private closed = false;
+  private releasing = new Set<string>();
+  private loginOwners = new Map<string, string>();
+  private activeDelivery?: DeliveryService;
   private watch: ReturnType<WorkspaceDocuments['watch']>;
   constructor(options: WorkspaceServicesOptions) {
     this.options = options;
@@ -91,8 +94,8 @@ export class WorkspaceServices {
         logRoot: path.join(directory, 'terminals'),
         env: options.terminalEnv,
       },
-      (event) =>
-        this.persist({
+      (event) => {
+        return this.persist({
           workspaceId: this.workspaceId,
           sessionId: event.sessionId,
           service: 'terminal',
@@ -101,7 +104,8 @@ export class WorkspaceServices {
           seq: event.sequence,
           at: event.at,
           data: { ...event },
-        }),
+        });
+      },
     );
     this.git = exec(
       'git',
@@ -116,12 +120,67 @@ export class WorkspaceServices {
     this.git.catch(() => {});
     this.delivery = this.git.then(
       (g) =>
-        new DeliveryService(g.root, options.ghPath, {
+        (this.activeDelivery = new DeliveryService(g.root, options.ghPath, {
           spawn: (file, args, opts) => spawnPty(file, args, opts),
           credentialStore: options.credentialStore,
-        }),
+        })),
     );
     this.delivery.catch(() => {});
+  }
+  async hasActiveSession(sessionId: string): Promise<boolean> {
+    if (
+      (await this.terminals.list(sessionId)).some(
+        (t) =>
+          t.owner === sessionId && ['running', 'stopping'].includes(t.status),
+      )
+    )
+      return true;
+    const debug = this.debuggers.get(sessionId)?.snapshot();
+    if (debug && ['starting', 'running', 'paused'].includes(debug.status))
+      return true;
+    for (const [id, owner] of this.loginOwners)
+      if (owner === sessionId) {
+        try {
+          if (
+            ['starting', 'waiting', 'saving'].includes(
+              this.activeDelivery?.login?.poll(id).status ?? '',
+            )
+          )
+            return true;
+        } catch {}
+      }
+    return false;
+  }
+  hasActiveSessionResources(sessionId: string) {
+    return this.hasActiveSession(sessionId);
+  }
+  async releaseSession(sessionId: string): Promise<void> {
+    if (this.releasing.has(sessionId))
+      throw Error('session resources are already closing');
+    this.releasing.add(sessionId);
+    try {
+      const terminals = await this.terminals.list(sessionId);
+      await Promise.all(
+        terminals
+          .filter((t) => ['running', 'stopping'].includes(t.status))
+          .map((t) => this.terminals.close(sessionId, t.id)),
+      );
+      const debug = this.debuggers.get(sessionId);
+      if (debug) {
+        await debug.dispose();
+        this.debuggers.delete(sessionId);
+      }
+      this.languages.get(sessionId)?.dispose();
+      this.languages.delete(sessionId);
+      for (const [id, owner] of this.loginOwners)
+        if (owner === sessionId) {
+          await this.activeDelivery?.login?.cancel(id);
+          this.loginOwners.delete(id);
+        }
+      this.sessions.delete(sessionId);
+    } finally {
+      this.releasing.delete(sessionId);
+    }
   }
   setCredentialFiles(patterns: string[]) {
     this.documents.setCredentialFiles(patterns);
@@ -178,8 +237,16 @@ export class WorkspaceServices {
       throw Error('workspace parameters must be an object');
     if (typeof sessionId !== 'string' || !sessionId || sessionId.includes('\0'))
       throw Error('session identity is required');
+    if (this.releasing.has(sessionId))
+      throw Error('session resources are closing');
     await this.ready;
-    if (this.failure) throw this.failure;
+    const emergency =
+      (service === 'terminal' && ['signal', 'close'].includes(method)) ||
+      (service === 'debug' && method === 'stop') ||
+      (service === 'delivery' &&
+        method === 'login' &&
+        params.action === 'cancel');
+    if (this.failure && !emergency) throw this.failure;
     this.sessions.add(sessionId);
     if (service === 'documents') {
       let result: unknown;
@@ -346,7 +413,26 @@ export class WorkspaceServices {
     }
     if (service === 'git' || service === 'delivery') {
       const target = service === 'git' ? await this.git : await this.delivery;
+      if (
+        service === 'delivery' &&
+        method === 'login' &&
+        params.action !== 'start' &&
+        typeof params.id === 'string' &&
+        this.loginOwners.get(params.id) !== sessionId
+      )
+        throw Error('login request does not belong to this session');
       const result = await target.call(method, params);
+      if (
+        service === 'delivery' &&
+        method === 'login' &&
+        (params.action === undefined || params.action === 'start')
+      ) {
+        const login = result as { id: string };
+        const owner = this.loginOwners.get(login.id);
+        if (owner && owner !== sessionId)
+          throw Error('another session is signing in');
+        this.loginOwners.set(login.id, sessionId);
+      }
       if (
         !['status', 'snapshot', 'diff', 'branches', 'checks', 'logs'].includes(
           method,
