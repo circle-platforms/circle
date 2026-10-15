@@ -19,8 +19,10 @@ import {
   OperationLedger,
   OperationIdentityConflictError,
   OperationNeedsReviewError,
+  OperationRejectedError,
   type OperationIdentity,
 } from '../src/workspace/operation-ledger.ts';
+import { WorkspaceDocuments } from '../src/workspace/documents.ts';
 const exec = promisify(execFile);
 const paramsHash = (value: string) =>
   createHash('sha256').update(value).digest('hex');
@@ -380,5 +382,51 @@ test('operation lists are bounded and page by stable ledger cursor', async (t) =
   assert.throws(
     () => ledger.acknowledgeUnknown('page-0', { note: 'already completed' }),
     /only an operation needing review/,
+  );
+});
+
+test('single-file CAS rejection preserves conflict feedback and never claims unknown side effects', async (t) => {
+  const f = await fixture(t),
+    ledger = await f.open(),
+    workspace = join(f.root, 'documents');
+  await mkdir(workspace);
+  const path = join(workspace, 'private-file.txt');
+  await writeFile(path, 'baseline');
+  const documents = new WorkspaceDocuments(workspace);
+  t.after(() => documents.close());
+  const baseline = await documents.read('private-file.txt');
+  await writeFile(path, 'external edit');
+  const op = {
+    ...identity('cas', 'draft'),
+    service: 'documents',
+    method: 'save',
+  };
+  let calls = 0;
+  const action = async () => {
+    calls++;
+    return documents.save('private-file.txt', 'draft', baseline.revision);
+  };
+  await assert.rejects(
+    ledger.run(op, action),
+    (error) =>
+      error instanceof OperationRejectedError &&
+      error.message.includes('file changed on disk') &&
+      !error.message.includes('private-file.txt'),
+  );
+  await assert.rejects(ledger.run(op, action), OperationRejectedError);
+  assert.equal(calls, 1);
+  assert.equal(await readFile(path, 'utf8'), 'external edit');
+  assert.equal(ledger.status('cas')?.state, 'rejected');
+  assert.equal(ledger.list({ state: 'needs_review' }).length, 0);
+  assert.equal(
+    ledger.list({ state: 'rejected' })[0].errorCode,
+    'DOCUMENT_CONFLICT',
+  );
+  // An arbitrary service claiming this error code has no no-effect guarantee.
+  await assert.rejects(
+    ledger.run(identity('untrusted-conflict'), async () => {
+      throw Object.assign(Error('private'), { code: 'DOCUMENT_CONFLICT' });
+    }),
+    OperationNeedsReviewError,
   );
 });

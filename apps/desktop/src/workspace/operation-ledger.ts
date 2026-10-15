@@ -25,7 +25,7 @@ export interface OperationIdentity {
   paramsHash: string;
 }
 export type OperationState =
-  'started' | 'completed' | 'needs_review' | 'reconciled';
+  'started' | 'completed' | 'needs_review' | 'reconciled' | 'rejected';
 export interface OperationMetadata {
   cursor: number;
   id: string;
@@ -56,6 +56,13 @@ export class OperationNeedsReviewError extends Error {
   ) {
     super(message);
     this.name = 'OperationNeedsReviewError';
+  }
+}
+export class OperationRejectedError extends Error {
+  readonly code = 'DOCUMENT_CONFLICT';
+  constructor() {
+    super('file changed on disk; reload and compare your draft before saving');
+    this.name = 'OperationRejectedError';
   }
 }
 export class OperationIdentityConflictError extends Error {
@@ -226,6 +233,7 @@ export class OperationLedger {
     if (saved) {
       if (saved.identity_hash !== identity)
         throw new OperationIdentityConflictError();
+      if (saved.state === 'rejected') throw new OperationRejectedError();
       if (saved.state !== 'completed')
         throw new OperationNeedsReviewError(
           saved.state === 'reconciled'
@@ -286,8 +294,10 @@ export class OperationLedger {
       );
     // Defer action one microtask so identical concurrent callers see this entry first.
     const promise = Promise.resolve().then(async () => {
+      let effectReturned = false;
       try {
         const value = await action();
+        effectReturned = true;
         const sealed = await this.codec.seal(encode(value));
         let inline: string | null = sealed,
           artifactHash: string | null = null;
@@ -311,6 +321,21 @@ export class OperationLedger {
         return value;
       } catch (error) {
         const rawCode = (error as { code?: unknown })?.code;
+        // WorkspaceDocuments.save raises this typed CAS conflict before rename;
+        // never extend this rule to multi-file edits that may have partial effects.
+        if (
+          !effectReturned &&
+          operation.service === 'documents' &&
+          operation.method === 'save' &&
+          rawCode === 'DOCUMENT_CONFLICT'
+        ) {
+          this.db
+            .prepare(
+              "UPDATE operations SET state='rejected',error_code='DOCUMENT_CONFLICT',updated_at=? WHERE id=?",
+            )
+            .run(Date.now(), operation.id);
+          throw new OperationRejectedError();
+        }
         const code =
           typeof rawCode === 'string' &&
           new Set([
@@ -386,9 +411,13 @@ export class OperationLedger {
     }
     if (options.state !== undefined) {
       if (
-        !['started', 'completed', 'needs_review', 'reconciled'].includes(
-          options.state,
-        )
+        ![
+          'started',
+          'completed',
+          'needs_review',
+          'reconciled',
+          'rejected',
+        ].includes(options.state)
       )
         throw Error('valid operation state is required');
       filters.push('state=?');
