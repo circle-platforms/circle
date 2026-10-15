@@ -152,6 +152,11 @@ export function Sidebar({
   // A new message moves rows. Keep the row that was at the top of the view there.
   // Hovering must not run this: a scroll event would close the card that just opened.
   useLayoutEffect(() => {
+    const focused = menuFocusRef.current;
+    if (focused && !rowKeys.includes(focused)) {
+      menuFocusRef.current = null;
+      setMenuFocus(null);
+    }
     const list = listRef.current;
     const previous = seenOrder.current;
     seenOrder.current = orderKey;
