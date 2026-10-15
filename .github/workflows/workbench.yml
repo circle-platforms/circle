@@ -87,6 +87,7 @@ jobs:
       - run: npm --prefix apps/desktop run build
       - run: node apps/desktop/scripts/developer-toolchain.mjs
       - run: node apps/desktop/test/developer-toolchain-smoke.mjs
+      - run: node apps/desktop/test/developer-debug-smoke.mjs
       - run: npm --prefix apps/desktop run test:desktop
       - run: npm --prefix apps/desktop run test:live
       - run: CIRCLE_DESKTOP_TEST_WIDTH=1024 npm --prefix apps/desktop run test:live
@@ -104,6 +105,7 @@ jobs:
             sudo chmod 4755 "$helper"
           fi
           node apps/desktop/test/developer-toolchain-smoke.mjs
+          node apps/desktop/test/developer-debug-smoke.mjs
           npm --prefix apps/desktop run test:desktop
           cp apps/desktop/artifacts/desktop/receipt.json apps/desktop/artifacts/desktop/packaged-receipt.json
           npm --prefix apps/desktop run test:live
@@ -150,6 +152,7 @@ jobs:
       - run: npm --prefix apps/desktop run test:runtime
       - run: npm --prefix apps/desktop run package
       - run: node apps/desktop/test/developer-toolchain-smoke.mjs
+      - run: node apps/desktop/test/developer-debug-smoke.mjs
       - name: Check invalid browser addresses on Windows
         if: runner.os == 'Windows'
         shell: pwsh
@@ -159,6 +162,7 @@ jobs:
           $env:CIRCLE_DESKTOP_APP_PATH = Join-Path $env:GITHUB_WORKSPACE 'apps/desktop/out/Circle-win32-x64'
           $env:CIRCLE_DESKTOP_EXECUTABLE = Join-Path $env:CIRCLE_DESKTOP_APP_PATH 'Circle.exe'
           node apps/desktop/test/developer-toolchain-smoke.mjs
+          node apps/desktop/test/developer-debug-smoke.mjs
           node apps/desktop/test/browser-address.mjs
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         if: runner.os == 'Windows' && always()

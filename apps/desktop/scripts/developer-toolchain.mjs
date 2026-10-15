@@ -15,6 +15,29 @@ import { dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+export const NODE_VERSION = '24.21.0';
+const nodeAssets = {
+  'darwin-arm64': [
+    'darwin-arm64.tar.gz',
+    'bed7eea5325e1108f32ce5228ddd6a5f0f08a499ee42aa7442aea583702f6057',
+  ],
+  'darwin-x64': [
+    'darwin-x64.tar.gz',
+    '1462cb3b3046b815cf8ea436d3da450ec1a9f11dac7e5a46b0ada5305d7e8097',
+  ],
+  'linux-arm64': [
+    'linux-arm64.tar.gz',
+    '724282c3b43aec998aa9527380465b45d229e021b58035f5f4f63095eabfe5d5',
+  ],
+  'linux-x64': [
+    'linux-x64.tar.gz',
+    '6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff',
+  ],
+  'win32-x64': [
+    'win-x64.zip',
+    '158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541',
+  ],
+};
 export const GH_VERSION = '2.83.2';
 export const DEBUG_VERSION = '1.140.0';
 const ghAssets = {
@@ -108,6 +131,13 @@ export async function prepareDeveloperTools(
   const temp = await mkdtemp(join(tmpdir(), 'circle-developer-tools-'));
   const specs = [
     {
+      name: 'node',
+      version: NODE_VERSION,
+      file: `node-v${NODE_VERSION}-${nodeAssets[target][0]}`,
+      sha256: nodeAssets[target][1],
+      base: `https://nodejs.org/dist/v${NODE_VERSION}/`,
+    },
+    {
       name: 'gh',
       version: GH_VERSION,
       file: `gh_${GH_VERSION}_${asset[0]}`,
@@ -169,7 +199,18 @@ export async function prepareDeveloperTools(
       const source =
         entries.length === 1 ? join(extracted, entries[0]) : extracted;
       await rm(destination, { recursive: true, force: true });
-      await cp(source, destination, { recursive: true });
+      if (spec.name === 'node') {
+        await mkdir(join(destination, 'bin'), { recursive: true });
+        const binary = platform === 'win32' ? 'node.exe' : 'bin/node';
+        await cp(
+          join(source, binary),
+          join(destination, 'bin', platform === 'win32' ? 'node.exe' : 'node'),
+        );
+        for (const name of ['LICENSE', 'README.md', 'CHANGELOG.md'])
+          await cp(join(source, name), join(destination, name));
+        if (platform !== 'win32')
+          await chmod(join(destination, 'bin/node'), 0o755);
+      } else await cp(source, destination, { recursive: true });
       if (spec.name === 'js-debug')
         await writeFile(
           join(destination, 'package.json'),
