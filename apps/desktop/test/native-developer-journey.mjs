@@ -1,4 +1,13 @@
 import {
+  createNativeTerminalFixture,
+  runNativeTerminalJourney,
+} from './helpers/native-terminal-journey.mjs';
+import {
+  createNativeDebugFixture,
+  runNativeDebugJourney,
+} from './helpers/native-debug-journey.mjs';
+import { runNativeKeyboardJourney } from './helpers/native-keyboard-journey.mjs';
+import {
   createNativeEditorSemanticsFixture,
   runNativeEditorSemantics,
 } from './helpers/native-editor-semantics.mjs';
@@ -74,6 +83,8 @@ await Promise.all([
 ]);
 await createNativeEditorFixture(repo);
 await createNativeEditorSemanticsFixture(repo);
+const terminalFixture = await createNativeTerminalFixture(repo);
+const debugFixture = await createNativeDebugFixture(repo);
 const isolationFiles = await createNativeEditorIsolationFixture(repo);
 const git = async (...args) =>
   (await promisify(execFile)('git', ['-C', repo, ...args])).stdout;
@@ -82,6 +93,9 @@ await git(
   'add',
   ...isolationFiles,
   '.circle-editor-isolation-fixture.json',
+  ...terminalFixture.files,
+  debugFixture.program,
+  '.circle-native-debug-interaction.json',
   'editor-supplement.ts',
   'editor-main.ts',
   'editor-lib.ts',
@@ -657,6 +671,39 @@ try {
     }, 'PTY receives actual stdin');
     await screenshot('03-interactive-terminal');
   });
+  await check(
+    'terminal search complete copy independent buffers and managed service lifecycle',
+    async () => {
+      await app.evaluate(({ clipboard }) => {
+        globalThis.__terminalClipboard = clipboard
+          .availableFormats()
+          .map((format) => [format, clipboard.readBuffer(format)]);
+      });
+      try {
+        await runNativeTerminalJourney({
+          page,
+          workspace: repo,
+          sessionId,
+          output,
+          nodePath: buildIdentity.bundledNode.path,
+          clipboard: {
+            readText: () =>
+              app.evaluate(({ clipboard }) => clipboard.readText()),
+          },
+          query,
+          until,
+          screenshot,
+        });
+      } finally {
+        await app.evaluate(({ clipboard }) => {
+          clipboard.clear();
+          for (const [format, buffer] of globalThis.__terminalClipboard ?? [])
+            clipboard.writeBuffer(format, buffer);
+          delete globalThis.__terminalClipboard;
+        });
+      }
+    },
+  );
   await check('Git working diff stage and unstage hunk', async () => {
     await page.locator('#dock-tab-git').click();
     const panel = page.locator('.native-git');
@@ -804,6 +851,20 @@ try {
       .getByRole('checkbox', { name: 'pause at entry', exact: true })
       .uncheck();
   });
+  await check(
+    'debug variable editing steps interactive stdin and inspector cleanup',
+    async () => {
+      await runNativeDebugJourney({
+        page,
+        workspace: repo,
+        sessionId,
+        query,
+        until,
+        output,
+        screenshot,
+      });
+    },
+  );
   await check('browser diagnostics actual source navigation', async () => {
     await page
       .getByRole('button', { name: 'browser panel', exact: true })
@@ -1076,6 +1137,21 @@ try {
         JSON.stringify({ concurrent, complete, gitApprovalObserved }, null, 2),
       );
       await screenshot('08c-parallel-task-results');
+    },
+  );
+  await check(
+    'keyboard quick open palette focus and layout selection retention',
+    async () => {
+      const keyboardChecks = [];
+      await runNativeKeyboardJourney({
+        page,
+        fileName: 'README.md',
+        checks: keyboardChecks,
+      });
+      await writeFile(
+        join(output, 'keyboard-journey.json'),
+        JSON.stringify({ checks: keyboardChecks }, null, 2),
+      );
     },
   );
   await check(
