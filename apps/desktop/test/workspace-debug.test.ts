@@ -382,3 +382,40 @@ test('adapter launch rejection cleans up and leaves a recoverable failed state',
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test(
+  'initialized coalesced with initialize response cannot deadlock launch configuration',
+  { timeout: 5000 },
+  async () => {
+    const root = await mkdtemp(
+      path.join(tmpdir(), 'circle-debug-initialized-'),
+    );
+    const adapter = path.join(root, 'adapter.cjs');
+    await writeFile(path.join(root, 'fixture.cjs'), '');
+    await writeFile(
+      adapter,
+      `const net=require('net');net.createServer(s=>{let buffer=Buffer.alloc(0),seq=0,launch;const frame=m=>{const b=JSON.stringify({seq:++seq,...m});return 'Content-Length: '+Buffer.byteLength(b)+'\\r\\n\\r\\n'+b};const reply=m=>frame({type:'response',request_seq:m.seq,command:m.command,success:true,body:{}});s.on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);while(true){const end=buffer.indexOf('\\r\\n\\r\\n');if(end<0)return;const len=+buffer.subarray(0,end).toString().match(/Content-Length: (\\d+)/i)[1];if(buffer.length<end+4+len)return;const m=JSON.parse(buffer.subarray(end+4,end+4+len));buffer=buffer.subarray(end+4+len);if(m.command==='initialize')s.write(reply(m)+frame({type:'event',event:'initialized',body:{}}));else if(m.command==='launch')launch=m;else if(m.command==='configurationDone'){s.write(reply(m));s.write(reply(launch));}else s.write(reply(m));}})}).listen(0,'127.0.0.1',function(){console.log('Debug server listening at 127.0.0.1:'+this.address().port)});`,
+    );
+    const service = new WorkspaceDebugService({
+      workspaceRoot: root,
+      nodeExecutable: process.execPath,
+      adapterPath: adapter,
+    });
+    try {
+      const launched = await Promise.race([
+        service.handle('launch', { program: 'fixture.cjs' }),
+        new Promise<never>((_, reject) => {
+          const timer = setTimeout(
+            () => reject(Error('initialize event was lost')),
+            1000,
+          );
+          timer.unref();
+        }),
+      ]);
+      assert.equal(launched.status, 'running');
+    } finally {
+      await service.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

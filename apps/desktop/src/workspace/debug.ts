@@ -6,6 +6,7 @@ import { EventEmitter } from 'node:events';
 
 /** Content-Length framed DAP transport. A failed connection rejects every waiter. */
 export class DapConnection extends EventEmitter {
+  readonly initialized: Promise<void>;
   private buffer = Buffer.alloc(0);
   private sequence = 0;
   private pending = new Map<
@@ -21,6 +22,9 @@ export class DapConnection extends EventEmitter {
     private reverse?: (command: string, args: any) => Promise<any>,
   ) {
     super();
+    this.initialized = new Promise((resolve) =>
+      this.once('initialized', () => resolve()),
+    );
     socket.on('data', (chunk) => {
       this.buffer = Buffer.concat([this.buffer, chunk]);
       this.parse();
@@ -247,9 +251,7 @@ export class WorkspaceDebugService {
             });
             const child = makeConnection(childSocket);
             this.target = child;
-            const initialized = new Promise<void>((resolve) =>
-              child.once('initialized', () => resolve()),
-            );
+            const initialized = child.initialized;
             await child.request('initialize', {
               clientID: 'circle',
               adapterID: 'pwa-node',
@@ -402,9 +404,7 @@ export class WorkspaceDebugService {
       const dap = await this.start();
       const generation = this.generation;
       try {
-        const initialized = new Promise<void>((resolve) =>
-          dap.once('initialized', () => resolve()),
-        );
+        const initialized = dap.initialized;
         const launch = dap.request(method, {
           type: 'pwa-node',
           request: method,
