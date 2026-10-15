@@ -497,3 +497,153 @@ test(
     );
   },
 );
+
+test(
+  'managed service readiness checks real HTTP and restart retains service identity and exact argv',
+  { skip: !unix },
+  async (t) => {
+    const { manager, workspace, events } = await setup(t);
+    const port = await freePort();
+    const marker = 'spaces "quotes" $HOME $(not-a-command)';
+    const script = join(workspace, 'service.cjs');
+    await writeFile(
+      script,
+      `const [port,value]=process.argv.slice(2);require('node:http').createServer((q,s)=>s.end(value)).listen(Number(port),'127.0.0.1',()=>{process.stdout.write('SERVICE_');setTimeout(()=>console.log('READY'),20)})`,
+    );
+    const original = await manager.create({
+      owner,
+      sessionId: 'service-session',
+      label: 'web preview',
+      command: { file: process.execPath, args: [script, String(port), marker] },
+      readiness: { pattern: 'SERVICE_READY', port, timeoutMs: 3000 },
+    });
+    await wait(
+      async () =>
+        (await manager.list(owner)).find((item) => item.id === original.id)
+          ?.serviceState === 'ready',
+      'managed service ready',
+    );
+    const ready = (await manager.list(owner)).find(
+      (item) => item.id === original.id,
+    )!;
+    assert.equal(ready.readiness?.matchedPattern, true);
+    assert.equal(ready.readiness?.portOpen, true);
+    assert.ok(ready.readiness?.readyAt);
+    assert.equal(
+      await (await fetch(`http://127.0.0.1:${port}`)).text(),
+      marker,
+    );
+    const restarted = await manager.restart(owner, original.id);
+    assert.equal(restarted.serviceId, original.serviceId);
+    assert.notEqual(restarted.epoch, original.epoch);
+    assert.notEqual(restarted.id, original.id);
+    assert.deepEqual(restarted.command, original.command);
+    await wait(
+      async () =>
+        (await manager.list(owner)).find((item) => item.id === restarted.id)
+          ?.serviceState === 'ready',
+      'service automatically ready after restart',
+    );
+    assert.equal(
+      await (await fetch(`http://127.0.0.1:${port}`)).text(),
+      marker,
+    );
+    const old = (await manager.list(owner)).find(
+      (item) => item.id === original.id,
+    )!;
+    assert.equal(old.serviceState, 'stopped');
+    assert.ok(old.exitReason);
+    const stopped = await manager.close(owner, restarted.id);
+    assert.equal(stopped.serviceState, 'stopped');
+    assert.equal(await portAvailable(port), true);
+    assert.equal(events.filter((event) => event.kind === 'ready').length, 2);
+  },
+);
+
+test(
+  'readiness timeout is explicit while the owned service remains available to stop',
+  { skip: !unix },
+  async (t) => {
+    const { manager } = await setup(t);
+    const port = await freePort();
+    const service = await manager.create({
+      owner,
+      sessionId: 'service-session',
+      command: {
+        file: process.execPath,
+        args: ['-e', "console.log('READY');setInterval(()=>{},1000)"],
+      },
+      readiness: { pattern: 'READY', port, timeoutMs: 150 },
+    });
+    await wait(
+      async () => (await manager.list(owner))[0]?.readiness?.state === 'failed',
+      'readiness timeout',
+    );
+    const failed = (await manager.list(owner))[0]!;
+    assert.equal(failed.status, 'running');
+    assert.equal(failed.serviceState, 'failed');
+    assert.equal(failed.readiness?.matchedPattern, true);
+    assert.equal(failed.readiness?.portOpen, false);
+    assert.match(failed.readiness!.error!, /150ms/);
+    await manager.close(owner, service.id);
+  },
+);
+
+test(
+  'port conflicts, command shape and early process failures have real distinct outcomes',
+  { skip: !unix },
+  async (t) => {
+    const { manager } = await setup(t);
+    const server = createServer();
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    t.after(
+      () => new Promise<void>((resolve) => server.close(() => resolve())),
+    );
+    const port = (server.address() as { port: number }).port;
+    await assert.rejects(
+      manager.create({
+        owner,
+        sessionId: 'a',
+        command: { file: process.execPath },
+        readiness: { port },
+      }),
+      /already in use/,
+    );
+    assert.equal((await manager.list(owner)).length, 0);
+    assert.equal(await portAvailable(port), false);
+    await assert.rejects(
+      manager.create({
+        owner,
+        sessionId: 'a',
+        command: { file: process.execPath },
+        shell: '/bin/sh',
+      }),
+      /either/,
+    );
+    await assert.rejects(
+      manager.create({
+        owner,
+        sessionId: 'a',
+        command: { file: process.execPath },
+        readiness: { pattern: '' },
+      }),
+      /pattern/,
+    );
+    const failed = await manager.create({
+      owner,
+      sessionId: 'a',
+      command: { file: process.execPath, args: ['-e', 'process.exit(3)'] },
+      readiness: { pattern: 'NEVER' },
+    });
+    await wait(
+      async () => (await manager.list(owner))[0]?.status === 'exited',
+      'early process exit',
+    );
+    const actual = await manager.close(owner, failed.id);
+    assert.equal(actual.serviceState, 'failed');
+    assert.equal(actual.exitReason, 'exit 3');
+    assert.match(actual.readiness!.error!, /before readiness/);
+  },
+);
