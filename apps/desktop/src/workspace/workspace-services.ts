@@ -89,6 +89,9 @@ export class WorkspaceServices {
     });
     this.watch = this.documents.watch(
       (snapshot) => {
+        const paths = snapshot.changes.map((change) => change.file.path);
+        for (const language of this.languages.values())
+          language.invalidate(paths);
         for (const session of this.sessions)
           this.publish(session, 'documents', 'files', {
             kind: 'files',
@@ -426,8 +429,9 @@ export class WorkspaceServices {
           path.isAbsolute(relative)
         )
           throw Error('source is outside the granted workspace');
-        await this.documents.read(relative);
-        return { path: relative };
+        const portable = relative.split(path.sep).join('/');
+        await this.documents.read(portable);
+        return { path: portable };
       }
       let result: unknown;
       const file =
@@ -472,6 +476,12 @@ export class WorkspaceServices {
           params.edits as WorkspaceDocumentEdit[],
         );
       } else throw Error('unknown document method');
+      const changedPaths =
+        method === 'save'
+          ? [file]
+          : (params.edits as WorkspaceDocumentEdit[]).map((edit) => edit.path);
+      for (const language of this.languages.values())
+        language.invalidate(changedPaths);
       await this.publish(sessionId, 'documents', file || 'batch', {
         kind: method,
         paths:

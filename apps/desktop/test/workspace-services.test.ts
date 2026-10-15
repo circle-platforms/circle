@@ -355,3 +355,50 @@ test('initial event journal open failure still allows complete service disposal'
     await rm(data, { recursive: true, force: true });
   }
 });
+test('document saves invalidate semantic projects without discarding another unsaved overlay', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-language-save-'));
+  const data = await mkdtemp(path.join(tmpdir(), 'circle-language-save-data-'));
+  await writeFile(path.join(root, 'a.ts'), 'export const value = 1;\n');
+  await writeFile(path.join(root, 'b.ts'), 'export const untouched = true;\n');
+  const service = new WorkspaceServices({
+    workspaceRoot: root,
+    dataDir: data,
+    nodeExecutable: process.execPath,
+    runtimeExecutable: process.execPath,
+    adapterPath: 'unused',
+    ghPath: 'unused',
+    emit: () => {},
+  });
+  try {
+    await service.call('s', 'language', 'open', {
+      path: 'b.ts',
+      content: 'export const untouched: string = 123;\n',
+    });
+    const before = (await service.call('s', 'language', 'request', {
+      method: 'diagnostics',
+      path: 'b.ts',
+    })) as unknown[];
+    assert.ok(before.length > 0);
+    const doc = (await service.call('s', 'documents', 'read', {
+      path: 'a.ts',
+    })) as WorkspaceDocument;
+    await service.call('s', 'documents', 'save', {
+      path: 'a.ts',
+      content: 'export const value = 2;\n',
+      expectedRevision: doc.revision,
+    });
+    const after = (await service.call('s', 'language', 'request', {
+      method: 'diagnostics',
+      path: 'b.ts',
+    })) as unknown[];
+    assert.ok(after.length > 0);
+    assert.equal(
+      await readFile(path.join(root, 'b.ts'), 'utf8'),
+      'export const untouched = true;\n',
+    );
+  } finally {
+    await service.dispose();
+    await rm(root, { recursive: true, force: true });
+    await rm(data, { recursive: true, force: true });
+  }
+});
