@@ -33,7 +33,11 @@ The ⋯ beside a folder creates a session, reveals the folder in Finder or the s
 
 Archiving hides a session from the sidebar. All sessions → archived sessions shows it again; its history stays readable, and restore conversation enables the composer. Until restored, it cannot change the saved branch, labels or conversation mode. A fork or clone can start a separate conversation from it. Archive state is kept in desktop metadata, without deleting the folder or changing the terminal's checkpoint history.
 
-A running turn, pending request or running background job prevents archiving and deletion, including after switching to another conversation. Archive all checks every session first and changes none when one is busy. Archive state survives restarting the application.
+Conversations in the same folder can run together. Creating or switching a conversation leaves the others running; each keeps its draft, attachments, scrolling, folded messages, queue and approvals. Stop affects the selected conversation only. Background requests stay with the session that asked them.
+
+A running turn, pending request or running background job prevents archiving, including after switching to another conversation. Archive all checks every session first and changes none when one is busy. Archive state survives restarting the application. Deleting a running conversation asks you to stop it and its tasks, waits for cleanup, and then removes its history. Deleting the selected conversation selects the most recent available conversation in that folder, or creates an empty one. Workspace files stay.
+
+Selecting a conversation owned by another Circle terminal opens its committed history read-only. Execution and deletion stay locked until that terminal releases it; export the saved history or fork a complete checkpoint to work independently. Conversations in the same folder still share its real files.
 
 ## Asking and answering
 

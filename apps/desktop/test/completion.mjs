@@ -157,7 +157,6 @@ await writeFile(
           completion: { reason: 'stop', provider_reason: 'end_turn' },
         },
       },
-      { error: 'unknown command /unrecognized-fixture-command' },
       {
         chunks: ['independent notice continuation ', 'finished'],
         delayMs: 1500,
@@ -191,6 +190,19 @@ await writeFile(
           content: 'hidden anchor continuation finished',
           completion: { reason: 'stop', provider_reason: 'end_turn' },
         },
+      },
+      {
+        message: {
+          id: 'failed-manual-summary',
+          role: 'assistant',
+          content: 'partial manual summary',
+          completion: {
+            reason: 'length',
+            provider_reason: 'max_tokens',
+            output_limit: 32000,
+          },
+        },
+        usage: { input_tokens: 13, output_tokens: 3, cache_read_tokens: 0 },
       },
     ],
   }),
@@ -381,10 +393,14 @@ try {
   await page
     .getByText('✖ model ended without an answer', { exact: true })
     .waitFor();
-  await page
-    .locator('.toast')
-    .filter({ hasText: 'model ended without an answer' })
-    .waitFor();
+  assert.equal(
+    await page
+      .locator('.toast')
+      .filter({ hasText: 'model ended without an answer' })
+      .count(),
+    0,
+    'a harness failure stays in its source transcript instead of a global toast',
+  );
   await send('continue after legacy error');
   await page.getByText('continuation is running', { exact: true }).waitFor();
   snapshot = await state();
@@ -425,13 +441,15 @@ try {
     expectedRequests,
   );
   checks.push(
-    'continuing after the legacy error immediately clears its current toast, retains the original failure in history and completes without replay',
+    'continuing after the legacy error keeps current state clear, retains the original failure in history and completes without replay',
   );
   const independentNotice = 'unknown command /unrecognized-fixture-command';
-  await send('trigger independent notification fixture failure');
+  await send('/skill nonexistent-native-fixture-skill');
+  await page.locator('.toast').filter({ hasText: 'skill not found' }).waitFor();
+  await send('/unrecognized-fixture-command');
   await page.locator('.toast').filter({ hasText: independentNotice }).waitFor();
-  // Give the runtime notice an earlier expiry than the identically worded action
-  // notice; its old timer must not erase the newer notice during continuation.
+  // An older identically worded action notice must not erase a newer one while
+  // the earlier session-scoped API failure clears on continuation.
   await new Promise((done) => setTimeout(done, 1800));
   await send('/unrecognized-fixture-command');
   await page.locator('.toast').filter({ hasText: independentNotice }).waitFor();
@@ -453,7 +471,7 @@ try {
     1,
     'the older runtime notice timer cannot erase the newer identically worded action toast',
   );
-  expectedRequests += 2;
+  expectedRequests += 1;
   assert.equal(
     (await readFile(requestsPath, 'utf8')).trim().split('\n').length,
     expectedRequests,
@@ -463,7 +481,7 @@ try {
     .filter({ hasText: independentNotice })
     .waitFor({ state: 'hidden' });
   checks.push(
-    'clearing a previous runtime error and its older timer leave a newer identically worded action toast intact',
+    'clearing a session action error and older timers leave a newer identically worded independent action toast intact',
   );
   await send('trigger hidden assistant response');
   await until(async () => {
@@ -508,6 +526,28 @@ try {
   checks.push(
     'an error anchored to a saved empty assistant stays in its original history position during and after continuation',
   );
+  await until(async () => {
+    const value = await state();
+    return !value.sessions.find((row) => row.id === value.activeSessionId).turn;
+  }, 'continuation finished before manual compaction');
+  assert.equal((await command('compact')).ok, true);
+  await until(async () => {
+    const value = await state();
+    return (
+      value.sessions
+        .find((row) => row.id === value.activeSessionId)
+        .messages.filter((row) => row.completionFailure === 'output_limit')
+        .length === 2
+    );
+  }, 'typed manual compaction diagnostic');
+  expectedRequests += 1;
+  assert.equal(
+    (await readFile(requestsPath, 'utf8')).trim().split('\n').length,
+    expectedRequests,
+  );
+  checks.push(
+    'a typed manual compaction failure remains visible on its source session without a global error',
+  );
   await page.evaluate(() => {
     location.hash = '/page/settings';
   });
@@ -522,7 +562,7 @@ try {
     await diagnostics.first().waitFor();
     assert.equal(
       await diagnostics.count(),
-      failure.code === 'empty_response' ? 2 : 1,
+      ['empty_response', 'output_limit'].includes(failure.code) ? 2 : 1,
     );
   }
   assert.equal(await page.getByText(partial, { exact: true }).count(), 1);

@@ -14,7 +14,7 @@ import {
   type BrowserResult,
 } from '../../../src/browser/protocol.ts';
 import { ScriptedModel } from '../../../src/testing.ts';
-import type { AgentRuntime } from '../../../src/runtime.ts';
+import { AgentRuntime } from '../../../src/runtime.ts';
 import { emptyUsage, type Message } from '../../../src/types.ts';
 import {
   saveSettings,
@@ -54,6 +54,7 @@ async function setup(
   replies: ConstructorParameters<typeof ScriptedModel>[0],
   trusted = true,
   browser?: BrowserPort,
+  beforeDelete?: (sessionId: string) => Promise<void>,
 ) {
   const root = await mkdtemp(join(tmpdir(), 'circle-core-desktop-'));
   const home = join(root, 'home');
@@ -73,6 +74,7 @@ async function setup(
     userHome: home,
     model,
     browser,
+    beforeDelete,
     emit: (update) => updates.push(update),
   });
   const call = (
@@ -247,7 +249,7 @@ test('the desktop keeps interleaved text and thinking, then exposes one typed in
   }
 });
 
-test('untyped runtime failures retain their error notification', async (t) => {
+test('untyped harness failures retain their source-session diagnostic without a global error', async (t) => {
   const f = await setup(t, [
     async () => {
       throw Error('local fixture network failed');
@@ -255,9 +257,17 @@ test('untyped runtime failures retain their error notification', async (t) => {
   ]);
   await f.call('prompt', { text: 'show an untyped failure' });
   await wait(
-    () =>
-      f.controller.snapshot().runtime?.error === 'local fixture network failed',
-    'untyped failure notification',
+    () => f.updates.some((row) => row.event?.kind === 'run_error'),
+    'untyped failure diagnostic',
+  );
+  const snapshot = f.controller.snapshot();
+  assert.equal(snapshot.runtime?.error, undefined);
+  assert.equal(
+    snapshot.sessions
+      .find((row) => row.id === snapshot.activeSessionId)!
+      .messages.filter((row) => row.text === '✖ local fixture network failed')
+      .length,
+    1,
   );
 });
 
@@ -281,10 +291,8 @@ test('continuing after a legacy empty-answer error clears current failure state 
   try {
     await f.call('prompt', { text: 'trigger legacy empty answer' });
     await wait(
-      () =>
-        f.controller.snapshot().runtime?.error ===
-        'model ended without an answer',
-      'legacy runtime error',
+      () => f.updates.some((row) => row.event?.kind === 'run_error'),
+      'legacy source-session error',
     );
     await f.call('prompt', { text: 'continue after legacy error' });
     await wait(
@@ -328,6 +336,63 @@ test('continuing after a legacy empty-answer error clears current failure state 
   } finally {
     finish();
   }
+});
+
+test('a typed manual compaction failure remains visible on its source session without a harness run_error', async (t) => {
+  const f = await setup(t, [
+    {
+      message: {
+        id: 'failed-summary',
+        role: 'assistant',
+        content: 'partial summary',
+        completion: {
+          reason: 'length',
+          provider_reason: 'max_tokens',
+          output_limit: 32000,
+        },
+      },
+      usage: { input_tokens: 13, output_tokens: 3, cache_read_tokens: 0 },
+    },
+  ]);
+  const active = (f.controller as unknown as { active: AgentRuntime }).active;
+  active.store.append(
+    active.session.id,
+    Array.from({ length: 8 }, (_, index) => ({
+      id: 'compact-history-' + index,
+      role: index % 2 ? ('assistant' as const) : ('user' as const),
+      content: 'synthetic conversation ' + index,
+    })),
+  );
+  await f.call('compact');
+  await wait(
+    () =>
+      f.updates.some(
+        (row) =>
+          row.event?.kind === 'compaction' &&
+          row.event.payload.phase === 'error',
+      ),
+    'compaction failure event',
+  );
+  const snapshot = f.controller.snapshot();
+  const notices = snapshot.sessions
+    .find((row) => row.id === snapshot.activeSessionId)!
+    .messages.filter((row) => row.role === 'notice');
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0]!.completionFailure, 'output_limit');
+  assert.equal(
+    notices[0]!.text,
+    '✖ model output limit reached; response incomplete',
+  );
+  assert.equal(snapshot.runtime?.error, undefined);
+  assert.equal(
+    f.updates.filter((row) => row.event?.kind === 'run_error').length,
+    0,
+  );
+  assert.equal(f.model.requests.length, 1);
+  assert.equal(
+    active.store.contextState(active.session.id).compactionCalls?.length,
+    1,
+  );
 });
 
 test('an error anchored to an invisible empty assistant stays before the continued turn', async (t) => {
@@ -3382,6 +3447,19 @@ test('an inactive session with a real running background job cannot be archived 
       .snapshot()
       .jobs.some((job) => job.sessionId === id && job.state === 'running'),
   );
+  const job = f.controller
+    .snapshot()
+    .jobs.find((item) => item.sessionId === id && item.state === 'running')!;
+  assert.equal(
+    (await f.call('stop-job', { id: job.id }, id)).ok,
+    true,
+    'a background job command binds its owning session',
+  );
+  assert(
+    !f.controller
+      .snapshot()
+      .jobs.some((item) => item.sessionId === id && item.state === 'running'),
+  );
 });
 
 test('completed desktop plans retain their core todos and produce one notice before the following answer (#5)', async (t) => {
@@ -3740,4 +3818,854 @@ test('startup prefers the last-used folder, then workspace_folder, then the scra
   const inside = open();
   assert.equal(activeWorkspacePath(inside), join(home, 'workspace'));
   await inside.close();
+});
+
+// A desktop tab is a view over an independently running conversation, including
+// when both conversations share a folder and the same checkpoint database.
+test('same-workspace sessions overlap model requests and keep queues and history separate', async (t) => {
+  let releaseA!: () => void;
+  let releaseB!: () => void;
+  const aGate = new Promise<void>((resolve) => {
+    releaseA = resolve;
+  });
+  const bGate = new Promise<void>((resolve) => {
+    releaseB = resolve;
+  });
+  t.after(() => {
+    releaseA();
+    releaseB();
+  });
+  const f = await setup(t, [
+    async (request) => {
+      request.token('A streaming');
+      await aGate;
+      return { message: assistant('A completed'), usage: emptyUsage() };
+    },
+    async (request) => {
+      request.token('B streaming');
+      await bGate;
+      return { message: assistant('B completed'), usage: emptyUsage() };
+    },
+    { message: assistant('B follow-up completed') },
+    { message: assistant('A follow-up completed') },
+  ]);
+  const a = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('prompt', { text: 'A prompt' })).ok, true);
+  await wait(() => f.model.requests.length === 1, 'A request starts');
+  assert.equal((await f.call('new-session')).ok, true);
+  const b = f.controller.snapshot().activeSessionId;
+  assert.notEqual(a, b);
+  assert.equal((await f.call('prompt', { text: 'B prompt' })).ok, true);
+  await wait(() => f.model.requests.length === 2, 'B starts before A ends');
+  assert.equal(
+    (await f.call('prompt', { text: 'B queued', kind: 'follow-up' })).ok,
+    true,
+  );
+  assert.equal((await f.call('select-session', { id: a })).ok, true);
+  assert.equal(
+    (await f.call('prompt', { text: 'A queued', kind: 'follow-up' })).ok,
+    true,
+  );
+  const rows = f.controller.snapshot().sessions;
+  assert.deepEqual(
+    rows.find((row) => row.id === a)!.queue.map((item) => item.text),
+    ['A queued'],
+  );
+  assert.deepEqual(
+    rows.find((row) => row.id === b)!.queue.map((item) => item.text),
+    ['B queued'],
+  );
+  assert(
+    rows
+      .find((row) => row.id === a)!
+      .messages.some((item) => item.text === 'A streaming'),
+  );
+  assert(
+    rows
+      .find((row) => row.id === b)!
+      .messages.some((item) => item.text === 'B streaming'),
+  );
+  releaseB();
+  await wait(
+    () => f.model.requests.length === 3,
+    'B follow-up starts while A stays running',
+  );
+  assert.equal(
+    f.controller.snapshot().sessions.find((row) => row.id === a)!.state,
+    'waiting',
+  );
+  assert(!JSON.stringify(f.model.requests[2]!.messages).includes('A prompt'));
+  releaseA();
+  await wait(
+    () =>
+      f.model.requests.length === 4 &&
+      f.controller.snapshot().sessions.every((row) => row.state === 'idle'),
+    'both finish',
+  );
+  assert(!JSON.stringify(f.model.requests[3]!.messages).includes('B prompt'));
+  const store = new CheckpointStore(f.home);
+  try {
+    assert(
+      store
+        .messages(a)
+        .some((item) => item.content === 'A follow-up completed'),
+    );
+    assert(!store.messages(a).some((item) => item.content.startsWith('B ')));
+    assert(
+      store
+        .messages(b)
+        .some((item) => item.content === 'B follow-up completed'),
+    );
+    assert(!store.messages(b).some((item) => item.content.startsWith('A ')));
+  } finally {
+    store.close();
+  }
+});
+
+test('background approval survives same-workspace switching and confirmed deletion removes only its owner', async (t) => {
+  const f = await setup(t, [
+    {
+      message: assistant('', [
+        {
+          id: 'write-a',
+          name: 'write_file',
+          args: {
+            file_path: 'a-deleted.txt',
+            content: 'must never be written',
+          },
+        },
+      ]),
+    },
+    { message: assistant('B safe answer') },
+  ]);
+  const a = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'A asks approval' });
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((row) => row.status === 'pending'),
+    'A waiting',
+  );
+  const approval = f.controller
+    .snapshot()
+    .interactions.find((row) => row.status === 'pending')!;
+  assert.equal((await f.call('new-session')).ok, true);
+  const b = f.controller.snapshot().activeSessionId;
+  assert.equal(
+    (await f.call('prompt', { text: 'B executes independently' })).ok,
+    true,
+  );
+  await wait(
+    () =>
+      f.model.requests.length === 2 &&
+      f.controller.snapshot().sessions.find((row) => row.id === b)?.state ===
+        'idle',
+    'B completes',
+  );
+  assert.equal(
+    f.controller.snapshot().interactions.find((row) => row.id === approval.id)!
+      .sessionId,
+    a,
+  );
+  assert.equal((await f.call('delete-session', { id: a })).ok, false);
+  assert.equal(f.controller.snapshot().activeSessionId, b);
+  assert.equal(
+    (await f.call('delete-session', { id: a, confirmed: true })).ok,
+    true,
+  );
+  assert.equal(f.controller.snapshot().activeSessionId, b);
+  assert(!f.controller.snapshot().sessions.some((row) => row.id === a));
+  assert(
+    !f.controller.snapshot().interactions.some((row) => row.id === approval.id),
+  );
+  assert.equal(existsSync(join(f.workspace, 'a-deleted.txt')), false);
+  assert.equal(
+    (
+      await f.call(
+        'answer',
+        { id: approval.id, revision: approval.revision, answer: 'approve' },
+        a,
+      )
+    ).ok,
+    false,
+  );
+  const store = new CheckpointStore(f.home);
+  try {
+    assert.equal(store.get(a), undefined);
+    assert(
+      store.messages(b).some((message) => message.content === 'B safe answer'),
+    );
+  } finally {
+    store.close();
+  }
+});
+
+test('deleting an active session selects a remaining session and preserves command identity', async (t) => {
+  const f = await setup(t, []);
+  const a = f.controller.snapshot().activeSessionId;
+  await f.call('new-session');
+  const b = f.controller.snapshot().activeSessionId;
+  const command = {
+    id: randomUUID(),
+    name: 'delete-session',
+    sessionId: b,
+    payload: { id: b, confirmed: true },
+  };
+  const [first, duplicate] = await Promise.all([
+    f.controller.dispatch(command),
+    f.controller.dispatch(command),
+  ]);
+  assert.equal(first.ok, true);
+  assert.deepEqual(duplicate, first);
+  assert.equal(f.controller.snapshot().activeSessionId, a);
+  assert(!f.controller.snapshot().sessions.some((row) => row.id === b));
+  assert.equal(
+    (await f.call('delete-session', { id: a, confirmed: true })).ok,
+    true,
+  );
+  assert.equal(f.controller.snapshot().sessions.length, 1);
+  assert.notEqual(f.controller.snapshot().activeSessionId, a);
+});
+
+test('aborting B leaves the simultaneous same-workspace A request alive', async (t) => {
+  let releaseA!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    releaseA = resolve;
+  });
+  t.after(() => releaseA());
+  let aAborted = false;
+  let bAborted = false;
+  const f = await setup(t, [
+    async (request) => {
+      request.signal.addEventListener('abort', () => {
+        aAborted = true;
+      });
+      await gate;
+      return { message: assistant('A alive'), usage: emptyUsage() };
+    },
+    async (request) => {
+      await new Promise<void>((_resolve, reject) => {
+        const abort = () => {
+          bAborted = true;
+          reject(request.signal.reason);
+        };
+        request.signal.addEventListener('abort', abort, { once: true });
+        if (request.signal.aborted) abort();
+      });
+      throw Error('unreachable');
+    },
+  ]);
+  const a = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'A stays running' });
+  await wait(() => f.model.requests.length === 1, 'A starts');
+  await f.call('new-session');
+  const b = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'B will stop' });
+  await wait(() => f.model.requests.length === 2, 'B starts');
+  assert.equal((await f.call('abort')).ok, true);
+  assert.equal(bAborted, true);
+  assert.equal(
+    f.controller.snapshot().runtime?.error,
+    undefined,
+    'an expected interruption is not a global runtime error',
+  );
+  assert.equal(aAborted, false);
+  assert.equal(
+    f.controller.snapshot().sessions.find((row) => row.id === a)!.state,
+    'waiting',
+  );
+  assert.equal(
+    f.controller.snapshot().sessions.find((row) => row.id === b)!.state,
+    'idle',
+  );
+  releaseA();
+  await wait(
+    () =>
+      f.controller.snapshot().sessions.find((row) => row.id === a)!.state ===
+      'idle',
+    'A finishes',
+  );
+  assert(
+    f.controller
+      .snapshot()
+      .sessions.find((row) => row.id === a)!
+      .messages.some((message) => message.text === 'A alive'),
+  );
+});
+
+test('confirmed deletion waits for a real background process and cannot stop another session', async (t) => {
+  let command = '';
+  const f = await setup(t, [
+    async () => ({
+      message: assistant('', [
+        { id: 'child', name: 'execute', args: { command, background: true } },
+      ]),
+      usage: emptyUsage(),
+    }),
+    { message: assistant('child started') },
+  ]);
+  const marker = join(f.workspace, 'synthetic-child.pid');
+  const script = `require('node:fs').writeFileSync(${JSON.stringify(marker)}, String(process.pid));setInterval(()=>{},1000)`;
+  const encoded = Buffer.from(script).toString('base64');
+  command = `"${process.execPath}" -e "eval(Buffer.from('${encoded}','base64').toString())"`;
+  const a = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'start local fixture child' });
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((row) => row.status === 'pending'),
+    'shell approval',
+  );
+  const approval = f.controller
+    .snapshot()
+    .interactions.find((row) => row.status === 'pending')!;
+  await f.call('answer', {
+    id: approval.id,
+    revision: approval.revision,
+    answer: 'approve',
+  });
+  await wait(
+    () =>
+      existsSync(marker) &&
+      f.controller.snapshot().sessions.find((row) => row.id === a)?.state ===
+        'idle',
+    'real child started',
+  );
+  const pid = Number(await readFile(marker, 'utf8'));
+  process.kill(pid, 0);
+  await f.call('new-session');
+  const b = f.controller.snapshot().activeSessionId;
+  assert.equal(
+    (await f.call('delete-session', { id: a, confirmed: true })).ok,
+    true,
+  );
+  assert.equal(f.controller.snapshot().activeSessionId, b);
+  assert.throws(() => process.kill(pid, 0), /ESRCH|no such process/i);
+  assert(!f.controller.snapshot().sessions.some((row) => row.id === a));
+  assert(!f.controller.snapshot().jobs.some((job) => job.sessionId === a));
+});
+
+test('desktop startup preserves a saved session owned by another terminal and starts independently', async (t) => {
+  const f = await setup(t, [{ message: assistant('saved bytes') }]);
+  const id = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'saved prompt' });
+  await wait(
+    () =>
+      f.model.requests.length === 1 &&
+      f.controller.snapshot().sessions[0]!.state === 'idle',
+    'saved conversation',
+  );
+  await f.controller.close();
+  const external = new AgentRuntime({
+    workspace: f.workspace,
+    home: f.home,
+    userHome: f.home,
+    settings: loadSettings(f.home),
+    model: new ScriptedModel(),
+    headless: true,
+  });
+  await external.close();
+  const owner = new AgentRuntime({
+    workspace: f.workspace,
+    home: f.home,
+    userHome: f.home,
+    session: id,
+    settings: loadSettings(f.home),
+    model: new ScriptedModel(),
+    headless: true,
+  });
+  const restarted = new RuntimeController({
+    workspace: f.workspace,
+    home: f.home,
+    userHome: f.home,
+    model: new ScriptedModel(),
+    emit: () => {},
+  });
+  try {
+    const snapshot = restarted.snapshot();
+    assert.notEqual(snapshot.activeSessionId, id);
+    assert.equal(
+      snapshot.sessions.find((row) => row.id === id)!.occupied,
+      true,
+    );
+    assert(
+      snapshot.sessions
+        .find((row) => row.id === id)!
+        .messages.some((row) => row.text === 'saved bytes'),
+    );
+    const select = await restarted.dispatch({
+      id: randomUUID(),
+      name: 'select-session',
+      sessionId: snapshot.activeSessionId,
+      payload: { id },
+    });
+    assert.equal(select.ok, true);
+    const viewing = restarted.snapshot();
+    assert.equal(viewing.activeSessionId, id);
+    assert.equal(viewing.sessions.find((row) => row.id === id)!.occupied, true);
+    assert(
+      viewing.sessions
+        .find((row) => row.id === id)!
+        .messages.some((row) => row.text === 'saved bytes'),
+    );
+    const prompt = await restarted.dispatch({
+      id: randomUUID(),
+      name: 'prompt',
+      sessionId: id,
+      payload: { text: 'must not execute in the foreign writer' },
+    });
+    assert.equal(prompt.ok, false);
+    for (const name of ['delete-session', 'archive-session'] as const) {
+      const result = await restarted.dispatch({
+        id: randomUUID(),
+        name,
+        sessionId: snapshot.activeSessionId,
+        payload: { id, confirmed: true, archived: true },
+      });
+      assert.equal(result.ok, false, name);
+    }
+    assert.equal(owner.store.get(id)?.id, id);
+    const exported = await restarted.dispatch({
+      id: randomUUID(),
+      name: 'export',
+      sessionId: id,
+      payload: { format: 'md' },
+    });
+    assert.equal(exported.ok, true);
+    assert(
+      String((exported.data as { content: string }).content).includes(
+        'saved bytes',
+      ),
+    );
+    const cloned = await restarted.dispatch({
+      id: randomUUID(),
+      name: 'clone',
+      sessionId: id,
+      payload: {},
+    });
+    assert.equal(cloned.ok, true);
+    assert.notEqual(restarted.snapshot().activeSessionId, id);
+    assert(
+      restarted
+        .snapshot()
+        .sessions.find(
+          (row) => row.id === restarted.snapshot().activeSessionId,
+        )!
+        .messages.some((row) => row.text === 'saved bytes'),
+    );
+    assert.equal(owner.store.get(id)?.id, id);
+  } finally {
+    await restarted.close();
+    await owner.close();
+  }
+});
+
+test('a background model failure stays in its source session without a toast in the selected session', async (t) => {
+  let fail!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    fail = resolve;
+  });
+  t.after(() => fail());
+  const f = await setup(t, [
+    async () => {
+      await gate;
+      throw Error('A fixture failure');
+    },
+  ]);
+  const a = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'A will fail later' });
+  await wait(() => f.model.requests.length === 1, 'A model request');
+  await f.call('new-session');
+  const b = f.controller.snapshot().activeSessionId;
+  fail();
+  await wait(
+    () =>
+      f.controller.snapshot().sessions.find((row) => row.id === a)?.state ===
+      'idle',
+    'background failure settles',
+  );
+  const snapshot = f.controller.snapshot();
+  assert.equal(snapshot.activeSessionId, b);
+  assert.equal(snapshot.runtime?.error, undefined);
+  assert(
+    snapshot.sessions
+      .find((row) => row.id === a)!
+      .messages.some((row) => row.text?.includes('A fixture failure')),
+  );
+  assert(
+    !snapshot.sessions
+      .find((row) => row.id === b)!
+      .messages.some((row) => row.text?.includes('A fixture failure')),
+  );
+});
+
+test('branch selection with a running background job refuses before changing the stored head', async (t) => {
+  const f = await setup(t, [
+    {
+      message: assistant('', [
+        {
+          id: 'background-branch',
+          name: 'execute',
+          args: {
+            command: `"${process.execPath}" -e "setInterval(()=>{},1000)"`,
+            background: true,
+          },
+        },
+      ]),
+    },
+    { message: assistant('background job active') },
+  ]);
+  const id = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'start background fixture' });
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((row) => row.status === 'pending'),
+    'command approval',
+  );
+  const approval = f.controller
+    .snapshot()
+    .interactions.find((row) => row.status === 'pending')!;
+  await f.call('answer', {
+    id: approval.id,
+    revision: approval.revision,
+    answer: 'approve',
+  });
+  await wait(
+    () =>
+      f.model.requests.length === 2 &&
+      f.controller.snapshot().sessions.find((row) => row.id === id)?.state ===
+        'idle',
+    'foreground ends',
+  );
+  const settingsBefore = loadSettings(f.home);
+  assert.equal(
+    (
+      await f.call('configure', {
+        endpoint: 'http://127.0.0.1:1/v1',
+        protocol: 'openai',
+        model: 'synthetic-new',
+        apiKey: 'synthetic-local-only',
+      })
+    ).ok,
+    false,
+  );
+  assert.equal((await f.call('logout')).ok, false);
+  assert.deepEqual(
+    loadSettings(f.home),
+    settingsBefore,
+    'background work prevents replacing shared connection settings',
+  );
+  const reader = new CheckpointStore(f.home);
+  try {
+    const head = reader.get(id)!.head;
+    const first = reader
+      .tree(id)
+      .find((node) => node.message?.role === 'user')!;
+    assert.notEqual(head, first.id);
+    const reply = await f.call('select-branch', { messageId: first.id });
+    assert.equal(reply.ok, false);
+    assert.equal(
+      reader.get(id)!.head,
+      head,
+      'a rejected branch operation cannot move the history head',
+    );
+  } finally {
+    reader.close();
+  }
+});
+
+test('all desktop close callers wait until the same in-flight session is cleaned up', async (t) => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  const f = await setup(t, [
+    async () => {
+      await gate;
+      return { message: assistant('released'), usage: emptyUsage() };
+    },
+  ]);
+  await f.call('prompt', { text: 'hold shutdown fixture' });
+  await wait(() => f.model.requests.length === 1, 'model entered');
+  const first = f.controller.close();
+  let secondFinished = false;
+  const second = f.controller.close().then(() => {
+    secondFinished = true;
+  });
+  await delay(20);
+  assert.equal(secondFinished, false);
+  release();
+  await Promise.all([first, second]);
+  assert.equal(secondFinished, true);
+});
+
+test('browser lifecycle cleanup is acknowledged before a session loses its history and can retry failure', async (t) => {
+  let attempts = 0;
+  const f = await setup(t, [], true, undefined, async (id) => {
+    attempts++;
+    const reader = new CheckpointStore(f.home);
+    try {
+      assert.ok(reader.get(id), 'history remains while browser cleanup runs');
+    } finally {
+      reader.close();
+    }
+    if (attempts === 1) throw Error('synthetic browser cleanup failed');
+  });
+  const id = f.controller.snapshot().activeSessionId;
+  const failed = await f.call('delete-session', { id, confirmed: true });
+  assert.equal(failed.ok, false);
+  assert.match(failed.error!, /browser cleanup failed/);
+  assert.equal(f.controller.snapshot().activeSessionId, id);
+  assert.equal(
+    f.controller.snapshot().sessions.find((row) => row.id === id)!.lifecycle,
+    'deleting',
+  );
+  assert.equal(
+    (await f.call('prompt', { text: 'must not enter deleting session' })).ok,
+    false,
+  );
+  assert.equal(
+    (await f.call('delete-session', { id, confirmed: true })).ok,
+    true,
+  );
+  assert.equal(attempts, 2);
+  assert(!f.controller.snapshot().sessions.some((row) => row.id === id));
+});
+
+test('the internal browser cleanup bridge awaits acknowledgment and rejects a failed cleanup', async () => {
+  const posted: { type: string; id: string; sessionId: string }[] = [];
+  const bridge = new BrowserBridge((message) =>
+    posted.push(message as (typeof posted)[number]),
+  );
+  let finished = false;
+  const pending = bridge.releaseSession('fixture-session').then(() => {
+    finished = true;
+  });
+  assert.deepEqual(
+    { type: posted[0]!.type, sessionId: posted[0]!.sessionId },
+    { type: 'browser-release', sessionId: 'fixture-session' },
+  );
+  await delay(5);
+  assert.equal(finished, false);
+  bridge.receive({ id: posted[0]!.id, ok: true, data: { text: 'closed' } });
+  await pending;
+  const failed = bridge.releaseSession('fixture-session');
+  bridge.receive({
+    id: posted[1]!.id,
+    ok: false,
+    error: 'fixture close failed',
+  });
+  await assert.rejects(failed, /fixture close failed/);
+  bridge.close();
+});
+
+test('a background session cleanup leaves selection and other model turns responsive', async (t) => {
+  let release!: () => void;
+  let entered = false;
+  let cleanups = 0;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  const f = await setup(
+    t,
+    [{ message: assistant('independent answer') }],
+    true,
+    undefined,
+    async () => {
+      cleanups++;
+      entered = true;
+      await gate;
+    },
+  );
+  const a = f.controller.snapshot().activeSessionId;
+  await f.call('new-session');
+  const b = f.controller.snapshot().activeSessionId;
+  await f.call('new-session');
+  const c = f.controller.snapshot().activeSessionId;
+  const command = {
+    id: randomUUID(),
+    name: 'delete-session' as const,
+    sessionId: c,
+    payload: { id: b, confirmed: true },
+  };
+  const deleting = f.controller.dispatch(command);
+  const retry = f.controller.dispatch(command);
+  await wait(() => entered, 'background cleanup entered');
+  assert.equal(
+    f.controller.snapshot().sessions.find((row) => row.id === b)!.lifecycle,
+    'deleting',
+  );
+  const selected = f.call('select-session', { id: a });
+  await wait(
+    () => f.controller.snapshot().activeSessionId === a,
+    'select A while B cleanup remains blocked',
+  );
+  assert.equal((await selected).ok, true);
+  assert.equal(
+    (await f.call('prompt', { text: 'A while B deletes' })).ok,
+    true,
+  );
+  await wait(
+    () =>
+      f.model.requests.length === 1 &&
+      f.controller.snapshot().sessions.find((row) => row.id === a)!.state ===
+        'idle',
+    'A completes before B cleanup',
+  );
+  assert(
+    f.controller
+      .snapshot()
+      .sessions.find((row) => row.id === a)!
+      .messages.some((row) => row.text === 'independent answer'),
+  );
+  assert.equal(cleanups, 1);
+  release();
+  assert.equal((await deleting).ok, true);
+  assert.deepEqual(await retry, await deleting);
+  assert.equal(f.controller.snapshot().activeSessionId, a);
+  assert.equal(
+    f.controller.snapshot().sessions.some((row) => row.id === b),
+    false,
+  );
+});
+
+test('closing during active deletion waits for cleanup without creating a fallback runtime', async (t) => {
+  let release!: () => void;
+  let entered = false;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  const f = await setup(t, [], true, undefined, async () => {
+    entered = true;
+    await gate;
+  });
+  const id = f.controller.snapshot().activeSessionId;
+  const deletion = f.call('delete-session', { id, confirmed: true });
+  await wait(() => entered, 'active deletion cleanup entered');
+  let closed = false;
+  const closing = f.controller.close().then(() => {
+    closed = true;
+  });
+  await delay(10);
+  assert.equal(closed, false);
+  release();
+  assert.equal((await deletion).ok, true);
+  await closing;
+  const store = new CheckpointStore(f.home);
+  try {
+    assert.equal(store.get(id), undefined);
+    assert.equal(store.list().length, 0);
+  } finally {
+    store.close();
+  }
+});
+
+test('shared desktop preferences and saved defaults do not revert when switching running same-folder sessions', async (t) => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  const f = await setup(t, [
+    async () => {
+      await gate;
+      return {
+        message: assistant('original model completed'),
+        usage: emptyUsage(),
+      };
+    },
+  ]);
+  const a = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'hold A' });
+  await wait(() => f.model.requests.length === 1, 'original model in flight');
+  await f.call('new-session');
+  const settings = {
+    theme: 'dark',
+    hideThinking: true,
+    defaultModel: 'saved-default',
+    defaultEffort: 'high',
+    doubleEscape: 'fork',
+    updateCheck: false,
+    enabledModels: ['saved-default'],
+  };
+  assert.equal((await f.call('save-settings', { settings })).ok, true);
+  await f.call('select-session', { id: a });
+  const selected = f.controller.snapshot();
+  for (const [key, value] of Object.entries(settings))
+    assert.deepEqual(
+      selected.settings[key as keyof typeof selected.settings],
+      value,
+      key,
+    );
+  assert.equal(
+    selected.sessions.find((row) => row.id === a)!.model,
+    'scripted',
+  );
+  assert.equal(selected.sessions.find((row) => row.id === a)!.state, 'waiting');
+  assert.equal(f.model.requests.length, 1);
+  release();
+  await wait(
+    () =>
+      f.controller.snapshot().sessions.find((row) => row.id === a)!.state ===
+      'idle',
+    'A original request completes',
+  );
+  assert(selected.sessions.every((row) => row.showThinking === false));
+});
+
+test('trusting a folder initializes every idle session with its own project context', async (t) => {
+  const f = await setup(
+    t,
+    [{ message: assistant('trusted A') }, { message: assistant('trusted B') }],
+    false,
+  );
+  await writeFile(
+    join(f.workspace, 'AGENTS.md'),
+    'Independent trusted workspace instructions marker.\n',
+  );
+  const a = f.controller.snapshot().activeSessionId;
+  await f.call('new-session');
+  const b = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('trust', { enabled: true })).ok, true);
+  await f.call('select-session', { id: a });
+  assert.equal(
+    (await f.call('prompt', { text: 'trusted A request' })).ok,
+    true,
+  );
+  await wait(
+    () =>
+      f.model.requests.length === 1 &&
+      f.controller.snapshot().sessions.find((row) => row.id === a)!.state ===
+        'idle',
+    'trusted A request',
+  );
+  assert(
+    f.model.requests[0]!.system.includes(
+      'Independent trusted workspace instructions marker',
+    ),
+  );
+  await f.call('select-session', { id: b });
+  assert.equal(
+    (await f.call('prompt', { text: 'trusted B request' })).ok,
+    true,
+  );
+  await wait(() => f.model.requests.length === 2, 'trusted B request');
+  assert(
+    f.model.requests[1]!.system.includes(
+      'Independent trusted workspace instructions marker',
+    ),
+  );
+  assert(
+    f.controller
+      .snapshot()
+      .workspaces.find((row) => row.path === realpathSync(f.workspace))!
+      .trusted,
+  );
 });

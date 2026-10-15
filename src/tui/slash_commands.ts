@@ -241,6 +241,7 @@ export function hotkeysText(): string {
     '  ctrl+o          expand/collapse tool output',
     '  ctrl+r          reverse-i-search history',
     '  ctrl+l          choose a model (/models); also redraws the screen',
+    '  alt+s           switch sessions, including while an approval waits',
     '  ctrl+p          next model, for this session',
     '  shift+tab       next session mode (manual, accept edits, read-only, auto)',
     '  alt+t           next thinking depth, for this session',

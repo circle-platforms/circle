@@ -35,6 +35,7 @@ export class RuntimeSupervisor {
   // The runtime's browser requests under way, to stop when it says so or exits
   private browserRequests = new Map<string, AbortController>();
   private browserHandler?: BrowserHandler;
+  private sessionCleanup?: (sessionId: string) => Promise<void>;
   constructor(
     readonly home: string,
     readonly directory: string,
@@ -72,10 +73,13 @@ export class RuntimeSupervisor {
           url?: unknown;
           request?: unknown;
           id?: unknown;
+          sessionId?: unknown;
         }) => {
           if (message.type === 'open-url' && typeof message.url === 'string')
             this.openUrl(message.url);
           if (message.type === 'browser') this.browser(message.request);
+          if (message.type === 'browser-release')
+            this.releaseSession(message.id, message.sessionId);
           if (message.type === 'browser-cancel')
             this.browserRequests.get(String(message.id))?.abort();
           if (message.type === 'update' && message.update) {
@@ -133,6 +137,45 @@ export class RuntimeSupervisor {
   /** Who carries out the runtime's browser requests: the window's browser sessions. */
   onBrowser(handler: BrowserHandler) {
     this.browserHandler = handler;
+  }
+  onSessionCleanup(handler: (sessionId: string) => Promise<void>) {
+    this.sessionCleanup = handler;
+  }
+  private releaseSession(id: unknown, sessionId: unknown) {
+    if (
+      typeof id !== 'string' ||
+      id.length > 200 ||
+      typeof sessionId !== 'string' ||
+      sessionId.length > 200
+    )
+      return;
+    if (!this.latest?.snapshot.sessions.some((row) => row.id === sessionId)) {
+      this.reply({
+        id,
+        ok: false,
+        error: 'session not found for browser cleanup',
+      });
+      return;
+    }
+    void Promise.resolve()
+      .then(() => this.sessionCleanup?.(sessionId))
+      .then(
+        () =>
+          this.reply({
+            id,
+            ok: true,
+            data: { text: 'session browser closed' },
+          }),
+        (error) =>
+          this.reply({
+            id,
+            ok: false,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'session browser cleanup failed',
+          }),
+      );
   }
   private browser(value: unknown) {
     let request: BrowserRequest;

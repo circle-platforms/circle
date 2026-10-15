@@ -94,6 +94,7 @@ let browsers: BrowserSessions | null = null;
 // Certificate exceptions live only in this application process, across window recreation.
 const browserCertificates = new Map<string, Set<string>>();
 let runtime: RuntimeSupervisor | undefined;
+let runtimeSessions = new Set<string>();
 const workspaceSelections = new Map<string, string>();
 const previewMode = process.env.CIRCLE_WORKBENCH_MODE === 'preview';
 const rendererRoot = join(__dirname, 'renderer');
@@ -386,6 +387,10 @@ async function createWindow() {
     (id) =>
       runtime?.state().snapshot.sessions.find((row) => row.id === id)?.mode,
   );
+  runtime?.onSessionCleanup(async (id) => {
+    await browsers?.deleteSession(id);
+    browserCertificates.delete(id);
+  });
   runtime?.onBrowser((request, signal) => {
     if (!browsers) throw Error('the browser is closed');
     return browsers.agent(request, signal);
@@ -465,6 +470,15 @@ app
         },
       );
       runtime.subscribe((update) => {
+        const current = new Set(
+          update.snapshot.sessions.map((session) => session.id),
+        );
+        for (const id of runtimeSessions)
+          if (!current.has(id)) {
+            void browsers?.deleteSession(id).catch(() => {});
+            browserCertificates.delete(id);
+          }
+        runtimeSessions = current;
         window?.webContents.send('circle:runtime-update', update);
         showAttention(update);
       });
