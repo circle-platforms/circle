@@ -56,4 +56,9 @@ export const developer: Record<string, string> = {
   '{n} tools waiting for approval': '{n} 个工具等待审批',
   '{n} tool running': '{n} 个工具正在运行',
   '{n} tools running': '{n} 个工具正在运行',
+  'result unavailable': '结果不可用',
+  'execution resource': '执行资源',
+  'foreground interface': '前台界面',
+  build: '构建',
+  'tool results': '工具结果',
 };
