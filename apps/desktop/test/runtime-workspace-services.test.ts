@@ -1,6 +1,14 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import {
+  mkdtemp,
+  mkdir,
+  writeFile,
+  readFile,
+  rm,
+  rename,
+  symlink,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -13,6 +21,7 @@ import {
   defaultSettings,
   trustFolder,
   saveSettings,
+  saveSettingsChange,
 } from '../../../src/settings.ts';
 import type { WorkspaceServiceEvent } from '../src/workspace-protocol.ts';
 const assistant = (content: string, calls?: any[]) => ({
@@ -282,5 +291,198 @@ test('loaded project rules expose their real source path in the native snapshot'
   assert.equal(
     await readFile(rule.path!, 'utf8'),
     'independent loaded rule marker',
+  );
+});
+
+test('task bridge runs isolated writers and read-only reviewer while task approval can be opened', async (t) => {
+  const handler: NonNullable<
+    ConstructorParameters<typeof ScriptedModel>[0]
+  >[number] = async (request) => {
+    const prompt =
+      request.messages.find((m) => m.role === 'user')?.content ?? '';
+    const match = /Task (left|right|review), attempt/.exec(prompt);
+    if (!match)
+      return {
+        message: assistant('parent ready'),
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+        },
+      };
+    assert.ok(
+      !request.tools.some((tool) => tool.name.startsWith('native_tasks_')),
+    );
+    const name = match[1];
+    const hadTool = request.messages.some((m) => m.role === 'tool');
+    return {
+      message: hadTool
+        ? assistant(`finished ${name}`)
+        : assistant('', [
+            {
+              id: `${name}-call`,
+              name: name === 'review' ? 'read_file' : 'write_file',
+              args:
+                name === 'review'
+                  ? { file_path: 'README.md' }
+                  : { file_path: 'same.txt', content: name },
+            },
+          ]),
+      usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+      },
+    };
+  };
+  const f = await setup(t, Array(30).fill(handler));
+  await writeFile(join(f.workspace, 'README.md'), 'baseline');
+  execFileSync('git', ['-C', f.workspace, 'add', 'README.md']);
+  execFileSync('git', [
+    '-C',
+    f.workspace,
+    '-c',
+    'user.name=Circle Fixture',
+    '-c',
+    'user.email=fixture@example.invalid',
+    'commit',
+    '-qm',
+    'Baseline',
+  ]);
+  const parent = f.controller.snapshot().activeSessionId;
+  const enqueue = await f.service(
+    'tasks',
+    'enqueue',
+    {
+      operationId: 'fixture-isolated-three',
+      tasks: ['left', 'right', 'review'].map((id) => ({
+        id,
+        access: id === 'review' ? 'readonly' : 'write',
+        prompt: `perform ${id}`,
+        acceptanceCriteria: ['inspect actual result'],
+      })),
+    },
+    parent,
+  );
+  assert.equal(enqueue.ok, true, enqueue.error);
+  await wait(() =>
+    f.controller.snapshot().interactions.some((i) => i.status === 'pending'),
+  );
+  const waiting = f.controller
+    .snapshot()
+    .interactions.find((i) => i.status === 'pending')!;
+  const selected = await f.call('select-session', { id: waiting.sessionId });
+  assert.equal(selected.ok, true, selected.error);
+  assert.equal(f.controller.snapshot().activeSessionId, waiting.sessionId);
+  await f.call('select-session', { id: parent });
+  const until = Date.now() + 8000;
+  let tasks: any[] = [];
+  while (Date.now() < until) {
+    for (const row of f.controller
+      .snapshot()
+      .interactions.filter((i) => i.status === 'pending')) {
+      const answer = await f.call(
+        'answer',
+        { id: row.id, revision: row.revision, answer: 'approve' },
+        row.sessionId,
+      );
+      assert.equal(answer.ok, true, answer.error);
+    }
+    const list = await f.service('tasks', 'list', {}, parent);
+    assert.equal(list.ok, true, list.error);
+    tasks = list.data as any[];
+    if (
+      tasks.every((task) =>
+        ['needs_review', 'succeeded', 'failed'].includes(task.state),
+      )
+    )
+      break;
+    await delay(10);
+  }
+  assert.equal(tasks.length, 3);
+  assert.ok(
+    tasks.every((task) => task.state === 'needs_review'),
+    JSON.stringify(
+      tasks.map((t) => ({ id: t.spec.id, state: t.state, reason: t.reason })),
+    ),
+  );
+  assert.notEqual(tasks[0].worktree, tasks[1].worktree);
+  for (const id of ['left', 'right'])
+    assert.equal(
+      await readFile(
+        join(tasks.find((task) => task.spec.id === id).worktree, 'same.txt'),
+        'utf8',
+      ),
+      id,
+    );
+  await assert.rejects(readFile(join(f.workspace, 'same.txt')));
+  assert.ok(f.events.some((event) => event.service === 'tasks'));
+});
+
+test('a replaced trusted root cannot redirect an existing session into another trusted repository', async (t) => {
+  const f = await setup(t);
+  await writeFile(join(f.workspace, 'marker.txt'), 'A');
+  const first = f.controller.snapshot().activeSessionId;
+  const other = join(f.root, 'other');
+  await mkdir(other);
+  execFileSync('git', ['init', '-q', other]);
+  await writeFile(join(other, 'marker.txt'), 'B');
+  saveSettingsChange(f.home, (settings) =>
+    Object.assign(settings, trustFolder(settings, other)),
+  );
+  const initial = await f.service(
+    'documents',
+    'read',
+    { path: 'marker.txt' },
+    first,
+  );
+  assert.equal(initial.ok, true);
+  const revision = (initial.data as any).revision;
+  await rename(f.workspace, f.workspace + '.old');
+  await symlink(other, f.workspace, 'dir');
+  for (const [service, method, params] of [
+    ['documents', 'read', { path: 'marker.txt' }],
+    [
+      'documents',
+      'save',
+      { path: 'marker.txt', content: 'redirected', expectedRevision: revision },
+    ],
+    ['git', 'status', {}],
+  ] as const) {
+    const denied = await f.service(service, method, params, first);
+    assert.equal(denied.ok, false);
+    assert.match(denied.error!, /workspace root changed/);
+  }
+  const shell = await f.call(
+    'shell',
+    { command: 'node -e process.exit(0)' },
+    first,
+  );
+  assert.equal(shell.ok, false);
+  assert.match(shell.error!, /workspace root changed/);
+  assert.equal(f.model.requests.length, 0);
+  assert.equal(await readFile(join(other, 'marker.txt'), 'utf8'), 'B');
+  assert.equal(
+    await readFile(join(f.workspace + '.old', 'marker.txt'), 'utf8'),
+    'A',
+  );
+  const opened = await f.call('open-workspace', { path: other });
+  assert.equal(opened.ok, true, opened.error);
+  const independent = await f.service('documents', 'read', {
+    path: 'marker.txt',
+  });
+  assert.equal(independent.ok, true, independent.error);
+  assert.equal((independent.data as any).content, 'B');
+  await rename(other, other + '.old');
+  await mkdir(other);
+  await writeFile(join(other, 'marker.txt'), 'replacement inode');
+  const replaced = await f.service('documents', 'read', { path: 'marker.txt' });
+  assert.equal(replaced.ok, false);
+  assert.match(replaced.error!, /workspace root changed/);
+  assert.equal(
+    await readFile(join(other, 'marker.txt'), 'utf8'),
+    'replacement inode',
   );
 });

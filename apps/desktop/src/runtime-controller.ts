@@ -88,6 +88,7 @@ import { currentNetworkStatus } from '../../../src/net.js';
 import { SessionMetadata } from './session-metadata';
 import { WorkspaceServices } from './workspace/workspace-services';
 import { TaskService } from './workspace/task-service';
+import { CollaborationResources } from './workspace/collaboration';
 import { createCollaborationTools } from './workspace/collaboration-tools';
 import type { TaskRecord } from './workspace/task-store';
 import type { FileMutations } from '../../../src/file_mutations.js';
@@ -300,9 +301,15 @@ export class RuntimeController {
   private mutation = Promise.resolve();
   private workspaceServices = new Map<string, WorkspaceServices>();
   private taskServices = new Map<string, TaskService>();
+  private taskResources = new CollaborationResources();
   private taskWorkspaces = new Map<string, string>();
+  private workspaceRoots = new Map<
+    string,
+    { canonical: string; dev: number; ino: number }
+  >();
   private taskRuntimes = new Map<string, AgentRuntime>();
-  private workspaceEventPending: Promise<unknown> = Promise.resolve();
+  private workspaceEventPending = new Set<Promise<unknown>>();
+  private workspaceStreamFailures = new Set<string>();
   private workspaceEpoch = randomUUID();
   private workspaceSeq = 0;
   private stoppedJobs = new Set<string>();
@@ -337,6 +344,13 @@ export class RuntimeController {
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
     this.metadata = new SessionMetadata(this.home);
     this.store = new CheckpointStore(this.home);
+    for (const session of this.store.list(undefined, true)) {
+      try {
+        this.bindWorkspace(session.workspace);
+      } catch {
+        /* Deleted histories require explicitly reopening an existing folder. */
+      }
+    }
     const saved = this.savedLocation();
     const settings = loadSettings(this.home);
     const workspace =
@@ -511,19 +525,74 @@ export class RuntimeController {
     workspace: string,
     event: WorkspaceServiceEvent,
   ): void {
-    const pending = this.workspaceEventPending.then(() =>
-      this.services(workspace).publishSource(event),
-    );
-    this.workspaceEventPending = pending.catch((error) => {
-      this.error = String(error);
-    });
+    if (this.workspaceStreamFailures.has(workspace)) return;
+    const failure = (error: unknown) => {
+      if (this.workspaceStreamFailures.has(workspace)) return;
+      this.workspaceStreamFailures.add(workspace);
+      this.error = `workspace event persistence failed: ${String(error)}`;
+      const runtime = this.taskRuntimes.get(event.resourceId);
+      if (runtime) void runtime.cancel({ keepQueue: false }).catch(() => {});
+      if (!this.closing) this.publish();
+    };
+    try {
+      const pending = this.services(workspace).publishSource(event);
+      this.workspaceEventPending.add(pending);
+      void pending
+        .catch(failure)
+        .finally(() => this.workspaceEventPending.delete(pending));
+    } catch (error) {
+      failure(error);
+    }
+  }
+
+  private bindWorkspace(workspace: string): void {
+    const canonical = realpathSync(workspace);
+    const directory = statSync(canonical);
+    if (!directory.isDirectory()) throw Error('workspace must be a directory');
+    const previous = this.workspaceRoots.get(workspace);
+    if (
+      previous &&
+      (previous.canonical !== canonical ||
+        previous.dev !== directory.dev ||
+        previous.ino !== directory.ino)
+    )
+      throw Error('workspace root changed; reopen and authorize the folder');
+    if (!previous)
+      this.workspaceRoots.set(workspace, {
+        canonical,
+        dev: directory.dev,
+        ino: directory.ino,
+      });
+  }
+  private workspaceRoot(workspace: string): string {
+    const bound = this.workspaceRoots.get(workspace);
+    if (!bound)
+      throw Error('workspace authorization is missing; reopen the folder');
+    const canonical = realpathSync(workspace);
+    const directory = statSync(canonical);
+    if (
+      canonical !== bound.canonical ||
+      directory.dev !== bound.dev ||
+      directory.ino !== bound.ino
+    )
+      throw Error('workspace root changed; reopen and authorize the folder');
+    return bound.canonical;
   }
   private trustedWorkspace(workspace: string): string {
-    const root = realpathSync(workspace);
-    const origin = this.taskWorkspaces.get(root) ?? root;
+    const canonical = this.workspaceRoot(workspace);
+    const origin = this.taskWorkspaces.get(canonical) ?? canonical;
+    if (origin !== canonical) this.trustedWorkspace(origin);
     if (!isFolderTrusted(loadSettings(this.home), origin))
       throw Error('trust this workspace first');
-    return root;
+    return canonical;
+  }
+  private validWorkspaceRoot(workspace: string): boolean {
+    try {
+      this.workspaceRoot(workspace);
+      return true;
+    } catch {
+      return false;
+    }
   }
   private services(workspace: string): WorkspaceServices {
     const root = this.trustedWorkspace(workspace);
@@ -607,6 +676,12 @@ export class RuntimeController {
     if (!service) {
       service = new TaskService({
         workspace: root,
+        resources: this.taskResources,
+        settingsPath: join(
+          this.options.dataFolder ?? this.home,
+          'workspace-services',
+          'task-settings.json',
+        ),
         dataDir: join(
           this.options.dataFolder ?? this.home,
           'collaboration',
@@ -685,6 +760,7 @@ export class RuntimeController {
     sessionId?: string,
     task?: TaskRecord,
   ): AgentRuntime {
+    this.bindWorkspace(workspace);
     const settings = settingsForRun(this.home, workspace).settings;
     const create = (session?: string) =>
       new AgentRuntime({
@@ -787,6 +863,7 @@ export class RuntimeController {
     }
     runtime.bus.subscribe((event) => {
       if (task) {
+        this.event(runtime, event, false);
         const eventRoot =
           this.taskWorkspaces.get(realpathSync(workspace)) ?? workspace;
         this.workspaceEvent(eventRoot, {
@@ -1102,8 +1179,9 @@ export class RuntimeController {
         id: identity(path),
         name: path === join(this.home, 'workspace') ? 'circle' : basename(path),
         path,
-        branch: this.branch(path),
-        trusted: isFolderTrusted(savedSettings, path),
+        branch: this.validWorkspaceRoot(path) ? this.branch(path) : '',
+        trusted:
+          this.validWorkspaceRoot(path) && isFolderTrusted(savedSettings, path),
         origin: 'native',
         instructions:
           !inspecting && isFolderTrusted(savedSettings, path)
@@ -1453,7 +1531,11 @@ export class RuntimeController {
       event,
     });
   }
-  private event(runtime: AgentRuntime, event: CircleEvent) {
+  private event(
+    runtime: AgentRuntime,
+    event: CircleEvent,
+    publishSnapshot = true,
+  ) {
     if (runtime.isClosing) return;
     if (
       ['run_end', 'run_error'].includes(event.kind) &&
@@ -1584,6 +1666,7 @@ export class RuntimeController {
       });
     }
     // The bus is observation only. Enforcement remains inside Harness and awaited callbacks.
+    if (!publishSnapshot) return;
     this.publish({
       kind: event.kind,
       sessionId: id,
@@ -1993,6 +2076,12 @@ export class RuntimeController {
   ): void {
     const owner = this.runtimes.get(id);
     if (
+      [...this.taskServices.values()].some((service) =>
+        service.hasActiveSession(id),
+      )
+    )
+      throw Error(`stop this session's tasks before ${action} it`);
+    if (
       (!owner && sessionOccupied(this.home, id)) ||
       (owner?.session.id === id &&
         (owner.busy || this.runtimes.lifecycle(id) !== 'open')) ||
@@ -2013,6 +2102,26 @@ export class RuntimeController {
     this.synchronizeSharedSettings(loadSettings(this.home));
     const p = command.payload;
     let runtime = this.active;
+    const navigation = [
+      'state',
+      'close',
+      'abort',
+      'answer',
+      'select-session',
+      'new-session',
+      'open-workspace',
+      'set-default-workspace',
+      'delete-session',
+      'archive-session',
+      'archive-workspace',
+      'rename-session',
+      'stop-job',
+      'save-settings',
+      'trust',
+      'export',
+    ];
+    if (!navigation.includes(command.name))
+      this.workspaceRoot(runtime.options.workspace);
     if (
       this.viewedSessionId &&
       ![
@@ -2037,6 +2146,7 @@ export class RuntimeController {
       if (!row) throw Error('session not found');
       // This acquires a lease only after the previous writer released it. A live
       // foreign writer rejects the action without touching the selected history.
+      this.workspaceRoot(row.workspace);
       runtime = this.runtimes.open(row.workspace, row.id);
       this.active = runtime;
       this.viewedSessionId = undefined;
@@ -3070,7 +3180,7 @@ export class RuntimeController {
     );
     await this.runtimes.close();
     await Promise.allSettled(this.tasks);
-    await this.workspaceEventPending;
+    await Promise.allSettled(this.workspaceEventPending);
     await Promise.all(
       [...this.workspaceServices.values()].map((service) => service.dispose()),
     );
