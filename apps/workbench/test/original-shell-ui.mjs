@@ -34,9 +34,21 @@ try {
         .getByRole('textbox', { name: 'message', exact: true })
         .waitFor();
       await page.evaluate(async (theme) => {
-        const { applyTheme } = await import('/src/theme.ts');
-        applyTheme(theme, 'default');
+        const { PreviewRuntime } = await import('/src/model/state.ts');
+        const runtime = new PreviewRuntime(localStorage);
+        runtime.change((snapshot) => {
+          snapshot.settings.theme = theme;
+        });
       }, theme);
+      await page.reload();
+      await page
+        .getByRole('textbox', { name: 'message', exact: true })
+        .waitFor();
+      const paletteBefore = await page.evaluate(() =>
+        getComputedStyle(document.documentElement)
+          .getPropertyValue('--bg')
+          .trim(),
+      );
       assert.equal(
         await page
           .locator(
@@ -46,6 +58,7 @@ try {
         0,
       );
       const composer = page.locator('textarea[aria-label="message"]');
+      const composerOwner = await composer.elementHandle();
       await composer.fill('Original shell preserved draft');
       await composer.evaluate((el) => el.setSelectionRange(4, 12));
       await page
@@ -64,6 +77,11 @@ try {
         .getByRole('button', { name: 'close inspector', exact: true })
         .click();
       assert.equal(
+        await page.locator('.inspector').isVisible(),
+        false,
+        'closed inspector is actually hidden',
+      );
+      assert.equal(
         await page.locator('#inspector-terminal-terminal').count(),
         1,
         'closing inspector preserves terminal',
@@ -75,6 +93,11 @@ try {
       await page
         .getByRole('button', { name: 'close inspector', exact: true })
         .click();
+      assert.equal(
+        await page.locator('.inspector').isVisible(),
+        false,
+        'closed inspector is actually hidden',
+      );
       await composer.focus();
       await page.keyboard.press('Control+p');
       const search = page.getByRole('textbox', {
@@ -131,6 +154,28 @@ try {
         const { setLanguage } = await import('/src/i18n/index.ts');
         setLanguage('zh-CN');
       });
+      await page
+        .locator('#inspector-changes-git')
+        .waitFor({ state: 'visible' });
+      assert.equal(
+        await page.locator('.composer textarea').inputValue(),
+        'Original shell preserved draft',
+      );
+      const paletteAfter = await page.evaluate(() =>
+        getComputedStyle(document.documentElement)
+          .getPropertyValue('--bg')
+          .trim(),
+      );
+      assert.equal(
+        await composerOwner.evaluate((el) => el.isConnected),
+        true,
+        'locale change retains composer identity',
+      );
+      assert.equal(
+        paletteAfter,
+        paletteBefore,
+        'locale change preserves the actual configured palette',
+      );
       await page.screenshot({ path: `${output}/zh-${theme}-${width}.png` });
       const noOverflow = await page
         .locator('.inspector')
@@ -141,7 +186,15 @@ try {
         'Chinese original inspector does not overflow',
       );
       assert.deepEqual(errors, []);
-      receipts.push({ theme, width, geometry, native: false, passed: true });
+      receipts.push({
+        theme,
+        width,
+        geometry,
+        paletteBefore,
+        paletteAfter,
+        native: false,
+        passed: true,
+      });
       await page.close();
     }
   await writeFile(
