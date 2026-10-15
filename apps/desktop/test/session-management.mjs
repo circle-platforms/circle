@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { readModelRequests } from './helpers/model-requests.mjs';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
 const temp = await mkdtemp(join(tmpdir(), 'circle-session-management-'));
@@ -295,10 +296,9 @@ try {
     await readFile(join(workspace.path, 'kept.txt'), 'utf8'),
     'approved fixture bytes',
   );
-  const modelRequests = (await readFile(requests, 'utf8'))
-    .trim()
-    .split('\n')
-    .map(JSON.parse);
+  const modelRequests = await readModelRequests(requests, {
+    requireComplete: true,
+  });
   assert.equal(
     modelRequests
       .at(-1)
@@ -323,10 +323,9 @@ try {
       'idle',
     'EOF turn finishes',
   );
-  const eofRequests = (await readFile(requests, 'utf8'))
-    .trim()
-    .split('\n')
-    .map(JSON.parse);
+  const eofRequests = await readModelRequests(requests, {
+    requireComplete: true,
+  });
   const eofResults = eofRequests
     .at(-1)
     .messages.filter((message) =>
@@ -452,6 +451,7 @@ try {
     'deleting an archived idle session uses the existing confirmation and keeps the open conversation and folder',
   );
   assert.deepEqual(errors, []);
+  await readModelRequests(requests, { requireComplete: true });
   await writeFile(
     join(output, 'receipt.json'),
     JSON.stringify(

@@ -10,6 +10,7 @@ import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
 import { waitDesktopReady } from './helpers/desktop-readiness.mjs';
+import { readModelRequests } from './helpers/model-requests.mjs';
 import {
   assertViewport,
   readViewport,
@@ -294,10 +295,9 @@ try {
     await readFile(join(workspace, 'native.txt'), 'utf8'),
     'native runtime bytes\n',
   );
-  const requests = (await readFile(requestsPath, 'utf8'))
-    .trim()
-    .split('\n')
-    .map(JSON.parse);
+  const requests = await readModelRequests(requestsPath, {
+    requireComplete: true,
+  });
   assert(
     requests[1].messages.some(
       (row) => row.role === 'tool' && row.content.includes('native.txt'),
@@ -323,10 +323,9 @@ try {
     .getByRole('button', { name: 'send answer', exact: true })
     .click();
   await page.getByText('staging target received', { exact: true }).waitFor();
-  const afterQuestion = (await readFile(requestsPath, 'utf8'))
-    .trim()
-    .split('\n')
-    .map(JSON.parse);
+  const afterQuestion = await readModelRequests(requestsPath, {
+    requireComplete: true,
+  });
   assert(
     afterQuestion[3].messages.some(
       (row) => row.role === 'tool' && row.content.includes('staging'),
@@ -957,6 +956,7 @@ try {
   checks.push(
     'the default workspace moves through the settings page and the native dialog grant, keeps the old folder and needs trust',
   );
+  await readModelRequests(requestsPath, { requireComplete: true });
   await writeFile(
     join(
       output,
