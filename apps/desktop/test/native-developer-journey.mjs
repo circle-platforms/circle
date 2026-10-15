@@ -373,7 +373,27 @@ const buildIdentity = {
   sourceBuildHead: process.env.CIRCLE_NATIVE_JOURNEY_SOURCE_BUILD_HEAD ?? null,
   appPath: launchRoot,
   files: {},
+  driverFiles: {},
 };
+for (const file of [
+  'native-developer-journey.mjs',
+  ...[
+    'native-input-recovery',
+    'native-browser-stream',
+    'native-editor-isolation',
+    'native-editor-journey',
+    'native-editor-semantics',
+    'native-terminal-journey',
+    'native-debug-journey',
+    'native-keyboard-journey',
+    'native-git-journey',
+    'native-journey-platform',
+  ].map((name) => 'helpers/' + name + '.mjs'),
+]) {
+  buildIdentity.driverFiles[file] = createHash('sha256')
+    .update(await readFile(join(root, 'test', file)))
+    .digest('hex');
+}
 for (const file of [
   'dist/main.cjs',
   'dist/preload.cjs',
@@ -1299,6 +1319,14 @@ try {
     join(output, 'fixture-final.json'),
     JSON.stringify(fixtureFinal, null, 2),
   );
+  try {
+    await writeFile(
+      join(output, 'actual-scripted-requests.jsonl'),
+      await readFile(requestsPath),
+    );
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
   server.closeAllConnections();
   await new Promise((done) => server.close(done));
   await rm(temp, { recursive: true, force: true });
