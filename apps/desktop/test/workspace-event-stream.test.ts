@@ -2,7 +2,14 @@ import assert from 'node:assert/strict';
 import { test as nodeTest } from 'node:test';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, appendFile, readFile, rm } from 'node:fs/promises';
+import {
+  mkdtemp,
+  mkdir,
+  stat,
+  appendFile,
+  readFile,
+  rm,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
@@ -449,5 +456,29 @@ test('reopening and replay reads never overwrite the committed prefix when appen
       assert.equal((await third.replay()).events.length, 4);
     } finally {
       await third.close();
+    }
+  }));
+
+test('a directory journal is rejected intact and its failed open releases the writer lease', () =>
+  fixture(async (path) => {
+    await mkdir(path);
+    await assert.rejects(
+      WorkspaceEventStream.open(path),
+      /EISDIR|directory|regular file/i,
+    );
+    assert.equal((await stat(path)).isDirectory(), true);
+    await rm(path, { recursive: true });
+    const stream = await WorkspaceEventStream.open(path);
+    try {
+      assert.equal(
+        (await stream.append(input('after rejected directory'))).seq,
+        1,
+      );
+      assert.equal(
+        (await stream.replay()).events[0].data.text,
+        'after rejected directory',
+      );
+    } finally {
+      await stream.close();
     }
   }));

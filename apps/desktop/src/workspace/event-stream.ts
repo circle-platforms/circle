@@ -89,6 +89,10 @@ export class WorkspaceEventStream {
         constants.O_RDWR | constants.O_CREAT,
         0o600,
       );
+      if (!(await stream.handle.stat()).isFile())
+        throw Error(
+          'workspace event journal must be a regular file, not a directory or device',
+        );
       for await (const row of stream.lines(0)) {
         const event = JSON.parse(row.text) as PersistedWorkspaceEvent;
         stream.validateRecord(event, row.end);
