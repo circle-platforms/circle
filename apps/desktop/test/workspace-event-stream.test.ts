@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test as nodeTest } from 'node:test';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, appendFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -8,9 +10,46 @@ import {
   type EventInput,
 } from '../src/workspace/event-stream.ts';
 import { WorkspaceStreamStore } from '../../workbench/src/model/workspace-stream-store.ts';
-import { spawn as spawnPty } from 'node-pty';
+import { spawnPty } from '../src/workspace/native-pty.ts';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+
+const progressDirectory =
+  process.env.CIRCLE_NATIVE_TEST_PROGRESS_DIR ??
+  join(tmpdir(), 'circle-runtime-progress');
+mkdirSync(progressDirectory, { recursive: true });
+const progressPath = join(
+  progressDirectory,
+  `event-stream-${process.platform}-${process.pid}-${randomUUID()}.jsonl`,
+);
+function progress(phase: string, data: Record<string, unknown> = {}) {
+  appendFileSync(
+    progressPath,
+    JSON.stringify({
+      phase,
+      at: new Date().toISOString(),
+      pid: process.pid,
+      ...data,
+    }) + '\n',
+  );
+}
+function test(name: string, run: () => unknown | Promise<unknown>) {
+  return nodeTest(name, async () => {
+    progress('case-start', { name });
+    try {
+      await run();
+      progress('case-complete', { name });
+    } catch (error) {
+      progress('case-failed', { name, error: String(error) });
+      throw error;
+    }
+  });
+}
+process.once('beforeExit', () =>
+  progress('natural-before-exit', {
+    resources: process.getActiveResourcesInfo(),
+  }),
+);
 
 const input = (text: string): EventInput => ({
   workspaceId: 'w',
@@ -21,10 +60,13 @@ const input = (text: string): EventInput => ({
 });
 async function fixture(run: (path: string) => Promise<void>) {
   const dir = await mkdtemp(join(tmpdir(), 'circle-stream-'));
+  progress('fixture-created', { dir });
   try {
     await run(join(dir, 'events.jsonl'));
   } finally {
+    progress('fixture-cleanup-start', { dir });
     await rm(dir, { recursive: true, force: true });
+    progress('fixture-cleanup-complete', { dir });
   }
 }
 test('persists every producer record, bounded cache and paginated reload replay', () =>
@@ -229,7 +271,12 @@ test('real PTY bytes and task-state records replay with separate source sequence
           CIRCLE_HOME: dirname(path),
         },
       },
+      (error) => {
+        progress('pty-transport-error', { error: String(error) });
+        throw error;
+      },
     );
+    progress('pty-created', { ptyPid: processPty.pid });
     const exited = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         processPty.kill();
@@ -246,6 +293,7 @@ test('real PTY bytes and task-state records replay with separate source sequence
         );
       });
       processPty.onExit(({ exitCode }) => {
+        progress('pty-public-exit', { exitCode });
         clearTimeout(timer);
         if (exitCode !== 0) reject(Error(`PTY exited ${exitCode}`));
         else resolve();
@@ -253,6 +301,7 @@ test('real PTY bytes and task-state records replay with separate source sequence
     });
     await exited;
     await Promise.all(writes);
+    progress('pty-journal-writes-complete', { count: writes.length });
     await toTask(3, 'completed');
     const page = await stream.replay();
     const store = new WorkspaceStreamStore();
@@ -311,6 +360,10 @@ test('another process cannot write and a killed owner releases its lease for dur
       { stdio: ['ignore', 'pipe', 'pipe'] },
     );
     const exited = once(child, 'close');
+    progress('lease-child-spawned', { childPid: child.pid, module, loader });
+    child.on('close', (code, signal) =>
+      progress('lease-child-close', { code, signal }),
+    );
     try {
       await new Promise<void>((resolve, reject) => {
         let stdout = '',
@@ -321,6 +374,7 @@ test('another process cannot write and a killed owner releases its lease for dur
         }, 10000);
         child.stdout.on('data', (chunk) => {
           stdout += chunk;
+          progress('lease-child-stdout', { text: String(chunk) });
           if (stdout.includes('LEASE_READY')) {
             clearTimeout(timer);
             resolve();
@@ -328,6 +382,7 @@ test('another process cannot write and a killed owner releases its lease for dur
         });
         child.stderr.on('data', (chunk) => {
           stderr += chunk;
+          progress('lease-child-stderr', { text: String(chunk) });
         });
         child.once('error', (error) => {
           clearTimeout(timer);
@@ -339,18 +394,25 @@ test('another process cannot write and a killed owner releases its lease for dur
             reject(Error('journal child exited: ' + stderr));
         });
       });
+      progress('lease-child-ready');
       const original = await readFile(path);
+      progress('second-lease-open-start');
       await assert.rejects(WorkspaceEventStream.open(path), /active writer/);
+      progress('second-lease-rejected');
       assert.deepEqual(await readFile(path), original);
+      progress('lease-child-kill-request');
       child.kill('SIGKILL');
       await exited;
+      progress('recovery-lease-open-start');
       const recovered = await WorkspaceEventStream.open(path);
+      progress('recovery-lease-open-complete');
       assert.equal(
         (await recovered.replay()).events[0].data.text,
         'crash survivor',
       );
       assert.equal((await recovered.append(input('after crash'))).seq, 2);
       await recovered.close();
+      progress('recovery-lease-close-complete');
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill();
