@@ -31,8 +31,9 @@ on:
       - 'tsconfig.build.json'
       - 'package.json'
       - 'package-lock.json'
+      # Not apps/desktop/package.json: most changes there only list a new test, and Desktop
+      # workbench packages the application for every pull request that touches apps/
       - 'apps/desktop/scripts/**'
-      - 'apps/desktop/package.json'
       - 'apps/desktop/package-lock.json'
       - '.github/release-install.md'
       - '.github/workflows/release.yml'
