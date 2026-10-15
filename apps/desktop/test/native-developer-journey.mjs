@@ -25,6 +25,8 @@ const output = resolve(
 await mkdir(output, { recursive: true });
 const temp = await mkdtemp(join(tmpdir(), 'circle-native-journey-'));
 const data = join(temp, 'data');
+const shellHome = join(temp, 'home');
+await mkdir(shellHome, { recursive: true });
 const repo = join(data, 'runtime-home', 'workspace');
 await mkdir(repo, { recursive: true });
 const baseline = '# native journey\n\noriginal content\n';
@@ -165,7 +167,13 @@ await new Promise((done) => server.listen(0, '127.0.0.1', done));
 const origin = 'http://127.0.0.1:' + server.address().port;
 const env = {
   ...process.env,
-  CIRCLE_HOME: join(temp, 'home'),
+  HOME: shellHome,
+  USERPROFILE:
+    process.platform === 'win32' ? shellHome : process.env.USERPROFILE,
+  ...(process.platform !== 'win32'
+    ? { ZDOTDIR: shellHome, ENV: '/dev/null', HISTFILE: '/dev/null' }
+    : {}),
+  CIRCLE_HOME: shellHome,
   CIRCLE_WORKBENCH_DATA_DIR: data,
   CIRCLE_WORKBENCH_MODE: 'live',
   CIRCLE_NO_UPDATE_CHECK: '1',
@@ -195,6 +203,7 @@ const until = async (predicate, label) => {
 };
 const check = async (name, action) => {
   phase = name;
+  console.log('native journey: ' + name);
   const start = Date.now();
   const result = await action();
   checks.push({
@@ -234,6 +243,26 @@ try {
     cwd: root,
     env,
   });
+  const actualApp = await app.evaluate(({ app }) => ({
+    appPath: app.getAppPath(),
+    executablePath: process.execPath,
+    packaged: app.isPackaged,
+  }));
+  Object.assign(buildIdentity, actualApp, { files: {} });
+  if (actualApp.appPath.endsWith('.asar'))
+    buildIdentity.files['app.asar'] = createHash('sha256')
+      .update(await readFile(actualApp.appPath))
+      .digest('hex');
+  else
+    for (const file of [
+      'dist/main.cjs',
+      'dist/preload.cjs',
+      'dist/runtime-worker.mjs',
+      'dist/renderer/index.html',
+    ])
+      buildIdentity.files[file] = createHash('sha256')
+        .update(await readFile(join(actualApp.appPath, file)))
+        .digest('hex');
   page = await app.firstWindow();
   page.setDefaultTimeout(15000);
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -316,6 +345,17 @@ try {
         ),
         true,
       );
+      await page
+        .locator('.file-view .view-lines')
+        .filter({ hasText: 'Keep native journey changes isolated.' })
+        .waitFor();
+      assert.equal(
+        await page
+          .locator('.file-view')
+          .getByText('file not found', { exact: true })
+          .count(),
+        0,
+      );
       await screenshot('01b-instruction-source');
       await page
         .getByRole('button', { name: 'close inspector', exact: true })
@@ -348,9 +388,17 @@ try {
       .getByRole('button', { name: 'edit', exact: true })
       .click();
     const editor = page.locator('.file-view .monaco-editor').last();
-    await editor.locator('textarea').focus();
+    await editor.locator('.view-lines').click({ position: { x: 120, y: 10 } });
     await page.keyboard.press('ControlOrMeta+End');
-    await page.keyboard.type('\nJOURNEY_MANUAL_SAVE\n');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('JOURNEY_MANUAL_SAVE');
+    await until(
+      async () =>
+        (await page.locator('.file-view').innerText()).includes(
+          'JOURNEY_MANUAL_SAVE',
+        ),
+      'actual edit buffer receives keyboard input',
+    );
     await page.keyboard.press('ControlOrMeta+s');
     await until(
       async () =>
@@ -369,6 +417,7 @@ try {
     await page.locator('#dock-tab-terminal').click();
     await page
       .getByRole('button', { name: 'new terminal', exact: true })
+      .first()
       .click();
     const terminal = page
       .locator('.native-terminal .xterm-helper-textarea')
