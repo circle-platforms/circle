@@ -39,6 +39,7 @@ const documents = existsSync(documentsModule)
     )
   : null;
 const streams = new Set();
+const journal = [];
 let seq = 0,
   externalWrites = 0;
 const event = (data) => {
@@ -49,9 +50,11 @@ const event = (data) => {
     resourceId: 'files',
     epoch: 'editor-fixture',
     seq: ++seq,
+    cursor: { seq, offset: seq * 100 },
     at: new Date().toISOString(),
     data,
   };
+  journal.push(payload);
   for (const stream of streams)
     stream.write(`data: ${JSON.stringify(payload)}\n\n`);
 };
@@ -174,7 +177,22 @@ const server = await createServer({
               const command = JSON.parse(body),
                 { service, method, params } = command.payload;
               let data;
-              if (service === 'language') data = language.call(method, params);
+              if (service === 'events' && method === 'replay') {
+                const events = journal
+                  .filter((event) => event.seq > (params.after?.seq ?? 0))
+                  .slice(0, params.limit ?? 256);
+                data = {
+                  events,
+                  cursor: events.at(-1)?.cursor ??
+                    params.after ?? { seq: 0, offset: 0 },
+                  hasMore: journal.some(
+                    (event) =>
+                      event.seq >
+                      (events.at(-1)?.seq ?? params.after?.seq ?? 0),
+                  ),
+                };
+              } else if (service === 'language')
+                data = language.call(method, params);
               else if (service === 'documents' && method === 'read') {
                 if (params.path === 'AGENTS.md')
                   await new Promise((resolve) => setTimeout(resolve, 200));
