@@ -11,7 +11,6 @@ import { WorkspaceStreamStore } from '../../workbench/src/model/workspace-stream
 import { spawn as spawnPty } from 'node-pty';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { fileURLToPath } from 'node:url';
 
 const input = (text: string): EventInput => ({
   workspaceId: 'w',
@@ -301,9 +300,10 @@ test('another process cannot write and a killed owner releases its lease for dur
   fixture(async (path) => {
     const module = new URL('../src/workspace/event-stream.ts', import.meta.url)
       .href;
-    const loader = fileURLToPath(
-      new URL('../../../node_modules/tsx/dist/loader.mjs', import.meta.url),
-    );
+    const loader = new URL(
+      '../../../node_modules/tsx/dist/loader.mjs',
+      import.meta.url,
+    ).href;
     const script = `const {WorkspaceEventStream}=await import(${JSON.stringify(module)});const stream=await WorkspaceEventStream.open(${JSON.stringify(path)});await stream.append(${JSON.stringify(input('crash survivor'))});console.log('LEASE_READY');setInterval(()=>{},1000);`;
     const child = spawn(
       process.execPath,
@@ -356,5 +356,36 @@ test('another process cannot write and a killed owner releases its lease for dur
         child.kill();
         await exited;
       }
+    }
+  }));
+
+test('reopening and replay reads never overwrite the committed prefix when appending', () =>
+  fixture(async (path) => {
+    const first = await WorkspaceEventStream.open(path);
+    await first.append(input('committed 中文 prefix'));
+    await first.close();
+    const prefix = await readFile(path);
+    const second = await WorkspaceEventStream.open(path);
+    try {
+      await second.replay(undefined, 1);
+      await second.append(input('second'));
+      await second.replay(undefined, 1);
+      await second.appendBatch([input('third'), input('fourth')]);
+      assert.deepEqual(
+        (await readFile(path)).subarray(0, prefix.length),
+        prefix,
+      );
+      assert.deepEqual(
+        (await second.replay()).events.map((event) => event.data.text),
+        ['committed 中文 prefix', 'second', 'third', 'fourth'],
+      );
+    } finally {
+      await second.close();
+    }
+    const third = await WorkspaceEventStream.open(path);
+    try {
+      assert.equal((await third.replay()).events.length, 4);
+    } finally {
+      await third.close();
     }
   }));
