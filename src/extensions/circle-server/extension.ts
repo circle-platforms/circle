@@ -87,6 +87,8 @@ interface Followed {
 }
 class ServerError extends Error {
   status = 0;
+  code = '';
+  details: Record<string, unknown> = {};
 }
 // What a refusal names besides its message (the rows, tools or limits it is about), kept
 // short so a model reads it beside the code instead of a whole response.
@@ -637,6 +639,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
         `${String(error.code ?? response.status)}: ${String(error.message ?? 'request failed')}${details ? ` · ${details.length > MAX_DETAIL_CHARS ? `${details.slice(0, MAX_DETAIL_CHARS)}…` : details}` : ''}`,
       );
       failed.status = response.status;
+      failed.code = typeof error.code === 'string' ? error.code : '';
+      failed.details = isRecord(error.details) ? error.details : {};
       throw failed;
     }
     return {
@@ -680,8 +684,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
   }
 
   // A session stays alive without asking anyone: shortly before the token runs out it is
-  // renewed at the server (POST /v1/auth/refresh), which keeps the same token and moves its
-  // expiry. A server without that route, or a run token, is left to expire.
+  // renewed at the server (POST /v1/auth/refresh), which issues a new token; the old one
+  // dies five seconds later. A server without that route, or a run token, is left to expire.
   let refreshing: Promise<boolean> | undefined;
   let refreshUnsupported = false;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -745,6 +749,11 @@ export async function register(api: ExtensionAPI): Promise<void> {
       const due = refreshDue(readConfig()?.expiresAt);
       if (due !== undefined && Date.now() >= due) await refresh();
     }
+    // Refresh rotates the token: the old one dies five seconds later, so a long poll
+    // started before the refresh can come back 401. Retry once on the current token
+    // before calling the session expired.
+    const used =
+      options.anonymous || fromRun ? undefined : await currentToken();
     try {
       return await send(method, path, options);
     } catch (error) {
@@ -756,6 +765,14 @@ export async function register(api: ExtensionAPI): Promise<void> {
         throw error;
       if (fromRun)
         throw new ServerError('circle-server turned down the run token');
+      const current = await currentToken();
+      if (used && current && current !== used)
+        try {
+          return await send(method, path, options);
+        } catch (again) {
+          if (!(again instanceof ServerError) || again.status !== 401)
+            throw again;
+        }
       expired = true;
       scheduleRefresh();
       void showStatus();
@@ -954,11 +971,28 @@ export async function register(api: ExtensionAPI): Promise<void> {
         const current = await status(taskId);
         const phase = String(current.phase ?? '');
         const over = TERMINAL.has(phase);
-        const { data } = await request(
-          'GET',
-          `/v1/tasks/${encodeURIComponent(taskId)}/events?after=${cursor}&waitMs=${over ? 0 : 20000}`,
-          { timeoutMs: 40_000 },
-        );
+        let data: unknown;
+        try {
+          data = (
+            await request(
+              'GET',
+              `/v1/tasks/${encodeURIComponent(taskId)}/events?after=${cursor}&waitMs=${over ? 0 : 20000}`,
+              { timeoutMs: 40_000 },
+            )
+          ).data;
+        } catch (error) {
+          // The retained window moved past this cursor: restart at its first
+          // retained position instead of sitting on the stale one forever.
+          if (
+            error instanceof ServerError &&
+            error.code === 'CURSOR_EXPIRED'
+          ) {
+            cursor = Number(error.details.minCursor) || 0;
+            remember(taskId, { seq: cursor });
+            continue;
+          }
+          throw error;
+        }
         const events = (
           isRecord(data) && Array.isArray(data.events) ? data.events : []
         ) as ServerEvent[];

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer, type IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ExtensionHost, bundledExtensionsRoot } from '../src/extensions.js';
@@ -23,17 +23,19 @@ async function until(predicate: () => boolean, timeout = 5000): Promise<void> {
   }
 }
 
-// A stand-in server whose tokens run out: a login lasts `ttlMs`, POST /v1/auth/refresh keeps
-// the same token for another hour (or is missing, as on an older server), and expire()
-// turns every token down.
+// A stand-in server whose tokens run out: a login lasts `ttlMs`, POST /v1/auth/refresh
+// issues a new token and the old one dies five seconds later (or is missing, as on an
+// older server), and expire() turns every token down.
 async function sessionServer(t: Parameters<typeof scratch>[0]) {
   const state = {
     ttlMs: 3_600_000,
     refreshRoute: true,
     refuseWithDetails: false,
+    holdEvents: false,
+    releaseEvents: undefined as (() => void) | undefined,
   };
   const expiries = new Map<string, number>();
-  const counts = { logins: 0, refreshes: 0, missingRefresh: 0, toolCalls: 0 };
+  const counts = { logins: 0, refreshes: 0, missingRefresh: 0, toolCalls: 0, events: 0 };
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://x');
     const text = (await read(request)).toString();
@@ -70,7 +72,11 @@ async function sessionServer(t: Parameters<typeof scratch>[0]) {
       }
       if (!valid) return fail(401, 'UNAUTHENTICATED');
       counts.refreshes++;
-      return send(200, { data: issued(token, 3_600_000) });
+      // The hub rotates the token: a fresh one, and the old one dies five seconds later.
+      expiries.set(token, Date.now() + 5_000);
+      return send(200, {
+        data: issued(`tok-session-${counts.logins}-r${counts.refreshes}`, 3_600_000),
+      });
     }
     if (!valid) return fail(401, 'UNAUTHENTICATED');
     if (url.pathname === '/v1/status')
@@ -122,7 +128,15 @@ async function sessionServer(t: Parameters<typeof scratch>[0]) {
     if (url.pathname === '/v1/tasks/task_f/status')
       return send(200, { data: { taskId: 'task_f', phase: 'running' } });
     if (url.pathname === '/v1/tasks/task_f/events') {
-      await delay(50);
+      counts.events++;
+      if (state.holdEvents)
+        await new Promise<void>((resolve) => {
+          state.releaseEvents = resolve;
+        });
+      else await delay(50);
+      // The poll's token may have died while the poll was open: check it again now.
+      if ((expiries.get(token) ?? 0) <= Date.now())
+        return fail(401, 'UNAUTHENTICATED');
       return send(200, { data: { events: [] } });
     }
     if (url.pathname === '/v1/assets')
@@ -142,6 +156,12 @@ async function sessionServer(t: Parameters<typeof scratch>[0]) {
     state,
     counts,
     expire: () => expiries.clear(),
+    // Rotation grace has elapsed: every token but the newest one is dead.
+    expireStale: () => {
+      let newest = 0;
+      for (const at of expiries.values()) newest = Math.max(newest, at);
+      for (const [tok, at] of expiries) if (at < newest) expiries.delete(tok);
+    },
   };
 }
 
@@ -178,6 +198,7 @@ async function connect(t: Parameters<typeof scratch>[0]) {
     );
   return {
     host,
+    home,
     prompts,
     lines,
     config,
@@ -283,4 +304,32 @@ test('a task that ended failed is shown with its own error, not as a failed requ
   assert.match(answer, /SOURCE_FORBIDDEN/);
   assert.match(answer, /Knowledge record is not available to this identity/);
   assert.doesNotMatch(answer, /request failed/);
+});
+
+test('a long poll that meets a 401 after the token rotated retries once on the current token', async (t) => {
+  const server = await sessionServer(t);
+  const session = await connect(t);
+  await session.run(`login ${server.url} tester`);
+  server.state.holdEvents = true;
+  await session.run('task task_f');
+  await until(() => server.counts.events >= 1, 5000); // the poll is open on the old token
+  // The next request notices the session is due and refreshes: the hub rotates the token.
+  writeFileSync(
+    join(session.home, 'extension_data', 'circle-server', 'config.json'),
+    JSON.stringify({
+      ...session.config(),
+      expiresAt: new Date(Date.now() - 1000).toISOString(),
+    }),
+  );
+  await session.run('packs');
+  assert.equal(server.counts.refreshes, 1, 'the expired-soon session rotated');
+  server.expireStale(); // the old token's five-second grace has elapsed
+  server.state.holdEvents = false;
+  server.state.releaseEvents!();
+  await until(() => server.counts.events >= 2, 5000); // retried once, on the new token
+  await delay(100);
+  assert.ok(
+    !session.lines.some((line) => /signed out/.test(line)),
+    'a rotated poll is not a sign-out',
+  );
 });
