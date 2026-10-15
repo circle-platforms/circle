@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { pathToFileURL } from 'node:url';
+import { inspect } from 'node:util';
 import { runningCopies, type InstallerCopy } from '../src/legacy_install.js';
 import {
   readWindowsQueryMarkers,
@@ -352,6 +353,9 @@ test('a failing diagnostic sink cannot replace the original query failure', (t) 
 
 test('the actual TAP reporter shows a direct caller failure observation while retaining its primary error', (t) => {
   const { copy, program, where } = heldCopy(t);
+  const primary = `${program} is in use, and the running programs could not be listed (no answer in 30 s)`;
+  const windowsPrimary =
+    'C:\\synthetic\\versions\\1.7.0\\circle.exe is in use, and the running programs could not be listed (no answer in 30 s)';
   const fixture = join(where.home, 'failure.test.mjs');
   const source = pathToFileURL(
     join(import.meta.dirname, '..', 'src', 'legacy_install.ts'),
@@ -362,7 +366,8 @@ test('the actual TAP reporter shows a direct caller failure observation while re
       `test('direct timeout', () => runningCopies(${JSON.stringify([copy])}, ${JSON.stringify(where)}, (_command, args) => {\n` +
       `const nonce = /CIRCLE_QUERY_([a-f0-9]{32})/.exec(args.at(-1))[1];\n` +
       `return { status: null, stdout: '', stderr: 'CIRCLE_QUERY_' + nonce + ' LOOKUP\\r\\n', error: Object.assign(new Error('native timeout'), { code: 'ETIMEDOUT' }) };\n` +
-      `}, () => 'EBUSY'));\n`,
+      `}, () => 'EBUSY'));\n` +
+      `test('synthetic Windows primary', () => { throw new Error(${JSON.stringify(windowsPrimary)}); });\n`,
   );
   const environment: NodeJS.ProcessEnv = {
     ...process.env,
@@ -374,15 +379,36 @@ test('the actual TAP reporter shows a direct caller failure observation while re
     ['--import', 'tsx', '--test', '--test-reporter=tap', fixture],
     { encoding: 'utf8', env: environment, timeout: 10_000 },
   );
-  assert.equal(result.status, 1, result.stderr + result.stdout);
-  assert.ok(
-    result.stdout.includes(
-      `${program} is in use, and the running programs could not be listed (no answer in 30 s)`,
-    ),
+  const actual = result.stderr + result.stdout;
+  assert.equal(result.status, 1, actual);
+  assert.match(result.stdout, /^# tests 2\r?$/m, actual);
+  assert.match(result.stdout, /^# fail 2\r?$/m, actual);
+  const errorFields = result.stdout
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('  error: '));
+  const errorField = (message: string) =>
+    `  error: ${inspect(message, { colors: false, breakLength: Infinity })}`;
+  assert.deepEqual(
+    errorFields,
+    [primary, windowsPrimary].map(errorField),
+    actual,
   );
-  assert.match(result.stdout, /last captured stage: LOOKUP/);
+  for (const message of [primary, windowsPrimary]) {
+    assert.equal(
+      errorFields.includes(errorField(message.slice(1))),
+      false,
+      actual,
+    );
+    assert.equal(
+      errorFields.includes(errorField(message.replace('30 s', '31 s'))),
+      false,
+      actual,
+    );
+  }
+  assert.match(result.stdout, /last captured stage: LOOKUP/, actual);
   assert.match(
     result.stdout,
     /captured counts: DECODE=0,LOOKUP=1,MODULE=0,DISPOSE=0,COMPLETE=0/,
+    actual,
   );
 });
