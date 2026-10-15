@@ -1,4 +1,7 @@
 export const editor: Record<string, string> = {
+  'save queued': '保存已排队',
+  'language service needs attention': '语言服务需要处理',
+  'project configuration needs attention': '项目配置需要处理',
   'file removed on disk; buffer kept': '磁盘上的文件已删除，缓冲区已保留',
   'file changed on disk; buffer kept': '磁盘内容已改变，缓冲区已保留',
   'restore file from buffer': '从缓冲区恢复文件',

@@ -23,6 +23,8 @@ const initial =
   'import { amount } from "./lib";\nconst label = "amount";\nconsole.log(amount, label);\n';
 writeFileSync(join(workspace, 'main.ts'), initial);
 writeFileSync(join(workspace, 'lib.ts'), 'export const amount = 1;\n');
+const rules = '# isolated project instructions\nfollow the rules\n';
+writeFileSync(join(workspace, 'AGENTS.md'), rules);
 const language = new LanguageService(workspace);
 const documentsModule =
   process.env.CIRCLE_EDITOR_DOCUMENT_SERVICE ??
@@ -63,6 +65,7 @@ const files = () =>
       size: statSync(join(workspace, path)).size,
     }));
 const changed = async (changes) => {
+  language.invalidate(changes.map(([, path]) => path));
   if (documents) {
     const snapshot = await documents.refresh();
     event({ kind: 'files', snapshot });
@@ -82,7 +85,11 @@ const changed = async (changes) => {
 };
 if (documents) await documents.refresh();
 const readDocument = (path) => {
-  if (!['main.ts', 'lib.ts', 'moved.ts'].includes(path))
+  if (
+    !['main.ts', 'lib.ts', 'moved.ts', 'tsconfig.json', 'AGENTS.md'].includes(
+      path,
+    )
+  )
     throw Error('outside fixture');
   const content = readFileSync(join(workspace, path), 'utf8');
   return {
@@ -137,17 +144,44 @@ const server = await createServer({
                 response.end('{}');
                 return;
               }
+              if (request.url.includes('badconfig=1')) {
+                writeFileSync(
+                  join(workspace, 'tsconfig.json'),
+                  '{"compilerOptions":{"target":,}}',
+                );
+                await changed([['added', 'tsconfig.json']]);
+                response.end('{}');
+                return;
+              }
+              if (request.url.includes('goodconfig=1')) {
+                writeFileSync(
+                  join(workspace, 'tsconfig.json'),
+                  JSON.stringify({
+                    compilerOptions: {
+                      target: 'ES2022',
+                      module: 'ESNext',
+                      moduleResolution: 'Bundler',
+                    },
+                    include: ['*.ts'],
+                  }),
+                );
+                await changed([['changed', 'tsconfig.json']]);
+                response.end('{}');
+                return;
+              }
               let body = '';
               for await (const chunk of request) body += chunk;
               const command = JSON.parse(body),
                 { service, method, params } = command.payload;
               let data;
               if (service === 'language') data = language.call(method, params);
-              else if (service === 'documents' && method === 'read')
+              else if (service === 'documents' && method === 'read') {
+                if (params.path === 'AGENTS.md')
+                  await new Promise((resolve) => setTimeout(resolve, 200));
                 data = documents
                   ? await documents.read(params.path)
                   : readDocument(params.path);
-              else if (service === 'documents' && method === 'save') {
+              } else if (service === 'documents' && method === 'save') {
                 if (documents)
                   data = await documents.save(
                     params.path,
@@ -164,6 +198,7 @@ const server = await createServer({
                   data = readDocument(params.path);
                 }
                 await changed([['changed', params.path]]);
+                await new Promise((resolve) => setTimeout(resolve, 400));
               } else throw Error('unsupported fixture operation');
               response.setHeader('Content-Type', 'application/json');
               response.end(JSON.stringify({ ok: true, data }));
@@ -288,6 +323,92 @@ try {
   await chinese.locator('.view-lines').first().click({ button: 'right' });
   await chinese.getByRole('menuitem', { name: /^复制/ }).waitFor();
   await chinese.close();
+  const switched = await browser.newPage();
+  switched.on('pageerror', (error) => errors.push(error.message));
+  await switched.goto(
+    `${server.resolvedUrls.local[0]}test/editor-ui.html?viewer=1`,
+  );
+  await switched.getByRole('button', { name: 'edit', exact: true }).click();
+  const appendTo = async (text) => {
+    await switched.locator('.native-code-editor .view-lines').first().click();
+    await switched.keyboard.press(`${modifier}+End`);
+    await switched.keyboard.insertText(text);
+  };
+  const diskUntil = async (path, predicate) => {
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      if (predicate(readFileSync(join(workspace, path), 'utf8'))) return;
+      await switched.waitForTimeout(20);
+    }
+    throw Error(
+      `disk timeout ${path}: ${readFileSync(join(workspace, path), 'utf8')}`,
+    );
+  };
+  await appendTo('x');
+  await switched.keyboard.press(`${modifier}+s`);
+  await diskUntil('main.ts', (text) => text.endsWith('x'));
+  await switched.keyboard.press(`${modifier}+z`);
+  await switched.keyboard.press(`${modifier}+s`);
+  await diskUntil('main.ts', (text) => text === initial);
+  await appendTo('// dirty file A\n');
+  await switched
+    .getByRole('button', { name: 'open rules', exact: true })
+    .click();
+  await switched.getByText('loading file', { exact: true }).waitFor();
+  assert.equal(
+    await switched.locator('.native-code-editor').count(),
+    0,
+    'pending B must not mount an A-seeded editor',
+  );
+  await switched
+    .locator('.file-view-heading strong')
+    .getByText('AGENTS.md', { exact: true })
+    .waitFor();
+  await switched.waitForFunction(() =>
+    document
+      .querySelector('.native-code-editor .view-lines')
+      ?.textContent.replaceAll('\u00a0', ' ')
+      .includes('isolated project instructions'),
+  );
+  assert.ok(
+    !(
+      await switched
+        .locator('.native-code-editor .view-lines')
+        .first()
+        .textContent()
+    ).includes('import'),
+  );
+  await switched.getByRole('button', { name: 'edit', exact: true }).click();
+  await appendTo('rules B saved\n');
+  await switched.keyboard.press(`${modifier}+s`);
+  await diskUntil('AGENTS.md', (text) => text.includes('rules B saved'));
+  await switched
+    .getByRole('button', { name: 'open main', exact: true })
+    .click();
+  await switched.waitForFunction(() =>
+    document
+      .querySelector('.native-code-editor .view-lines')
+      ?.textContent.replaceAll('\u00a0', ' ')
+      .includes('dirty file A'),
+  );
+  await switched.keyboard.press(`${modifier}+s`);
+  await diskUntil('main.ts', (text) => text.includes('dirty file A'));
+  await switched.getByText('disk and buffer match', { exact: true }).waitFor();
+  assert.doesNotMatch(
+    readFileSync(join(workspace, 'main.ts'), 'utf8'),
+    /isolated project instructions|rules B saved/,
+  );
+  assert.doesNotMatch(
+    readFileSync(join(workspace, 'AGENTS.md'), 'utf8'),
+    /import|dirty file A/,
+  );
+  await switched.close();
+  writeFileSync(join(workspace, 'main.ts'), initial);
+  writeFileSync(join(workspace, 'AGENTS.md'), rules);
+  await changed([
+    ['changed', 'main.ts'],
+    ['changed', 'AGENTS.md'],
+  ]);
   const viewer = await browser.newPage();
   viewer.on('pageerror', (error) => errors.push(error.message));
   await viewer.goto(
@@ -378,12 +499,44 @@ try {
         'editor-recovered.png',
       ),
     });
+  await viewer
+    .getByRole('button', { name: 'break project config', exact: true })
+    .click();
+  await viewer
+    .getByText('project configuration needs attention', { exact: true })
+    .waitFor();
+  await viewer
+    .getByRole('button', { name: 'tsconfig.json', exact: true })
+    .first()
+    .click();
+  await viewer
+    .locator('.file-view-heading strong')
+    .getByText('tsconfig.json', { exact: true })
+    .waitFor();
+  await viewer
+    .getByRole('button', { name: 'fix project config', exact: true })
+    .click();
+  await viewer
+    .getByText('project configuration needs attention', { exact: true })
+    .waitFor({ state: 'hidden' });
   await viewer.close();
   assert.deepEqual(errors, []);
   console.log(
     'Monaco input/Undo/Redo/save/diff/remount/themes/draft recovery, live menu locale, clean/dirty watcher, move/delete recovery passed; document backend: ' +
       (documents ? 'WorkspaceDocuments' : 'standalone fixture adapter'),
   );
+} catch (error) {
+  console.error(
+    'language project at failure',
+    language.call('request', { method: 'project' }),
+  );
+  for (const context of browser?.contexts() ?? [])
+    for (const page of context.pages())
+      console.error(
+        'page alerts',
+        await page.locator('[role=alert]').allTextContents(),
+      );
+  throw error;
 } finally {
   await browser?.close();
   for (const stream of streams) stream.end();

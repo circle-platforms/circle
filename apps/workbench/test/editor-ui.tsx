@@ -108,34 +108,58 @@ if (nativeFixture) {
     ];
   });
   Object.defineProperty(runtime, 'mode', { value: 'live' });
-  createRoot(document.getElementById('root')!).render(
-    <Tooltip.Provider>
-      <RuntimeProvider runtime={runtime}>
-        <button
-          onClick={() =>
-            fetch('/__editor_workspace?external=1', { method: 'POST' })
-          }
-        >
-          external write
-        </button>
-        <button
-          onClick={() =>
-            fetch('/__editor_workspace?rename=1', { method: 'POST' })
-          }
-        >
-          external rename
-        </button>
-        <button
-          onClick={() =>
-            fetch('/__editor_workspace?delete=1', { method: 'POST' })
-          }
-        >
-          external delete
-        </button>
-        <div style={{ height: 650, display: 'flex' }}>
-          <FileViewer path="main.ts" onClose={() => {}} />
-        </div>
-      </RuntimeProvider>
-    </Tooltip.Provider>,
-  );
+  function NativeFixture() {
+    const [target, setTarget] = useState('main.ts');
+    return (
+      <Tooltip.Provider>
+        <RuntimeProvider runtime={runtime}>
+          <button onClick={() => setTarget('main.ts')}>open main</button>
+          <button onClick={() => setTarget('AGENTS.md')}>open rules</button>
+          <button
+            onClick={() =>
+              fetch('/__editor_workspace?external=1', { method: 'POST' })
+            }
+          >
+            external write
+          </button>
+          <button
+            onClick={() =>
+              fetch('/__editor_workspace?rename=1', { method: 'POST' })
+            }
+          >
+            external rename
+          </button>
+          <button
+            onClick={() =>
+              fetch('/__editor_workspace?delete=1', { method: 'POST' })
+            }
+          >
+            external delete
+          </button>
+          <button
+            onClick={() =>
+              fetch('/__editor_workspace?badconfig=1', { method: 'POST' })
+            }
+          >
+            break project config
+          </button>
+          <button
+            onClick={() =>
+              fetch('/__editor_workspace?goodconfig=1', { method: 'POST' })
+            }
+          >
+            fix project config
+          </button>
+          <div style={{ height: 650, display: 'flex' }}>
+            <FileViewer
+              path={target}
+              onNavigate={(path) => setTarget(path)}
+              onClose={() => {}}
+            />
+          </div>
+        </RuntimeProvider>
+      </Tooltip.Provider>
+    );
+  }
+  createRoot(document.getElementById('root')!).render(<NativeFixture />);
 } else createRoot(document.getElementById('root')!).render(<Fixture />);

@@ -85,7 +85,7 @@ export async function runNativeEditorJourney({
   const append = async (text) => {
     await page.locator('.native-code-editor .view-lines').first().click();
     await page.keyboard.press(`${modifier}+End`);
-    await page.keyboard.type(text);
+    await page.keyboard.insertText(text);
   };
   const save = async () =>
     page.getByRole('button', { name: 'save to disk', exact: true }).click();
@@ -94,16 +94,16 @@ export async function runNativeEditorJourney({
   assert.ok(initial.revision);
   checks.push('real native document read');
   await open(main);
-  await append('// human save\n');
+  await append('x');
   await page.keyboard.press(`${modifier}+s`);
   await until(
-    async () => (await disk(main)).includes('// human save'),
+    async () => (await disk(main)).endsWith('x'),
     'CmdS actual disk effect',
   );
   await page.keyboard.press(`${modifier}+z`);
   await page.keyboard.press(`${modifier}+s`);
   await until(
-    async () => !(await disk(main)).includes('// human save'),
+    async () => (await disk(main)) === source,
     'Undo then CmdS actual disk effect',
   );
   checks.push('native UI edit, CmdS and retained Undo');

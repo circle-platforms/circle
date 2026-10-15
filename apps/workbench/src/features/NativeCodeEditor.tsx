@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import { applyMonacoLocale } from './monaco-locale';
 import { useLocale } from '../i18n';
 import * as monaco from 'monaco-editor/editor/editor.api';
@@ -19,7 +19,7 @@ import 'monaco-editor/editor/contrib/suggest/browser/suggestController';
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker';
 import 'monaco-editor/languages/definitions/typescript/register';
 import 'monaco-editor/languages/definitions/javascript/register';
-import { workspaceCall } from '../model/workspace-client';
+import { workspaceCall, subscribeWorkspace } from '../model/workspace-client';
 import './native-editor.css';
 
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
@@ -76,6 +76,18 @@ export function persistBuffer(workspace: string, path: string): boolean {
     window.dispatchEvent(new CustomEvent('circle-editor-persistence-error'));
     return false;
   }
+}
+export function editorBuffer(workspace: string, path: string) {
+  const uri = editorUri(workspace, path),
+    model = monaco.editor.getModel(uri);
+  return model
+    ? {
+        uri: uri.toString(),
+        path,
+        content: model.getValue(),
+        version: model.getVersionId(),
+      }
+    : null;
 }
 export function pendingEditorDocuments(workspace: string) {
   return [...editorDocuments.entries()].flatMap(([uri, document]) => {
@@ -163,9 +175,10 @@ export function NativeCodeEditor({
 }) {
   const languageChoice = useLocale();
   const container = useRef<HTMLDivElement>(null);
-  const callbacks = useRef({ onChange, onSave, onNavigate });
-  callbacks.current = { onChange, onSave, onNavigate };
-  useEffect(() => {
+  const owner = JSON.stringify([workspaceId, sessionId, path]);
+  const callbacks = useRef({ owner, onChange, onSave, onNavigate });
+  callbacks.current = { owner, onChange, onSave, onNavigate };
+  useLayoutEffect(() => {
     if (!container.current) return;
     applyMonacoLocale();
     const model = retainedModel(workspaceId, path, value, language);
@@ -248,9 +261,11 @@ export function NativeCodeEditor({
       editor.revealRangeInCenter(selection);
     }
     editor.focus();
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () =>
-      callbacks.current.onSave(),
+    editor.addCommand(
+      monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
+      () => callbacks.current.owner === owner && callbacks.current.onSave(),
     );
+    let active = true;
     let timer: ReturnType<typeof setTimeout>;
     const request = <T,>(
       method: string,
@@ -274,18 +289,72 @@ export function NativeCodeEditor({
       });
     const disposables: monaco.IDisposable[] = [];
     const update = () => {
+      if (callbacks.current.owner !== owner) return;
       callbacks.current.onChange(model.getValue());
       if (!live) return;
       clearTimeout(timer);
       timer = setTimeout(() => {
-        void request<monaco.editor.IMarkerData[]>('diagnostics')
-          .then((markers) =>
-            monaco.editor.setModelMarkers(model, 'circle', markers),
-          )
-          .catch(() => {});
+        const version = model.getVersionId();
+        void request<(monaco.editor.IMarkerData & { path?: string })[]>(
+          'diagnostics',
+        )
+          .then((markers) => {
+            if (
+              !active ||
+              model.isDisposed() ||
+              model.getVersionId() !== version
+            )
+              return;
+            monaco.editor.setModelMarkers(
+              model,
+              'circle',
+              markers.filter((marker) => !marker.path || marker.path === path),
+            );
+            window.dispatchEvent(
+              new CustomEvent('circle-language-project', {
+                detail: {
+                  workspaceId,
+                  diagnostics: markers.filter(
+                    (marker) => marker.source === 'configuration',
+                  ),
+                },
+              }),
+            );
+          })
+          .catch((cause) => {
+            if (!active) return;
+            window.dispatchEvent(
+              new CustomEvent('circle-language-project', {
+                detail: {
+                  workspaceId,
+                  diagnostics: [
+                    {
+                      message: String(
+                        cause instanceof Error ? cause.message : cause,
+                      ),
+                      path,
+                      startLineNumber: 1,
+                      startColumn: 1,
+                    },
+                  ],
+                },
+              }),
+            );
+          });
       }, 250);
     };
     disposables.push(model.onDidChangeContent(update));
+    if (live)
+      disposables.push({
+        dispose: subscribeWorkspace((event) => {
+          if (
+            event.workspaceId === workspaceId &&
+            event.sessionId === sessionId &&
+            event.service === 'documents'
+          )
+            update();
+        }),
+      });
     if (live) {
       const selector = { language, scheme: 'file', pattern: model.uri.path };
       const at = (position: monaco.Position) => ({
@@ -374,6 +443,7 @@ export function NativeCodeEditor({
         monaco.editor.registerEditorOpener({
           openCodeEditor: async (_, resource, selection) => {
             if (!resource.path.startsWith(`/${workspaceId}/`)) return false;
+            if (!active || callbacks.current.owner !== owner) return false;
             await callbacks.current.onNavigate(
               resource.path.slice(workspaceId.length + 2),
               selection &&
@@ -393,6 +463,7 @@ export function NativeCodeEditor({
     }
     update();
     return () => {
+      active = false;
       states.set(uri, editor.saveViewState());
       clearTimeout(timer);
       disposables.forEach((item) => item.dispose());

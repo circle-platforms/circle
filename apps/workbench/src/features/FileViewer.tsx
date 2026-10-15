@@ -9,6 +9,7 @@ import { workspaceCall, subscribeWorkspace } from '../model/workspace-client';
 import {
   NativeCodeEditor,
   editorDocuments,
+  editorBuffer,
   editorUri,
   pendingEditorDocuments,
   persistBuffer,
@@ -17,6 +18,11 @@ import {
   setEditorDocument,
 } from './NativeCodeEditor';
 import type { EditorDocument } from './NativeCodeEditor';
+type SaveFlight = {
+  queued?: { all: boolean; restore: boolean };
+  writes: Map<string, string>;
+  latest: Map<string, EditorDocument>;
+};
 const MODE_LABEL = {
   file: () => t('file'),
   diff: () => t('diff'),
@@ -27,11 +33,17 @@ export function FileViewer({
   line,
   column,
   onClose,
+  onNavigate: onSourceNavigate,
 }: {
   path: string;
   line?: number;
   column?: number;
   onClose: () => void;
+  onNavigate?: (
+    path: string,
+    line?: number,
+    column?: number,
+  ) => void | Promise<void>;
 }) {
   const { snapshot, runtime, perform, notify } = useRuntime();
   const session = currentSession(snapshot);
@@ -46,16 +58,29 @@ export function FileViewer({
     projected?.status ? 'diff' : 'file',
   );
   const [document, setDocument] = useState<EditorDocument | null>(null);
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
+  const identity = JSON.stringify([workspaceId, session.id, path]);
+  const currentIdentity = useRef(identity);
+  currentIdentity.current = identity;
   const [value, setValue] = useState(
     projected?.draft ?? projected?.content ?? '',
   );
-  const valueRef = useRef(value);
-  valueRef.current = value;
   const [selection, setSelection] = useState<IRange>();
   const [error, setError] = useState('');
   const [conflict, setConflict] = useState<EditorDocument | null>(null);
   const [saving, setSaving] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [saveQueued, setSaveQueued] = useState(false);
+  const inFlightSaves = useRef(new Map<string, SaveFlight>());
+  const [projectErrors, setProjectErrors] = useState<
+    {
+      path?: string;
+      message: string;
+      source?: string;
+      startLineNumber: number;
+      startColumn: number;
+    }[]
+  >([]);
+  const [loading, setLoading] = useState(true);
   const [missing, setMissing] = useState(false);
   const [moved, setMoved] = useState<EditorDocument | null>(null);
   const [bufferCount, setBufferCount] = useState(0);
@@ -85,6 +110,11 @@ export function FileViewer({
       retained = editorDocuments.get(uri);
     }
     if (!retained) setEditorDocument(workspaceId, doc);
+    setLoadedKey(JSON.stringify([workspaceId, session.id, doc.path]));
+    if (doc.path !== path) {
+      setPath(doc.path);
+      void onSourceNavigate?.(doc.path);
+    }
     setDocument(retained ?? doc);
     setValue(
       retainedModel(
@@ -111,21 +141,26 @@ export function FileViewer({
   }, [requestedPath, line, column]);
   useEffect(() => {
     let active = true;
+    const readIdentity = identity;
     setError('');
     setConflict(null);
     setMissing(false);
     setMoved(null);
     setDocument(null);
+    setLoadedKey(null);
+    setSaving(inFlightSaves.current.has(identity));
+    setSaveQueued(false);
     setLoading(true);
     if (live) {
       void workspaceCall<EditorDocument>(session.id, 'documents', 'read', {
         path,
       })
         .then((doc) => {
-          if (active) showDocument(doc);
+          if (active && currentIdentity.current === readIdentity)
+            showDocument(doc);
         })
         .catch((cause) => {
-          if (!active) return;
+          if (!active || currentIdentity.current !== readIdentity) return;
           retainedModel(workspaceId, path, '', language);
           const prior = editorDocuments.get(
             editorUri(workspaceId, path).toString(),
@@ -141,7 +176,8 @@ export function FileViewer({
           );
         })
         .finally(() => {
-          if (active) setLoading(false);
+          if (active && currentIdentity.current === readIdentity)
+            setLoading(false);
         });
     } else {
       if (projected)
@@ -232,6 +268,20 @@ export function FileViewer({
           })
             .then((document) => {
               if (!alive || reads.get(target) !== readVersion) return;
+              const pending = [...inFlightSaves.current.values()].find(
+                (flight) => flight.writes.has(uri),
+              );
+              if (pending) {
+                pending.latest.set(uri, document);
+                if (
+                  target === path &&
+                  document.content !== pending.writes.get(uri)
+                ) {
+                  setConflict(document);
+                  setError(t('file changed on disk; buffer kept'));
+                }
+                return;
+              }
               const result = refreshEditorDocument(workspaceId, document);
               if (target !== path) return;
               setMissing(false);
@@ -267,8 +317,17 @@ export function FileViewer({
       };
     })();
   }, [workspaceId, session.id, path, live, language]);
+  useEffect(() => {
+    setProjectErrors([]);
+    const update = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail.workspaceId === workspaceId)
+        setProjectErrors(detail.diagnostics);
+    };
+    window.addEventListener('circle-language-project', update);
+    return () => window.removeEventListener('circle-language-project', update);
+  }, [workspaceId]);
   const changed = (text: string) => {
-    valueRef.current = text;
     setValue(text);
     setBufferCount(pendingEditorDocuments(workspaceId).length);
   };
@@ -276,36 +335,90 @@ export function FileViewer({
     setSelection(range);
     setMode('edit');
     setPath(target);
+    await onSourceNavigate?.(
+      target,
+      range?.startLineNumber,
+      range?.startColumn,
+    );
   };
   const save = async (all = false, restore = false) => {
-    if (!document || saving || readOnly) return;
-    setSaving(true);
-    setError('');
+    const buffer = editorBuffer(workspaceId, path);
+    if (
+      !document ||
+      document.path !== path ||
+      loadedKey !== identity ||
+      !buffer ||
+      readOnly
+    )
+      return;
+    const currentFlight = inFlightSaves.current.get(identity);
+    if (currentFlight) {
+      currentFlight.queued = { all, restore };
+      if (currentIdentity.current === identity) setSaveQueued(true);
+      return;
+    }
+    const baseline = editorDocuments.get(buffer.uri) ?? document;
+    if (!all && !restore && buffer.content === baseline.content) {
+      if (currentIdentity.current === identity) notify(t('file saved'));
+      return;
+    }
+    const flight: SaveFlight = {
+      writes: new Map([[buffer.uri, buffer.content]]),
+      latest: new Map(),
+    };
+    inFlightSaves.current.set(identity, flight);
+    let completed = false;
+    // Capture one immutable target before any asynchronous operation. Never route
+    // an old editor's value to whichever path/session is selected after a reply.
+    const target = {
+      key: identity,
+      workspaceId,
+      sessionId: session.id,
+      path,
+      revision: baseline.revision,
+      content: buffer.content,
+      version: buffer.version,
+      fileId: projected?.id,
+    };
+    const selected = () => currentIdentity.current === target.key;
+    if (selected()) {
+      setSaving(true);
+      setSaveQueued(false);
+      setError('');
+    }
     try {
       if (!live) {
-        notify(t('buffer saved locally'));
+        if (selected()) notify(t('buffer saved locally'));
+        completed = true;
         return;
       }
       if (all) {
-        const edits = pendingEditorDocuments(workspaceId).map((item) => ({
-          path: item.path,
-          content: item.content,
-          expectedRevision: item.revision,
-        }));
+        const edits = pendingEditorDocuments(target.workspaceId).map(
+          (item) => ({
+            path: item.path,
+            content: item.content,
+            expectedRevision: item.revision,
+          }),
+        );
+        for (const edit of edits)
+          flight.writes.set(
+            editorUri(target.workspaceId, edit.path).toString(),
+            edit.content,
+          );
         const result = await workspaceCall<{
           status: string;
           committedPaths?: string[];
           failures?: { path: string; message?: string }[];
-        }>(session.id, 'documents', 'applyEdits', { edits });
-        for (const target of result.committedPaths ?? []) {
+        }>(target.sessionId, 'documents', 'applyEdits', { edits });
+        for (const committed of result.committedPaths ?? []) {
           const doc = await workspaceCall<EditorDocument>(
-            session.id,
+            target.sessionId,
             'documents',
             'read',
-            { path: target },
+            { path: committed },
           );
-          setEditorDocument(workspaceId, doc);
-          if (target === path) setDocument(doc);
+          setEditorDocument(target.workspaceId, doc);
+          if (selected() && committed === target.path) setDocument(doc);
         }
         if (result.failures?.length)
           throw Error(
@@ -318,49 +431,79 @@ export function FileViewer({
           );
       } else {
         const doc = await workspaceCall<EditorDocument>(
-          session.id,
+          target.sessionId,
           'documents',
           'save',
           {
-            path,
-            content: valueRef.current,
-            expectedRevision: restore ? null : document.revision,
+            path: target.path,
+            content: target.content,
+            expectedRevision: restore ? null : target.revision,
           },
         );
-        setEditorDocument(workspaceId, doc);
-        setDocument(doc);
-        setConflict(null);
-        setMissing(false);
-        setMoved(null);
-        if (projected)
+        if (doc.path !== target.path)
+          throw Error('saved document identity changed');
+        setEditorDocument(target.workspaceId, doc);
+        if (selected()) {
+          setDocument(doc);
+          const external = flight.latest.get(buffer.uri);
+          if (
+            external &&
+            external.revision !== doc.revision &&
+            external.content !== doc.content
+          ) {
+            setConflict(external);
+            setError(t('file changed on disk; buffer kept'));
+          } else setConflict(null);
+          setMissing(false);
+          setMoved(null);
+        }
+        if (target.fileId)
           runtime.change((state) => {
-            const item = state.files.find((file) => file.id === projected.id);
+            const item = state.files.find(
+              (file) =>
+                file.id === target.fileId &&
+                file.workspaceId === target.workspaceId &&
+                file.path === target.path,
+            );
             if (item) {
               item.content = doc.content;
               item.draft = undefined;
             }
           });
       }
-      setBufferCount(pendingEditorDocuments(workspaceId).length);
-      notify(t('file saved'));
+      completed = true;
+      if (selected()) {
+        setBufferCount(pendingEditorDocuments(target.workspaceId).length);
+        notify(t('file saved'));
+      }
     } catch (cause) {
+      if (!selected()) return;
       setError(String(cause instanceof Error ? cause.message : cause));
       try {
         const disk = await workspaceCall<EditorDocument>(
-          session.id,
+          target.sessionId,
           'documents',
           'read',
-          { path },
+          { path: target.path },
         );
-        if (disk.revision !== document.revision) setConflict(disk);
+        if (selected() && disk.revision !== target.revision) setConflict(disk);
       } catch {
-        /* The original failure remains visible. */
+        /* Keep the original failure and the target's retained draft. */
       }
     } finally {
-      setSaving(false);
+      inFlightSaves.current.delete(target.key);
+      if (selected()) {
+        setSaving(false);
+        setSaveQueued(false);
+      }
+      if (completed && flight.queued)
+        await save(flight.queued.all, flight.queued.restore);
     }
   };
-  if (loading)
+  if (
+    loading ||
+    (document && (document.path !== path || loadedKey !== identity))
+  )
     return (
       <section className="file-view">
         <header className="file-view-heading">
@@ -423,6 +566,42 @@ export function FileViewer({
           </Button>
         )}
       </div>
+      {!!projectErrors.length && (
+        <div className="editor-notice" role="alert">
+          <strong>
+            {projectErrors.every(
+              (problem) => problem.source === 'configuration',
+            )
+              ? t('project configuration needs attention')
+              : t('language service needs attention')}
+          </strong>
+          {projectErrors.slice(0, 3).map((problem, index) => (
+            <span key={index}>
+              {problem.path && (
+                <Button
+                  onClick={() => {
+                    setSelection({
+                      startLineNumber: problem.startLineNumber,
+                      startColumn: problem.startColumn,
+                      endLineNumber: problem.startLineNumber,
+                      endColumn: problem.startColumn,
+                    });
+                    void navigate(problem.path!, {
+                      startLineNumber: problem.startLineNumber,
+                      startColumn: problem.startColumn,
+                      endLineNumber: problem.startLineNumber,
+                      endColumn: problem.startColumn,
+                    });
+                  }}
+                >
+                  {problem.path}
+                </Button>
+              )}{' '}
+              {problem.message}
+            </span>
+          ))}
+        </div>
+      )}
       {error && (
         <div className="editor-notice" role="alert">
           <span>{error}</span>
@@ -438,8 +617,7 @@ export function FileViewer({
             <Button
               onClick={() => {
                 setSelection(undefined);
-                setMode('edit');
-                setPath(moved.path);
+                void navigate(moved.path);
               }}
             >
               {t('open possible moved file: {path}', { path: moved.path })}
@@ -494,11 +672,13 @@ export function FileViewer({
           disabled={readOnly || saving || !!conflict || missing}
           onClick={() => perform(() => save())}
         >
-          {saving
-            ? t('saving file')
-            : live
-              ? t('save to disk')
-              : t('save buffer')}
+          {saveQueued
+            ? t('save queued')
+            : saving
+              ? t('saving file')
+              : live
+                ? t('save to disk')
+                : t('save buffer')}
         </Button>
       </footer>
     </section>
