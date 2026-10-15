@@ -1,4 +1,5 @@
 import { desktopHost, setDefaultWorkspace } from '../host';
+import { recordedDecision, recordedTitle } from '../model/decisions';
 import { KeybindingsEditor } from './KeybindingsEditor';
 import { usePlugins } from '../plugins/context';
 import { pairing } from '../plugins/registry';
@@ -1291,8 +1292,8 @@ function ApprovalsPage() {
           )
           .map((item) => (
             <div className="decision-row" key={item.id}>
-              <span>{item.title}</span>
-              <strong>{item.decision}</strong>
+              <span>{recordedTitle(item)}</span>
+              <strong>{recordedDecision(item.decision)}</strong>
             </div>
           ))}
         {runtime.mode !== 'live' && (

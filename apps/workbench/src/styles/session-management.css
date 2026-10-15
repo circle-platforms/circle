@@ -34,3 +34,13 @@
   opacity: 0.5;
   cursor: default;
 }
+/* The opening click's pointerup must not land on an item and rename the row. */
+.session-menu[data-state='open'] {
+  pointer-events: none;
+  animation: session-menu-ready 160ms step-end forwards;
+}
+@keyframes session-menu-ready {
+  to {
+    pointer-events: auto;
+  }
+}

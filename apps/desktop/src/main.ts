@@ -127,6 +127,9 @@ if (startupLocale() === 'zh-CN') {
     process.env.LANG = 'zh_CN.UTF-8';
     process.env.LC_MESSAGES = 'zh_CN.UTF-8';
   }
+  // gettext reads LANGUAGE when the dialog is built, including under the C locale.
+  // It does not create the catalog: Recent and Home stay English until gtk30.mo exists.
+  if (!process.env.LANGUAGE) process.env.LANGUAGE = 'zh_CN';
 }
 function checkSender(event: IpcMainInvokeEvent) {
   if (

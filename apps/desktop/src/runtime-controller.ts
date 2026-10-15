@@ -89,7 +89,11 @@ import { currentNetworkStatus } from '../../../src/net.js';
 import { SessionMetadata } from './session-metadata';
 import { PlanCompletionTracker } from '../../../src/plan_state.js';
 import { nextAgentActivity } from '../../../src/session_activity.js';
-import { formatElapsed, type TurnUsage } from '../../../src/tui/status_rows.js';
+import {
+  formatElapsed,
+  gapElapsed,
+  type TurnUsage,
+} from '../../../src/tui/status_rows.js';
 import {
   approvalPreview,
   fileChange,
@@ -574,6 +578,9 @@ export class RuntimeController {
     const turns = this.turnUsage.get(id) ?? {};
     const result: Message[] = [];
     const calls = new Map<string, Message>();
+    // A stored reply has tokens but not the turn clock. Measure it from the prompt,
+    // or from the previous reply, so an older footer shows a duration too.
+    let markedAt: number | undefined;
     for (const node of nodes) {
       const raw = node.message;
       if (!raw || raw.internal || raw.role === 'system') continue;
@@ -616,7 +623,8 @@ export class RuntimeController {
           content: a.data,
           mime: a.mime_type,
         })),
-        // The last message of a finished turn shows the whole turn: its time and tokens
+        // The last message of a finished turn shows the whole turn: its time and tokens.
+        // Any other reply with usage shows the time since the prompt or the previous reply.
         usage: turns[raw.id]
           ? {
               input: turns[raw.id]!.input,
@@ -633,17 +641,16 @@ export class RuntimeController {
                   raw.cost?.currency === 'USD'
                     ? (raw.cost.amount ?? null)
                     : null,
-                elapsed: '',
+                elapsed: gapElapsed(markedAt, node.created),
               }
             : undefined,
       };
-      if (
+      const shown =
         raw.role !== 'assistant' ||
-        base.text ||
-        base.thinking ||
-        base.attachments?.length
-      )
-        result.push(base);
+        Boolean(base.text || base.thinking || base.attachments?.length);
+      if (raw.role === 'user' || (shown && base.usage))
+        markedAt = new Date(node.created).getTime();
+      if (shown) result.push(base);
       for (const call of raw.tool_calls ?? []) {
         const state = this.toolStates.get(`${id}:${call.id}`);
         const row: Message = {

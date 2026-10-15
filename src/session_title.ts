@@ -21,6 +21,7 @@ export function fallbackTitle(text: string): string {
 /** Keep a model title only when it is one short line and not a refusal. */
 export function sanitizeGeneratedTitle(text: string): string | undefined {
   const line = text
+    .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '\n')
     .split('\n')
     .map((row) => row.trim())
     .find(Boolean);

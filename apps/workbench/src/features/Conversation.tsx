@@ -65,7 +65,6 @@ interface Props {
   onCommand: () => void;
   finding: boolean;
   setFinding: (value: boolean | ((value: boolean) => boolean)) => void;
-  onToggleSidebar?: () => void;
 }
 const MEDIA_TYPES = new Set([
   'image/png',
@@ -119,7 +118,6 @@ export function Conversation({
   onCommand,
   finding,
   setFinding,
-  onToggleSidebar,
 }: Props) {
   const { snapshot, runtime, perform, act, notify } = useRuntime();
   const session = currentSession(snapshot);
@@ -377,6 +375,8 @@ export function Conversation({
       // A copy chord over a selection stays a cut or a copy.
       if (mapped === 'message.copy' && window.getSelection()?.toString())
         return;
+      // The window handles the sidebar, including settings and home.
+      if (mapped === 'sidebar.toggle') return;
       if (mapped) {
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -397,7 +397,6 @@ export function Conversation({
         } else if (mapped === 'history.search') onCommand();
         else if (mapped === 'exit') onDialog('exit');
         else if (mapped === 'secret.enter') onDialog('secret');
-        else if (mapped === 'sidebar.toggle') onToggleSidebar?.();
         else if (mapped === 'suspend' || mapped === 'job.background') {
           runtime.request(mapped === 'suspend' ? 'suspend' : 'background');
           notify(
@@ -468,7 +467,6 @@ export function Conversation({
     snapshot.settings.enabledModels,
     snapshot.settings.keybindings,
     session.id,
-    onToggleSidebar,
   ]);
   const jobs = snapshot.jobs.filter(
     (job) =>

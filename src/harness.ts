@@ -363,17 +363,25 @@ export class Harness {
         ],
         tools: [],
         signal: AbortSignal.timeout(20_000),
-        effort: 'minimal',
+        // Empty, not the session's effort: an Anthropic-compatible gateway rejects
+        // output_config.effort (and a thinking budget) on this short call.
+        effort: '',
         token: () => {},
       });
-      const title = sanitizeGeneratedTitle(response.message.content);
+      const title =
+        sanitizeGeneratedTitle(response.message.content) ??
+        sanitizeGeneratedTitle(response.message.thinking ?? '');
       if (!title) return false;
       const current = this.options.store.get(this.sessionId);
       if (!current || current.title !== fallback) return true;
       this.options.store.rename(this.sessionId, title);
       this.bus.emit('info', { payload: { title } });
       return true;
-    } catch {
+    } catch (error) {
+      console.error(
+        'session title request failed:',
+        error instanceof Error ? error.message : error,
+      );
       return false;
     }
   }

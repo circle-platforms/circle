@@ -61,6 +61,11 @@ import { DialogHost, InteractionDialog } from '../features/Dialogs';
 import { applyTheme } from '../theme';
 import { t } from '../i18n';
 import { isSessionBrowser } from '../model/browser';
+import {
+  effectiveBindings,
+  formatChord,
+  matchingAction,
+} from '../model/shortcuts';
 // The names of the pages in the top bar; any other page shows its id.
 const PAGE_NAMES: Partial<Record<string, () => string>> = {
   sessions: () => t('sessions'),
@@ -448,20 +453,32 @@ export function App() {
   }, [runtime]);
   useEffect(() => {
     const handle = (event: KeyboardEvent) => {
+      if (document.documentElement.dataset.keyCapture) return;
+      if (document.querySelector('[role="dialog"]')) return;
       if (
-        ((event.metaKey && event.key === 'k') ||
-          ((event.ctrlKey || event.metaKey) &&
-            event.shiftKey &&
-            event.key.toLowerCase() === 'p')) &&
-        !document.querySelector('[role="dialog"]')
+        (event.metaKey && event.key === 'k') ||
+        ((event.ctrlKey || event.metaKey) &&
+          event.shiftKey &&
+          event.key.toLowerCase() === 'p')
       ) {
         event.preventDefault();
         setSearchOpen(true);
+        return;
+      }
+      if (
+        matchingAction(
+          event,
+          effectiveBindings(snapshot.settings.keybindings),
+        ) === 'sidebar.toggle'
+      ) {
+        event.preventDefault();
+        if (narrow) setSidebarOpen((open) => !open);
+        else setSidebarCollapsed((closed) => !closed);
       }
     };
     addEventListener('keydown', handle);
     return () => removeEventListener('keydown', handle);
-  }, []);
+  }, [narrow, snapshot.settings.keybindings]);
   const activeAgent = snapshot.agents.find((item) => item.id === agent);
   const pluginPage = pluginPages.find((item) => item.page.id === page);
   const installedPage = registry.plugins.find((plugin) =>
@@ -537,7 +554,6 @@ export function App() {
       }}
       finding={finding}
       setFinding={setFinding}
-      onToggleSidebar={toggleSidebar}
     />
   );
   // The session's own actions, under its title as Claude has them.
@@ -707,12 +723,13 @@ export function App() {
                 </DropdownMenu.Trigger>
                 <DropdownMenu.Portal>
                   <DropdownMenu.Content
-                    className="dropdown"
+                    className="dropdown app-menu"
                     align="end"
                     sideOffset={6}
                   >
                     <DropdownMenu.Item onSelect={() => setSearchOpen(true)}>
-                      {t('search')}
+                      <span>{t('search')}</span>
+                      <kbd>{formatChord('ctrl+shift+p')}</kbd>
                     </DropdownMenu.Item>
                     <DropdownMenu.Item
                       onSelect={() =>
@@ -754,7 +771,14 @@ export function App() {
                 defaultSize={inspectorVisible && !narrow ? '68%' : '100%'}
                 minSize="38%"
               >
-                <div className="main-stack">{content}</div>
+                <div className="main-stack">
+                  {content}
+                  {notice && (
+                    <div className="toast" role="status">
+                      {notice}
+                    </div>
+                  )}
+                </div>
               </Panel>
               {inspectorVisible && !narrow && (
                 <>
@@ -851,11 +875,6 @@ export function App() {
             if (narrow) setInspectorOpen(false);
           }}
         />
-        {notice && (
-          <div className="toast" role="status">
-            {notice}
-          </div>
-        )}
       </div>
     </Tooltip.Provider>
   );

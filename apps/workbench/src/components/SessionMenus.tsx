@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useRef,
   useState,
   type ComponentProps,
   type ReactNode,
@@ -27,7 +28,15 @@ import { t } from '../i18n';
 import { IconButton } from './common';
 import '../styles/session-management.css';
 
-function Menu({ label, children }: { label: string; children: ReactNode }) {
+function Menu({
+  label,
+  children,
+  onCloseAutoFocus,
+}: {
+  label: string;
+  children: ReactNode;
+  onCloseAutoFocus?: (event: Event) => void;
+}) {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
@@ -41,6 +50,7 @@ function Menu({ label, children }: { label: string; children: ReactNode }) {
           side="right"
           align="start"
           sideOffset={4}
+          onCloseAutoFocus={onCloseAutoFocus}
         >
           {children}
         </DropdownMenu.Content>
@@ -104,6 +114,7 @@ export function SessionMenu({
   onRename?: () => void;
 }) {
   const { snapshot, runtime, perform } = useRuntime();
+  const holdFocus = useRef(false);
   const archive = () =>
     perform(async () => {
       if (runtime.mode === 'live')
@@ -120,7 +131,14 @@ export function SessionMenu({
         });
     });
   return (
-    <Menu label={t('session actions for {title}', { title: session.title })}>
+    <Menu
+      label={t('session actions for {title}', { title: session.title })}
+      onCloseAutoFocus={(event) => {
+        if (!holdFocus.current) return;
+        holdFocus.current = false;
+        event.preventDefault();
+      }}
+    >
       <Item
         icon={Pin}
         label={session.pinned ? t('unpin session') : t('pin session')}
@@ -140,9 +158,14 @@ export function SessionMenu({
         icon={Pencil}
         label={t('rename session')}
         hint={onRename ? 'F2' : undefined}
-        onSelect={() =>
-          onRename ? onRename() : onDialog('rename', session.id)
-        }
+        onSelect={() => {
+          if (!onRename) {
+            onDialog('rename', session.id);
+            return;
+          }
+          holdFocus.current = true;
+          onRename();
+        }}
       />
       <Item
         icon={Archive}

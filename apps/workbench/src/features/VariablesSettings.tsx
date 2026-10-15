@@ -133,6 +133,7 @@ export function VariablesSettings() {
       </p>
       <VariableTable
         label={t('secrets')}
+        nameHeading={t('name')}
         rows={secrets.map((name) => [name, MASK])}
         selected={selected.secret}
         onSelect={(name) => setSelected({ ...selected, secret: name })}
@@ -235,6 +236,7 @@ export function VariablesSettings() {
 
 function VariableTable({
   label,
+  nameHeading,
   rows,
   selected,
   onSelect,
@@ -243,6 +245,7 @@ function VariableTable({
   onDelete,
 }: {
   label: string;
+  nameHeading?: string;
   rows: [string, string][];
   selected: string | null;
   onSelect: (name: string) => void;
@@ -257,7 +260,7 @@ function VariableTable({
         <table aria-label={label}>
           <thead>
             <tr>
-              <th>{t('variable')}</th>
+              <th>{nameHeading ?? t('variable')}</th>
               <th>{t('value')}</th>
             </tr>
           </thead>

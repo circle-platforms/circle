@@ -68,7 +68,18 @@ export function formatChord(chord: string): string {
       if (part === 'meta') return mac ? '⌘' : 'Meta';
       if (part === 'escape') return 'Esc';
       if (part.length === 1) return part.toUpperCase();
-      return part;
+      const word = (
+        {
+          up: 'Up',
+          down: 'Down',
+          left: 'Left',
+          right: 'Right',
+          tab: 'Tab',
+          enter: 'Enter',
+          space: 'Space',
+        } as Record<string, string>
+      )[part];
+      return word ?? part;
     })
     .join('+');
 }

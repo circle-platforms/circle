@@ -43,6 +43,17 @@ export function formatElapsed(seconds: number): string {
   if (minutes < 60) return `${minutes}m ${Math.floor(value) % 60}s`;
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
+/** How long passed between two messages, or blank when that would read as `0s`. */
+export function gapElapsed(
+  previousMs: number | undefined,
+  created: number | string,
+): string {
+  if (previousMs === undefined) return '';
+  const at = new Date(created).getTime();
+  if (!Number.isFinite(at)) return '';
+  const text = formatElapsed((at - previousMs) / 1000);
+  return text === '0s' ? '' : text;
+}
 // `840`, `12.3k`, `7.8M`: past a million the k would grow to `7824.0k`.
 export function formatTokens(value: number): string {
   const count = Math.max(0, Math.floor(value || 0));

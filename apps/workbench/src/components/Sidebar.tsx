@@ -46,6 +46,53 @@ export const CUSTOMIZE = [
 ] as const;
 const SHOWN = 8;
 
+function RenameField({
+  label,
+  defaultValue,
+  onCommit,
+  onCancel,
+}: {
+  label: string;
+  defaultValue: string;
+  onCommit: (value: string) => void;
+  onCancel: () => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const input = ref.current;
+    if (!input) return;
+    const selectAll = () => {
+      input.focus();
+      input.setSelectionRange(0, input.value.length);
+      input.scrollLeft = 0;
+    };
+    selectAll();
+    const frame = requestAnimationFrame(selectAll);
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  return (
+    <input
+      ref={ref}
+      className="session-rename"
+      aria-label={label}
+      defaultValue={defaultValue}
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          onCommit(event.currentTarget.value);
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          onCancel();
+        }
+      }}
+      onBlur={(event) => onCommit(event.currentTarget.value)}
+    />
+  );
+}
+
 export function Sidebar({
   onSearch,
   onNavigate,
@@ -258,67 +305,50 @@ export function Sidebar({
                   : sessions.slice(0, SHOWN)
               ).map((session) => (
                 <div className="session-row" key={session.id}>
-                  <NavLink
-                    className={({ isActive }) =>
-                      isActive ? 'session-link active' : 'session-link'
-                    }
-                    to={`/session/${session.id}`}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      perform(async () => {
-                        await goSession(session.id);
-                      });
-                    }}
-                  >
-                    {renaming === session.id ? (
-                      <input
-                        className="session-rename"
-                        aria-label={t('rename session')}
-                        defaultValue={
-                          session.title === 'new session' ? '' : session.title
-                        }
-                        autoFocus
-                        onFocus={(event) => event.currentTarget.select()}
-                        onClick={(event) => event.preventDefault()}
-                        onKeyDown={(event) => {
-                          event.stopPropagation();
-                          if (event.key === 'Enter') {
-                            event.preventDefault();
-                            commitRename(
-                              session.id,
-                              event.currentTarget.value,
-                              session.title,
-                            );
-                          } else if (event.key === 'Escape') {
-                            event.preventDefault();
-                            renameDone.current = true;
-                            setRenaming(null);
-                          }
-                        }}
-                        onBlur={(event) =>
-                          commitRename(
-                            session.id,
-                            event.currentTarget.value,
-                            session.title,
-                          )
-                        }
-                      />
-                    ) : (
+                  {renaming === session.id ? (
+                    <RenameField
+                      label={t('rename session')}
+                      defaultValue={
+                        session.title === 'new session' ? '' : session.title
+                      }
+                      onCommit={(value) =>
+                        commitRename(session.id, value, session.title)
+                      }
+                      onCancel={() => {
+                        renameDone.current = true;
+                        setRenaming(null);
+                      }}
+                    />
+                  ) : (
+                    <NavLink
+                      className={({ isActive }) =>
+                        isActive ? 'session-link active' : 'session-link'
+                      }
+                      to={`/session/${session.id}`}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        perform(async () => {
+                          await goSession(session.id);
+                        });
+                      }}
+                    >
                       <span>{sessionTitle(session.title)}</span>
-                    )}
-                    {waiting.has(session.id) ? (
-                      <i className="attention-dot" />
-                    ) : session.state === 'waiting' ? (
-                      <i className="running-dot" />
-                    ) : null}
-                  </NavLink>
-                  <SessionMenu
-                    session={session}
-                    onRename={() => beginRename(session.id)}
-                    onDialog={(dialog, selection) =>
-                      onDialog?.(dialog, selection)
-                    }
-                  />
+                      {waiting.has(session.id) ? (
+                        <i className="attention-dot" />
+                      ) : session.state === 'waiting' ? (
+                        <i className="running-dot" />
+                      ) : null}
+                    </NavLink>
+                  )}
+                  {renaming !== session.id && (
+                    <SessionMenu
+                      session={session}
+                      onRename={() => beginRename(session.id)}
+                      onDialog={(dialog, selection) =>
+                        onDialog?.(dialog, selection)
+                      }
+                    />
+                  )}
                 </div>
               ))}
               {!collapsed.includes(workspace.id) && sessions.length > SHOWN && (

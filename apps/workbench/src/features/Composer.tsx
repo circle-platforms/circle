@@ -62,6 +62,7 @@ export function ModeMenu({
           data-mode={mode}
           aria-label={t('approval mode')}
           title={MODE_TEXT[mode].detail()}
+          onMouseDown={(event) => event.preventDefault()}
         >
           <Icon size={13} />
           {MODE_TEXT[mode].label()}
@@ -157,7 +158,11 @@ export function ModelMenu({
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <button className="footbar-button" aria-label={t('model')}>
+        <button
+          className="footbar-button"
+          aria-label={t('model')}
+          onMouseDown={(event) => event.preventDefault()}
+        >
           <span className="footbar-model">{session.model}</span>
           <ChevronDown size={11} />
         </button>
@@ -199,7 +204,11 @@ export function EffortMenu({
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <button className="footbar-button" aria-label={t('thinking depth')}>
+        <button
+          className="footbar-button"
+          aria-label={t('thinking depth')}
+          onMouseDown={(event) => event.preventDefault()}
+        >
           {EFFORT_TEXT[session.effort]?.label() ?? session.effort}
           <ChevronDown size={11} />
         </button>

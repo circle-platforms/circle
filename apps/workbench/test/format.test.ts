@@ -8,7 +8,9 @@ import {
   formatBusyElapsed,
   formatTokens,
   formatWindow,
+  nextBusySeconds,
 } from '../src/model/format.ts';
+import { formatChord } from '../src/model/shortcuts.ts';
 import {
   browserApprovalInput,
   browserEventAddress,
@@ -67,6 +69,12 @@ test('the footer and busy word write numbers as the terminal does', () => {
   assert.equal(contextPercent(null, 1_000_000), null);
   assert.equal(contextPercent(10, null), null);
   assert.equal(contextPercent(5_000_000, 1000), 999);
+  assert.equal(nextBusySeconds(undefined, 8.1), 8.1);
+  assert.equal(nextBusySeconds(8.1, 7.8), 8.1);
+  assert.equal(nextBusySeconds(8.1, 8.4), 8.4);
+  assert.equal(nextBusySeconds(8.1, Number.NaN), 8.1);
+  assert.equal(formatChord('alt+up'), 'Alt+Up');
+  assert.equal(formatChord('ctrl+shift+p'), 'Ctrl+Shift+P');
 });
 
 test('a dialog shows over the tab that waits on it and names where it came from', () => {

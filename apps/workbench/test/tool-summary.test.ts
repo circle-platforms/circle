@@ -39,6 +39,47 @@ function edit(status: ToolCall['status'], file: string, output = ''): Message {
   };
 }
 
+function call(name: string, status: ToolCall['status'], output = ''): Message {
+  return {
+    id: `${status}-${name}`,
+    parentId: null,
+    role: 'tool',
+    text: '',
+    at: '',
+    tool: {
+      id: `${status}-${name}`,
+      name,
+      input: {},
+      output,
+      status,
+    },
+  };
+}
+
+test('a pending command or listing waits, and a rejection says so', () => {
+  assert.equal(
+    toolSummary([call('execute', 'waiting')]).text,
+    'waiting to run a command',
+  );
+  assert.equal(
+    toolSummary([call('ls', 'waiting'), call('ls', 'waiting')]).text,
+    'waiting to list 2 directories',
+  );
+  assert.equal(
+    toolSummary([call('execute', 'error', 'The user rejected this tool call.')])
+      .text,
+    'rejected a command',
+  );
+  assert.equal(
+    toolSummary([call('execute', 'running')]).text,
+    'running a command',
+  );
+  assert.equal(
+    toolSummary([call('execute', 'error', 'exit 1')]).text,
+    'failed to run a command',
+  );
+});
+
 test('a directory listing is not called a search', () => {
   assert.equal(toolSummary([row('ls')]).text, 'listed a directory');
   assert.equal(

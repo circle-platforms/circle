@@ -40,6 +40,12 @@ test('generated titles keep one line and drop a refusal', () => {
   assert.equal(sanitizeGeneratedTitle('会话标题。'), '会话标题');
   assert.equal(sanitizeGeneratedTitle('Sorry, I cannot do that'), undefined);
   assert.equal(sanitizeGeneratedTitle('   '), undefined);
+  assert.equal(
+    sanitizeGeneratedTitle(
+      '<think>planning the name</think>\nWorkspace file list',
+    ),
+    'Workspace file list',
+  );
   const long = sanitizeGeneratedTitle(
     'Refactor the session title generator so the sidebar shows a short summary of the first prompt',
   );
@@ -61,9 +67,9 @@ class TitleModel implements ChatModel {
   ) {}
   async complete(request: ModelRequest): Promise<ModelResponse> {
     this.requests.push(request);
-    if (request.effort === 'minimal') await this.gate;
-    const content = request.effort === 'minimal' ? this.title : this.answer;
-    if (content && request.effort !== 'minimal') request.token(content);
+    if (request.effort === '') await this.gate;
+    const content = request.effort === '' ? this.title : this.answer;
+    if (content && request.effort !== '') request.token(content);
     return {
       message: { id: 'reply', role: 'assistant', content },
       usage: emptyUsage(),
@@ -104,22 +110,25 @@ test('a side request names the session and does not take the answer', async (t) 
   assert.equal(result.answer, 'done');
   assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
   assert.equal(
-    model.requests.filter((request) => request.effort === 'minimal').length,
+    model.requests.filter((request) => request.effort === '').length,
     1,
   );
   assert.match(
     String(
-      model.requests.find((request) => request.effort === 'minimal')!
-        .messages[0]!.content,
+      model.requests.find((request) => request.effort === '')!.messages[0]!
+        .content,
     ),
     /Write the title in the same language as the user message/,
   );
-  assert.equal(model.requests.filter((request) => !request.effort).length, 1);
+  assert.equal(
+    model.requests.filter((request) => request.effort === undefined).length,
+    1,
+  );
   model.releaseTitle();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(session.id)!.title, 'Login bug fix');
   assert.equal(
-    model.requests.filter((request) => request.effort === 'minimal').length,
+    model.requests.filter((request) => request.effort === '').length,
     1,
   );
 });
@@ -145,7 +154,7 @@ test('a prompt past sixteen characters asks for a title', async (t) => {
   assert.equal(prompt.length, 17);
   await run.run(prompt);
   assert.equal(
-    model.requests.filter((request) => request.effort === 'minimal').length,
+    model.requests.filter((request) => request.effort === '').length,
     1,
   );
   model.releaseTitle();
@@ -163,8 +172,8 @@ test('a chinese prompt asks for a chinese title', async (t) => {
   await run.run(prompt);
   assert.match(
     String(
-      model.requests.find((request) => request.effort === 'minimal')!
-        .messages[0]!.content,
+      model.requests.find((request) => request.effort === '')!.messages[0]!
+        .content,
     ),
     /Write the title in Simplified Chinese/,
   );
@@ -179,7 +188,7 @@ test('a failed title request is tried once more after the turn', async (t) => {
     model: 'title-model',
     sideRequests: true,
     async complete(request) {
-      if (request.effort === 'minimal') {
+      if (request.effort === '') {
         attempts += 1;
         if (attempts === 1) throw new Error('gateway busy');
         return {
@@ -218,8 +227,54 @@ test('a short prompt keeps the fallback and skips the model', async (t) => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(session.id)!.title, 'hello there');
   assert.equal(
-    model.requests.filter((request) => request.effort === 'minimal').length,
+    model.requests.filter((request) => request.effort === '').length,
     0,
+  );
+});
+
+test('a gateway that rejects effort still replaces the fallback title', async (t) => {
+  const root = scratch(t);
+  const requests: ModelRequest[] = [];
+  const model: ChatModel = {
+    model: 'glm',
+    sideRequests: true,
+    async complete(request) {
+      requests.push(request);
+      if (request.effort)
+        throw new Error('output_config.effort is not supported');
+      if (request.effort === '') {
+        return {
+          message: {
+            id: 'title',
+            role: 'assistant',
+            content: 'Workspace file list',
+          },
+          usage: emptyUsage(),
+        };
+      }
+      request.token('listed');
+      return {
+        message: { id: 'reply', role: 'assistant', content: 'listed' },
+        usage: emptyUsage(),
+      };
+    },
+  };
+  const { harness: run, store, session } = harness(root, model);
+  cleanup(t, () => store.close());
+  const prompt = 'Please list all the files in the workspace and explain each';
+  assert.notEqual(fallbackTitle(prompt), 'Workspace file list');
+  const result = await run.run(prompt);
+  assert.equal(result.answer, 'listed');
+  for (let i = 0; i < 8; i++)
+    await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(store.get(session.id)!.title, 'Workspace file list');
+  assert.equal(requests.filter((request) => request.effort === '').length, 1);
+  assert.ok(requests.every((request) => !request.effort));
+  assert.match(
+    String(
+      requests.find((request) => request.effort === '')!.messages[0]!.content,
+    ),
+    /Write the title in the same language as the user message/,
   );
 });
 

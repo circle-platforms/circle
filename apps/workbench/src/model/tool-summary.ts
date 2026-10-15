@@ -58,6 +58,117 @@ function editGroups(edits: ToolCall[]): [EditOutcome, ToolCall[]][] {
     .filter(([, group]) => group.length > 0);
 }
 
+function commandPhrase(outcome: EditOutcome, count: number) {
+  if (outcome === 'waiting')
+    return tn(count, 'waiting to run a command', 'waiting to run {n} commands');
+  if (outcome === 'running')
+    return tn(count, 'running a command', 'running {n} commands');
+  if (outcome === 'rejected')
+    return tn(count, 'rejected a command', 'rejected {n} commands');
+  if (outcome === 'failed')
+    return tn(count, 'failed to run a command', 'failed to run {n} commands');
+  return tn(count, 'ran a command', 'ran {n} commands');
+}
+
+function listPhrase(outcome: EditOutcome, count: number) {
+  if (outcome === 'waiting')
+    return tn(
+      count,
+      'waiting to list a directory',
+      'waiting to list {n} directories',
+    );
+  if (outcome === 'running')
+    return tn(count, 'listing a directory', 'listing {n} directories');
+  if (outcome === 'rejected')
+    return tn(
+      count,
+      'rejected a directory listing',
+      'rejected {n} directory listings',
+    );
+  if (outcome === 'failed')
+    return tn(
+      count,
+      'failed to list a directory',
+      'failed to list {n} directories',
+    );
+  return tn(count, 'listed a directory', 'listed {n} directories');
+}
+
+function readPhrase(
+  outcome: EditOutcome,
+  file: string | undefined,
+  count: number,
+) {
+  if (file) {
+    if (outcome === 'waiting') return t('waiting to read {file}', { file });
+    if (outcome === 'running') return t('reading {file}', { file });
+    if (outcome === 'rejected') return t('rejected reading {file}', { file });
+    if (outcome === 'failed') return t('failed to read {file}', { file });
+    return t('read {file}', { file });
+  }
+  if (outcome === 'waiting')
+    return tn(count, 'waiting to read a file', 'waiting to read {n} files');
+  if (outcome === 'running')
+    return tn(count, 'reading a file', 'reading {n} files');
+  if (outcome === 'rejected')
+    return tn(count, 'rejected a file read', 'rejected {n} file reads');
+  if (outcome === 'failed')
+    return tn(count, 'failed to read a file', 'failed to read {n} files');
+  return tn(count, 'read a file', 'read {n} files');
+}
+
+function globPhrase(outcome: EditOutcome, count: number) {
+  if (outcome === 'waiting')
+    return tn(
+      count,
+      'waiting to search files once',
+      'waiting to search files {n} times',
+    );
+  if (outcome === 'running')
+    return tn(count, 'searching files once', 'searching files {n} times');
+  if (outcome === 'rejected')
+    return tn(count, 'rejected a file search', 'rejected {n} file searches');
+  if (outcome === 'failed')
+    return tn(
+      count,
+      'failed to search files once',
+      'failed to search files {n} times',
+    );
+  return tn(count, 'searched files once', 'searched files {n} times');
+}
+
+function grepPhrase(outcome: EditOutcome, count: number) {
+  if (outcome === 'waiting')
+    return tn(count, 'waiting to search once', 'waiting to search {n} times');
+  if (outcome === 'running')
+    return tn(count, 'searching once', 'searching {n} times');
+  if (outcome === 'rejected')
+    return tn(count, 'rejected a search', 'rejected {n} searches');
+  if (outcome === 'failed')
+    return tn(count, 'failed to search once', 'failed to search {n} times');
+  return tn(count, 'searched once', 'searched {n} times');
+}
+
+function symbolPhrase(outcome: EditOutcome, count: number) {
+  if (outcome === 'waiting')
+    return tn(
+      count,
+      'waiting to look up a symbol',
+      'waiting to look up {n} symbols',
+    );
+  if (outcome === 'running')
+    return tn(count, 'looking up a symbol', 'looking up {n} symbols');
+  if (outcome === 'rejected')
+    return tn(count, 'rejected a symbol lookup', 'rejected {n} symbol lookups');
+  if (outcome === 'failed')
+    return tn(
+      count,
+      'failed to look up a symbol',
+      'failed to look up {n} symbols',
+    );
+  return tn(count, 'looked up a symbol', 'looked up {n} symbols');
+}
+
 const READS = ['read_file'];
 const EDITS = ['write_file', 'edit_file', 'apply_patch', 'delete'];
 const WEB = ['webfetch', 'websearch'];
@@ -77,24 +188,25 @@ export function toolSummary(rows: Message[]): {
   const count = (names: string[]) =>
     tools.filter((tool) => names.includes(tool.name));
   const parts: string[] = [];
-  const commands = count(['execute']).length;
-  if (commands) parts.push(tn(commands, 'ran a command', 'ran {n} commands'));
-  const reads = count(READS);
-  if (reads.length === 1 && reads[0]!.filePath)
-    parts.push(t('read {file}', { file: name(reads[0]!.filePath) }));
-  else if (reads.length)
-    parts.push(tn(reads.length, 'read a file', 'read {n} files'));
-  const listed = count(['ls']).length;
-  if (listed)
-    parts.push(tn(listed, 'listed a directory', 'listed {n} directories'));
-  const globs = count(['glob']).length;
-  if (globs)
-    parts.push(tn(globs, 'searched files once', 'searched files {n} times'));
-  const greps = count(['grep']).length;
-  if (greps) parts.push(tn(greps, 'searched once', 'searched {n} times'));
-  const symbols = count(['lsp']).length;
-  if (symbols)
-    parts.push(tn(symbols, 'looked up a symbol', 'looked up {n} symbols'));
+  for (const [outcome, group] of editGroups(count(['execute'])))
+    parts.push(commandPhrase(outcome, group.length));
+  for (const [outcome, group] of editGroups(count(READS))) {
+    const files = [
+      ...new Set(group.map((tool) => tool.filePath).filter(Boolean)),
+    ] as string[];
+    if (files.length === 1)
+      parts.push(readPhrase(outcome, name(files[0]!), group.length));
+    else if (group.length)
+      parts.push(readPhrase(outcome, undefined, group.length));
+  }
+  for (const [outcome, group] of editGroups(count(['ls'])))
+    parts.push(listPhrase(outcome, group.length));
+  for (const [outcome, group] of editGroups(count(['glob'])))
+    parts.push(globPhrase(outcome, group.length));
+  for (const [outcome, group] of editGroups(count(['grep'])))
+    parts.push(grepPhrase(outcome, group.length));
+  for (const [outcome, group] of editGroups(count(['lsp'])))
+    parts.push(symbolPhrase(outcome, group.length));
   const edits = count(EDITS);
   for (const [outcome, group] of editGroups(edits)) {
     const files = [

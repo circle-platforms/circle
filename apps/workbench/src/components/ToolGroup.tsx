@@ -35,11 +35,22 @@ export function ToolGroup({
   const busy = tools.some((tool) =>
     ['running', 'waiting'].includes(tool.status),
   );
-  // An edit names its own rejection or failure. The badge is for other tools.
+  // These lines already say rejected or failed. The badge is for other tools.
   const failed = tools.filter(
     (tool) =>
       tool.status === 'error' &&
-      !['write_file', 'edit_file', 'apply_patch', 'delete'].includes(tool.name),
+      ![
+        'write_file',
+        'edit_file',
+        'apply_patch',
+        'delete',
+        'execute',
+        'ls',
+        'read_file',
+        'glob',
+        'grep',
+        'lsp',
+      ].includes(tool.name),
   ).length;
   const [open, setOpen] = useSessionDisclosure(
     'group:' + rows[0]?.id,
