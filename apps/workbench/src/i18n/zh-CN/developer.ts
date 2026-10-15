@@ -1,4 +1,5 @@
 export const developer: Record<string, string> = {
+  'no instruction files loaded': '尚未加载指令文件',
   'needs review': '需核对',
   'opening file…': '正在打开文件…',
   rejected: '已拒绝',
