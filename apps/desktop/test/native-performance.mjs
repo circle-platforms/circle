@@ -366,6 +366,10 @@ try {
     .waitFor();
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   clipboardBefore = await preserveNativeClipboard(app);
+  if (process.env.CIRCLE_NATIVE_PERF_PROBE_ONLY === '1')
+    throw Error(
+      'native performance probe requested stop after clipboard checkpoint',
+    );
   taskIds = Array.from(
     { length: 8 },
     (_, index) => `performance-agent-${index}`,
