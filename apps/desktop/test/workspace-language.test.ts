@@ -528,7 +528,7 @@ test(
     const shortRoot = execFileSync(
       'cmd.exe',
       ['/d', '/c', `for %I in ("${root}") do @echo %~sI`],
-      { encoding: 'utf8' },
+      { encoding: 'utf8', windowsVerbatimArguments: true },
     ).trim();
     const service = new LanguageService(shortRoot);
     t.after(() => service.dispose());

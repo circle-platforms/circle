@@ -139,7 +139,9 @@ export class LanguageService {
     };
     this.configErrors = [];
     if (config) {
-      const read = ts.readConfigFile(config, readFile);
+      // TypeScript JSON diagnostics require normalized compiler filenames.
+      const configFile = config.split(path.sep).join('/');
+      const read = ts.readConfigFile(configFile, readFile);
       if (read.error) {
         this.configErrors = [read.error];
         this.options = defaults;
@@ -155,7 +157,7 @@ export class LanguageService {
           },
           path.dirname(config),
           undefined,
-          config,
+          configFile,
         );
         this.options = { ...defaults, ...parsed.options };
         this.files = parsed.fileNames
@@ -442,7 +444,10 @@ export class LanguageService {
           text: item.newText,
         }));
     if (method === 'diagnostics' && file.endsWith('.json')) {
-      const error = ts.parseConfigFileTextToJson(file, content).error;
+      const error = ts.parseConfigFileTextToJson(
+        file.split(path.sep).join('/'),
+        content,
+      ).error;
       return [
         ...this.configDiagnostics(),
         ...(error
