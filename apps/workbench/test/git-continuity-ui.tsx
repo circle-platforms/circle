@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { GitPanel } from '../src/components/GitPanel';
 Object.assign(window, {
@@ -10,6 +11,9 @@ Object.assign(window, {
       }).then((response) => response.json()),
   },
 });
-createRoot(document.getElementById('root')!).render(
-  <GitPanel sessionId="continuity" />,
-);
+function Fixture() {
+  const [sessionId, setSessionId] = useState('continuity');
+  Object.assign(window, { __gitSetSession: setSessionId });
+  return <GitPanel sessionId={sessionId} />;
+}
+createRoot(document.getElementById('root')!).render(<Fixture />);
