@@ -9,6 +9,7 @@ function IndependentResource() {
 }
 function Fixture() {
   const [revision, setRevision] = useState(0);
+  const [resource, setResource] = useState('first');
   return (
     <main data-revision={revision}>
       <label>
@@ -37,7 +38,15 @@ function Fixture() {
       >
         repair source
       </button>
-      <NativeResourceBoundary name="terminal">
+      <button
+        onClick={() => {
+          broken = false;
+          setResource('second');
+        }}
+      >
+        choose healthy resource
+      </button>
+      <NativeResourceBoundary name="terminal" resetKey={resource}>
         <IndependentResource />
       </NativeResourceBoundary>
     </main>

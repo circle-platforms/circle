@@ -645,6 +645,7 @@ export function App() {
       layout={layout}
       openDock={dockRequest}
       sessionId={session.id}
+      editorKey={file ?? undefined}
       editor={
         file ? (
           <Suspense fallback={<p role="status">{t('opening file…')}</p>}>
@@ -699,7 +700,7 @@ export function App() {
     [() => t('redo on screen'), () => act(() => runtime.command('redo'))],
   ] as const;
   const inspector = (
-    <NativeResourceBoundary name={t('inspector')}>
+    <NativeResourceBoundary name={t('inspector')} resetKey={panel}>
       <Inspector
         panel={panel}
         selection={selection}

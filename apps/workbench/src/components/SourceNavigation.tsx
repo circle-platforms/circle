@@ -36,7 +36,10 @@ export function SourceNavigation({
         }}
         title={attachment?.name ?? t('attachment')}
       >
-        <NativeResourceBoundary name={t('attachment')}>
+        <NativeResourceBoundary
+          name={t('attachment')}
+          resetKey={attachment?.id}
+        >
           {attachment && (
             <div className="source-preview">
               {image ? (

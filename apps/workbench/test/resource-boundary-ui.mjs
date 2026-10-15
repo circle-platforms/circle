@@ -36,6 +36,12 @@ try {
     .getByRole('button', { name: 'fail resource', exact: true })
     .click();
   await page.getByRole('alert', { name: 'terminal unavailable' }).waitFor();
+  assert.equal(
+    await page
+      .getByRole('button', { name: 'fail resource', exact: true })
+      .evaluate((node) => document.activeElement === node),
+    true,
+  );
   assert.equal(await conversation.inputValue(), 'developer keeps this draft');
   assert.equal(
     await editor.inputValue(),
@@ -70,6 +76,15 @@ try {
     await conversation.inputValue(),
     'still writable after sibling crash',
   );
+  assert.equal(await editor.inputValue(), 'still editable after sibling crash');
+  await page
+    .getByRole('button', { name: 'fail resource', exact: true })
+    .click();
+  await page.getByRole('alert', { name: 'terminal unavailable' }).waitFor();
+  await page
+    .getByRole('button', { name: 'choose healthy resource', exact: true })
+    .click();
+  await page.getByRole('textbox', { name: 'terminal search' }).waitFor();
   assert.equal(await editor.inputValue(), 'still editable after sibling crash');
   console.log(
     'PASS real React render failure isolated to one resource; sibling edits survive and explicit retry recovers',

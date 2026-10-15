@@ -38,6 +38,7 @@ export function DeveloperWorkbench({
   sessionId,
   conversation,
   editor,
+  editorKey,
   onFile,
   onSession,
   openDock,
@@ -46,6 +47,7 @@ export function DeveloperWorkbench({
   sessionId: string;
   conversation: ReactNode;
   editor: ReactNode;
+  editorKey?: string;
   onFile: (path: string, line?: number, column?: number) => void;
   onSession: (id: string) => void;
   openDock?: { dock: DeveloperDock; id: number };
@@ -105,12 +107,12 @@ export function DeveloperWorkbench({
         <button onClick={() => setMobile('editor')}>{t('editor')}</button>
       </div>
       <div className="developer-conversation">
-        <NativeResourceBoundary name={t('conversation')}>
+        <NativeResourceBoundary name={t('conversation')} resetKey={sessionId}>
           {conversation}
         </NativeResourceBoundary>
       </div>
       <div className="developer-editor">
-        <NativeResourceBoundary name={t('editor')}>
+        <NativeResourceBoundary name={t('editor')} resetKey={editorKey}>
           {editor ?? (
             <div className="empty-state">
               <h3>{t('open a file to start editing')}</h3>
@@ -184,7 +186,10 @@ export function DeveloperWorkbench({
                 aria-labelledby="dock-tab-terminal"
                 hidden={dock !== 'terminal'}
               >
-                <NativeResourceBoundary name={t('terminal')}>
+                <NativeResourceBoundary
+                  name={t('terminal')}
+                  resetKey={sessionId}
+                >
                   <NativeTerminal
                     sessionId={sessionId}
                     active={open && dock === 'terminal'}
@@ -199,7 +204,10 @@ export function DeveloperWorkbench({
                 aria-labelledby="dock-tab-git"
                 hidden={dock !== 'git'}
               >
-                <NativeResourceBoundary name={t('git workspace')}>
+                <NativeResourceBoundary
+                  name={t('git workspace')}
+                  resetKey={sessionId}
+                >
                   <GitPanel
                     sessionId={sessionId}
                     onFile={onFile}
@@ -215,7 +223,7 @@ export function DeveloperWorkbench({
                 aria-labelledby="dock-tab-debug"
                 hidden={dock !== 'debug'}
               >
-                <NativeResourceBoundary name={t('debug')}>
+                <NativeResourceBoundary name={t('debug')} resetKey={sessionId}>
                   <DebugPanel sessionId={sessionId} onFile={onFile} />
                 </NativeResourceBoundary>
               </div>
@@ -227,7 +235,10 @@ export function DeveloperWorkbench({
                 aria-labelledby="dock-tab-delivery"
                 hidden={dock !== 'delivery'}
               >
-                <NativeResourceBoundary name={t('automatic delivery')}>
+                <NativeResourceBoundary
+                  name={t('automatic delivery')}
+                  resetKey={sessionId}
+                >
                   <DeliveryCyclePanel
                     sessionId={sessionId}
                     active={open && dock === 'delivery'}
@@ -247,7 +258,10 @@ export function DeveloperWorkbench({
                 aria-labelledby="dock-tab-tasks"
                 hidden={dock !== 'tasks'}
               >
-                <NativeResourceBoundary name={t('collaboration tasks')}>
+                <NativeResourceBoundary
+                  name={t('collaboration tasks')}
+                  resetKey={sessionId}
+                >
                   <TasksPanel
                     sessionId={sessionId}
                     onSession={onSession}

@@ -3,6 +3,7 @@ import { copyText } from '../host';
 import { t } from '../i18n';
 interface Props {
   name: string;
+  resetKey?: string;
   children: ReactNode;
   onError?: (error: Error, info: ErrorInfo) => void;
 }
@@ -22,8 +23,16 @@ export class NativeResourceBoundary extends Component<Props, State> {
       copyFailed: false,
     };
   }
+  componentDidUpdate(previous: Props) {
+    if (previous.resetKey !== this.props.resetKey && this.state.error)
+      this.setState({ error: null, copied: false, copyFailed: false });
+  }
   componentDidCatch(error: Error, info: ErrorInfo) {
-    this.props.onError?.(error, info);
+    try {
+      this.props.onError?.(error, info);
+    } catch {
+      /* diagnostics must never crash another resource */
+    }
   }
   render() {
     const error = this.state.error;
