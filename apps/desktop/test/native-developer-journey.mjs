@@ -1,4 +1,8 @@
 import {
+  createNativeGitFixture,
+  runNativeGitJourney,
+} from './helpers/native-git-journey.mjs';
+import {
   createNativeTerminalFixture,
   runNativeTerminalJourney,
 } from './helpers/native-terminal-journey.mjs';
@@ -81,6 +85,7 @@ await Promise.all([
     JSON.stringify({ name: 'native-journey', private: true }),
   ),
 ]);
+await createNativeGitFixture(repo);
 await createNativeEditorFixture(repo);
 await createNativeEditorSemanticsFixture(repo);
 const terminalFixture = await createNativeTerminalFixture(repo);
@@ -748,6 +753,26 @@ try {
       'actual index hunk unstaged',
     );
   });
+  await check(
+    'Git consecutive scoped commits local push conflict continue and abort',
+    async () => {
+      await page
+        .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+        .click();
+      const beforeBranch = (await git('branch', '--show-current')).trim();
+      const beforeReadme = await readFile(join(repo, 'README.md'), 'utf8');
+      await runNativeGitJourney({ page, workspace: repo, sessionId, output });
+      assert.equal(
+        (await git('branch', '--show-current')).trim(),
+        beforeBranch,
+      );
+      assert.equal(
+        await readFile(join(repo, 'README.md'), 'utf8'),
+        beforeReadme,
+        'extended Git journey preserves existing manual edits',
+      );
+    },
+  );
   await check('Node launch breakpoint variables and step', async () => {
     await page.locator('#dock-tab-debug').click();
     const panel = page.locator('.debug-panel');
