@@ -1,3 +1,4 @@
+import { cleanupNativeTest } from './helpers/native-failure.mjs';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
@@ -6,6 +7,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { _electron as electron } from 'playwright';
+import { captureFailure } from './helpers/diagnostics.mjs';
 
 // A local model gateway reads the real preceding screenshot result. It never calls a model.
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -156,6 +158,8 @@ for (const key of Object.keys(env))
     delete env[key];
 delete env.ELECTRON_RUN_AS_NODE;
 let app;
+let page;
+const errors = [];
 try {
   app = await electron.launch({
     executablePath:
@@ -167,9 +171,8 @@ try {
     timeout: 45000,
   });
   app.context().on('page', (page) => page.on('dialog', () => {}));
-  const page = await app.firstWindow();
+  page = await app.firstWindow();
   page.setDefaultTimeout(20000);
-  const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await app.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows()[0];
@@ -303,9 +306,22 @@ try {
     ),
   );
   console.log(JSON.stringify({ checks: 5, packaged: info.packaged, output }));
+} catch (error) {
+  await captureFailure(page, error, errors, output);
+  throw error;
 } finally {
-  if (app) await app.close();
-  server.closeAllConnections();
-  await new Promise((resolve) => server.close(resolve));
-  await rm(temp, { recursive: true, force: true });
+  if (
+    !(await cleanupNativeTest([
+      async () => {
+        if (app) await app.close();
+      },
+      () => server.closeAllConnections(),
+      () =>
+        new Promise((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        ),
+      () => rm(temp, { recursive: true, force: true }),
+    ]))
+  )
+    process.exitCode = 1;
 }
