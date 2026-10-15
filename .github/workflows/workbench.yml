@@ -84,7 +84,7 @@ jobs:
       - run: npm --prefix apps/workbench test
       - run: npm --prefix apps/desktop test
       - name: Verify native developer tool resources
-        run: node --test apps/desktop/test/developer-toolchain.test.mjs
+        run: node --test apps/desktop/test/developer-toolchain.test.mjs apps/desktop/test/journey-platform.test.mjs
       - run: npm --prefix apps/desktop run test:runtime
       - run: npm --prefix apps/desktop run build
       - run: node apps/desktop/scripts/developer-toolchain.mjs
@@ -160,7 +160,7 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.dotnet\tools"
           & "$env:USERPROFILE\.dotnet\tools\wix.exe" extension add --global WixToolset.UI.wixext/5.0.2
       - name: Verify native developer tool resources
-        run: node --test apps/desktop/test/developer-toolchain.test.mjs
+        run: node --test apps/desktop/test/developer-toolchain.test.mjs apps/desktop/test/journey-platform.test.mjs
       - run: npm --prefix apps/desktop run test:runtime
       - run: npm --prefix apps/desktop run package
       - run: node apps/desktop/test/developer-toolchain-smoke.mjs
