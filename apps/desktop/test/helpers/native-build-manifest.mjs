@@ -42,9 +42,9 @@ export function verifyNativeBuildManifest(manifest, executed) {
 /** Hash only paths belonging to the actual running main window, including asar files. */
 export async function executedNativeBuildEvidence(app, manifest) {
   return app.evaluate(async ({ app, BrowserWindow }, requested) => {
-    const fs = require('node:fs/promises');
-    const path = require('node:path');
-    const crypto = require('node:crypto');
+    const fs = process.getBuiltinModule('node:fs/promises');
+    const path = process.getBuiltinModule('node:path');
+    const crypto = process.getBuiltinModule('node:crypto');
     const appPath = app.getAppPath();
     const pkg = JSON.parse(
       await fs.readFile(path.join(appPath, 'package.json'), 'utf8'),
