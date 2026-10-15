@@ -18,6 +18,8 @@ export interface Usage {
   estimated_input_tokens?: number;
   /** Output tokens included above that a stopped turn estimated. */
   estimated_output_tokens?: number;
+  /** Input tokens whose endpoint omitted cache fields. Filled by `stats`. */
+  cache_unreported_input?: number;
 }
 export interface Message {
   id: string;
@@ -42,6 +44,11 @@ export interface Message {
   thinking_seconds?: number;
   /** This assistant message is the partial reply saved when the turn was stopped. */
   interrupted?: boolean;
+  /**
+   * False when this call's endpoint omitted cache fields. A reported zero stays
+   * `cache 0.0%`; a missing field is `cache N/A`, the same as a stop.
+   */
+  cache_reported?: boolean;
   internal?: string;
   truncated?: boolean;
   recoverable?: boolean;

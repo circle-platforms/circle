@@ -164,8 +164,10 @@ function meterParts(meters: Meters): {
   // A stopped turn stores cache reads as 0 because the endpoint never reported
   // them. That is not a measured 0.0% hit rate.
   const estimatedIn = usage.estimated_input_tokens ?? 0;
-  const measuredIn = Math.max(0, usage.input_tokens - estimatedIn);
-  const cacheUnknown = estimatedIn > 0 && measuredIn === 0;
+  // A finished call that omitted cache fields is the same unknown as a stop.
+  const unreported = usage.cache_unreported_input ?? 0;
+  const measuredIn = Math.max(0, usage.input_tokens - estimatedIn - unreported);
+  const cacheUnknown = usage.input_tokens > 0 && measuredIn === 0;
   const cached = Math.min(
     usage.cache_read_tokens,
     measuredIn || usage.input_tokens,

@@ -313,6 +313,36 @@ test('footer meters colour the context yellow from 70% and red from 90%, and a f
     );
     assert.equal(cramped.includes('cach'), false, cramped);
     assert.match(cramped, /cleared/);
+    const omitted = stripAnsi(
+      footerRow(
+        {
+          usage: {
+            input_tokens: 1500,
+            output_tokens: 42,
+            cache_read_tokens: 0,
+            cache_unreported_input: 1500,
+          },
+        },
+        '',
+        80,
+      ),
+    );
+    assert.match(omitted, /cache N\/A/);
+    assert.equal(omitted.includes('cache 0.0%'), false);
+    const reportedZero = stripAnsi(
+      footerRow(
+        {
+          usage: {
+            input_tokens: 1500,
+            output_tokens: 42,
+            cache_read_tokens: 0,
+          },
+        },
+        '',
+        80,
+      ),
+    );
+    assert.match(reportedZero, /cache 0\.0%/);
   }
   // Before the session is connected there are no meters.
   const state = screen();
@@ -631,6 +661,52 @@ test('thinking rows have no background on a dark theme and on a light one', () =
     assert.ok(live[0]!.includes(p.reason.slice(2, -1)));
     assert.ok(!live[0]!.includes('\x1b[48'));
   }
+});
+
+test('a finished call that omitted cache fields reads cache N/A', async (t) => {
+  const root = scratch(t);
+  const settings = trustFolder(defaultSettings(), root);
+  const model = new ScriptedModel([
+    {
+      message: {
+        id: 'omitted',
+        role: 'assistant',
+        content: 'done',
+        cache_reported: false,
+      },
+      usage: { input_tokens: 1500, output_tokens: 42, cache_read_tokens: 0 },
+    },
+    {
+      message: {
+        id: 'reported',
+        role: 'assistant',
+        content: 'again',
+      },
+      usage: { input_tokens: 100, output_tokens: 8, cache_read_tokens: 0 },
+    },
+  ]);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings,
+    model,
+    headless: true,
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.harness.run('look at the workspace and say what is there');
+  const omitted = runtime.stats().usage;
+  assert.equal(omitted.cache_unreported_input, 1500);
+  assert.equal(omitted.input_tokens, 1500);
+  const row = stripAnsi(footerRow({ usage: omitted }, '', 80));
+  assert.match(row, /cache N\/A/);
+  assert.equal(row.includes('cache 0.0%'), false);
+  await runtime.harness.run('look at the workspace and say what is there');
+  const mixed = runtime.stats().usage;
+  assert.equal(mixed.input_tokens, 1600);
+  assert.equal(mixed.cache_unreported_input, 1500);
+  const mixedRow = stripAnsi(footerRow({ usage: mixed }, '', 80));
+  assert.match(mixedRow, /cache 0\.0%/);
+  assert.equal(mixedRow.includes('cache N/A'), false);
 });
 
 test('a real turn renders short tool rows, a folded read, a folded thought with its time and a usage line without the approval wait', async (t) => {

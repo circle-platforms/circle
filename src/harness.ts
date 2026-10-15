@@ -348,14 +348,19 @@ export class Harness {
     } while (this.followUps.length);
     return { answer, usage: total };
   }
+  /**
+   * Output cap for the title request. 128 was spent entirely on reasoning by
+   * glm-5.3, so the answer never arrived. 512 leaves room for the title once
+   * thinking is disabled.
+   */
+  static readonly titleOutputTokens = 512;
   /** Set once the fallback is saved. Sent after the turn so it does not share that request. */
   private pendingTitle?: { display: string; fallback: string };
   /**
    * Ask the model for a short title after the fallback is already saved. A scripted model
-   * never sees this call. A rename that landed first is left alone. The request asks for
-   * no thinking and a short cap: an Anthropic-compatible model such as glm-5.3 otherwise
-   * spends the turn's effort and output budget and the fallback stays, with the error
-   * swallowed.
+   * never sees this call. A rename that landed first is left alone. The request disables
+   * thinking: glm-5.3 still reasons when the field is omitted, fills the cap, and the
+   * reasoning text is not a title.
    */
   private generateTitle(display: string, fallback: string): void {
     // `this.model`, not the model passed at construction: /model and a reload replace it.
@@ -380,7 +385,7 @@ export class Harness {
       return;
     }
     titleTrace(
-      `request model=${model.model} chars=${prompt.length} maxTokens=128 effort=`,
+      `request model=${model.model} chars=${prompt.length} maxTokens=${Harness.titleOutputTokens} thinking=disabled`,
     );
     void model
       .complete({
@@ -394,14 +399,15 @@ export class Harness {
         ],
         tools: [],
         signal: AbortSignal.timeout(20_000),
-        // `''` skips thinking. `minimal` is sent as output_config.effort and glm rejects
-        // it, or thinks until this times out, and the catch used to hide that.
+        // `''` asks the Anthropic body for `thinking: {type: 'disabled'}`.
+        // `minimal` is sent as output_config.effort and glm rejects it.
         effort: '',
-        maxTokens: 128,
+        maxTokens: Harness.titleOutputTokens,
         token: () => {},
       })
       .then((response) => {
-        const raw = response.message.content || response.message.thinking || '';
+        // Reasoning is never a title, even when the answer is empty.
+        const raw = response.message.content;
         const title = sanitizeGeneratedTitle(raw);
         const cleaned = raw
           .split('\n')

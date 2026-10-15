@@ -78,7 +78,11 @@ export const BUILTIN_SLASH: SlashCommand[] = [
     aliases: ['sessions'],
   },
   { name: 'continue', description: 'Resume the previous session' },
-  { name: 'name', description: 'Set session display name: /name <title>' },
+  {
+    name: 'name',
+    description: 'Set session display name: /name <title>',
+    aliases: ['rename'],
+  },
   {
     name: 'session',
     description: 'Show the session: id, title, messages, tokens',

@@ -332,9 +332,9 @@ test('@file is read from the current folder, then the workspace, and inlined aft
   });
   assert.equal(binary.code, 2);
   assert.match(binary.stderr, /blob\.bin is not a text file/);
-  // The first prompt is long enough for a title side request (max_tokens 128).
+  // The first prompt is long enough for a title side request (max_tokens 512).
   // That request is not a turn.
-  const turns = () => endpoint.bodies.filter((body) => body.max_tokens !== 128);
+  const turns = () => endpoint.bodies.filter((body) => body.max_tokens !== 512);
   assert.equal(turns().length, 1);
   // An image in the workspace goes as an attachment, which text cannot carry.
   const png = Buffer.from('89504e470d0a1a0a30303030', 'hex');

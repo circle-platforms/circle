@@ -111,7 +111,7 @@ class TitleModel implements ChatModel {
   thinking = '';
   async complete(request: ModelRequest): Promise<ModelResponse> {
     this.requests.push(request);
-    const titleCall = request.maxTokens === 128;
+    const titleCall = request.maxTokens === Harness.titleOutputTokens;
     if (titleCall && this.failTitle) throw new Error('title exploded');
     if (titleCall) await this.gate;
     const content = titleCall ? this.title : this.answer;
@@ -161,7 +161,7 @@ test('a side request names the session and does not take the answer', async (t) 
   assert.equal(result.answer, 'done');
   assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
   const titleCalls = model.requests.filter(
-    (request) => request.maxTokens === 128,
+    (request) => request.maxTokens === Harness.titleOutputTokens,
   );
   assert.equal(titleCalls.length, 1);
   assert.equal(titleCalls[0]!.effort, '');
@@ -201,7 +201,9 @@ test('a short prompt keeps the fallback and skips the model', async (t) => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(session.id)!.title, 'hello there');
   assert.equal(
-    model.requests.filter((request) => request.maxTokens === 128).length,
+    model.requests.filter(
+      (request) => request.maxTokens === Harness.titleOutputTokens,
+    ).length,
     0,
   );
   assert.deepEqual(notes, []);
@@ -223,7 +225,9 @@ test('a long prompt with no side request reports title failed', async (t) => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
   assert.equal(
-    model.requests.filter((request) => request.maxTokens === 128).length,
+    model.requests.filter(
+      (request) => request.maxTokens === Harness.titleOutputTokens,
+    ).length,
     0,
   );
   assert.match(notes[0] ?? '', /no side request/);
@@ -255,7 +259,9 @@ test('the runtime wrapper keeps side requests and can name the session', async (
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(runtime.store.get(runtime.session.id)!.title, 'Login bug fix');
   assert.equal(
-    model.requests.filter((request) => request.maxTokens === 128).length,
+    model.requests.filter(
+      (request) => request.maxTokens === Harness.titleOutputTokens,
+    ).length,
     1,
   );
 });
@@ -310,16 +316,24 @@ test('a failed side request keeps the fallback and is reported', async (t) => {
   assert.match(notes[0] ?? '', /title exploded/);
 });
 
-test('a title that arrives as thinking still replaces the fallback', async (t) => {
+test('thinking text is never used as the title', async (t) => {
   const root = scratch(t);
   const model = new TitleModel('done', '');
-  model.thinking = 'Sea poem';
+  model.thinking = 'The user wants me to generate a title for a conver';
   const { harness: run, store, session } = harness(root, model);
   cleanup(t, () => store.close());
+  const notes: string[] = [];
+  run.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as
+      { event?: string; message?: string } | undefined;
+    if (notice?.event === 'title_failed') notes.push(String(notice.message));
+  });
   await run.run(LONG);
   model.releaseTitle();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(store.get(session.id)!.title, 'Sea poem');
+  assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
+  assert.match(notes[0] ?? '', /empty title/);
+  assert.equal(store.get(session.id)!.title.includes('The user wants'), false);
 });
 
 const TITLE_EVENTS: [string, unknown][] = [
@@ -400,7 +414,8 @@ test('an Anthropic title request through the terminal replaces the fallback', as
     for await (const chunk of request) text += chunk;
     const body = JSON.parse(text) as { max_tokens?: number; system?: string };
     bodies.push(body);
-    if (body.max_tokens === 128 && rejectTitle) {
+    const titleCall = String(body.system ?? '').includes('title generator');
+    if (titleCall && rejectTitle) {
       response.writeHead(400, { 'content-type': 'application/json' });
       response.end(
         JSON.stringify({
@@ -410,10 +425,9 @@ test('an Anthropic title request through the terminal replaces the fallback', as
       );
       return;
     }
-    const answer =
-      body.max_tokens === 128
-        ? 'Workspace File Overview'
-        : 'Here are the files.';
+    const answer = titleCall
+      ? 'Workspace File Overview'
+      : 'Here are the files.';
     response.writeHead(200, { 'content-type': 'text/event-stream' });
     response.end(anthropicStream(answer));
   });
@@ -475,16 +489,14 @@ test('an Anthropic title request through the terminal replaces the fallback', as
   await until(
     () => runtime.store.get(first)?.title === 'Workspace File Overview',
   );
-  const title = bodies.find(
-    (body) =>
-      body.max_tokens === 128 &&
-      String(body.system).includes('title generator'),
+  const title = bodies.find((body) =>
+    String(body.system).includes('title generator'),
   );
   assert.ok(title, JSON.stringify(bodies.map((body) => body.max_tokens)));
   assert.match(String(title.system), /title generator/);
   assert.equal(title.output_config, undefined);
-  assert.equal(title.thinking, undefined);
-  assert.equal(title.max_tokens, 128);
+  assert.deepEqual(title.thinking, { type: 'disabled' });
+  assert.equal(title.max_tokens, Harness.titleOutputTokens);
   assert.match(logged.join('\n'), /\[circle\] title:/);
   assert.notEqual(runtime.store.get(first)?.title, fallbackTitle(prompt));
   rejectTitle = true;
@@ -501,4 +513,155 @@ test('an Anthropic title request through the terminal replaces the fallback', as
     second.store.get(second.session.id)?.title,
     fallbackTitle(failed),
   );
+});
+
+test('an Anthropic title reply that is only thinking keeps the fallback', async (t) => {
+  const bodies: Record<string, unknown>[] = [];
+  const server = createServer(async (request, response) => {
+    if (request.method !== 'POST') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ data: [{ id: 'glm-5.3' }] }));
+      return;
+    }
+    let text = '';
+    for await (const chunk of request) text += chunk;
+    const body = JSON.parse(text) as { system?: string };
+    bodies.push(body);
+    const titleCall = String(body.system ?? '').includes('title generator');
+    const events: [string, unknown][] = titleCall
+      ? [
+          [
+            'message_start',
+            {
+              type: 'message_start',
+              message: {
+                id: 'message',
+                type: 'message',
+                role: 'assistant',
+                model: 'glm-5.3',
+                content: [],
+                usage: { input_tokens: 20, output_tokens: 0 },
+              },
+            },
+          ],
+          [
+            'content_block_start',
+            {
+              type: 'content_block_start',
+              index: 0,
+              content_block: { type: 'thinking', thinking: '', signature: '' },
+            },
+          ],
+          [
+            'content_block_delta',
+            {
+              type: 'content_block_delta',
+              index: 0,
+              delta: {
+                type: 'thinking_delta',
+                thinking:
+                  'The user is asking about a README.md file - they want a title',
+              },
+            },
+          ],
+          [
+            'content_block_delta',
+            {
+              type: 'content_block_delta',
+              index: 0,
+              delta: { type: 'signature_delta', signature: 'sig' },
+            },
+          ],
+          ['content_block_stop', { type: 'content_block_stop', index: 0 }],
+          [
+            'message_delta',
+            {
+              type: 'message_delta',
+              delta: { stop_reason: 'max_tokens', stop_sequence: null },
+              usage: { output_tokens: 512 },
+            },
+          ],
+          ['message_stop', { type: 'message_stop' }],
+        ]
+      : [
+          TITLE_EVENTS[0]!,
+          TITLE_EVENTS[1]!,
+          [
+            'content_block_delta',
+            {
+              type: 'content_block_delta',
+              index: 0,
+              delta: { type: 'text_delta', text: 'Here are the files.' },
+            },
+          ],
+          ...TITLE_EVENTS.slice(2),
+        ];
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.end(
+      events
+        .map(
+          ([event, data]) =>
+            `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
+        )
+        .join(''),
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  cleanup(t, async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const settings = defaultSettings();
+  settings.initialized = true;
+  settings.auth.base_url = `http://127.0.0.1:${address.port}`;
+  settings.auth.protocol = 'anthropic';
+  settings.auth.model = 'glm-5.3';
+  saveCredentials({ api_key: 'fake-title-key' }, home);
+  const previousRefresh = process.env.CIRCLE_NO_MODELS_REFRESH;
+  process.env.CIRCLE_NO_MODELS_REFRESH = '1';
+  cleanup(t, () => {
+    if (previousRefresh === undefined)
+      delete process.env.CIRCLE_NO_MODELS_REFRESH;
+    else process.env.CIRCLE_NO_MODELS_REFRESH = previousRefresh;
+  });
+  const app = new SessionApp(workspace, home, settings);
+  const ui = app as unknown as {
+    screen: { render: () => void };
+    flashTimer?: ReturnType<typeof setTimeout>;
+    input: { close: () => void };
+    interactions: { close: () => void };
+    off?: () => void;
+    offSignals?: () => void;
+  };
+  ui.screen.render = () => {};
+  await app.attach({ workspace, home, settings, headless: true });
+  cleanup(t, async () => {
+    ui.off?.();
+    ui.offSignals?.();
+    if (ui.flashTimer) clearTimeout(ui.flashTimer);
+    ui.input.close();
+    ui.interactions.close();
+    await app.runtime?.close();
+  });
+  const prompt = 'look at @README.md and tell me what the first heading is';
+  await app.submit(prompt);
+  const runtime = app.runtime!;
+  await until(() =>
+    app.state.notices.some((line) => line.includes('title failed')),
+  );
+  const title = bodies.find((body) =>
+    String(body.system).includes('title generator'),
+  );
+  assert.ok(title);
+  assert.deepEqual(title.thinking, { type: 'disabled' });
+  assert.equal(title.max_tokens, Harness.titleOutputTokens);
+  assert.equal(title.output_config, undefined);
+  const stored = runtime.store.get(runtime.session.id)!.title;
+  assert.equal(stored, fallbackTitle(prompt));
+  assert.equal(stored.includes('The user is asking'), false);
+  assert.match(app.state.notices.join('\n'), /title failed/);
 });

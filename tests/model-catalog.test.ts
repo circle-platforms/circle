@@ -509,14 +509,14 @@ test('real Anthropic requests fit legacy thinking and output budgets and include
     messages: [{ id: 'user', role: 'user', content: 'question' }],
     tools: [],
     effort: '',
-    maxTokens: 128,
+    maxTokens: 512,
     signal: new AbortController().signal,
     token: () => {},
   });
   assert.equal(bodies[2]!.model, 'glm-5.3');
-  assert.equal(bodies[2]!.max_tokens, 128);
+  assert.equal(bodies[2]!.max_tokens, 512);
   assert.equal(bodies[2]!.output_config, undefined);
-  assert.equal(bodies[2]!.thinking, undefined);
+  assert.deepEqual(bodies[2]!.thinking, { type: 'disabled' });
 });
 test('saved prices and model identity survive catalog changes and restart instead of repricing previous calls', async (t) => {
   const root = scratch(t);

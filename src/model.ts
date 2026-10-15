@@ -315,6 +315,7 @@ export class GatewayModel implements ChatModel {
         { id: string; name: string; args: string }
       >();
       const usage = emptyUsage();
+      let cacheReported = false;
       let guardedStop = false;
       try {
         for await (const chunk of stream) {
@@ -328,10 +329,14 @@ export class GatewayModel implements ChatModel {
               usage.output_tokens,
               chunk.usage.completion_tokens || 0,
             );
-            usage.cache_read_tokens = Math.max(
-              usage.cache_read_tokens,
-              chunk.usage.prompt_tokens_details?.cached_tokens ?? 0,
-            );
+            const cached = chunk.usage.prompt_tokens_details?.cached_tokens;
+            if (typeof cached === 'number') {
+              cacheReported = true;
+              usage.cache_read_tokens = Math.max(
+                usage.cache_read_tokens,
+                cached,
+              );
+            }
             request.progress?.('usage');
           }
           const choice = chunk.choices[0];
@@ -404,6 +409,7 @@ export class GatewayModel implements ChatModel {
           content,
           thinking,
           tool_calls,
+          ...(cacheReported ? {} : { cache_reported: false }),
           ...(guardedStop || !finish || finish === 'length'
             ? { truncated: true }
             : {}),
@@ -490,7 +496,11 @@ export class GatewayModel implements ChatModel {
         input_schema: { ...tool.parameters, type: 'object' },
       }));
     const effort = this.effortFor(request);
-    if (effort) {
+    if (request.effort === '') {
+      // Omitting `thinking` leaves glm-5.3 free to reason until max_tokens.
+      // `{type: 'disabled'}` is the switch it accepts.
+      body.thinking = { type: 'disabled' };
+    } else if (effort) {
       const profile = modelProfile('anthropic', this.model);
       const claude = this.model
         .toLowerCase()
@@ -589,6 +599,10 @@ export class GatewayModel implements ChatModel {
           content,
           thinking,
           tool_calls,
+          ...(typeof final.usage.cache_read_input_tokens === 'number' ||
+          typeof final.usage.cache_creation_input_tokens === 'number'
+            ? {}
+            : { cache_reported: false }),
           provider_content: final.content,
           ...(guardedStop ||
           !final.stop_reason ||

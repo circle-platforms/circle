@@ -1159,13 +1159,20 @@ export class AgentRuntime {
     const usage = emptyUsage();
     let estimatedIn = 0;
     let estimatedOut = 0;
+    let unreportedIn = 0;
     const countEstimate = (message: {
       interrupted?: boolean;
+      cache_reported?: boolean;
       usage?: import('./types.js').Usage;
     }): void => {
-      if (!message.interrupted || !message.usage) return;
-      estimatedIn += message.usage.input_tokens;
-      estimatedOut += message.usage.output_tokens;
+      if (!message.usage) return;
+      if (message.interrupted) {
+        estimatedIn += message.usage.input_tokens;
+        estimatedOut += message.usage.output_tokens;
+        return;
+      }
+      if (message.cache_reported === false)
+        unreportedIn += message.usage.input_tokens;
     };
     for (const message of messages)
       if (message.usage) {
@@ -1226,6 +1233,7 @@ export class AgentRuntime {
       usage.estimated_input_tokens = estimatedIn;
       usage.estimated_output_tokens = estimatedOut;
     }
+    if (unreportedIn) usage.cache_unreported_input = unreportedIn;
     return {
       messages: messages.length,
       toolCalls: messages.reduce(

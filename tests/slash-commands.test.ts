@@ -244,6 +244,11 @@ test('a mistyped command stays in the box with a suggestion; a space or a path s
     rawName: 'tasks',
     args: '',
   });
+  assert.deepEqual(parseSlash('/rename my work'), {
+    name: 'name',
+    rawName: 'rename',
+    args: 'my work',
+  });
   assert.deepEqual(parseSlash('/skill:review src'), {
     name: 'skill',
     rawName: 'skill:review',
@@ -687,9 +692,12 @@ test('/name, /session, /approvals, /themes and /effort answer as 0.5.0 did', asy
   await app.submit('/name  my   work ');
   assert.equal(runtime.store.get(runtime.session.id)!.title, 'my work');
   assert.equal(app.state.notices.at(-1), 'Session name → my work');
+  await app.submit('/rename  other   name ');
+  assert.equal(runtime.store.get(runtime.session.id)!.title, 'other name');
+  assert.equal(app.state.notices.at(-1), 'Session name → other name');
   await app.submit('/session');
   const facts = app.state.notices.at(-1)!.split('\n');
-  assert.equal(facts[0], `session  ${runtime.session.id} · my work`);
+  assert.equal(facts[0], `session  ${runtime.session.id} · other name`);
   assert.equal(facts[2], 'model    scripted');
   assert.match(facts[4]!, /^messages 0 · 0 yours · 0 from the model/);
   runtime.policy.store.record(
