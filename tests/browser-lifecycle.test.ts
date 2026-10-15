@@ -202,6 +202,86 @@ test('a Windows taskkill helper has an independent three-second bound and actual
   }
 });
 
+for (const helperExitCode of [0, 7])
+  test(
+    helperExitCode === 0
+      ? 'a successful forced tree helper is followed by one native owned-root stop when the root stays alive'
+      : 'a failed forced tree helper preserves its error without a native-root stop',
+    async (t) => {
+      const fixture = ownedStartupBrowser(t, 'unused', false, undefined, 40);
+      const state = fixture.browser as any;
+      await state.start();
+      const child = fixture.child();
+      const nativeStop = t.mock.method(child, 'kill', child.kill.bind(child));
+      const execute = childProcesses.execFile;
+      const helpers: ChildProcess[] = [];
+      const treeStops: string[][] = [];
+      t.mock.method(
+        childProcesses,
+        'execFile',
+        (file: any, args: any, ...rest: any[]) => {
+          if (file !== 'taskkill') return (execute as any)(file, args, ...rest);
+          treeStops.push(args);
+          // A real helper reports a known result without changing the owned root.
+          const helper = (execute as any)(
+            process.execPath,
+            ['-e', `process.exit(${helperExitCode})`],
+            ...rest,
+          ) as ChildProcess;
+          helpers.push(helper);
+          return helper;
+        },
+      );
+      syncBuiltinESMExports();
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+      Object.defineProperty(process, 'platform', { value: 'win32' });
+      state.processGroups.clear();
+      try {
+        if (helperExitCode === 0) {
+          await fixture.browser.close();
+          assert(child.exitCode !== null || child.signalCode !== null);
+        } else {
+          await assert.rejects(fixture.browser.close(), (error) => {
+            assert(error instanceof Error);
+            assert.equal((error as any).code, helperExitCode);
+            return true;
+          });
+          assert.equal(child.exitCode, null);
+          assert.equal(child.signalCode, null);
+        }
+        assert.deepEqual(treeStops, [
+          ['/PID', String(child.pid), '/T'],
+          ['/PID', String(child.pid), '/T', '/F'],
+        ]);
+        assert.equal(nativeStop.mock.callCount(), helperExitCode === 0 ? 1 : 0);
+        if (helperExitCode === 0)
+          assert.deepEqual(nativeStop.mock.calls[0]!.arguments, ['SIGKILL']);
+        assert.equal(helpers.length, 2);
+        assert(
+          helpers.every(
+            (helper) =>
+              helper.exitCode === helperExitCode && helper.signalCode === null,
+          ),
+        );
+      } finally {
+        t.diagnostic(
+          JSON.stringify({
+            treeHelperCalls: treeStops.length,
+            helperExitCodes: helpers.map((helper) => helper.exitCode),
+            nativeStopsBeforeSafety: nativeStop.mock.callCount(),
+            rootExitObservedBeforeSafety:
+              child.exitCode !== null || child.signalCode !== null,
+          }),
+        );
+        Object.defineProperty(process, 'platform', platform);
+        await stopOwned(child);
+        for (const helper of helpers) await stopOwned(helper);
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+      }
+    },
+  );
+
 test('closing after a broken protocol and a new launch stops both owned roots', async (t) => {
   const fixture = ownedStartupBrowser(t, 'unused', false, undefined, 40);
   const state = fixture.browser as any;

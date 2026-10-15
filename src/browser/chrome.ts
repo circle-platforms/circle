@@ -554,6 +554,10 @@ export class ChromeBrowser implements BrowserPort {
           await this.stopProcess(child, false).catch(() => {});
           if (!(await this.waitForExit(child, Math.min(timeout, 1000)))) {
             await this.stopProcess(child, true);
+            // A successful tree command is not an observed root exit. Stop the
+            // same owned handle once, then retain the existing exit verification.
+            if (process.platform === 'win32' && !this.exited(child))
+              child.kill('SIGKILL');
             if (!(await this.waitForExit(child, timeout)))
               throw new Error(
                 'the browser process did not stop; retry closing the session',

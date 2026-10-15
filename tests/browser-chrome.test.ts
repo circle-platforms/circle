@@ -579,6 +579,11 @@ test(
           assert.equal(error.fixturePhase.session, tab.session);
           assert.equal(error.fixturePhase.status, 'timeout');
           assert.ok(fixture.signal.aborted);
+          assert.equal(
+            Object.hasOwn(error, 'browserFixtureCleanup'),
+            false,
+            error,
+          );
           return true;
         },
       );
