@@ -13,7 +13,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
+import { DeliveryService } from '../src/workspace/delivery.ts';
 import { setTimeout as delay } from 'node:timers/promises';
 import { RuntimeController } from '../src/runtime-controller.ts';
 import { ScriptedModel } from '../../../src/testing.ts';
@@ -881,11 +883,10 @@ test('controller task verification executes a pinned project oracle in an isolat
 test('controller isolates same-named cycles by session and repairs real PR checks before human merge', async (t) => {
   const tools = await mkdtemp(join(tmpdir(), 'circle-cycle-gh-'));
   t.after(() => rm(tools, { recursive: true, force: true }));
-  const gh = join(tools, 'gh');
+  const gh = join(tools, 'fake-gh.cjs');
   await writeFile(
     gh,
-    `#!${process.execPath}
-const fs=require('node:fs'),cp=require('node:child_process'),path=require('node:path'),crypto=require('node:crypto');
+    `const fs=require('node:fs'),cp=require('node:child_process'),path=require('node:path'),crypto=require('node:crypto');
 const args=process.argv.slice(2), key=crypto.createHash('sha256').update(process.cwd()).digest('hex'), state=path.join(${JSON.stringify(tools)},key+'.json');
 const git=(...args)=>cp.execFileSync('git',args,{encoding:'utf8'}).trim();
 fs.appendFileSync(${JSON.stringify(join(tools, 'calls'))},JSON.stringify(args)+'\\n');
@@ -900,7 +901,34 @@ else if(args[0]==='auth')console.log('authenticated');
 else if(args[0]==='--version')console.log('gh version 2.83.2');
 else process.exit(2);
 `,
-    { mode: 0o700 },
+    { mode: 0o600 },
+  );
+  const executeFixture = promisify(execFile);
+  const originalNodeOptions = process.env.NODE_OPTIONS;
+  const transports: { file: string; args: string[]; cwd: string }[] = [];
+  // Inject only the trusted CLI transport. Keep DeliveryService's real PR/CI
+  // state machine and every Git/TaskService operation. Windows does not execute
+  // a Unix shebang, so run the same fixture with Node on every platform.
+  t.mock.method(
+    DeliveryService.prototype,
+    'gh',
+    async function (this: DeliveryService, args: string[]) {
+      const argv = [gh, ...args];
+      transports.push({ file: process.execPath, args: argv, cwd: this.root });
+      return (
+        await executeFixture(process.execPath, argv, {
+          cwd: this.root,
+          encoding: 'utf8',
+          maxBuffer: 8 * 1024 * 1024,
+          timeout: 120000,
+          env: {
+            ...process.env,
+            GH_PROMPT_DISABLED: '1',
+            GH_NO_UPDATE_NOTIFIER: '1',
+          },
+        })
+      ).stdout;
+    },
   );
   const handler = async (request: any) => ({
     message: request.messages.some((m: any) => m.role === 'tool')
@@ -1107,6 +1135,24 @@ else process.exit(2);
   const calls = await readFile(join(tools, 'calls'), 'utf8');
   assert.ok(calls.includes('"ready"'));
   assert.equal(calls.includes('"merge"'), false);
+  assert.ok(transports.length > 0);
+  assert.ok(
+    transports.every(
+      (call) => call.file === process.execPath && call.args[0] === gh,
+    ),
+  );
+  assert.ok(
+    transports.every(
+      (call) =>
+        realpathSync.native(call.cwd) !== realpathSync.native(f.workspace),
+    ),
+    'CLI operates only in the owned integration worktrees',
+  );
+  assert.equal(
+    process.env.NODE_OPTIONS,
+    originalNodeOptions,
+    'fixture transport does not change global Node options',
+  );
 });
 
 test('nested agent patch reports committed paths to the next model after a real competing disk write', async (t) => {
