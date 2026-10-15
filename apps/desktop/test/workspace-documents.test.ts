@@ -6,6 +6,7 @@ import {
   mkdtemp,
   mkdir,
   readFile,
+  realpath,
   readdir,
   rename,
   rm,
@@ -16,6 +17,9 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { realpathSync } from 'node:fs';
+import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   DocumentConflictError,
@@ -36,6 +40,106 @@ async function fixture(t: TestContext) {
   });
   return { scratch, root, documents };
 }
+
+test('workspace roots use the same native spelling as asynchronous scope checks', async (t) => {
+  const { root, documents } = await fixture(t);
+  assert.equal(documents.root, await realpath(root));
+  assert.equal(documents.root, realpathSync.native(root));
+  await writeFile(join(root, 'file.txt'), 'original');
+  const document = await documents.read('file.txt');
+  const saved = await documents.save('file.txt', 'updated', document.revision);
+  assert.equal(await readFile(join(root, 'file.txt'), 'utf8'), saved.content);
+});
+
+test(
+  'real Windows short-path aliases preserve CAS coordination and native folder boundaries',
+  { skip: process.platform !== 'win32' },
+  async (t) => {
+    const { scratch, root, documents } = await fixture(t);
+    const execute = promisify(execFile);
+    const canonical = await realpath(root);
+    // Windows CI TMP already contains RUNNER~1. Preserve that actual short input.
+    // Other Windows hosts can ask the OS for an alias when 8.3 is available.
+    let short = root;
+    if (root.toLowerCase() === canonical.toLowerCase()) {
+      const powershell = join(
+        process.env.SystemRoot ?? 'C:\\Windows',
+        'System32',
+        'WindowsPowerShell',
+        'v1.0',
+        'powershell.exe',
+      );
+      try {
+        short = (
+          await execute(
+            powershell,
+            [
+              '-NoProfile',
+              '-NonInteractive',
+              '-Command',
+              '(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:CIRCLE_DOCUMENT_ALIAS_FOLDER).ShortPath',
+            ],
+            {
+              env: { ...process.env, CIRCLE_DOCUMENT_ALIAS_FOLDER: root },
+              encoding: 'utf8',
+            },
+          )
+        ).stdout.trim();
+      } catch {
+        return t.skip('the host exposes no usable Windows short-path alias');
+      }
+      if (!short || short.toLowerCase() === canonical.toLowerCase())
+        return t.skip('8.3 aliases are disabled for this temporary folder');
+    }
+    assert.equal(await realpath(short), canonical);
+    const aliases = [canonical, root, short].filter(
+      (value, index, array) => array.indexOf(value) === index,
+    );
+    t.diagnostic(
+      JSON.stringify({
+        shortAliasDiffers: short.toLowerCase() !== canonical.toLowerCase(),
+        tmpInputDiffers: root.toLowerCase() !== canonical.toLowerCase(),
+        nativeResolversAgree: realpathSync.native(root) === canonical,
+      }),
+    );
+    const services = aliases.map((alias) => new WorkspaceDocuments(alias));
+    t.after(() => services.forEach((service) => service.close()));
+    assert.ok(services.every((service) => service.root === canonical));
+    await writeFile(join(root, 'file.txt'), 'original');
+    const original = await documents.read('file.txt');
+    const outcomes = await Promise.allSettled([
+      documents.save('file.txt', 'first', original.revision),
+      services[0]!.save('file.txt', 'second', original.revision),
+    ]);
+    assert.equal(
+      outcomes.filter((result) => result.status === 'fulfilled').length,
+      1,
+    );
+    assert.ok(
+      outcomes.some(
+        (result) =>
+          result.status === 'rejected' &&
+          result.reason instanceof DocumentConflictError,
+      ),
+    );
+    const saved = await documents.read('file.txt');
+    const batch = await services.at(-1)!.applyChanges([
+      { path: 'file.txt', content: 'batch', expectedRevision: saved.revision },
+      { path: 'nested/new.txt', content: 'new', expectedRevision: null },
+    ]);
+    assert.equal(batch.status, 'applied');
+    assert.equal(await readFile(join(root, 'nested/new.txt'), 'utf8'), 'new');
+    await writeFile(join(scratch, 'outside.txt'), 'outside');
+    await assert.rejects(
+      services[0]!.read('../outside.txt'),
+      DocumentPathError,
+    );
+    assert.equal(
+      await readFile(join(scratch, 'outside.txt'), 'utf8'),
+      'outside',
+    );
+  },
+);
 
 test('save checks disk revisions, preserves file mode and keeps a stable file id', async (t) => {
   const { root, documents } = await fixture(t);

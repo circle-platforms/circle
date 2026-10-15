@@ -166,7 +166,9 @@ export class WorkspaceDocuments {
   private closed = false;
 
   constructor(root: string, options: WorkspaceDocumentsOptions = {}) {
-    this.root = realpathSync(resolve(root));
+    // Use the same OS resolver as fs.promises.realpath() in target(). The JS
+    // resolver can retain Windows 8.3 names that the native resolver expands.
+    this.root = realpathSync.native(resolve(root));
     const info = statSync(this.root, { bigint: true });
     if (!info.isDirectory())
       throw new DocumentPathError('workspace is not a folder');
