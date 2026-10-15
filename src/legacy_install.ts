@@ -56,7 +56,8 @@ type Run = (
   command: string,
   args: string[],
   timeout?: number,
-) => Pick<SpawnSyncReturns<string>, 'status' | 'stdout' | 'stderr' | 'error'>;
+) => Pick<SpawnSyncReturns<string>, 'status' | 'stdout' | 'stderr' | 'error'> &
+  Partial<Pick<SpawnSyncReturns<string>, 'pid' | 'signal'>>;
 
 const runCommand: Run = (command, args, timeout = 120_000) =>
   spawnSync(command, args, { encoding: 'utf8', timeout });
@@ -300,6 +301,32 @@ const openError = (path: string): string | undefined => {
 };
 const LIST_TIMEOUT = 30_000;
 
+export interface ProcessQueryEvidence {
+  /** Whole runningCopies call, including its preparation; not query-only time. */
+  readonly runningCopiesElapsedMs: number;
+  /** The runner's reported PID, including zero; this does not establish startup. */
+  readonly reportedPid: number | 'unknown';
+  readonly status: number | null;
+  /** A reported signal does not establish that another process or service stopped. */
+  readonly signal: string | null;
+  readonly errorCode: string | null;
+  readonly errorCodeTruncated: boolean;
+  /** Lengths of the decoded strings in UTF-16 code units, not raw pipe bytes. */
+  readonly stdoutCodeUnits: number;
+  readonly stderrCodeUnits: number;
+  readonly stdoutLineCount: number;
+  readonly stderrLineCount: number;
+  readonly matchingPidCount: number;
+}
+const queryFailures = new WeakMap<Error, ProcessQueryEvidence>();
+export function processQueryEvidence(
+  error: unknown,
+): ProcessQueryEvidence | undefined {
+  return error instanceof Error ? queryFailures.get(error) : undefined;
+}
+const lineCount = (value: string): number =>
+  value ? value.split(/\r?\n/).length - (value.endsWith('\n') ? 1 : 0) : 0;
+
 // Processes still running a copy: removing it would break them (Windows refuses outright).
 // Throws on Windows when a program of a copy is in use and no process could be named for it.
 export function runningCopies(
@@ -308,6 +335,7 @@ export function runningCopies(
   run: Run = runCommand,
   opened: (path: string) => string | undefined = openError,
 ): number[] {
+  const runningCopiesStarted = performance.now();
   const pids = new Set<number>();
   const folders = copies.flatMap((copy) =>
     copy.kind === 'installer'
@@ -407,11 +435,41 @@ export function runningCopies(
               ? result.stderr?.trim() || `exit status ${result.status}`
               : undefined;
         const files = `${busy.join(', ')} ${busy.length > 1 ? 'are' : 'is'} in use`;
-        throw new Error(
+        const error = new Error(
           reason
             ? `${files}, and the running programs could not be listed (${reason})`
             : `${files} by another program`,
         );
+        const code = (result.error as NodeJS.ErrnoException | undefined)?.code;
+        const evidence: ProcessQueryEvidence = Object.freeze({
+          runningCopiesElapsedMs: Math.round(
+            performance.now() - runningCopiesStarted,
+          ),
+          reportedPid:
+            typeof result.pid === 'number' && Number.isSafeInteger(result.pid)
+              ? result.pid
+              : 'unknown',
+          status: result.status,
+          signal: result.signal === undefined ? 'unknown' : result.signal,
+          errorCode: result.error
+            ? typeof code === 'string'
+              ? code.slice(0, 64)
+              : 'unknown'
+            : null,
+          errorCodeTruncated: typeof code === 'string' && code.length > 64,
+          stdoutCodeUnits: (result.stdout || '').length,
+          stderrCodeUnits: (result.stderr || '').length,
+          stdoutLineCount: lineCount(result.stdout || ''),
+          stderrLineCount: lineCount(result.stderr || ''),
+          matchingPidCount: pids.size,
+        });
+        // The reporter can show this safe summary; the consumer recognizes only our errors.
+        Object.defineProperty(error, 'processQuery', {
+          value: evidence,
+          enumerable: true,
+        });
+        queryFailures.set(error, evidence);
+        throw error;
       }
     }
   } else {
