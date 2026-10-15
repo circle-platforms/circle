@@ -19,6 +19,7 @@ import {
   TITLE_MAX_WORDS,
   titleConversation,
   titleNeedsRefresh,
+  titleUnits,
   titleWorthy,
   userPrompts,
 } from '../src/session_title.js';
@@ -217,16 +218,25 @@ test('generated titles keep one short phrase and drop a reply', () => {
   );
   assert.equal(sanitizeGeneratedTitle('请提供文件内容'), undefined);
   assert.equal(sanitizeGeneratedTitle('你可以粘贴一下'), undefined);
+  assert.equal(titleUnits('解释 React hooks'), 4);
+  assert.equal(titleUnits('什么是 Rust'), 4);
+  assert.equal(titleUnits('what is TCP'), 3);
+  assert.equal(titleUnits('hi there'), 2);
+  assert.equal(titleUnits('thanks'), 1);
+  assert.equal(titleUnits('你好'), 2);
   assert.equal(titleWorthy('hi'), false);
   assert.equal(titleWorthy('hello there'), false);
+  assert.equal(titleWorthy('hi there'), false);
   assert.equal(titleWorthy('ok'), false);
   assert.equal(titleWorthy('thanks'), false);
   assert.equal(titleWorthy('Thanks!'), false);
   assert.equal(titleWorthy('thanks a lot'), false);
   assert.equal(titleWorthy('what is TCP'), true);
   assert.equal(titleWorthy('what is TCP?'), true);
+  assert.equal(titleWorthy('解释 React hooks'), true);
+  assert.equal(titleWorthy('什么是 Rust'), true);
   assert.equal(titleWorthy('你好'), false);
-  assert.equal(titleWorthy('一二三'), false);
+  assert.equal(titleWorthy('一二三'), true);
   assert.equal(titleWorthy('一二三四'), true);
   assert.equal(titleWorthy('请'), false);
   assert.equal(titleWorthy('请用大约200字介绍一下罗马帝国的兴衰'), true);
@@ -432,6 +442,38 @@ test('a three-word question asks for a summary title', async (t) => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(session.id)!.title, 'TCP overview');
   assert.deepEqual(notes, []);
+});
+
+test('CJK and Latin units are counted together, and a greeting is not titled', async (t) => {
+  const cases = [
+    { prompt: '解释 React hooks', title: 'React hooks', ask: true },
+    { prompt: '什么是 Rust', title: 'Rust 简介', ask: true },
+    { prompt: 'what is TCP', title: 'TCP overview', ask: true },
+    { prompt: 'hi there', title: 'hi there', ask: false },
+    { prompt: 'thanks', title: 'thanks', ask: false },
+    { prompt: '你好', title: '你好', ask: false },
+  ];
+  for (const item of cases) {
+    const root = scratch(t);
+    const model = new TitleModel('done', item.ask ? item.title : 'unused');
+    const { harness: run, store, session } = harness(root, model);
+    cleanup(t, () => store.close());
+    await run.run(item.prompt);
+    assert.equal(
+      model.requests.filter(
+        (request) => request.maxTokens === Harness.titleOutputTokens,
+      ).length,
+      item.ask ? 1 : 0,
+      item.prompt,
+    );
+    if (!item.ask) {
+      assert.equal(store.get(session.id)!.title, item.title, item.prompt);
+      continue;
+    }
+    model.releaseTitle();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(store.get(session.id)!.title, item.title, item.prompt);
+  }
 });
 
 test('a long prompt with no side request reports title failed', async (t) => {

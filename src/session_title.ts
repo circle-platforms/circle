@@ -87,17 +87,16 @@ export function titleUnits(text: string): number {
 }
 
 /**
- * A side request is worth it for a real question. Three words covers "what is
- * TCP". Two or fewer stay as typed, and so does a greeting or acknowledgement
- * such as "hi", "ok", or "thanks". CJK still counts by characters: four
- * characters ask, and "你好" does not. A long line of 24 characters or more
- * still asks.
+ * A side request is worth it at three units, counted together. Each CJK
+ * character is one unit and each other word is one: "what is TCP" is three,
+ * "解释 React hooks" and "什么是 Rust" are four. A greeting or acknowledgement
+ * such as "hi", "thanks", or "你好" stays as typed, and so does a prompt of
+ * two units or fewer ("hi there").
  */
 export function titleWorthy(text: string): boolean {
-  const { line, cjk, words } = counted(text);
+  const { line } = counted(text);
   if (!line || isAck(line)) return false;
-  if (cjk >= 4 || words >= 3) return true;
-  return line.length >= 24;
+  return titleUnits(line) >= 3;
 }
 
 /**
