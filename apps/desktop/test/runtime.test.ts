@@ -1,6 +1,13 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  writeFile,
+  unlink,
+} from 'node:fs/promises';
 import { existsSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,6 +29,7 @@ import {
   loadSettings,
   trustFolder,
   defaultSettings,
+  isFolderTrusted,
 } from '../../../src/settings.ts';
 import { visibleMessages } from '../../workbench/src/model/state.ts';
 import {
@@ -32,6 +40,7 @@ import { createServer } from 'node:http';
 import { ModelCatalog } from '../../../src/model_catalog.ts';
 import { loadSecrets } from '../../../src/secrets.ts';
 import { CheckpointStore } from '../../../src/checkpoint_store.ts';
+import type { Socket } from 'node:net';
 import type {
   RuntimeCommandName,
   RuntimeUpdate,
@@ -4722,3 +4731,187 @@ test('the first message keeps the thinking depth and mode chosen on home', async
     'home turn finished',
   );
 });
+
+async function coldStartFixture(
+  t: TestContext,
+  mode: 'scratch' | 'untrusted' = 'scratch',
+  prepare?: (home: string, workspace: string) => Promise<void>,
+) {
+  const root = await mkdtemp(join(tmpdir(), 'circle-desktop-cold-start-'));
+  const home = join(root, 'home'),
+    workspace = join(root, 'workspace');
+  await mkdir(home);
+  await mkdir(workspace);
+  const settings = defaultSettings();
+  settings.extensions.hub = { enabled: true };
+  saveSettings(settings, home);
+  await prepare?.(home, workspace);
+  const model = new ScriptedModel([]),
+    updates: RuntimeUpdate[] = [];
+  const controller = new RuntimeController({
+    home,
+    userHome: home,
+    workspace: mode === 'untrusted' ? workspace : undefined,
+    model,
+    emit: (update) => updates.push(update),
+  });
+  const controllers = [controller];
+  t.after(async () => {
+    for (const owner of controllers) await owner.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  return { root, home, workspace, model, updates, controller, controllers };
+}
+
+test('trusted scratch cold start loads the enabled hub before any prompt trust or reload and retains it after restart', async (t) => {
+  const f = await coldStartFixture(t);
+  f.controller.publish();
+  assert.equal(f.updates[0]!.connected, true);
+  await f.controller.initialize();
+  const hub = f.controller.snapshot().extensions.find((x) => x.name === 'hub');
+  assert.ok(hub);
+  assert.equal(hub?.enabled, true);
+  assert.equal(hub.error, undefined);
+  await wait(
+    () =>
+      (
+        f.controller.snapshot().extensions.find((x) => x.name === 'hub')
+          ?.view as { signedIn?: boolean } | undefined
+      )?.signedIn === false,
+    'cold-start hub view',
+  );
+  assert.ok(hub.commands.includes('hub'));
+  assert.equal(f.model.requests.length, 0);
+  const saved = loadSettings(f.home);
+  assert.equal(isFolderTrusted(saved, join(f.home, 'workspace')), true);
+  assert.equal(isFolderTrusted(saved, f.workspace), false);
+  await f.controller.close();
+  const restart = new RuntimeController({
+    home: f.home,
+    userHome: f.home,
+    model: f.model,
+    emit: () => {},
+  });
+  f.controllers.push(restart);
+  await restart.initialize();
+  assert.equal(
+    restart.snapshot().extensions.find((x) => x.name === 'hub')?.enabled,
+    true,
+  );
+  assert.equal(f.model.requests.length, 0);
+});
+
+test('cold start leaves an untrusted workspace and its extension code untouched', async (t) => {
+  const f = await coldStartFixture(t, 'untrusted', async (_home, workspace) => {
+    const folder = join(workspace, '.circle/extensions/untrusted');
+    await mkdir(folder, { recursive: true });
+    await writeFile(
+      join(folder, 'extension.mjs'),
+      `import{writeFileSync}from'node:fs';export function register(){writeFileSync(${JSON.stringify(join(workspace, 'must-not-run'))},'ran')}`,
+    );
+  });
+  await f.controller.initialize();
+  assert.deepEqual(f.controller.snapshot().extensions, []);
+  assert.equal(existsSync(join(f.workspace, 'must-not-run')), false);
+  assert.equal(isFolderTrusted(loadSettings(f.home), f.workspace), false);
+  assert.equal(f.model.requests.length, 0);
+});
+
+test('cold start reports a discovery failure and an explicit reload can recover without a model turn', async (t) => {
+  const f = await coldStartFixture(t, 'scratch', async (home) => {
+    await writeFile(join(home, 'extensions'), 'invalid extension directory');
+  });
+  await f.controller.initialize();
+  assert.match(f.controller.snapshot().runtime?.error ?? '', /ENOTDIR/);
+  assert.equal(f.model.requests.length, 0);
+  await unlink(join(f.home, 'extensions'));
+  const reply = await f.controller.dispatch({
+    id: randomUUID(),
+    name: 'reload',
+    payload: {},
+    sessionId: f.controller.snapshot().activeSessionId,
+  });
+  assert.equal(reply.ok, true);
+  assert.equal(f.controller.snapshot().runtime?.error, undefined);
+  assert.equal(
+    f.controller.snapshot().extensions.find((x) => x.name === 'hub')?.enabled,
+    true,
+  );
+  assert.equal(f.model.requests.length, 0);
+});
+
+test(
+  'closing cold start cancels an MCP transport waiting for headers without hiding the first frame or leaking its socket',
+  { timeout: 5000 },
+  async (t) => {
+    const sockets = new Set<Socket>();
+    let requested!: () => void;
+    const requestSeen = new Promise<void>((resolve) => {
+      requested = resolve;
+    });
+    const server = createServer(() => requested());
+    server.on('connection', (socket) => {
+      sockets.add(socket);
+      socket.once('close', () => sockets.delete(socket));
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    t.after(async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+    const port = (server.address() as { port: number }).port;
+    const f = await coldStartFixture(t, 'scratch', async (home) => {
+      const settings = loadSettings(home);
+      settings.mcp_servers = [
+        {
+          name: 'waiting-for-headers',
+          transport: 'sse',
+          url: `http://127.0.0.1:${port}/events`,
+        },
+      ];
+      saveSettings(settings, home);
+    });
+    f.controller.publish();
+    const initializing = f.controller.initialize();
+    assert.equal(f.updates[0]!.connected, true);
+    await requestSeen;
+    const published = f.updates.length;
+    await f.controller.close();
+    await initializing;
+    await wait(() => sockets.size === 0, 'closed startup MCP socket');
+    assert.equal(f.model.requests.length, 0);
+    assert.equal(f.updates.length, published);
+  },
+);
+
+test(
+  'closing cold start aborts an async extension registration and never installs its closed host',
+  { timeout: 5000 },
+  async (t) => {
+    const f = await coldStartFixture(t, 'scratch', async (home) => {
+      const folder = join(home, 'extensions', 'waiting');
+      await mkdir(folder, { recursive: true });
+      await writeFile(
+        join(folder, 'extension.mjs'),
+        `import{writeFileSync}from'node:fs';export async function register(api){writeFileSync(${JSON.stringify(join(home, 'register-started'))},'started');api.signal.addEventListener('abort',()=>writeFileSync(${JSON.stringify(join(home, 'register-aborted'))},'aborted'),{once:true});await new Promise(()=>{});}`,
+      );
+    });
+    const initializing = f.controller.initialize();
+    await wait(
+      () => existsSync(join(f.home, 'register-started')),
+      'pending extension registration',
+    );
+    const published = f.updates.length;
+    await f.controller.close();
+    await initializing;
+    await f.controller.close();
+    assert.equal(existsSync(join(f.home, 'register-aborted')), true);
+    assert.equal(f.updates.length, published);
+    assert.ok(
+      f.updates.every((update) => update.snapshot.extensions.length === 0),
+    );
+    assert.equal(f.model.requests.length, 0);
+  },
+);

@@ -11,7 +11,7 @@ import type {
   ToolContext,
 } from './types.js';
 import { isRecord } from './settings.js';
-import { Watch, waitWatch } from './watch.js';
+import { Watch, waitWatch, abortable } from './watch.js';
 import { JobRegistry, jobLine, type JobOwner } from './jobs.js';
 import { ExtensionSecrets, SecretMask } from './extension_secrets.js';
 import { checkedUrl } from './open_url.js';
@@ -562,10 +562,12 @@ export class ExtensionHost {
     return [...found.values()];
   }
   async load(): Promise<this> {
+    this.controller.signal.throwIfAborted();
     const loaded: Extension[] = [];
     const tools = new Set(this.options.reservedTools);
     const commands = new Set(this.options.reservedCommands);
     for (const discovered of this.discover()) {
+      this.controller.signal.throwIfAborted();
       const setting = this.options.settings?.[discovered.name]?.enabled;
       const ext: Extension = {
         ...discovered,
@@ -589,6 +591,7 @@ export class ExtensionHost {
         const module: unknown = await import(
           pathToFileURL(ext.path).href + '?reload=' + randomUUID()
         );
+        this.controller.signal.throwIfAborted();
         if (!isRecord(module) || typeof module.register !== 'function')
           throw new ExtensionError('extension defines no register(api)');
         const api = new ExtensionAPI(
@@ -610,11 +613,16 @@ export class ExtensionHost {
             track: (work) => this.track(work),
           },
         );
-        await module.register(api);
+        await abortable(
+          Promise.resolve(module.register(api)),
+          this.controller.signal,
+        );
+        this.controller.signal.throwIfAborted();
         for (const tool of ext.tools) tools.add(tool.name);
         live.add(api);
         for (const command of ext.commands) commands.add(command.name);
       } catch (error) {
+        this.controller.signal.throwIfAborted();
         ext.error =
           error instanceof Error
             ? `${error.name}: ${error.message}`
