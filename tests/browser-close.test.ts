@@ -298,6 +298,61 @@ test(
 );
 
 test(
+  'process inspection has its own bounded budget when the browser exit grace period is shorter than ps startup',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const root = scratch(t);
+    const marker = join(root, 'inspection-started');
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    writeFileSync(
+      join(root, 'ps'),
+      `#!/bin/sh\nprintf '%s' "$$" > ${quote(marker)}\n/bin/sleep 0.12\nexec /bin/ps "$@"\n`,
+      { mode: 0o755 },
+    );
+    const child = spawn(
+      process.execPath,
+      ['-e', "process.stdout.write('ready');setInterval(()=>{},1000)"],
+      { detached: true, stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    await new Promise<void>((resolve, reject) => {
+      child.stdout!.once('data', () => resolve());
+      child.once('error', reject);
+    });
+    const exited = new Promise<void>((resolve) =>
+      child.once('exit', () => resolve()),
+    );
+    const browser = new ChromeBrowser({
+      executable: process.execPath,
+      closeTimeout: 40,
+      processInspectionTimeout: 1000,
+    });
+    const owned = browser as any;
+    owned.processGroups.add(child.pid);
+    owned.cdp = { close: () => {} };
+    const previousPath = process.env.PATH;
+    try {
+      process.env.PATH = root;
+      const started = Date.now();
+      assert.equal(await owned.groupRunning(child.pid), true);
+      assert.ok(Date.now() - started >= 100, 'the actual delayed ps ran');
+      assert.ok(existsSync(marker), 'the inspection process really started');
+      assert.equal(child.exitCode, null);
+      assert.equal(child.signalCode, null);
+      await browser.close();
+      await exited;
+      assert.equal(child.signalCode, 'SIGKILL');
+      assert.equal(owned.processGroups.has(child.pid), false);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill('SIGKILL');
+      await exited;
+    }
+  },
+);
+
+test(
   'a never-ending process inspector fails within its bound and retains the real browser group for a successful close retry',
   { skip: process.platform === 'win32' },
   async (t) => {
@@ -327,6 +382,7 @@ test(
     const browser = new ChromeBrowser({
       executable: process.execPath,
       closeTimeout: 1000,
+      processInspectionTimeout: 1000,
     });
     const owned = browser as any;
     let closed = false;
