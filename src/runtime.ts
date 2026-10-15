@@ -871,7 +871,9 @@ export class AgentRuntime {
           new Set([...base, ...this.mcp.tools].map((tool) => tool.name)),
         );
         const stop = () => {
-          void host.close(0);
+          // This host is not installed yet, but already owns background work.
+          // Its catch below awaits the same bounded drain before startup ends.
+          void host.close(2000);
         };
         active.addEventListener('abort', stop, { once: true });
         try {
@@ -879,7 +881,7 @@ export class AgentRuntime {
           await abortable(host.load(), active);
           active.throwIfAborted();
         } catch (error) {
-          await host.close(0);
+          await host.close(2000);
           throw error;
         } finally {
           active.removeEventListener('abort', stop);

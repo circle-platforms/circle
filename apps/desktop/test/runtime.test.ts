@@ -21,6 +21,8 @@ import {
   type BrowserResult,
 } from '../../../src/browser/protocol.ts';
 import { ScriptedModel } from '../../../src/testing.ts';
+import { ExtensionAPI } from '../../../src/extensions.ts';
+import { ExtensionSecrets } from '../../../src/extension_secrets.ts';
 import { emptyUsage, type Message } from '../../../src/types.ts';
 import {
   saveSettings,
@@ -3401,7 +3403,12 @@ async function coldStartFixture(
   const controllers = [controller];
   t.after(async () => {
     for (const owner of controllers) await owner.close();
-    await rm(root, { recursive: true, force: true });
+    await rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    });
   });
   return { root, home, workspace, model, updates, controller, controllers };
 }
@@ -3558,3 +3565,127 @@ test(
     assert.equal(f.model.requests.length, 0);
   },
 );
+
+for (const mode of ['released', 'bounded'] as const)
+  test(
+    `closing cold start owns a late hub token read through ${mode} drain without recreating data or publishing`,
+    { timeout: 8000 },
+    async (t) => {
+      let release!: () => void;
+      const barrier = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let paused = false;
+      const get = ExtensionSecrets.prototype.get,
+        background = ExtensionAPI.prototype.background,
+        setView = ExtensionAPI.prototype.setView,
+        setStatus = ExtensionAPI.prototype.setStatus;
+      const work: Promise<unknown>[] = [],
+        late: string[] = [];
+      t.mock.method(
+        ExtensionSecrets.prototype,
+        'get',
+        async function (this: ExtensionSecrets, name: string) {
+          const value = await get.call(this, name);
+          if (name === 'token' && Reflect.get(this, 'extension') === 'hub') {
+            paused = true;
+            await barrier;
+          }
+          return value;
+        },
+      );
+      t.mock.method(
+        ExtensionAPI.prototype,
+        'background',
+        function (this: ExtensionAPI, promise: Promise<unknown>) {
+          if (this.name === 'hub') work.push(promise);
+          return background.call(this, promise);
+        },
+      );
+      t.mock.method(
+        ExtensionAPI.prototype,
+        'setView',
+        function (this: ExtensionAPI, value: unknown) {
+          if (this.name === 'hub' && this.signal.aborted) late.push('view');
+          return setView.call(this, value);
+        },
+      );
+      t.mock.method(
+        ExtensionAPI.prototype,
+        'setStatus',
+        function (
+          this: ExtensionAPI,
+          ...args: Parameters<ExtensionAPI['setStatus']>
+        ) {
+          if (this.name === 'hub' && this.signal.aborted) late.push('status');
+          return setStatus.apply(this, args);
+        },
+      );
+      const f = await coldStartFixture(t, 'scratch', async (home) => {
+        const folder = join(home, 'extensions', 'waiting');
+        await mkdir(folder, { recursive: true });
+        await writeFile(
+          join(folder, 'extension.mjs'),
+          `import{writeFileSync}from'node:fs';export async function register(api){writeFileSync(${JSON.stringify(join(home, 'register-started'))},'started');await new Promise(()=>{});}`,
+        );
+      });
+      let initializing: Promise<void> | undefined,
+        closing: Promise<void> | undefined;
+      try {
+        initializing = f.controller.initialize();
+        await wait(
+          () => paused && existsSync(join(f.home, 'register-started')),
+          'late hub token read and pending registration',
+        );
+        let ended = false;
+        closing = f.controller.close().then(() => {
+          ended = true;
+        });
+        if (mode === 'released') {
+          await delay(25);
+          const endedBeforeRelease = ended;
+          release();
+          await closing;
+          await initializing;
+          assert.equal(
+            endedBeforeRelease,
+            false,
+            'runtime close waits for its not-yet-installed host background work',
+          );
+        } else {
+          // A stuck background read cannot hold close forever; after its existing
+          // bounded drain expires, it still may not publish or recreate files.
+          await closing;
+          await initializing;
+        }
+        await rm(f.home, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 100,
+        });
+        assert.equal(existsSync(f.home), false);
+        release();
+        await Promise.allSettled([...work]);
+        assert.equal(
+          existsSync(join(f.home, 'extension_data')),
+          false,
+          'late hub work must not recreate a removed home',
+        );
+        assert.deepEqual(
+          late,
+          [],
+          'a closed hub may publish neither a view nor a status',
+        );
+        assert.equal(f.model.requests.length, 0);
+        assert.ok(
+          f.updates.every((update) => update.snapshot.extensions.length === 0),
+        );
+      } finally {
+        release();
+        await closing;
+        await initializing;
+        await Promise.allSettled([...work]);
+      }
+    },
+  );

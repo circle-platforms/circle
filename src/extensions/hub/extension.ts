@@ -689,6 +689,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     } catch {
       return;
     }
+    if (api.signal.aborted) return;
     if (run !== statusRun) return latestStatus;
     publishView(signedIn);
     if (!config || !signedIn) {
