@@ -66,11 +66,21 @@ export class DeliveryService {
   ): Promise<unknown> {
     if (!['publish', 'ready', 'retry'].includes(method))
       return this.execute(method, params);
+    return this.serialized(() => this.execute(method, params));
+  }
+  /** Trusted host only: publish the exact candidate already pushed by the cycle ledger. */
+  async publishPushed(input: {
+    revision: string;
+    head: string;
+    title: string;
+    body: string;
+  }): Promise<unknown> {
+    return this.serialized(() => this.publish(input, input.head));
+  }
+  private async serialized<T>(action: () => Promise<T>): Promise<T> {
     const key = (await this.git.snapshot()).root;
     const before = deliveryLocks.get(key) ?? Promise.resolve();
-    const operation = before
-      .catch(() => {})
-      .then(() => this.execute(method, params));
+    const operation = before.catch(() => {}).then(action);
     deliveryLocks.set(key, operation);
     try {
       return await operation;
@@ -130,62 +140,7 @@ export class DeliveryService {
         ]),
       };
     }
-    if (method === 'publish') {
-      const state = await this.git.snapshot();
-      if (state.revision !== params.revision)
-        throw Error('repository changed; refresh before publishing');
-      if (state.entries.length)
-        throw Error('commit or preserve workspace changes before publishing');
-      if (state.branch === 'detached' || /^(main|master)$/.test(state.branch))
-        throw Error('publish from a feature branch');
-      // Query first, including after an interrupted request; never blindly create a duplicate PR.
-      const existing = await this.pr().catch(async () => {
-        const list = JSON.parse(
-          await this.gh([
-            'pr',
-            'list',
-            '--head',
-            state.branch,
-            '--state',
-            'open',
-            '--json',
-            'number,url,isDraft,headRefOid',
-          ]),
-        );
-        return list[0] ?? null;
-      });
-      if (existing) {
-        await this.git.call('push', { revision: state.revision });
-        return this.pr();
-      }
-      if (
-        typeof params.title !== 'string' ||
-        !params.title.trim() ||
-        typeof params.body !== 'string'
-      )
-        throw Error('title and body are required');
-      await this.git.call('push', { revision: state.revision });
-      try {
-        await this.gh([
-          'pr',
-          'create',
-          '--draft',
-          '--head',
-          state.branch,
-          '--title',
-          params.title,
-          '--body',
-          params.body,
-        ]);
-      } catch (error) {
-        const recovered = await this.pr().catch(() => null);
-        if (recovered) return recovered;
-        throw Error(
-          `publish result is unknown; refresh before retrying: ${String(error)}`,
-        );
-      }
-      return this.pr();
-    }
+    if (method === 'publish') return this.publish(params);
     if (method === 'ready') {
       const state = await this.git.snapshot();
       const pr = await this.pr();
@@ -204,5 +159,97 @@ export class DeliveryService {
       return { requested: true };
     }
     throw Error('unknown delivery method');
+  }
+  private async publish(
+    params: Record<string, unknown>,
+    pushedHead?: string,
+  ): Promise<unknown> {
+    const state = await this.git.snapshot();
+    if (
+      state.revision !== params.revision ||
+      (pushedHead !== undefined && state.head !== pushedHead)
+    )
+      throw Error('repository changed; refresh before publishing');
+    if (state.entries.length)
+      throw Error('commit or preserve workspace changes before publishing');
+    if (state.branch === 'detached' || /^(main|master)$/.test(state.branch))
+      throw Error('publish from a feature branch');
+    const preparePublishedHead = async () => {
+      if (pushedHead === undefined) {
+        await this.git.call('push', { revision: state.revision });
+        return;
+      }
+      const reference = `refs/heads/${state.branch}`;
+      const advertised = (
+        await this.git.git(['ls-remote', '--heads', 'origin', reference])
+      ).trim();
+      if (advertised !== `${pushedHead}\t${reference}`)
+        throw Error(
+          'the remote branch no longer contains the pushed candidate',
+        );
+      if ((await this.git.snapshot()).revision !== state.revision)
+        throw Error('repository changed while verifying the pushed candidate');
+    };
+    const openForBranch = (pr: { state?: string; headRefName?: string }) =>
+      pr.state === 'OPEN' && pr.headRefName === state.branch;
+    const findOpen = async () => {
+      const list = JSON.parse(
+        await this.gh([
+          'pr',
+          'list',
+          '--head',
+          state.branch,
+          '--state',
+          'open',
+          '--json',
+          'number,url,isDraft,headRefOid,headRefName,state',
+        ]),
+      );
+      if (
+        !Array.isArray(list) ||
+        list.length > 1 ||
+        list.some((pr) => !pr || !openForBranch(pr))
+      )
+        throw Error(
+          'open pull request reconciliation returned an unexpected branch or state',
+        );
+      return list[0] ?? null;
+    };
+    // A completed PR is not the active candidate. Reconcile successfully before creating another.
+    const existing = await this.pr().then(
+      (pr) => (openForBranch(pr) ? pr : findOpen()),
+      () => findOpen(),
+    );
+    if (existing) {
+      await preparePublishedHead();
+      return this.pr();
+    }
+    if (
+      typeof params.title !== 'string' ||
+      !params.title.trim() ||
+      typeof params.body !== 'string'
+    )
+      throw Error('title and body are required');
+    await preparePublishedHead();
+    try {
+      await this.gh([
+        'pr',
+        'create',
+        '--draft',
+        '--head',
+        state.branch,
+        '--title',
+        params.title,
+        '--body',
+        params.body,
+      ]);
+    } catch (error) {
+      const recovered = await this.pr().catch(() => null);
+      if (recovered && openForBranch(recovered)) return recovered;
+      throw Error(
+        `publish result is unknown; refresh before retrying: ${String(error)}`,
+      );
+    }
+    return this.pr();
   }
 }

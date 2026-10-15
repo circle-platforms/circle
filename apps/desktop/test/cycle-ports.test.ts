@@ -21,6 +21,7 @@ import {
   type CycleRecord,
 } from '../src/workspace/delivery-cycle.js';
 import { DeliveryService } from '../src/workspace/delivery.js';
+import { GitWorkspaceService } from '../src/workspace/git.js';
 import {
   TaskService,
   type TaskServiceOptions,
@@ -126,14 +127,14 @@ const statePath=fs.readFileSync(path,'utf8');
 const s=JSON.parse(fs.readFileSync(statePath,'utf8')),a=process.argv.slice(2);
 s.calls.push(a);
 const git=(...args)=>cp.execFileSync('git',args,{cwd:process.cwd(),encoding:'utf8'}).trim();
-const branch=git('branch','--show-current'),head=git('rev-parse','refs/remotes/origin/'+branch);
+const branch=git('branch','--show-current'),head=(()=>{try{return git('rev-parse','--verify','--quiet','refs/remotes/origin/'+branch)}catch{return ''}})();
 const save=()=>fs.writeFileSync(statePath,JSON.stringify(s));
-const pr=()=>{if(!s.pr){save();process.exit(1)};return {...s.pr,headRefOid:head,headRefName:branch,state:'OPEN'}};
+const pr=()=>{if(!s.pr){save();process.exit(1)};return {...s.pr,headRefOid:head,headRefName:branch,state:s.pr.state??'OPEN'}};
 let out;
 if(a[0]==='auth')out='logged in';
 else if(a[0]==='--version')out='gh version 2.83.2 (fixture)';
 else if(a[0]==='pr'&&a[1]==='view')out=pr();
-else if(a[0]==='pr'&&a[1]==='list')out=s.pr?[pr()]:[];
+else if(a[0]==='pr'&&a[1]==='list'){if(s.listFailure){save();process.exit(7)};out=s.pr&&s.pr.state!=='CLOSED'&&s.pr.state!=='MERGED'?[pr()]:[];}
 else if(a[0]==='pr'&&a[1]==='create'){if(!a.includes('--draft'))throw Error('must be draft');s.created++;s.pr={number:7,url:'https://github.invalid/fixture/repo/pull/7',isDraft:true};out=s.pr.url;}
 else if(a[0]==='pr'&&a[1]==='checks'){
  const content=git('show',head+':app.cjs');
@@ -217,6 +218,16 @@ test('real scripted tasks integrate and repair failing CI on one draft PR withou
   };
   let service = new TaskService(taskOptions);
   cleanup(t, () => service.close());
+  const pushedHeads: string[] = [];
+  const trackPush = (service: GitWorkspaceService) => {
+    const run = service.git.bind(service);
+    service.git = async (args, input) => {
+      if (args[0] === 'push')
+        pushedHeads.push(await git(service.root, 'rev-parse', 'HEAD'));
+      return run(args, input);
+    };
+    return service;
+  };
   const portsOptions = {
     workspace: f.workspace,
     dataDir: join(f.dataDir, 'ports'),
@@ -228,7 +239,13 @@ test('real scripted tasks integrate and repair failing CI on one draft PR withou
       run: () => Promise<T>,
     ) => resources.withResource(resource, run),
     identity,
-    createDelivery: (path: string) => new DeliveryService(path, f.ghPath),
+    createGit: (path: string) =>
+      trackPush(new GitWorkspaceService(path, { identity, signoff: true })),
+    createDelivery: (path: string) => {
+      const service = new DeliveryService(path, f.ghPath);
+      trackPush(service.git);
+      return service;
+    },
   };
   const ports = createWorkspaceCyclePorts(portsOptions);
   let cycles = await DeliveryCycleService.open({
@@ -325,6 +342,12 @@ test('real scripted tasks integrate and repair failing CI on one draft PR withou
   assert.equal(gh.ready, 1);
   assert.equal(gh.logs, 1);
   assert.equal(gh.pr.isDraft, false);
+  assert.equal(
+    pushedHeads.length,
+    2,
+    'exactly one actual Git push per implementation/repair attempt',
+  );
+  assert.equal(new Set(pushedHeads).size, 2);
   assert.ok(
     !gh.calls.some((args: string[]) => args[0] === 'pr' && args[1] === 'merge'),
   );
@@ -594,6 +617,116 @@ test('accepted task patches stop at a changed integration HEAD and manual cycle 
   );
   assert.notDeepEqual(otherIds, ids);
   await assert.rejects(other.tasks.status(cycle, ids), /owned candidate/);
+  assert.equal(
+    await git(f.workspace, 'status', '--porcelain=v1'),
+    f.originalStatus,
+  );
+  assert.deepEqual(
+    await readFile(join(f.workspace, '.git', 'index')),
+    f.originalIndex,
+  );
+});
+
+test('trusted already-pushed publishing verifies the remote HEAD while renderer options cannot skip a push', async (t) => {
+  const f = await fixture(t),
+    owned = join(f.root, 'owned-delivery');
+  await git(f.workspace, 'worktree', 'add', '--detach', owned, f.baseline);
+  await git(owned, 'switch', '-c', 'codex/trusted-published-head');
+  const delivery = new DeliveryService(owned, f.ghPath);
+  const run = delivery.git.git.bind(delivery.git);
+  let pushes = 0;
+  delivery.git.git = async (args, input) => {
+    if (args[0] === 'push') pushes++;
+    return run(args, input);
+  };
+  const input = async () => {
+    const s = await delivery.git.snapshot();
+    return {
+      revision: s.revision,
+      head: s.head,
+      title: 'Actual candidate',
+      body: 'Publish only the already-pushed candidate',
+    };
+  };
+  await assert.rejects(
+    delivery.publishPushed(await input()),
+    /remote branch no longer contains/,
+  );
+  assert.equal(pushes, 0);
+  assert.equal(JSON.parse(await readFile(f.ghState, 'utf8')).created, 0);
+  await assert.rejects(
+    delivery.call('publishPushed', await input()),
+    /unknown delivery method/,
+  );
+  await delivery.git.call('push', { revision: (await input()).revision });
+  assert.equal(pushes, 1);
+  await delivery.publishPushed(await input());
+  assert.equal(pushes, 1, 'trusted publication must not push again');
+  await delivery.call('publish', { ...(await input()), skipPush: true });
+  assert.equal(pushes, 2, 'renderer-supplied skipPush must have no effect');
+  await writeFile(join(owned, 'README.md'), 'uncommitted owned edit\n');
+  await assert.rejects(
+    delivery.publishPushed(await input()),
+    /preserve workspace changes/,
+  );
+  await assert.rejects(
+    delivery.publishPushed({ ...(await input()), revision: 'stale' }),
+    /changed/,
+  );
+  await git(owned, 'add', 'README.md');
+  await git(
+    owned,
+    '-c',
+    `user.name=${identity.name}`,
+    '-c',
+    `user.email=${identity.email}`,
+    'commit',
+    '-m',
+    'Change owned candidate',
+  );
+  await assert.rejects(
+    delivery.publishPushed(await input()),
+    /remote branch no longer contains/,
+  );
+  await delivery.git.call('push', { revision: (await input()).revision });
+  await delivery.publishPushed(await input());
+  assert.equal(pushes, 3);
+  // A stale remote-tracking ref cannot stand in for the server's advertised HEAD.
+  await git(
+    f.remote,
+    'update-ref',
+    'refs/heads/codex/trusted-published-head',
+    f.baseline,
+  );
+  await assert.rejects(
+    delivery.publishPushed(await input()),
+    /remote branch no longer contains/,
+  );
+  await git(
+    f.remote,
+    'update-ref',
+    'refs/heads/codex/trusted-published-head',
+    (await input()).head,
+  );
+  const state = JSON.parse(await readFile(f.ghState, 'utf8'));
+  state.pr.state = 'CLOSED';
+  state.listFailure = true;
+  await writeFile(f.ghState, JSON.stringify(state));
+  await assert.rejects(delivery.publishPushed(await input()), /Command failed/);
+  assert.equal(
+    JSON.parse(await readFile(f.ghState, 'utf8')).created,
+    1,
+    'failed reconciliation must not create another PR',
+  );
+  state.listFailure = false;
+  await writeFile(f.ghState, JSON.stringify(state));
+  await delivery.publishPushed(await input());
+  assert.equal(
+    JSON.parse(await readFile(f.ghState, 'utf8')).created,
+    2,
+    'completed PR must allow a new open draft',
+  );
+  assert.equal(pushes, 3);
   assert.equal(
     await git(f.workspace, 'status', '--porcelain=v1'),
     f.originalStatus,
