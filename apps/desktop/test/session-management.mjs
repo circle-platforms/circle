@@ -7,6 +7,10 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { readModelRequests } from './helpers/model-requests.mjs';
+import {
+  captureSessionFailure,
+  cleanupSessionTest,
+} from './helpers/session-failure.mjs';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
 const temp = await mkdtemp(join(tmpdir(), 'circle-session-management-'));
@@ -496,7 +500,15 @@ try {
       errors,
     }),
   );
+} catch (error) {
+  await captureSessionFailure(app, error, output);
+  throw error;
 } finally {
-  await app?.close();
-  await rm(temp, { recursive: true, force: true });
+  if (
+    !(await cleanupSessionTest([
+      () => app?.close(),
+      () => rm(temp, { recursive: true, force: true }),
+    ]))
+  )
+    process.exitCode = 1;
 }
