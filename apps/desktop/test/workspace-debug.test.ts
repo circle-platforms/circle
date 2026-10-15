@@ -4,12 +4,15 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { WorkspaceDebugService } from '../src/workspace/debug.ts';
 
 const nodeExecutable = process.env.CIRCLE_JS_DEBUG_NODE ?? process.execPath;
 const adapterPath =
   process.env.CIRCLE_JS_DEBUG_ADAPTER ??
-  '/tmp/circle-native-debugger-adapter/js-debug/src/dapDebugServer.js';
+  fileURLToPath(
+    new URL('../dist/tools/js-debug/src/dapDebugServer.js', import.meta.url),
+  );
 test(
   'Node project launch hits breakpoint, inspects locals, steps and stops',
   {
