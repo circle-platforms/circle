@@ -111,4 +111,11 @@ export const developer: Record<string, string> = {
   'load current patch and recheck criteria': '载入当前改动并重新逐项核对',
   'source is outside the workspace': '来源文件不在当前授权工作区内',
   'unsupported source path': '无法识别此来源路径',
+  'inspect task artifacts': '查看任务产物',
+  '{n} bytes': '{n} 字节',
+  'partial artifact · read the remaining content before reviewing':
+    '当前为部分内容，请读完剩余内容再核对',
+  'read remaining artifact': '读取后续内容',
+  'copy shown content': '复制已显示内容',
+  'copy complete artifact': '复制完整产物',
 };

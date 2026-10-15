@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TaskRecord } from '../../../desktop/src/workspace/task-store';
 import { workspaceCall, subscribeWorkspace } from '../model/workspace-client';
 import { Button, DataBlock, Status } from '../components/common';
+import { TaskArtifacts } from './TaskArtifacts';
 import { TaskReviewForm } from './TaskReviewForm';
 import { t } from '../i18n';
 
@@ -295,7 +296,18 @@ export function TasksPanel({
             </ul>
             {task.reason && <p role="status">{task.reason}</p>}
             {task.result !== undefined && (
-              <DataBlock title={t('result')} value={task.result} />
+              <>
+                <TaskArtifacts
+                  key={`${task.spec.id}:${task.attempt}`}
+                  sessionId={sessionId}
+                  taskId={task.spec.id}
+                  attempt={task.attempt}
+                />
+                <details>
+                  <summary>{t('result')}</summary>
+                  <DataBlock title={t('result')} value={task.result} />
+                </details>
+              </>
             )}
             {String(task.state) === 'needs_review' && (
               <TaskReviewForm
