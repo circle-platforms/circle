@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import { ChromeBrowser } from '../src/browser/chrome.js';
 import { cleanup, scratch } from './helpers.js';
 import { ownedStartupBrowser } from './browser-startup-fixture.js';
@@ -40,7 +41,98 @@ test('an operation error from a living owned child is not an observed exit', asy
   assert.equal(child.listenerCount('error'), 0);
 });
 
-test('a Windows taskkill helper is bounded and actually exits when it never answers', async (t) => {
+test('a Windows normal termination helper can finish beyond the browser exit wait', async (t) => {
+  const root = scratch(t);
+  const browser = new ChromeBrowser({
+    executable: process.execPath,
+    trustFile: join(root, 'trust.json'),
+    closeTimeout: 40,
+  });
+  const execute = childProcesses.execFile;
+  let helper: ChildProcess | undefined;
+  let options: any;
+  let readyObserved = false;
+  let releaseRequested = false;
+  let ready!: () => void;
+  const prepared = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  t.mock.method(
+    childProcesses,
+    'execFile',
+    (file: any, args: any, ...rest: any[]) => {
+      if (file !== 'taskkill') return (execute as any)(file, args, ...rest);
+      options = typeof rest[0] === 'object' ? rest[0] : undefined;
+      helper = (execute as any)(
+        process.execPath,
+        [
+          '-e',
+          "process.stdin.once('data', () => process.exit(0)); process.stdout.write('ready');",
+        ],
+        ...rest,
+      );
+      helper!.stdout!.once('data', () => {
+        readyObserved = true;
+        ready();
+      });
+      return helper!;
+    },
+  );
+  syncBuiltinESMExports();
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  Object.defineProperty(process, 'platform', { value: 'win32' });
+  const stopping = (browser as any).stopProcess(
+    { pid: 1_073_741_824, exitCode: null, signalCode: null },
+    true,
+  ) as Promise<void>;
+  void stopping.catch(() => {});
+  try {
+    await Promise.race([
+      prepared,
+      stopping.then(() => {
+        throw Error('the helper completed before its release gate');
+      }),
+    ]);
+    // The parent withholds completion after readiness for longer than the exit
+    // observation budget. No command is retried and no machine-speed guess is used.
+    await delay(60);
+    assert(helper);
+    assert.equal(
+      helper.exitCode,
+      null,
+      'the helper is still waiting for its parent',
+    );
+    assert.equal(
+      helper.signalCode,
+      null,
+      'the browser exit wait must not kill the helper',
+    );
+    releaseRequested = true;
+    helper.stdin!.end('release');
+    await stopping;
+    assert.equal(helper.exitCode, 0);
+    assert.equal(helper.signalCode, null);
+    assert.equal(options.timeout, 3000);
+  } finally {
+    Object.defineProperty(process, 'platform', platform);
+    if (helper) await stopOwned(helper);
+    await stopping.catch(() => {});
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    t.diagnostic(
+      JSON.stringify({
+        readyObserved,
+        releaseRequested,
+        browserExitWaitMs: 40,
+        helperTimeoutMs: options?.timeout,
+        helperExitCode: helper?.exitCode,
+        helperSignal: helper?.signalCode,
+      }),
+    );
+  }
+});
+
+test('a Windows taskkill helper has an independent three-second bound and actually exits when it never answers', async (t) => {
   const root = scratch(t);
   const browser = new ChromeBrowser({
     executable: process.execPath,
@@ -75,8 +167,8 @@ test('a Windows taskkill helper is bounded and actually exits when it never answ
   try {
     assert.equal(
       options?.timeout,
-      40,
-      'the helper has the existing close deadline',
+      3000,
+      'the helper deadline is independent of the browser exit wait',
     );
     await assert.rejects(
       Promise.race([
@@ -95,10 +187,11 @@ test('a Windows taskkill helper is bounded and actually exits when it never answ
         return true;
       },
     );
-    assert.equal(options.timeout, 40);
+    assert.equal(options.timeout, 3000);
     assert.equal(options.killSignal, 'SIGKILL');
     assert(helper);
     assert(helper.exitCode !== null || helper.signalCode !== null);
+    assert.equal(helper.killed, true);
   } finally {
     clearTimeout(watchdog);
     Object.defineProperty(process, 'platform', platform);

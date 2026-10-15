@@ -134,7 +134,11 @@ export interface ChromeOptions {
   handoff?: (reason: string, signal: AbortSignal) => Promise<void>;
   /** How long the browser has to start, in milliseconds: a minute unless given. */
   startTimeout?: number;
-  /** Bounded process shutdown, in milliseconds per phase; three seconds unless given. */
+  /**
+   * Process exit waits, in milliseconds per phase; three seconds unless given.
+   * Also caps the shutdown response. Windows taskkill commands have a separate
+   * fixed three-second execution deadline.
+   */
   closeTimeout?: number;
   /**
    * Host names mapped to addresses, as Chrome's --host-resolver-rules: for tests, which reach
@@ -249,6 +253,7 @@ interface Hold {
 const LATE_DOWNLOAD = 10_000;
 /** How long the browser has to start: a new profile on a busy Windows machine has taken 20 s. */
 const START_TIMEOUT = 60_000;
+const TASKKILL_TIMEOUT = 3000;
 const BLANK = 'about:blank';
 const CERTIFICATE_ERROR = /^ERR_(CERT_|SSL_PINNED|BAD_SSL)/;
 const originOf = (url: string) => {
@@ -494,7 +499,7 @@ export class ChromeBrowser implements BrowserPort {
           'taskkill',
           ['/PID', String(child.pid), '/T', ...(force ? ['/F'] : [])],
           {
-            timeout: Math.max(1, this.options.closeTimeout ?? 3000),
+            timeout: TASKKILL_TIMEOUT,
             killSignal: 'SIGKILL',
           },
           (error) => {
