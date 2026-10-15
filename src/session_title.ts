@@ -1,9 +1,18 @@
 /** Room for a short title when a gateway still spends some of the cap thinking. */
 export const TITLE_MAX_TOKENS = 512;
 
-/** A title is one short phrase. Longer text is the model answering the user. */
-export const TITLE_MAX_WORDS = 10;
+/**
+ * A title is one short topic. Longer text is the model answering the user.
+ * English stops at six words. Chinese stops at twelve characters. Sixty
+ * characters is the hard ceiling either way.
+ */
+export const TITLE_MAX_WORDS = 6;
+export const TITLE_MAX_CJK = 12;
 export const TITLE_MAX_CHARS = 60;
+
+/** A fragment from an older build can be longer than a topic title. */
+const STALE_TITLE_WORDS = 10;
+const STALE_TITLE_CHARS = 60;
 
 const CJK_CHAR = /[\u3400-\u9fff]/g;
 
@@ -78,10 +87,11 @@ export function titleUnits(text: string): number {
 }
 
 /**
- * A side request is worth it at three combined units. Each CJK character is
- * one unit and each other word is one, so "解释 React hooks" and "what is
- * TCP" both ask. Two units stay as typed ("hi there"). A greeting or
- * acknowledgement stays as typed even at three units ("你好啊", "thanks").
+ * A side request is worth it at three units, counted together. Each CJK
+ * character is one unit and each other word is one: "what is TCP" is three,
+ * "解释 React hooks" and "什么是 Rust" are four. A greeting or acknowledgement
+ * such as "hi", "thanks", or "你好" stays as typed, and so does a prompt of
+ * two units or fewer ("hi there").
  */
 export function titleWorthy(text: string): boolean {
   const { line } = counted(text);
@@ -90,8 +100,9 @@ export function titleWorthy(text: string): boolean {
 }
 
 /**
- * Why this prompt does not get a title request. Callers show it as
- * `title failed · <reason>`. Undefined means the request should be sent.
+ * Why this prompt does not get a title request. `prompt too short` stays
+ * quiet: the caller logs it only when debugging. Any other reason is shown
+ * as `title failed · <reason>`. Undefined means the request should be sent.
  */
 export function titleSkipReason(
   prompt: string,
@@ -119,13 +130,9 @@ export function isNumberFragment(title: string, source: string): boolean {
 /**
  * The title call must not look like a user turn. glm-5.3 otherwise answers the
  * prompt ("I don't see any README.md… Could you paste") instead of naming it.
- * `stricter` is the one retry after a title that only repeated the question.
- * The reminder stays outside `<conversation>` so it is an instruction, not data.
  */
-export function titleConversation(text: string, stricter = false): string {
-  const body = `<conversation>\n${text.slice(0, 2000)}\n</conversation>`;
-  if (!stricter) return body;
-  return `${body}\nDo not return the question itself, even re-cased, with a question mark, or with the words reordered. Reply with a short noun phrase such as "TCP overview" or "Rust intro".`;
+export function titleConversation(text: string): string {
+  return `<conversation>\n${text.slice(0, 2000)}\n</conversation>`;
 }
 
 /**
@@ -152,6 +159,48 @@ function assistantVoice(title: string): boolean {
   return /我无法|我不能|请提供|请你提供|你可以|您可以|对不起|抱歉/.test(title);
 }
 
+/**
+ * "Creating hello.txt" reads as work already under way. A rejected tool call
+ * must not be titled as if it finished.
+ */
+const READS_AS_DONE =
+  /^(?:creating|writing|debugging|refactoring|implementing|adding|fixing|building|generating|analyzing|analysing|making|updating|editing|deleting|removing|installing)\b|^(?:created|wrote|added|fixed|built|generated|implemented|refactored|updated|deleted|removed|installed)\b|^(?:setting up)\b|^(?:正在|已经|已完成|已创建|已写)/i;
+
+/**
+ * "hello.txt creation request" stays. A bare topic with "request" stuck on
+ * ("尾递归解释请求", "Rate limiting request") does not.
+ */
+const ACTION_REQUEST =
+  /\b(?:creation|create|write|edit|delete|fix|implement|add|update|refactor|remove)\s+request$/i;
+const ACTION_REQUEST_CJK =
+  /(?:创建|编写|写入|修改|删除|修复|实现|新增|添加)请求$/;
+
+function cjkCount(text: string): number {
+  return text.match(CJK_CHAR)?.length ?? 0;
+}
+
+function stripAsides(title: string): string {
+  return title
+    .replace(/\s*[（(][^）)]*[）)]\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function trimTemplatedRequest(title: string): string {
+  if (ACTION_REQUEST.test(title) || ACTION_REQUEST_CJK.test(title))
+    return title;
+  return title.replace(/(?:\s+request|请求)$/i, '').trim();
+}
+
+function overTitleCap(title: string): boolean {
+  if (cjkCount(title) > TITLE_MAX_CJK || title.length > TITLE_MAX_CHARS)
+    return true;
+  const words = title.split(/\s+/).filter(Boolean);
+  if (cjkCount(title) === 0) return words.length > TITLE_MAX_WORDS;
+  const latin = words.filter((word) => word.replace(CJK_CHAR, '').length > 0);
+  return latin.length > TITLE_MAX_WORDS;
+}
+
 /** `README.md` is one token. `Login bug. Write tests` is two sentences. */
 function manySentences(title: string): boolean {
   const masked = title
@@ -165,74 +214,6 @@ function manySentences(title: string): boolean {
   return parts.length > 1;
 }
 
-const QUESTION_WORD = /^(?:what|how|why|when|where|who|which)\b/;
-const CJK_QUESTION = /什么|为何|为什么|怎么|如何|哪/;
-
-function stripPunct(text: string): string {
-  return text.replace(/[\p{P}\p{S}]/gu, '');
-}
-
-/** Case, spacing, and punctuation folded so "What is TCP?" matches "what is TCP". */
-function foldedTitle(text: string): string {
-  return text
-    .normalize('NFKC')
-    .replace(/[\u3000\u00a0]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
-}
-
-function compactTitle(text: string): string {
-  return stripPunct(foldedTitle(text)).replace(/\s+/g, '');
-}
-
-/** Latin words stay whole. Each Han character is its own token. */
-function titleTokens(text: string): string[] {
-  const plain = foldedTitle(text).replace(/[\p{P}\p{S}]/gu, ' ');
-  return [...plain.matchAll(/[a-z0-9]+|[\u3400-\u9fff]/g)].map(
-    (match) => match[0],
-  );
-}
-
-function sameTokens(left: string[], right: string[]): boolean {
-  if (left.length === 0 || left.length !== right.length) return false;
-  const count = new Map<string, number>();
-  for (const token of left) count.set(token, (count.get(token) ?? 0) + 1);
-  for (const token of right) {
-    const n = count.get(token);
-    if (!n) return false;
-    if (n === 1) count.delete(token);
-    else count.set(token, n - 1);
-  }
-  return count.size === 0;
-}
-
-/**
- * A question, so a reordering of its words is still the question
- * ("what is TCP" → "TCP what is"). "解释 React hooks" is not one: a reordered
- * noun phrase such as "React hooks 解释" is a real title.
- */
-function questionShaped(prompt: string): boolean {
-  const line = foldedTitle(prompt);
-  if (!line) return false;
-  if (/[?？]\s*$/.test(line)) return true;
-  if (QUESTION_WORD.test(line)) return true;
-  return CJK_QUESTION.test(line);
-}
-
-/**
- * The candidate is the prompt again: only case, spacing, punctuation, or a
- * reordering of a question. "TCP overview" is not an echo of "what is TCP".
- */
-export function echoesPrompt(title: string, prompt: string): boolean {
-  const left = compactTitle(title);
-  const right = compactTitle(prompt);
-  if (!left || !right) return false;
-  if (left === right) return true;
-  if (!questionShaped(prompt)) return false;
-  return sameTokens(titleTokens(title), titleTokens(prompt));
-}
-
 /** Keep a model title only when it is one short phrase and not a reply. */
 export function sanitizeGeneratedTitle(text: string): string | undefined {
   const line = text
@@ -243,38 +224,73 @@ export function sanitizeGeneratedTitle(text: string): string | undefined {
   let title = line.replace(/^["'“”‘’«»]+|["'“”‘’«»]+$/g, '').trim();
   if (/[?？]\s*$/.test(title) || /<\/?conversation\b/i.test(title))
     return undefined;
-  title = title.replace(/[。．.]+$/g, '').trim();
+  title = trimTemplatedRequest(
+    stripAsides(title.replace(/[。．.]+$/g, '').trim()),
+  );
   if (
     !title ||
+    /[()（）]/.test(title) ||
     /^\d+$/.test(title) ||
     /^(?:i cannot|i can't|sorry|unable)\b/i.test(title) ||
     assistantVoice(title) ||
     manySentences(title) ||
-    title.split(/\s+/).length > TITLE_MAX_WORDS ||
-    title.length > TITLE_MAX_CHARS
+    READS_AS_DONE.test(title) ||
+    overTitleCap(title)
   )
     return undefined;
   return title;
 }
 
 /**
+ * Letters and digits only, so "What is TCP?" and "what is TCP" are the same
+ * title. A noun phrase such as "TCP overview" is not.
+ */
+function foldTitle(text: string): string {
+  return text
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * The candidate is the prompt, or its short typed title, with only case or
+ * punctuation changed.
+ */
+export function echoesPrompt(title: string, prompt: string): boolean {
+  const folded = foldTitle(title);
+  if (!folded) return false;
+  if (folded === foldTitle(prompt)) return true;
+  const fallback = foldTitle(fallbackTitle(prompt));
+  return Boolean(fallback) && folded === fallback;
+}
+
+/**
+ * The second title request. The first reply restated the user's words.
+ */
+export function titleRetrySystem(system: string): string {
+  return `${system}\n\nThe previous title only changed capitalization or punctuation. That is not a title. Reply with a short noun phrase for the topic, such as "TCP overview". Do not repeat the user's sentence.`;
+}
+
+/**
  * What the model returned, or why it is not a title. A number fragment is its
- * own reason: the fallback already has the full number.
+ * own reason: the fallback already has the full number. A case or punctuation
+ * copy of the prompt is `echoes prompt`: the caller retries once, then keeps
+ * the short title.
  */
 export function acceptGeneratedTitle(
   content: string,
   prompt: string,
 ): { title?: string; reason: string } {
-  const line = content
+  const title = sanitizeGeneratedTitle(content);
+  const cleaned = content
     .split('\n')
     .map((row) => row.trim())
     .find(Boolean)
     ?.replace(/^["'“”‘’«»]+|["'“”‘’«»]+$/g, '')
+    .replace(/[。．.]+$/g, '')
     .trim();
-  // Before the trailing-"?" rule, so "what is TCP?" is an echo, not "not a title".
-  if (line && echoesPrompt(line, prompt)) return { reason: 'echoes prompt' };
-  const title = sanitizeGeneratedTitle(content);
-  const cleaned = line?.replace(/[。．.]+$/g, '').trim();
   const fragment = (title ?? cleaned ?? '').trim();
   if (
     fragment &&
@@ -283,6 +299,8 @@ export function acceptGeneratedTitle(
     fragment.split(/\s+/).length <= TITLE_MAX_WORDS
   )
     return { reason: 'number fragment' };
+  if (fragment && echoesPrompt(fragment, prompt))
+    return { reason: 'echoes prompt' };
   if (!title) return { reason: content.trim() ? 'not a title' : 'empty title' };
   return { title, reason: '' };
 }
@@ -296,8 +314,8 @@ export function mightBeStaleTitle(title: string): boolean {
   if (!line) return false;
   if (REASONING_TITLE.test(line) || /^\d+$/.test(line)) return true;
   return (
-    line.length <= TITLE_MAX_CHARS &&
-    line.split(/\s+/).length <= TITLE_MAX_WORDS &&
+    line.length <= STALE_TITLE_CHARS &&
+    line.split(/\s+/).length <= STALE_TITLE_WORDS &&
     /\d/.test(line)
   );
 }
@@ -312,8 +330,8 @@ export function staleGeneratedTitle(title: string, source: string): boolean {
   if (REASONING_TITLE.test(line) || /^\d+$/.test(line)) return true;
   return (
     isNumberFragment(line, source) &&
-    line.length <= TITLE_MAX_CHARS &&
-    line.split(/\s+/).length <= TITLE_MAX_WORDS
+    line.length <= STALE_TITLE_CHARS &&
+    line.split(/\s+/).length <= STALE_TITLE_WORDS
   );
 }
 
@@ -327,17 +345,107 @@ export function repairedTitle(
   return next && next !== title.trim() ? next : undefined;
 }
 
+function templatedRequest(title: string): boolean {
+  if (ACTION_REQUEST.test(title) || ACTION_REQUEST_CJK.test(title))
+    return false;
+  return /(?:请求|\srequest)$/i.test(title);
+}
+
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * The title is the start of a longer prompt, including a cut that lands inside
+ * a word (`hiFib demo` from `hiFib demonstration…`, or the first words of a
+ * sentence). A greeting that is the whole message is not one of these.
+ */
+function fragmentOf(title: string, prompt: string): boolean {
+  if (!prompt.startsWith(title) || prompt.length === title.length) return false;
+  if (title.split(' ').length >= 2 || cjkCount(title) >= 4 || title.length >= 8)
+    return true;
+  return titleWorthy(prompt);
+}
+
+/**
+ * The title is several user messages stuck together, in order, from the first.
+ * A title that is only the first message is not one of these.
+ */
+function gluedTitle(title: string, parts: string[]): boolean {
+  if (parts.length < 2) return false;
+  const first = parts[0]!;
+  let tight = first;
+  let spaced = first;
+  for (let index = 1; index < parts.length; index++) {
+    const part = parts[index]!;
+    tight += part;
+    spaced = `${spaced} ${part}`;
+    if (title === tight || title === spaced) return true;
+    if (title.length <= first.length || !title.startsWith(first)) continue;
+    if (fragmentOf(title, tight) || fragmentOf(title, spaced)) return true;
+  }
+  return false;
+}
+
+/**
+ * Ask again for a title that is still the trimmed first message, a prefix or
+ * cut of that message, several user messages stuck together, or a line that
+ * reads as work already done. A greeting as short as the message is left
+ * alone. The caller leaves a name the person chose alone. `later` is the
+ * user's following messages, one each.
+ */
+export function titleNeedsRefresh(
+  title: string,
+  source: string,
+  later: readonly string[] = [],
+): boolean {
+  const line = oneLine(title);
+  const prompts = [source, ...later].map(oneLine).filter(Boolean);
+  const prompt = prompts[0] ?? '';
+  if (!line || !prompt) return false;
+  const joined = prompts.join(' ');
+  if (!titleWorthy(prompt) && !(prompts.length > 1 && titleWorthy(joined)))
+    return false;
+  if (titleWorthy(prompt)) {
+    if (line === fallbackTitle(prompt)) return true;
+    if (/[()（）]/.test(line) || line.includes('@')) return true;
+    if (READS_AS_DONE.test(line) || /(?:…|\.\.\.)$/.test(line)) return true;
+    if (templatedRequest(line)) return true;
+    if (fragmentOf(line, prompt)) return true;
+  }
+  return prompts.length > 1 && gluedTitle(line, prompts);
+}
+
+type StoredUser = {
+  role: string;
+  content?: string;
+  display?: string;
+  internal?: string;
+};
+
+/**
+ * What the person wrote, one line per message. When the shown line is a cut of
+ * the stored prompt, the stored prompt is kept: a title such as
+ * `please explain to me briefly in two` is that cut.
+ */
+export function userPrompts(messages: StoredUser[]): string[] {
+  const prompts: string[] = [];
+  for (const message of messages) {
+    if (message.role !== 'user' || message.internal) continue;
+    const content = oneLine(message.content ?? '');
+    const display = oneLine(message.display ?? '');
+    let text = display || content;
+    if (content && display && content !== display) {
+      if (content.startsWith(display) || display.startsWith(content))
+        text = content.length >= display.length ? content : display;
+      else text = display;
+    } else text = content || display;
+    if (text) prompts.push(text);
+  }
+  return prompts;
+}
+
 /** The first thing the person wrote, which a stale title is rebuilt from. */
-export function firstUserSource(
-  messages: {
-    role: string;
-    content?: string;
-    display?: string;
-    internal?: string;
-  }[],
-): string {
-  const message = messages.find(
-    (item) => item.role === 'user' && !item.internal,
-  );
-  return (message?.display || message?.content || '').trim();
+export function firstUserSource(messages: StoredUser[]): string {
+  return userPrompts(messages)[0] ?? '';
 }

@@ -22,11 +22,15 @@ import {
   repairedTitle,
   sanitizeGeneratedTitle,
   TITLE_MAX_CHARS,
+  TITLE_MAX_CJK,
   TITLE_MAX_TOKENS,
   TITLE_MAX_WORDS,
   titleConversation,
+  titleNeedsRefresh,
+  titleRetrySystem,
   titleUnits,
   titleWorthy,
+  userPrompts,
 } from '../src/session_title.js';
 import { ScriptedModel } from '../src/testing.js';
 import type { ChatModel, ModelRequest, ModelResponse } from '../src/types.js';
@@ -122,6 +126,28 @@ test('generated titles keep one short phrase and drop a reply', () => {
   assert.equal(sanitizeGeneratedTitle('你好世界 Go 程序'), '你好世界 Go 程序');
   assert.equal(sanitizeGeneratedTitle('我的 Go 程序'), '我的 Go 程序');
   assert.equal(sanitizeGeneratedTitle('我无法生成标题'), undefined);
+  assert.equal(sanitizeGeneratedTitle('尾递归解释请求'), '尾递归解释');
+  assert.equal(
+    sanitizeGeneratedTitle('罗马帝国介绍请求（含共和国等术语）'),
+    '罗马帝国介绍',
+  );
+  assert.equal(
+    sanitizeGeneratedTitle('hello.txt creation request'),
+    'hello.txt creation request',
+  );
+  assert.equal(
+    sanitizeGeneratedTitle('Rate limiting request'),
+    'Rate limiting',
+  );
+  assert.equal(sanitizeGeneratedTitle('Creating hello.txt with hi'), undefined);
+  assert.equal(
+    sanitizeGeneratedTitle('一'.repeat(TITLE_MAX_CJK)),
+    '一'.repeat(TITLE_MAX_CJK),
+  );
+  assert.equal(
+    sanitizeGeneratedTitle('一'.repeat(TITLE_MAX_CJK + 1)),
+    undefined,
+  );
   assert.equal(sanitizeGeneratedTitle('请提供文件内容'), undefined);
   assert.equal(sanitizeGeneratedTitle('你可以粘贴一下'), undefined);
   assert.equal(titleWorthy('hi'), false);
@@ -370,7 +396,7 @@ test('a short Chinese sentence asks for a title in that language', async (t) => 
   assert.ok(title);
   assert.equal(title.messages[0]!.content, titleConversation(prompt));
   assert.match(String(title.system), /Chinese title/);
-  assert.match(String(title.system), /罗马帝国兴衰/);
+  assert.match(String(title.system), /罗马帝国简介/);
   assert.match(String(title.system), /Go 你好世界/);
   assert.match(String(title.system), /Do not answer it/);
   model.releaseTitle();
@@ -473,38 +499,29 @@ test('a three-word question asks for a summary title', async (t) => {
 test('a recased question is not a title, and a noun phrase is', () => {
   const tcp = 'what is TCP';
   assert.equal(echoesPrompt('What is TCP', tcp), true);
-  assert.equal(echoesPrompt('what is TCP?', tcp), true);
-  assert.equal(echoesPrompt('TCP what is', tcp), true);
-  assert.equal(echoesPrompt('  What   is\u3000TCP ', tcp), true);
+  assert.equal(echoesPrompt('What is TCP?', tcp), true);
+  assert.equal(echoesPrompt('what is TCP!', tcp), true);
+  assert.equal(echoesPrompt('TCP overview', tcp), false);
+  assert.equal(echoesPrompt('什么是 rust', '什么是 Rust'), true);
+  assert.equal(echoesPrompt('Rust 简介', '什么是 Rust'), false);
   assert.equal(
     acceptGeneratedTitle('What is TCP', tcp).reason,
     'echoes prompt',
   );
   assert.equal(acceptGeneratedTitle('What is TCP', tcp).title, undefined);
   assert.equal(
-    acceptGeneratedTitle('what is TCP?', tcp).reason,
-    'echoes prompt',
-  );
-  assert.equal(
-    acceptGeneratedTitle('TCP what is', tcp).reason,
+    acceptGeneratedTitle('What is TCP?', tcp).reason,
     'echoes prompt',
   );
   assert.equal(acceptGeneratedTitle('TCP overview', tcp).title, 'TCP overview');
-  assert.equal(acceptGeneratedTitle('TCP basics', tcp).title, 'TCP basics');
-  const rust = 'what is Rust';
   assert.equal(
-    acceptGeneratedTitle('What is Rust', rust).reason,
-    'echoes prompt',
+    acceptGeneratedTitle('Rust intro', 'what is Rust').title,
+    'Rust intro',
   );
   assert.equal(
-    acceptGeneratedTitle('what is Rust?', rust).reason,
+    acceptGeneratedTitle('What is Rust', 'what is Rust').reason,
     'echoes prompt',
   );
-  assert.equal(
-    acceptGeneratedTitle('Rust what is', rust).reason,
-    'echoes prompt',
-  );
-  assert.equal(acceptGeneratedTitle('Rust intro', rust).title, 'Rust intro');
   assert.equal(
     acceptGeneratedTitle('React hooks 解释', '解释 React hooks').title,
     'React hooks 解释',
@@ -513,20 +530,34 @@ test('a recased question is not a title, and a noun phrase is', () => {
     acceptGeneratedTitle('Rust 语言简介', '什么是 Rust').title,
     'Rust 语言简介',
   );
+  const system = 'You are a title generator.';
+  const retry = titleRetrySystem(system);
+  assert.equal(retry.startsWith(`${system}\n\n`), true);
+  assert.match(retry, /TCP overview/);
+  assert.match(retry, /capitalization or punctuation/);
   assert.equal(
-    acceptGeneratedTitle('什么是 Rust', '什么是 Rust').reason,
-    'echoes prompt',
-  );
-  assert.equal(
-    acceptGeneratedTitle('什么是\u3000Rust', '什么是 Rust').reason,
-    'echoes prompt',
-  );
-  assert.match(titleConversation(tcp, true), /TCP overview/);
-  assert.equal(
-    titleConversation(tcp, true).startsWith(titleConversation(tcp)),
+    titleNeedsRefresh(
+      'Creating hello.txt with hi',
+      'create hello.txt with hi and then leave it',
+    ),
     true,
   );
-  assert.doesNotMatch(titleConversation(tcp), /TCP overview/);
+  assert.equal(titleNeedsRefresh('hi', 'hi'), false);
+  assert.equal(
+    titleNeedsRefresh('Custom name', '帮我写一个你好世界的Go程序'),
+    false,
+  );
+  assert.deepEqual(
+    userPrompts([
+      {
+        role: 'user',
+        display: 'please explain to me briefly in two',
+        content:
+          'please explain to me briefly in two sentences how this works today',
+      },
+    ]),
+    ['please explain to me briefly in two sentences how this works today'],
+  );
 });
 
 test('an echoed question is asked once more, then left untitled', async (t) => {
@@ -551,10 +582,15 @@ test('an echoed question is asked once more, then left untitled', async (t) => {
   );
   assert.equal(calls.length, 2);
   assert.equal(calls[0]!.messages[0]!.content, titleConversation(prompt));
-  assert.equal(calls[1]!.messages[0]!.content, titleConversation(prompt, true));
+  assert.equal(calls[1]!.messages[0]!.content, titleConversation(prompt));
   assert.equal(calls[1]!.effort, '');
   assert.equal(calls[1]!.tools.length, 0);
-  assert.match(String(calls[1]!.system), /Never return the question itself/);
+  assert.match(String(calls[1]!.system), /TCP overview/);
+  assert.match(String(calls[1]!.system), /capitalization or punctuation/);
+  assert.equal(
+    String(calls[1]!.system),
+    titleRetrySystem(String(calls[0]!.system)),
+  );
   assert.equal(store.get(session.id)!.title, 'TCP overview');
   assert.deepEqual(notes, []);
 

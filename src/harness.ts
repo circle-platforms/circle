@@ -28,6 +28,7 @@ import {
   fallbackTitle,
   TITLE_MAX_TOKENS,
   titleConversation,
+  titleRetrySystem,
   titleSkipReason,
 } from './session_title.js';
 
@@ -366,8 +367,9 @@ export class Harness {
    * first is left alone. The request disables thinking: glm-5.3 still reasons
    * when the field is omitted. Reasoning text is not a title. The prompt is
    * wrapped as data, and a reply that answers the user is discarded. A title
-   * that only repeats the question is asked once more; a second echo leaves
-   * the session untitled and is not `title failed`.
+   * that only changes the prompt's case or punctuation is asked once more,
+   * with `titleRetrySystem`. A second copy is not stored and is not
+   * `title failed`.
    */
   private generateTitle(display: string, fallback: string): void {
     // `this.model`, not the model passed at construction: /model and a reload replace it.
@@ -406,14 +408,15 @@ export class Harness {
       this.bus.emit('info', { payload: { title } });
       return true;
     };
-    const ask = (stricter: boolean) =>
+    const system = readPrompt('agent', 'title.md');
+    const ask = (text: string) =>
       model.complete({
-        system: readPrompt('agent', 'title.md'),
+        system: text,
         messages: [
           {
             id: 'title',
             role: 'user',
-            content: titleConversation(prompt, stricter),
+            content: titleConversation(prompt),
           },
         ],
         tools: [],
@@ -465,7 +468,7 @@ export class Harness {
     task = (async () => {
       let response;
       try {
-        response = await ask(false);
+        response = await ask(system);
       } catch (error) {
         fail(error);
         return;
@@ -477,7 +480,7 @@ export class Harness {
         return;
       titleTrace('retry: title echoed the prompt');
       try {
-        response = await ask(true);
+        response = await ask(titleRetrySystem(system));
       } catch (error) {
         fail(error);
         return;
