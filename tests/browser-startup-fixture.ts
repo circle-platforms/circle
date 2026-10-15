@@ -13,6 +13,7 @@ export function ownedStartupBrowser(
   phase: string,
   exits: boolean,
   spawnError?: NodeJS.ErrnoException,
+  closeTimeout?: number,
 ) {
   const root = scratch(t);
   const executable = 'circle-owned-startup-fixture';
@@ -36,33 +37,34 @@ process.on('message', (request) => {
       if (file !== executable) return spawn(file, args, options);
       const input = new PassThrough();
       const output = new PassThrough();
-      child = spawn(process.execPath, ['-e', program], {
+      const launched = spawn(process.execPath, ['-e', program], {
         ...options,
         stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
       });
-      if (spawnError) queueMicrotask(() => child!.emit('error', spawnError));
-      child.stdio[3] = input;
-      child.stdio[4] = output;
+      child = launched;
+      if (spawnError) queueMicrotask(() => launched.emit('error', spawnError));
+      launched.stdio[3] = input;
+      launched.stdio[4] = output;
       let sawStderr = false;
       let stopping = false;
       const finish = () => {
         if (!sawStderr || !stopping) return;
         stopping = false;
-        if (exits) child!.send({ exit: true }, () => {});
+        if (exits) launched.send({ exit: true }, () => {});
         else output.destroy();
       };
-      child.stderr!.on('data', () => {
+      launched.stderr!.on('data', () => {
         sawStderr = true;
         finish();
       });
-      child.on('message', (message: any) => {
+      launched.on('message', (message: any) => {
         if (message.stopping) {
           stopping = true;
           finish();
         } else output.write(JSON.stringify(message) + '\0');
       });
       // For the known-exit case, EOF is delivered only after the actual exit.
-      child.once('exit', () => output.destroy());
+      launched.once('exit', () => output.destroy());
       let pending = '';
       input.on('data', (chunk: Buffer) => {
         pending += chunk.toString();
@@ -70,7 +72,7 @@ process.on('message', (request) => {
         while ((end = pending.indexOf('\0')) >= 0) {
           const request = JSON.parse(pending.slice(0, end));
           pending = pending.slice(end + 1);
-          child!.send(request, () => {});
+          launched.send(request, () => {});
         }
       });
       return child;
@@ -82,6 +84,7 @@ process.on('message', (request) => {
     headless: true,
     downloads: join(root, 'downloads'),
     trustFile: join(root, 'certificates.json'),
+    closeTimeout,
   });
   cleanup(t, async () => {
     try {
