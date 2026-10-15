@@ -5,6 +5,11 @@ import { join } from 'node:path';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { ChromeBrowser } from '../src/browser/chrome.js';
+import { CheckpointStore } from '../src/checkpoint_store.js';
+import { AgentRuntime } from '../src/runtime.js';
+import { SessionRuntimeManager } from '../src/session_manager.js';
+import { defaultSettings } from '../src/settings.js';
+import { ScriptedModel } from '../src/testing.js';
 import { cancellationFixture, cleanup, scratch } from './helpers.js';
 
 function browserWithChild(child: ChildProcess) {
@@ -91,4 +96,91 @@ test('browser cleanup failure rejects and remains retryable instead of confirmin
   (child as unknown as { exitCode: number | null }).exitCode = 0;
   child.emit('exit', 0, null);
   await browser.close();
+});
+
+function liveChild(): ChildProcess {
+  return Object.assign(new EventEmitter(), {
+    pid: 1_073_741_824,
+    exitCode: null as number | null,
+    signalCode: null,
+  }) as unknown as ChildProcess;
+}
+
+test('browser close escalates a refused graceful termination instead of rejecting before force', async () => {
+  const child = liveChild();
+  const browser = browserWithChild(child);
+  const state = browser as any;
+  const attempts: boolean[] = [];
+  let closed = false;
+  state.cdp.close = () => {
+    closed = true;
+  };
+  state.stopProcess = async (_child: ChildProcess, force: boolean) => {
+    attempts.push(force);
+    if (!force)
+      throw new Error(
+        'the process can only be terminated forcefully (with /F)',
+      );
+    (child as unknown as { exitCode: number | null }).exitCode = 1;
+    child.emit('exit', 1, null);
+  };
+  await browser.close();
+  assert.deepEqual(attempts, [false, true]);
+  assert.notEqual(child.exitCode, null);
+  assert.equal(closed, true);
+});
+
+test('refused forced browser termination retains session history until a successful deletion retry', async (t) => {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const child = liveChild();
+  const browser = browserWithChild(child);
+  const state = browser as any;
+  const forcedError = new Error('forced termination refused');
+  const attempts: boolean[] = [];
+  let refuseForce = true;
+  let closed = false;
+  state.cdp.close = () => {
+    closed = true;
+  };
+  state.stopProcess = async (_child: ChildProcess, force: boolean) => {
+    attempts.push(force);
+    if (!force) throw new Error('graceful termination refused');
+    if (refuseForce) throw forcedError;
+    (child as unknown as { exitCode: number | null }).exitCode = 1;
+    child.emit('exit', 1, null);
+  };
+  const runtime = new AgentRuntime({
+    home,
+    workspace,
+    settings: defaultSettings(),
+    model: new ScriptedModel([
+      { message: { id: 'answer', role: 'assistant', content: 'saved answer' } },
+    ]),
+    headless: true,
+    beforeDelete: () => browser.close(),
+  });
+  const sessions = new SessionRuntimeManager(() => {
+    throw new Error('unexpected runtime creation');
+  });
+  sessions.register(runtime);
+  cleanup(t, () => sessions.close());
+  await runtime.harness.run('keep this history until the browser stops');
+  const id = runtime.session.id;
+  const messages = runtime.store.messages(id);
+  await assert.rejects(sessions.delete(id, { confirmed: true }), forcedError);
+  assert.deepEqual(attempts, [false, true]);
+  assert.equal(closed, false);
+  assert.equal(child.exitCode, null);
+  assert.equal(sessions.lifecycle(id), 'deleting');
+  assert(runtime.store.get(id));
+  assert.deepEqual(runtime.store.messages(id), messages);
+  refuseForce = false;
+  await sessions.delete(id, { confirmed: true });
+  assert.deepEqual(attempts, [false, true, false, true]);
+  assert.equal(closed, true);
+  assert.equal(sessions.lifecycle(id), 'deleted');
+  const store = new CheckpointStore(home);
+  cleanup(t, () => store.close());
+  assert.equal(store.get(id), undefined);
 });

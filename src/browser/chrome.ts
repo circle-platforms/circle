@@ -494,7 +494,9 @@ export class ChromeBrowser implements BrowserPort {
         Math.min(timeout, 2000),
       ).catch(() => {});
       if (!(await this.waitForExit(child, timeout))) {
-        await this.stopProcess(child, false);
+        // Windows taskkill can refuse a graceful stop and require /F. Still give the
+        // process its bounded grace period, then escalate; a forced-stop failure rejects.
+        await this.stopProcess(child, false).catch(() => {});
         if (!(await this.waitForExit(child, Math.min(timeout, 1000)))) {
           await this.stopProcess(child, true);
           if (!(await this.waitForExit(child, timeout)))
