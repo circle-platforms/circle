@@ -11,7 +11,7 @@ import { LanguageService } from './language.ts';
 import { WorkspaceDebugService } from './debug.ts';
 import { DeliveryService } from './delivery.ts';
 import type { CredentialStore } from './delivery-login.ts';
-import { WorkspaceEventStream } from './event-stream.ts';
+import { WorkspaceEventStream, type StreamCursor } from './event-stream.ts';
 import type {
   WorkspaceService,
   WorkspaceServiceEvent,
@@ -19,6 +19,7 @@ import type {
 const exec = promisify(execFile);
 export interface WorkspaceServicesOptions {
   workspaceRoot: string;
+  workspaceId?: string;
   dataDir: string;
   nodeExecutable: string;
   runtimeExecutable: string;
@@ -49,14 +50,11 @@ export class WorkspaceServices {
   private watch: ReturnType<WorkspaceDocuments['watch']>;
   constructor(options: WorkspaceServicesOptions) {
     this.options = options;
-    this.workspaceId = createHash('sha256')
+    const rootHash = createHash('sha256')
       .update(path.resolve(options.workspaceRoot))
       .digest('hex');
-    const directory = path.join(
-      options.dataDir,
-      'workspaces',
-      this.workspaceId,
-    );
+    this.workspaceId = options.workspaceId ?? rootHash.slice(0, 24);
+    const directory = path.join(options.dataDir, 'workspaces', rootHash);
     this.ready = WorkspaceEventStream.open(
       path.join(directory, 'events.jsonl'),
     );
@@ -127,6 +125,16 @@ export class WorkspaceServices {
   }
   setCredentialFiles(patterns: string[]) {
     this.documents.setCredentialFiles(patterns);
+  }
+  async publishSource(event: WorkspaceServiceEvent): Promise<void> {
+    if (event.workspaceId !== this.workspaceId)
+      throw Error('event does not belong to this workspace');
+    return this.persist(event);
+  }
+  async replay(after?: StreamCursor, limit?: number) {
+    await this.pending;
+    if (this.failure) throw this.failure;
+    return (await this.ready).replay(after, limit);
   }
   private persist(event: WorkspaceServiceEvent): Promise<void> {
     const operation = this.pending.then(async () => {
