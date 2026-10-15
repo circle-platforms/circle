@@ -819,7 +819,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
   }
 
   // Save every artifact of a delivered task in the workspace, after checking the bytes
-  // against the SHA-256 the server recorded for it.
+  // against the SHA-256 the server recorded for it. A module-execute run produces a
+  // flow original per step, so artifacts land in tasks/<taskId>/, not the root.
   async function deliver(
     taskId: string,
     context: CommandContext,
@@ -838,6 +839,22 @@ export async function register(api: ExtensionAPI): Promise<void> {
           : ''
       }${unmapped.length ? ` · ${unmapped.length} unmapped (listed in the workbook)` : ''}`,
     );
+    // A flow result summarizes its cases and the terminal execution observations.
+    const outcome = isRecord(result.result) ? result.result : {};
+    const cases = Array.isArray(outcome.cases) ? outcome.cases : [];
+    for (const item of cases)
+      if (isRecord(item))
+        context.append(
+          `    case ${String(item.autoid)} · ${String(item.verdict)}`,
+        );
+    const executionObservations = Array.isArray(result.executionObservations)
+      ? result.executionObservations
+      : [];
+    for (const item of executionObservations)
+      if (isRecord(item))
+        context.append(
+          `    execution ${String(item.operationId)} · terminal ${String(item.terminal)} · remote lease released ${String(item.remoteLeaseReleased)}`,
+        );
     for (const item of unmapped.slice(0, 5))
       if (isRecord(item))
         context.append(
@@ -861,6 +878,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
       context.append(`  ${taskId} delivered no files`);
       return;
     }
+    const folder = join(context.workspace, 'tasks', taskId);
+    mkdirSync(folder, { recursive: true });
     for (const artifact of artifacts) {
       const { bytes, headers } = await request(
         'GET',
@@ -877,13 +896,42 @@ export async function register(api: ExtensionAPI): Promise<void> {
         );
         continue;
       }
-      const path = freePath(context.workspace, name);
+      const path = freePath(folder, name);
       writeFileSync(path, bytes, { flag: 'wx' });
       remember(taskId, { saved: true });
       context.append(
         `✓ saved ${path} · ${bytes.byteLength} bytes · sha256 ${short(actual)} matches the server (${artifact.artifactId})`,
       );
     }
+  }
+
+  // A failed task carries its own error; hub 60220cf adds the rejected flow action
+  // (stepId/kind) and the bounded cause (code/message) in error.details.
+  async function failureNote(
+    taskId: string,
+    phase: string,
+  ): Promise<string> {
+    let error: Record<string, unknown> | undefined;
+    try {
+      const { data } = await request(
+        'GET',
+        `/v1/tasks/${encodeURIComponent(taskId)}/result`,
+      );
+      if (isRecord(data) && isRecord(data.error)) error = data.error;
+    } catch {
+      /* The plain line stands. */
+    }
+    if (!error) return `✖ ${taskId} ${phase}`;
+    const details = isRecord(error.details) ? error.details : {};
+    const cause = isRecord(details.cause) ? details.cause : undefined;
+    const where =
+      typeof details.stepId === 'string'
+        ? ` · step ${details.stepId}${typeof details.kind === 'string' ? ` (${details.kind})` : ''}`
+        : '';
+    const why = cause
+      ? ` · ${String(cause.code ?? '')}: ${String(cause.message ?? '')}`
+      : '';
+    return `✖ ${taskId} ${phase}: ${String(error.code ?? '')} · ${String(error.message ?? '')}${where}${why}`;
   }
 
   // Follow a task from the last event this window showed until it ends, writing each event
@@ -930,7 +978,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
             context.append(
               `✖ ${taskId}: the outcome is unknown and the server does not guess it · /server task ${taskId} later`,
             );
-          else context.append(`✖ ${taskId} ${phase}`);
+          else context.append(await failureNote(taskId, phase));
           ended = true;
           return;
         }

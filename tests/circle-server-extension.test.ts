@@ -342,7 +342,7 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
   });
   assert.equal(upload.auth, `Bearer ${TOKEN}`);
   assert.deepEqual(
-    readFileSync(join(workspace, 'cases.xlsx')),
+    readFileSync(join(workspace, 'tasks', 'task_one', 'cases.xlsx')),
     server.workbook,
   );
   assert.ok(
@@ -384,7 +384,7 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
   await command.handler('get task_one', context);
   assert.equal(lines.filter((line) => line.startsWith('✓ saved')).length, 2);
   assert.deepEqual(
-    readFileSync(join(workspace, 'cases-1.xlsx')),
+    readFileSync(join(workspace, 'tasks', 'task_one', 'cases-1.xlsx')),
     server.workbook,
   );
 
@@ -501,7 +501,7 @@ test('the connector tools let a model list packs, hand over a file and get the c
     submitted.lines.some((line: string) => /✓ saved .*cases\.xlsx/.test(line)),
   );
   assert.deepEqual(
-    readFileSync(join(workspace, 'cases.xlsx')),
+    readFileSync(join(workspace, 'tasks', 'task_one', 'cases.xlsx')),
     server.workbook,
   );
   // Files become one source artifact: each uploaded as an original, listed with its role.
