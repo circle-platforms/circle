@@ -147,3 +147,70 @@
     flex-basis: 100%;
   }
 }
+
+.native-service-details {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--ui-small);
+}
+.native-service-details code {
+  min-width: 0;
+  flex: 1 1 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.native-service-details > span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.native-service-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.native-service-form > label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.native-service-form fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  min-width: 0;
+}
+.native-service-form p {
+  color: var(--muted);
+  font-size: var(--ui-small);
+}
+.native-service-argument {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.native-service-argument > input {
+  flex: 1;
+  font-family: var(--mono);
+}
+.native-service-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.native-terminal-lamp.ready {
+  background: var(--accent);
+}
+.native-terminal-lamp.starting {
+  background: var(--attention);
+}

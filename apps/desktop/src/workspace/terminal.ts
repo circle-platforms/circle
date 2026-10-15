@@ -88,7 +88,7 @@ export interface TerminalSnapshot {
   serviceState?: ServiceState;
   exitReason?: string;
   readiness?: TerminalReadinessOptions & {
-    state: 'waiting' | 'ready' | 'failed' | 'not-configured';
+    state: 'waiting' | 'ready' | 'failed' | 'cancelled' | 'not-configured';
     matchedPattern?: boolean;
     portOpen?: boolean;
     readyAt?: string;
@@ -344,14 +344,20 @@ export class TerminalManager {
           if (snapshot.kind === 'service') {
             snapshot.serviceState =
               snapshot.requestedSignal === 'SIGTERM' ||
-              snapshot.requestedSignal === 'SIGKILL'
+              snapshot.requestedSignal === 'SIGKILL' ||
+              (snapshot.requestedSignal === 'SIGINT' &&
+                (exit.signal === 2 ||
+                  exit.exitCode === 130 ||
+                  exit.exitCode === 0))
                 ? 'stopped'
                 : exit.exitCode || exit.signal
                   ? 'failed'
                   : 'exited';
             if (snapshot.readiness?.state === 'waiting') {
-              snapshot.readiness.state = 'failed';
-              snapshot.readiness.error = `process ended before readiness: ${snapshot.exitReason}`;
+              snapshot.readiness.state =
+                snapshot.serviceState === 'stopped' ? 'cancelled' : 'failed';
+              if (snapshot.serviceState !== 'stopped')
+                snapshot.readiness.error = `process ended before readiness: ${snapshot.exitReason}`;
             }
           }
           this.#append(entry, 'exit', undefined, true);
@@ -1057,8 +1063,14 @@ function validateReadiness(
   return { ...options, timeoutMs: options.timeoutMs ?? 30000 };
 }
 async function portOpen(port: number): Promise<boolean> {
+  const results = await Promise.all(
+    ['127.0.0.1', '::1'].map((host) => probeLoopback(host, port)),
+  );
+  return results.some(Boolean);
+}
+async function probeLoopback(host: string, port: number): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
-    const socket = createConnection({ host: '127.0.0.1', port });
+    const socket = createConnection({ host, port });
     let settled = false;
     const finish = (open: boolean) => {
       if (settled) return;

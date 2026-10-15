@@ -647,3 +647,71 @@ test(
     assert.match(actual.readiness!.error!, /before readiness/);
   },
 );
+
+test(
+  'an explicit interrupt cancels a pending readiness check instead of reporting service failure',
+  { skip: !unix },
+  async (t) => {
+    const { manager, events } = await setup(t);
+    const service = await manager.create({
+      owner,
+      sessionId: 'service-session',
+      command: {
+        file: process.execPath,
+        args: ['-e', "console.log('SERVICE_LIVE');setInterval(()=>{},1000)"],
+      },
+      readiness: { pattern: 'NEVER', timeoutMs: 3000 },
+    });
+    await wait(
+      () => events.some((event) => event.data?.includes('SERVICE_LIVE')),
+      'service actually started',
+    );
+    await manager.signal(owner, service.id, 'SIGINT');
+    await wait(
+      async () => (await manager.list(owner))[0]?.status === 'exited',
+      'service actually interrupted',
+    );
+    const stopped = await manager.close(owner, service.id);
+    assert.equal(stopped.serviceState, 'stopped');
+    assert.equal(stopped.readiness?.state, 'cancelled');
+    assert.equal(stopped.readiness?.error, undefined);
+  },
+);
+
+test(
+  'localhost services listening only on IPv6 can become ready',
+  { skip: !unix },
+  async (t) => {
+    const { manager } = await setup(t);
+    const probe = createServer();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        probe.once('error', reject);
+        probe.listen(0, '::1', resolve);
+      });
+    } catch {
+      t.skip('IPv6 loopback is unavailable');
+      return;
+    }
+    const port = (probe.address() as { port: number }).port;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    const service = await manager.create({
+      owner,
+      sessionId: 'ipv6-service',
+      command: {
+        file: process.execPath,
+        args: [
+          '-e',
+          `require('node:http').createServer((q,s)=>s.end('ipv6')).listen(${port},'::1',()=>console.log('IPV6_READY'))`,
+        ],
+      },
+      readiness: { port, pattern: 'IPV6_READY', timeoutMs: 3000 },
+    });
+    await wait(
+      async () => (await manager.list(owner))[0]?.serviceState === 'ready',
+      'IPv6-only service ready',
+    );
+    assert.equal(await (await fetch(`http://[::1]:${port}`)).text(), 'ipv6');
+    await manager.close(owner, service.id);
+  },
+);

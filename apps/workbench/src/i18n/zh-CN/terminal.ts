@@ -1,4 +1,5 @@
 export const terminal: Record<string, string> = {
+  optional: '可选',
   stopping: '正在停止',
   'previous match': '上一个匹配',
   'no matches': '没有匹配项',
@@ -17,4 +18,27 @@ export const terminal: Record<string, string> = {
     '代理继续工作时，也能在这里运行命令',
   'retry output': '重新加载输出',
   'ended by signal {signal}': '因信号 {signal} 结束',
+  'service starting': '服务正在启动',
+  'service ready': '服务已就绪',
+  'service running': '服务运行中',
+  'readiness failed': '就绪检查失败',
+  'start service': '启动服务',
+  'restart service': '重启服务',
+  'restart terminal': '重启终端',
+  'stop service': '停止服务',
+  'service name': '服务名称',
+  'service executable': '启动程序',
+  'service folder': '运行文件夹',
+  'service arguments': '启动参数',
+  'service argument {n}': '第 {n} 个启动参数',
+  'remove argument {n}': '移除第 {n} 个参数',
+  'add service argument': '添加启动参数',
+  'each field is one argument; spaces and quotes are kept exactly':
+    '每个输入框对应一个参数，空格和引号保持原样',
+  'ready port': '就绪端口',
+  'ready log text': '就绪日志文字',
+  'when both checks are set, both must pass before the service is ready':
+    '同时设置两项检查时，两项都通过后才会显示服务就绪',
+  'keep a development service with its logs, readiness checks and restart action':
+    '统一查看开发服务的日志、就绪状态，并随时停止或重启',
 };
