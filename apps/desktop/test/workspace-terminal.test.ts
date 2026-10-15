@@ -286,7 +286,63 @@ test(
     );
     await manager.close(owner, terminal.id);
     const raw = await readFile(terminal.logPath, 'utf8');
-    assert.ok(raw.includes(expected));
+    let evidence: string | undefined;
+    if (
+      !raw.includes(expected) &&
+      process.env.CIRCLE_NATIVE_TEST_PROGRESS_DIR
+    ) {
+      const directory = process.env.CIRCLE_NATIVE_TEST_PROGRESS_DIR;
+      await mkdir(directory, { recursive: true });
+      evidence = join(directory, `full-log-${process.platform}-${terminal.id}`);
+      const offset = raw.indexOf('ROW_0000_');
+      let firstMismatch = 0;
+      while (
+        firstMismatch < expected.length &&
+        raw[offset + firstMismatch] === expected[firstMismatch]
+      )
+        firstMismatch++;
+      await Promise.all([
+        writeFile(evidence + '.raw.log', raw),
+        writeFile(evidence + '.expected.log', expected),
+        writeFile(evidence + '.events.json', JSON.stringify(events, null, 2)),
+        writeFile(
+          evidence + '.json',
+          JSON.stringify(
+            {
+              terminal,
+              stopped: (await manager.list(owner)).find(
+                (item) => item.id === terminal.id,
+              ),
+              expectedBytes: Buffer.byteLength(expected),
+              actualBytes: Buffer.byteLength(raw),
+              expectedSha256: createHash('sha256')
+                .update(expected)
+                .digest('hex'),
+              actualSha256: createHash('sha256').update(raw).digest('hex'),
+              actualRows: raw.match(/ROW_\d{4}_/g),
+              firstRowOffset: offset,
+              firstMismatch,
+              expectedContext: expected.slice(
+                Math.max(0, firstMismatch - 80),
+                firstMismatch + 80,
+              ),
+              actualContext: raw.slice(
+                Math.max(0, offset + firstMismatch - 80),
+                offset + firstMismatch + 80,
+              ),
+            },
+            null,
+            2,
+          ),
+        ),
+      ]);
+    }
+    assert.ok(
+      raw.includes(expected),
+      evidence
+        ? `complete raw output mismatch; original evidence: ${evidence}`
+        : 'complete raw output must include all 2000 expected rows',
+    );
     let cursor = 0;
     let text = '';
     const sequences: number[] = [];
