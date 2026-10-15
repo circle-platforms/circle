@@ -88,6 +88,30 @@ test('workspace routing preserves revisions, isolates terminal owners and persis
       'utf8',
     );
     assert.ok(journal.includes('"kind":"save"'));
+    const firstPage = await service.replay();
+    assert.equal(firstPage.events[0].workspaceId.length, 24);
+    const event = {
+      workspaceId: firstPage.events[0].workspaceId,
+      sessionId: 'session-a',
+      service: 'tasks' as const,
+      resourceId: 'task-1',
+      epoch: 'task-runtime',
+      seq: 99,
+      at: new Date().toISOString(),
+      data: { kind: 'progress' },
+    };
+    await assert.rejects(
+      service.publishSource({ ...event, workspaceId: 'foreign-workspace' }),
+      /does not belong/,
+    );
+    await service.publishSource(event);
+    const nextPage = await service.replay(firstPage.cursor);
+    assert.ok(
+      nextPage.events.some(
+        (item) => item.sourceSeq === 99 && item.data.kind === 'progress',
+      ),
+    );
+
     await assert.rejects(
       service.call('session-a', 'documents', 'save', {
         path: 'a.ts',
