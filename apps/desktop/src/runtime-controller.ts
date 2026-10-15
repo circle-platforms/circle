@@ -48,7 +48,6 @@ import {
 import {
   discoverCustomCommands,
   substituteArguments,
-  splitArguments,
 } from '../../../src/commands.js';
 import { loadSkillBody } from '../../../src/skills.js';
 import { attachmentFromBase64, MAX_MEDIA_BYTES } from '../../../src/media.js';
@@ -87,6 +86,16 @@ import { formatCosts } from '../../../src/pricing.js';
 import { TurnStatus } from '../../../src/tui/turn_status.js';
 import { currentNetworkStatus } from '../../../src/net.js';
 import { SessionMetadata } from './session-metadata';
+import { WorkspaceServices } from './workspace/workspace-services';
+import { TaskService } from './workspace/task-service';
+import type { TaskRecord } from './workspace/task-store';
+import type { FileMutations } from '../../../src/file_mutations.js';
+import type { RuntimeCredentialStore } from './runtime-private-channel';
+import {
+  validateWorkspaceRequest,
+  type WorkspaceServiceEvent,
+} from './workspace-protocol';
+import { formatMcpArguments, parseMcpArguments } from './mcp-arguments';
 import { PlanCompletionTracker } from '../../../src/plan_state.js';
 import { nextAgentActivity } from '../../../src/session_activity.js';
 import { formatElapsed, type TurnUsage } from '../../../src/tui/status_rows.js';
@@ -203,6 +212,14 @@ interface Streaming {
 }
 export interface ControllerOptions {
   home: string;
+  emitWorkspaceEvent?: (event: WorkspaceServiceEvent) => void;
+  credentialStore?: RuntimeCredentialStore;
+  workspaceTools?: {
+    nodeExecutable: string;
+    runtimeExecutable: string;
+    adapterPath: string;
+    ghPath: string;
+  };
   /** The application's data folder, which holds home beside the updates and Chromium's
    * own files: the default workspace may not be in it. Home when not given. */
   dataFolder?: string;
@@ -280,6 +297,14 @@ export class RuntimeController {
   private closing = false;
   private closePromise?: Promise<void>;
   private mutation = Promise.resolve();
+  private workspaceServices = new Map<string, WorkspaceServices>();
+  private taskServices = new Map<string, TaskService>();
+  private taskWorkspaces = new Map<string, string>();
+  private taskRuntimes = new Map<string, AgentRuntime>();
+  private workspaceEventPending: Promise<unknown> = Promise.resolve();
+  private workspaceEpoch = randomUUID();
+  private workspaceSeq = 0;
+  private stoppedJobs = new Set<string>();
   private accepted = new Map<
     string,
     { signature: string; reply: Promise<RuntimeReply> }
@@ -481,16 +506,186 @@ export class RuntimeController {
       });
     }
   }
-  private createRuntime(workspace: string, sessionId?: string): AgentRuntime {
+  private workspaceEvent(
+    workspace: string,
+    event: WorkspaceServiceEvent,
+  ): void {
+    const pending = this.workspaceEventPending.then(() =>
+      this.services(workspace).publishSource(event),
+    );
+    this.workspaceEventPending = pending.catch((error) => {
+      this.error = String(error);
+    });
+  }
+  private trustedWorkspace(workspace: string): string {
+    const root = realpathSync(workspace);
+    const origin = this.taskWorkspaces.get(root) ?? root;
+    if (!isFolderTrusted(loadSettings(this.home), origin))
+      throw Error('trust this workspace first');
+    return root;
+  }
+  private services(workspace: string): WorkspaceServices {
+    const root = this.trustedWorkspace(workspace);
+    let services = this.workspaceServices.get(root);
+    if (!services) {
+      const tools = this.options.workspaceTools ?? {
+        nodeExecutable: process.execPath,
+        runtimeExecutable: process.execPath,
+        adapterPath: join(
+          this.home,
+          'tools',
+          'js-debug',
+          'src',
+          'dapDebugServer.js',
+        ),
+        ghPath: 'gh',
+      };
+      services = new WorkspaceServices({
+        workspaceRoot: root,
+        dataDir: join(
+          this.options.dataFolder ?? this.home,
+          'workspace-services',
+        ),
+        ...tools,
+        credentialStore: this.options.credentialStore
+          ? {
+              get: () => this.options.credentialStore!.get('github.com'),
+              put: (token) =>
+                this.options.credentialStore!.put('github.com', token),
+            }
+          : undefined,
+        workspaceId: identity(root),
+        credentialFiles: loadSettings(this.home).credential_files,
+        emit: (event) => this.options.emitWorkspaceEvent?.(event),
+      });
+      this.workspaceServices.set(root, services);
+    }
+    services.setCredentialFiles(loadSettings(this.home).credential_files);
+    return services;
+  }
+  private fileMutations(workspace: string): FileMutations {
+    return {
+      read: async (path, signal) => {
+        const documents = this.services(workspace).documents;
+        const document = await documents.snapshot(
+          relative(documents.root, path),
+          { signal },
+        );
+        return {
+          path,
+          content: document?.content ?? null,
+          revision: document?.revision ?? null,
+        };
+      },
+      apply: async (changes, signal) => {
+        const documents = this.services(workspace).documents;
+        const result = await documents.applyChanges(
+          changes.map((change) => ({
+            ...change,
+            path: relative(documents.root, change.path),
+          })),
+          { signal },
+        );
+        if (result.status !== 'applied')
+          throw Object.assign(
+            Error(
+              result.failures.map((f) => `${f.path}: ${f.message}`).join('; '),
+            ),
+            { committedPaths: result.committedPaths },
+          );
+      },
+    };
+  }
+  private collaboration(
+    workspace: string,
+    ownerSessionId: string,
+  ): TaskService {
+    const root = this.trustedWorkspace(workspace);
+    let service = this.taskServices.get(root);
+    if (!service) {
+      service = new TaskService({
+        workspace: root,
+        dataDir: join(
+          this.options.dataFolder ?? this.home,
+          'collaboration',
+          identity(root),
+        ),
+        createRuntime: (task, context) => {
+          this.taskWorkspaces.set(realpathSync(context.worktree), root);
+          return this.createRuntime(context.worktree, undefined, task);
+        },
+        onRuntimeCreated: (task, runtime) => {
+          this.taskRuntimes.set(task.spec.id, runtime);
+          this.activeRuns.add(runtime.session.id);
+        },
+        onRuntimeClosed: (task, runtime) => {
+          this.taskRuntimes.delete(task.spec.id);
+          this.activeRuns.delete(runtime.session.id);
+        },
+        emit: (event) => {
+          const task = event.taskId
+            ? service?.getTask(event.taskId)
+            : undefined;
+          this.workspaceEvent(root, {
+            workspaceId: identity(root),
+            sessionId: task?.spec.sessionId ?? ownerSessionId,
+            service: 'tasks',
+            resourceId: event.taskId ?? 'collaboration',
+            epoch: event.epoch,
+            seq: event.seq,
+            at: new Date(event.createdAt).toISOString(),
+            data: { ...event },
+          });
+        },
+      });
+      this.taskServices.set(root, service);
+    }
+    return service;
+  }
+  private async workspaceCommand(command: RuntimeCommand): Promise<unknown> {
+    this.metadata.refresh();
+    const id = text(command.sessionId, 'session', 200);
+    const row = this.store.get(id);
+    if (!row) throw Error('session not found');
+    if (this.runtimes.lifecycle(id) !== 'open')
+      throw Error('session is deleting or deleted');
+    const workspace = this.trustedWorkspace(row.workspace);
+    const request = validateWorkspaceRequest(command.payload);
+    if (request.service === 'events')
+      return this.services(workspace).replay(
+        request.params?.after as { offset: number; seq: number } | undefined,
+        request.params?.limit as number | undefined,
+      );
+    if (this.metadata.archivedAt(id))
+      throw Error('restore this session before continuing');
+    if (request.service === 'tasks')
+      return this.collaboration(workspace, id).call(
+        id,
+        request.method,
+        request.params,
+      );
+    return this.services(workspace).call(
+      id,
+      request.service,
+      request.method,
+      request.params,
+    );
+  }
+  private createRuntime(
+    workspace: string,
+    sessionId?: string,
+    task?: TaskRecord,
+  ): AgentRuntime {
     const settings = settingsForRun(this.home, workspace).settings;
     const create = (session?: string) =>
       new AgentRuntime({
         workspace,
+        fileMutations: this.fileMutations(workspace),
         home: this.home,
         beforeDelete: () =>
           this.options.beforeDelete?.(runtime.session.id) ?? Promise.resolve(),
         userHome: this.options.userHome,
-        localContext: isFolderTrusted(settings, workspace),
+        localContext: !!task || isFolderTrusted(settings, workspace),
         settings,
         model:
           this.options.model ??
@@ -548,7 +743,31 @@ export class RuntimeController {
         runtime = create();
       else throw error;
     }
-    runtime.bus.subscribe((event) => this.event(runtime, event));
+    runtime.bus.subscribe((event) => {
+      if (task) {
+        const eventRoot =
+          this.taskWorkspaces.get(realpathSync(workspace)) ?? workspace;
+        this.workspaceEvent(eventRoot, {
+          workspaceId: identity(eventRoot),
+          sessionId: task.spec.sessionId ?? runtime.session.id,
+          service: 'tasks',
+          resourceId: task.spec.id,
+          epoch: this.workspaceEpoch,
+          seq: ++this.workspaceSeq,
+          at: new Date().toISOString(),
+          data: {
+            kind: 'runtime-event',
+            taskId: task.spec.id,
+            attempt: task.attempt,
+            event: JSON.parse(
+              JSON.stringify(event, (_key, value) =>
+                typeof value === 'string' ? runtime.redact(value) : value,
+              ),
+            ),
+          },
+        });
+      } else this.event(runtime, event);
+    });
     const tracker = new PlanCompletionTracker();
     tracker.reset(runtime.todos);
     this.planCompletions.set(runtime.session.id, tracker);
@@ -577,6 +796,13 @@ export class RuntimeController {
             ...call,
             id: node.id,
             parentId: node.parent,
+            attachments: raw.attachments?.map((a, index) => ({
+              id: `${node.id}-attachment-${index}`,
+              name: a.filename,
+              kind: a.kind,
+              content: a.data,
+              mime: a.mime_type,
+            })),
             tool: {
               ...call.tool,
               output: raw.content,
@@ -757,6 +983,7 @@ export class RuntimeController {
         branchIds,
         hiddenIds: [],
         undoStack: [],
+        queueVersion: owner?.harness.queuedVersion,
         queue: [
           ...queue.steering.map((value, i) => ({
             id: `steer-${i}`,
@@ -832,7 +1059,15 @@ export class RuntimeController {
         branch: this.branch(path),
         trusted: isFolderTrusted(savedSettings, path),
         origin: 'native',
-        instructions: [],
+        instructions:
+          !inspecting && isFolderTrusted(savedSettings, path)
+            ? ([...this.runtimes.values()]
+                .find((owner) => owner.options.workspace === path)
+                ?.loadedInstructions.map((file) => ({
+                  name: file.path,
+                  content: file.content,
+                })) ?? [])
+            : [],
       })),
       sessions,
       files: [],
@@ -867,14 +1102,18 @@ export class RuntimeController {
           title: job.title,
           state:
             job.status === 'running'
-              ? ('running' as const)
+              ? this.stoppedJobs.has(`${job.sessionId}:${job.id}`)
+                ? ('stopping' as const)
+                : ('running' as const)
               : job.status === 'done'
                 ? ('completed' as const)
-                : ('failed' as const),
+                : job.status === 'stopped'
+                  ? ('cancelled' as const)
+                  : ('failed' as const),
           elapsed: elapsed(job),
           output: existsSync(job.outputPath) ? outputTail(job.outputPath) : '',
           outputPath: job.virtualPath,
-          stopRequested: false,
+          stopRequested: this.stoppedJobs.has(`${job.sessionId}:${job.id}`),
         })),
       ),
       interactions: [
@@ -948,9 +1187,7 @@ export class RuntimeController {
           name: String(spec.name ?? `server ${i + 1}`),
           transport: String(spec.transport ?? 'stdio') as 'stdio',
           command: String(spec.command ?? ''),
-          args: Array.isArray(spec.args)
-            ? spec.args.map((arg) => JSON.stringify(arg)).join(' ')
-            : '',
+          args: Array.isArray(spec.args) ? formatMcpArguments(spec.args) : '',
           url: String(spec.url ?? ''),
           enabled: spec.enabled !== false,
           status: pendingReload
@@ -1664,11 +1901,13 @@ export class RuntimeController {
             'archive-session',
             'answer',
             'stop-job',
+            'workspace-service',
           ].includes(command.name)
         )
           throw Error('session changed; retry from the current session');
         const data = await this.execute(command);
-        if (!this.closing) this.publish();
+        if (!this.closing && command.name !== 'workspace-service')
+          this.publish();
         return { id: command.id, ok: true, data };
       } catch (error) {
         return {
@@ -1688,6 +1927,8 @@ export class RuntimeController {
       'background',
       'stop-job',
       'delete-session',
+      'workspace-service',
+      'select-session',
     ].includes(command.name);
     const result = immediate ? operation() : this.mutation.then(operation);
     if (!immediate) this.mutation = result.then(() => {});
@@ -1719,6 +1960,8 @@ export class RuntimeController {
     this.planCompletions.set(runtime.session.id, tracker);
   }
   private async execute(command: RuntimeCommand): Promise<unknown> {
+    if (command.name === 'workspace-service')
+      return this.workspaceCommand(command);
     this.metadata.refresh();
     this.synchronizeSharedSettings(loadSettings(this.home));
     const p = command.payload;
@@ -1858,6 +2101,22 @@ export class RuntimeController {
           p.kind === 'steering' ? 'steer' : 'followUp',
           Number(p.index),
           text(p.text, 'queued message'),
+        );
+      }
+      case 'edit-queued': {
+        if (
+          !Number.isSafeInteger(p.expectedQueueVersion) ||
+          Number(p.expectedQueueVersion) < 0
+        )
+          throw Error('queued message revision is required');
+        if (!['steering', 'follow-up'].includes(String(p.kind)))
+          throw Error('invalid queue kind');
+        return runtime.harness.editQueued(
+          p.kind === 'steering' ? 'steer' : 'followUp',
+          Number(p.index),
+          text(p.text, 'queued message'),
+          text(p.updatedText, 'updated message'),
+          Number(p.expectedQueueVersion),
         );
       }
       case 'background':
@@ -2298,7 +2557,7 @@ export class RuntimeController {
                 name: text(row.name, 'server name', 100),
                 transport,
                 command: text(row.command ?? '', 'command', 4000),
-                args: splitArguments(text(row.args ?? '', 'args', 4000)),
+                args: parseMcpArguments(text(row.args ?? '', 'args', 4000)),
                 url: text(row.url ?? '', 'url', 4000),
                 enabled: flag(row.enabled),
               };
@@ -2438,7 +2697,14 @@ export class RuntimeController {
             `${command.sessionId}:${jobId}` === id,
         );
         if (!owner) throw Error('job not found in this session');
-        await owner.jobs.stop(jobId, 'user');
+        this.stoppedJobs.add(id);
+        this.publish();
+        try {
+          await owner.jobs.stop(jobId, 'user');
+        } catch (error) {
+          this.stoppedJobs.delete(id);
+          throw error;
+        }
         return {};
       }
       case 'revoke-approval': {
@@ -2620,31 +2886,22 @@ export class RuntimeController {
           !isFolderTrusted(runtime.options.settings, runtime.options.workspace)
         )
           throw Error('trust this workspace first');
-        if (runtime.busy) throw Error('finish the current turn before saving');
         const path = text(p.path, 'path', 8000);
         const target = runtime.sandbox.resolvePath(path);
-        const rel = relative(runtime.options.workspace, target);
-        if (
-          !rel ||
-          rel === '..' ||
-          rel.startsWith('../') ||
-          rel.startsWith('..\\') ||
-          isAbsolute(rel)
-        )
-          throw Error('file must be inside this workspace');
-        if (runtime.harness.planMode && basename(target) !== 'plan.md')
-          throw Error('plan mode allows saving plan.md only');
-        const tool = runtime.allTools.find(
-          (tool) => tool.name === 'write_file',
-        )!;
-        const output = await tool.run(
-          { file_path: path, content: text(p.content, 'file', 4_000_000) },
-          {
-            sessionId: runtime.session.id,
-            signal: new AbortController().signal,
-          },
+        const documents = this.services(runtime.options.workspace).documents;
+        const file = relative(documents.root, target);
+        const expected =
+          p.expectedRevision === undefined
+            ? ((await documents.snapshot(file))?.revision ?? null)
+            : p.expectedRevision;
+        if (expected !== null && typeof expected !== 'string')
+          throw Error('invalid expected document revision');
+        const document = await documents.save(
+          file,
+          text(p.content, 'file', 4_000_000),
+          expected,
         );
-        return { output };
+        return { output: `saved ${file}`, document };
       }
       case 'share':
       case 'unshare': {
@@ -2754,8 +3011,15 @@ export class RuntimeController {
     for (const pending of this.pending.values())
       pending.reject(new Error('runtime closed'));
     this.pending.clear();
+    await Promise.all(
+      [...this.taskServices.values()].map((service) => service.close()),
+    );
     await this.runtimes.close();
     await Promise.allSettled(this.tasks);
+    await this.workspaceEventPending;
+    await Promise.all(
+      [...this.workspaceServices.values()].map((service) => service.dispose()),
+    );
     this.store.close();
   }
 }
