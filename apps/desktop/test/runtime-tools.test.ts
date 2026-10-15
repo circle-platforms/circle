@@ -1,46 +1,70 @@
 import assert from 'node:assert/strict';
+import { join, resolve } from 'node:path';
 import { test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 import { workspaceToolsForWorker } from '../src/runtime-tools.ts';
+
+const fixture = (...parts: string[]) =>
+  join(resolve('/synthetic tools fixture'), ...parts);
 
 test('development tools resolve beside the built worker, never through PATH', () => {
   assert.deepEqual(
     workspaceToolsForWorker(
-      'file:///synthetic/application/dist/runtime-worker.mjs',
-      '/synthetic/Electron',
+      pathToFileURL(fixture('application', 'dist', 'runtime-worker.mjs')).href,
+      fixture('Electron'),
       'darwin',
     ),
     {
-      nodeExecutable: '/synthetic/Electron',
-      runtimeExecutable: '/synthetic/application/dist/tools/node/bin/node',
-      adapterPath:
-        '/synthetic/application/dist/tools/js-debug/src/dapDebugServer.js',
-      ghPath: '/synthetic/application/dist/tools/gh/bin/gh',
+      nodeExecutable: fixture('Electron'),
+      runtimeExecutable: fixture(
+        'application',
+        'dist',
+        'tools',
+        'node',
+        'bin',
+        'node',
+      ),
+      adapterPath: fixture(
+        'application',
+        'dist',
+        'tools',
+        'js-debug',
+        'src',
+        'dapDebugServer.js',
+      ),
+      ghPath: fixture('application', 'dist', 'tools', 'gh', 'bin', 'gh'),
     },
   );
 });
 test('packaged executables and adapter resources resolve outside asar', () => {
+  const resources = fixture('Circle.app', 'Contents', 'Resources');
   const tools = workspaceToolsForWorker(
-    'file:///synthetic/Circle.app/Contents/Resources/app.asar/dist/runtime-worker.mjs',
-    '/synthetic/Circle',
+    pathToFileURL(join(resources, 'app.asar', 'dist', 'runtime-worker.mjs'))
+      .href,
+    fixture('Circle'),
     'darwin',
   );
-  assert.match(
-    tools.runtimeExecutable,
-    /app\.asar\.unpacked\/dist\/tools\/node\/bin\/node$/,
-  );
-  assert.match(
-    tools.adapterPath,
-    /app\.asar\.unpacked\/dist\/tools\/js-debug\/src\/dapDebugServer\.js$/,
-  );
-  assert.match(tools.ghPath, /app\.asar\.unpacked\/dist\/tools\/gh\/bin\/gh$/);
-  assert.equal(tools.nodeExecutable, '/synthetic/Circle');
+  const unpacked = join(resources, 'app.asar.unpacked', 'dist', 'tools');
+  assert.deepEqual(tools, {
+    runtimeExecutable: join(unpacked, 'node', 'bin', 'node'),
+    adapterPath: join(unpacked, 'js-debug', 'src', 'dapDebugServer.js'),
+    ghPath: join(unpacked, 'gh', 'bin', 'gh'),
+    nodeExecutable: fixture('Circle'),
+  });
 });
 test('Windows tool names use native executable suffixes', () => {
   const tools = workspaceToolsForWorker(
-    'file:///synthetic/resources/app.asar/dist/runtime-worker.mjs',
-    '/synthetic/Circle.exe',
+    pathToFileURL(
+      fixture('resources', 'app.asar', 'dist', 'runtime-worker.mjs'),
+    ).href,
+    fixture('Circle.exe'),
     'win32',
   );
-  assert.ok(tools.runtimeExecutable.endsWith('node.exe'));
-  assert.ok(tools.ghPath.endsWith('gh.exe'));
+  const unpacked = fixture('resources', 'app.asar.unpacked', 'dist', 'tools');
+  assert.deepEqual(tools, {
+    runtimeExecutable: join(unpacked, 'node', 'bin', 'node.exe'),
+    adapterPath: join(unpacked, 'js-debug', 'src', 'dapDebugServer.js'),
+    ghPath: join(unpacked, 'gh', 'bin', 'gh.exe'),
+    nodeExecutable: fixture('Circle.exe'),
+  });
 });
