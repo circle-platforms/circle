@@ -1,6 +1,8 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { createServer, type Socket } from 'node:net';
+import type { Server as HttpServer } from 'node:http';
+import type { Server as HttpsServer } from 'node:https';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 interface TestContext {
@@ -54,6 +56,64 @@ export function cleanup(
   action: () => void | Promise<void>,
 ): void {
   owned(t).cleanup.push(action);
+}
+
+/** Register before clients connect; only this test's server and its sockets are closed. */
+export function cleanupServer(
+  t: TestContext,
+  server: HttpServer | HttpsServer,
+): void {
+  const sockets = new Set<Socket>();
+  function disconnected(this: Socket) {
+    sockets.delete(this);
+  }
+  const connected = (socket: Socket) => {
+    sockets.add(socket);
+    socket.once('close', disconnected);
+  };
+  server.on('connection', connected);
+  cleanup(t, async () => {
+    const errors: unknown[] = [];
+    const stopped = new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (
+          error == null ||
+          (error as NodeJS.ErrnoException).code === 'ERR_SERVER_NOT_RUNNING'
+        )
+          resolve();
+        else reject(error);
+      });
+    });
+    // Observe a synchronous close failure while still attempting every owned socket.
+    void stopped.catch(() => {});
+    try {
+      try {
+        server.closeAllConnections();
+      } catch (error) {
+        errors.push(error);
+      }
+      // Include raw connections, such as upgrades and unfinished TLS handshakes.
+      for (const socket of sockets) {
+        try {
+          socket.destroy();
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      try {
+        await stopped;
+      } catch (error) {
+        errors.push(error);
+      }
+    } finally {
+      server.off('connection', connected);
+      for (const socket of sockets) socket.off('close', disconnected);
+      sockets.clear();
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length)
+      throw new AggregateError(errors, 'owned test server cleanup failed');
+  });
 }
 
 /** A real descendant waits for permission to write, independent of scheduling delay. */
