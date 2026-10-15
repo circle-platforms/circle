@@ -46,4 +46,5 @@ Your output must be:
 "@utils/parser.ts this is broken" → Parser bug fix
 "look at @config.json" → Config review
 "@App.tsx add dark mode toggle" → Dark mode toggle in App
+"请用大约200字介绍一下罗马帝国的兴衰" → 罗马帝国兴衰简介
 </examples>

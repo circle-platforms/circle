@@ -10,15 +10,24 @@ const LATIN =
 const CJK_LEAD = /^(?:帮我|请你|请|麻烦你|麻烦)\s*/;
 
 /**
+ * Han text has no spaces, so a word count never sees it. Six characters is a
+ * short sentence (罗马帝国兴衰); a greeting such as 你好 stays on the fallback.
+ */
+const HAN = /[\u3400-\u9fff]/g;
+export const TITLE_CJK_CHARS = 6;
+
+/**
  * A side request is worth it once the prompt is a sentence. Four words covers
- * a short question such as "README.md what is this". A long line with fewer
- * words, including CJK without spaces, still qualifies. A greeting such as
- * "hi" stays on the fallback.
+ * a short question such as "README.md what is this". A line of at least
+ * TITLE_CJK_CHARS Han characters does too, even under 24 characters. A long
+ * line with fewer words still qualifies. A greeting such as "hi" stays on
+ * the fallback.
  */
 export function titleWorthy(text: string): boolean {
   const line = text.replace(/\s+/g, ' ').trim();
   if (!line) return false;
   if (line.split(' ').length >= 4) return true;
+  if ((line.match(HAN)?.length ?? 0) >= TITLE_CJK_CHARS) return true;
   return line.length >= 24;
 }
 

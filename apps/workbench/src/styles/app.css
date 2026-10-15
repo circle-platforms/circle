@@ -149,18 +149,25 @@ pre {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
 .workspace-content {
-  flex: 1;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
   min-height: 0;
+  overflow: hidden;
 }
 .main-stack {
   display: flex;
   flex-direction: column;
   position: relative;
+  flex: 1 1 0;
   height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
 .sidebar {
   display: flex;
@@ -514,6 +521,7 @@ pre {
   flex: 1;
   min-height: 0;
   min-width: 0;
+  overflow: hidden;
 }
 .conversation-heading {
   display: flex;
@@ -4169,9 +4177,10 @@ pre {
   }
 }
 
-/* The input box and the footbar under it. */
+/* The input box and the footbar under it. The transcript scrolls; this stays. */
 .composer-area {
   padding: 0 28px 14px;
+  flex: 0 0 auto;
 }
 .composer-area > * {
   width: 100%;
@@ -4558,6 +4567,25 @@ pre {
 /* In a narrow window the side panel lies over the conversation on the right. */
 .workspace-content {
   position: relative;
+}
+/* The resizable panel otherwise grows with the transcript and scrolls the
+   composer off a window that is not maximized. Pin the column and scroll
+   the transcript. The library sets height and overflow inline. */
+.workspace-content > [data-group] {
+  flex: 1 1 0;
+  min-height: 0;
+}
+.workspace-content [data-panel] {
+  height: 100% !important;
+  max-height: 100% !important;
+  overflow: hidden !important;
+}
+.workspace-content [data-panel] > div {
+  display: flex !important;
+  flex-direction: column;
+  height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
 }
 .inspector-overlay {
   position: absolute;

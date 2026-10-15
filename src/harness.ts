@@ -30,6 +30,12 @@ import {
   titleConversation,
   titleWorthy,
 } from './session_title.js';
+
+/** `CIRCLE_DEBUG=1` prints why a title was skipped or rejected. */
+function titleTrace(message: string): void {
+  if (!process.env.CIRCLE_DEBUG) return;
+  console.error(`[circle] title: ${message}`);
+}
 export type ApprovalDecision =
   | 'approve'
   | 'reject'
@@ -340,12 +346,27 @@ export class Harness {
   private generateTitle(display: string, fallback: string): void {
     const model = this.options.model;
     const prompt = display.trim();
-    if (!model.sideRequests || !titleWorthy(prompt)) return;
+    if (!titleWorthy(prompt)) {
+      const words = prompt.split(/\s+/).filter(Boolean).length;
+      const cjk = prompt.match(/[\u3400-\u9fff]/g)?.length ?? 0;
+      titleTrace(
+        `skipped (length ${prompt.length}, words ${words}, cjk ${cjk})`,
+      );
+      return;
+    }
     const report = (message: string): void => {
+      titleTrace(`failed: ${message}`);
       this.bus.emit('info', {
         payload: { model_notice: { event: 'title_failed', message } },
       });
     };
+    if (!model.sideRequests) {
+      titleTrace('skipped (model has no sideRequests)');
+      return;
+    }
+    titleTrace(
+      `request model=${model.model} chars=${prompt.length} maxTokens=${TITLE_MAX_TOKENS} thinking=disabled`,
+    );
     void model
       .complete({
         system: readPrompt('agent', 'title.md'),
@@ -372,8 +393,14 @@ export class Harness {
           return;
         }
         const current = this.options.store.get(this.sessionId);
-        if (!current || current.title !== fallback) return;
+        if (!current || current.title !== fallback) {
+          titleTrace(
+            `discarded ${JSON.stringify(title)} (session title is ${JSON.stringify(current?.title ?? '')})`,
+          );
+          return;
+        }
         this.options.store.rename(this.sessionId, title);
+        titleTrace(`renamed to ${JSON.stringify(title)}`);
         this.bus.emit('info', { payload: { title } });
       })
       .catch((error: unknown) => {

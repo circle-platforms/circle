@@ -15,6 +15,7 @@ import { defaultSettings, saveCredentials } from '../src/settings.js';
 import {
   fallbackTitle,
   sanitizeGeneratedTitle,
+  TITLE_CJK_CHARS,
   TITLE_MAX_CHARS,
   TITLE_MAX_TOKENS,
   TITLE_MAX_WORDS,
@@ -226,6 +227,13 @@ test('a model title is asked for four words, and a greeting stays local', () => 
   assert.ok(cjk.length >= 24);
   assert.equal(cjk.split(' ').length, 1);
   assert.equal(titleWorthy(cjk), true);
+  const rome = '请用大约200字介绍一下罗马帝国的兴衰';
+  assert.ok(rome.length < 24);
+  assert.equal(rome.split(' ').length, 1);
+  assert.ok((rome.match(/[\u3400-\u9fff]/g)?.length ?? 0) >= TITLE_CJK_CHARS);
+  assert.equal(titleWorthy(rome), true);
+  assert.equal(titleWorthy('你好'), false);
+  assert.equal(titleWorthy('罗马帝国兴衰'), true);
 });
 
 test('a short prompt keeps the fallback and skips the model', async (t) => {
@@ -242,6 +250,64 @@ test('a short prompt keeps the fallback and skips the model', async (t) => {
       .length,
     0,
   );
+});
+
+test('a short Chinese sentence asks for a title in that language', async (t) => {
+  const root = scratch(t);
+  const model = new TitleModel('done', '罗马帝国兴衰简介');
+  const { harness: run, store, session } = harness(root, model);
+  cleanup(t, () => store.close());
+  const prompt = '请用大约200字介绍一下罗马帝国的兴衰';
+  assert.equal(fallbackTitle(prompt), '用大约200字介绍一下罗马帝国的兴衰');
+  await run.run(prompt);
+  assert.equal(store.get(session.id)!.title, fallbackTitle(prompt));
+  const title = model.requests.find(
+    (request) => request.maxTokens === TITLE_MAX_TOKENS,
+  );
+  assert.ok(title);
+  assert.equal(title.messages[0]!.content, titleConversation(prompt));
+  assert.match(String(title.system), /罗马帝国兴衰简介/);
+  assert.match(String(title.system), /Do not answer it/);
+  model.releaseTitle();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(store.get(session.id)!.title, '罗马帝国兴衰简介');
+});
+
+test('a skipped or failed title is reported when debug logging is on', async (t) => {
+  const previous = process.env.CIRCLE_DEBUG;
+  const logged: string[] = [];
+  const errors = console.error;
+  delete process.env.CIRCLE_DEBUG;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(' '));
+  };
+  cleanup(t, () => {
+    if (previous === undefined) delete process.env.CIRCLE_DEBUG;
+    else process.env.CIRCLE_DEBUG = previous;
+    console.error = errors;
+  });
+  const quiet = scratch(t);
+  const quietModel = new TitleModel('done', 'unused');
+  const quietRun = harness(quiet, quietModel);
+  cleanup(t, () => quietRun.store.close());
+  await quietRun.harness.run('hi');
+  assert.equal(logged.length, 0);
+  process.env.CIRCLE_DEBUG = '1';
+  const root = scratch(t);
+  const model = new TitleModel('done', 'Login bug fix');
+  const skipped = harness(root, model);
+  cleanup(t, () => skipped.store.close());
+  await skipped.harness.run('hi');
+  assert.match(logged.join('\n'), /\[circle\] title: skipped \(length 2,/);
+  logged.length = 0;
+  const failedRoot = scratch(t);
+  const failedModel = new TitleModel('done', 'Login bug fix');
+  failedModel.failTitle = true;
+  const failed = harness(failedRoot, failedModel);
+  cleanup(t, () => failed.store.close());
+  await failed.harness.run(LONG);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(logged.join('\n'), /\[circle\] title: failed: title exploded/);
 });
 
 test('four words ask for a title even when the prompt is short', async (t) => {

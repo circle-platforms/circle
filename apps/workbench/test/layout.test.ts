@@ -51,6 +51,32 @@ test('an empty variable or secret row does not highlight on hover', () => {
   assert.match(table, /<tr className="variable-empty-row">/);
 });
 
+test('a session column keeps the composer inside the window', () => {
+  const workspace = css.match(/\.workspace \{[^}]*\}/)?.[0] ?? '';
+  assert.match(workspace, /overflow:\s*hidden/);
+  assert.match(workspace, /min-height:\s*0/);
+  const content = css.match(/\.workspace-content \{[^}]*\}/)?.[0] ?? '';
+  assert.match(content, /min-height:\s*0/);
+  assert.match(content, /overflow:\s*hidden/);
+  const panel = css.indexOf('.workspace-content [data-panel]');
+  const inner = css.indexOf('.workspace-content [data-panel] > div');
+  assert.ok(panel > 0 && inner > panel);
+  const panelBlock = css.slice(panel).match(/\{[^}]*\}/)?.[0] ?? '';
+  const innerBlock = css.slice(inner).match(/\{[^}]*\}/)?.[0] ?? '';
+  assert.match(panelBlock, /height:\s*100%\s*!important/);
+  assert.match(panelBlock, /overflow:\s*hidden\s*!important/);
+  assert.match(innerBlock, /height:\s*100%\s*!important/);
+  assert.match(innerBlock, /overflow:\s*hidden\s*!important/);
+  assert.match(innerBlock, /flex-direction:\s*column/);
+  const conversation = css.match(/\.conversation \{[^}]*\}/)?.[0] ?? '';
+  assert.match(conversation, /overflow:\s*hidden/);
+  assert.match(conversation, /min-height:\s*0/);
+  const mark = css.indexOf('The transcript scrolls; this stays.');
+  const composerBlock =
+    css.slice(mark).match(/\.composer-area \{[^}]*\}/)?.[0] ?? '';
+  assert.match(composerBlock, /flex:\s*0 0 auto/);
+});
+
 test('the effort menu is not capped by the shared footbar menu', () => {
   const shared = css.indexOf('.footbar-menu {');
   const effort = css.indexOf('.footbar-menu.effort-menu');
