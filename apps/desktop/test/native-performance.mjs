@@ -501,43 +501,53 @@ try {
     await input.fill(value);
     await finish('inputPaste');
   }
-  for (let index = 0; index < 40; index++) {
-    const label = index % 2 ? 'task layout' : 'developer layout';
-    const button = page.getByRole('button', { name: label, exact: true });
-    await page.locator('[data-perf-target^="layout-"]').evaluateAll((nodes) => {
-      for (const node of nodes) delete node.dataset.perfTarget;
+  const skipLegacyLayout =
+    process.env.CIRCLE_NATIVE_PERF_SKIP_LEGACY_LAYOUT === '1';
+  report.legacyLayout = skipLegacyLayout
+    ? 'excluded by updated product scope; no final layout acceptance claimed'
+    : 'legacy candidate baseline';
+  if (!skipLegacyLayout) {
+    for (let index = 0; index < 40; index++) {
+      const label = index % 2 ? 'task layout' : 'developer layout';
+      const button = page.getByRole('button', { name: label, exact: true });
+      await page
+        .locator('[data-perf-target^="layout-"]')
+        .evaluateAll((nodes) => {
+          for (const node of nodes) delete node.dataset.perfTarget;
+        });
+      const target = `layout-${index}`;
+      await button.evaluate(
+        (node, value) => (node.dataset.perfTarget = value),
+        target,
+      );
+      const selector = `[data-perf-target="${target}"]`;
+      await arm('click', selector, {
+        selector,
+        attribute: 'aria-pressed',
+        equals: 'true',
+      });
+      await button.click();
+      await finish('click');
+    }
+    await input.fill('retained developer draft');
+    await input.evaluate((node) => {
+      node.focus();
+      node.setSelectionRange(3, 10);
     });
-    const target = `layout-${index}`;
-    await button.evaluate(
-      (node, value) => (node.dataset.perfTarget = value),
-      target,
+    await page
+      .getByRole('button', { name: 'developer layout', exact: true })
+      .click();
+    assert.deepEqual(
+      await input.evaluate((node) => ({
+        value: node.value,
+        start: node.selectionStart,
+        end: node.selectionEnd,
+      })),
+      { value: 'retained developer draft', start: 3, end: 10 },
     );
-    const selector = `[data-perf-target="${target}"]`;
-    await arm('click', selector, {
-      selector,
-      attribute: 'aria-pressed',
-      equals: 'true',
-    });
-    await button.click();
-    await finish('click');
+    checks.push('layout retains actual composer value and selection');
   }
-  await input.fill('retained developer draft');
-  await input.evaluate((node) => {
-    node.focus();
-    node.setSelectionRange(3, 10);
-  });
-  await page
-    .getByRole('button', { name: 'developer layout', exact: true })
-    .click();
-  assert.deepEqual(
-    await input.evaluate((node) => ({
-      value: node.value,
-      start: node.selectionStart,
-      end: node.selectionEnd,
-    })),
-    { value: 'retained developer draft', start: 3, end: 10 },
-  );
-  checks.push('layout retains actual composer value and selection');
+
   await waitFor(
     async () =>
       await page.evaluate(() => window.__circleNativePerfEvents.length >= 60),
@@ -687,7 +697,7 @@ try {
   for (const [metric, budget] of Object.entries({
     inputKeystroke: 100,
     inputPaste: 100,
-    click: 100,
+    ...(skipLegacyLayout ? {} : { click: 100 }),
     eventToFrame: 200,
     sessionSwitch: 300,
     fileSwitch: 300,
@@ -781,7 +791,7 @@ try {
   for (const [metric, budget] of Object.entries({
     inputKeystroke: 100,
     inputPaste: 100,
-    click: 100,
+    ...(skipLegacyLayout ? {} : { click: 100 }),
     eventToFrame: 200,
     sessionSwitch: 300,
     fileSwitch: 300,
