@@ -57,6 +57,10 @@ await Promise.all([
   writeFile(join(repo, 'git-probe.txt'), 'baseline\n'),
   writeFile(join(repo, 'README.md'), baseline),
   writeFile(join(repo, 'debug.cjs'), program),
+  writeFile(
+    join(repo, 'debug-args.cjs'),
+    "const args = process.argv.slice(2);\nconsole.log('JOURNEY_LITERAL_ARGS', JSON.stringify(args));\n",
+  ),
   writeFile(join(repo, 'browser-source.js'), browserSource),
   writeFile(
     join(repo, 'package.json'),
@@ -79,6 +83,7 @@ await git(
   'git-probe.txt',
   'README.md',
   'debug.cjs',
+  'debug-args.cjs',
   'browser-source.js',
   'package.json',
 );
@@ -719,6 +724,65 @@ try {
         (await query('debug', 'snapshot')).output.includes('DEBUG_RESULT 4'),
       'Node continued real output',
     );
+  });
+  await check('explicit entry pause and literal launch arguments', async () => {
+    await page.locator('#dock-tab-debug').click();
+    const panel = page.locator('.debug-panel');
+    await until(
+      async () =>
+        ['idle', 'stopped', 'failed'].includes(
+          (await query('debug', 'snapshot')).status,
+        ),
+      'prior debug process completed',
+    );
+    await panel
+      .getByLabel('program path', { exact: true })
+      .fill('debug-args.cjs');
+    await panel.locator('.debug-launch-options summary').click();
+    await panel
+      .getByRole('checkbox', { name: 'pause at entry', exact: true })
+      .check();
+    const args = ['two words', '"quoted"', ''];
+    for (let index = 0; index < args.length; index++) {
+      await panel
+        .getByRole('button', { name: 'add argument', exact: true })
+        .click();
+      await panel
+        .getByLabel('program argument ' + (index + 1), { exact: true })
+        .fill(args[index]);
+    }
+    await panel.getByRole('button', { name: 'launch', exact: true }).click();
+    await until(
+      async () => (await query('debug', 'snapshot')).status === 'paused',
+      'explicit entry pause takes effect',
+    );
+    const frames = await query('debug', 'stackTrace');
+    assert(
+      frames.stackFrames.some((frame) =>
+        frame.source?.path?.endsWith('debug-args.cjs'),
+      ),
+      'entry pause belongs to actual args fixture',
+    );
+    await screenshot('05-debug-explicit-entry-arguments');
+    await panel.getByRole('button', { name: 'continue', exact: true }).click();
+    await until(
+      async () =>
+        (await query('debug', 'snapshot')).output.includes(
+          'JOURNEY_LITERAL_ARGS ' + JSON.stringify(args),
+        ),
+      'actual process argv preserves spaces quotes and empty argument',
+    );
+    await writeFile(
+      join(output, 'debug-literal-arguments.json'),
+      JSON.stringify(
+        { args, output: (await query('debug', 'snapshot')).output },
+        null,
+        2,
+      ),
+    );
+    await panel
+      .getByRole('checkbox', { name: 'pause at entry', exact: true })
+      .uncheck();
   });
   await check('browser diagnostics actual source navigation', async () => {
     await page
