@@ -6,7 +6,11 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runtimeTestArguments } from '../scripts/runtime-test-options.mjs';
+import {
+  runtimeTestArguments,
+  orderRuntimeTestFiles,
+  WINDOWS_NATIVE_TEST_PRIORITY,
+} from '../scripts/runtime-test-options.mjs';
 const exec = promisify(execFile);
 const tsx = fileURLToPath(
   new URL('../../../node_modules/tsx/dist/cli.mjs', import.meta.url),
@@ -64,5 +68,37 @@ test('runtime test runner retains every file, uses two real file workers and emi
   assert.equal(
     runtimeTestArguments(tsx, files).includes('--test-reporter=tap'),
     false,
+  );
+});
+
+test('Windows native priority retains each discovered file exactly once and leaves the remaining inventory sorted', () => {
+  const remaining = [
+    'z-last.test.ts',
+    'aaa-first.test.ts',
+    'workspace-event-stream.test.ts',
+  ];
+  const inventory = [...remaining, ...WINDOWS_NATIVE_TEST_PRIORITY].reverse();
+  const actual = orderRuntimeTestFiles(inventory, 'win32');
+  assert.deepEqual(actual, [
+    ...WINDOWS_NATIVE_TEST_PRIORITY,
+    ...remaining.sort(),
+  ]);
+  assert.equal(actual.length, inventory.length);
+  assert.equal(new Set(actual).size, inventory.length);
+  assert.deepEqual([...actual].sort(), [...inventory].sort());
+  assert.deepEqual(
+    orderRuntimeTestFiles([...inventory].reverse(), 'win32'),
+    actual,
+  );
+  assert.deepEqual(
+    orderRuntimeTestFiles(inventory, 'linux'),
+    [...inventory].sort(),
+  );
+  assert.deepEqual(orderRuntimeTestFiles(['only.test.ts'], 'win32'), [
+    'only.test.ts',
+  ]);
+  assert.throws(
+    () => orderRuntimeTestFiles(['same.test.ts', 'same.test.ts'], 'win32'),
+    /duplicate/,
   );
 });
