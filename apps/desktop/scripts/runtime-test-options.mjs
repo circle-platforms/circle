@@ -86,7 +86,7 @@ export function runRuntimeTestGroups({
     };
     const persist = () => {
       writeFileSync(path + '.tmp', JSON.stringify(receipt, null, 2) + '\n');
-      const handle = openSync(path + '.tmp', 'r');
+      const handle = openSync(path + '.tmp', 'r+');
       try {
         fsyncSync(handle);
       } finally {

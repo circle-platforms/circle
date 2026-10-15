@@ -1,4 +1,6 @@
 import test from 'node:test';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -27,7 +29,9 @@ test('runtime test runner retains every file, uses two real file workers and emi
       const file = join(directory, `worker-${id}.test.mjs`);
       await writeFile(
         file,
-        `import test from 'node:test';import assert from 'node:assert/strict';import {appendFileSync} from 'node:fs';import {setTimeout} from 'node:timers/promises';
+        `import test from 'node:test';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';import assert from 'node:assert/strict';import {appendFileSync} from 'node:fs';import {setTimeout} from 'node:timers/promises';
     const record=event=>appendFileSync(${JSON.stringify(events)},JSON.stringify({event,id:${id}})+'\\n');
     test('real worker ${id}',async()=>{record('start');try{await setTimeout(500);${id === 2 ? "assert.equal('observed','expected');" : ''}}finally{record('end')}});`,
       );
@@ -119,7 +123,9 @@ test('Windows priority child completes before remaining children start and all f
       const file = join(directory, name);
       await writeFile(
         file,
-        `import test from 'node:test';import assert from 'node:assert/strict';import {appendFileSync} from 'node:fs';import {setTimeout} from 'node:timers/promises';test('stage-${index}',async()=>{const record=event=>appendFileSync(${JSON.stringify(events)},JSON.stringify({event,id:${index}})+'\\n');record('start');try{await setTimeout(80);${index === 1 ? 'assert.fail("intentional priority failure");' : ''}}finally{record('end')}});`,
+        `import test from 'node:test';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';import assert from 'node:assert/strict';import {appendFileSync} from 'node:fs';import {setTimeout} from 'node:timers/promises';test('stage-${index}',async()=>{const record=event=>appendFileSync(${JSON.stringify(events)},JSON.stringify({event,id:${index}})+'\\n');record('start');try{await setTimeout(80);${index === 1 ? 'assert.fail("intentional priority failure");' : ''}}finally{record('end')}});`,
       );
       return file;
     }),
@@ -185,4 +191,65 @@ test('Windows priority child completes before remaining children start and all f
     ).status,
     'passed',
   );
+});
+
+test('stage receipts flush a writable descriptor before rename under Windows-style fsync permissions', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'circle-runtime-receipt-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = join(directory, 'receipt.test.mjs');
+  await writeFile(
+    file,
+    "import test from 'node:test';test('real child',()=>{});",
+  );
+  const modes = new Map<number, fs.OpenMode>();
+  const actualOpen = fs.openSync;
+  const actualSync = fs.fsyncSync;
+  let flushed = 0;
+  const open = t.mock.method(
+    fs,
+    'openSync',
+    (...args: Parameters<typeof fs.openSync>) => {
+      const fd = actualOpen(...args);
+      modes.set(fd, args[1]);
+      return fd;
+    },
+  );
+  const flush = t.mock.method(fs, 'fsyncSync', (fd: number) => {
+    if (modes.get(fd) === 'r')
+      throw Object.assign(new Error('Windows read-only flush denied'), {
+        code: 'EPERM',
+      });
+    assert.ok(modes.get(fd), 'flush descriptor came from explicit open');
+    flushed++;
+    actualSync(fd);
+  });
+  syncBuiltinESMExports();
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  try {
+    const result = runRuntimeTestGroups({
+      executable: process.execPath,
+      tsxPath: tsx,
+      groups: [{ name: 'all', files: [file] }],
+      env,
+      ci: true,
+      receiptDirectory: directory,
+      stdio: 'pipe',
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(
+      flushed,
+      2,
+      'started and completed receipts both reach storage',
+    );
+    assert.equal(
+      JSON.parse(await readFile(join(directory, 'stage-1-all.json'), 'utf8'))
+        .status,
+      'passed',
+    );
+  } finally {
+    open.mock.restore();
+    flush.mock.restore();
+    syncBuiltinESMExports();
+  }
 });
