@@ -532,7 +532,10 @@ export class WorkspaceServices {
       () => {},
     );
     await this.pending;
-    await (await this.ready).close();
+    await this.ready.then(
+      (stream) => stream.close(),
+      () => undefined,
+    );
   }
 }
 

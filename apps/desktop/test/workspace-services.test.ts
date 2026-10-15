@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import {
   mkdtemp,
@@ -7,6 +8,8 @@ import {
   rm,
   readdir,
   realpath,
+  mkdir,
+  symlink,
 } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
@@ -90,6 +93,13 @@ test('workspace routing preserves revisions, isolates terminal owners and persis
     await assert.rejects(
       service.call('session-a', 'documents', 'resolveSource', {
         path: path.join(data, 'outside.ts'),
+      }),
+      /outside/,
+    );
+    await symlink(path.join(data, 'outside.ts'), path.join(root, 'escape.ts'));
+    await assert.rejects(
+      service.call('session-a', 'documents', 'resolveSource', {
+        path: 'escape.ts',
       }),
       /outside/,
     );
@@ -301,6 +311,45 @@ test('blocked durable writer bounds 100000 incoming events and exposes one failu
     assert.throws(() => process.kill(terminal.pid!, 0));
   } finally {
     unblock();
+    await service.dispose();
+    await rm(root, { recursive: true, force: true });
+    await rm(data, { recursive: true, force: true });
+  }
+});
+
+test('initial event journal open failure still allows complete service disposal', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-journal-open-'));
+  const data = await mkdtemp(path.join(tmpdir(), 'circle-journal-open-data-'));
+  const hash = createHash('sha256').update(path.resolve(root)).digest('hex');
+  await mkdir(path.join(data, 'workspaces', hash, 'events.jsonl'), {
+    recursive: true,
+  });
+  const errors: Error[] = [];
+  const service = new WorkspaceServices({
+    workspaceRoot: root,
+    dataDir: data,
+    nodeExecutable: process.execPath,
+    runtimeExecutable: process.execPath,
+    adapterPath: 'unused',
+    ghPath: 'unused',
+    terminalEnv: {
+      HOME: root,
+      ZDOTDIR: root,
+      HISTFILE: path.join(root, '.history'),
+      ENV: '',
+      BASH_ENV: '',
+    },
+    emit: () => {},
+    onPersistenceError: (error) => errors.push(error),
+  });
+  try {
+    await assert.rejects(
+      service.call('session-a', 'documents', 'refresh'),
+      /EISDIR|directory/i,
+    );
+    assert.equal(errors.length, 1);
+    await assert.doesNotReject(service.dispose());
+  } finally {
     await service.dispose();
     await rm(root, { recursive: true, force: true });
     await rm(data, { recursive: true, force: true });
