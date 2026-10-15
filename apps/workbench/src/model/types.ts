@@ -122,6 +122,7 @@ export interface Session {
   undoStack: string[][];
   attachments: Attachment[];
   queue: { id: string; text: string; kind: 'steering' | 'follow-up' }[];
+  queueVersion?: number;
   state: 'idle' | 'waiting' | 'paused';
   readOnly: boolean;
   auto: boolean;
@@ -164,7 +165,7 @@ export interface Workspace {
   branch: string;
   trusted: boolean;
   origin?: 'native' | 'preview';
-  instructions: { name: string; content: string }[];
+  instructions: { name: string; content: string; path?: string }[];
 }
 export interface WorkspaceFile {
   id: string;
