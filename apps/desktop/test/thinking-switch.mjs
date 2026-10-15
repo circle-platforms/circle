@@ -108,6 +108,24 @@ if (process.env.CIRCLE_DESKTOP_EXECUTABLE)
       : '/usr/bin:/bin:/usr/sbin:/sbin';
 let app;
 const checks = [];
+const ready = async (page) =>
+  waitDesktopReady(
+    () =>
+      page.evaluate(async () => {
+        const { snapshot } = await window.circleDesktop.runtimeState();
+        return {
+          active: snapshot.activeSessionId,
+          configured: snapshot.runtime?.configured,
+          connected: snapshot.runtime?.connected,
+          hash: location.hash,
+        };
+      }),
+    (s) =>
+      Boolean(
+        s.configured && s.connected && s.hash === '#/session/' + s.active,
+      ),
+    { label: 'native renderer route ready', timeoutMs: 15000 },
+  );
 try {
   app = await electron.launch({
     executablePath:
@@ -123,6 +141,7 @@ try {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.waitForFunction(() => Boolean(window.circleDesktop));
+  await ready(page);
   assert.equal(
     (await page.evaluate(() => window.circleDesktop.info())).frontendOnly,
     false,
@@ -145,6 +164,13 @@ try {
       { name, payload },
     );
     assert.equal(reply.ok, true, `${name}: ${reply.error}`);
+    if (name === 'select-session') {
+      await page.evaluate((id) => {
+        location.hash = '/session/' + id;
+      }, payload.id);
+      await ready(page);
+      assert.equal((await state()).activeSessionId, payload.id);
+    }
     return reply;
   };
   const done = async (label, expectedRequests, assistantCount) =>
@@ -229,6 +255,7 @@ try {
   });
   const restarted = await app.firstWindow();
   await restarted.waitForFunction(() => Boolean(window.circleDesktop));
+  await ready(restarted);
   const result = await restarted.evaluate(async (id) => {
     const { snapshot } = await window.circleDesktop.runtimeState();
     return window.circleDesktop.runtimeCommand({
@@ -238,7 +265,11 @@ try {
       sessionId: snapshot.activeSessionId,
     });
   }, known.id);
-  assert.ok(result);
+  assert.equal(result.ok, true, result.error);
+  await restarted.evaluate((id) => {
+    location.hash = '/session/' + id;
+  }, known.id);
+  await ready(restarted);
   await restarted.evaluate(async () => {
     const { snapshot } = await window.circleDesktop.runtimeState();
     return window.circleDesktop.runtimeCommand({
