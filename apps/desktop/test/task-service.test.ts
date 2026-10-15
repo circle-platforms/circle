@@ -157,6 +157,8 @@ test('task concurrency settings persist, validate ranges and never silently repl
     limits: { agents: 12, builds: 3 },
   });
   await service.close();
+  assert.equal(service.hasActiveSession('session'), false);
+  assert.equal(service.getTask('missing'), undefined);
   service = new TaskService(options);
   assert.deepEqual(await service.call('session', 'settings'), {
     agents: 12,

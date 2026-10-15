@@ -88,6 +88,7 @@ export class TaskService {
   private integrator?: Promise<TaskIntegrator>;
   private unsubscribe: () => void;
   private closing = false;
+  private closed = false;
   private closePromise?: Promise<void>;
   constructor(private readonly options: TaskServiceOptions) {
     if (!isAbsolute(options.dataDir))
@@ -126,6 +127,7 @@ export class TaskService {
     if (options.autoStart !== false) this.scheduler.start();
   }
   hasActiveSession(sessionId: string): boolean {
+    if (this.closed) return false;
     return this.scheduler
       .list()
       .some(
@@ -158,6 +160,7 @@ export class TaskService {
       );
   }
   getTask(id: string): TaskRecord | undefined {
+    if (this.closed) return undefined;
     return this.scheduler.get(id);
   }
   call(
@@ -529,6 +532,7 @@ export class TaskService {
         throw error;
       }
       this.unsubscribe();
+      this.closed = true;
     })();
     return this.closePromise;
   }
