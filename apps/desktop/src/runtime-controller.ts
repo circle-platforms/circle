@@ -831,7 +831,7 @@ export class RuntimeController {
       },
       workspaces: paths.map((path) => ({
         id: identity(path),
-        name: path === join(this.home, 'workspace') ? 'circle' : basename(path),
+        name: this.isScratch(path) ? 'circle' : basename(path),
         path,
         branch: this.branch(path),
         trusted: isFolderTrusted(savedSettings, path),
