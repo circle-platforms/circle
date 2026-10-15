@@ -1,4 +1,8 @@
 export const developer: Record<string, string> = {
+  'new task': '新建任务',
+  'close task form': '收起新建任务',
+  'task details and acceptance': '任务详情与验收条件',
+  'collaboration settings': '协作设置',
   'copied in memory; not saved': '已复制到内存；尚未保存',
   'draft is available only in memory; saving failed and the recovery copy is retained':
     '草稿仅保留在当前内存中；保存失败，恢复副本已保留',
