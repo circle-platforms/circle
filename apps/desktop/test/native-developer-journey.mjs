@@ -514,6 +514,21 @@ try {
         workspace: repo,
         sessionId,
         output,
+        assertDevToolsClosed: async () => {
+          const mainWindow = await app.browserWindow(page);
+          const windowId = await mainWindow.evaluate((window) => window.id);
+          const opened = await app.evaluate(({ BrowserWindow }, id) => {
+            const window = BrowserWindow.fromId(id);
+            if (!window || window.isDestroyed())
+              throw new Error('native journey main window is unavailable');
+            return window.webContents.isDevToolsOpened();
+          }, windowId);
+          assert.equal(
+            opened,
+            false,
+            'formatting must keep main DevTools closed',
+          );
+        },
       });
     },
   );
