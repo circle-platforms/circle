@@ -83,6 +83,14 @@ jobs:
       - run: npm --prefix apps/workbench run format:check
       - run: npm --prefix apps/desktop run format:check
       - run: npm --prefix apps/workbench test
+      - name: Run the renderer component regression journeys on Linux
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          unset CIRCLE_TEST_BROWSER_CHANNEL
+          node apps/workbench/node_modules/playwright/cli.js install --with-deps chromium
+          npm --prefix apps/workbench run test:components
       - run: npm --prefix apps/desktop test
         timeout-minutes: 5
       - name: Verify native developer tool resources
