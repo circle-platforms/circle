@@ -1,6 +1,12 @@
 import { Search, ShieldAlert, X } from 'lucide-react';
 import { Dialog, Tooltip } from 'radix-ui';
-import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react';
+import {
+  useEffect,
+  useRef,
+  type ButtonHTMLAttributes,
+  type ReactNode,
+  type Ref,
+} from 'react';
 import { t } from '../i18n';
 export function Button({
   children,
@@ -34,6 +40,20 @@ export function IconButton({
     </Tooltip.Root>
   );
 }
+function focusDialogField(content: HTMLElement) {
+  const field = content.querySelector(
+    'input:not([type="hidden"]), textarea, select',
+  );
+  if (
+    field instanceof HTMLInputElement ||
+    field instanceof HTMLTextAreaElement
+  ) {
+    field.focus();
+    // A rename box should start with the current name selected.
+    if (field instanceof HTMLInputElement) field.select();
+  } else if (field instanceof HTMLSelectElement) field.focus();
+  else content.focus();
+}
 export function Modal({
   open,
   onOpenChange,
@@ -49,13 +69,38 @@ export function Modal({
   children: ReactNode;
   wide?: boolean;
 }) {
+  const content = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    // A menu that opened the dialog restores its trigger in a timeout. A nested
+    // timeout runs after that, so the field keeps the focus and the keystrokes.
+    let nested = 0;
+    const timer = window.setTimeout(() => {
+      nested = window.setTimeout(() => {
+        if (content.current) focusDialogField(content.current);
+      }, 0);
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      window.clearTimeout(nested);
+    };
+  }, [open, title]);
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="dialog-overlay" />
         <Dialog.Content
+          ref={content}
           className={`dialog-content ${wide ? 'wide' : ''}`}
           aria-describedby={description ? 'dialog-description' : undefined}
+          onOpenAutoFocus={(event) => {
+            // The close button is the first tab stop. Leaving focus there drops
+            // keystrokes, and the composer behind the dialog receives them.
+            event.preventDefault();
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== 'Escape') event.stopPropagation();
+          }}
         >
           <div className="dialog-heading">
             <div>

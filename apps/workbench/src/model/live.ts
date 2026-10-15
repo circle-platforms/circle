@@ -4,6 +4,7 @@ import type {
   RuntimeUpdate,
 } from '../../../desktop/src/runtime-protocol';
 import type {
+  Attachment,
   BeginResult,
   CommandResult,
   Effort,
@@ -17,6 +18,7 @@ import {
   visibleMessages,
   EFFORTS,
   parseMode,
+  promptAttachments,
   sessionMode,
 } from './state';
 import {
@@ -424,9 +426,15 @@ export class LiveRuntime implements RuntimePort {
     model?: string;
     effort?: Effort;
     mode?: SessionMode;
+    attachments?: Attachment[];
   }): Promise<BeginResult> => {
     const text = input.text.trim();
     if (!text) throw Error(t('prompt is empty'));
+    if (
+      input.attachments !== undefined &&
+      (!Array.isArray(input.attachments) || input.attachments.length > 16)
+    )
+      throw Error('invalid attachments');
     await this.changes;
     const workspaceId = input.workspaceId || undefined;
     if (workspaceId) {
@@ -437,10 +445,12 @@ export class LiveRuntime implements RuntimePort {
         throw Error(t('open the workspace through the native folder dialog'));
       if (!workspace.trusted) return { dialog: 'trust' };
     }
+    const folded = promptAttachments(text, input.attachments ?? []);
     const result = (await this.native('begin-session', {
       ...(workspaceId ? { workspaceId } : {}),
-      text,
-      display: text,
+      text: folded.text,
+      display: folded.display,
+      ...(folded.attachments.length ? { attachments: folded.attachments } : {}),
       ...(input.model ? { modelId: input.model } : {}),
       ...(input.effort ? { effort: input.effort } : {}),
       ...(input.mode ? { mode: input.mode } : {}),
@@ -597,25 +607,12 @@ export class LiveRuntime implements RuntimePort {
         notice: t('unknown command /{name}', { name: commandWord(raw) }),
       };
     if (!raw && !session.attachments.length) return {};
-    const textAttachments = session.attachments.filter(
-      (a) => !['image', 'document'].includes(a.kind),
-    );
-    const prompt =
-      raw +
-      textAttachments
-        .map(
-          (a) =>
-            `\n\n<attachment name=${JSON.stringify(a.name)}>\n${a.content}\n</attachment>`,
-        )
-        .join('');
-    const media = session.attachments.filter((a) =>
-      ['image', 'document'].includes(a.kind),
-    );
+    const folded = promptAttachments(raw, session.attachments);
     const payload = {
-      text: prompt || 'See the attached files.',
-      display: raw,
+      text: folded.text,
+      display: folded.display,
       kind,
-      attachments: media,
+      attachments: folded.attachments,
     };
     // Said here, with the message left in the box, rather than as a refused command
     if (JSON.stringify(payload).length > MAX_PROMPT_PAYLOAD)

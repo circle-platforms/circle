@@ -4232,6 +4232,26 @@ test('trusting a folder initializes every idle session with its own project cont
   );
 });
 
+test('opening a folder publishes it for the sidebar and the home picker', async (t) => {
+  const f = await setup(t, []);
+  const project = join(f.root, 'circle-packs');
+  await mkdir(project);
+  const before = f.updates.length;
+  const opened = await f.call('open-workspace', { path: project });
+  assert.equal(opened.ok, true, opened.error);
+  const id = (opened.data as { workspaceId: string }).workspaceId;
+  assert.ok(f.updates.length > before);
+  const workspace = f.updates
+    .at(-1)!
+    .snapshot.workspaces.find((row) => row.id === id);
+  assert.equal(workspace?.name, 'circle-packs');
+  assert.equal(workspace?.kind, 'project');
+  assert.equal(
+    f.controller.snapshot().workspaces.some((row) => row.id === id),
+    true,
+  );
+});
+
 test('the first message from home creates one session in the chosen project', async (t) => {
   const f = await setup(t, [
     { message: assistant('parser started') },

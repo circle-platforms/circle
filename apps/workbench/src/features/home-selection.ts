@@ -42,3 +42,25 @@ export function homePath(workspaceId?: string | null) {
   if (workspaceId) return `/home?workspace=${encodeURIComponent(workspaceId)}`;
   return '/home';
 }
+
+/**
+ * Open the home composer and focus its message box. A second click while home
+ * is already showing still focuses it: the route does not remount.
+ */
+export function openHome(
+  navigate: (
+    to: string,
+    options?: {
+      replace?: boolean;
+      state?: { focusComposer: number };
+    },
+  ) => void,
+  current: string,
+  workspaceId?: string | null,
+) {
+  const to = homePath(workspaceId);
+  navigate(to, {
+    state: { focusComposer: Date.now() },
+    replace: current === to,
+  });
+}

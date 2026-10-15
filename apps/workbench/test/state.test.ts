@@ -14,6 +14,7 @@ import { PluginRegistry } from '../src/plugins/registry.ts';
 import type { WorkbenchPlugin } from '../src/plugins/types.ts';
 import {
   canArchiveSession,
+  historyMessages,
   sessionHasContent,
   workspaceListed,
   workspaceSessions,
@@ -541,6 +542,45 @@ test('the picker choice decides where the first message is stored', () => {
   assert.notEqual(looseSession.workspaceId, 'circle');
   assert.equal(looseWorkspace.kind, 'scratch');
   assert.equal(looseSession.messages[0]!.text, 'a loose question');
+});
+
+test('the first home message keeps files chosen beside the box', () => {
+  const runtime = new PreviewRuntime();
+  const started = runtime.beginConversation({
+    text: 'see this',
+    attachments: [
+      {
+        id: 'note',
+        name: 'note.txt',
+        kind: 'file',
+        content: 'hello',
+      },
+    ],
+  });
+  assert.ok('sessionId' in started);
+  const message = runtime
+    .getSnapshot()
+    .sessions.find((session) => session.id === started.sessionId)!.messages[0]!;
+  assert.equal(message.text, 'see this');
+  assert.equal(message.attachments?.[0]?.name, 'note.txt');
+  assert.equal(message.attachments?.[0]?.content, 'hello');
+});
+
+test('search history includes assistant replies and skips tool rows', () => {
+  const runtime = new PreviewRuntime();
+  const session = runtime.getSnapshot().sessions[0]!;
+  const hits = historyMessages(session);
+  assert.ok(hits.some((message) => message.role === 'user'));
+  assert.ok(
+    hits.some(
+      (message) =>
+        message.role === 'assistant' && message.text.includes('pending buffer'),
+    ),
+  );
+  assert.equal(
+    hits.some((message) => message.role === 'tool'),
+    false,
+  );
 });
 
 test('working without a project creates one scratch session, and empty rows stay unlisted', () => {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Check,
   ChevronDown,
@@ -10,34 +10,43 @@ import {
   ArrowUp,
 } from 'lucide-react';
 import { DropdownMenu } from 'radix-ui';
-import { desktopHost, openNativeWorkspace } from '../host';
+import { desktopHost, folderOpenMessage, openNativeWorkspace } from '../host';
 import { useRuntime } from '../app/context';
-import type { DialogId, Effort, Session, SessionMode } from '../model/types';
+import type {
+  Attachment,
+  DialogId,
+  Effort,
+  Session,
+  SessionMode,
+} from '../model/types';
 import { sessionMode } from '../model/state';
 import { t } from '../i18n';
+import { FileChip, IconButton } from '../components/common';
 import { EffortMenu, ModeMenu, ModelMenu } from './Composer';
-import { homePath, homeProjects, selectedHomeProject } from './home-selection';
-
-export { homePath };
+import { homeProjects, openHome, selectedHomeProject } from './home-selection';
 
 export function Home({
   requestedId,
   onDialog,
   onStarted,
+  onAttach,
 }: {
   /** `null` keeps the current project. `''` is working without a project. */
   requestedId: string | null;
   onDialog: (dialog: DialogId, selection?: string) => void;
   onStarted: (sessionId: string) => void;
+  onAttach: (accept: (attachment: Attachment) => void) => void;
 }) {
   const { snapshot, runtime, perform, notify } = useRuntime();
   const navigate = useNavigate();
+  const location = useLocation();
   const message = useRef<HTMLTextAreaElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const active =
     snapshot.sessions.find((item) => item.id === snapshot.activeSessionId) ??
     snapshot.sessions[0];
   const [draft, setDraft] = useState('');
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [query, setQuery] = useState('');
   const [projectsOpen, setProjectsOpen] = useState(false);
   const [model, setModelId] = useState(
@@ -49,19 +58,39 @@ export function Home({
   const [mode, setMode] = useState<SessionMode>(() =>
     active ? sessionMode(active) : 'manual',
   );
-  const controls: Session | undefined = active
-    ? {
-        ...active,
-        model,
-        effort,
-        mode,
-        readOnly: mode === 'plan',
-        auto: mode === 'auto',
-      }
-    : undefined;
-  const focusMessage = () => {
-    requestAnimationFrame(() => message.current?.focus());
+  const controls: Session = {
+    ...(active ?? {
+      id: 'home',
+      title: 'new session',
+      workspaceId: '',
+      model,
+      effort,
+      draft: '',
+      messages: [],
+      leafId: null,
+      hiddenIds: [],
+      undoStack: [],
+      attachments: [],
+      queue: [],
+      state: 'idle' as const,
+      readOnly: false,
+      auto: false,
+    }),
+    model,
+    effort,
+    mode,
+    readOnly: mode === 'plan',
+    auto: mode === 'auto',
   };
+  const here = `${location.pathname}${location.search}`;
+  const go = (id?: string | null) => openHome(navigate, here, id);
+  const focusToken = (location.state as { focusComposer?: number } | null)
+    ?.focusComposer;
+  useEffect(() => {
+    if (focusToken === undefined) return;
+    const timer = window.setTimeout(() => message.current?.focus(), 0);
+    return () => window.clearTimeout(timer);
+  }, [focusToken]);
   useEffect(() => {
     if (!projectsOpen) return;
     const frame = requestAnimationFrame(() => search.current?.focus());
@@ -81,25 +110,21 @@ export function Home({
   const choose = (id: string | null) => {
     setQuery('');
     setProjectsOpen(false);
-    navigate(homePath(id));
-    focusMessage();
+    go(id);
   };
   const openProject = () =>
     perform(async () => {
       try {
         const id = await openNativeWorkspace(runtime);
-        if (id) navigate(homePath(id));
+        if (id) go(id);
       } catch (error) {
-        notify(
-          error instanceof Error
-            ? error.message
-            : t('folder could not be opened'),
-        );
+        notify(folderOpenMessage(error));
       }
     });
   const send = () => {
     const text = draft.trim();
     if (!text) return;
+    const files = attachments;
     perform(async () => {
       if (project && !project.trusted) {
         const anchor = snapshot.sessions.find(
@@ -118,12 +143,14 @@ export function Home({
         model,
         effort,
         mode,
+        ...(files.length ? { attachments: files } : {}),
       });
       if ('dialog' in result) {
         onDialog(result.dialog, project?.id);
         return;
       }
       setDraft('');
+      setAttachments([]);
       onStarted(result.sessionId);
     });
   };
@@ -168,6 +195,21 @@ export function Home({
               }
             }}
           />
+          {attachments.length > 0 && (
+            <div className="attachment-strip">
+              {attachments.map((file) => (
+                <FileChip
+                  key={file.id}
+                  name={file.name}
+                  onRemove={() =>
+                    setAttachments((current) =>
+                      current.filter((item) => item.id !== file.id),
+                    )
+                  }
+                />
+              ))}
+            </div>
+          )}
           <div className="composer-send">
             <button
               className="send"
@@ -181,6 +223,19 @@ export function Home({
         </div>
         <div className="composer-footbar">
           <div>
+            <IconButton
+              label={t('attach files')}
+              onClick={() =>
+                onAttach((attachment) =>
+                  setAttachments((current) =>
+                    current.length >= 16 ? current : [...current, attachment],
+                  ),
+                )
+              }
+            >
+              <Plus size={16} />
+            </IconButton>
+            <ModeMenu session={controls} onMode={setMode} />
             <DropdownMenu.Root
               open={projectsOpen}
               modal={false}
@@ -204,7 +259,7 @@ export function Home({
               <DropdownMenu.Portal>
                 <DropdownMenu.Content
                   className="dropdown project-menu"
-                  side="top"
+                  side="bottom"
                   align="start"
                   sideOffset={7}
                   onCloseAutoFocus={(event) => {
@@ -243,7 +298,7 @@ export function Home({
                     onSelect={openProject}
                   >
                     <Plus size={14} />
-                    <span>{t('new project')}</span>
+                    <span>{t('open folder')}</span>
                   </DropdownMenu.Item>
                   <DropdownMenu.Item onSelect={() => choose(null)}>
                     <X size={14} />
@@ -253,7 +308,6 @@ export function Home({
                 </DropdownMenu.Content>
               </DropdownMenu.Portal>
             </DropdownMenu.Root>
-            {controls && <ModeMenu session={controls} onMode={setMode} />}
           </div>
           <div>
             {runtime.mode === 'live' && !snapshot.runtime?.configured ? (
@@ -264,17 +318,15 @@ export function Home({
                 {t('connect a model')}
               </button>
             ) : (
-              controls && (
-                <ModelMenu
-                  session={controls}
-                  models={snapshot.models}
-                  enabled={snapshot.settings.enabledModels}
-                  onModel={setModelId}
-                  onManage={() => navigate('/page/models')}
-                />
-              )
+              <ModelMenu
+                session={controls}
+                models={snapshot.models}
+                enabled={snapshot.settings.enabledModels}
+                onModel={setModelId}
+                onManage={() => navigate('/page/models')}
+              />
             )}
-            {controls && <EffortMenu session={controls} onEffort={setEffort} />}
+            <EffortMenu session={controls} onEffort={setEffort} />
           </div>
         </div>
       </div>

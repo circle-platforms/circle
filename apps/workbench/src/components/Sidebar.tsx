@@ -1,5 +1,5 @@
-import { desktopHost, openNativeWorkspace } from '../host';
-import { homePath } from '../features/Home';
+import { desktopHost, folderOpenMessage, openNativeWorkspace } from '../host';
+import { openHome } from '../features/home-selection';
 import { useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -74,7 +74,7 @@ export function Sidebar({
     onNavigate?.();
   };
   const newSession = (workspaceId?: string) => {
-    navigate(homePath(workspaceId));
+    openHome(navigate, `${location.pathname}${location.search}`, workspaceId);
     onNavigate?.();
   };
   // The open folder first, then the others by their latest session.
@@ -275,15 +275,15 @@ export function Sidebar({
               try {
                 const selected = await openNativeWorkspace(runtime);
                 if (selected) {
-                  navigate(homePath(selected));
+                  openHome(
+                    navigate,
+                    `${location.pathname}${location.search}`,
+                    selected,
+                  );
                   onNavigate?.();
                 }
               } catch (error) {
-                notify(
-                  error instanceof Error
-                    ? error.message
-                    : t('folder could not be opened'),
-                );
+                notify(folderOpenMessage(error));
               }
             }}
           >

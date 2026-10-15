@@ -1,4 +1,13 @@
-import type { Session, WorkbenchSnapshot, Workspace } from './types';
+import type { Message, Session, WorkbenchSnapshot, Workspace } from './types';
+
+/** User and assistant text the global search indexes. Tools and notices are not history. */
+export function historyMessages(session: Session): Message[] {
+  return session.messages.filter(
+    (message) =>
+      (message.role === 'user' || message.role === 'assistant') &&
+      message.text.trim() !== '',
+  );
+}
 
 /**
  * A session the sidebar and the session list should show. A click on new session

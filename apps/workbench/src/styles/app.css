@@ -2413,6 +2413,12 @@ pre {
   box-shadow: 0 8px 28px color-mix(in srgb, var(--fg) 12%, transparent);
   padding: 5px;
 }
+/* The project menu opens over the greeting. --surface is nearly --bg, so the
+   heading reads through it unless this panel is opaque and above the page. */
+.dropdown.project-menu {
+  z-index: 120;
+  background: var(--bg);
+}
 .dropdown [role='menuitem'] {
   padding: 8px 10px;
   font-size: var(--ui-small);

@@ -3,7 +3,7 @@ import { validateKeybindings } from '../model/shortcuts';
 import { usePlugins } from '../plugins/context';
 import { pairing } from '../plugins/registry';
 import { useState } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { CUSTOMIZE, NAVIGATION } from '../components/Sidebar';
 import {
   Plus,
@@ -73,7 +73,7 @@ import {
   canArchiveSession,
   sessionHasContent,
 } from '../model/session-management';
-import { homePath } from './Home';
+import { openHome } from './home-selection';
 import { NetworkStatus } from './NetworkStatus';
 import { BUILTIN_TOOL_INFO } from '../model/tool-info';
 import { TEXT_SIZES, textSizes } from '../theme';
@@ -138,6 +138,7 @@ function PageContent(props: Props) {
 function SessionsPage({ onSession, onDialog }: Props) {
   const { snapshot, runtime, perform } = useRuntime();
   const navigate = useNavigate();
+  const location = useLocation();
   const [search, setSearch] = useState('');
   const [all, setAll] = useState(false);
   const [archived, setArchived] = useState(false);
@@ -158,7 +159,11 @@ function SessionsPage({ onSession, onDialog }: Props) {
         'Reopen a conversation or continue from an earlier point.',
       )}
       action={
-        <Button onClick={() => navigate(homePath())}>
+        <Button
+          onClick={() =>
+            openHome(navigate, `${location.pathname}${location.search}`)
+          }
+        >
           <Plus size={14} />
           {t('new session')}
         </Button>

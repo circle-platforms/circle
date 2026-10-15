@@ -376,6 +376,8 @@ export interface BeginConversation {
   model?: string;
   effort?: Effort;
   mode?: SessionMode;
+  /** Files chosen on the home composer, folded the same way as a session send. */
+  attachments?: Attachment[];
 }
 export type BeginResult = { sessionId: string } | { dialog: 'trust' };
 export interface RuntimePort {

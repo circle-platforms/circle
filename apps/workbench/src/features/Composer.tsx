@@ -55,7 +55,7 @@ export function ModeMenu({
   const mode = sessionMode(session);
   const Icon = MODE_TEXT[mode].icon;
   return (
-    <DropdownMenu.Root>
+    <DropdownMenu.Root modal={false}>
       <DropdownMenu.Trigger asChild>
         <button
           className="footbar-button mode-button"
@@ -74,6 +74,7 @@ export function ModeMenu({
           side="top"
           align="start"
           sideOffset={7}
+          onCloseAutoFocus={(event) => event.preventDefault()}
         >
           {MODES.map((item) => {
             const ItemIcon = MODE_TEXT[item].icon;
@@ -131,7 +132,7 @@ export function ModelMenu({
         model.id === session.model),
   );
   return (
-    <DropdownMenu.Root>
+    <DropdownMenu.Root modal={false}>
       <DropdownMenu.Trigger asChild>
         <button className="footbar-button" aria-label={t('model')}>
           <span className="footbar-model">{session.model}</span>
@@ -144,6 +145,7 @@ export function ModelMenu({
           side="top"
           align="end"
           sideOffset={7}
+          onCloseAutoFocus={(event) => event.preventDefault()}
         >
           {shown.map((model) => (
             <DropdownMenu.Item
@@ -173,7 +175,7 @@ export function EffortMenu({
   onEffort: (effort: Effort) => void;
 }) {
   return (
-    <DropdownMenu.Root>
+    <DropdownMenu.Root modal={false}>
       <DropdownMenu.Trigger asChild>
         <button className="footbar-button" aria-label={t('thinking depth')}>
           {EFFORT_TEXT[session.effort]?.() ?? session.effort}
@@ -186,6 +188,7 @@ export function EffortMenu({
           side="top"
           align="end"
           sideOffset={7}
+          onCloseAutoFocus={(event) => event.preventDefault()}
         >
           {(['default', ...EFFORTS] as Effort[]).map((effort) => (
             <DropdownMenu.Item key={effort} onSelect={() => onEffort(effort)}>

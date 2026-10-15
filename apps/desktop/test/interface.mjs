@@ -375,7 +375,24 @@ try {
     .getByRole('button', { name: 'approval mode', exact: true })
     .waitFor();
   await page.getByRole('button', { name: 'model', exact: true }).waitFor();
+  await page
+    .getByRole('button', { name: 'attach files', exact: true })
+    .waitFor();
   assert.match(await thinking.innerText(), /^high\b/);
+  await page.getByRole('button', { name: 'new session', exact: true }).click();
+  await page.waitForFunction(
+    () => document.activeElement?.getAttribute('aria-label') === 'message',
+  );
+  checks.push('new session focuses the composer when home is already open');
+  await page
+    .getByRole('button', { name: 'approval mode', exact: true })
+    .click();
+  await page.getByRole('menuitem', { name: /^manual/ }).waitFor();
+  await page.keyboard.press('Escape');
+  await thinking.click();
+  await page.getByRole('menuitem', { name: 'minimal', exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  checks.push('closing the mode menu does not swallow the next effort click');
   await thinking.click();
   await page.getByRole('menuitem', { name: 'extra high', exact: true }).click();
   assert.match(await thinking.innerText(), /extra high/);
@@ -406,6 +423,36 @@ try {
     0,
   );
   checks.push('choosing no project returns focus to the composer');
+  await page.getByRole('button', { name: 'search', exact: true }).click();
+  const searchDialog = page.getByRole('dialog', {
+    name: 'search',
+    exact: true,
+  });
+  await searchDialog.waitFor();
+  await page.waitForFunction(
+    () =>
+      document.activeElement?.getAttribute('aria-label') === 'global search',
+  );
+  await page.keyboard.type('buffer');
+  // The dialog hides the composer from the accessibility tree. Read it directly.
+  const composerValue = () =>
+    page.evaluate(
+      () =>
+        document.querySelector('textarea[aria-label="message"]')?.value ?? '',
+    );
+  assert.equal(await composerValue(), 'focused');
+  await searchDialog.getByText('pending buffer').waitFor();
+  await page.keyboard.press('Control+a');
+  await page.keyboard.type('zzznomatch');
+  await searchDialog
+    .getByRole('heading', { name: 'no results', exact: true })
+    .waitFor();
+  await page.keyboard.press('Escape');
+  await searchDialog.waitFor({ state: 'hidden' });
+  assert.equal(await composerValue(), 'focused');
+  checks.push(
+    'search focuses its box, finds an assistant reply, and shows no results',
+  );
   await page.getByRole('button', { name: 'send message', exact: true }).click();
   await page.getByRole('heading', { name: 'focused', exact: true }).waitFor();
   const started = await state();
@@ -419,6 +466,28 @@ try {
   assert.equal(workspace.kind, 'scratch');
   checks.push('the first message keeps the thinking depth chosen on home');
   await route('/session/session1');
+  await page
+    .getByRole('button', { name: 'Fix the reconnect race', exact: true })
+    .click();
+  await page.getByRole('menuitem', { name: 'rename', exact: true }).click();
+  const renameBox = page.getByRole('textbox', {
+    name: 'session name',
+    exact: true,
+  });
+  await renameBox.waitFor();
+  await page.waitForFunction(
+    () => document.activeElement?.getAttribute('aria-label') === 'session name',
+  );
+  assert.equal(await renameBox.inputValue(), 'Fix the reconnect race');
+  assert.equal(
+    await renameBox.evaluate(
+      (node) =>
+        node.selectionStart === 0 && node.selectionEnd === node.value.length,
+    ),
+    true,
+  );
+  await page.keyboard.press('Escape');
+  checks.push('rename focuses the name and selects it');
   const resetDraft = 'preview reset regression draft';
   await page
     .getByRole('textbox', { name: 'message', exact: true })

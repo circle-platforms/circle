@@ -1,6 +1,7 @@
 import {
   desktopHost,
   copyText,
+  folderOpenMessage,
   nativeAttachment,
   openNativeWorkspace,
   readNativeFile,
@@ -33,7 +34,10 @@ import {
 } from 'lucide-react';
 import { useRuntime } from './context';
 import { currentSession, sessionText, sessionTitle } from '../model/state';
-import { sessionHasContent } from '../model/session-management';
+import {
+  historyMessages,
+  sessionHasContent,
+} from '../model/session-management';
 import type {
   Attachment,
   DialogId,
@@ -50,11 +54,13 @@ import {
   Status,
   Facts,
   DataBlock,
+  EmptyState,
 } from '../components/common';
 import { Markdown } from '../components/Markdown';
 import { ToolMessage } from '../components/ToolMessage';
 import { Conversation } from '../features/Conversation';
-import { Home, homePath } from '../features/Home';
+import { Home } from '../features/Home';
+import { homePath, openHome } from '../features/home-selection';
 import { Inspector, PanelButtons } from '../features/Panels';
 import { FileViewer } from '../features/FileViewer';
 import { ManagementPage } from '../features/Pages';
@@ -245,7 +251,10 @@ export function App() {
     media.addEventListener('change', apply);
     return () => media.removeEventListener('change', apply);
   }, [snapshot.settings.theme, snapshot.settings.textSize]);
-  const pickFiles = async (importing = false) => {
+  const pickFiles = async (
+    importing = false,
+    into?: (attachment: Attachment) => void,
+  ) => {
     const originSessionId = runtime.getSnapshot().activeSessionId;
     if (desktopHost()) {
       try {
@@ -300,7 +309,8 @@ export function App() {
               target.leafId = messageId;
             });
             onSession();
-          } else
+          } else if (into) into(nativeAttachment(item));
+          else
             runtime.change((state) => {
               const target = state.sessions.find(
                 (session) => session.id === originSessionId,
@@ -310,7 +320,8 @@ export function App() {
             });
         }
       } catch (error) {
-        if (runtime.getSnapshot().activeSessionId !== originSessionId) return;
+        if (!into && runtime.getSnapshot().activeSessionId !== originSessionId)
+          return;
         notify(
           error instanceof Error
             ? error.message
@@ -412,16 +423,19 @@ export function App() {
             size: item.size,
             truncated: kind === 'file' && item.size > 256000,
           };
-          runtime.change((state) => {
-            const target = state.sessions.find(
-              (session) => session.id === originSessionId,
-            );
-            if (target && target.lifecycle !== 'deleting')
-              target.attachments.push(attachment);
-          });
+          if (into) into(attachment);
+          else
+            runtime.change((state) => {
+              const target = state.sessions.find(
+                (session) => session.id === originSessionId,
+              );
+              if (target && target.lifecycle !== 'deleting')
+                target.attachments.push(attachment);
+            });
         }
       } catch (error) {
-        if (runtime.getSnapshot().activeSessionId !== originSessionId) return;
+        if (!into && runtime.getSnapshot().activeSessionId !== originSessionId)
+          return;
         notify(
           error instanceof Error
             ? error.message
@@ -453,15 +467,21 @@ export function App() {
       if (action === 'open-folder') {
         void openNativeWorkspace(runtime)
           .then((selected) => {
-            if (selected) navigate(homePath(selected));
+            if (selected)
+              openHome(
+                navigate,
+                `${location.pathname}${location.search}`,
+                selected,
+              );
           })
-          .catch((error) => notify(String(error)));
-      } else if (action === 'new') navigate(homePath());
+          .catch((error) => notify(folderOpenMessage(error)));
+      } else if (action === 'new')
+        openHome(navigate, `${location.pathname}${location.search}`);
       else if (action === 'settings') navigate('/page/settings');
       else if (action === 'help') navigate('/page/help');
       else act(() => runtime.command(action));
     });
-  }, [runtime]);
+  }, [runtime, navigate, location.pathname, location.search]);
   useEffect(() => {
     const handle = (event: KeyboardEvent) => {
       if (
@@ -545,6 +565,7 @@ export function App() {
       requestedId={homeRequested}
       onDialog={onDialog}
       onStarted={(id) => navigate(`/session/${id}`)}
+      onAttach={(accept) => void pickFiles(false, accept)}
     />
   ) : (
     <Conversation
@@ -628,19 +649,22 @@ export function App() {
         run: () => onFile(item.path),
       })),
     ...snapshot.sessions.flatMap((item) =>
-      item.messages
-        .filter((message) => message.role === 'user')
-        .map((message) => ({
-          id: message.id,
-          label: message.text,
-          detail: t('message history'),
-          run: () => {
+      historyMessages(item).map((message) => ({
+        id: message.id,
+        label: message.text,
+        detail: t('message history'),
+        run: () => {
+          void runtime.selectSession(item.id);
+          if (message.role === 'user')
             runtime.change((state) => {
-              currentSession(state).draft = message.text;
+              const target = state.sessions.find(
+                (session) => session.id === item.id,
+              );
+              if (target) target.draft = message.text;
             });
-            onSession();
-          },
-        })),
+          onSession();
+        },
+      })),
     ),
   ].filter((item) =>
     (item.label + ' ' + item.detail)
@@ -836,23 +860,27 @@ export function App() {
             placeholder={t('sessions, files, pages or past messages')}
           />
           <div className="search-results">
-            {searchItems.map((item) => (
-              <button
-                key={item.id}
-                onClick={() => {
-                  item.run();
-                  setSearchOpen(false);
-                  setSearch('');
-                }}
-              >
-                <Search size={14} />
-                <span>
-                  <strong>{item.label}</strong>
-                  <small>{item.detail}</small>
-                </span>
-                <ArrowUpRight size={12} />
-              </button>
-            ))}
+            {search.trim() && searchItems.length === 0 ? (
+              <EmptyState title={t('no results')} />
+            ) : (
+              searchItems.map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => {
+                    item.run();
+                    setSearchOpen(false);
+                    setSearch('');
+                  }}
+                >
+                  <Search size={14} />
+                  <span>
+                    <strong>{item.label}</strong>
+                    <small>{item.detail}</small>
+                  </span>
+                  <ArrowUpRight size={12} />
+                </button>
+              ))
+            )}
           </div>
         </Modal>
         <DialogHost

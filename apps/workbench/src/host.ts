@@ -5,10 +5,22 @@ import type {
 } from '../../desktop/src/contracts';
 import type { Attachment, RuntimePort } from './model/types';
 import { currentSession } from './model/state';
+import { t } from './i18n';
 declare global {
   interface Window {
     circleDesktop?: DesktopBridge;
   }
+}
+/** A failed folder open, in the interface language when the cause is the chooser. */
+export function folderOpenMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  if (
+    !message ||
+    message === 'folder could not be opened' ||
+    message === 'workspace is not a folder'
+  )
+    return t('folder could not be opened');
+  return message;
 }
 export function desktopHost() {
   return typeof window !== 'undefined' ? window.circleDesktop : undefined;

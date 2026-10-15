@@ -404,6 +404,42 @@ test('a home message sends the chosen model, effort and mode', async () => {
   assert.equal(host.commands[0]!.payload.mode, 'plan');
 });
 
+test('a home message inlines text files and sends pictures as attachments', async () => {
+  const { runtime, host } = live();
+  host.runtimeCommand = async (command) => {
+    host.commands.push(command);
+    return { id: command.id, ok: true, data: { sessionId: 'session-home' } };
+  };
+  await runtime.beginConversation({
+    workspaceId: 'workspace1',
+    text: 'see this',
+    attachments: [
+      { id: 'note', name: 'note.txt', kind: 'file', content: 'hello' },
+      {
+        id: 'pic',
+        name: 'pic.png',
+        kind: 'image',
+        content: 'data:image/png;base64,aaaa',
+        mime: 'image/png',
+      },
+    ],
+  });
+  assert.equal(
+    host.commands[0]!.payload.text,
+    'see this\n\n<attachment name="note.txt">\nhello\n</attachment>',
+  );
+  assert.equal(host.commands[0]!.payload.display, 'see this');
+  assert.deepEqual(host.commands[0]!.payload.attachments, [
+    {
+      id: 'pic',
+      name: 'pic.png',
+      kind: 'image',
+      content: 'data:image/png;base64,aaaa',
+      mime: 'image/png',
+    },
+  ]);
+});
+
 test('an untrusted project is not given a session from home', async () => {
   const { runtime, host } = live();
   assert.deepEqual(

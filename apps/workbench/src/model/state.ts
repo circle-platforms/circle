@@ -7,6 +7,7 @@ import {
 import type {
   BeginResult,
   CommandResult,
+  Attachment,
   Effort,
   Message,
   RuntimePort,
@@ -36,6 +37,34 @@ export const sessionMode = (session: Session): SessionMode =>
   (session.readOnly ? 'plan' : session.auto ? 'auto' : 'manual');
 export const nextMode = (mode: SessionMode): SessionMode =>
   MODES[(MODES.indexOf(mode) + 1) % MODES.length]!;
+/**
+ * Text files are inlined in the prompt. Pictures and PDFs stay attachments.
+ * `display` is what the person typed, without the inlined files.
+ */
+export function promptAttachments(
+  text: string,
+  attachments: readonly Attachment[],
+): { text: string; display: string; attachments: Attachment[] } {
+  const copied = attachments.filter(
+    (item) => !['image', 'document'].includes(item.kind),
+  );
+  const media = attachments.filter((item) =>
+    ['image', 'document'].includes(item.kind),
+  );
+  const prompt =
+    text +
+    copied
+      .map(
+        (item) =>
+          `\n\n<attachment name=${JSON.stringify(item.name)}>\n${item.content}\n</attachment>`,
+      )
+      .join('');
+  return {
+    text: prompt || (attachments.length ? 'See the attached files.' : ''),
+    display: text,
+    attachments: media,
+  };
+}
 export function parseMode(args: string, current: SessionMode) {
   const word = args
     .trim()
@@ -246,9 +275,15 @@ export class PreviewRuntime implements RuntimePort {
     model?: string;
     effort?: Effort;
     mode?: SessionMode;
+    attachments?: Attachment[];
   }): BeginResult => {
     const text = input.text.trim();
     if (!text) throw Error('prompt is empty');
+    if (
+      input.attachments !== undefined &&
+      (!Array.isArray(input.attachments) || input.attachments.length > 16)
+    )
+      throw Error('invalid attachments');
     if (
       input.effort !== undefined &&
       input.effort !== 'default' &&
@@ -286,6 +321,9 @@ export class PreviewRuntime implements RuntimePort {
         hour: '2-digit',
         minute: '2-digit',
       }),
+      ...(input.attachments?.length
+        ? { attachments: structuredClone(input.attachments) }
+        : {}),
     };
     session.messages = [message];
     session.leafId = message.id;
