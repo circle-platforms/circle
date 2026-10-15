@@ -9,12 +9,13 @@ export function sourceLocation(href: string): SourceLocation | null {
     !href ||
     href.startsWith('#') ||
     (/^[a-z][a-z\d+.-]*:/i.test(href) &&
-      !href.startsWith('file:') &&
+      !/^file:/i.test(href) &&
+      !/^[A-Za-z]:[\\/]/.test(href) &&
       !/^[^:/]+\.[^:/]+:\d+(?::\d+)?$/.test(href))
   )
     return null;
   let value = href;
-  if (value.startsWith('file:')) {
+  if (/^file:/i.test(value)) {
     try {
       const url = new URL(value);
       if (url.hostname && url.hostname !== 'localhost') return null;
@@ -39,7 +40,8 @@ export function sourceLocation(href: string): SourceLocation | null {
     return null;
   // Plain relative links need a filename; URL routes are not source files.
   if (
-    !href.startsWith('file:') &&
+    !/^file:/i.test(href) &&
+    !/^[A-Za-z]:[\\/]/.test(href) &&
     !path.startsWith('/') &&
     !/(?:^|\/)[^/]+\.[^/]+$/.test(path) &&
     !/(?:^|\/)(?:AGENTS|README|LICENSE|Dockerfile|Makefile)$/.test(path)
@@ -66,4 +68,76 @@ export function attachmentImage(content: string, mime?: string): string | null {
   return /^[a-zA-Z0-9+/=\s]+$/.test(content) && content.trim()
     ? `data:${type};base64,${content}`
     : null;
+}
+
+/** Canonical document key relative to the granted root. Decode URI paths once;
+ * plain filesystem names (including literal percent signs) are never decoded. */
+export function workspaceRelativePath(
+  source: string,
+  workspaceRoot: string,
+): string {
+  let value = source;
+  if (/^file:/i.test(value)) {
+    const location = sourceLocation(value);
+    if (!location) throw Error('unsupported source path');
+    value = location.path;
+  }
+  if (
+    !value ||
+    value.includes('\0') ||
+    !workspaceRoot ||
+    workspaceRoot.includes('\0')
+  )
+    throw Error('unsupported source path');
+  value = value.replaceAll('\\', '/');
+  let root = workspaceRoot.replaceAll('\\', '/');
+  if (/^\/[A-Za-z]:\//.test(value)) value = value.slice(1);
+  if (/^\/[A-Za-z]:\//.test(root)) root = root.slice(1);
+  const windows = /^[A-Za-z]:\//.test(root) || root.startsWith('//');
+  const absolute = (path: string) =>
+    path.startsWith('/') || /^[A-Za-z]:\//.test(path);
+  const collapse = (path: string) => {
+    const prefix = path.startsWith('//')
+      ? '//'
+      : path.startsWith('/')
+        ? '/'
+        : /^[A-Za-z]:\//.test(path)
+          ? path.slice(0, 3)
+          : '';
+    const body = path.slice(prefix.length);
+    const parts: string[] = [];
+    for (const part of body.split('/')) {
+      if (!part || part === '.') continue;
+      if (part === '..') {
+        if (!parts.length) throw Error('source is outside the workspace');
+        parts.pop();
+      } else parts.push(part);
+    }
+    return prefix + parts.join('/');
+  };
+  root = collapse(root).replace(/\/$/, '');
+  if (
+    !absolute(workspaceRoot.replaceAll('\\', '/')) &&
+    !/^[A-Za-z]:\//.test(root)
+  )
+    throw Error('unsupported source path');
+  if (/^[a-z][a-z\d+.-]*:/i.test(value) && !/^[A-Za-z]:\//.test(value))
+    throw Error('unsupported source path');
+  let relative: string;
+  if (absolute(value)) {
+    value = collapse(value);
+    const compare = (text: string) => (windows ? text.toLowerCase() : text);
+    const prefix = root ? root + '/' : '/';
+    if (!compare(value).startsWith(compare(prefix)))
+      throw Error('source is outside the workspace');
+    relative = value.slice(prefix.length);
+  } else relative = collapse(value);
+  if (
+    !relative ||
+    relative === '.' ||
+    relative.startsWith('../') ||
+    /^[A-Za-z]:/.test(relative)
+  )
+    throw Error('source is outside the workspace');
+  return relative;
 }

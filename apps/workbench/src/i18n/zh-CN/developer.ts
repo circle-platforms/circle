@@ -109,4 +109,6 @@ export const developer: Record<string, string> = {
   'recording review…': '正在记录核对结果…',
   'confirm reviewed criteria': '确认已逐项核对',
   'load current patch and recheck criteria': '载入当前改动并重新逐项核对',
+  'source is outside the workspace': '来源文件不在当前授权工作区内',
+  'unsupported source path': '无法识别此来源路径',
 };

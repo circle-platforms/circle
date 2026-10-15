@@ -64,6 +64,10 @@ import {
   DeveloperWorkbench,
   type WorkbenchLayout,
 } from '../features/DeveloperWorkbench';
+import {
+  sourceLocation,
+  workspaceRelativePath,
+} from '../model/source-navigation';
 import { connectWorkspaceStreams } from '../model/workspace-client';
 import { SourceNavigation } from '../components/SourceNavigation';
 import { Inspector, PanelButtons } from '../features/Panels';
@@ -218,8 +222,15 @@ export function App() {
   }, [session.id, onPage, narrow]);
   const onFile = async (path: string, line?: number, column?: number) => {
     try {
-      if (runtime.mode !== 'live') await readNativeFile(runtime, path);
-      setFile(path);
+      const target = /^file:/i.test(path) ? sourceLocation(path) : null;
+      const relative = workspaceRelativePath(
+        target?.path ?? path,
+        workspace.path,
+      );
+      line ??= target?.line;
+      column ??= target?.column;
+      if (runtime.mode !== 'live') await readNativeFile(runtime, relative);
+      setFile(relative);
       setSourceLine(line);
       setSourceColumn(column);
       setAgent(null);
@@ -227,7 +238,13 @@ export function App() {
       onSessionRoute();
     } catch (error) {
       notify(
-        error instanceof Error ? error.message : t('file could not be opened'),
+        error instanceof Error
+          ? error.message === 'source is outside the workspace'
+            ? t('source is outside the workspace')
+            : error.message === 'unsupported source path'
+              ? t('unsupported source path')
+              : error.message
+          : t('file could not be opened'),
       );
     }
   };

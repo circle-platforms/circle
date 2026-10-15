@@ -71,3 +71,52 @@ test('historical binary attachment payload becomes the exact original image with
   );
   assert.equal(attachmentImage('', 'image/png'), null);
 });
+
+test('absolute sources share the same workspace-relative document key on POSIX and Windows', async () => {
+  const { workspaceRelativePath } =
+    await import('../src/model/source-navigation.ts');
+  assert.equal(
+    workspaceRelativePath('/work/app/src/../README.md', '/work/app'),
+    'README.md',
+  );
+  assert.equal(workspaceRelativePath('./README.md', '/work/app'), 'README.md');
+  assert.equal(
+    workspaceRelativePath(
+      'file:///work/my%20app/src/a%2520b.ts#L2',
+      '/work/my app',
+    ),
+    'src/a%20b.ts',
+  );
+  assert.equal(
+    workspaceRelativePath('C:\\Work\\App\\src\\a.ts', 'c:\\work\\app'),
+    'src/a.ts',
+  );
+  assert.equal(
+    workspaceRelativePath(
+      'file:///C:/Work/My%20App/src/a.ts#L12',
+      'C:\\Work\\My App',
+    ),
+    'src/a.ts',
+  );
+  assert.equal(workspaceRelativePath('src\\a.ts', 'C:\\Work\\App'), 'src/a.ts');
+  assert.equal(workspaceRelativePath('/README.md', '/'), 'README.md');
+  assert.deepEqual(sourceLocation('C:\\Work\\App\\a.ts:12:3'), {
+    path: 'C:\\Work\\App\\a.ts',
+    line: 12,
+    column: 3,
+  });
+});
+test('outside-root, sibling prefix, traversal and different-drive source paths are refused', async () => {
+  const { workspaceRelativePath } =
+    await import('../src/model/source-navigation.ts');
+  for (const [source, root] of [
+    ['/work/app2/a.ts', '/work/app'],
+    ['/work/app/../../private/a.ts', '/work/app'],
+    ['../private/a.ts', '/work/app'],
+    ['D:\\work\\a.ts', 'C:\\work'],
+    ['file:///work/app/%2e%2e/private/a.ts', '/work/app'],
+    ['https://example.com/a.ts', '/work/app'],
+    ['C:\\Work\\Other\\a.ts', 'C:\\Work\\App'],
+  ])
+    assert.throws(() => workspaceRelativePath(source, root), source);
+});
