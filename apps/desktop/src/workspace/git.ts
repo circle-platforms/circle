@@ -18,10 +18,28 @@ export type GitSnapshot = {
   }[];
   merging: boolean;
 };
+export interface GitWorkspaceOptions {
+  identity?: { name: string; email: string };
+  signoff?: boolean;
+}
 export class GitWorkspaceService {
   readonly root: string;
-  constructor(root: string) {
+  private options: GitWorkspaceOptions;
+  constructor(root: string, options: GitWorkspaceOptions = {}) {
     this.root = root;
+    if (
+      options.identity &&
+      [options.identity.name, options.identity.email].some(
+        (value) =>
+          typeof value !== 'string' ||
+          !value.trim() ||
+          /[\r\n\0<>]/.test(value),
+      )
+    )
+      throw Error(
+        'trusted Git identity must contain a single-line name and email',
+      );
+    this.options = structuredClone(options);
   }
   async git(args: string[], input?: string) {
     if (input !== undefined)
@@ -227,7 +245,21 @@ export class GitWorkspaceService {
             throw Error(
               'staged files do not match the explicit commit selection',
             );
-          await this.git(['commit', '-m', params.message]);
+          const identity = this.options.identity;
+          await this.git([
+            ...(identity
+              ? [
+                  '-c',
+                  `user.name=${identity.name}`,
+                  '-c',
+                  `user.email=${identity.email}`,
+                ]
+              : []),
+            'commit',
+            ...(this.options.signoff ? ['--signoff'] : []),
+            '-m',
+            params.message,
+          ]);
         } else if (method === 'push') {
           if (state.branch === 'detached')
             throw Error('select a branch before pushing');

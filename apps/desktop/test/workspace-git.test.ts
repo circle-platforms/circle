@@ -147,3 +147,65 @@ test('literal filenames and one hunk preserve other unstaged edits', async () =>
     await rm(root, { recursive: true, force: true });
   }
 });
+test('trusted constructor identity signs commits while renderer identity overrides are ignored', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-git-identity-'));
+  const s = new GitWorkspaceService(root, {
+    identity: { name: 'Trusted Maintainer', email: 'trusted@example.invalid' },
+    signoff: true,
+  });
+  try {
+    await s.git(['init']);
+    await s.git(['config', 'user.name', 'Original']);
+    await s.git(['config', 'user.email', 'original@example.invalid']);
+    await writeFile(path.join(root, 'feature'), 'verified');
+    await s.call('stage', {
+      revision: (await s.snapshot()).revision,
+      paths: ['feature'],
+    });
+    await s.call('commit', {
+      revision: (await s.snapshot()).revision,
+      paths: ['feature'],
+      message: 'Add verified feature',
+      identity: { name: 'Forged', email: 'forged@example.invalid' },
+      signoff: false,
+    });
+    assert.equal(
+      (await s.git(['log', '-1', '--format=%an <%ae>'])).trim(),
+      'Trusted Maintainer <trusted@example.invalid>',
+    );
+    const body = await s.git(['log', '-1', '--format=%B']);
+    assert.match(
+      body,
+      /Signed-off-by: Trusted Maintainer <trusted@example.invalid>/,
+    );
+    assert.doesNotMatch(body, /Forged|forged@/);
+    assert.equal((await s.git(['config', 'user.name'])).trim(), 'Original');
+    assert.equal(
+      (await s.git(['config', 'user.email'])).trim(),
+      'original@example.invalid',
+    );
+    const manual = new GitWorkspaceService(root);
+    await writeFile(path.join(root, 'feature'), 'manual change');
+    await manual.call('stage', {
+      revision: (await manual.snapshot()).revision,
+      paths: ['feature'],
+    });
+    await manual.call('commit', {
+      revision: (await manual.snapshot()).revision,
+      paths: ['feature'],
+      message: 'Record manual change',
+      identity: { name: 'Forged', email: 'forged@example.invalid' },
+      signoff: true,
+    });
+    assert.equal(
+      (await manual.git(['log', '-1', '--format=%an <%ae>'])).trim(),
+      'Original <original@example.invalid>',
+    );
+    assert.doesNotMatch(
+      await manual.git(['log', '-1', '--format=%B']),
+      /Signed-off-by|Forged/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
