@@ -4,6 +4,11 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Fixed
+
+- `/hub refresh` returns after its platform view has been updated, including when overlapping status reads wait for the sign-in file. The commands and tools use only the hub names.
+- This is the first published build of the hub extension from the 1.7.0 line; the v1.7.0 tag did not produce a release. The earlier hub commands, module execution, source binding and result downloads are included.
+
 ## 1.7.0 - 2026-10-15
 
 ### Changed
