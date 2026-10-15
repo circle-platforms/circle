@@ -5,6 +5,7 @@ import './debug-panel.css';
 
 type Snapshot = {
   status: string;
+  pauseId?: number;
   reason?: string;
   output: string;
   breakpoints: Record<string, any[]>;
@@ -36,6 +37,7 @@ export function DebugPanel({
   const [line, setLine] = useState('1');
   const [frames, setFrames] = useState<any[]>([]);
   const [variables, setVariables] = useState<any[]>([]);
+  const [scopeList, setScopeList] = useState<any[]>([]);
   const [expression, setExpression] = useState('');
   const [result, setResult] = useState('');
   const [error, setError] = useState('');
@@ -72,7 +74,7 @@ export function DebugPanel({
       setFrames([]);
       setVariables([]);
     }
-  }, [state.status, state.reason]);
+  }, [state.status, state.reason, state.pauseId]);
   async function act(method: string, params: Record<string, unknown> = {}) {
     setBusy(true);
     setError('');
@@ -90,19 +92,15 @@ export function DebugPanel({
       onFile?.(frame.source.path, frame.line);
     try {
       const scopes = await call<any>('scopes', { frameId: frame.id });
-      const rows = await Promise.all(
-        scopes.scopes.map(async (s: any) => ({
-          scope: s.name,
-          ...(await call<any>('variables', {
-            variablesReference: s.variablesReference,
-          })),
-        })),
-      );
-      setVariables(
-        rows.flatMap((r) =>
-          r.variables.map((v: any) => ({ ...v, scope: r.scope })),
-        ),
-      );
+      setScopeList(scopes.scopes);
+      const initial =
+        scopes.scopes.find((s: any) => !s.expensive) ?? scopes.scopes[0];
+      if (initial) {
+        const result = await call<any>('variables', {
+          variablesReference: initial.variablesReference,
+        });
+        setVariables(result.variables);
+      } else setVariables([]);
     } catch (e) {
       setError(String(e));
     }
@@ -215,6 +213,20 @@ export function DebugPanel({
         </section>
         <section>
           <h3>{t('variables')}</h3>
+          {scopeList.map((scope) => (
+            <button
+              key={scope.variablesReference}
+              onClick={() =>
+                void call<any>('variables', {
+                  variablesReference: scope.variablesReference,
+                })
+                  .then((r) => setVariables(r.variables))
+                  .catch((e) => setError(String(e)))
+              }
+            >
+              {scope.name}
+            </button>
+          ))}
           {variables.map((v, i) => (
             <div key={i}>
               <button

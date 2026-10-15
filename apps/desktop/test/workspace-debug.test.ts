@@ -298,3 +298,61 @@ test('DAP frames survive split headers and reject pending requests on close', as
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test(
+  'step in and out preserve project stack and evaluate paused locals',
+  {
+    timeout: 15000,
+    skip: !existsSync(adapterPath) && 'set CIRCLE_JS_DEBUG_ADAPTER',
+  },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'circle-debug-steps-'));
+    await writeFile(
+      path.join(root, 'fixture.cjs'),
+      'function inner() {\n const local = 41;\n return local + 1;\n}\nfunction outer() {\n const result = inner();\n console.log(result);\n setInterval(()=>{},1000);\n}\nouter();\n',
+    );
+    const service = new WorkspaceDebugService({
+      workspaceRoot: root,
+      nodeExecutable,
+      runtimeExecutable:
+        process.env.CIRCLE_JS_DEBUG_RUNTIME ?? process.execPath,
+      adapterPath,
+    });
+    const paused = async () => {
+      const until = Date.now() + 5000;
+      while (service.snapshot().status !== 'paused' && Date.now() < until)
+        await new Promise((r) => setTimeout(r, 10));
+      assert.equal(service.snapshot().status, 'paused');
+    };
+    const step = async (method: string) => {
+      await service.handle(method);
+      await new Promise((r) => setTimeout(r, 50));
+      await paused();
+      return service.handle('stackTrace');
+    };
+    try {
+      await service.handle('setBreakpoints', {
+        path: 'fixture.cjs',
+        lines: [6],
+      });
+      await service.handle('launch', { program: 'fixture.cjs' });
+      await paused();
+      const inside = await step('stepIn');
+      assert.match(inside.stackFrames[0].name, /(?:^|\.)inner$/);
+      await step('next');
+      const stack = await service.handle('stackTrace');
+      const evaluated = await service.handle('evaluate', {
+        expression: 'local + 1',
+        frameId: stack.stackFrames[0].id,
+        context: 'repl',
+      });
+      assert.equal(evaluated.result, '42');
+      const outside = await step('stepOut');
+      assert.match(outside.stackFrames[0].name, /(?:^|\.)outer$/);
+      await service.handle('continue');
+    } finally {
+      await service.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

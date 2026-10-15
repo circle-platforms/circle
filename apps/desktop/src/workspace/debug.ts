@@ -145,6 +145,7 @@ export interface DebugOptions {
 export interface DebugSnapshot {
   status: 'idle' | 'starting' | 'running' | 'paused' | 'stopped' | 'failed';
   threadId?: number;
+  pauseId?: number;
   reason?: string;
   output: string;
   breakpoints: Record<string, any[]>;
@@ -279,6 +280,7 @@ export class WorkspaceDebugService {
         });
         this.connections.add(connection);
         connection.on('output', (body) => {
+          if (generation !== this.generation) return;
           if (body.category !== 'telemetry')
             this.publish({
               output: (this.state.output + (body.output ?? '')).slice(
@@ -287,6 +289,7 @@ export class WorkspaceDebugService {
             });
         });
         connection.on('breakpoint', (body) => {
+          if (generation !== this.generation) return;
           const b = body.breakpoint;
           if (!b) return;
           for (const [source, rows] of Object.entries(this.state.breakpoints)) {
@@ -301,8 +304,10 @@ export class WorkspaceDebugService {
           this.publish({});
         });
         connection.on('stopped', async (body) => {
-          if (body.reason === 'entry' && this.resumeEntry) {
-            this.resumeEntry = false;
+          if (generation !== this.generation) return;
+          const resumeEntry = body.reason === 'entry' && this.resumeEntry;
+          this.resumeEntry = false;
+          if (resumeEntry) {
             try {
               for (const [source, breakpoints] of Object.entries(
                 this.state.breakpoints,
@@ -319,16 +324,21 @@ export class WorkspaceDebugService {
           }
           this.publish({
             status: 'paused',
+            pauseId: (this.state.pauseId ?? 0) + 1,
             threadId: body.threadId,
             reason: body.reason,
           });
         });
-        connection.on('continued', () =>
-          this.publish({ status: 'running', reason: undefined }),
-        );
-        connection.on('terminated', () => this.publish({ status: 'stopped' }));
+        connection.on('continued', () => {
+          if (generation === this.generation)
+            this.publish({ status: 'running', reason: undefined });
+        });
+        connection.on('terminated', () => {
+          if (generation === this.generation)
+            this.publish({ status: 'stopped' });
+        });
         connection.on('closed', () => {
-          if (this.state.status !== 'stopped')
+          if (generation === this.generation && this.state.status !== 'stopped')
             this.publish({
               status: 'failed',
               reason: 'debug adapter disconnected',
