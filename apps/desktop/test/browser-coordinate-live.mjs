@@ -5,7 +5,13 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { randomUUID } from 'node:crypto';
 import { _electron as electron } from 'playwright';
+import {
+  captureNativeFailure,
+  cleanupNativeFixture,
+  writeNativeFailure,
+} from './helpers/native-failure.mjs';
 
 // A local model gateway reads the real preceding screenshot result. It never calls a model.
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -156,6 +162,13 @@ for (const key of Object.keys(env))
     delete env[key];
 delete env.ELECTRON_RUN_AS_NODE;
 let app;
+let page;
+const errors = [];
+const attempt = { id: randomUUID(), startedAt: new Date().toISOString() };
+let stage = 'launch';
+let primaryFailed = false;
+let failureDetails;
+let observerStartedAt;
 try {
   app = await electron.launch({
     executablePath:
@@ -166,27 +179,35 @@ try {
     chromiumSandbox: true,
     timeout: 45000,
   });
+  stage = 'first window';
   app.context().on('page', (page) => page.on('dialog', () => {}));
-  const page = await app.firstWindow();
+  page = await app.firstWindow();
   page.setDefaultTimeout(20000);
-  const errors = [];
+  observerStartedAt = new Date().toISOString();
   page.on('pageerror', (error) => errors.push(error.message));
+  stage = 'show and size window';
   await app.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows()[0];
     window.show();
     window.setContentSize(1400, 900);
   });
+  stage = 'fill base url';
   await page
     .getByRole('textbox', { name: 'base url', exact: true })
     .fill(url + 'v1');
+  stage = 'fill api key';
   await page
     .getByRole('textbox', { name: 'api key', exact: true })
     .fill('coordinate-fixture-key');
+  stage = 'probe connection';
   await page.getByRole('button', { name: 'next', exact: true }).click();
+  stage = 'select model';
   await page
     .getByRole('option', { name: 'coordinate-fixture', exact: true })
     .click();
+  stage = 'save connection';
   await page.getByRole('button', { name: 'connect', exact: true }).click();
+  stage = 'coordinate conversation';
   await page
     .getByRole('textbox', { name: 'message', exact: true })
     .fill('click the local ellipsis');
@@ -303,9 +324,44 @@ try {
     ),
   );
   console.log(JSON.stringify({ checks: 5, packaged: info.packaged, output }));
+} catch (error) {
+  primaryFailed = true;
+  try {
+    failureDetails = await captureNativeFailure({
+      app,
+      page,
+      error,
+      events: errors,
+      output,
+      attempt,
+      stage,
+      observerStartedAt,
+      expectedDataPath: env.CIRCLE_WORKBENCH_DATA_DIR,
+    });
+  } catch (secondary) {
+    console.error('coordinate failure diagnostic failed:', secondary);
+  }
+  throw error;
 } finally {
-  if (app) await app.close();
-  server.closeAllConnections();
-  await new Promise((resolve) => server.close(resolve));
-  await rm(temp, { recursive: true, force: true });
+  await cleanupNativeFixture({
+    primaryFailed,
+    operations: [
+      ['application', () => app?.close()],
+      ['server connections', () => server.closeAllConnections()],
+      [
+        'server',
+        () =>
+          new Promise((resolve, reject) =>
+            server.close((error) => (error ? reject(error) : resolve())),
+          ),
+      ],
+      ['scratch', () => rm(temp, { recursive: true, force: true })],
+    ],
+    onErrors: async (cleanupErrors) => {
+      if (failureDetails) {
+        failureDetails.cleanupErrors = cleanupErrors;
+        await writeNativeFailure(output, failureDetails);
+      }
+    },
+  });
 }
