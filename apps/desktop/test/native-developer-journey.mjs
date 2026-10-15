@@ -1,3 +1,4 @@
+import { runNativeBrowserStream } from './helpers/native-browser-stream.mjs';
 import {
   createNativeEditorIsolationFixture,
   runNativeEditorIsolation,
@@ -47,7 +48,7 @@ const baseline = '# native journey\n\noriginal content\n';
 const program =
   "function fixture() {\n  const count = 3;\n  const next = count + 1;\n  console.log('DEBUG_RESULT', next);\n  return next;\n}\nfixture();\n";
 const browserSource =
-  "function browserFixture(){\n  console.error('JOURNEY_CONSOLE_SOURCE');\n}\nbrowserFixture();\nfetch('/api/data').then(r=>r.text()).then(v=>console.log(v));\nlocalStorage.setItem('journey','before');\n";
+  "function browserFixture(){\n  console.error('JOURNEY_CONSOLE_SOURCE');\n}\nbrowserFixture();\nfetch('/api/data').then(r=>r.text()).then(v=>console.log(v));\nlocalStorage.setItem('journey','before');\nnew EventSource('/events').onmessage = event => console.log(event.data);\n";
 await Promise.all([
   writeFile(
     join(repo, 'AGENTS.md'),
@@ -167,7 +168,18 @@ await writeFile(
     ],
   }),
 );
+const browserStreams = new Set();
 const server = createServer((request, response) => {
+  if (request.url === '/events') {
+    response.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+    });
+    response.write(': ready\n\n');
+    browserStreams.add(response);
+    request.on('close', () => browserStreams.delete(response));
+    return;
+  }
   if (request.url === '/source.js') {
     response.setHeader('Content-Type', 'text/javascript');
     response.end(
@@ -790,6 +802,21 @@ try {
     assert.equal(png.readUInt32BE(20), 812);
     await writeFile(join(output, '07-actual-browser-capture-375x812.png'), png);
     await screenshot('07-browser-storage-viewport');
+    if (process.env.CIRCLE_NATIVE_JOURNEY_PUSH === '1') {
+      await until(
+        async () => browserStreams.size > 0,
+        'synthetic browser event stream connected',
+      );
+      await runNativeBrowserStream({
+        page,
+        sessionId,
+        output,
+        emit(marker) {
+          for (const stream of browserStreams)
+            stream.write('data: ' + marker + '\n\n');
+        },
+      });
+    }
   });
   await check('draft survives layout switches', async () => {
     const message = page.getByRole('textbox', { name: 'message', exact: true });
