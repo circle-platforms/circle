@@ -112,7 +112,7 @@ export async function runNativeEditorSemantics({
     await until(
       async () =>
         (await disk()) ===
-        'const value = 2;\nconsole.log(value);\nexport {};\n',
+        'const value = 2;\nconsole.log(value);\nexport { };\n',
       'range replacement and format save exact expected disk bytes',
     );
     checks.push('native range replacement and formatting save exact content');

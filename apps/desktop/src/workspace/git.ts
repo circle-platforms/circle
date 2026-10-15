@@ -42,19 +42,26 @@ export class GitWorkspaceService {
     this.options = structuredClone(options);
   }
   async git(args: string[], input?: string) {
+    const env = {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_EDITOR: 'true',
+      ...(['status', 'diff'].includes(args[0] ?? '')
+        ? { GIT_OPTIONAL_LOCKS: '0' }
+        : {}),
+    };
+    // Diff's porcelain auto-refresh runs update-index separately; disable it too.
+    const prefix =
+      args[0] === 'diff' ? ['-c', 'diff.autoRefreshIndex=false'] : [];
     if (input !== undefined)
       return new Promise<string>((resolve, reject) => {
         const child = execFile(
           'git',
-          ['--literal-pathspecs', '-C', this.root, ...args],
+          ['--literal-pathspecs', '-C', this.root, ...prefix, ...args],
           {
             encoding: 'utf8',
             maxBuffer: 32 * 1024 * 1024,
-            env: {
-              ...process.env,
-              GIT_TERMINAL_PROMPT: '0',
-              GIT_EDITOR: 'true',
-            },
+            env,
           },
           (error, stdout, stderr) =>
             error ? reject(Error(stderr || error.message)) : resolve(stdout),
@@ -62,11 +69,15 @@ export class GitWorkspaceService {
         child.stdin?.end(input);
       });
     return (
-      await exec('git', ['--literal-pathspecs', '-C', this.root, ...args], {
-        encoding: 'utf8',
-        maxBuffer: 32 * 1024 * 1024,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_EDITOR: 'true' },
-      })
+      await exec(
+        'git',
+        ['--literal-pathspecs', '-C', this.root, ...prefix, ...args],
+        {
+          encoding: 'utf8',
+          maxBuffer: 32 * 1024 * 1024,
+          env,
+        },
+      )
     ).stdout;
   }
   async snapshot(): Promise<GitSnapshot> {

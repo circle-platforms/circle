@@ -18,6 +18,11 @@ import {
   preserveNativeClipboard,
   restoreNativeClipboard,
 } from './helpers/native-clipboard.mjs';
+import {
+  performanceMessages,
+  PERFORMANCE_RAW_MESSAGES,
+  PERFORMANCE_PROJECTED_MESSAGES,
+} from './helpers/native-performance-fixture.mjs';
 import { CheckpointStore } from '../../../src/checkpoint_store.ts';
 import {
   defaultSettings,
@@ -101,45 +106,9 @@ store.append(otherSession, [
   },
 ]);
 store.create(workspace, 'fixture', 'performance history', mainSession);
-const messages = Array.from({ length: 9997 }, (_, index) => ({
-  id: `history-${index}`,
-  role: index % 2 ? 'assistant' : 'user',
-  content: `persisted history ${index} · ${'readable transcript '.repeat(5)}`,
-}));
-messages.push({
-  id: 'history-tool-call',
-  role: 'assistant',
-  content: '',
-  tool_calls: [
-    {
-      id: 'perf-execute',
-      name: 'execute',
-      args: { command: 'historical performance fixture' },
-    },
-  ],
-});
-messages.push({
-  id: 'history-tool-result',
-  role: 'tool',
-  tool_call_id: 'perf-execute',
-  content: log,
-});
-messages.push({
-  id: 'history-last',
-  role: 'assistant',
-  content:
-    'PERF_HISTORY_READY\n\n[README](README.md#L1) · [SECOND](SECOND.md#L1)',
-  attachments: [
-    {
-      kind: 'image',
-      filename: 'performance-original.png',
-      mime_type: 'image/png',
-      data: png,
-    },
-  ],
-});
+const messages = performanceMessages({ png, log });
 store.append(mainSession, messages);
-assert.equal(store.messages(mainSession).length, 10000);
+assert.equal(store.messages(mainSession).length, PERFORMANCE_RAW_MESSAGES);
 store.close();
 await writeFile(
   join(home, 'desktop-session.json'),
@@ -201,7 +170,8 @@ const report = {
   executable,
   appPath,
   workload: {
-    persistedMessages: 10000,
+    persistedMessages: PERFORMANCE_RAW_MESSAGES,
+    projectedMessages: PERFORMANCE_PROJECTED_MESSAGES,
     activeStreamingAgents: 8,
     agentChunkIntervalMs: 40,
     ptyIntervalMs: 50,
@@ -318,12 +288,16 @@ try {
         snapshot.runtime?.connected &&
         snapshot.activeSessionId === mainSession &&
         snapshot.sessions.find((s) => s.id === mainSession)?.messages.length ===
-          10000
+          PERFORMANCE_PROJECTED_MESSAGES
       );
     },
     '10k history loaded',
     60000,
   );
+  await page
+    .locator('.transcript')
+    .getByText('PERF_HISTORY_READY', { exact: false })
+    .waitFor();
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   report.sourceBuildHead = (
     await exec('git', ['-C', desktopRoot, 'rev-parse', 'HEAD'])
@@ -606,6 +580,14 @@ try {
   const image = page.getByRole('dialog').locator('img');
   await image.waitFor();
   assert.equal(await image.getAttribute('src'), `data:image/png;base64,${png}`);
+  assert.equal(
+    await image.evaluate(
+      (node) =>
+        node.complete && node.naturalWidth > 0 && node.naturalHeight > 0,
+    ),
+    true,
+    'historical original PNG decodes into visible image pixels',
+  );
   await page.getByRole('button', { name: 'close dialog', exact: true }).click();
   assert.ok(
     Math.abs(
@@ -662,6 +644,21 @@ try {
 } catch (error) {
   report.failure = String(error.stack ?? error);
   try {
+    const actual = await state();
+    report.actualStateOnFailure = {
+      activeSessionId: actual.activeSessionId,
+      runtime: actual.runtime,
+      sessions: actual.sessions.map((session) => ({
+        id: session.id,
+        state: session.state,
+        projectedMessages: session.messages.length,
+        leafId: session.leafId,
+      })),
+    };
+  } catch (diagnosticError) {
+    report.stateReadFailure = String(diagnosticError);
+  }
+  try {
     if (page) await page.screenshot({ path: join(output, 'failure.png') });
   } catch {}
   process.exitCode = 1;
@@ -691,6 +688,24 @@ try {
       process.exitCode = 1;
     }
     await app.close().catch(() => {});
+  }
+  for (const [metric, budget] of Object.entries({
+    inputKeystroke: 100,
+    inputPaste: 100,
+    click: 100,
+    eventToFrame: 200,
+    sessionSwitch: 300,
+    fileSwitch: 300,
+    save: 500,
+  })) {
+    if (!report.metrics[metric] && samples[metric].length)
+      report.metrics[metric] = {
+        n: samples[metric].length,
+        p95: p95(samples[metric]),
+        budgetMs: budget,
+        passed: samples[metric].length >= 20 && p95(samples[metric]) <= budget,
+        partial: !report.complete,
+      };
   }
   report.finishedAt = new Date().toISOString();
   await writeFile(join(output, 'report.json'), JSON.stringify(report, null, 2));

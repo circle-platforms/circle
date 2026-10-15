@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { GitWorkspaceService } from '../src/workspace/git.ts';
@@ -268,5 +268,66 @@ test('same-head branch changes and origin push destination changes invalidate ol
     await rm(root, { recursive: true, force: true });
     await rm(remoteA, { recursive: true, force: true });
     await rm(remoteB, { recursive: true, force: true });
+  }
+});
+
+test('read-only refresh preserves index bytes and required write locks', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-git-read-lock-'));
+  const s = new GitWorkspaceService(root);
+  try {
+    await s.git(['init', '-b', 'codex/a']);
+    await s.git(['config', 'user.name', 'Test']);
+    await s.git(['config', 'user.email', 'test@example.invalid']);
+    for (let i = 0; i < 40; i++)
+      await writeFile(path.join(root, `file-${i}`), 'original\n');
+    await s.git([
+      'add',
+      '--',
+      ...Array.from({ length: 40 }, (_, i) => `file-${i}`),
+    ]);
+    await s.git(['commit', '-m', 'Initial']);
+    await s.git(['branch', 'codex/b']);
+    const index = path.join(root, '.git', 'index');
+    const before = await readFile(index);
+    const future = new Date(Date.now() + 5000);
+    for (let i = 0; i < 40; i++)
+      await utimes(path.join(root, `file-${i}`), future, future);
+    await s.snapshot();
+    await s.call('diff', { paths: ['file-0'] });
+    assert.deepEqual(
+      await readFile(index),
+      before,
+      'readers must not refresh index stat cache',
+    );
+    for (let round = 0; round < 10; round++) {
+      await utimes(
+        path.join(root, 'file-0'),
+        new Date(Date.now() + 6000 + round),
+        new Date(Date.now() + 6000 + round),
+      );
+      await Promise.all([
+        ...Array.from({ length: 6 }, () =>
+          s.git(['status', '--porcelain=v1', '-z']),
+        ),
+        s.git(['switch', round % 2 ? 'codex/a' : 'codex/b']),
+      ]);
+    }
+    await writeFile(path.join(root, 'file-0'), 'changed\n');
+    const revision = (await s.snapshot()).revision;
+    const lock = path.join(root, '.git', 'index.lock');
+    await writeFile(lock, 'owned sentinel');
+    await assert.rejects(
+      s.call('stage', { revision, paths: ['file-0'] }),
+      /index.lock/,
+    );
+    assert.equal(await readFile(lock, 'utf8'), 'owned sentinel');
+    await rm(lock);
+    await s.call('stage', {
+      revision: (await s.snapshot()).revision,
+      paths: ['file-0'],
+    });
+    assert.equal(await s.git(['show', ':file-0']), 'changed\n');
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

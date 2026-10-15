@@ -4,8 +4,11 @@ import { test, type TestContext } from 'node:test';
 import { join } from 'node:path';
 import { syncBuiltinESMExports } from 'node:module';
 import { InputHistory } from '../src/tui/input_history.js';
-import { InputHistoryIoError } from '../src/tui/input_history_file.js';
-import { scratch } from './helpers.js';
+import {
+  historyFileOperation,
+  InputHistoryIoError,
+} from '../src/tui/input_history_file.js';
+import { cleanup, scratch } from './helpers.js';
 function fault(code: string) {
   return Object.assign(new Error('controlled filesystem failure'), { code });
 }
@@ -157,7 +160,10 @@ test('persistent permission failure is bounded, explicit and preserves the pendi
   }) as typeof fs.renameSync);
   const started = Date.now();
   assert.equal(history.add('kept in this process'), false);
-  assert.equal(calls, 9);
+  assert(
+    calls >= 1 && calls <= 9,
+    'stop at the attempt cap or elapsed deadline, whichever comes first',
+  );
   assert(Date.now() - started < 1500, 'sharing backoff has a finite deadline');
   assert.equal(history.pendingCount, 1);
   assert.equal((history.persistenceError as InputHistoryIoError).code, 'EPERM');
@@ -166,6 +172,43 @@ test('persistent permission failure is bounded, explicit and preserves the pendi
   assert.equal(history.flush(), true);
   assert.deepEqual(stored(path), ['kept in this process']);
   assert.equal(history.pendingCount, 0);
+});
+
+test('sharing retry independently enforces the attempt cap and elapsed deadline', (t) => {
+  let now = 1000;
+  t.mock.method(Date, 'now', () => now);
+  let cappedCalls = 0;
+  assert.throws(
+    () =>
+      historyFileOperation('publish', () => {
+        cappedCalls++;
+        throw fault('EPERM');
+      }),
+    (error) =>
+      error instanceof InputHistoryIoError &&
+      error.stage === 'publish' &&
+      error.code === 'EPERM',
+  );
+  assert.equal(
+    cappedCalls,
+    9,
+    'the attempt cap applies even when no clock time advances',
+  );
+  let timedCalls = 0;
+  assert.throws(
+    () =>
+      historyFileOperation('publish', () => {
+        timedCalls++;
+        now += 251;
+        throw fault('EBUSY');
+      }),
+    (error) => error instanceof InputHistoryIoError && error.code === 'EBUSY',
+  );
+  assert.equal(
+    timedCalls,
+    1,
+    'a slow failed call exhausts the deadline without another filesystem call',
+  );
 });
 
 test('fresh views keep their navigation draft while failed deltas merge without erasing legacy multiline history', (t) => {
@@ -200,6 +243,9 @@ test('the real composer reports a history write failure, retains the entry in me
     model = new ScriptedModel();
   const app = new SessionApp(workspace, home, settings),
     ui = app as any;
+  // Register with scratch ownership so the real SQLite connection closes before
+  // its directory is removed. Independent t.after hooks run after scratch cleanup.
+  cleanup(t, () => app.close());
   ui.screen.render = () => {};
   app.terminal = {
     platform: process.platform,
@@ -208,7 +254,6 @@ test('the real composer reports a history write failure, retains the entry in me
     kill: () => {},
   };
   await app.attach({ workspace, home, settings, model, headless: true });
-  t.after(() => app.close());
   const rename = fs.renameSync;
   patch(t, 'renameSync', ((source, destination) => {
     if (destination === ui.history.path) throw fault('ENOSPC');

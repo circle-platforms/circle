@@ -121,6 +121,14 @@ export async function runNativeGitJourney({
     throw Error('native Git timed out: ' + label);
   };
   const panel = page.locator('.native-git');
+  const waitForNativeIdle = async () =>
+    until(
+      () =>
+        panel
+          .getByRole('button', { name: 'push branch', exact: true })
+          .isEnabled(),
+      'native Git operation completed',
+    );
   const refresh = async () => {
     await panel
       .getByRole('button', { name: 'refresh', exact: true })
@@ -159,6 +167,7 @@ export async function runNativeGitJourney({
       async () => (await git('log', '-1', '--format=%s')).trim() === message,
       'commit disk effect',
     );
+    await waitForNativeIdle();
     assert.deepEqual(
       (await git('show', '--format=', '--name-only', 'HEAD'))
         .trim()
@@ -185,6 +194,7 @@ export async function runNativeGitJourney({
         ).trim() === head
       );
     }, 'local bare receives exact feature head');
+    await waitForNativeIdle();
     pushedHeads.push(
       (
         await git('--git-dir=' + remote, 'rev-parse', 'refs/heads/' + branch)
@@ -300,6 +310,7 @@ export async function runNativeGitJourney({
         )),
       'native merge continue',
     );
+    await waitForNativeIdle();
     assert.equal(
       (await git('rev-list', '--parents', '-n', '1', 'HEAD')).trim().split(' ')
         .length,
@@ -336,6 +347,7 @@ export async function runNativeGitJourney({
         )),
       'native merge abort',
     );
+    await waitForNativeIdle();
     assert.equal((await git('rev-parse', 'HEAD')).trim(), beforeAbort);
     assert.equal(
       await readFile(path.join(root, names.conflict), 'utf8'),

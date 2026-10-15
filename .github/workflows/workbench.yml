@@ -28,7 +28,8 @@ jobs:
   native:
     strategy:
       fail-fast: false
-      max-parallel: 2
+      # One native runner plus the independent Windows runner: two slots total.
+      max-parallel: 1
       matrix:
         include:
           - runner: macos-15
@@ -135,10 +136,9 @@ jobs:
             ${{ runner.temp }}/circle-xvfb.log
           if-no-files-found: error
   package-other-platforms:
-    # Native builds occupy at most two runners; Windows follows without becoming
-    # silently skipped when a different operating system has a test failure.
-    needs: native
-    if: ${{ always() && !cancelled() }}
+    # Start Windows independently so slower native platforms cannot prevent
+    # ConPTY and packaged Windows acceptance from ever getting a turn.
+    # The native matrix uses one other slot; at most two builds run together.
     strategy:
       fail-fast: false
       matrix:

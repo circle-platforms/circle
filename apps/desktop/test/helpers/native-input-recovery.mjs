@@ -39,31 +39,85 @@ export async function runNativeInputRecovery({
     (await state()).sessions.find((s) => s.id === sessionId);
   const composer = () =>
     page.getByRole('textbox', { name: 'message', exact: true });
+  let pasteAttempt = 0;
   const pasteImage = async () => {
+    pasteAttempt++;
+    const observations = { attempt: pasteAttempt };
     const app = getApp();
     const clipboardKey = await preserveNativeClipboard(app);
     try {
       const before = (await current()).attachments.length;
-      await app.evaluate(async ({ clipboard, ClipboardItem, nativeImage }) => {
-        const png = nativeImage
-          .createFromBitmap(Buffer.from([10, 20, 30, 255]), {
-            width: 1,
-            height: 1,
-          })
-          .toPNG();
-        await clipboard.write([
-          new ClipboardItem({
-            'image/png': new Blob([png], { type: 'image/png' }),
-          }),
-        ]);
+      observations.native = await app.evaluate(
+        async ({ clipboard, ClipboardItem, nativeImage }) => {
+          const png = nativeImage
+            .createFromBitmap(Buffer.from([10, 20, 30, 255]), {
+              width: 1,
+              height: 1,
+            })
+            .toPNG();
+          await clipboard.write([
+            new ClipboardItem({
+              'image/png': new Blob([png], { type: 'image/png' }),
+            }),
+          ]);
+          return {
+            types: (await clipboard.read()).flatMap((item) => item.types),
+            pngPresent: await clipboard.has('image/png'),
+          };
+        },
+      );
+      await page.evaluate(() => {
+        const events = [];
+        const listener = (event) =>
+          events.push({
+            trusted: event.isTrusted,
+            types: [...event.clipboardData.types],
+            items: [...event.clipboardData.items].map((item) => ({
+              kind: item.kind,
+              type: item.type,
+            })),
+            files: [...event.clipboardData.files].map((file) => ({
+              type: file.type,
+              size: file.size,
+            })),
+            target: event.target?.getAttribute('aria-label'),
+            documentFocused: document.hasFocus(),
+          });
+        document.addEventListener('paste', listener, true);
+        window.__circlePasteObservation = {
+          events,
+          cleanup: () => document.removeEventListener('paste', listener, true),
+        };
       });
-      await composer().focus();
+      await app.evaluate(({ app, BrowserWindow }) => {
+        app.focus({ steal: true });
+        BrowserWindow.getAllWindows()
+          .find((window) => !window.isDestroyed())
+          ?.focus();
+      });
+      await composer().click();
+      observations.focus = await composer().evaluate((node) => ({
+        documentFocused: document.hasFocus(),
+        inputFocused: document.activeElement === node,
+      }));
       await page.keyboard.press('ControlOrMeta+v');
       await until(
         async () => (await current()).attachments.length > before,
         'real native valid PNG paste received',
       );
     } finally {
+      observations.events = await page
+        .evaluate(() => {
+          const observer = window.__circlePasteObservation;
+          observer?.cleanup();
+          delete window.__circlePasteObservation;
+          return observer?.events ?? [];
+        })
+        .catch((error) => ({ unavailable: String(error) }));
+      await writeFile(
+        join(output, `outbox-paste-${pasteAttempt}-observations.json`),
+        JSON.stringify(observations, null, 2),
+      );
       await restoreNativeClipboard(app, clipboardKey);
     }
   };
