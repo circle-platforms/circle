@@ -11,6 +11,7 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -538,8 +539,29 @@ test('parsing: -n collapses spaces and cuts to 80, @files are kept apart, a fold
   assert.equal(flag.workspace, realpathSync.native(workspace));
   // A single word is the folder even when it does not exist.
   const typo = parseCli(['--line', 'hello'], workspace);
-  assert.equal(typo.workspace, join(realpathSync.native(workspace), 'hello'));
+  assert.equal(typo.workspace, join(workspace, 'hello'));
+  assert.equal(existsSync(typo.workspace), false);
   assert.deepEqual(typo.prompts, []);
+});
+
+test('CLI preserves a missing workspace lexical path while existing alias input resolves to its actual native directory', (t) => {
+  const base = scratch(t),
+    workspace = join(base, 'workspace'),
+    alias = join(base, 'workspace-alias');
+  mkdirSync(workspace);
+  symlinkSync(
+    workspace,
+    alias,
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
+  const missing = parseCli(['--line', 'hello'], alias);
+  assert.equal(missing.workspace, join(alias, 'hello'));
+  assert.equal(existsSync(missing.workspace), false);
+  assert.deepEqual(missing.prompts, []);
+  assert.equal(
+    parseCli(['--line', alias]).workspace,
+    realpathSync.native(workspace),
+  );
 });
 
 test('-n names the saved conversation with its spaces collapsed', async (t) => {
