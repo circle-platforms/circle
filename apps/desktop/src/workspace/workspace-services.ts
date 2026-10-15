@@ -147,7 +147,7 @@ export class WorkspaceServices {
       { encoding: 'utf8' },
     ).then(async ({ stdout }) => {
       const root = await realpath(options.workspaceRoot);
-      if (stdout.trim() !== root)
+      if ((await realpath(stdout.trim())) !== root)
         throw Error('open the repository root to grant Git workspace access');
       return new GitWorkspaceService(root);
     });
