@@ -154,6 +154,53 @@ test('the desktop keeps interleaved text and thinking, then exposes one typed in
     () => f.updates.some((row) => row.event?.kind === 'run_error'),
     'specific completion failure',
   );
+  const early = f.updates.find(
+    (row) =>
+      row.event?.kind === 'llm_end' &&
+      (row.event.payload.message as Message | undefined)?.id === 'partial',
+  )!;
+  const earlySession = early.snapshot.sessions.find(
+    (row) => row.id === early.snapshot.activeSessionId,
+  )!;
+  assert(
+    earlySession.messages.some(
+      (row) => row.completionFailure === 'output_limit',
+    ),
+    'the saved partial response already projects its diagnostic at llm_end',
+  );
+  assert.equal(
+    earlySession.messages.find((row) => row.tool?.id === 'blocked')?.tool
+      ?.status,
+    'unknown',
+    'the projected diagnostic does not mean blocked calls have their results yet',
+  );
+  assert(earlySession.turn, 'llm_end is still inside the running turn');
+  const ended = f.updates.find(
+    (row) =>
+      row.event?.kind === 'run_error' &&
+      row.event.payload.completion_message_id === 'partial',
+  )!;
+  const endedSession = ended.snapshot.sessions.find(
+    (row) => row.id === ended.snapshot.activeSessionId,
+  )!;
+  assert.equal(
+    endedSession.messages.find((row) => row.tool?.id === 'blocked')?.tool
+      ?.status,
+    'error',
+  );
+  assert.equal(
+    endedSession.turn,
+    undefined,
+    'the terminal failure clears turn presentation only after paired blocked results are saved',
+  );
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .sessions.find((row) => row.id === ended.snapshot.activeSessionId)
+        ?.state === 'idle',
+    'failed harness request settled',
+  );
   const snapshot = f.controller.snapshot();
   assert.equal(
     snapshot.runtime?.error,

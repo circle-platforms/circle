@@ -294,6 +294,45 @@ try {
       .getByRole('button', { name: 'send message', exact: true })
       .click();
   };
+  const completedTurn = async ({
+    kind,
+    messageId,
+    message,
+    answer,
+    blocked = [],
+  }) => {
+    await page.waitForFunction(
+      ({ sessionId, kind, messageId, message, answer }) =>
+        window.completionEvents.some(
+          ({ event }) =>
+            event.sessionId === sessionId &&
+            event.kind === kind &&
+            (!messageId || event.payload.completion_message_id === messageId) &&
+            (!message || event.payload.message === message) &&
+            (!answer || event.payload.answer === answer),
+        ),
+      { sessionId: initial.activeSessionId, kind, messageId, message, answer },
+    );
+    let completed;
+    await until(async () => {
+      const current = await state();
+      const target = current.sessions.find(
+        (row) => row.id === initial.activeSessionId,
+      );
+      if (!target || target.state !== 'idle' || target.turn) return false;
+      if (
+        !blocked.every((id) =>
+          target.messages.some(
+            (row) => row.tool?.id === id && row.tool.status === 'error',
+          ),
+        )
+      )
+        return false;
+      completed = current;
+      return true;
+    }, `completed ${kind} lifecycle with paired blocked results`);
+    return completed;
+  };
   await send('show interleaved text and thinking');
   await page.getByText('native progress one', { exact: true }).waitFor();
   await until(
@@ -309,7 +348,10 @@ try {
     'visible stream retains text and thinking',
   );
   await page.getByText('native complete answer', { exact: true }).waitFor();
-  let snapshot = await state();
+  let snapshot = await completedTurn({
+    kind: 'run_end',
+    answer: 'native complete answer',
+  });
   let session = snapshot.sessions.find(
     (row) => row.id === snapshot.activeSessionId,
   );
@@ -333,7 +375,11 @@ try {
   for (const failure of failures) {
     await send('show ' + failure.code);
     await page.getByText('✖ ' + failure.text, { exact: true }).waitFor();
-    snapshot = await state();
+    snapshot = await completedTurn({
+      kind: 'run_error',
+      messageId: failure.id,
+      blocked: failure.code === 'empty_response' ? [] : [failure.id + '-write'],
+    });
     assert.equal(
       snapshot.runtime.error,
       undefined,
@@ -363,7 +409,6 @@ try {
         ),
       );
     }
-    await new Promise((done) => setTimeout(done, 100));
     const requests = (await readFile(requestsPath, 'utf8'))
       .trim()
       .split('\n')
@@ -393,6 +438,10 @@ try {
   await page
     .getByText('✖ model ended without an answer', { exact: true })
     .waitFor();
+  await completedTurn({
+    kind: 'run_error',
+    message: 'model ended without an answer',
+  });
   assert.equal(
     await page
       .locator('.toast')
@@ -429,6 +478,10 @@ try {
   await page
     .getByText('continuation is running then finished', { exact: true })
     .waitFor();
+  await completedTurn({
+    kind: 'run_end',
+    answer: 'continuation is running then finished',
+  });
   assert.equal(
     await page
       .getByText('✖ model ended without an answer', { exact: true })
@@ -466,6 +519,10 @@ try {
   await page
     .getByText('independent notice continuation finished', { exact: true })
     .waitFor();
+  await completedTurn({
+    kind: 'run_end',
+    answer: 'independent notice continuation finished',
+  });
   assert.equal(
     await page.locator('.toast').filter({ hasText: independentNotice }).count(),
     1,
@@ -493,6 +550,7 @@ try {
         .length === 2
     );
   }, 'custom empty response error');
+  await completedTurn({ kind: 'run_error', messageId: 'custom-empty-hidden' });
   await send('continue after hidden assistant');
   await page.getByText('hidden anchor continuation', { exact: true }).waitFor();
   const hiddenOrder = async () => {
@@ -517,6 +575,10 @@ try {
   await page
     .getByText('hidden anchor continuation finished', { exact: true })
     .waitFor();
+  await completedTurn({
+    kind: 'run_end',
+    answer: 'hidden anchor continuation finished',
+  });
   await hiddenOrder();
   expectedRequests += 2;
   assert.equal(
@@ -526,10 +588,6 @@ try {
   checks.push(
     'an error anchored to a saved empty assistant stays in its original history position during and after continuation',
   );
-  await until(async () => {
-    const value = await state();
-    return !value.sessions.find((row) => row.id === value.activeSessionId).turn;
-  }, 'continuation finished before manual compaction');
   assert.equal((await command('compact')).ok, true);
   await until(async () => {
     const value = await state();
