@@ -161,6 +161,8 @@ const samples = {
   save: [],
   eventToFrame: [],
 };
+const skipLegacyLayout =
+  process.env.CIRCLE_NATIVE_PERF_SKIP_LEGACY_LAYOUT === '1';
 const errors = [];
 const checks = [];
 let app;
@@ -501,8 +503,6 @@ try {
     await input.fill(value);
     await finish('inputPaste');
   }
-  const skipLegacyLayout =
-    process.env.CIRCLE_NATIVE_PERF_SKIP_LEGACY_LAYOUT === '1';
   report.legacyLayout = skipLegacyLayout
     ? 'excluded by updated product scope; no final layout acceptance claimed'
     : 'legacy candidate baseline';
@@ -740,6 +740,21 @@ try {
   } catch {}
   process.exitCode = 1;
 } finally {
+  await writeFile(
+    join(output, 'samples-before-cleanup.json'),
+    JSON.stringify(
+      {
+        samples,
+        checks,
+        errors,
+        failure: report.failure,
+        initialTranscriptPassed: report.initialTranscriptPassed,
+        legacyLayout: report.legacyLayout,
+      },
+      null,
+      2,
+    ),
+  );
   if (page) {
     for (const id of taskIds)
       try {
