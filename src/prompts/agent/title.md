@@ -16,7 +16,7 @@ Your output must be:
 </task>
 
 <rules>
-- you MUST use the same language as the user message you are summarizing
+- you MUST write the title in the same language as the user message you are summarizing. A Chinese conversation gets a Chinese title. An English conversation gets an English title
 - Title must be grammatically correct and read naturally - no word salad
 - Never include tool names in the title (e.g. "read tool", "bash tool", "edit tool")
 - Focus on the main topic or question the user needs to retrieve
@@ -46,4 +46,6 @@ Your output must be:
 "@utils/parser.ts this is broken" → Parser bug fix
 "look at @config.json" → Config review
 "@App.tsx add dark mode toggle" → Dark mode toggle in App
+"请用大约200字介绍一下罗马帝国的兴衰" → 罗马帝国兴衰
+"帮我写一个你好世界的Go程序" → Go 你好世界
 </examples>

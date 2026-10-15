@@ -24,12 +24,11 @@ import { httpStatus } from './model_guard.js';
 import { validateAttachments } from './media.js';
 import { readPrompt } from './system_prompt.js';
 import {
+  acceptGeneratedTitle,
   fallbackTitle,
-  isNumberFragment,
-  sanitizeGeneratedTitle,
-  TITLE_MAX_CHARS,
-  TITLE_MAX_WORDS,
+  TITLE_MAX_TOKENS,
   titleConversation,
+  titleSkipReason,
 } from './session_title.js';
 import { tokenLen } from './middleware/tool_result_prune.js';
 function titleTrace(message: string): void {
@@ -356,7 +355,7 @@ export class Harness {
    * glm-5.3, so the answer never arrived. 512 leaves room for the title once
    * thinking is disabled.
    */
-  static readonly titleOutputTokens = 512;
+  static readonly titleOutputTokens = TITLE_MAX_TOKENS;
   /** Set once the fallback is saved. Sent after the turn so it does not share that request. */
   private pendingTitle?: { display: string; fallback: string };
   /**
@@ -370,22 +369,19 @@ export class Harness {
     // `this.model`, not the model passed at construction: /model and a reload replace it.
     const model = this.model;
     const prompt = display.trim();
-    // A short line keeps the fallback on purpose. A long line with no side
-    // request used to return here with no footer: the extension wrapper had
-    // dropped `sideRequests`, and harness tests never saw that wrapper.
-    if (prompt.length < 24) {
-      titleTrace(`skipped (prompt length ${prompt.length} < 24)`);
-      return;
-    }
     const report = (message: string): void => {
       titleTrace(`failed: ${message}`);
       this.bus.emit('info', {
         payload: { model_notice: { event: 'title_failed', message } },
       });
     };
-    if (!model.sideRequests) {
-      titleTrace('skipped (model has no sideRequests)');
-      report('model has no side request');
+    // A short line keeps the fallback. A long line with no side request used
+    // to return here with no footer: the extension wrapper had dropped
+    // `sideRequests`. Either way the footer says why.
+    const skip = titleSkipReason(prompt, model.sideRequests);
+    if (skip) {
+      titleTrace(`skipped (${skip})`);
+      report(skip);
       return;
     }
     titleTrace(
@@ -411,31 +407,13 @@ export class Harness {
       })
       .then((response) => {
         // Reasoning is never a title, even when the answer is empty.
-        const content = response.message.content;
-        const title = sanitizeGeneratedTitle(content);
-        const cleaned = content
-          .split('\n')
-          .map((row) => row.trim())
-          .find(Boolean)
-          ?.replace(/^["'“”‘’«»]+|["'“”‘’«»]+$/g, '')
-          .replace(/[。．.]+$/g, '')
-          .trim();
-        // `150` from "Write a 1500 word essay" is not a title. Keep the fallback
-        // without saying the request failed: the model did return a fragment.
-        const fragment = (title ?? cleaned ?? '').trim();
-        if (
-          fragment &&
-          isNumberFragment(fragment, prompt) &&
-          fragment.length <= TITLE_MAX_CHARS &&
-          fragment.split(/\s+/).length <= TITLE_MAX_WORDS
-        ) {
-          titleTrace(`discarded number fragment ${JSON.stringify(fragment)}`);
+        const decision = acceptGeneratedTitle(response.message.content, prompt);
+        if (!decision.title) {
+          titleTrace(`discarded (${decision.reason})`);
+          report(decision.reason);
           return;
         }
-        if (!title) {
-          report(content.trim() ? 'not a title' : 'empty title');
-          return;
-        }
+        const title = decision.title;
         const current = this.options.store.get(this.sessionId);
         if (!current || current.title !== fallback) {
           titleTrace(
