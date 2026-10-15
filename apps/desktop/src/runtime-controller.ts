@@ -746,7 +746,7 @@ export class RuntimeController {
       read: async (path, signal) => {
         const documents = this.services(workspace).documents;
         const document = await documents.snapshot(
-          relative(documents.root, path),
+          relative(documents.root, path).split(sep).join('/'),
           { signal },
         );
         return {
@@ -760,14 +760,14 @@ export class RuntimeController {
         const result = await documents.applyChanges(
           changes.map((change) => ({
             ...change,
-            path: relative(documents.root, change.path),
+            path: relative(documents.root, change.path).split(sep).join('/'),
           })),
           { signal },
         );
         if (result.status !== 'applied')
           throw Object.assign(
             Error(
-              result.failures.map((f) => `${f.path}: ${f.message}`).join('; '),
+              `committed paths: ${result.committedPaths.length ? result.committedPaths.join(', ') : '(none)'}; failures: ${result.failures.map((f) => `${f.path}: ${f.message}`).join('; ')}`,
             ),
             { committedPaths: result.committedPaths },
           );

@@ -1055,3 +1055,70 @@ else process.exit(2);
   assert.ok(calls.includes('"ready"'));
   assert.equal(calls.includes('"merge"'), false);
 });
+
+test('nested agent patch reports committed paths to the next model after a real competing disk write', async (t) => {
+  const f = await setup(t, [
+    {
+      message: assistant('', [
+        {
+          id: 'partial-patch',
+          name: 'apply_patch',
+          args: {
+            patchText:
+              '*** Begin Patch\n*** Update File: nested/a.ts\n@@\n-old A\n+agent A\n*** Update File: nested/b.ts\n@@\n-old B\n+agent B\n*** End Patch',
+          },
+        },
+      ]),
+    },
+    { message: assistant('inspect partial result') },
+  ]);
+  await mkdir(join(f.workspace, 'nested'));
+  await writeFile(join(f.workspace, 'nested/a.ts'), 'old A\n');
+  await writeFile(join(f.workspace, 'nested/b.ts'), 'old B\n');
+  await f.service('documents', 'read', { path: 'nested/a.ts' });
+  const documents = (f.controller as any).services(
+    realpathSync(f.workspace),
+  ).documents;
+  const readTarget = documents.readTarget.bind(documents);
+  let triggered = false;
+  t.mock.method(documents, 'readTarget', async (...args: any[]) => {
+    const result = await readTarget(...args);
+    if (
+      args[1] === 'nested/a.ts' &&
+      result.content === 'agent A\n' &&
+      !triggered
+    ) {
+      triggered = true;
+      await writeFile(join(f.workspace, 'nested/b.ts'), 'external B\n');
+    }
+    return result;
+  });
+  const started = await f.call('prompt', { text: 'update both nested files' });
+  assert.equal(started.ok, true, started.error);
+  await wait(() =>
+    f.controller.snapshot().interactions.some((i) => i.status === 'pending'),
+  );
+  const approval = f.controller
+    .snapshot()
+    .interactions.find((i) => i.status === 'pending')!;
+  await f.call(
+    'answer',
+    { id: approval.id, revision: approval.revision, answer: 'approve' },
+    approval.sessionId,
+  );
+  await wait(() => f.model.requests.length >= 2);
+  assert.equal(
+    await readFile(join(f.workspace, 'nested/a.ts'), 'utf8'),
+    'agent A\n',
+  );
+  assert.equal(
+    await readFile(join(f.workspace, 'nested/b.ts'), 'utf8'),
+    'external B\n',
+  );
+  const result = f.model.requests[1].messages
+    .filter((m) => m.role === 'tool')
+    .map((m) => m.content)
+    .join('\n');
+  assert.match(result, /committed paths: nested\/a\.ts/);
+  assert.match(result, /failures: nested\/b\.ts/);
+});
