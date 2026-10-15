@@ -11,17 +11,21 @@ import { CheckpointStore } from '../src/checkpoint_store.js';
 import { ExtensionHost } from '../src/extensions.js';
 import { Harness } from '../src/harness.js';
 import { GatewayModel } from '../src/model.js';
+import { AgentRuntime } from '../src/runtime.js';
 import { defaultSettings, saveCredentials } from '../src/settings.js';
 import {
   fallbackTitle,
+  firstUserSource,
+  isNumberFragment,
+  repairedTitle,
   sanitizeGeneratedTitle,
-  TITLE_CJK_CHARS,
   TITLE_MAX_CHARS,
   TITLE_MAX_TOKENS,
   TITLE_MAX_WORDS,
   titleConversation,
   titleWorthy,
 } from '../src/session_title.js';
+import { ScriptedModel } from '../src/testing.js';
 import type { ChatModel, ModelRequest, ModelResponse } from '../src/types.js';
 import { emptyUsage } from '../src/types.js';
 import { cleanup, scratch } from './helpers.js';
@@ -83,6 +87,8 @@ test('generated titles keep one short phrase and drop a reply', () => {
   assert.equal(sanitizeGeneratedTitle('  "Login bug"\nextra'), 'Login bug');
   assert.equal(sanitizeGeneratedTitle('会话标题。'), '会话标题');
   assert.equal(sanitizeGeneratedTitle('Sorry, I cannot do that'), undefined);
+  assert.equal(sanitizeGeneratedTitle('150'), undefined);
+  assert.equal(sanitizeGeneratedTitle('1500.'), undefined);
   assert.equal(sanitizeGeneratedTitle('   '), undefined);
   assert.equal(
     sanitizeGeneratedTitle('First heading in README.md'),
@@ -108,7 +114,36 @@ test('generated titles keep one short phrase and drop a reply', () => {
   assert.equal(sanitizeGeneratedTitle("I don't see the file"), undefined);
   assert.equal(sanitizeGeneratedTitle('Could you paste it'), undefined);
   assert.equal(sanitizeGeneratedTitle('You left out the file'), undefined);
-  assert.equal(sanitizeGeneratedTitle('我看不到附件内容'), undefined);
+  assert.equal(sanitizeGeneratedTitle('我看不到附件内容'), '我看不到附件内容');
+  assert.equal(sanitizeGeneratedTitle('你好世界 Go 程序'), '你好世界 Go 程序');
+  assert.equal(sanitizeGeneratedTitle('我的 Go 程序'), '我的 Go 程序');
+  assert.equal(sanitizeGeneratedTitle('我无法生成标题'), undefined);
+  assert.equal(sanitizeGeneratedTitle('请提供文件内容'), undefined);
+  assert.equal(sanitizeGeneratedTitle('你可以粘贴一下'), undefined);
+  assert.equal(titleWorthy('hi'), false);
+  assert.equal(titleWorthy('hello there'), false);
+  assert.equal(titleWorthy('请'), false);
+  assert.equal(titleWorthy('请用大约200字介绍一下罗马帝国的兴衰'), true);
+  assert.equal(titleWorthy('帮我写一个你好世界的Go程序'), true);
+  assert.equal(
+    repairedTitle(
+      'The user wants me to generate a title for a conver',
+      '请用大约200字介绍一下罗马帝国的兴衰',
+    ),
+    fallbackTitle('请用大约200字介绍一下罗马帝国的兴衰'),
+  );
+  assert.equal(
+    repairedTitle('150', 'Write a 1500 word essay about roman citizenship'),
+    fallbackTitle('Write a 1500 word essay about roman citizenship'),
+  );
+  assert.equal(repairedTitle('Login bug fix', LONG), undefined);
+  assert.equal(
+    firstUserSource([
+      { role: 'user', content: 'hidden', display: 'shown', internal: 'note' },
+      { role: 'user', content: 'body', display: 'visible' },
+    ]),
+    'visible',
+  );
   assert.equal(
     sanitizeGeneratedTitle(
       "I don't see any README.md content attached to your message. Could you paste…",
@@ -119,6 +154,19 @@ test('generated titles keep one short phrase and drop a reply', () => {
     sanitizeGeneratedTitle('<conversation>\nLogin bug\n</conversation>'),
     undefined,
   );
+  const essay =
+    'Write a 1500 word essay about the history of roman citizenship and the legal meaning of that status across the empire';
+  const fallback = fallbackTitle(essay);
+  assert.match(fallback, /1500/);
+  assert.notEqual(fallback, '150');
+  assert.equal(isNumberFragment('150', essay), true);
+  assert.equal(isNumberFragment('about 150', essay), true);
+  assert.equal(isNumberFragment('Roman citizenship', essay), false);
+  const cjkNumber = fallbackTitle(
+    '一二三四五六七八九十一二三四五六七八1500' + '九'.repeat(30),
+  );
+  assert.match(cjkNumber, /1500/);
+  assert.equal(/150(?!0)/.test(cjkNumber), false);
 });
 
 class TitleModel implements ChatModel {
@@ -230,10 +278,11 @@ test('a model title is asked for four words, and a greeting stays local', () => 
   const rome = '请用大约200字介绍一下罗马帝国的兴衰';
   assert.ok(rome.length < 24);
   assert.equal(rome.split(' ').length, 1);
-  assert.ok((rome.match(/[\u3400-\u9fff]/g)?.length ?? 0) >= TITLE_CJK_CHARS);
   assert.equal(titleWorthy(rome), true);
   assert.equal(titleWorthy('你好'), false);
+  assert.equal(titleWorthy('你好世界'), true);
   assert.equal(titleWorthy('罗马帝国兴衰'), true);
+  assert.equal(titleWorthy('帮我写一个你好世界的Go程序'), true);
 });
 
 test('a short prompt keeps the fallback and skips the model', async (t) => {
@@ -241,6 +290,12 @@ test('a short prompt keeps the fallback and skips the model', async (t) => {
   const model = new TitleModel('done', 'Should not appear');
   const { harness: run, store, session } = harness(root, model);
   cleanup(t, () => store.close());
+  const notes: string[] = [];
+  run.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as
+      { event?: string; message?: string } | undefined;
+    if (notice?.event === 'title_failed') notes.push(String(notice.message));
+  });
   await run.run('hello there');
   model.releaseTitle();
   await new Promise((resolve) => setImmediate(resolve));
@@ -250,6 +305,7 @@ test('a short prompt keeps the fallback and skips the model', async (t) => {
       .length,
     0,
   );
+  assert.deepEqual(notes, ['prompt too short']);
 });
 
 test('a short Chinese sentence asks for a title in that language', async (t) => {
@@ -266,7 +322,9 @@ test('a short Chinese sentence asks for a title in that language', async (t) => 
   );
   assert.ok(title);
   assert.equal(title.messages[0]!.content, titleConversation(prompt));
-  assert.match(String(title.system), /罗马帝国兴衰简介/);
+  assert.match(String(title.system), /Chinese title/);
+  assert.match(String(title.system), /罗马帝国兴衰/);
+  assert.match(String(title.system), /Go 你好世界/);
   assert.match(String(title.system), /Do not answer it/);
   model.releaseTitle();
   await new Promise((resolve) => setImmediate(resolve));
@@ -298,7 +356,10 @@ test('a skipped or failed title is reported when debug logging is on', async (t)
   const skipped = harness(root, model);
   cleanup(t, () => skipped.store.close());
   await skipped.harness.run('hi');
-  assert.match(logged.join('\n'), /\[circle\] title: skipped \(length 2,/);
+  assert.match(
+    logged.join('\n'),
+    /\[circle\] title: skipped \(prompt too short\)/,
+  );
   logged.length = 0;
   const failedRoot = scratch(t);
   const failedModel = new TitleModel('done', 'Login bug fix');
@@ -643,6 +704,208 @@ test('the extension wrapper keeps a side request so a runtime can title', async 
   model.releaseTitle();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(session.id)!.title, 'Login bug fix');
+});
+
+test('a long prompt with no side request reports title failed', async (t) => {
+  const root = scratch(t);
+  const model = new TitleModel('done', 'Login bug fix');
+  model.sideRequests = false;
+  const { harness: run, store, session } = harness(root, model);
+  cleanup(t, () => store.close());
+  const notes: string[] = [];
+  run.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as
+      { event?: string; message?: string } | undefined;
+    if (notice?.event === 'title_failed') notes.push(String(notice.message));
+  });
+  await run.run(LONG);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
+  assert.equal(
+    model.requests.filter((request) => request.maxTokens === TITLE_MAX_TOKENS)
+      .length,
+    0,
+  );
+  assert.match(notes[0] ?? '', /no side request/);
+});
+
+test('a numeric fragment is discarded and the fallback keeps the whole number', async (t) => {
+  const root = scratch(t);
+  const prompt =
+    'Write a 1500 word essay about the history of roman citizenship and why it mattered';
+  const model = new TitleModel('partial essay', '150');
+  const { harness: run, store, session } = harness(root, model);
+  cleanup(t, () => store.close());
+  const notes: string[] = [];
+  run.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as
+      { event?: string; message?: string } | undefined;
+    if (notice?.event === 'title_failed') notes.push(String(notice.message));
+  });
+  await run.run(prompt);
+  model.releaseTitle();
+  await new Promise((resolve) => setImmediate(resolve));
+  const title = store.get(session.id)!.title;
+  assert.match(title, /1500/);
+  assert.notEqual(title, '150');
+  assert.deepEqual(notes, ['number fragment']);
+});
+
+test('Chinese prompts are titled from the model over a real HTTP server', async (t) => {
+  const rome = '请用大约200字介绍一下罗马帝国的兴衰';
+  const go = '帮我写一个你好世界的Go程序';
+  const bodies: Record<string, unknown>[] = [];
+  const instance = createServer(async (request, response) => {
+    const body = await readBody(request);
+    bodies.push(body);
+    const title = body.max_tokens === TITLE_MAX_TOKENS;
+    const conversation = JSON.stringify(body.messages ?? '');
+    const text = !title
+      ? '好的。'
+      : conversation.includes('你好世界')
+        ? '你好世界 Go 程序'
+        : '罗马帝国兴衰';
+    sse(response, (event) => {
+      event('message_start', {
+        type: 'message_start',
+        message: {
+          id: title ? 'title' : 'answer',
+          type: 'message',
+          role: 'assistant',
+          model: 'glm-5.3',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 12, output_tokens: 0 },
+        },
+      });
+      event('content_block_start', {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' },
+      });
+      event('content_block_delta', {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text },
+      });
+      event('content_block_stop', { type: 'content_block_stop', index: 0 });
+      event('message_delta', {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { output_tokens: 4 },
+      });
+      event('message_stop', { type: 'message_stop' });
+    });
+  });
+  await new Promise<void>((resolve) =>
+    instance.listen(0, '127.0.0.1', resolve),
+  );
+  t.after(
+    () =>
+      new Promise<void>((resolve) => {
+        instance.closeAllConnections();
+        instance.close(() => resolve());
+      }),
+  );
+  const address = instance.address();
+  assert.ok(address && typeof address === 'object');
+  const runPrompt = async (prompt: string, expected: string) => {
+    const root = scratch(t);
+    const settings = defaultSettings();
+    settings.auth = {
+      ...settings.auth,
+      base_url: `http://127.0.0.1:${address.port}`,
+      model: 'glm-5.3',
+      protocol: 'anthropic',
+    };
+    saveCredentials({ api_key: 'test-key' }, root);
+    const model = new GatewayModel(settings, root);
+    const { harness: run, store, session } = harness(root, model);
+    cleanup(t, () => store.close());
+    const notes: string[] = [];
+    run.bus.subscribe((event) => {
+      const notice = event.payload.model_notice as
+        { event?: string; message?: string } | undefined;
+      if (notice?.event === 'title_failed') notes.push(String(notice.message));
+    });
+    const result = await run.run(prompt);
+    assert.equal(result.answer, '好的。');
+    for (let i = 0; i < 20; i++) {
+      if (store.get(session.id)!.title === expected) break;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(store.get(session.id)!.title, expected);
+    assert.notEqual(store.get(session.id)!.title, fallbackTitle(prompt));
+    assert.deepEqual(notes, []);
+  };
+  await runPrompt(rome, '罗马帝国兴衰');
+  await runPrompt(go, '你好世界 Go 程序');
+  const titles = bodies.filter((body) => body.max_tokens === TITLE_MAX_TOKENS);
+  assert.equal(titles.length, 2);
+  for (const title of titles) {
+    assert.equal(title.output_config, undefined);
+    assert.deepEqual(title.thinking, { type: 'disabled' });
+    assert.equal(title.max_tokens, TITLE_MAX_TOKENS);
+    assert.match(String(title.system), /Chinese title/);
+    assert.match(String(title.system), /Do not answer it/);
+  }
+  const wire = JSON.stringify(titles.map((body) => body.messages));
+  assert.match(wire, /<conversation>\\n请用大约200字介绍一下罗马帝国的兴衰\\n/);
+  assert.match(wire, /<conversation>\\n帮我写一个你好世界的Go程序\\n/);
+});
+
+test('opening a session replaces a reasoning title and a number fragment', async (t) => {
+  const root = scratch(t);
+  const store = new CheckpointStore(root);
+  const essay =
+    'Write a 1500 word essay about the history of roman citizenship and why it mattered';
+  const readme = 'look at README.md and tell me what the first heading is';
+  const login =
+    'please help me fix the login bug in the authentication service that returns 500';
+  const number = store.create(root, 'scripted');
+  store.append(number.id, [{ id: 'n', role: 'user', content: essay }]);
+  store.rename(number.id, '150');
+  const asking = store.create(root, 'scripted');
+  store.append(asking.id, [{ id: 'a', role: 'user', content: readme }]);
+  store.rename(asking.id, 'The user is asking about a README.md file - they');
+  const wants = store.create(root, 'scripted');
+  store.append(wants.id, [
+    { id: 'w', role: 'user', content: '请用大约200字介绍一下罗马帝国的兴衰' },
+  ]);
+  store.rename(wants.id, 'The user wants me to generate a title for a conver');
+  const kept = store.create(root, 'scripted');
+  store.append(kept.id, [{ id: 'k', role: 'user', content: login }]);
+  store.rename(kept.id, 'Login bug fix');
+  store.close();
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: defaultSettings(),
+    model: new ScriptedModel(),
+    session: number.id,
+    headless: true,
+    localContext: false,
+    bundledExtensions: false,
+  });
+  cleanup(t, () => runtime.close());
+  assert.match(runtime.store.get(number.id)!.title, /1500/);
+  assert.equal(runtime.store.get(number.id)!.title, fallbackTitle(essay));
+  assert.equal(runtime.session.title, fallbackTitle(essay));
+  assert.equal(
+    runtime.store.get(asking.id)!.title.includes('The user is asking'),
+    false,
+  );
+  assert.equal(runtime.store.get(asking.id)!.title, fallbackTitle(readme));
+  assert.equal(
+    runtime.store.get(wants.id)!.title.includes('The user wants'),
+    false,
+  );
+  assert.equal(
+    runtime.store.get(wants.id)!.title,
+    fallbackTitle('请用大约200字介绍一下罗马帝国的兴衰'),
+  );
+  assert.equal(runtime.store.get(kept.id)!.title, 'Login bug fix');
 });
 
 test('renaming a session does not move it above a newer one', (t) => {

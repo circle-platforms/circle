@@ -12,6 +12,11 @@ import {
   type SessionGraph,
   type SessionGraphNode,
 } from './session_graph.js';
+import {
+  firstUserSource,
+  mightBeStaleTitle,
+  repairedTitle,
+} from './session_title.js';
 export interface Session {
   id: string;
   workspace: string;
@@ -228,6 +233,19 @@ export class CheckpointStore {
     return this.db
       .prepare('SELECT * FROM sessions WHERE parent_id=? ORDER BY created,id')
       .all(parentId) as unknown as Session[];
+  }
+  /**
+   * Replace a title saved by an older build (reasoning text, or `150` cut from
+   * `1500`) with the short title of the first message. A rename is not
+   * activity, so the row stays where it was.
+   */
+  repairStaleTitles(): void {
+    for (const session of this.list()) {
+      if (!session.head || !mightBeStaleTitle(session.title)) continue;
+      const source = firstUserSource(this.messages(session.id));
+      const next = source ? repairedTitle(session.title, source) : undefined;
+      if (next) this.rename(session.id, next);
+    }
   }
   rename(id: string, title: string): void {
     // A new name is not new activity: `updated` is the list order.

@@ -50,7 +50,7 @@ Circle's screen has a few parts, and each kind of information always goes to the
 
 A few things appear briefly and are not kept: the confirmations in the footer, the completion list, and the lists of `/models`, `/effort`, `/resume`, `/tree`, `/fork`, `/jobs`, `/settings`, `/login` and `/approvals`. Some views take over the whole conversation area: a subagent's record and a background job's page.
 
-Circle also sets the terminal window's title to `circle - <folder>`, or `circle - <session title> - <folder>` once the session has a title (the first line of your first message, or what `/name` set), and gives the old title back when it exits, in terminals that keep a title stack.
+Circle also sets the terminal window's title to `circle - <folder>`, or `circle - <session title> - <folder>` once the session has a title (the short title from the first message, a model title, or what `/name` set), and gives the old title back when it exits, in terminals that keep a title stack.
 
 ## The welcome
 

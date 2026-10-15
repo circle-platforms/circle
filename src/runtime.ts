@@ -245,6 +245,9 @@ export class AgentRuntime {
       const current = this.store.get(this.session.id);
       if (!current) throw new Error('unknown session');
       this.session = current;
+      this.store.repairStaleTitles();
+      const repaired = this.store.get(this.session.id);
+      if (repaired) this.session = repaired;
     } catch (error) {
       this.store.close();
       throw error;
@@ -1260,6 +1263,9 @@ export class AgentRuntime {
     const previous = this.session.id;
     this.store.claimSession(session.id, (error) => this.ownershipLost(error));
     this.session = session;
+    this.store.repairStaleTitles();
+    const repaired = this.store.get(session.id);
+    if (repaired) this.session = repaired;
     this.harness = this.createHarness(this.options.model);
     this.todos = restoredTodos(this.harness.messages);
     this.applyDefaultMode();
@@ -1286,6 +1292,9 @@ export class AgentRuntime {
       this.applyDefaultMode();
       this.bus.setRunId(session.id);
       this.store.releaseSession(previous);
+      this.store.repairStaleTitles();
+      const repaired = this.store.get(session.id);
+      if (repaired) this.session = repaired;
       this.extensions.emit('session_start', {
         workspace: this.options.workspace,
         session_id: session.id,
@@ -1304,6 +1313,9 @@ export class AgentRuntime {
     this.todos = restoredTodos(messages);
     if (typeof header.title === 'string')
       this.store.rename(this.session.id, header.title);
+    this.store.repairStaleTitles();
+    const repaired = this.store.get(this.session.id);
+    if (repaired) this.session = repaired;
   }
   exportSession(): string {
     if (

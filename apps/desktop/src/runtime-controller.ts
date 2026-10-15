@@ -315,6 +315,7 @@ export class RuntimeController {
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
     this.metadata = new SessionMetadata(this.home);
     this.store = new CheckpointStore(this.home);
+    this.store.repairStaleTitles();
     const saved = this.savedLocation();
     const settings = loadSettings(this.home);
     const workspace =

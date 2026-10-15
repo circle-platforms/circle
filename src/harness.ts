@@ -24,11 +24,11 @@ import { httpStatus } from './model_guard.js';
 import { validateAttachments } from './media.js';
 import { readPrompt } from './system_prompt.js';
 import {
+  acceptGeneratedTitle,
   fallbackTitle,
-  sanitizeGeneratedTitle,
   TITLE_MAX_TOKENS,
   titleConversation,
-  titleWorthy,
+  titleSkipReason,
 } from './session_title.js';
 
 /** `CIRCLE_DEBUG=1` prints why a title was skipped or rejected. */
@@ -338,34 +338,39 @@ export class Harness {
     return { answer, usage: total };
   }
   /**
+   * Output cap for the title request. 128 was spent entirely on reasoning by
+   * glm-5.3, so the answer never arrived. 512 leaves room for the title once
+   * thinking is disabled.
+   */
+  static readonly titleOutputTokens = TITLE_MAX_TOKENS;
+  /**
    * Ask the model for a short title after the fallback is already saved. A scripted model
-   * never sees this call. A rename that landed first is left alone. Thinking is disabled
-   * and the cap is short. Reasoning text is not a title. The prompt is wrapped as data,
-   * and a reply that answers the user is discarded.
+   * never sees this call. A rename that landed first is left alone. The request disables
+   * thinking: glm-5.3 still reasons when the field is omitted. Reasoning text is
+   * not a title. The prompt is wrapped as data, and a reply that answers the
+   * user is discarded.
    */
   private generateTitle(display: string, fallback: string): void {
-    const model = this.options.model;
+    // `this.model`, not the model passed at construction: /model and a reload replace it.
+    const model = this.model;
     const prompt = display.trim();
-    if (!titleWorthy(prompt)) {
-      const words = prompt.split(/\s+/).filter(Boolean).length;
-      const cjk = prompt.match(/[\u3400-\u9fff]/g)?.length ?? 0;
-      titleTrace(
-        `skipped (length ${prompt.length}, words ${words}, cjk ${cjk})`,
-      );
-      return;
-    }
     const report = (message: string): void => {
       titleTrace(`failed: ${message}`);
       this.bus.emit('info', {
         payload: { model_notice: { event: 'title_failed', message } },
       });
     };
-    if (!model.sideRequests) {
-      titleTrace('skipped (model has no sideRequests)');
+    // A short line keeps the fallback. A long line with no side request used
+    // to return here with no footer: the extension wrapper had dropped
+    // `sideRequests`. Either way the footer says why.
+    const skip = titleSkipReason(prompt, model.sideRequests);
+    if (skip) {
+      titleTrace(`skipped (${skip})`);
+      report(skip);
       return;
     }
     titleTrace(
-      `request model=${model.model} chars=${prompt.length} maxTokens=${TITLE_MAX_TOKENS} thinking=disabled`,
+      `request model=${model.model} chars=${prompt.length} maxTokens=${Harness.titleOutputTokens} thinking=disabled`,
     );
     void model
       .complete({
@@ -379,19 +384,21 @@ export class Harness {
         ],
         tools: [],
         signal: AbortSignal.timeout(20_000),
-        // `''` sends Anthropic `thinking: { type: 'disabled' }`. `minimal` is sent as
-        // output_config.effort and glm rejects it, or thinks until this times out.
+        // `''` asks the Anthropic body for `thinking: {type: 'disabled'}`.
+        // `minimal` is sent as output_config.effort and glm rejects it.
         effort: '',
-        maxTokens: TITLE_MAX_TOKENS,
+        maxTokens: Harness.titleOutputTokens,
         token: () => {},
       })
       .then((response) => {
-        const content = response.message.content;
-        const title = sanitizeGeneratedTitle(content);
-        if (!title) {
-          report(content.trim() ? 'not a title' : 'empty title');
+        // Reasoning is never a title, even when the answer is empty.
+        const decision = acceptGeneratedTitle(response.message.content, prompt);
+        if (!decision.title) {
+          titleTrace(`discarded (${decision.reason})`);
+          report(decision.reason);
           return;
         }
+        const title = decision.title;
         const current = this.options.store.get(this.sessionId);
         if (!current || current.title !== fallback) {
           titleTrace(
