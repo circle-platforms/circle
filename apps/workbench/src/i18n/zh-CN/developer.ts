@@ -61,4 +61,7 @@ export const developer: Record<string, string> = {
   'foreground interface': '前台界面',
   build: '构建',
   'tool results': '工具结果',
+  refresh: '刷新',
+  agent: '代理',
+  branch: '分支',
 };

@@ -639,7 +639,7 @@ export function App() {
   );
   const searchItems = [
     ...[
-      { id: 'new', label: t('new conversation') },
+      { id: 'new', label: t('new session') },
       { id: 'compact', label: t('compact context') },
       { id: 'fork', label: t('fork') },
       { id: 'export', label: t('export') },
