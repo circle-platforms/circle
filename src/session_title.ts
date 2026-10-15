@@ -392,7 +392,7 @@ function prefixCut(left: string, right: string, worthy: boolean): boolean {
  */
 function fragmentOf(title: string, prompt: string): boolean {
   const worthy = titleWorthy(prompt);
-  const pairs = [
+  const pairs: [string, string][] = [
     [oneLine(title), oneLine(prompt)],
     [foldTitle(title), foldTitle(prompt)],
     [leadStripped(title), leadStripped(prompt)],
