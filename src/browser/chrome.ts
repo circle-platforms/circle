@@ -407,7 +407,16 @@ export class ChromeBrowser implements BrowserPort {
       () => {},
     );
     await Promise.race([exited, delay(3000)]);
-    if (child.exitCode === null) child.kill();
+    // A stopped browser exits a second or more later on a loaded machine; close returns when it
+    // is gone, and kills one that will not stop
+    for (const [signal, wait] of [
+      ['SIGTERM', 2000],
+      ['SIGKILL', 1000],
+    ] as const) {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      child.kill(signal);
+      await Promise.race([exited, delay(wait)]);
+    }
   }
   // ---- tabs
   private conversation(id: string): Conversation {
