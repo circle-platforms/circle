@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -18,6 +18,7 @@ const exec = promisify(execFile),
 const helper = fileURLToPath(
   new URL('../src/workspace/pty-exit-cleanup.mjs', import.meta.url),
 );
+const vt = fileURLToPath(new URL('./helpers/terminal-vt.mjs', import.meta.url));
 const native = fileURLToPath(
   new URL('../src/workspace/native-pty.ts', import.meta.url),
 );
@@ -194,12 +195,43 @@ test(
       "console.log('CONPTY_READY');process.stdin.once('data',data=>{console.log('CONPTY_INPUT:'+data.toString().trim());process.stdout.write('CONPTY_TAIL_'+ 'x'.repeat(65536)+'_END\\n');process.stdin.pause();process.exitCode=7});";
     await writeFile(
       fixture,
-      `import assert from 'node:assert/strict';import fs from 'node:fs';import {spawnPty} from ${JSON.stringify(pathToFileURL(native).href)};\n` +
+      `import assert from 'node:assert/strict';import fs from 'node:fs';import path from 'node:path';import {createHash} from 'node:crypto';import {spawnPty} from ${JSON.stringify(pathToFileURL(native).href)};import {renderTerminalOutput} from ${JSON.stringify(pathToFileURL(vt).href)};\n` +
         String.raw`
-const progress=step=>{fs.appendFileSync(PROGRESS,JSON.stringify({at:Date.now(),step,resources:process.getActiveResourcesInfo()})+'\n');console.log(step)};
-let count=0;
-function start(){const index=++count;progress('spawn-'+index);const terminal=spawnPty(process.execPath,['-e',PROGRAM],{cwd:ROOT,env:process.env,cols:80,rows:24});let output='',sent=false;terminal.onData(data=>{output+=data;if(!sent&&output.includes('CONPTY_READY')){sent=true;terminal.write('actual-input\r')}});terminal.onExit(event=>{assert.equal(event.exitCode,7,output.slice(-1000));assert.match(output,/CONPTY_INPUT:actual-input/);assert.match(output,/CONPTY_TAIL_[x\r\n]+_END/);progress('natural-exit-'+index);if(index<3)start();else progress('all-conpty-exits-observed')})}
-start();process.once('beforeExit',()=>progress('node-beforeExit-no-conpty-worker'));
+const progress=(step,detail={})=>{fs.appendFileSync(PROGRESS,JSON.stringify({at:Date.now(),step,resources:process.getActiveResourcesInfo(),...detail})+'\n');console.log(step)};
+const sha=text=>createHash('sha256').update(text).digest('hex');
+let count=0,verified=0,workers=0;
+function start(){
+ const index=++count,rawFile=PROGRESS+'.session-'+index+'.raw.log',normalizedFile=PROGRESS+'.session-'+index+'.normalized.json';
+ fs.writeFileSync(rawFile,'');progress('spawn-'+index,{rawFile});
+ const terminal=spawnPty(process.execPath,['-e',PROGRAM],{cwd:ROOT,env:process.env,cols:80,rows:24});
+ const worker=terminal._agent._conoutSocketWorker._worker;
+ worker.once('exit',code=>{workers++;progress('owned-worker-exit-'+index,{code})});
+ let output='',sent=false;
+ terminal.onData(data=>{output+=data;fs.appendFileSync(rawFile,data);if(!sent&&output.includes('CONPTY_READY')){sent=true;terminal.write('actual-input\r')}});
+ terminal.onExit(event=>{
+  progress('natural-exit-'+index,{exitCode:event.exitCode,rawBytes:Buffer.byteLength(output),rawSha256:sha(output),rawFile});
+  void (async()=>{
+   assert.equal(event.exitCode,7,'actual ConPTY program exit code');
+   const rendered=await renderTerminalOutput(output,{cols:80,rows:24,scrollback:10000});
+   // The fixture emits one unbroken payload. Join physical screen rows only
+   // after actual cursor/erase/scroll semantics have resolved repainting.
+   const continuous=rendered.lines.map(line=>line.text).join('');
+   const begin=continuous.indexOf('CONPTY_TAIL_'),end=continuous.indexOf('_END',begin+12);
+   const payload=begin>=0&&end>=0?continuous.slice(begin+12,end):'';
+   const report={rawFile,exitCode:event.exitCode,rawBytes:Buffer.byteLength(output),rawSha256:sha(output),prefixFound:begin>=0,suffixFound:end>=0,payloadBytes:Buffer.byteLength(payload),payloadSha256:sha(payload),expectedBytes:65536,expectedSha256:sha('x'.repeat(65536)),rendered};
+   fs.writeFileSync(normalizedFile,JSON.stringify(report));
+   assert.ok(begin>=0&&end>begin,'full payload framing must survive VT parsing');
+   assert.equal(payload.length,65536,'exact payload character count after VT semantics');
+   assert.equal(report.payloadBytes,65536,'exact 64KB payload byte count');
+   assert.equal(report.payloadSha256,report.expectedSha256,'every payload byte must match, not just the end marker');
+   assert.equal(payload,'x'.repeat(65536));
+   assert.ok(continuous.includes('CONPTY_INPUT:actual-input'),'actual stdin remains visible after VT parsing');
+   verified++;progress('tail-verified-'+index,{normalizedFile,payloadBytes:report.payloadBytes,payloadSha256:report.payloadSha256});
+   if(index<3)start();else progress('all-conpty-exits-observed',{verified});
+  })().catch(error=>{progress('tail-verification-failed-'+index,{error:String(error),normalizedFile,rawFile});console.error(error);process.exitCode=1});
+ });
+}
+start();process.once('beforeExit',()=>{progress('node-beforeExit-no-conpty-worker',{spawned:count,verified,workers});if(verified!==3||workers!==3)process.exitCode=1});
 `
           .replaceAll('PROGRESS', JSON.stringify(progress))
           .replaceAll('PROGRAM', JSON.stringify(program))
@@ -217,6 +249,40 @@ start();process.once('beforeExit',()=>progress('node-beforeExit-no-conpty-worker
     });
     assert.match(result.stdout, /all-conpty-exits-observed/);
     assert.match(result.stdout, /node-beforeExit-no-conpty-worker/);
+    const events = (await readFile(progress, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    assert.equal(
+      events.filter((event) => /^natural-exit-\d+$/.test(event.step)).length,
+      3,
+    );
+    assert.equal(
+      events.filter((event) => /^owned-worker-exit-\d+$/.test(event.step))
+        .length,
+      3,
+    );
+    assert.equal(
+      events.filter((event) => /^tail-verified-\d+$/.test(event.step)).length,
+      3,
+    );
+    const final = events.find(
+      (event) => event.step === 'node-beforeExit-no-conpty-worker',
+    );
+    assert.equal(final.verified, 3);
+    assert.equal(final.workers, 3);
+    for (const event of events.filter((event) =>
+      /^tail-verified-\d+$/.test(event.step),
+    )) {
+      const report = JSON.parse(await readFile(event.normalizedFile, 'utf8'));
+      const raw = await readFile(report.rawFile, 'utf8');
+      assert.equal(
+        createHash('sha256').update(raw).digest('hex'),
+        report.rawSha256,
+      );
+      assert.equal(report.payloadBytes, 65536);
+      assert.equal(report.payloadSha256, report.expectedSha256);
+    }
     t.diagnostic(
       JSON.stringify({
         kind: 'actual Windows ConPTY three natural exits and full final output',
