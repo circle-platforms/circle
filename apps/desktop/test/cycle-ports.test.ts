@@ -511,6 +511,11 @@ test('cycle adapter refuses unverified candidates, changed ownership and missing
     worktrees,
   );
   await rename(manifest + '.retained', manifest);
+  const originalBranch = await git(cyclePath, 'branch', '--show-current');
+  await git(cyclePath, 'switch', '-c', 'codex/foreign-owner-branch');
+  await assert.rejects(ports.tasks.status(cycle, ids), /branch changed/);
+  await assert.rejects(ports.git.snapshot(cycle), /branch changed/);
+  await git(cyclePath, 'switch', originalBranch);
   assert.equal(
     await git(f.workspace, 'status', '--porcelain=v1'),
     f.originalStatus,

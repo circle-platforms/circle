@@ -81,22 +81,53 @@ export class GitWorkspaceService {
     ).stdout;
   }
   async snapshot(): Promise<GitSnapshot> {
-    const root = (await this.git(['rev-parse', '--show-toplevel'])).trim();
-    const head = await this.git(['rev-parse', '--verify', 'HEAD']).then(
-      (s) => s.trim(),
-      () => 'unborn',
-    );
-    const branch = (
-      await this.git(['symbolic-ref', '--short', '-q', 'HEAD']).catch(
-        () => 'detached',
+    let previous = await this.readSnapshot();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const current = await this.readSnapshot();
+      if (
+        previous.root === current.root &&
+        previous.revision === current.revision
       )
-    ).trim();
-    const raw = await this.git([
-      'status',
-      '--porcelain=v1',
-      '-z',
-      '--untracked-files=all',
+        return current;
+      previous = current;
+    }
+    throw Error(
+      'repository changed while reading its state; refresh and try again',
+    );
+  }
+  private async readSnapshot(): Promise<GitSnapshot> {
+    // Read-only subprocesses can run together. Two matching complete reads in
+    // snapshot() reject mixed baselines without caching or weakening write CAS.
+    const [
+      rootValue,
+      head,
+      branchValue,
+      raw,
+      originPushUrls,
+      indexValue,
+      merging,
+    ] = await Promise.all([
+      this.git(['rev-parse', '--show-toplevel']),
+      this.git(['rev-parse', '--verify', 'HEAD']).then(
+        (s) => s.trim(),
+        () => 'unborn',
+      ),
+      this.git(['symbolic-ref', '--short', '-q', 'HEAD']).catch(
+        () => 'detached',
+      ),
+      this.git(['status', '--porcelain=v1', '-z', '--untracked-files=all']),
+      this.git(['remote', 'get-url', '--push', '--all', 'origin']).catch(
+        () => '',
+      ),
+      this.git(['rev-parse', '--git-path', 'index']),
+      this.git(['rev-parse', '-q', '--verify', 'MERGE_HEAD']).then(
+        () => true,
+        () => false,
+      ),
     ]);
+    const root = rootValue.trim(),
+      branch = branchValue.trim(),
+      indexPath = indexValue.trim();
     const fields = raw.split('\0');
     const entries: GitSnapshot['entries'] = [];
     for (let i = 0; i < fields.length; i++) {
@@ -111,19 +142,9 @@ export class GitWorkspaceService {
       if (/[RC]/.test(row.slice(0, 2))) entry.originalPath = fields[++i];
       entries.push(entry);
     }
-    const originPushUrls = await this.git([
-      'remote',
-      'get-url',
-      '--push',
-      '--all',
-      'origin',
-    ]).catch(() => '');
     const hash = createHash('sha256')
-      .update(JSON.stringify({ head, branch, originPushUrls }))
+      .update(JSON.stringify({ head, branch, originPushUrls, merging }))
       .update(raw);
-    const indexPath = (
-      await this.git(['rev-parse', '--git-path', 'index'])
-    ).trim();
     hash.update(
       await readFile(path.resolve(this.root, indexPath)).catch(() =>
         Buffer.alloc(0),
@@ -137,15 +158,6 @@ export class GitWorkspaceService {
             Buffer.from('missing'),
           ),
         );
-    const merging = await this.git([
-      'rev-parse',
-      '-q',
-      '--verify',
-      'MERGE_HEAD',
-    ]).then(
-      () => true,
-      () => false,
-    );
     return {
       root,
       head,
