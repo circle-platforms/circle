@@ -1,5 +1,6 @@
 import { createRoot } from 'react-dom/client';
 import { BrowserDiagnostics } from '../src/features/BrowserDiagnostics';
+import '../src/styles/app.css';
 import type {
   BrowserDiagnosticState,
   BrowserDiagnosticEvent,
@@ -85,12 +86,40 @@ const notify = () => {
   },
   release: () => release?.(),
 };
+const diagnostics = (
+  <BrowserDiagnostics
+    sessionId="fixture"
+    tab="t1"
+    url="http://localhost/fixture"
+  />
+);
 createRoot(document.getElementById('root')!).render(
-  <div className="native-browser" style={{ height: 700, width: 500 }}>
-    <BrowserDiagnostics
-      sessionId="fixture"
-      tab="t1"
-      url="http://localhost/fixture"
-    />
-  </div>,
+  location.search.includes('layout') ? (
+    <div
+      style={{
+        height: 700,
+        width: 500,
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
+      <div className="inspector-body">
+        <div className="native-browser">
+          <div style={{ height: 40, flexShrink: 0 }}>browser address</div>
+          <div className="native-browser-viewport" />
+          <div
+            className="native-browser-footer"
+            style={{ height: 32, flexShrink: 0 }}
+          >
+            native browser
+          </div>
+          {diagnostics}
+        </div>
+      </div>
+    </div>
+  ) : (
+    <div className="native-browser" style={{ height: 700, width: 500 }}>
+      {diagnostics}
+    </div>
+  ),
 );

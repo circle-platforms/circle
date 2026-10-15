@@ -650,9 +650,19 @@ try {
       return page.evaluate(() => {
         const bottom = (selector) =>
           document.querySelector(selector).getBoundingClientRect().bottom;
+        const children = [...document.querySelector('.native-browser').children]
+          .map((child) => child.getBoundingClientRect())
+          .filter((rect) => rect.width > 0 && rect.height > 0);
+        // Diagnostics/download/capture controls follow the page status footer.
+        // They occupy real panel space; only the gap after all visible content is blank.
+        const contentBottom = Math.max(...children.map((rect) => rect.bottom));
         return {
           height: innerHeight,
-          blank: bottom('.inspector-body') - bottom('.native-browser-footer'),
+          footerGap:
+            bottom('.inspector-body') - bottom('.native-browser-footer'),
+          blank: bottom('.inspector-body') - contentBottom,
+          contentBottom,
+          containerBottom: bottom('.inspector-body'),
         };
       });
     };
@@ -661,6 +671,13 @@ try {
     );
     for (const height of [tallest, 900]) {
       const panel = await blankBelow(height);
+      await page
+        .getByRole('button', { name: 'page diagnostics', exact: true })
+        .waitFor({ state: 'visible' });
+      assert(
+        panel.contentBottom <= panel.containerBottom + 2,
+        'browser controls stay inside the inspector',
+      );
       assert(
         panel.blank <= 32,
         `blank under the browser panel: ${JSON.stringify(panel)}`,

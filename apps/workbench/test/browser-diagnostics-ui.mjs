@@ -85,6 +85,43 @@ try {
         });
     }
   }
+  await page.goto(
+    server.resolvedUrls.local[0] + 'test/browser-diagnostics-ui.html?layout',
+  );
+  const geometry = await page.evaluate(() => {
+    const bottom = (selector) =>
+      document.querySelector(selector).getBoundingClientRect().bottom;
+    const children = [...document.querySelector('.native-browser').children]
+      .map((child) => child.getBoundingClientRect())
+      .filter((rect) => rect.width > 0 && rect.height > 0);
+    return {
+      footerGap: bottom('.inspector-body') - bottom('.native-browser-footer'),
+      blank:
+        bottom('.inspector-body') -
+        Math.max(...children.map((rect) => rect.bottom)),
+      diagnosticsHeight: document
+        .querySelector('.browser-diagnostics')
+        .getBoundingClientRect().height,
+    };
+  });
+  assert(
+    geometry.footerGap > 32,
+    'old footer reference counts newly added diagnostic controls as blank',
+  );
+  assert(
+    geometry.blank <= 32,
+    'actual empty gap after all visible browser controls remains bounded',
+  );
+  checks.push({
+    scenario:
+      'closed diagnostic controls occupy the area below the page footer',
+    status: 'passed',
+    geometry,
+  });
+  if (output)
+    await page.screenshot({
+      path: join(output, 'closed-controls-geometry.png'),
+    });
   if (output)
     await writeFile(
       join(output, 'receipt.json'),
