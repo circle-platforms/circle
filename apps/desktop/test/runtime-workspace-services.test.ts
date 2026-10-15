@@ -16,6 +16,7 @@ import { realpathSync } from 'node:fs';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { DeliveryService } from '../src/workspace/delivery.ts';
+import { WorkspaceEventStream } from '../src/workspace/event-stream.ts';
 import { setTimeout as delay } from 'node:timers/promises';
 import { RuntimeController } from '../src/runtime-controller.ts';
 import { ScriptedModel } from '../../../src/testing.ts';
@@ -199,18 +200,21 @@ test('foreign occupied viewed history can use workspace documents without acquir
     settings,
     model: new ScriptedModel([]),
   });
-  t.after(() => foreign.close());
-  const selected = await f.call('select-session', { id: foreign.session.id });
-  assert.equal(selected.ok, true, selected.error);
-  const read = await f.service(
-    'documents',
-    'read',
-    { path: 'README.md' },
-    foreign.session.id,
-  );
-  assert.equal(read.ok, true, read.error);
-  assert.equal((read.data as any).content, 'foreign view');
-  assert.equal(f.controller.snapshot().activeSessionId, foreign.session.id);
+  try {
+    const selected = await f.call('select-session', { id: foreign.session.id });
+    assert.equal(selected.ok, true, selected.error);
+    const read = await f.service(
+      'documents',
+      'read',
+      { path: 'README.md' },
+      foreign.session.id,
+    );
+    assert.equal(read.ok, true, read.error);
+    assert.equal((read.data as any).content, 'foreign view');
+    assert.equal(f.controller.snapshot().activeSessionId, foreign.session.id);
+  } finally {
+    await foreign.close();
+  }
 });
 test('human save while agent write approval waits prevents stale agent overwrite', async (t) => {
   const f = await setup(t, [
@@ -620,16 +624,33 @@ test('workspace journal failure cancels its producers and remains visible after 
   ]);
   await f.call('prompt', { text: 'stay running while native journal fails' });
   await wait(() => f.model.requests.length === 1);
-  const hash = createHash('sha256')
-    .update(realpathSync.native(f.workspace))
-    .digest('hex');
-  await mkdir(
-    join(f.home, 'workspace-services', 'workspaces', hash, 'events.jsonl'),
-    { recursive: true },
+  let attemptedJournal: string | undefined;
+  const open = WorkspaceEventStream.open.bind(WorkspaceEventStream);
+  // Corrupt the exact physical journal selected by the real service, rather
+  // than duplicating its path/hash policy in the test (8.3 aliases differ).
+  t.mock.method(
+    WorkspaceEventStream,
+    'open',
+    async (
+      path: string,
+      options?: Parameters<typeof WorkspaceEventStream.open>[1],
+    ) => {
+      attemptedJournal = path;
+      await mkdir(path, { recursive: true });
+      return open(path, options);
+    },
   );
   const failed = await f.service('documents', 'read', { path: 'README.md' });
   assert.equal(failed.ok, false);
-  await wait(() => aborted);
+  assert.ok(attemptedJournal?.endsWith('events.jsonl'));
+  try {
+    await wait(() => aborted);
+  } catch (error) {
+    throw Error(
+      `${String(error)}: ${JSON.stringify({ attemptedJournal, failed, runtime: f.controller.snapshot().runtime, activeWorkspaces: [...(f.controller as any).runtimes.values()].map((runtime: any) => runtime.options.workspace) })}`,
+    );
+  }
+
   assert.match(
     f.controller.snapshot().runtime?.error ?? '',
     /persistence failed/,
@@ -1496,7 +1517,9 @@ test('native controller mutations share a canonical root across actual filesyste
       process.env.ComSpec ?? 'cmd.exe',
       ['/d', '/c', command],
       { encoding: 'utf8' },
-    ).trim();
+    )
+      .trim()
+      .replace(/^"(.*)"$/s, '$1');
     assert.ok(
       alias && realpathSync.native(alias) === canonical,
       'Windows short name must resolve to the exact granted directory',
