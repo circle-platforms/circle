@@ -1,4 +1,5 @@
-import { spawn as spawnPty, type IPty } from 'node-pty';
+import type { IPty } from 'node-pty';
+import { spawnPty } from './native-pty.ts';
 import { randomUUID } from 'node:crypto';
 import {
   createReadStream,

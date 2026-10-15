@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { realpath } from 'node:fs/promises';
-import { spawn as spawnPty } from 'node-pty';
+import { spawnPty } from './native-pty.ts';
 import { WorkspaceDocuments, type WorkspaceDocumentEdit } from './documents.ts';
 import { TerminalManager, type TerminalSignal } from './terminal.ts';
 import { GitWorkspaceService } from './git.ts';
