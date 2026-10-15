@@ -518,6 +518,7 @@ test('a background subagent ends every shell it owns before its report is marked
   cleanup(t, () => runtime.close());
   runtime.policy.setYolo(runtime.session.id, true);
   await runtime.harness.run('start');
+  await fixture.ready();
   await runtime.jobs.wait(['j1'], 5, new AbortController().signal);
   assert.equal(runtime.jobs.get('j1')!.status, 'done');
   assert.equal(runtime.jobs.get('j2')!.parent, 'j1');
