@@ -69,4 +69,5 @@ export const developer: Record<string, string> = {
     '排队消息已被读取，编辑内容已保留',
   'return edit to draft': '将编辑内容放回草稿',
   dismiss: '关闭',
+  'external link is not allowed': '此链接不允许打开',
 };

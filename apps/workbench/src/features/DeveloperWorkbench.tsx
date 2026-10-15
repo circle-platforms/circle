@@ -1,5 +1,7 @@
 import { lazy, Suspense, useState, type ReactNode } from 'react';
 import { t } from '../i18n';
+import { desktopHost } from '../host';
+import { useRuntime } from '../app/context';
 import { TasksPanel } from './TasksPanel';
 import '../styles/developer-workbench.css';
 const NativeTerminal = lazy(() =>
@@ -42,6 +44,31 @@ export function DeveloperWorkbench({
   onFile: (path: string, line?: number, column?: number) => void;
   onSession: (id: string) => void;
 }) {
+  const { notify } = useRuntime();
+  const openExternal = (url: string) => {
+    try {
+      const target = new URL(url);
+      if (
+        target.protocol !== 'https:' ||
+        target.hostname !== 'github.com' ||
+        target.username ||
+        target.password
+      )
+        throw Error(t('external link is not allowed'));
+      const host = desktopHost();
+      if (
+        host &&
+        'openExternal' in host &&
+        typeof host.openExternal === 'function'
+      )
+        void Promise.resolve(host.openExternal(target.href)).catch((error) =>
+          notify(String(error)),
+        );
+      else window.open(target.href, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      notify(String(error));
+    }
+  };
   const [dock, setDock] = useState<Dock>('terminal');
   const [open, setOpen] = useState(false);
   const [visited, setVisited] = useState<Set<Dock>>(new Set());
@@ -152,7 +179,11 @@ export function DeveloperWorkbench({
                 aria-labelledby="dock-tab-git"
                 hidden={dock !== 'git'}
               >
-                <GitPanel sessionId={sessionId} onFile={onFile} />
+                <GitPanel
+                  sessionId={sessionId}
+                  onFile={onFile}
+                  onOpenExternal={openExternal}
+                />
               </div>
             )}
             {visited.has('debug') && (
