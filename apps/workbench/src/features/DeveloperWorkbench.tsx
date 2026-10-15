@@ -2,6 +2,7 @@ import { lazy, Suspense, useState, type ReactNode } from 'react';
 import { t } from '../i18n';
 import { desktopHost } from '../host';
 import { useRuntime } from '../app/context';
+import { DeliveryCyclePanel } from './DeliveryCyclePanel';
 import { TasksPanel } from './TasksPanel';
 import '../styles/developer-workbench.css';
 const NativeTerminal = lazy(() =>
@@ -20,12 +21,13 @@ const DebugPanel = lazy(() =>
   })),
 );
 export type WorkbenchLayout = 'task' | 'developer';
-type Dock = 'terminal' | 'git' | 'debug' | 'tasks';
+type Dock = 'terminal' | 'git' | 'debug' | 'tasks' | 'delivery';
 const dockLabels = {
   terminal: () => t('terminal'),
   git: () => t('git workspace'),
   debug: () => t('debug'),
   tasks: () => t('collaboration tasks'),
+  delivery: () => t('automatic delivery'),
 };
 
 /** Layout changes move CSS grid areas; live surfaces retain the same React identity. */
@@ -72,6 +74,7 @@ export function DeveloperWorkbench({
   const [dock, setDock] = useState<Dock>('terminal');
   const [open, setOpen] = useState(false);
   const [visited, setVisited] = useState<Set<Dock>>(new Set());
+  const [focusTask, setFocusTask] = useState<string>();
   const [mobile, setMobile] = useState<'conversation' | 'editor'>(
     'conversation',
   );
@@ -196,6 +199,24 @@ export function DeveloperWorkbench({
                 <DebugPanel sessionId={sessionId} onFile={onFile} />
               </div>
             )}
+            {visited.has('delivery') && (
+              <div
+                id="dock-delivery"
+                role="tabpanel"
+                aria-labelledby="dock-tab-delivery"
+                hidden={dock !== 'delivery'}
+              >
+                <DeliveryCyclePanel
+                  sessionId={sessionId}
+                  active={open && dock === 'delivery'}
+                  onOpenExternal={openExternal}
+                  onTask={(id) => {
+                    setFocusTask(id);
+                    select('tasks');
+                  }}
+                />
+              </div>
+            )}
             {visited.has('tasks') && (
               <div
                 id="dock-tasks"
@@ -203,7 +224,11 @@ export function DeveloperWorkbench({
                 aria-labelledby="dock-tab-tasks"
                 hidden={dock !== 'tasks'}
               >
-                <TasksPanel sessionId={sessionId} onSession={onSession} />
+                <TasksPanel
+                  sessionId={sessionId}
+                  onSession={onSession}
+                  focusTaskId={focusTask}
+                />
               </div>
             )}
           </Suspense>

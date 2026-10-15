@@ -13,9 +13,11 @@ interface Limits {
 export function TasksPanel({
   sessionId,
   onSession,
+  focusTaskId,
 }: {
   sessionId: string;
   onSession: (id: string) => void;
+  focusTaskId?: string;
 }) {
   const [tasks, setTasks] = useState<
     (TaskRecord & { runtimeSessionId?: string })[]
@@ -32,6 +34,13 @@ export function TasksPanel({
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
+  useEffect(() => {
+    if (focusTaskId) {
+      const item = document.getElementById('task-' + focusTaskId);
+      item?.scrollIntoView({ block: 'nearest' });
+      item?.focus();
+    }
+  }, [focusTaskId, tasks]);
   const refresh = useCallback(async () => {
     const epoch = generation.current;
     try {
@@ -246,7 +255,12 @@ export function TasksPanel({
       {!tasks.length && !error && <p>{t('no collaboration tasks')}</p>}
       <div className="tasks-list">
         {tasks.map((task) => (
-          <article key={task.spec.id} data-state={task.state}>
+          <article
+            key={task.spec.id}
+            id={'task-' + task.spec.id}
+            tabIndex={-1}
+            data-state={task.state}
+          >
             <header>
               <Status value={task.state} />
               <small>{t('attempt {n}', { n: task.attempt })}</small>
