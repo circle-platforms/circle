@@ -5,7 +5,7 @@ import { _electron as electron } from 'playwright';
 import { createServer as httpsServer } from 'node:https';
 import { createServer } from 'node:http';
 import { connect } from 'node:net';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -235,6 +235,22 @@ try {
   await new Promise((done) => proxy.listen(0, '127.0.0.1', done));
   await mkdir(join(home, 'cache'), { recursive: true });
   await mkdir(workspace);
+  // Electron initializes Hunspell before creating a window. On a fresh Linux
+  // profile that downloads a dictionary from redirector.gvt1.com, even with
+  // Chromium's component updater disabled. Keep this fixture's profile offline:
+  // an explicit, blocked dictionary avoids locale-dependent initialization.
+  // https://www.electronjs.org/docs/latest/tutorial/spellchecker
+  await writeFile(
+    join(data, 'Preferences'),
+    JSON.stringify({
+      browser: { enable_spellchecking: false },
+      spellcheck: {
+        dictionaries: ['en-US'],
+        blocked_dictionaries: ['en-US'],
+        use_spelling_service: false,
+      },
+    }),
+  );
   await writeFile(
     join(home, 'cache', 'models-dev.json'),
     JSON.stringify({ schema: 'circle.models-dev/v1', providers: {} }),
@@ -305,6 +321,13 @@ try {
   page = await app.firstWindow();
   page.setDefaultTimeout(15000);
   page.on('pageerror', (error) => errors.push(String(error)));
+  const profile = await app.evaluate(({ app, session }) => ({
+    path: app.getPath('sessionData'),
+    spellcheck: session.defaultSession.isSpellCheckerEnabled(),
+  }));
+  assert.equal(await realpath(profile.path), await realpath(data));
+  assert.equal(profile.spellcheck, false);
+  checks.push('the isolated Chromium profile disables spellchecker downloads');
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   const state = () =>
     page.evaluate(
