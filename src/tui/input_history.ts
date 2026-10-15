@@ -8,8 +8,28 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { withPrivateJsonLock } from '../settings.js';
+
+function retryFile<T>(operation: () => T): T {
+  const deadline = Date.now() + 1000;
+  for (;;) {
+    try {
+      return operation();
+    } catch (error) {
+      if (
+        !['EPERM', 'EBUSY'].includes(
+          (error as NodeJS.ErrnoException).code ?? '',
+        ) ||
+        Date.now() >= deadline
+      )
+        throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+}
+
 export class InputHistory {
   private values: string[] = [];
+  private pending: string[] = [];
   private cursor?: number;
   private draft = '';
   query?: string;
@@ -20,7 +40,7 @@ export class InputHistory {
   ) {
     this.refresh();
   }
-  private read(): string[] | undefined {
+  private read(strict = false): string[] | undefined {
     try {
       const body = readFileSync(this.path, 'utf8');
       try {
@@ -46,13 +66,22 @@ export class InputHistory {
         .split(/\r?\n/)
         .filter((line) => line.trim())
         .slice(-this.maximum);
-    } catch {
+    } catch (error) {
+      if (strict && (error as NodeJS.ErrnoException).code !== 'ENOENT')
+        throw error;
       /* An unavailable history file must not prevent typing. */
       return undefined;
     }
   }
+  private merged(latest: string[]): string[] {
+    const values = [...latest];
+    for (const text of this.pending)
+      if (values.at(-1) !== text) values.push(text);
+    return values.slice(-this.maximum);
+  }
   private refresh(): void {
-    this.values = this.read() ?? this.values;
+    const latest = this.read();
+    if (latest) this.values = this.merged(latest);
   }
   static forHome(home: string): InputHistory {
     return new InputHistory(
@@ -67,16 +96,17 @@ export class InputHistory {
     if (!text.trim()) return;
     if (this.values.at(-1) !== text)
       this.values = [...this.values, text].slice(-this.maximum);
+    if (this.pending.at(-1) !== text)
+      this.pending = [...this.pending, text].slice(-this.maximum);
     this.reset();
     try {
       mkdirSync(dirname(this.path), { recursive: true });
       withPrivateJsonLock(this.path, () => {
         // Other views and terminals have their own navigation state. Merge against the
         // latest file while holding its lock, without changing their browsing snapshots.
-        const latest = this.read() ?? this.values;
-        this.values = (
-          latest.at(-1) === text ? latest : [...latest, text]
-        ).slice(-this.maximum);
+        // A failed read is not an empty file: never publish a stale browsing snapshot.
+        const latest = retryFile(() => this.read(true)) ?? [];
+        const values = this.merged(latest);
         const temporary = `${this.path}.${randomUUID()}.tmp`;
         try {
           // Keep the compact prefix older readers recognise; publish the entire history
@@ -86,11 +116,14 @@ export class InputHistory {
             JSON.stringify({
               format: 'circle-history',
               version: 1,
-              items: this.values,
+              items: values,
             }) + '\n',
             { mode: 0o600, flag: 'wx' },
           );
-          renameSync(temporary, this.path);
+          retryFile(() => renameSync(temporary, this.path));
+          this.values = values;
+          // Publication succeeded even if releasing the lock subsequently fails.
+          this.pending = [];
         } finally {
           rmSync(temporary, { force: true });
         }

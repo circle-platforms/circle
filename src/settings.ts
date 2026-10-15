@@ -1,4 +1,4 @@
-import {
+import fs, {
   existsSync,
   readFileSync,
   renameSync,
@@ -213,6 +213,27 @@ function saveSettingsUnlocked(settings: CircleSettings, path: string): string {
 // a field another terminal just changed. Never call an asynchronous operation inside one.
 export function withPrivateJsonLock<T>(path: string, operation: () => T): T {
   const deadline = Date.now() + 5000;
+  const temporaryFailure = (error: unknown): boolean =>
+    ['EPERM', 'EBUSY'].includes((error as NodeJS.ErrnoException).code ?? '');
+  const pause = (): void => {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  };
+  const lockFs = {
+    ...fs,
+    rmdirSync(folder: fs.PathLike): void {
+      for (;;) {
+        try {
+          fs.rmdirSync(folder);
+          return;
+        } catch (error) {
+          // Retry removal itself: proper-lockfile has already released ownership,
+          // so retrying its release callback would leave the directory behind.
+          if (!temporaryFailure(error) || Date.now() >= deadline) throw error;
+          pause();
+        }
+      }
+    },
+  };
   let release: (() => void) | undefined;
   while (!release) {
     try {
@@ -220,14 +241,16 @@ export function withPrivateJsonLock<T>(path: string, operation: () => T): T {
         realpath: false,
         stale: 30000,
         update: 5000,
+        fs: lockFs,
       });
     } catch (error) {
       if (
-        (error as NodeJS.ErrnoException).code !== 'ELOCKED' ||
+        ((error as NodeJS.ErrnoException).code !== 'ELOCKED' &&
+          !temporaryFailure(error)) ||
         Date.now() >= deadline
       )
         throw error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      pause();
     }
   }
   try {
