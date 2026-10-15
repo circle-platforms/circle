@@ -325,7 +325,11 @@ test('actual approval waits in task state; cancel cleans the owned real process 
   let approveReached = false;
   const code =
     'require("node:fs").writeFileSync("pid.txt",String(process.pid));setInterval(()=>{},1000)';
-  const command = `'${process.execPath}' -e '${code}'`;
+  const script = join(data, 'owned-process.cjs');
+  await writeFile(script, code);
+  // Run the same actual program through cmd.exe and POSIX shells without inline
+  // JavaScript quoting changing its bytes or turning an executable into a string.
+  const command = `"${process.execPath}" "${script}"`;
   const model = new ScriptedModel([
     {
       message: assistant('', [
