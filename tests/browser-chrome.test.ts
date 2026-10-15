@@ -431,6 +431,7 @@ function browserFixture(
 ) {
   const internal = chrome as unknown as {
     child?: ChildProcess;
+    ownedRoots?: Set<ChildProcess>;
     conversations: Map<
       string,
       {
@@ -452,6 +453,7 @@ function browserFixture(
     budgetMs,
     report,
     close: () => chrome.close(),
+    ownedRoots: () => [...(internal.ownedRoots ?? []), internal.child],
     state: () => ({
       process: internal.child
         ? {
