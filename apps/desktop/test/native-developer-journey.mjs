@@ -499,6 +499,14 @@ try {
           .count()) > 0,
       'console opens real local source',
     );
+    await until(
+      async () =>
+        (await page
+          .locator('.file-view .monaco-editor .line-numbers.active-line-number')
+          .first()
+          .innerText()) === '2',
+      'console source cursor is at actual line2',
+    );
     await screenshot('06-console-to-source');
     await panel.getByRole('tab', { name: 'network', exact: true }).click();
     await panel.getByRole('button', { name: /GET 200.*api\/data/ }).click();
@@ -527,6 +535,18 @@ try {
     await panel
       .getByRole('button', { name: 'apply viewport', exact: true })
       .click();
+    await page
+      .getByRole('button', { name: 'capture browser', exact: true })
+      .click();
+    await page.getByText('captured observation', { exact: true }).click();
+    const capture = await page
+      .locator('.native-browser img.attachment-image')
+      .getAttribute('src');
+    assert(capture?.startsWith('data:image/png;base64,'));
+    const png = Buffer.from(capture.split(',')[1], 'base64');
+    assert.equal(png.readUInt32BE(16), 375);
+    assert.equal(png.readUInt32BE(20), 812);
+    await writeFile(join(output, '07-actual-browser-capture-375x812.png'), png);
     await screenshot('07-browser-storage-viewport');
   });
   await check('draft survives layout switches', async () => {
