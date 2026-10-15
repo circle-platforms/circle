@@ -124,6 +124,7 @@ export async function runNativeTerminalJourney({
   const checks = [],
     created = [];
   let completed = false;
+  let phase = 'create terminal';
   const list = () => query('terminal', 'list');
   const replay = async (id) => {
     let cursor = 0,
@@ -192,6 +193,7 @@ export async function runNativeTerminalJourney({
       async () => (await replay(first.id)).includes(line(600)),
       'all 600 actual output lines',
     );
+    phase = 'search rendered output';
     const find = panel.getByRole('textbox', {
       name: 'find in terminal',
       exact: true,
@@ -207,6 +209,14 @@ export async function runNativeTerminalJourney({
     );
     await find.fill(line(1));
     await find.press('Enter');
+    await until(
+      async () =>
+        (await panel
+          .locator(`#terminal-${first.id} .xterm-selection div`)
+          .count()) > 0 &&
+        !(await panel.getByText('no matches', { exact: true }).isVisible()),
+      'real xterm selects the complete Chinese match after parsing pending replay',
+    );
     assert.equal(
       await panel.getByText('no matches', { exact: true }).isVisible(),
       false,
@@ -226,6 +236,7 @@ export async function runNativeTerminalJourney({
     checks.push(
       'real xterm search, no-match feedback, keyboard focus and selected-match copy',
     );
+    phase = 'copy complete output';
     await panel
       .getByRole('button', { name: 'copy complete output', exact: true })
       .click();
@@ -245,6 +256,7 @@ export async function runNativeTerminalJourney({
       '600 actual multilingual output lines copied completely and in order',
     );
     const second = await create();
+    phase = 'independent terminal buffers';
     await select(first.id);
     await panel
       .getByRole('button', { name: 'copy complete output', exact: true })
@@ -274,6 +286,7 @@ export async function runNativeTerminalJourney({
     );
     await screenshot('terminal-independent-tabs');
     const port = await freePort();
+    phase = 'start managed service';
     await panel
       .getByRole('button', { name: 'start service', exact: true })
       .click();
@@ -338,6 +351,7 @@ export async function runNativeTerminalJourney({
     assert.deepEqual(actual.args, ['space argument', '']);
     assert.deepEqual(service.command.args, args);
     await screenshot('terminal-managed-service-ready');
+    phase = 'stop managed service and release port';
     await panel
       .getByRole('button', { name: 'stop service', exact: true })
       .click();
@@ -350,6 +364,7 @@ export async function runNativeTerminalJourney({
     await until(() => canBind(port), 'actual service port is released');
     await screenshot('terminal-managed-service-stopped-port-free');
     const previous = service;
+    phase = 'restart managed service';
     await panel
       .getByRole('button', { name: 'restart service', exact: true })
       .click();
@@ -410,6 +425,45 @@ export async function runNativeTerminalJourney({
       );
     completed = true;
     return receipt;
+  } catch (error) {
+    // Preserve the actual failed screen and original output before UI cleanup
+    // changes selection or stops the owned shell. Never capture the user's
+    // pre-existing clipboard; the parent preserves and restores it separately.
+    if (output) {
+      try {
+        await mkdir(output, { recursive: true });
+        await screenshot('terminal-extended-failure-before-cleanup');
+        const terminals = await list();
+        const logs = await Promise.all(
+          created.map(async (id) => ({ id, text: await replay(id) })),
+        );
+        const view = await panel.evaluate((element) => ({
+          selectedTab: element
+            .querySelector('[role="tab"][aria-selected="true"]')
+            ?.getAttribute('aria-controls'),
+          search: element.querySelector('.native-terminal-search input')?.value,
+          text: element.textContent,
+        }));
+        await writeFile(
+          join(output, 'terminal-extended-failure.json'),
+          JSON.stringify(
+            {
+              phase,
+              checks,
+              terminals,
+              logs,
+              view,
+              error: { message: error.message, stack: error.stack },
+            },
+            null,
+            2,
+          ),
+        );
+      } catch {
+        /* Keep the original assertion if renderer evidence is unavailable. */
+      }
+    }
+    throw error;
   } finally {
     // UI-only cleanup. The parent app teardown remains the owner if the renderer fails.
     const failures = [];
