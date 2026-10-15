@@ -111,6 +111,359 @@ try {
   clipboard = await application.evaluate(({ clipboard }) =>
     clipboard.readText(),
   );
+  const sections = page.locator('.project-list > .project');
+  await sections
+    .nth(0)
+    .getByRole('button', { name: 'recent', exact: true })
+    .waitFor();
+  const activeLinks = page.locator('.sidebar a.session-link.active');
+  const hrefs = await activeLinks.evaluateAll((nodes) =>
+    nodes.map((node) => node.getAttribute('href')),
+  );
+  assert.ok(hrefs.length >= 2);
+  assert.equal(new Set(hrefs).size, 1);
+  const activeProject = sections
+    .filter({ has: page.locator('a.session-link.active') })
+    .nth(1);
+  const projectName = await activeProject.locator('.project-name').innerText();
+  const recentActive = sections.nth(0).locator('a.session-link.active');
+  assert.equal((await recentActive.innerText()).includes(projectName), false);
+  const recentRow = sections.nth(0).locator('.session-row', {
+    has: page.locator('a.session-link.active'),
+  });
+  await recentActive.hover();
+  const hover = page.locator('.session-hover');
+  await hover.waitFor();
+  assert.match(await hover.innerText(), new RegExp(projectName));
+  assert.match(await hover.innerText(), /\btoday\b/);
+  assert.doesNotMatch(await hover.innerText(), /updated/);
+  const menu = recentRow.getByRole('button', {
+    name: 'session actions for Fix the reconnect race',
+    exact: true,
+  });
+  await page.waitForFunction(() => {
+    const card = document.querySelector('.session-hover');
+    const button = document
+      .querySelector(
+        '.project-list > .project .session-row a.session-link.active',
+      )
+      ?.parentElement?.querySelector('button');
+    if (!card || !button) return false;
+    return (
+      card.getBoundingClientRect().x >= button.getBoundingClientRect().right - 1
+    );
+  });
+  const flickered = await page.evaluate(async () => {
+    const start = performance.now();
+    while (performance.now() - start < 350) {
+      if (!document.querySelector('.session-hover')) return true;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    return false;
+  });
+  assert.equal(flickered, false);
+  await recentActive.click();
+  await hover.waitFor();
+  await recentActive.click();
+  await hover.waitFor();
+  checks.push('clicking a row keeps its hover card while the pointer stays');
+  await menu.click();
+  await page
+    .getByRole('menuitem', { name: 'rename session', exact: true })
+    .waitFor();
+  await page.keyboard.press('Escape');
+  await page.reload();
+  await page.evaluate(() => {
+    location.hash = '/session/session1';
+  });
+  await page
+    .getByRole('heading', { name: 'Fix the reconnect race', exact: true })
+    .waitFor();
+  await recentActive.hover();
+  await hover.waitFor();
+  const renameCommand = page.getByRole('textbox', {
+    name: 'message',
+    exact: true,
+  });
+  await renameCommand.fill('/name ');
+  await hover.waitFor();
+  await renameCommand.press('Enter');
+  await page
+    .getByRole('dialog', { name: 'rename session', exact: true })
+    .waitFor();
+  assert.equal(await hover.count(), 0);
+  await page.keyboard.press('Escape');
+  await page
+    .getByRole('heading', { name: 'Fix the reconnect race', exact: true })
+    .hover();
+  assert.equal(await hover.count(), 0);
+  await recentActive.focus();
+  await hover.waitFor();
+  assert.deepEqual(
+    await page
+      .locator('.sidebar a.session-link')
+      .evaluateAll((nodes) =>
+        nodes
+          .filter((node) => node.tabIndex === 0)
+          .map((node) => node.textContent.trim()),
+      ),
+    ['Fix the reconnect race'],
+  );
+  await page.keyboard.press('ArrowDown');
+  await page.waitForFunction(
+    () =>
+      document.activeElement?.textContent?.includes(
+        'Review the request lifecycle',
+      ) ?? false,
+  );
+  assert.equal(
+    await page
+      .locator('.sidebar')
+      .getByRole('button', { name: 'work without a project', exact: true })
+      .count(),
+    0,
+  );
+  await recentActive.focus();
+  await page.waitForFunction(() => {
+    const tips = document.querySelectorAll('.tooltip');
+    const cards = document.querySelectorAll('.session-hover');
+    return tips.length === 1 && cards.length === 1;
+  });
+  const menuTab = await page
+    .locator('.sidebar button[aria-label^="session actions"]')
+    .evaluateAll((nodes) => nodes.map((node) => node.tabIndex));
+  assert.ok(menuTab.length > 1);
+  assert.ok(menuTab.every((value) => value === -1));
+  await page.keyboard.press('Tab');
+  assert.equal(
+    (
+      await page.evaluate(
+        () => document.activeElement?.getAttribute('aria-label') ?? '',
+      )
+    ).startsWith('session actions'),
+    false,
+  );
+  await recentActive.focus();
+  await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(() => {
+    const tips = document.querySelectorAll('.tooltip');
+    return (
+      document.activeElement?.getAttribute('aria-label') ===
+        'session actions for Fix the reconnect race' &&
+      tips.length === 1 &&
+      !document.querySelector('.session-hover')
+    );
+  });
+  await page.keyboard.press('ArrowLeft');
+  await recentRow.hover();
+  await page.waitForFunction(() => document.querySelector('.session-hover'));
+  await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(() => {
+    const tips = [...document.querySelectorAll('.tooltip')];
+    return (
+      document.activeElement?.getAttribute('aria-label') ===
+        'session actions for Fix the reconnect race' &&
+      tips.length === 1 &&
+      !tips[0].classList.contains('session-hover')
+    );
+  });
+  checks.push('right arrow replaces the hover card with the menu tip');
+  await page.keyboard.press('ArrowLeft');
+  await page.waitForFunction(() =>
+    document.activeElement?.classList.contains('session-link'),
+  );
+  await page.keyboard.press('Shift+F10');
+  await page
+    .getByRole('menuitem', { name: 'rename session', exact: true })
+    .waitFor();
+  await page.keyboard.press('Escape');
+  checks.push(
+    'the open session stays highlighted in recent and in its project',
+  );
+  checks.push(
+    'a recent row shows only its title, and hover or focus shows the project and time',
+  );
+  checks.push(
+    'a recent hover card sits beside the row and its menu opens on the first click',
+  );
+  checks.push('arrow keys move between sidebar session rows');
+  checks.push(
+    'tab leaves the session list and a row menu opens from the keyboard without a second tip',
+  );
+  await renameCommand.fill('x');
+  await page.waitForFunction(() =>
+    localStorage.getItem('circle.workbench.preview.v1'),
+  );
+  await renameCommand.fill('');
+  await page.evaluate(() => {
+    const key = 'circle.workbench.preview.v1';
+    const saved = JSON.parse(localStorage.getItem(key));
+    const sample = saved.sessions.find((row) => row.id === 'session1');
+    for (let index = 0; index < 4; index += 1) {
+      saved.sessions.push({
+        ...sample,
+        id: 'extra' + index,
+        title: 'Extra recent ' + index,
+        pinned: false,
+        messages: sample.messages.map((message, messageIndex) => ({
+          ...message,
+          id: 'extra' + index + '-' + messageIndex,
+        })),
+      });
+    }
+    localStorage.setItem(key, JSON.stringify(saved));
+  });
+  await page.reload();
+  await page.evaluate(() => {
+    location.hash = '/session/session1';
+  });
+  await page
+    .getByRole('heading', { name: 'Fix the reconnect race', exact: true })
+    .waitFor();
+  assert.equal(await sections.nth(0).locator('a.session-link').count(), 5);
+  await sections
+    .nth(0)
+    .getByRole('button', { name: 'show 2 more', exact: true })
+    .waitFor();
+  checks.push('recent shows five sessions before show more');
+  const recentRows = sections.nth(0).locator('.session-row');
+  await recentRows.nth(0).locator('a.session-link').focus();
+  await page.keyboard.press('Shift+F10');
+  await page
+    .getByRole('menuitem', { name: 'rename session', exact: true })
+    .waitFor();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => {
+    const tips = [...document.querySelectorAll('.tooltip')];
+    return (
+      tips.length === 1 &&
+      !tips[0].classList.contains('session-hover') &&
+      document.activeElement?.getAttribute('aria-label') ===
+        'session actions for Extra recent 0'
+    );
+  });
+  const away = page.getByRole('textbox', { name: 'message', exact: true });
+  const expectCard = async (row) => {
+    await away.hover();
+    await row.hover();
+    await page.waitForFunction(() => {
+      const tips = [...document.querySelectorAll('.tooltip')];
+      return tips.length === 1 && tips[0].classList.contains('session-hover');
+    });
+  };
+  for (const index of [1, 2, 3, 4]) await expectCard(recentRows.nth(index));
+  const projectRow = (project, title) =>
+    page
+      .locator('.project-list > .project')
+      .filter({ has: page.getByRole('button', { name: project, exact: true }) })
+      .locator('.session-row', { hasText: title });
+  await expectCard(projectRow('orbit-api', 'Review the request lifecycle'));
+  await expectCard(projectRow('docs-site', 'Tighten the setup guide'));
+  await page.keyboard.press('ArrowLeft');
+  for (const index of [0, 1, 2, 3, 4]) await expectCard(recentRows.nth(index));
+  await expectCard(projectRow('orbit-api', 'Review the request lifecycle'));
+  await expectCard(projectRow('docs-site', 'Tighten the setup guide'));
+  checks.push(
+    'every recent and project row shows its card, including after a dismissed tip',
+  );
+  await projectRow('orbit-api', 'Fix the reconnect race')
+    .locator('a.session-link')
+    .click();
+  await page.keyboard.press('Shift+F10');
+  await page
+    .getByRole('menuitem', { name: 'rename session', exact: true })
+    .waitFor();
+  await page.keyboard.press('Escape');
+  checks.push('shift+f10 opens the menu on the first press after a click');
+  await application.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    if (window.isMaximized()) window.unmaximize();
+  });
+  const contentSize = await readViewport(page);
+  const restored = {
+    width: Math.round(contentSize.width),
+    height: Math.round(contentSize.height),
+  };
+  // The window will not shrink below its 560px minimum.
+  await setViewport(application, page, {
+    width: restored.width,
+    height: Math.min(restored.height, 640),
+  });
+  const list = page.locator('.project-list');
+  const beforeScroll = await list.evaluate((node) => ({
+    scrollHeight: node.scrollHeight,
+    clientHeight: node.clientHeight,
+  }));
+  assert.ok(beforeScroll.scrollHeight > beforeScroll.clientHeight);
+  await projectRow('orbit-api', 'Fix the reconnect race')
+    .locator('a.session-link')
+    .focus();
+  await expectCard(projectRow('orbit-api', 'Fix the reconnect race'));
+  await recentRows.nth(0).locator('a.session-link').focus();
+  await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(() => {
+    const tips = [...document.querySelectorAll('.tooltip')];
+    return tips.length === 1 && !tips[0].classList.contains('session-hover');
+  });
+  await recentRows.nth(0).locator('a.session-link').hover();
+  await page.mouse.wheel(0, 240);
+  await page.waitForFunction(() => {
+    const node = document.querySelector('.project-list');
+    return (
+      node instanceof HTMLElement &&
+      node.scrollTop > 0 &&
+      document.querySelectorAll('.tooltip').length === 0
+    );
+  });
+  checks.push('the sidebar list scrolls');
+  checks.push('scrolling the sidebar closes a menu tip');
+  await list.evaluate((node) => {
+    const row = [...node.querySelectorAll('[data-row-key]')].find(
+      (item) => item.dataset.rowKey === 'recent:extra3',
+    );
+    if (!(row instanceof HTMLElement)) return;
+    node.scrollTop +=
+      row.getBoundingClientRect().top - node.getBoundingClientRect().top;
+  });
+  await page.waitForFunction(() => {
+    const node = document.querySelector('.project-list');
+    const row = node?.querySelector('[data-row-key="recent:extra3"]');
+    if (!(node instanceof HTMLElement) || !(row instanceof HTMLElement))
+      return false;
+    return (
+      Math.abs(
+        row.getBoundingClientRect().top - node.getBoundingClientRect().top,
+      ) < 2
+    );
+  });
+  const anchored = await list.evaluate((node) => {
+    const row = node.querySelector('[data-row-key="recent:extra3"]');
+    if (!(row instanceof HTMLElement)) return null;
+    return {
+      delta: row.getBoundingClientRect().top - node.getBoundingClientRect().top,
+      scrollTop: node.scrollTop,
+    };
+  });
+  assert.ok(anchored);
+  const still = page.getByRole('textbox', { name: 'message', exact: true });
+  await still.fill('keep the sidebar still');
+  await still.press('Enter');
+  await page
+    .locator('article.message.user', { hasText: 'keep the sidebar still' })
+    .waitFor();
+  const kept = await list.evaluate((node) => {
+    const row = node.querySelector('[data-row-key="recent:extra3"]');
+    if (!(row instanceof HTMLElement)) return null;
+    return {
+      delta: row.getBoundingClientRect().top - node.getBoundingClientRect().top,
+      scrollTop: node.scrollTop,
+    };
+  });
+  assert.ok(kept);
+  assert.ok(Math.abs(kept.delta - anchored.delta) < 2);
+  assert.ok(kept.scrollTop > anchored.scrollTop + 8);
+  await setViewport(application, page, restored);
+  checks.push('sending a message keeps the row at the top of the sidebar');
   for (const command of sourceCommands) {
     await reset();
     await page
@@ -349,11 +702,236 @@ try {
   await page.getByRole('heading', { name: 'models', exact: true }).waitFor();
   checks.push('custom key binding invokes its configured action');
   await reset();
+  const beforeNew = await state();
   await page.getByRole('button', { name: 'new session', exact: true }).click();
   await page
-    .getByRole('heading', { name: 'new session', exact: true })
+    .getByRole('heading', {
+      name: 'what should we build in orbit-api?',
+      exact: true,
+    })
     .waitFor();
-  const resetSessionId = new URL(page.url()).hash.split('/').at(-1);
+  assert.equal(new URL(page.url()).hash, '#/home');
+  // Sample data stays in memory until a view writes it. Home must not add a row.
+  const afterNew = await state();
+  assert.equal(afterNew?.sessions.length ?? 3, beforeNew?.sessions.length ?? 3);
+  assert.equal(
+    afterNew?.activeSessionId ?? 'session1',
+    beforeNew?.activeSessionId ?? 'session1',
+  );
+  checks.push('new session opens home without creating an empty session');
+  const thinking = page.getByRole('button', {
+    name: 'thinking depth',
+    exact: true,
+  });
+  await thinking.waitFor();
+  await page
+    .getByRole('button', { name: 'approval mode', exact: true })
+    .waitFor();
+  await page.getByRole('button', { name: 'model', exact: true }).waitFor();
+  await page
+    .getByRole('button', { name: 'attach files', exact: true })
+    .waitFor();
+  assert.match(await thinking.innerText(), /^high\b/);
+  await page.getByRole('button', { name: 'new session', exact: true }).click();
+  await page.waitForFunction(
+    () => document.activeElement?.getAttribute('aria-label') === 'message',
+  );
+  checks.push('new session focuses the composer when home is already open');
+  await page
+    .getByRole('button', { name: 'approval mode', exact: true })
+    .click();
+  const modeMenu = page.locator('.mode-menu');
+  await modeMenu.waitFor();
+  assert.equal(await modeMenu.getAttribute('data-side'), 'bottom');
+  await page.getByRole('menuitem', { name: /^manual/ }).waitFor();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(
+    () => document.activeElement?.getAttribute('aria-label') === 'message',
+  );
+  await thinking.click();
+  const effortMenu = page.locator('.dropdown.footbar-menu');
+  await effortMenu.waitFor();
+  assert.equal(await effortMenu.getAttribute('data-side'), 'bottom');
+  await page.getByRole('menuitem', { name: 'minimal', exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(
+    () => document.activeElement?.getAttribute('aria-label') === 'message',
+  );
+  checks.push(
+    'home menus open downward and escape returns focus to the composer',
+  );
+  await thinking.click();
+  await page.getByRole('menuitem', { name: 'extra high', exact: true }).click();
+  assert.match(await thinking.innerText(), /extra high/);
+  checks.push('home composer has the session controls');
+  const projectButton = page.getByRole('button', {
+    name: 'choose a project',
+    exact: true,
+  });
+  await projectButton.click();
+  const projectMenu = page.locator('.project-menu');
+  await projectMenu.waitFor();
+  assert.equal(await projectMenu.getAttribute('data-side'), 'bottom');
+  await page
+    .getByRole('textbox', { name: 'search projects', exact: true })
+    .fill('zzznomatch');
+  await projectMenu
+    .getByRole('status')
+    .getByText('no matching projects')
+    .waitFor();
+  await projectMenu
+    .getByRole('menuitem', { name: 'open folder', exact: true })
+    .waitFor();
+  await projectMenu
+    .getByRole('menuitem', { name: 'no project', exact: true })
+    .waitFor();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(
+    () => document.activeElement?.getAttribute('aria-label') === 'message',
+  );
+  checks.push(
+    'a project search with no matches keeps open folder and no project',
+  );
+  const heldDraft = page.getByRole('textbox', { name: 'message', exact: true });
+  await heldDraft.fill('hold this');
+  await projectButton.click();
+  await page.getByRole('menuitem', { name: 'docs-site', exact: true }).click();
+  await page
+    .getByRole('heading', {
+      name: 'what should we build in docs-site?',
+      exact: true,
+    })
+    .waitFor();
+  await route('/session/session1');
+  await page.getByRole('button', { name: 'new session', exact: true }).click();
+  await page
+    .getByRole('heading', {
+      name: 'what should we build in docs-site?',
+      exact: true,
+    })
+    .waitFor();
+  assert.equal(await heldDraft.inputValue(), 'hold this');
+  assert.match(await thinking.innerText(), /extra high/);
+  checks.push(
+    'leaving home and opening new session keeps the draft, project and thinking depth',
+  );
+  await page.getByRole('button', { name: 'send message', exact: true }).click();
+  const trustDialog = page.getByRole('dialog', {
+    name: 'workspace trust',
+    exact: true,
+  });
+  await trustDialog.waitFor();
+  await page.waitForFunction(
+    () =>
+      document.activeElement?.textContent?.includes('trust in preview') ??
+      false,
+  );
+  await trustDialog
+    .getByRole('button', { name: 'trust in preview', exact: true })
+    .click();
+  await page.getByRole('heading', { name: 'hold this', exact: true }).waitFor();
+  const trusted = await state();
+  const trustedSession = trusted.sessions.find((session) =>
+    session.messages.some((item) => item.text === 'hold this'),
+  );
+  const trustedWorkspace = trusted.workspaces.find(
+    (item) => item.id === trustedSession.workspaceId,
+  );
+  assert.equal(trustedWorkspace.name, 'docs-site');
+  assert.equal(trustedWorkspace.trusted, true);
+  checks.push(
+    'trusting a project focuses the confirm button and sends the waiting message',
+  );
+  await page.getByRole('button', { name: 'new session', exact: true }).click();
+  await page
+    .getByRole('button', { name: 'choose a project', exact: true })
+    .click();
+  await page.getByRole('menuitem', { name: 'no project', exact: true }).click();
+  const homeMessage = page.getByRole('textbox', {
+    name: 'message',
+    exact: true,
+  });
+  await homeMessage.click();
+  assert.equal(
+    await page.evaluate(
+      () => document.activeElement?.getAttribute('aria-label') ?? '',
+    ),
+    'message',
+  );
+  await page.keyboard.type('focused');
+  assert.equal(await homeMessage.inputValue(), 'focused');
+  assert.equal(
+    await page
+      .getByRole('textbox', { name: 'search projects', exact: true })
+      .count(),
+    0,
+  );
+  checks.push('choosing no project returns focus to the composer');
+  await page.getByRole('button', { name: 'search', exact: true }).click();
+  const searchDialog = page.getByRole('dialog', {
+    name: 'search',
+    exact: true,
+  });
+  await searchDialog.waitFor();
+  await page.waitForFunction(
+    () =>
+      document.activeElement?.getAttribute('aria-label') === 'global search',
+  );
+  await page.keyboard.type('buffer');
+  // The dialog hides the composer from the accessibility tree. Read it directly.
+  const composerValue = () =>
+    page.evaluate(
+      () =>
+        document.querySelector('textarea[aria-label="message"]')?.value ?? '',
+    );
+  assert.equal(await composerValue(), 'focused');
+  await searchDialog.getByText('pending buffer').waitFor();
+  await page.keyboard.press('Control+a');
+  await page.keyboard.type('zzznomatch');
+  await searchDialog
+    .getByRole('heading', { name: 'no results', exact: true })
+    .waitFor();
+  await page.keyboard.press('Escape');
+  await searchDialog.waitFor({ state: 'hidden' });
+  assert.equal(await composerValue(), 'focused');
+  checks.push(
+    'search focuses its box, finds an assistant reply, and shows no results',
+  );
+  await page.getByRole('button', { name: 'send message', exact: true }).click();
+  await page.getByRole('heading', { name: 'focused', exact: true }).waitFor();
+  const started = await state();
+  const created = started.sessions.find((session) =>
+    session.messages.some((item) => item.text === 'focused'),
+  );
+  assert.equal(created.effort, 'xhigh');
+  const workspace = started.workspaces.find(
+    (item) => item.id === created.workspaceId,
+  );
+  assert.equal(workspace.kind, 'scratch');
+  checks.push('the first message keeps the thinking depth chosen on home');
+  await route('/session/session1');
+  await page
+    .getByRole('button', { name: 'Fix the reconnect race', exact: true })
+    .click();
+  await page.getByRole('menuitem', { name: 'rename', exact: true }).click();
+  const renameBox = page.getByRole('textbox', {
+    name: 'session name',
+    exact: true,
+  });
+  await renameBox.waitFor();
+  await page.waitForFunction(
+    () => document.activeElement?.getAttribute('aria-label') === 'session name',
+  );
+  assert.equal(await renameBox.inputValue(), 'Fix the reconnect race');
+  assert.equal(
+    await renameBox.evaluate(
+      (node) =>
+        node.selectionStart === 0 && node.selectionEnd === node.value.length,
+    ),
+    true,
+  );
+  await page.keyboard.press('Escape');
+  checks.push('rename focuses the name and selects it');
   const resetDraft = 'preview reset regression draft';
   await page
     .getByRole('textbox', { name: 'message', exact: true })
@@ -432,7 +1010,7 @@ try {
       .inputValue(),
     '',
   );
-  assert.notEqual(new URL(page.url()).hash.split('/').at(-1), resetSessionId);
+  assert.equal(new URL(page.url()).hash, '#/session/session1');
   await openPreview();
   await previewDialog
     .getByRole('button', { name: 'reset sample data', exact: true })

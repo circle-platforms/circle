@@ -80,7 +80,14 @@ export class WorkspaceGrants {
         result.truncated = true;
         return;
       }
-      for (const entry of await readdir(folder, { withFileTypes: true })) {
+      // One unreadable directory must not reject the folder the person confirmed.
+      let entries;
+      try {
+        entries = await readdir(folder, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
         if (result.files.length >= 2000) {
           result.truncated = true;
           break;

@@ -141,7 +141,6 @@ try {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.waitForFunction(() => Boolean(window.circleDesktop));
-  await ready(page);
   assert.equal(
     (await page.evaluate(() => window.circleDesktop.info())).frontendOnly,
     false,
@@ -255,7 +254,6 @@ try {
   });
   const restarted = await app.firstWindow();
   await restarted.waitForFunction(() => Boolean(window.circleDesktop));
-  await ready(restarted);
   const result = await restarted.evaluate(async (id) => {
     const { snapshot } = await window.circleDesktop.runtimeState();
     return window.circleDesktop.runtimeCommand({
