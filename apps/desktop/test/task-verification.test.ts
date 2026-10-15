@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
 import { existsSync, realpathSync, writeFileSync } from 'node:fs';
 import {
   mkdir,
@@ -9,7 +10,8 @@ import {
   unlink,
   writeFile,
 } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
+import { syncBuiltinESMExports } from 'node:module';
 import { test, type TestContext } from 'node:test';
 import { promisify } from 'node:util';
 import { AgentRuntime } from '../../../src/runtime.ts';
@@ -175,6 +177,52 @@ test('trusted baseline oracle verifies the candidate with real logs and invokes 
     await readFile(join(f.workspace, 'value.txt'), 'utf8'),
     'fixed\n',
   );
+});
+
+test('a legacy synchronous workspace spelling cannot reject the native canonical candidate before its real oracle', async (t) => {
+  const f = await fixture(t);
+  const canonical = realpathSync.native(f.workspace);
+  const alias = join(f.root, 'legacy-workspace-spelling');
+  await symlink(
+    canonical,
+    alias,
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
+  await writeFile(join(f.workspace, 'value.txt'), 'fixed\n');
+  const context = await f.context();
+  const original = fs.realpathSync;
+  // Reproduce the Windows 8.3 resolver disagreement on every host. The alias
+  // is a real folder, while the OS-native resolver still returns its target.
+  fs.realpathSync = Object.assign(
+    ((...args: Parameters<typeof realpathSync>) =>
+      typeof args[0] === 'string' && resolve(args[0]) === resolve(f.workspace)
+        ? alias
+        : Reflect.apply(original, fs, args)) as typeof realpathSync,
+    { native: original.native },
+  );
+  syncBuiltinESMExports();
+  try {
+    const verify = createTaskVerifier({
+      workspace: f.workspace,
+      dataDir: f.dataDir,
+      runtimeExecutable: process.execPath,
+    });
+    const checks = await verify(f.task, context);
+    assert.equal(checks[0]?.status, 'passed');
+    assert.equal(checks[0]?.source, 'command');
+    assert.equal(checks[0]?.exitCode, 0);
+    const log = checks[0]!.artifactPaths!.find((path) =>
+      path.endsWith('.log'),
+    )!;
+    assert.match(await readFile(log, 'utf8'), /TRUSTED_ORACLE_PASS v24\./);
+    assert.equal(
+      await readFile(join(f.workspace, 'value.txt'), 'utf8'),
+      'fixed\n',
+    );
+  } finally {
+    fs.realpathSync = original;
+    syncBuiltinESMExports();
+  }
 });
 
 test('a bad candidate fails independently of the worker completion claim', async (t) => {
