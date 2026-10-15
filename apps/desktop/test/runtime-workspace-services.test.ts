@@ -1122,3 +1122,43 @@ test('nested agent patch reports committed paths to the next model after a real 
   assert.match(result, /committed paths: nested\/a\.ts/);
   assert.match(result, /failures: nested\/b\.ts/);
 });
+
+test('native document access applies trusted project credential file rules', async (t) => {
+  const f = await setup(t);
+  await mkdir(join(f.workspace, '.circle'));
+  await writeFile(
+    join(f.workspace, '.circle/settings.json'),
+    JSON.stringify({ credential_files: ['private.fixture'] }),
+  );
+  await writeFile(
+    join(f.workspace, 'private.fixture'),
+    'synthetic protected value',
+  );
+  for (const [method, params] of [
+    ['read', { path: 'private.fixture' }],
+    [
+      'save',
+      { path: 'private.fixture', content: 'bad', expectedRevision: null },
+    ],
+    [
+      'applyEdits',
+      {
+        edits: [
+          { path: 'private.fixture', content: 'bad', expectedRevision: null },
+        ],
+      },
+    ],
+  ] as const) {
+    const reply = await f.service('documents', method, params);
+    if (reply.ok) assert.equal((reply.data as any)?.status, 'rejected');
+    assert.equal(
+      JSON.stringify(reply).includes('synthetic protected value'),
+      false,
+    );
+    assert.equal(
+      await readFile(join(f.workspace, 'private.fixture'), 'utf8'),
+      'synthetic protected value',
+    );
+    if (method === 'read') assert.equal(reply.ok, false);
+  }
+});

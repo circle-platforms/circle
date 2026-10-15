@@ -732,13 +732,16 @@ export class RuntimeController {
           });
         },
         workspaceId: identity(root),
-        credentialFiles: loadSettings(this.home).credential_files,
+        credentialFiles: settingsForRun(this.home, root).settings
+          .credential_files,
         emit: (event) => this.options.emitWorkspaceEvent?.(event),
         onPersistenceError: (error) => this.workspaceFailure(root, error),
       });
       this.workspaceServices.set(root, services);
     }
-    services.setCredentialFiles(loadSettings(this.home).credential_files);
+    services.setCredentialFiles(
+      settingsForRun(this.home, root).settings.credential_files,
+    );
     return services;
   }
   private fileMutations(workspace: string): FileMutations {
