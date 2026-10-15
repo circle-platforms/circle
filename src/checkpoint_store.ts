@@ -230,9 +230,10 @@ export class CheckpointStore {
       .all(parentId) as unknown as Session[];
   }
   rename(id: string, title: string): void {
+    // A new name is not new activity: `updated` is the list order.
     this.db
-      .prepare('UPDATE sessions SET title = ?, updated = ? WHERE id = ?')
-      .run(title, Date.now(), id);
+      .prepare('UPDATE sessions SET title = ? WHERE id = ?')
+      .run(title, id);
     this.writeVersion++;
   }
   private decode(row: Record<string, unknown>): Checkpoint {

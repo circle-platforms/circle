@@ -55,6 +55,17 @@ export function chordFromEvent(event: {
     key
   );
 }
+/** Desktop session search. The header menu and the shortcut list both show this chord. */
+export const DESKTOP_SEARCH_CHORD = 'ctrl+k';
+export function isDesktopSearch(event: {
+  key: string;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+  metaKey: boolean;
+}): boolean {
+  return chordFromEvent(event) === DESKTOP_SEARCH_CHORD;
+}
 export function formatChord(chord: string): string {
   const mac =
     typeof document !== 'undefined' &&

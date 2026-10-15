@@ -114,6 +114,7 @@ export function VariablesSettings() {
       </p>
       <VariableTable
         label={t('variables')}
+        empty={t('no variables yet')}
         rows={Object.entries(variables)}
         selected={selected.variable}
         onSelect={(name) => setSelected({ ...selected, variable: name })}
@@ -134,6 +135,7 @@ export function VariablesSettings() {
       <VariableTable
         label={t('secrets')}
         nameHeading={t('name')}
+        empty={t('no secrets yet')}
         rows={secrets.map((name) => [name, MASK])}
         selected={selected.secret}
         onSelect={(name) => setSelected({ ...selected, secret: name })}
@@ -237,6 +239,7 @@ export function VariablesSettings() {
 function VariableTable({
   label,
   nameHeading,
+  empty,
   rows,
   selected,
   onSelect,
@@ -246,6 +249,7 @@ function VariableTable({
 }: {
   label: string;
   nameHeading?: string;
+  empty: string;
   rows: [string, string][];
   selected: string | null;
   onSelect: (name: string) => void;
@@ -265,6 +269,13 @@ function VariableTable({
             </tr>
           </thead>
           <tbody>
+            {rows.length === 0 && (
+              <tr>
+                <td className="variable-empty" colSpan={2}>
+                  {empty}
+                </td>
+              </tr>
+            )}
             {rows.map(([name, value]) => (
               <tr
                 key={name}

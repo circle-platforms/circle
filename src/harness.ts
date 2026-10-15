@@ -23,7 +23,7 @@ import {
 import { httpStatus } from './model_guard.js';
 import { validateAttachments } from './media.js';
 import { readPrompt } from './system_prompt.js';
-import { fallbackTitle, sanitizeGeneratedTitle } from './session_title.js';
+import { fallbackTitle, titleFromModelReply } from './session_title.js';
 export type ApprovalDecision =
   | 'approve'
   | 'reject'
@@ -362,16 +362,40 @@ export class Harness {
           },
         ],
         tools: [],
-        signal: AbortSignal.timeout(20_000),
-        // Empty, not the session's effort: an Anthropic-compatible gateway rejects
-        // output_config.effort (and a thinking budget) on this short call.
-        effort: '',
+        // GLM-5.3 thinks by default at its deepest setting and may spend the whole
+        // call in a thinking block. `low` is a depth that endpoint accepts; a short
+        // budget and a minute keep the call from dying before the title is written.
+        signal: AbortSignal.timeout(60_000),
+        effort: 'low',
+        maxTokens: 4096,
         token: () => {},
       });
-      const title =
-        sanitizeGeneratedTitle(response.message.content) ??
-        sanitizeGeneratedTitle(response.message.thinking ?? '');
-      if (!title) return false;
+      const title = titleFromModelReply(
+        response.message.content,
+        response.message.thinking ?? '',
+      );
+      if (!title) {
+        const raw =
+          `${response.message.content}\n${response.message.thinking ?? ''}`.trim();
+        if (!/^(?:i cannot|i can't|sorry|unable)\b/i.test(raw)) {
+          const blocks = (response.message.provider_content ?? []).map(
+            (block) =>
+              block && typeof block === 'object' && 'type' in block
+                ? String(block.type)
+                : typeof block,
+          );
+          console.error(
+            'session title request returned no title:',
+            JSON.stringify({
+              model: response.message.model,
+              blocks,
+              content: response.message.content.slice(0, 200),
+              thinking: (response.message.thinking ?? '').slice(0, 200),
+            }),
+          );
+        }
+        return false;
+      }
       const current = this.options.store.get(this.sessionId);
       if (!current || current.title !== fallback) return true;
       this.options.store.rename(this.sessionId, title);

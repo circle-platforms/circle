@@ -101,6 +101,8 @@ export interface ModelRequest {
    * turn's depth stays put.
    */
   effort?: string;
+  /** Cap this call's answer. A session title does not need the turn's output budget. */
+  maxTokens?: number;
 }
 export interface ModelNotice {
   event: string;

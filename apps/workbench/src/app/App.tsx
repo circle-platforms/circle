@@ -63,7 +63,9 @@ import { t } from '../i18n';
 import { isSessionBrowser } from '../model/browser';
 import {
   effectiveBindings,
+  DESKTOP_SEARCH_CHORD,
   formatChord,
+  isDesktopSearch,
   matchingAction,
 } from '../model/shortcuts';
 // The names of the pages in the top bar; any other page shows its id.
@@ -455,12 +457,7 @@ export function App() {
     const handle = (event: KeyboardEvent) => {
       if (document.documentElement.dataset.keyCapture) return;
       if (document.querySelector('[role="dialog"]')) return;
-      if (
-        (event.metaKey && event.key === 'k') ||
-        ((event.ctrlKey || event.metaKey) &&
-          event.shiftKey &&
-          event.key.toLowerCase() === 'p')
-      ) {
+      if (isDesktopSearch(event)) {
         event.preventDefault();
         setSearchOpen(true);
         return;
@@ -729,7 +726,7 @@ export function App() {
                   >
                     <DropdownMenu.Item onSelect={() => setSearchOpen(true)}>
                       <span>{t('search')}</span>
-                      <kbd>{formatChord('ctrl+shift+p')}</kbd>
+                      <kbd>{formatChord(DESKTOP_SEARCH_CHORD)}</kbd>
                     </DropdownMenu.Item>
                     <DropdownMenu.Item
                       onSelect={() =>

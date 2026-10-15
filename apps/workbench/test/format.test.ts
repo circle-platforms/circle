@@ -10,7 +10,11 @@ import {
   formatWindow,
   nextBusySeconds,
 } from '../src/model/format.ts';
-import { formatChord } from '../src/model/shortcuts.ts';
+import {
+  DESKTOP_SEARCH_CHORD,
+  formatChord,
+  isDesktopSearch,
+} from '../src/model/shortcuts.ts';
 import {
   browserApprovalInput,
   browserEventAddress,
@@ -75,6 +79,22 @@ test('the footer and busy word write numbers as the terminal does', () => {
   assert.equal(nextBusySeconds(8.1, Number.NaN), 8.1);
   assert.equal(formatChord('alt+up'), 'Alt+Up');
   assert.equal(formatChord('ctrl+shift+p'), 'Ctrl+Shift+P');
+  assert.equal(DESKTOP_SEARCH_CHORD, 'ctrl+k');
+  assert.equal(formatChord(DESKTOP_SEARCH_CHORD), 'Ctrl+K');
+  const key = (
+    name: string,
+    mods: { ctrl?: boolean; meta?: boolean; shift?: boolean } = {},
+  ) =>
+    isDesktopSearch({
+      key: name,
+      ctrlKey: Boolean(mods.ctrl),
+      altKey: false,
+      shiftKey: Boolean(mods.shift),
+      metaKey: Boolean(mods.meta),
+    });
+  assert.equal(key('k', { ctrl: true }), true);
+  assert.equal(key('k', { meta: true }), true);
+  assert.equal(key('p', { ctrl: true, shift: true }), false);
 });
 
 test('a dialog shows over the tab that waits on it and names where it came from', () => {

@@ -2015,6 +2015,13 @@ pre {
   line-height: 1.8;
   margin-bottom: 15px;
 }
+.settings-block > .toggle {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
 .effort-options {
   display: flex;
   gap: 8px;
@@ -3492,7 +3499,6 @@ pre {
   min-width: 0;
   padding: 0 2px;
   border: 0;
-  border-bottom: 1px solid var(--accent);
   border-radius: 0;
   background: transparent;
   color: var(--fg);
@@ -3500,8 +3506,16 @@ pre {
 .session-row > .session-rename {
   flex: 1;
   height: 30px;
-  margin: 0;
-  padding: 0 8px 0 22px;
+  margin: 2px 0;
+  padding: 0 10px 0 22px;
+  border-radius: 7px;
+  font-size: var(--ui-size);
+  line-height: 30px;
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.session-row > .session-rename:focus,
+.session-row > .session-rename:focus-visible {
+  outline: none;
 }
 .session-menu [role='menuitem'] {
   display: flex;
@@ -4648,6 +4662,12 @@ pre {
   font-family: var(--mono);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.variable-table td.variable-empty {
+  font-family: inherit;
+  color: var(--muted);
+  text-align: center;
+  padding: 22px 10px;
 }
 .variable-table tbody tr {
   cursor: default;

@@ -234,6 +234,8 @@ export const pages: Record<string, string> = {
   'runs commands': '运行命令',
   'may change things': '可能有改动',
   variables: '变量',
+  'no variables yet': '还没有变量',
+  'no secrets yet': '还没有密钥',
   "Written as Windows writes environment variables: %NAME% in a tool's arguments takes the value when the tool runs. The model also reads the values.":
     '写法同 Windows 环境变量：工具参数里的 %NAME% 在工具执行时换成变量值。模型也能看到这些值。',
   secrets: '密钥',

@@ -21,6 +21,7 @@ import {
 import { VERSION } from '../../../../src/version';
 import { useRuntime } from '../app/context';
 import { t, tn } from '../i18n';
+import { DESKTOP_SEARCH_CHORD, formatChord } from '../model/shortcuts';
 import { DiffBlock } from '../components/DiffBlock';
 import { BrowserApproval, requestReason } from './InlineRequest';
 import { hasToolInput } from '../model/browser';
@@ -80,7 +81,7 @@ function desktopShortcuts(): [string, string][] {
     ['↑ ↓', t('earlier messages, at the start of the box')],
     ['Alt+↑', t('take back queued messages')],
     ['?', t('this list, with an empty box')],
-    [mod + 'K', t('search')],
+    [formatChord(DESKTOP_SEARCH_CHORD), t('search')],
     [mod + 'F', t('find in conversation')],
     [mod + 'N', t('new session')],
     [mod + 'O', t('open folder')],

@@ -448,11 +448,12 @@ export class GatewayModel implements ChatModel {
         previous.content.push(...content);
       else messages.push({ role, content });
     }
+    const budget = this.outputBudget ?? 32000;
     const body: MessageCreateParamsNonStreaming = {
       model: this.model,
       system,
       messages,
-      max_tokens: this.outputBudget ?? 32000,
+      max_tokens: Math.min(request.maxTokens ?? budget, budget),
     };
     if (request.tools.length)
       body.tools = request.tools.map((tool) => ({
@@ -546,6 +547,12 @@ export class GatewayModel implements ChatModel {
           name: block.name,
           args: block.input as Record<string, unknown>,
         });
+      else {
+        // GLM sometimes names the reasoning block something other than `thinking`.
+        const extra = block as { text?: string; thinking?: string };
+        if (extra.thinking) thinking += extra.thinking;
+        else if (extra.text) content += extra.text;
+      }
     }
     const response: ModelResponse = {
       message: {
