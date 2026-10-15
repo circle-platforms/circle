@@ -26,6 +26,7 @@ import { readPrompt } from './system_prompt.js';
 import {
   fallbackTitle,
   sanitizeGeneratedTitle,
+  TITLE_MAX_TOKENS,
   titleWorthy,
 } from './session_title.js';
 export type ApprovalDecision =
@@ -331,10 +332,9 @@ export class Harness {
   }
   /**
    * Ask the model for a short title after the fallback is already saved. A scripted model
-   * never sees this call. A rename that landed first is left alone. The request asks for
-   * no thinking and a short cap: an Anthropic-compatible model such as glm-5.3 otherwise
-   * spends the turn's effort and output budget and the fallback stays, with the error
-   * swallowed.
+   * never sees this call. A rename that landed first is left alone. Thinking is disabled
+   * and the cap is short. Reasoning text is not a title: glm-5.3 otherwise returns a
+   * fragment of its thinking and the sidebar shows that.
    */
   private generateTitle(display: string, fallback: string): void {
     const model = this.options.model;
@@ -357,16 +357,14 @@ export class Harness {
         ],
         tools: [],
         signal: AbortSignal.timeout(20_000),
-        // `''` skips thinking. `minimal` is sent as output_config.effort and glm rejects
-        // it, or thinks until this times out, and the catch used to hide that.
+        // `''` sends Anthropic `thinking: { type: 'disabled' }`. `minimal` is sent as
+        // output_config.effort and glm rejects it, or thinks until this times out.
         effort: '',
-        maxTokens: 128,
+        maxTokens: TITLE_MAX_TOKENS,
         token: () => {},
       })
       .then((response) => {
-        const title = sanitizeGeneratedTitle(
-          response.message.content || response.message.thinking || '',
-        );
+        const title = sanitizeGeneratedTitle(response.message.content);
         if (!title) {
           report('empty title');
           return;

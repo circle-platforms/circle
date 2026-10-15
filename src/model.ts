@@ -461,8 +461,12 @@ export class GatewayModel implements ChatModel {
         description: tool.description,
         input_schema: { ...tool.parameters, type: 'object' },
       }));
+    // GLM's Anthropic gateway accepts `{ type: 'disabled' }` and continues the
+    // request (it maps the value to low effort). Omitting the field leaves
+    // glm-5.3 on its default, which spends the cap on thinking.
+    if (request.effort === '') body.thinking = { type: 'disabled' };
     const effort = this.effortFor(request);
-    if (effort) {
+    if (request.effort !== '' && effort) {
       const profile = modelProfile('anthropic', this.model);
       const claude = this.model
         .toLowerCase()

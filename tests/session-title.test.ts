@@ -15,6 +15,7 @@ import { defaultSettings, saveCredentials } from '../src/settings.js';
 import {
   fallbackTitle,
   sanitizeGeneratedTitle,
+  TITLE_MAX_TOKENS,
   titleWorthy,
 } from '../src/session_title.js';
 import type { ChatModel, ModelRequest, ModelResponse } from '../src/types.js';
@@ -102,7 +103,7 @@ class TitleModel implements ChatModel {
   thinking = '';
   async complete(request: ModelRequest): Promise<ModelResponse> {
     this.requests.push(request);
-    const titleCall = request.maxTokens === 128;
+    const titleCall = request.maxTokens === TITLE_MAX_TOKENS;
     if (titleCall && this.failTitle) throw new Error('title exploded');
     if (titleCall) await this.gate;
     const content = titleCall ? this.title : this.answer;
@@ -152,7 +153,7 @@ test('a side request names the session and does not take the answer', async (t) 
   assert.equal(result.answer, 'done');
   assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
   const titleCalls = model.requests.filter(
-    (request) => request.maxTokens === 128,
+    (request) => request.maxTokens === TITLE_MAX_TOKENS,
   );
   assert.equal(titleCalls.length, 1);
   assert.equal(titleCalls[0]!.effort, '');
@@ -203,7 +204,8 @@ test('a short prompt keeps the fallback and skips the model', async (t) => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(session.id)!.title, 'hello there');
   assert.equal(
-    model.requests.filter((request) => request.maxTokens === 128).length,
+    model.requests.filter((request) => request.maxTokens === TITLE_MAX_TOKENS)
+      .length,
     0,
   );
 });
@@ -219,7 +221,8 @@ test('four words ask for a title even when the prompt is short', async (t) => {
   await run.run(prompt);
   assert.equal(store.get(session.id)!.title, prompt);
   assert.equal(
-    model.requests.filter((request) => request.maxTokens === 128).length,
+    model.requests.filter((request) => request.maxTokens === TITLE_MAX_TOKENS)
+      .length,
     1,
   );
   model.releaseTitle();
@@ -263,16 +266,23 @@ test('a failed side request keeps the fallback and is reported', async (t) => {
   assert.match(notes[0] ?? '', /title exploded/);
 });
 
-test('a title that arrives as thinking still replaces the fallback', async (t) => {
+test('thinking text is not used as the title', async (t) => {
   const root = scratch(t);
   const model = new TitleModel('done', '');
-  model.thinking = 'Sea poem';
+  model.thinking = 'The user is asking about a README.md file - they';
   const { harness: run, store, session } = harness(root, model);
   cleanup(t, () => store.close());
+  const notes: string[] = [];
+  run.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as
+      { event?: string; message?: string } | undefined;
+    if (notice?.event === 'title_failed') notes.push(String(notice.message));
+  });
   await run.run(LONG);
   model.releaseTitle();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(store.get(session.id)!.title, 'Sea poem');
+  assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
+  assert.equal(notes[0], 'empty title');
 });
 
 const LIVE = 'Please list all the files in the workspace and explain each';
@@ -296,13 +306,13 @@ function sse(
   response.end();
 }
 
-test('an anthropic title call waits out the turn and sends no thinking', async (t) => {
+test('an anthropic title call waits out the turn and disables thinking', async (t) => {
   const bodies: Record<string, unknown>[] = [];
   let answerSent = false;
   const instance = createServer(async (request, response) => {
     const body = await readBody(request);
     bodies.push(body);
-    const title = body.max_tokens === 128;
+    const title = body.max_tokens === TITLE_MAX_TOKENS;
     if (title) assert.equal(answerSent, true);
     sse(response, (event) => {
       event('message_start', {
@@ -373,23 +383,23 @@ test('an anthropic title call waits out the turn and sends no thinking', async (
     await new Promise((resolve) => setImmediate(resolve));
   }
   assert.equal(store.get(session.id)!.title, 'Workspace file list');
-  const title = bodies.find((body) => body.max_tokens === 128);
+  const title = bodies.find((body) => body.max_tokens === TITLE_MAX_TOKENS);
   assert.ok(title);
   assert.equal(title!.output_config, undefined);
-  assert.equal(title!.thinking, undefined);
+  assert.deepEqual(title!.thinking, { type: 'disabled' });
   assert.equal(title!.model, 'glm-5.3');
-  assert.equal(bodies[0]!.max_tokens === 128, false);
+  assert.equal(bodies[0]!.max_tokens === TITLE_MAX_TOKENS, false);
 });
 
-test('a thinking block with no text still becomes the session title', async (t) => {
+test('a thinking-only title keeps the fallback and is reported', async (t) => {
   let answerSent = false;
   const instance = createServer(async (request, response) => {
     const body = await readBody(request);
-    const title = body.max_tokens === 128;
+    const title = body.max_tokens === TITLE_MAX_TOKENS;
     if (title) {
       assert.equal(answerSent, true);
       assert.equal(body.output_config, undefined);
-      assert.equal(body.thinking, undefined);
+      assert.deepEqual(body.thinking, { type: 'disabled' });
     }
     sse(response, (event) => {
       event('message_start', {
@@ -463,13 +473,19 @@ test('a thinking block with no text still becomes the session title', async (t) 
   const model = new GatewayModel(settings, root);
   const { harness: run, store, session } = harness(root, model);
   cleanup(t, () => store.close());
+  const notes: string[] = [];
+  run.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as
+      { event?: string; message?: string } | undefined;
+    if (notice?.event === 'title_failed') notes.push(String(notice.message));
+  });
   const result = await run.run(LIVE);
   assert.equal(result.answer, 'listed');
-  for (let i = 0; i < 20; i++) {
-    if (store.get(session.id)!.title === 'Workspace file list') break;
+  for (let i = 0; i < 20 && !notes.length; i++)
     await new Promise((resolve) => setImmediate(resolve));
-  }
-  assert.equal(store.get(session.id)!.title, 'Workspace file list');
+  assert.equal(store.get(session.id)!.title, fallbackTitle(LIVE));
+  assert.notEqual(fallbackTitle(LIVE), 'Workspace file list');
+  assert.equal(notes[0], 'empty title');
 });
 
 test('the extension wrapper keeps a side request so a runtime can title', async (t) => {
@@ -487,7 +503,9 @@ test('the extension wrapper keeps a side request so a runtime can title', async 
   cleanup(t, () => store.close());
   const result = await run.run(LONG);
   assert.equal(result.answer, 'done');
-  const title = model.requests.find((request) => request.maxTokens === 128);
+  const title = model.requests.find(
+    (request) => request.maxTokens === TITLE_MAX_TOKENS,
+  );
   assert.ok(title);
   assert.equal(title!.effort, '');
   model.releaseTitle();

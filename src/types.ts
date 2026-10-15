@@ -98,7 +98,8 @@ export interface ModelRequest {
   timeoutScale?: number;
   /**
    * Thinking depth for this request only. A side request (a session title) uses it so the
-   * turn's depth stays put. `''` asks for no thinking on this request.
+   * turn's depth stays put. `''` asks for no thinking: the Anthropic body sends
+   * `thinking: { type: 'disabled' }`.
    */
   effort?: string;
   /** Output cap for this request only. A session title asks for a short reply. */

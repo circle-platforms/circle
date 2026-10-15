@@ -28,6 +28,7 @@ import {
   trustFolder,
   defaultSettings,
 } from '../../../src/settings.ts';
+import { TITLE_MAX_TOKENS } from '../../../src/session_title.ts';
 import { visibleMessages } from '../../workbench/src/model/state.ts';
 import { createServer } from 'node:http';
 import { ModelCatalog } from '../../../src/model_catalog.ts';
@@ -4261,7 +4262,7 @@ test('a desktop prompt asks for a title after the turn and shows a failure', asy
     sideRequests: true,
     async complete(request) {
       requests.push(request);
-      const titleCall = request.maxTokens === 128;
+      const titleCall = request.maxTokens === TITLE_MAX_TOKENS;
       if (titleCall && fail) throw new Error('title exploded');
       if (titleCall) await gate;
       const content = titleCall ? 'Workspace file list' : 'listed';
@@ -4302,15 +4303,17 @@ test('a desktop prompt asks for a title after the turn and shows a failure', asy
     true,
   );
   await wait(
-    () => requests.some((request) => request.maxTokens === 128),
+    () => requests.some((request) => request.maxTokens === TITLE_MAX_TOKENS),
     'title request after the turn',
   );
   assert.equal(requests[0]!.maxTokens, undefined);
-  const title = requests.find((request) => request.maxTokens === 128)!;
+  const title = requests.find(
+    (request) => request.maxTokens === TITLE_MAX_TOKENS,
+  )!;
   assert.equal(title.effort, '');
   assert.equal(title.tools.length, 0);
   assert.equal(
-    requests.filter((request) => request.maxTokens === 128).length,
+    requests.filter((request) => request.maxTokens === TITLE_MAX_TOKENS).length,
     1,
   );
   const row = () =>

@@ -1,3 +1,6 @@
+/** Room for a short title when a gateway still spends some of the cap thinking. */
+export const TITLE_MAX_TOKENS = 512;
+
 const LATIN =
   /^(?:please|pls|plz|can you|could you|would you|i need you to|i want you to|i(?:'|’)d like you to|help me(?: to)?)\s*/i;
 const CJK_LEAD = /^(?:帮我|请你|请|麻烦你|麻烦)\s*/;
