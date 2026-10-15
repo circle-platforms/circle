@@ -89,6 +89,29 @@ export function DeveloperWorkbench({
               key={item}
               aria-selected={open && dock === item}
               aria-controls={`dock-${item}`}
+              tabIndex={dock === item ? 0 : -1}
+              onKeyDown={(event) => {
+                if (
+                  !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(
+                    event.key,
+                  )
+                )
+                  return;
+                event.preventDefault();
+                const tabs = Object.keys(dockLabels) as Dock[];
+                const index =
+                  event.key === 'Home'
+                    ? 0
+                    : event.key === 'End'
+                      ? tabs.length - 1
+                      : (tabs.indexOf(item) +
+                          (event.key === 'ArrowRight' ? 1 : -1) +
+                          tabs.length) %
+                        tabs.length;
+                const next = tabs[index]!;
+                select(next);
+                document.getElementById(`dock-tab-${next}`)?.focus();
+              }}
               onClick={() => select(item)}
             >
               {dockLabels[item]()}

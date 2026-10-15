@@ -162,6 +162,7 @@ export function Conversation({
   const [editingQueue, setEditingQueue] = useState<{
     id: string;
     text: string;
+    original: string;
   } | null>(null);
   const [find, setFind] = useState('');
   const [findIndex, setFindIndex] = useState(0);
@@ -935,6 +936,41 @@ export function Conversation({
               <ArrowRight size={13} />
             </button>
           )}
+          {editingQueue &&
+            !session.queue.some((item) => item.id === editingQueue.id) && (
+              <div className="queue-editor" role="status">
+                <p>
+                  {t('queued message was consumed; your edit is preserved')}
+                </p>
+                <textarea
+                  aria-label={t('edit queued message')}
+                  value={editingQueue.text}
+                  onChange={(event) =>
+                    setEditingQueue({
+                      ...editingQueue,
+                      text: event.target.value,
+                    })
+                  }
+                />
+                <div>
+                  <Button
+                    onClick={() => {
+                      setDraft(
+                        [session.draft, editingQueue.text]
+                          .filter(Boolean)
+                          .join('\n'),
+                      );
+                      setEditingQueue(null);
+                    }}
+                  >
+                    {t('return edit to draft')}
+                  </Button>
+                  <Button onClick={() => setEditingQueue(null)}>
+                    {t('dismiss')}
+                  </Button>
+                </div>
+              </div>
+            )}
           {session.queue.length > 0 && (
             <div className="queue">
               {session.queue.map((item) => (
@@ -947,7 +983,7 @@ export function Conversation({
                         value={editingQueue.text}
                         onChange={(event) =>
                           setEditingQueue({
-                            id: item.id,
+                            ...editingQueue,
                             text: event.target.value,
                           })
                         }
@@ -970,7 +1006,7 @@ export function Conversation({
                                   {
                                     kind: item.kind,
                                     index: Number(item.id.split('-').at(-1)),
-                                    text: item.text,
+                                    text: editingQueue.original,
                                     updatedText: text,
                                   },
                                   session.id,
@@ -983,7 +1019,14 @@ export function Conversation({
                                   const queued = target?.queue.find(
                                     (entry) => entry.id === item.id,
                                   );
-                                  if (queued) queued.text = text;
+                                  if (
+                                    !queued ||
+                                    queued.text !== editingQueue.original
+                                  )
+                                    throw Error(
+                                      t('queued message changed before saving'),
+                                    );
+                                  queued.text = text;
                                 });
                               setEditingQueue(null);
                             });
@@ -1001,7 +1044,11 @@ export function Conversation({
                       <p>{item.text}</p>
                       <Button
                         onClick={() =>
-                          setEditingQueue({ id: item.id, text: item.text })
+                          setEditingQueue({
+                            id: item.id,
+                            text: item.text,
+                            original: item.text,
+                          })
                         }
                       >
                         {t('edit queued message')}

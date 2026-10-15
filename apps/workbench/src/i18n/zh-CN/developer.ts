@@ -64,4 +64,9 @@ export const developer: Record<string, string> = {
   refresh: '刷新',
   agent: '代理',
   branch: '分支',
+  'queued message changed before saving': '排队消息已变化，请重新核对',
+  'queued message was consumed; your edit is preserved':
+    '排队消息已被读取，编辑内容已保留',
+  'return edit to draft': '将编辑内容放回草稿',
+  dismiss: '关闭',
 };
