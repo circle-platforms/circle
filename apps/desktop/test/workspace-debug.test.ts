@@ -179,6 +179,11 @@ test(
       ['--inspect=127.0.0.1:0', '-e', 'setInterval(()=>{},1000)'],
       { cwd: root, stdio: ['ignore', 'ignore', 'pipe'] },
     );
+    // Register before any debugger operation: kill() only requests termination.
+    // Windows retains the child's cwd until its actual process/stdio close.
+    const childClosed = new Promise<void>((resolve) =>
+      child.once('close', () => resolve()),
+    );
     const port = await new Promise<number>((resolve, reject) => {
       let output = '';
       child.stderr!.on('data', (chunk) => {
@@ -223,6 +228,7 @@ test(
       assert.doesNotThrow(() => process.kill(child.pid!, 0));
     } finally {
       child.kill();
+      await childClosed;
       await service.dispose();
       await rm(root, { recursive: true, force: true });
     }
