@@ -5,6 +5,7 @@ import { recoveredDraft, type RecoveredInput } from '../model/recovered-input';
 import { useRuntime } from '../app/context';
 import { Button } from '../components/common';
 import { t } from '../i18n';
+import './task-panel.css';
 interface Recovery {
   version: number;
   items: RecoveredInput[];
@@ -149,16 +150,16 @@ export function RecoveredInputs({ sessionId }: { sessionId: string }) {
   if (recovery?.items.length === 0 && !error && !notice) return null;
   return (
     <section
-      className="recovered-inputs"
+      className="recovered-inputs task-recovery"
       aria-label={t('recovered queued inputs')}
     >
-      <header>
+      <header className="task-section-heading">
         <strong>{t('recovered queued inputs')}</strong>
         <Button disabled={busy} onClick={() => void refresh()}>
           {t('refresh')}
         </Button>
       </header>
-      <p>
+      <p className="panel-note">
         {t(
           'nothing is sent automatically after restart; choose whether to resume, copy to draft or remove each input',
         )}
@@ -176,18 +177,20 @@ export function RecoveredInputs({ sessionId }: { sessionId: string }) {
       )}
       {recovery?.items.map((input) => (
         <article key={input.id}>
-          <strong>
-            {input.kind === 'steer'
-              ? t('steering input')
-              : t('follow-up input')}
-          </strong>
-          <p>
-            {new Date(input.createdAt).toLocaleString()} ·{' '}
-            {t('{n} media attachments', {
-              n: input.payload.attachments?.length ?? 0,
-            })}
-          </p>
-          <details>
+          <div className="task-recovery-title">
+            <strong>
+              {input.kind === 'steer'
+                ? t('steering input')
+                : t('follow-up input')}
+            </strong>
+            <small>
+              {new Date(input.createdAt).toLocaleString()} ·{' '}
+              {t('{n} media attachments', {
+                n: input.payload.attachments?.length ?? 0,
+              })}
+            </small>
+          </div>
+          <details className="task-technical">
             <summary>{t('inspect full recovered input')}</summary>
             <pre>{input.payload.text}</pre>
             <p>{t('original display')}</p>
@@ -206,20 +209,25 @@ export function RecoveredInputs({ sessionId }: { sessionId: string }) {
               </p>
             ))}
           </details>
-          <Button disabled={busy} onClick={() => void resolve(input, 'resume')}>
-            {t('resume this input')}
-          </Button>
-          <Button
-            disabled={busy || copied.includes(input.id)}
-            onClick={() => void resolve(input, 'returnToDraft')}
-          >
-            {memoryOnly.includes(input.id)
-              ? t('copied in memory; not saved')
-              : copied.includes(input.id)
-                ? t('copied to draft')
-                : t('return input to draft')}
-          </Button>
-          <label>
+          <div className="tasks-actions">
+            <Button
+              disabled={busy}
+              onClick={() => void resolve(input, 'resume')}
+            >
+              {t('resume this input')}
+            </Button>
+            <Button
+              disabled={busy || copied.includes(input.id)}
+              onClick={() => void resolve(input, 'returnToDraft')}
+            >
+              {memoryOnly.includes(input.id)
+                ? t('copied in memory; not saved')
+                : copied.includes(input.id)
+                  ? t('copied to draft')
+                  : t('return input to draft')}
+            </Button>
+          </div>
+          <label className="task-check">
             <input
               type="checkbox"
               checked={confirmed.includes(input.id)}

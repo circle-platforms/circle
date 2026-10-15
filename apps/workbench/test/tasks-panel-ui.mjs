@@ -31,14 +31,21 @@ try {
           viewport: { width, height: 650 },
         });
         await page.goto(
-          `${server.resolvedUrls.local[0]}test/tasks-panel-ui.html?theme=${theme}&language=${language}`,
+          `${server.resolvedUrls.local[0]}test/tasks-panel-ui.html?theme=${theme}&language=${language}&embedded=1`,
         );
         const task = page
-          .locator('.tasks-list')
+          .locator('.tasks-list .task-row')
           .getByText('Implement editor navigation', {
             exact: true,
           });
         await task.waitFor();
+        assert.equal(
+          await page.locator('.task-panel-toolbar > strong').count(),
+          0,
+          'the embedded activity content must not repeat the inspector title',
+        );
+        assert.equal(await page.locator('.task-entry[open]').count(), 0);
+        assert.equal(await page.locator('.task-row').count(), 3);
         assert.equal(await page.getByRole('textbox').count(), 0);
         const rect = await task.boundingBox();
         assert.ok(rect.y >= 0 && rect.y + rect.height < 650);
@@ -51,6 +58,22 @@ try {
         await page.screenshot({
           path: join(output, `${theme}-${language}-${width}-initial.png`),
         });
+        const fontSize = await page
+          .locator('.task-panel')
+          .evaluate((node) => parseFloat(getComputedStyle(node).fontSize));
+        await page.evaluate(() =>
+          document.documentElement.style.setProperty('--ui-size', '17px'),
+        );
+        assert.ok(
+          (await page
+            .locator('.task-panel')
+            .evaluate((node) => parseFloat(getComputedStyle(node).fontSize))) >
+            fontSize,
+          'embedded task text must follow the existing text-size preference',
+        );
+        await page.evaluate(() =>
+          document.documentElement.style.removeProperty('--ui-size'),
+        );
         observations.push({
           theme,
           language,
@@ -119,7 +142,7 @@ try {
           })
           .click();
         await page
-          .locator('.tasks-list')
+          .locator('.tasks-list .task-row')
           .getByText('New keyboard task', { exact: true })
           .waitFor();
         assert.equal(await instruction.isVisible(), false);
@@ -171,7 +194,7 @@ try {
   await race.screenshot({ path: join(output, 'delayed-frame-focus-race.png') });
   await race.getByRole('button', { name: 'queue task', exact: true }).click();
   await race
-    .locator('.tasks-list')
+    .locator('.tasks-list .task-row')
     .getByText('TASK_FOCUS_RACE', { exact: true })
     .waitFor();
   await race.getByRole('button', { name: 'new task', exact: true }).click();
@@ -183,7 +206,7 @@ try {
   await race.keyboard.type('second criterion typed once');
   await race.getByRole('button', { name: 'queue task', exact: true }).click();
   await race
-    .locator('.tasks-list')
+    .locator('.tasks-list .task-row')
     .getByText('TASK_FOCUS_RACE_B', { exact: true })
     .waitFor();
   const enqueued = (await race.evaluate(() => window.calls)).filter(
@@ -208,6 +231,7 @@ try {
     `${server.resolvedUrls.local[0]}test/tasks-panel-ui.html?focusTask=1`,
   );
   await background.locator('#task-task-0').waitFor();
+  await background.locator('#task-task-0 .task-entry[open]').waitFor();
   const manual = background.getByRole('textbox', {
     name: 'manual editor',
     exact: true,
@@ -239,6 +263,101 @@ try {
     path: join(output, 'background-task-focus.png'),
   });
   await background.close();
+  const review = await browser.newPage({
+    viewport: { width: 375, height: 750 },
+  });
+  await review.goto(
+    `${server.resolvedUrls.local[0]}test/tasks-panel-ui.html?embedded=1&review=1&theme=light&language=en`,
+  );
+  const reviewRow = review.locator('#task-review-task .task-row');
+  await reviewRow.waitFor();
+  assert.equal(await review.locator('.task-review').isVisible(), false);
+  await reviewRow.focus();
+  await reviewRow.press('Enter');
+  assert.equal(
+    await review.locator('#task-review-task .task-instruction').textContent(),
+    'Review task summary\nComplete task instruction remains available after expanding the activity row.',
+  );
+  const confirm = review.getByRole('button', {
+    name: 'confirm reviewed criteria',
+    exact: true,
+  });
+  assert.equal(await confirm.isDisabled(), true);
+  await review.locator('.task-review input[type=checkbox]').check();
+  assert.equal(
+    await confirm.isDisabled(),
+    true,
+    'checking a criterion alone must not approve it',
+  );
+  const evidence = review.getByRole('textbox', {
+    name: 'review evidence for keep complete source',
+    exact: true,
+  });
+  await evidence.fill('Inspected the actual patch and complete source.');
+  assert.equal(await confirm.isEnabled(), true);
+  assert.equal(
+    await review
+      .locator('.task-review .task-technical code')
+      .last()
+      .isVisible(),
+    false,
+    'technical patch identifiers stay folded until explicitly inspected',
+  );
+  await review
+    .getByRole('button', { name: 'inspect task artifacts', exact: true })
+    .click();
+  await review
+    .locator('.task-artifacts')
+    .getByRole('button', { name: 'changes', exact: true })
+    .click();
+  await review.locator('.task-artifacts .data-block pre').waitFor();
+  assert.equal(
+    await review.locator('.task-artifacts .data-block pre').textContent(),
+    'diff --git a/demo.ts b/demo.ts\n+preserved complete change\n',
+  );
+  assert.equal(
+    await review.locator('.task-artifacts .task-technical code').isVisible(),
+    false,
+  );
+  await review.screenshot({
+    path: join(output, 'embedded-human-review-narrow.png'),
+    fullPage: true,
+  });
+  const overflow = await review.evaluate(() =>
+    Array.from(document.querySelectorAll('*'))
+      .filter((node) => node.getBoundingClientRect().right > innerWidth + 1)
+      .map((node) => ({
+        tag: node.tagName,
+        className: node.className,
+        right: node.getBoundingClientRect().right,
+      })),
+  );
+  assert.equal(
+    await review.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+    true,
+    JSON.stringify(overflow),
+  );
+  await confirm.click();
+  await review.waitForFunction(() =>
+    window.calls.some((call) => call.payload.method === 'review'),
+  );
+  const reviewCall = (await review.evaluate(() => window.calls)).find(
+    (call) => call.payload.method === 'review',
+  );
+  assert.deepEqual(reviewCall.payload.params, {
+    id: 'review-task',
+    expectedAttempt: 1,
+    expectedPatchSha256: 'b'.repeat(64),
+    checks: [
+      {
+        criterion: 'keep complete source',
+        evidence: 'Inspected the actual patch and complete source.',
+      },
+    ],
+  });
+  await review.close();
   await writeFile(
     join(output, 'receipt.json'),
     JSON.stringify(
@@ -249,6 +368,13 @@ try {
           delayedFrameCannotStealCriteria: true,
           twoSequentialTasksKeepIndependentPromptsAndCriteria: true,
           taskRefreshCannotStealManualEditor: true,
+        },
+        embeddedChecks: {
+          singleInspectorTitle: true,
+          compactRows: true,
+          fullInstructionAccessible: true,
+          strictHumanReview: true,
+          completeArtifactPreserved: true,
         },
       },
       null,

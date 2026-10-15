@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { ChevronRight, Users } from 'lucide-react';
 import type { TaskRecord } from '../../../desktop/src/workspace/task-store';
 import { workspaceCall, subscribeWorkspace } from '../model/workspace-client';
 import { Button, DataBlock, Status } from '../components/common';
@@ -12,6 +13,7 @@ import { PendingOperations } from './PendingOperations';
 import { TaskArtifacts } from './TaskArtifacts';
 import { TaskReviewForm } from './TaskReviewForm';
 import { t } from '../i18n';
+import './task-panel.css';
 
 interface Limits {
   agents: number;
@@ -23,10 +25,12 @@ export function TasksPanel({
   sessionId,
   onSession,
   focusTaskId,
+  embedded = false,
 }: {
   sessionId: string;
   onSession: (id: string) => void;
   focusTaskId?: string;
+  embedded?: boolean;
 }) {
   const [tasks, setTasks] = useState<
     (TaskRecord & { runtimeSessionId?: string })[]
@@ -58,6 +62,8 @@ export function TasksPanel({
     if (revealedTask.current === request) return;
     const item = document.getElementById('task-' + focusTaskId);
     if (item) {
+      const detail = item.querySelector<HTMLDetailsElement>('.task-entry');
+      if (detail) detail.open = true;
       item.scrollIntoView({ block: 'nearest' });
       item.focus();
       revealedTask.current = request;
@@ -115,9 +121,12 @@ export function TasksPanel({
     }
   };
   return (
-    <section className="tasks-panel" aria-label={t('collaboration tasks')}>
-      <header>
-        <strong>{t('collaboration tasks')}</strong>
+    <section
+      className={`tasks-panel task-panel${embedded ? ' task-panel-embedded' : ''}`}
+      aria-label={t('collaboration tasks')}
+    >
+      <header className="task-panel-toolbar">
+        {!embedded && <strong>{t('collaboration tasks')}</strong>}
         <Button
           type="button"
           aria-expanded={createOpen}
@@ -141,6 +150,7 @@ export function TasksPanel({
       </header>
       <div id={'new-task-' + sessionId} hidden={!createOpen}>
         <form
+          className="task-create-form"
           onSubmit={(event) => {
             event.preventDefault();
             void run(async () => {
@@ -252,7 +262,7 @@ export function TasksPanel({
         </p>
       )}
       {!tasks.length && !error && <p>{t('no collaboration tasks')}</p>}
-      <div className="tasks-list">
+      <div className="tasks-list panel-section first">
         {tasks.map((task) => (
           <article
             key={task.spec.id}
@@ -260,113 +270,133 @@ export function TasksPanel({
             tabIndex={-1}
             data-state={task.state}
           >
-            <header>
-              <Status value={task.state} />
-              <small>{t('attempt {n}', { n: task.attempt })}</small>
-            </header>
-            <p>{task.spec.prompt}</p>
-            <details>
-              <summary>{t('task details and acceptance')}</summary>
-              <code>{task.spec.id}</code>
-              <dl>
-                <dt>{t('baseline')}</dt>
-                <dd>
-                  <code>{task.spec.baseline}</code>
-                </dd>
-                <dt>{t('workspace')}</dt>
-                <dd>{task.worktree ?? task.spec.workspace}</dd>
-                {task.branch && (
-                  <>
-                    <dt>{t('branch')}</dt>
-                    <dd>{task.branch}</dd>
-                  </>
-                )}
-                {task.spec.dependencies.length > 0 && (
-                  <>
-                    <dt>{t('dependencies')}</dt>
-                    <dd>{task.spec.dependencies.join(', ')}</dd>
-                  </>
-                )}
-              </dl>
-              <ul>
-                {task.spec.acceptanceCriteria.map((criterion, index) => (
-                  <li key={index}>{criterion}</li>
-                ))}
-              </ul>
-            </details>
-            {task.reason && <p role="status">{task.reason}</p>}
-            {task.result !== undefined && (
-              <>
-                <TaskArtifacts
-                  key={`${task.spec.id}:${task.attempt}`}
-                  sessionId={sessionId}
-                  taskId={task.spec.id}
-                  attempt={task.attempt}
+            <details className="task-entry">
+              <summary className="activity-row task-row">
+                <Users size={15} aria-hidden="true" />
+                <span>
+                  <strong>
+                    {task.spec.prompt
+                      .split(/\r?\n/)
+                      .find((line) => line.trim()) ?? task.spec.prompt}
+                  </strong>
+                  <small>{t('attempt {n}', { n: task.attempt })}</small>
+                </span>
+                <Status value={task.state} />
+                <ChevronRight
+                  className="task-row-chevron"
+                  size={13}
+                  aria-hidden="true"
                 />
-                <details>
-                  <summary>{t('result')}</summary>
-                  <DataBlock title={t('result')} value={task.result} />
+              </summary>
+              <div className="task-detail">
+                <p className="task-instruction">{task.spec.prompt}</p>
+                <details className="task-technical">
+                  <summary>{t('task details and acceptance')}</summary>
+                  <code>{task.spec.id}</code>
+                  <dl>
+                    <dt>{t('baseline')}</dt>
+                    <dd>
+                      <code>{task.spec.baseline}</code>
+                    </dd>
+                    <dt>{t('workspace')}</dt>
+                    <dd>{task.worktree ?? task.spec.workspace}</dd>
+                    {task.branch && (
+                      <>
+                        <dt>{t('branch')}</dt>
+                        <dd>{task.branch}</dd>
+                      </>
+                    )}
+                    {task.spec.dependencies.length > 0 && (
+                      <>
+                        <dt>{t('dependencies')}</dt>
+                        <dd>{task.spec.dependencies.join(', ')}</dd>
+                      </>
+                    )}
+                  </dl>
+                  <ul>
+                    {task.spec.acceptanceCriteria.map((criterion, index) => (
+                      <li key={index}>{criterion}</li>
+                    ))}
+                  </ul>
                 </details>
-              </>
-            )}
-            {String(task.state) === 'needs_review' && (
-              <TaskReviewForm
-                key={task.spec.id}
-                task={task}
-                sessionId={sessionId}
-                onRefresh={() => void refresh()}
-              />
-            )}
-            <div className="tasks-actions">
-              {task.runtimeSessionId && (
-                <Button onClick={() => onSession(task.runtimeSessionId!)}>
-                  {task.state === 'waiting'
-                    ? t('review pending requests')
-                    : t('open task conversation')}
-                </Button>
-              )}
-              {[
-                'queued',
-                'preparing',
-                'running',
-                'waiting',
-                'blocked',
-              ].includes(task.state) && (
-                <Button
-                  disabled={busy}
-                  onClick={() =>
-                    void run(() =>
-                      workspaceCall(sessionId, 'tasks', 'cancel', {
-                        id: task.spec.id,
-                      }),
-                    )
-                  }
-                >
-                  {t('cancel task')}
-                </Button>
-              )}
-              {['failed', 'cancelled', 'interrupted', 'needs_review'].includes(
-                task.state,
-              ) && (
-                <Button
-                  disabled={busy}
-                  onClick={() =>
-                    void run(() =>
-                      workspaceCall(sessionId, 'tasks', 'retry', {
-                        id: task.spec.id,
-                        operationId: crypto.randomUUID(),
-                      }),
-                    )
-                  }
-                >
-                  {t('reviewed effects · retry task')}
-                </Button>
-              )}
-            </div>
+                {task.reason && <p role="status">{task.reason}</p>}
+                {task.result !== undefined && (
+                  <>
+                    <TaskArtifacts
+                      key={`${task.spec.id}:${task.attempt}`}
+                      sessionId={sessionId}
+                      taskId={task.spec.id}
+                      attempt={task.attempt}
+                    />
+                    <details>
+                      <summary>{t('result')}</summary>
+                      <DataBlock title={t('result')} value={task.result} />
+                    </details>
+                  </>
+                )}
+                {String(task.state) === 'needs_review' && (
+                  <TaskReviewForm
+                    key={task.spec.id}
+                    task={task}
+                    sessionId={sessionId}
+                    onRefresh={() => void refresh()}
+                  />
+                )}
+                <div className="tasks-actions">
+                  {task.runtimeSessionId && (
+                    <Button onClick={() => onSession(task.runtimeSessionId!)}>
+                      {task.state === 'waiting'
+                        ? t('review pending requests')
+                        : t('open task conversation')}
+                    </Button>
+                  )}
+                  {[
+                    'queued',
+                    'preparing',
+                    'running',
+                    'waiting',
+                    'blocked',
+                  ].includes(task.state) && (
+                    <Button
+                      disabled={busy}
+                      onClick={() =>
+                        void run(() =>
+                          workspaceCall(sessionId, 'tasks', 'cancel', {
+                            id: task.spec.id,
+                          }),
+                        )
+                      }
+                    >
+                      {t('cancel task')}
+                    </Button>
+                  )}
+                  {[
+                    'failed',
+                    'cancelled',
+                    'interrupted',
+                    'needs_review',
+                  ].includes(task.state) && (
+                    <Button
+                      disabled={busy}
+                      onClick={() =>
+                        void run(() =>
+                          workspaceCall(sessionId, 'tasks', 'retry', {
+                            id: task.spec.id,
+                            operationId: crypto.randomUUID(),
+                          }),
+                        )
+                      }
+                    >
+                      {t('reviewed effects · retry task')}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </details>
           </article>
         ))}
       </div>
-      <details>
+      <details className="panel-section task-settings task-technical">
         <summary>{t('collaboration settings')}</summary>
         <div className="tasks-limits">
           <label>

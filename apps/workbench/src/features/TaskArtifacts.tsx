@@ -15,6 +15,22 @@ interface ArtifactPage {
   totalCharacters: number;
   byteLength: number;
 }
+function artifactLabel(kind: string): string {
+  switch (kind) {
+    case 'task-patch':
+      return t('changes');
+    case 'acceptance':
+      return t('acceptance report');
+    case 'transcript':
+      return t('task transcript');
+    case 'runtime-events':
+      return t('runtime event log');
+    case 'verification':
+      return t('verification evidence');
+    default:
+      return kind;
+  }
+}
 export function TaskArtifacts({
   sessionId,
   taskId,
@@ -88,17 +104,23 @@ export function TaskArtifacts({
                 disabled={busy}
                 onClick={() => void load(artifact.id)}
               >
-                {artifact.kind} · {artifact.sha256.slice(0, 12)}
+                {artifactLabel(artifact.kind)}
               </Button>
             ))}
           </div>
           {value && (
             <>
-              <p>
-                <code>{value.sha256}</code> ·{' '}
-                {t('{n} bytes', { n: value.byteLength })}
-              </p>
-              <DataBlock title={value.kind} value={value.content} />
+              <details className="task-technical">
+                <summary>{t('artifact details')}</summary>
+                <p>
+                  {value.kind} · {t('{n} bytes', { n: value.byteLength })}
+                </p>
+                <code>{value.sha256}</code>
+              </details>
+              <DataBlock
+                title={artifactLabel(value.kind)}
+                value={value.content}
+              />
               {value.truncated && (
                 <p role="status">
                   {t(
