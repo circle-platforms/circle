@@ -186,3 +186,22 @@ test('two workspace journals can interleave seq 1 while session switches and rel
   );
   reloaded.close();
 });
+
+test('replay authorization cannot substitute another workspace journal', async () => {
+  const { WorkspaceStreamRegistry } =
+    await import('../src/model/workspace-stream-connection.ts');
+  const registry = new WorkspaceStreamRegistry({
+    listen: () => () => {},
+    replay: async () => ({
+      events: [event(1)],
+      cursor: event(1).cursor,
+      hasMore: false,
+    }),
+  });
+  await assert.rejects(
+    registry.connect('different-workspace', 's'),
+    /different journal/,
+  );
+  assert.equal(registry.store('different-workspace').cursor.seq, 0);
+  registry.close();
+});

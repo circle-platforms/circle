@@ -15,7 +15,7 @@ export interface WorkspaceStreamTransport {
     limit: number,
   ) => Promise<WorkspaceReplayPage>;
 }
-/** One global journal cursor per window. Resource/session filtering belongs after
+/** One cursor for a single workspace journal. Resource/session filtering belongs after
  * ingestion: filtering first would turn unrelated events into permanent holes. */
 export class WorkspaceStreamConnection {
   private stopped = true;
@@ -188,13 +188,17 @@ export class WorkspaceStreamRegistry {
                 this.receivers.delete(workspaceId);
             };
           },
-          replay: (after, limit) =>
-            this.transport.replay(
+          replay: async (after, limit) => {
+            const page = await this.transport.replay(
               workspaceId,
               this.sessions.get(workspaceId)!,
               after,
               limit,
-            ),
+            );
+            if (page.events.some((event) => event.workspaceId !== workspaceId))
+              throw Error('workspace replay returned a different journal');
+            return page;
+          },
         },
         this.applied,
         this.failed,
