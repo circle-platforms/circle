@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.7.3 - 2026-10-15
+
 ### Fixed
 
 - Closing during desktop startup waits for the initializing extension host's bounded background work. A late Hub token lookup cannot recreate its data folder or publish a view after cancellation, including when that close budget has expired.
