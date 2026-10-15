@@ -73,12 +73,11 @@ export async function runNativeKeyboardJourney({
       };
     });
   await geometry();
-  await transcript.evaluate(
-    (node) =>
-      (node.scrollTop = Math.min(
-        120,
-        Math.max(0, node.scrollHeight - node.clientHeight),
-      )),
+  await transcript.evaluate((node) =>
+    node.scrollTo({
+      top: Math.min(120, Math.max(0, node.scrollHeight - node.clientHeight)),
+      behavior: 'instant',
+    }),
   );
   const before = await geometry();
   await page

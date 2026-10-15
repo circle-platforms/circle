@@ -354,7 +354,8 @@ export function Conversation({
     const content = column.current;
     if (!box || !content) return;
     const scrolled = () => {
-      stuck.current = height.current - box.scrollTop - box.clientHeight < 48;
+      // Only the actual end follows new content; a reader just above it stays put.
+      stuck.current = height.current - box.scrollTop - box.clientHeight <= 1;
       position.current = { top: box.scrollTop, follow: stuck.current };
     };
     box.addEventListener('scroll', scrolled, { passive: true });
@@ -659,7 +660,11 @@ export function Conversation({
           </IconButton>
         </div>
       )}
-      <div className="transcript" ref={scroller}>
+      <div
+        className="transcript"
+        ref={scroller}
+        style={{ overflowAnchor: 'none' }}
+      >
         <div className="transcript-column" ref={column}>
           {messages.length === 0 ? (
             <div className="welcome">
