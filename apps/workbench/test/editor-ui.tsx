@@ -1,10 +1,17 @@
+import '../src/styles/app.css';
+import { Tooltip } from 'radix-ui';
 import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import {
-  NativeCodeEditor,
-  setEditorDocument,
-} from '../src/features/NativeCodeEditor';
+import { setLanguage } from '../src/i18n';
+import { RuntimeProvider } from '../src/app/context';
+import { PreviewRuntime, currentSession } from '../src/model/state';
+import type { DesktopBridge } from '../../desktop/src/contracts';
 import { applyTheme } from '../src/theme';
+setLanguage(
+  new URL(location.href).searchParams.get('lang') === 'zh-CN' ? 'zh-CN' : 'en',
+);
+const { NativeCodeEditor, setEditorDocument } =
+  await import('../src/features/NativeCodeEditor');
 applyTheme('dark');
 setEditorDocument('fixture', {
   path: 'main.ts',
@@ -58,4 +65,47 @@ function Fixture() {
     </>
   );
 }
-createRoot(document.getElementById('root')!).render(<Fixture />);
+const nativeFixture = new URL(location.href).searchParams.has('viewer');
+if (nativeFixture) {
+  window.circleDesktop = {
+    runtimeCommand: async (command) => {
+      const response = await fetch('/__editor_workspace', {
+        method: 'POST',
+        body: JSON.stringify(command),
+      });
+      return response.json();
+    },
+  } as DesktopBridge;
+  const { FileViewer } = await import('../src/features/FileViewer');
+  const runtime = new PreviewRuntime();
+  runtime.change((state) => {
+    const session = currentSession(state);
+    session.readOnly = false;
+    state.files = [
+      {
+        id: 'fixture-main',
+        workspaceId: session.workspaceId,
+        path: 'main.ts',
+        content: '',
+        language: 'typescript',
+      },
+    ];
+  });
+  Object.defineProperty(runtime, 'mode', { value: 'live' });
+  createRoot(document.getElementById('root')!).render(
+    <Tooltip.Provider>
+      <RuntimeProvider runtime={runtime}>
+        <button
+          onClick={() =>
+            fetch('/__editor_workspace?external=1', { method: 'POST' })
+          }
+        >
+          external write
+        </button>
+        <div style={{ height: 650, display: 'flex' }}>
+          <FileViewer path="main.ts" onClose={() => {}} />
+        </div>
+      </RuntimeProvider>
+    </Tooltip.Provider>,
+  );
+} else createRoot(document.getElementById('root')!).render(<Fixture />);

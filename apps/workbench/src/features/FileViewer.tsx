@@ -304,6 +304,7 @@ export function FileViewer({
               onClick={() => {
                 setMode('diff');
                 setDocument(conflict);
+                setEditorDocument(workspaceId, conflict);
                 setError(t('disk changed; review the diff before saving'));
                 setConflict(null);
               }}
