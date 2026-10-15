@@ -10,6 +10,7 @@ import type {
   RuntimePort,
   WorkbenchSnapshot,
   Session,
+  SessionViewPatch,
 } from './types';
 import {
   currentSession,
@@ -319,6 +320,39 @@ export class LiveRuntime implements RuntimePort {
     void promise.catch((error) => this.report(error, sessionId));
     return promise;
   }
+  updateSessionView = (sessionId: string, patch: SessionViewPatch): boolean => {
+    if (
+      !patch ||
+      typeof patch !== 'object' ||
+      Array.isArray(patch) ||
+      Object.keys(patch).some(
+        (key) => !(LOCAL_SESSION as readonly string[]).includes(key),
+      )
+    )
+      throw Error(t('use a native session operation'));
+    const index = this.snapshot.sessions.findIndex(
+      (session) => session.id === sessionId,
+    );
+    if (index < 0) return false;
+    const previous = this.snapshot.sessions[index];
+    const changed = Object.entries(patch).some(
+      ([key, value]) =>
+        !Object.is(previous[key as keyof Session], value) &&
+        !equal(previous[key as keyof Session], value),
+    );
+    if (!changed) return true;
+    const copy = structuredClone(patch);
+    const sessions = this.snapshot.sessions.slice();
+    sessions[index] = { ...previous, ...copy };
+    this.views.set(sessionId, {
+      ...(this.views.get(sessionId) ?? {}),
+      ...copy,
+    });
+    this.snapshot = { ...this.snapshot, sessions };
+    this.persist();
+    for (const listener of this.listeners) listener();
+    return true;
+  };
   change = (update: (draft: WorkbenchSnapshot) => void) => {
     const before = this.snapshot;
     const requested = structuredClone(before);
@@ -384,8 +418,12 @@ export class LiveRuntime implements RuntimePort {
             item.id,
           );
       }
+      const previousMessages = new Map<string, Session['messages'][number]>();
+      for (const message of previous.messages)
+        if (!previousMessages.has(message.id))
+          previousMessages.set(message.id, message);
       for (const message of item.messages) {
-        const old = previous.messages.find((m) => m.id === message.id);
+        const old = previousMessages.get(message.id);
         if (old && message.label !== old.label)
           add(
             'label-branch',
@@ -393,11 +431,7 @@ export class LiveRuntime implements RuntimePort {
             item.id,
           );
       }
-      if (
-        item.messages.some(
-          (m) => !previous.messages.some((old) => old.id === m.id),
-        )
-      )
+      if (item.messages.some((message) => !previousMessages.has(message.id)))
         throw Error(
           t('history can only be imported through the native runtime'),
         );

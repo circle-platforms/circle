@@ -378,6 +378,21 @@ export interface CommandResult {
   selection?: string;
   effect?: 'copy' | 'import' | 'download';
 }
+/** Local fields only: this API cannot edit history, permissions or execution. */
+export type SessionViewPatch = Partial<
+  Pick<
+    Session,
+    | 'draft'
+    | 'attachments'
+    | 'hiddenIds'
+    | 'undoStack'
+    | 'showThinking'
+    | 'expandTools'
+    | 'pinned'
+    | 'shared'
+    | 'presentation'
+  >
+>;
 export interface RuntimePort {
   readonly mode: 'preview' | 'live';
   /** Changes when a reset replaces renderer session identities, even if IDs recur. */
@@ -385,6 +400,7 @@ export interface RuntimePort {
   getSnapshot: () => WorkbenchSnapshot;
   subscribe: (listener: () => void) => () => void;
   change: (update: (draft: WorkbenchSnapshot) => void) => void;
+  updateSessionView: (sessionId: string, patch: SessionViewPatch) => boolean;
   send: (
     kind?: 'steering' | 'follow-up',
   ) => CommandResult | Promise<CommandResult>;

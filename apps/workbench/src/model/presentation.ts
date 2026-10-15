@@ -19,9 +19,8 @@ export function saveSessionScroll(
   if (!session) return;
   const previous = session.presentation?.scroll;
   if (previous?.top === scroll.top && previous.follow === scroll.follow) return;
-  runtime.change((state) => {
-    const target = state.sessions.find((item) => item.id === sessionId);
-    if (target) (target.presentation ??= {}).scroll = scroll;
+  runtime.updateSessionView(sessionId, {
+    presentation: { ...session.presentation, scroll },
   });
 }
 
@@ -30,10 +29,13 @@ export function useSessionPresentation() {
   const { snapshot, runtime } = useRuntime();
   const session = currentSession(snapshot);
   const update = (change: (view: Presentation) => void) => {
-    runtime.change((state) => {
-      const target = state.sessions.find((item) => item.id === session.id);
-      if (target) change((target.presentation ??= {}));
-    });
+    const target = runtime
+      .getSnapshot()
+      .sessions.find((item) => item.id === session.id);
+    if (!target) return;
+    const presentation = structuredClone(target.presentation ?? {});
+    change(presentation);
+    runtime.updateSessionView(session.id, { presentation });
   };
   return { view: session.presentation ?? {}, update };
 }

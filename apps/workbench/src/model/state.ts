@@ -215,6 +215,36 @@ export class PreviewRuntime implements RuntimePort {
       this.listeners.delete(listener);
     };
   };
+  updateSessionView = (
+    sessionId: string,
+    patch: import('./types').SessionViewPatch,
+  ): boolean => {
+    if (!this.snapshot.sessions.some((session) => session.id === sessionId))
+      return false;
+    const allowed = [
+      'draft',
+      'attachments',
+      'hiddenIds',
+      'undoStack',
+      'showThinking',
+      'expandTools',
+      'pinned',
+      'shared',
+      'presentation',
+    ];
+    if (
+      !patch ||
+      typeof patch !== 'object' ||
+      Array.isArray(patch) ||
+      Object.keys(patch).some((key) => !allowed.includes(key))
+    )
+      throw Error('use a native session operation');
+    this.change((snapshot) => {
+      const session = snapshot.sessions.find((item) => item.id === sessionId);
+      if (session) Object.assign(session, structuredClone(patch));
+    });
+    return true;
+  };
   change = (update: (draft: WorkbenchSnapshot) => void) => {
     const next = structuredClone(this.snapshot);
     update(next);
