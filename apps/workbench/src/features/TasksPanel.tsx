@@ -17,7 +17,9 @@ export function TasksPanel({
   sessionId: string;
   onSession: (id: string) => void;
 }) {
-  const [tasks, setTasks] = useState<TaskRecord[]>([]);
+  const [tasks, setTasks] = useState<
+    (TaskRecord & { runtimeSessionId?: string })[]
+  >([]);
   const [limits, setLimits] = useState<Limits | null>(null);
   const [agents, setAgents] = useState('8');
   const [prompt, setPrompt] = useState('');
@@ -281,8 +283,8 @@ export function TasksPanel({
               <DataBlock title={t('result')} value={task.result} />
             )}
             <div className="tasks-actions">
-              {task.spec.sessionId && (
-                <Button onClick={() => onSession(task.spec.sessionId!)}>
+              {task.runtimeSessionId && (
+                <Button onClick={() => onSession(task.runtimeSessionId!)}>
                   {task.state === 'waiting'
                     ? t('review pending requests')
                     : t('open task conversation')}
