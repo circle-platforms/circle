@@ -111,9 +111,11 @@ export function App() {
   useEffect(
     () =>
       runtime.mode === 'live' && snapshot.runtime?.connected
-        ? connectWorkspaceStreams(session.id, (error) => notify(String(error)))
+        ? connectWorkspaceStreams(session.workspaceId, session.id, (error) =>
+            notify(String(error)),
+          )
         : undefined,
-    [runtime, session.id, snapshot.runtime?.connected],
+    [runtime, session.id, session.workspaceId, snapshot.runtime?.connected],
   );
   const workspace = snapshot.workspaces.find(
     (item) => item.id === session.workspaceId,

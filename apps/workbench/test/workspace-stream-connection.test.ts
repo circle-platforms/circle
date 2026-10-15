@@ -123,3 +123,66 @@ test('malformed replay cursors fail closed without fabricating sequence progress
   assert.equal(store.cursor.seq, 0);
   stream.stop();
 });
+
+test('two workspace journals can interleave seq 1 while session switches and reload preserve each cursor', async () => {
+  const { WorkspaceStreamRegistry } =
+    await import('../src/model/workspace-stream-connection.ts');
+  let receive!: (event: WorkspaceStreamEvent) => void;
+  const journals = new Map<string, WorkspaceStreamEvent[]>([
+    ['a', [{ ...event(1, 'a-first'), workspaceId: 'a' }]],
+    ['b', [{ ...event(1, 'b-first'), workspaceId: 'b' }]],
+  ]);
+  const auth: string[] = [],
+    seen: string[] = [];
+  const transport = {
+    listen: (listener: (event: WorkspaceStreamEvent) => void) => {
+      receive = listener;
+      return () => {};
+    },
+    replay: async (
+      workspaceId: string,
+      sessionId: string,
+      after: { seq: number; offset: number },
+    ) => {
+      auth.push(`${workspaceId}:${sessionId}`);
+      const events = journals
+        .get(workspaceId)!
+        .filter((row) => row.seq > after.seq);
+      return { events, cursor: events.at(-1)?.cursor ?? after, hasMore: false };
+    },
+  };
+  const registry = new WorkspaceStreamRegistry(transport, undefined, (row) =>
+    seen.push(`${row.workspaceId}:${row.seq}`),
+  );
+  await registry.connect('a', 'a-first');
+  await registry.connect('b', 'b-first');
+  const a2 = { ...event(2, 'a-background'), workspaceId: 'a' };
+  journals.get('a')!.push(a2);
+  receive(a2);
+  const b2 = { ...event(2, 'b-first'), workspaceId: 'b' };
+  journals.get('b')!.push(b2);
+  receive(b2);
+  await registry.connect('a', 'a-switched-session');
+  assert.deepEqual(seen, ['a:1', 'b:1', 'a:2', 'b:2']);
+  const checkpoints = new Map(
+    ['a', 'b'].map((id) => [id, registry.store(id).checkpoint()]),
+  );
+  registry.close();
+  const reloaded = new WorkspaceStreamRegistry(transport, (id) => {
+    const store = new WorkspaceStreamStore();
+    assert.equal(store.restore(checkpoints.get(id)), true);
+    return store;
+  });
+  const a3 = { ...event(3, 'a-after-reload'), workspaceId: 'a' };
+  journals.get('a')!.push(a3);
+  await reloaded.connect('b', 'b-first');
+  await reloaded.connect('a', 'a-after-reload');
+  assert.equal(reloaded.store('a').cursor.seq, 3);
+  assert.equal(reloaded.store('b').cursor.seq, 2);
+  assert.ok(auth.includes('a:a-switched-session'));
+  assert.equal(
+    reloaded.store('a').snapshot(WorkspaceStreamStore.resourceKey(a2)).length,
+    1,
+  );
+  reloaded.close();
+});

@@ -129,3 +129,85 @@ export class WorkspaceStreamConnection {
     return this.replaying;
   }
 }
+
+export interface WorkspaceJournalTransport {
+  listen: (receive: (event: WorkspaceStreamEvent) => void) => () => void;
+  replay: (
+    workspaceId: string,
+    sessionId: string,
+    after: WorkspaceStreamCursor,
+    limit: number,
+  ) => Promise<WorkspaceReplayPage>;
+}
+/** Each granted workspace owns a separate durable journal. Sessions in the same
+ * workspace share its cursor; unrelated workspaces may both legitimately be seq 1. */
+export class WorkspaceStreamRegistry {
+  private stores = new Map<string, WorkspaceStreamStore>();
+  private connections = new Map<string, WorkspaceStreamConnection>();
+  private sessions = new Map<string, string>();
+  private receivers = new Map<string, (event: WorkspaceStreamEvent) => void>();
+  private unsubscribe: () => void;
+  private transport: WorkspaceJournalTransport;
+  private createStore: (workspaceId: string) => WorkspaceStreamStore;
+  private applied: (event: WorkspaceStreamEvent) => void;
+  private failed: (error: unknown) => void;
+  constructor(
+    transport: WorkspaceJournalTransport,
+    createStore: (workspaceId: string) => WorkspaceStreamStore = () =>
+      new WorkspaceStreamStore(),
+    applied: (event: WorkspaceStreamEvent) => void = () => {},
+    failed: (error: unknown) => void = () => {},
+  ) {
+    this.transport = transport;
+    this.createStore = createStore;
+    this.applied = applied;
+    this.failed = failed;
+    this.unsubscribe = transport.listen((event) =>
+      this.receivers.get(event.workspaceId)?.(event),
+    );
+  }
+  store(workspaceId: string) {
+    let store = this.stores.get(workspaceId);
+    if (!store) {
+      store = this.createStore(workspaceId);
+      this.stores.set(workspaceId, store);
+    }
+    return store;
+  }
+  connect(workspaceId: string, sessionId: string): Promise<void> {
+    this.sessions.set(workspaceId, sessionId);
+    let connection = this.connections.get(workspaceId);
+    if (!connection) {
+      connection = new WorkspaceStreamConnection(
+        this.store(workspaceId),
+        {
+          listen: (receive) => {
+            this.receivers.set(workspaceId, receive);
+            return () => {
+              if (this.receivers.get(workspaceId) === receive)
+                this.receivers.delete(workspaceId);
+            };
+          },
+          replay: (after, limit) =>
+            this.transport.replay(
+              workspaceId,
+              this.sessions.get(workspaceId)!,
+              after,
+              limit,
+            ),
+        },
+        this.applied,
+        this.failed,
+      );
+      this.connections.set(workspaceId, connection);
+      return connection.start();
+    }
+    return connection.synchronize();
+  }
+  close() {
+    this.unsubscribe();
+    for (const connection of this.connections.values()) connection.stop();
+    this.connections.clear();
+    this.receivers.clear();
+  }
+}

@@ -163,6 +163,7 @@ export function Conversation({
     id: string;
     text: string;
     original: string;
+    version?: number;
   } | null>(null);
   const [find, setFind] = useState('');
   const [findIndex, setFindIndex] = useState(0);
@@ -1007,6 +1008,7 @@ export function Conversation({
                                     kind: item.kind,
                                     index: Number(item.id.split('-').at(-1)),
                                     text: editingQueue.original,
+                                    expectedQueueVersion: editingQueue.version,
                                     updatedText: text,
                                   },
                                   session.id,
@@ -1048,6 +1050,7 @@ export function Conversation({
                             id: item.id,
                             text: item.text,
                             original: item.text,
+                            version: session.queueVersion,
                           })
                         }
                       >

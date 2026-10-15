@@ -8,7 +8,7 @@ import {
   type WorkspaceStreamEvent,
 } from './workspace-stream-store';
 import {
-  WorkspaceStreamConnection,
+  WorkspaceStreamRegistry,
   type WorkspaceReplayPage,
 } from './workspace-stream-connection';
 
@@ -30,92 +30,112 @@ export async function workspaceCall<T>(
   if (!reply.ok) throw Error(reply.error ?? 'workspace operation failed');
   return reply.data as T;
 }
-export const workspaceStreams = new WorkspaceStreamStore();
 const listeners = new Set<(event: WorkspaceServiceEvent) => void>();
-let connection: WorkspaceStreamConnection | undefined;
-let activeOwner = 0;
-const CHECKPOINT = 'circle-workspace-stream-checkpoint-v1';
-let restored = false;
-let checkpointTimer: ReturnType<typeof setTimeout> | undefined;
-function restoreCheckpoint() {
-  if (restored) return;
-  restored = true;
-  try {
-    const value = sessionStorage.getItem(CHECKPOINT);
-    if (value && !workspaceStreams.restore(JSON.parse(value)))
-      sessionStorage.removeItem(CHECKPOINT);
-  } catch {
-    /* unavailable storage falls back to authoritative replay from zero */
-  }
-}
-workspaceStreams.subscribeCursor(() => {
-  if (checkpointTimer) return;
-  checkpointTimer = setTimeout(() => {
-    checkpointTimer = undefined;
-    try {
-      sessionStorage.setItem(
-        CHECKPOINT,
-        JSON.stringify(workspaceStreams.checkpoint()),
-      );
-    } catch {
-      try {
-        sessionStorage.removeItem(CHECKPOINT);
-      } catch {
-        /* replay remains authoritative */
-      }
-    }
-  }, 1000);
-});
+const errorListeners = new Set<(error: unknown) => void>();
+let registry: WorkspaceStreamRegistry | undefined;
+let connectedHost: ReturnType<typeof desktopHost>;
+const stores = new Map<string, WorkspaceStreamStore>();
+const checkpointTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const checkpointKey = (id: string) =>
+  `circle-workspace-stream-checkpoint-v1:${id}`;
 
-/** Called by the app once for its selected trusted session. Switching session
- * changes replay authorization, while the global journal/store identity remains. */
-export function connectWorkspaceStreams(
-  sessionId: string,
-  onError: (error: unknown) => void = () => {},
-) {
+export function workspaceStreamFor(workspaceId: string): WorkspaceStreamStore {
+  let store = stores.get(workspaceId);
+  if (store) return store;
+  store = new WorkspaceStreamStore();
+  stores.set(workspaceId, store);
+  try {
+    const value = sessionStorage.getItem(checkpointKey(workspaceId));
+    const checkpoint = value ? JSON.parse(value) : null;
+    const ownWorkspace =
+      checkpoint &&
+      Array.isArray(checkpoint.resources) &&
+      checkpoint.resources.every(
+        (resource: { events?: WorkspaceStreamEvent[] }) =>
+          Array.isArray(resource.events) &&
+          resource.events.every((event) => event.workspaceId === workspaceId),
+      );
+    if (value && (!ownWorkspace || !store.restore(checkpoint)))
+      sessionStorage.removeItem(checkpointKey(workspaceId));
+  } catch {
+    /* unavailable cache means authoritative replay from zero */
+  }
+  const target = store;
+  store.subscribeCursor(() => {
+    if (checkpointTimers.has(workspaceId)) return;
+    checkpointTimers.set(
+      workspaceId,
+      setTimeout(() => {
+        checkpointTimers.delete(workspaceId);
+        try {
+          sessionStorage.setItem(
+            checkpointKey(workspaceId),
+            JSON.stringify(target.checkpoint()),
+          );
+        } catch {
+          try {
+            sessionStorage.removeItem(checkpointKey(workspaceId));
+          } catch {
+            /* durable replay remains authoritative */
+          }
+        }
+      }, 1000),
+    );
+  });
+  return store;
+}
+function streamRegistry() {
   const host = desktopHost();
-  if (!host?.onWorkspaceEvent) return () => {};
-  restoreCheckpoint();
-  const owner = ++activeOwner;
-  connection?.stop();
-  connection = new WorkspaceStreamConnection(
-    workspaceStreams,
+  if (!host?.onWorkspaceEvent) return;
+  if (registry && connectedHost === host) return registry;
+  registry?.close();
+  connectedHost = host;
+  const report = (error: unknown) => {
+    for (const listener of errorListeners) listener(error);
+  };
+  registry = new WorkspaceStreamRegistry(
     {
       listen: (receive) =>
         host.onWorkspaceEvent!((event) =>
           receive(event as WorkspaceStreamEvent),
         ),
-      replay: async (after, limit) => {
-        // 'events' is a protocol service in the integrated desktop bridge.
-        return workspaceCall<WorkspaceReplayPage>(
+      replay: async (_workspaceId, sessionId, after, limit) =>
+        workspaceCall<WorkspaceReplayPage>(
           sessionId,
           'events' as WorkspaceService,
           'replay',
           { after, limit },
-        );
-      },
+        ),
     },
+    workspaceStreamFor,
     (event) => {
       for (const listener of listeners) {
         try {
           listener(event);
         } catch (error) {
-          onError(error);
+          report(error);
         }
       }
     },
-    onError,
+    report,
   );
-  void connection.start().catch(onError);
+  return registry;
+}
+/** A known session authorizes replay of its workspace. Background workspace
+ * connections remain alive; only their own journal identity routes live events. */
+export function connectWorkspaceStreams(
+  workspaceId: string,
+  sessionId: string,
+  onError: (error: unknown) => void = () => {},
+) {
+  errorListeners.add(onError);
+  void streamRegistry()?.connect(workspaceId, sessionId).catch(onError);
   return () => {
-    if (owner === activeOwner) {
-      connection?.stop();
-      connection = undefined;
-    }
+    errorListeners.delete(onError);
   };
 }
-
-/** Consumers observe only accepted, deduplicated events after global ingestion. */
+/** Consumers observe accepted events after per-journal ingestion, then select
+ * session/resource. Never filter session before advancing a workspace cursor. */
 export function subscribeWorkspace(
   listener: (event: WorkspaceServiceEvent) => void,
 ): () => void {
