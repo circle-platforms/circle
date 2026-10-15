@@ -349,6 +349,10 @@ export class ChromeBrowser implements BrowserPort {
     failed.catch(() => {});
     child.once('exit', () => {
       cdp.close();
+      // An auxiliary service can inherit these pipe descriptors and outlive the
+      // browser. Release our ends once the browser exits so they cannot keep Circle
+      // alive; stopping the owned browser process group is still awaited by close().
+      for (const stream of child.stdio) stream?.destroy();
       this.gone(cdp);
       void removeProfile(profile);
     });
@@ -465,13 +469,9 @@ export class ChromeBrowser implements BrowserPort {
     }
   }
   private async groupRunning(pid: number): Promise<boolean> {
-    try {
-      process.kill(-pid, 0);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
-      throw error;
-    }
-    // An exited grandchild can remain a zombie until the OS reaps it; it cannot run or write.
+    // Signal 0 checks permission too; a refused probe does not tell us whether
+    // live owned descendants remain. Read actual process state instead: a zombie
+    // cannot run or write. Failure to read state or stop a live member still rejects.
     const output = await new Promise<string>((resolve, reject) =>
       execFile('ps', ['-A', '-o', 'pgid=,stat='], (error, stdout) =>
         error ? reject(error) : resolve(stdout),
