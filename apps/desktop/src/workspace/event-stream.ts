@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { open, mkdir } from 'node:fs/promises';
+import { open, mkdir, chmod } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
 import type { FileHandle } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { WorkspaceServiceEvent } from '../workspace-protocol.ts';
@@ -39,12 +40,14 @@ export interface EventStreamOptions {
 export class WorkspaceEventStream {
   readonly epoch = randomUUID();
   private handle!: FileHandle;
+  private writerLease?: DatabaseSync;
   private offset = 0;
   private seq = 0;
   private pending: Promise<unknown> = Promise.resolve();
   private failure: Error | undefined;
   private closed = false;
   private closing = false;
+  private closePromise?: Promise<void>;
   private pendingBytes = 0;
   private ring: PersistedWorkspaceEvent[] = [];
   private ringSize = 0;
@@ -59,8 +62,26 @@ export class WorkspaceEventStream {
   static async open(path: string, options: EventStreamOptions = {}) {
     const stream = new WorkspaceEventStream(path, options);
     await mkdir(dirname(path), { recursive: true });
-    stream.handle = await open(path, 'a+', 0o600);
     try {
+      // A separate SQLite RESERVED lock provides cross-process ownership and
+      // kernel crash release without stale PID files. The JSONL stays unchanged.
+      const leasePath = path + '.owner.sqlite';
+      stream.writerLease = new DatabaseSync(leasePath);
+      try {
+        stream.writerLease.exec('PRAGMA busy_timeout=0; BEGIN IMMEDIATE');
+      } catch (cause) {
+        const busy = /locked|busy/i.test(
+          cause instanceof Error ? cause.message : String(cause),
+        );
+        throw new Error(
+          busy
+            ? 'workspace event journal already has an active writer; close the other application before retrying'
+            : 'workspace event journal writer lease could not be acquired',
+          { cause },
+        );
+      }
+      await chmod(leasePath, 0o600);
+      stream.handle = await open(path, 'a+', 0o600);
       for await (const row of stream.lines(0)) {
         const event = JSON.parse(row.text) as PersistedWorkspaceEvent;
         stream.validateRecord(event, row.end);
@@ -73,7 +94,12 @@ export class WorkspaceEventStream {
         await stream.handle.truncate(stream.offset);
       return stream;
     } catch (error) {
-      await stream.handle.close();
+      try {
+        await stream.handle?.close();
+      } finally {
+        stream.writerLease?.close();
+        stream.writerLease = undefined;
+      }
       throw error;
     }
   }
@@ -240,14 +266,21 @@ export class WorkspaceEventStream {
     return { events, cursor, hasMore: cursor.offset < this.offset };
   }
 
-  async close() {
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
     this.closing = true;
-    await this.pending;
-    if (!this.closed) {
+    this.closePromise = (async () => {
+      await this.pending;
       this.closed = true;
       this.listeners.clear();
-      await this.handle.close();
-    }
+      try {
+        await this.handle.close();
+      } finally {
+        this.writerLease?.close();
+        this.writerLease = undefined;
+      }
+    })();
+    return this.closePromise;
   }
 
   private validateRecord(event: PersistedWorkspaceEvent, end: number) {
