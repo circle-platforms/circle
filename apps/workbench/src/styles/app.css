@@ -161,14 +161,25 @@ pre {
   height: 100%;
   min-height: 0;
 }
+/* The grid item has to be allowed to shrink. Otherwise the session list grows
+   with its rows and the wheel has nothing to scroll. */
+.desktop-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
 .sidebar {
   display: flex;
   flex-direction: column;
+  flex: 1;
   height: 100%;
   background: var(--sidebar);
   border-right: 1px solid var(--border);
   padding: 0 12px;
   min-height: 0;
+  overflow: hidden;
 }
 .brand {
   display: flex;
@@ -3748,6 +3759,7 @@ pre {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
   padding-bottom: 10px;
 }
 .project {

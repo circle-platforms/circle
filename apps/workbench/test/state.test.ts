@@ -13,11 +13,15 @@ import { PlatformPreviewService } from '../src/plugins/platform/store.ts';
 import { PluginRegistry } from '../src/plugins/registry.ts';
 import type { WorkbenchPlugin } from '../src/plugins/types.ts';
 import {
+  activityAge,
   canArchiveSession,
   historyMessages,
+  orderedProjects,
   projectTag,
+  RECENT_SHOWN,
   recentDetails,
   recentSessions,
+  sessionActivityAt,
   sessionHasContent,
   sidebarProjects,
   visibleSessions,
@@ -760,20 +764,62 @@ test('recent lists every context newest first, and its hover names only a projec
   };
   const sessions = [older, newer, archived, placeholder];
   const workspaces = [project, scratch];
+  assert.equal(RECENT_SHOWN, 5);
   assert.deepEqual(
     recentSessions(sessions).map((session) => session.id),
     ['newer', 'older'],
   );
   const now = new Date(2026, 9, 15, 12, 0, 0);
-  const filed = recentDetails(older, workspaces, now);
-  const loose = recentDetails(newer, workspaces, now);
+  const withAt = (session: typeof older, at: string) => ({
+    ...session,
+    messages: [{ ...session.messages[0]!, id: `${session.id}-m`, at }],
+  });
+  const talked = withAt(
+    {
+      ...older,
+      id: 'talked',
+      updatedAt: '2019-01-01T00:00:00.000Z',
+      pinned: false,
+    },
+    new Date(now.getTime() - 3 * 60 * 1000).toISOString(),
+  );
+  const quiet = withAt(
+    {
+      ...newer,
+      id: 'quiet',
+      updatedAt: '2026-10-15T12:00:00.000Z',
+    },
+    '2020-01-01T00:00:00.000Z',
+  );
+  assert.equal(
+    sessionActivityAt(talked),
+    new Date(now.getTime() - 3 * 60 * 1000).toISOString(),
+  );
+  assert.deepEqual(
+    recentSessions([quiet, talked]).map((session) => session.id),
+    ['talked', 'quiet'],
+  );
+  const filed = recentDetails(talked, workspaces, now);
+  const loose = recentDetails(quiet, workspaces, now);
   assert.equal(filed.project, 'docs-site');
-  assert.equal(filed.relative, shownTime(older.updatedAt, now));
+  assert.deepEqual(filed.age, { kind: 'minutes', n: 3 });
   assert.ok(filed.absolute);
-  assert.notEqual(filed.absolute, filed.relative);
   assert.equal(loose.project, undefined);
-  assert.equal(loose.relative, shownTime(newer.updatedAt, now));
+  assert.equal(loose.age.kind, 'days');
+  assert.ok(loose.age.kind === 'days' && loose.age.n >= 1);
   assert.ok(loose.absolute);
+  assert.deepEqual(activityAge('today', now), { kind: 'raw', text: 'today' });
+  assert.deepEqual(
+    activityAge(new Date(now.getTime() - 30_000).toISOString(), now),
+    { kind: 'just now' },
+  );
+  assert.deepEqual(
+    activityAge(
+      new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString(),
+      now,
+    ),
+    { kind: 'hours', n: 2 },
+  );
   assert.equal(
     projectTag({ ...older, workspaceId: 'missing' }, workspaces),
     undefined,
@@ -783,11 +829,57 @@ test('recent lists every context newest first, and its hover names only a projec
     workspaces,
     now,
   );
-  assert.equal(preview.relative, 'today');
+  assert.deepEqual(preview.age, { kind: 'raw', text: 'today' });
   assert.equal(preview.absolute, undefined);
   assert.deepEqual(
     sidebarProjects(workspaces, sessions).map((item) => item.id),
     ['proj'],
+  );
+  const late = { ...project, id: 'late', name: 'zeta' };
+  const early = { ...project, id: 'early', name: 'alpha' };
+  assert.deepEqual(
+    orderedProjects(
+      [late, early],
+      [
+        withAt(
+          { ...older, id: 'late-session', workspaceId: 'late' },
+          '2026-10-15T11:00:00.000Z',
+        ),
+        {
+          ...withAt(
+            { ...older, id: 'early-session', workspaceId: 'early' },
+            '2026-10-15T08:00:00.000Z',
+          ),
+          updatedAt: '2026-10-15T12:00:00.000Z',
+        },
+      ],
+    ).map((item) => item.id),
+    ['late', 'early'],
+  );
+  assert.deepEqual(
+    orderedProjects(
+      [
+        { ...project, id: 'b', name: 'zeta' },
+        { ...project, id: 'a', name: 'alpha' },
+      ],
+      [
+        {
+          ...older,
+          id: 's1',
+          workspaceId: 'b',
+          messages: [],
+          updatedAt: 'today',
+        },
+        {
+          ...older,
+          id: 's2',
+          workspaceId: 'a',
+          messages: [],
+          updatedAt: 'today',
+        },
+      ],
+    ).map((item) => item.name),
+    ['alpha', 'zeta'],
   );
   const inRecent = recentSessions(sessions).some(
     (session) => session.id === older.id,

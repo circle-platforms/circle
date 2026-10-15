@@ -1,6 +1,12 @@
 import { desktopHost, folderOpenMessage, openNativeWorkspace } from '../host';
 import { openHome } from '../features/home-selection';
-import { useEffect, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 import { NavLink, useLocation, useMatch, useNavigate } from 'react-router-dom';
 import {
   Plus,
@@ -21,14 +27,17 @@ import { useRuntime } from '../app/context';
 import { usePlugins } from '../plugins/context';
 import { currentSession, sessionTitle } from '../model/state';
 import {
+  orderedProjects,
+  RECENT_SHOWN,
   recentDetails,
   recentSessions,
-  sidebarProjects,
+  sessionActivityAt,
   visibleSessions,
+  type ActivityAge,
 } from '../model/session-management';
 import type { DialogId, Session } from '../model/types';
 import { IconButton } from './common';
-import { t } from '../i18n';
+import { t, tn } from '../i18n';
 import { UpdateChip } from '../features/Update';
 import { SessionMenu, WorkspaceMenu } from './SessionMenus';
 // The labels are functions so they follow the interface language when it changes.
@@ -76,6 +85,8 @@ export function Sidebar({
   const current = currentSession(snapshot);
   const [all, setAll] = useState<string[]>([]);
   const [collapsed, setCollapsed] = useState<string[]>([]);
+  const [roving, setRoving] = useState<string | null>(null);
+  const anchors = useRef(new Map<string, HTMLAnchorElement>());
   const goSession = async (id: string) => {
     await runtime.selectSession(id);
     navigate(`/session/${id}`);
@@ -85,23 +96,58 @@ export function Sidebar({
     openHome(navigate, `${location.pathname}${location.search}`, workspaceId);
     onNavigate?.();
   };
-  // The open folder first, then the others by their latest session.
-  const latest = (id: string) =>
-    snapshot.sessions
-      .filter((session) => session.workspaceId === id)
-      .reduce(
-        (value, session) => Math.max(value, Date.parse(session.updatedAt) || 0),
-        0,
-      );
-  const projects = sidebarProjects(snapshot.workspaces, snapshot.sessions).sort(
-    (a, b) =>
-      a.id === current.workspaceId
-        ? -1
-        : b.id === current.workspaceId
-          ? 1
-          : latest(b.id) - latest(a.id),
-  );
+  const activityAt = (session: Session) =>
+    Date.parse(sessionActivityAt(session)) || 0;
+  const projects = orderedProjects(snapshot.workspaces, snapshot.sessions);
   const recent = recentSessions(snapshot.sessions);
+  const recentShown = collapsed.includes(RECENT)
+    ? []
+    : all.includes(RECENT)
+      ? recent
+      : recent.slice(0, RECENT_SHOWN);
+  const groups = projects.map((workspace) => {
+    const sessions = visibleSessions(snapshot.sessions)
+      .filter(
+        (session) =>
+          session.workspaceId === workspace.id && !session.archivedAt,
+      )
+      .sort(
+        (a, b) =>
+          Number(b.pinned) - Number(a.pinned) ||
+          activityAt(b) - activityAt(a) ||
+          a.id.localeCompare(b.id),
+      );
+    const shown = collapsed.includes(workspace.id)
+      ? []
+      : all.includes(workspace.id)
+        ? sessions
+        : sessions.slice(0, SHOWN);
+    return { workspace, sessions, shown };
+  });
+  const rowKeys = [
+    ...recentShown.map((session) => `recent:${session.id}`),
+    ...groups.flatMap((group) =>
+      group.shown.map((session) => `${group.workspace.id}:${session.id}`),
+    ),
+  ];
+  const tabKey =
+    roving && rowKeys.includes(roving)
+      ? roving
+      : (rowKeys.find((key) => key === `recent:${current.id}`) ??
+        rowKeys.find((key) => key.endsWith(`:${current.id}`)) ??
+        rowKeys[0]);
+  const onRowKeyDown = (
+    rowKey: string,
+    event: KeyboardEvent<HTMLAnchorElement>,
+  ) => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    const next =
+      rowKeys[rowKeys.indexOf(rowKey) + (event.key === 'ArrowDown' ? 1 : -1)];
+    if (!next) return;
+    event.preventDefault();
+    setRoving(next);
+    anchors.current.get(next)?.focus();
+  };
   const waiting = new Set(
     snapshot.interactions
       .filter((item) => item.status === 'pending')
@@ -109,25 +155,35 @@ export function Sidebar({
   );
   const toggle = (id: string, list: string[], set: (ids: string[]) => void) =>
     set(list.includes(id) ? list.filter((item) => item !== id) : [...list, id]);
-  const sessionRows = (sessions: Session[], hover: boolean) =>
-    sessions.map((session) => (
-      <SessionRow
-        key={session.id}
-        session={session}
-        details={
-          hover ? recentDetails(session, snapshot.workspaces) : undefined
-        }
-        renaming={renaming}
-        attention={waiting.has(session.id)}
-        running={session.state === 'waiting'}
-        onOpen={(id) => {
-          perform(async () => {
-            await goSession(id);
-          });
-        }}
-        onDialog={onDialog}
-      />
-    ));
+  const sessionRows = (sessions: Session[], hover: boolean, prefix: string) =>
+    sessions.map((session) => {
+      const rowKey = `${prefix}:${session.id}`;
+      return (
+        <SessionRow
+          key={rowKey}
+          session={session}
+          tabIndex={rowKey === tabKey ? 0 : -1}
+          details={
+            hover ? recentDetails(session, snapshot.workspaces) : undefined
+          }
+          renaming={renaming}
+          attention={waiting.has(session.id)}
+          running={session.state === 'waiting'}
+          onOpen={(id) => {
+            perform(async () => {
+              await goSession(id);
+            });
+          }}
+          onKeyDown={(event) => onRowKeyDown(rowKey, event)}
+          onFocusRow={() => setRoving(rowKey)}
+          linkRef={(node) => {
+            if (node) anchors.current.set(rowKey, node);
+            else anchors.current.delete(rowKey);
+          }}
+          onDialog={onDialog}
+        />
+      );
+    });
   const customizing = CUSTOMIZE.some(
     (id) => location.pathname === '/page/' + id,
   );
@@ -205,37 +261,20 @@ export function Sidebar({
                 {t('recent')}
               </button>
             </div>
-            {sessionRows(
-              collapsed.includes(RECENT)
-                ? []
-                : all.includes(RECENT)
-                  ? recent
-                  : recent.slice(0, SHOWN),
-              true,
-            )}
-            {!collapsed.includes(RECENT) && recent.length > SHOWN && (
+            {sessionRows(recentShown, true, RECENT)}
+            {!collapsed.includes(RECENT) && recent.length > RECENT_SHOWN && (
               <button
                 className="text-button show-more"
                 onClick={() => toggle(RECENT, all, setAll)}
               >
                 {all.includes(RECENT)
                   ? t('show less')
-                  : t('show {n} more', { n: recent.length - SHOWN })}
+                  : t('show {n} more', { n: recent.length - RECENT_SHOWN })}
               </button>
             )}
           </section>
         )}
-        {projects.map((workspace) => {
-          const sessions = visibleSessions(snapshot.sessions)
-            .filter(
-              (session) =>
-                session.workspaceId === workspace.id && !session.archivedAt,
-            )
-            .sort(
-              (a, b) =>
-                Number(b.pinned) - Number(a.pinned) ||
-                (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0),
-            );
+        {groups.map(({ workspace, sessions, shown }) => {
           const open = all.includes(workspace.id);
           return (
             <section className="project" key={workspace.id}>
@@ -266,14 +305,7 @@ export function Sidebar({
                   />
                 </div>
               </div>
-              {sessionRows(
-                collapsed.includes(workspace.id)
-                  ? []
-                  : open
-                    ? sessions
-                    : sessions.slice(0, SHOWN),
-                false,
-              )}
+              {sessionRows(shown, false, workspace.id)}
               {!collapsed.includes(workspace.id) && sessions.length > SHOWN && (
                 <button
                   className="text-button show-more"
@@ -365,58 +397,77 @@ export function Sidebar({
 
 function SessionRow({
   session,
+  tabIndex,
   details,
   renaming,
   attention,
   running,
   onOpen,
+  onKeyDown,
+  onFocusRow,
+  linkRef,
   onDialog,
 }: {
   session: Session;
-  details?: { project?: string; relative: string; absolute?: string };
+  tabIndex: number;
+  details?: { project?: string; age: ActivityAge; absolute?: string };
   renaming: boolean;
   attention: boolean;
   running: boolean;
   onOpen: (id: string) => void;
+  onKeyDown: (event: KeyboardEvent<HTMLAnchorElement>) => void;
+  onFocusRow: () => void;
+  linkRef: (node: HTMLAnchorElement | null) => void;
   onDialog?: (dialog: DialogId, selection?: string) => void;
 }) {
   // A function class would be stringified by the tooltip trigger, so the
   // active row would lose its highlight. The same path is used in a project
   // group, and both rows highlight together.
   const active = useMatch({ path: `/session/${session.id}`, end: true });
-  const link = (
-    <NavLink
-      className={active ? 'session-link active' : 'session-link'}
-      end
-      to={`/session/${session.id}`}
-      onClick={(event) => {
-        event.preventDefault();
-        onOpen(session.id);
-      }}
-    >
-      <span>{sessionTitle(session.title)}</span>
-      {attention ? (
-        <i className="attention-dot" />
-      ) : running ? (
-        <i className="running-dot" />
-      ) : null}
-    </NavLink>
-  );
-  return (
+  const row = (
     <div className="session-row">
-      {details ? (
-        <RecentHover details={details} suppressed={renaming}>
-          {link}
-        </RecentHover>
-      ) : (
-        link
-      )}
+      <NavLink
+        ref={linkRef}
+        tabIndex={tabIndex}
+        className={active ? 'session-link active' : 'session-link'}
+        end
+        to={`/session/${session.id}`}
+        onClick={(event) => {
+          event.preventDefault();
+          onOpen(session.id);
+        }}
+        onKeyDown={onKeyDown}
+        onFocus={onFocusRow}
+      >
+        <span>{sessionTitle(session.title)}</span>
+        {attention ? (
+          <i className="attention-dot" />
+        ) : running ? (
+          <i className="running-dot" />
+        ) : null}
+      </NavLink>
       <SessionMenu
         session={session}
         onDialog={(dialog, selection) => onDialog?.(dialog, selection)}
       />
     </div>
   );
+  return details ? (
+    <RecentHover details={details} suppressed={renaming}>
+      {row}
+    </RecentHover>
+  ) : (
+    row
+  );
+}
+
+function activityLabel(age: ActivityAge): string {
+  if (age.kind === 'raw') return age.text;
+  if (age.kind === 'just now') return t('just now');
+  if (age.kind === 'minutes')
+    return tn(age.n, '{n} minute ago', '{n} minutes ago');
+  if (age.kind === 'hours') return tn(age.n, '{n} hour ago', '{n} hours ago');
+  return tn(age.n, '{n} day ago', '{n} days ago');
 }
 
 function RecentHover({
@@ -424,7 +475,7 @@ function RecentHover({
   suppressed,
   children,
 }: {
-  details: { project?: string; relative: string; absolute?: string };
+  details: { project?: string; age: ActivityAge; absolute?: string };
   suppressed: boolean;
   children: ReactNode;
 }) {
@@ -445,10 +496,12 @@ function RecentHover({
         <Tooltip.Content
           className="tooltip session-hover"
           side="right"
+          align="start"
           sideOffset={8}
+          avoidCollisions={false}
         >
           {details.project ? <span>{details.project}</span> : null}
-          <span>{t('updated {time}', { time: details.relative })}</span>
+          <span>{activityLabel(details.age)}</span>
           {details.absolute ? <span>{details.absolute}</span> : null}
         </Tooltip.Content>
       </Tooltip.Portal>

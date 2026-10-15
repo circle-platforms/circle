@@ -122,17 +122,37 @@ try {
   );
   assert.ok(hrefs.length >= 2);
   assert.equal(new Set(hrefs).size, 1);
-  const projectName = await sections
-    .nth(1)
-    .locator('.project-name')
-    .innerText();
+  const activeProject = sections
+    .filter({ has: page.locator('a.session-link.active') })
+    .nth(1);
+  const projectName = await activeProject.locator('.project-name').innerText();
   const recentActive = sections.nth(0).locator('a.session-link.active');
   assert.equal((await recentActive.innerText()).includes(projectName), false);
+  const recentRow = sections.nth(0).locator('.session-row', {
+    has: page.locator('a.session-link.active'),
+  });
   await recentActive.hover();
   const hover = page.locator('.session-hover');
   await hover.waitFor();
   assert.match(await hover.innerText(), new RegExp(projectName));
-  assert.match(await hover.innerText(), /updated /);
+  assert.match(await hover.innerText(), /\btoday\b/);
+  assert.doesNotMatch(await hover.innerText(), /updated/);
+  const menu = recentRow.getByRole('button', {
+    name: 'session actions for Fix the reconnect race',
+    exact: true,
+  });
+  await page.waitForFunction(() => {
+    const card = document.querySelector('.session-hover');
+    const button = document
+      .querySelector(
+        '.project-list > .project .session-row a.session-link.active',
+      )
+      ?.parentElement?.querySelector('button');
+    if (!card || !button) return false;
+    return (
+      card.getBoundingClientRect().x >= button.getBoundingClientRect().right - 1
+    );
+  });
   const flickered = await page.evaluate(async () => {
     const start = performance.now();
     while (performance.now() - start < 350) {
@@ -142,6 +162,20 @@ try {
     return false;
   });
   assert.equal(flickered, false);
+  await menu.click();
+  await page
+    .getByRole('menuitem', { name: 'rename session', exact: true })
+    .waitFor();
+  await page.keyboard.press('Escape');
+  await page.reload();
+  await page.evaluate(() => {
+    location.hash = '/session/session1';
+  });
+  await page
+    .getByRole('heading', { name: 'Fix the reconnect race', exact: true })
+    .waitFor();
+  await recentActive.hover();
+  await hover.waitFor();
   const renameCommand = page.getByRole('textbox', {
     name: 'message',
     exact: true,
@@ -160,6 +194,23 @@ try {
   assert.equal(await hover.count(), 0);
   await recentActive.focus();
   await hover.waitFor();
+  assert.deepEqual(
+    await page
+      .locator('.sidebar a.session-link')
+      .evaluateAll((nodes) =>
+        nodes
+          .filter((node) => node.tabIndex === 0)
+          .map((node) => node.textContent.trim()),
+      ),
+    ['Fix the reconnect race'],
+  );
+  await page.keyboard.press('ArrowDown');
+  await page.waitForFunction(
+    () =>
+      document.activeElement?.textContent?.includes(
+        'Review the request lifecycle',
+      ) ?? false,
+  );
   assert.equal(
     await page
       .locator('.sidebar')
@@ -173,6 +224,74 @@ try {
   checks.push(
     'a recent row shows only its title, and hover or focus shows the project and time',
   );
+  checks.push(
+    'a recent hover card sits beside the row and its menu opens on the first click',
+  );
+  checks.push('arrow keys move between sidebar session rows');
+  await renameCommand.fill('x');
+  await page.waitForFunction(() =>
+    localStorage.getItem('circle.workbench.preview.v1'),
+  );
+  await renameCommand.fill('');
+  await page.evaluate(() => {
+    const key = 'circle.workbench.preview.v1';
+    const saved = JSON.parse(localStorage.getItem(key));
+    const sample = saved.sessions.find((row) => row.id === 'session1');
+    for (let index = 0; index < 4; index += 1) {
+      saved.sessions.push({
+        ...sample,
+        id: 'extra' + index,
+        title: 'Extra recent ' + index,
+        pinned: false,
+        messages: sample.messages.map((message, messageIndex) => ({
+          ...message,
+          id: 'extra' + index + '-' + messageIndex,
+        })),
+      });
+    }
+    localStorage.setItem(key, JSON.stringify(saved));
+  });
+  await page.reload();
+  await page.evaluate(() => {
+    location.hash = '/session/session1';
+  });
+  await page
+    .getByRole('heading', { name: 'Fix the reconnect race', exact: true })
+    .waitFor();
+  assert.equal(await sections.nth(0).locator('a.session-link').count(), 5);
+  await sections
+    .nth(0)
+    .getByRole('button', { name: 'show 2 more', exact: true })
+    .waitFor();
+  checks.push('recent shows five sessions before show more');
+  await application.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    if (window.isMaximized()) window.unmaximize();
+  });
+  const contentSize = await readViewport(page);
+  const restored = {
+    width: Math.round(contentSize.width),
+    height: Math.round(contentSize.height),
+  };
+  // The window will not shrink below its 560px minimum.
+  await setViewport(application, page, {
+    width: restored.width,
+    height: Math.min(restored.height, 640),
+  });
+  const list = page.locator('.project-list');
+  const beforeScroll = await list.evaluate((node) => ({
+    scrollHeight: node.scrollHeight,
+    clientHeight: node.clientHeight,
+  }));
+  assert.ok(beforeScroll.scrollHeight > beforeScroll.clientHeight);
+  await list.hover();
+  await page.mouse.wheel(0, 240);
+  await page.waitForFunction(() => {
+    const node = document.querySelector('.project-list');
+    return node instanceof HTMLElement && node.scrollTop > 0;
+  });
+  await setViewport(application, page, restored);
+  checks.push('the sidebar list scrolls');
   for (const command of sourceCommands) {
     await reset();
     await page
