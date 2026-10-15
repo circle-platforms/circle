@@ -130,13 +130,17 @@ export async function runNativeGitJourney({
       'native Git operation completed',
     );
   const refresh = async () => {
+    const expected = await call('git', 'status', {});
     await panel
       .getByRole('button', { name: 'refresh', exact: true })
       .first()
       .click();
     await until(
-      async () => !(await panel.getByRole('status').count()),
-      'refresh idle',
+      async () =>
+        (await panel.getAttribute('aria-busy')) === 'false' &&
+        (await panel.getAttribute('data-revision')) === expected.revision &&
+        (await panel.getAttribute('data-branch')) === expected.branch,
+      'refreshed native branch and revision',
     );
   };
   const snapshot = async (name) =>
@@ -203,6 +207,7 @@ export async function runNativeGitJourney({
   };
   const checks = [];
   let addedOrigin = false;
+  let primaryFailure;
   try {
     await git('switch', '-c', branch);
     await git('config', '--local', 'user.name', 'Native Journey');
@@ -379,31 +384,89 @@ export async function runNativeGitJourney({
       JSON.stringify(result, null, 2) + '\n',
     );
     return result;
+  } catch (error) {
+    primaryFailure = error;
+    // Preserve the actual failed assertion before cleanup can encounter dirty
+    // files. Never reset those files just to restore the fixture branch.
+    await writeFile(
+      path.join(output, 'native-git-failure.json'),
+      JSON.stringify(
+        {
+          error: String(error),
+          stack: error?.stack,
+          checks,
+          pushedHeads,
+          branch: await git('branch', '--show-current').catch(String),
+          status: await git('status', '--porcelain=v1').catch(String),
+          index: await git('diff', '--cached', '--name-status').catch(String),
+          firstDiff: await git('diff', '--', names.first).catch(String),
+          panel: await panel.innerText().catch(String),
+        },
+        null,
+        2,
+      ) + '\n',
+    );
+    throw error;
   } finally {
-    if (
-      (await git('symbolic-ref', '--short', 'HEAD').catch(() => ''))
-        .trim()
-        .startsWith(branch)
-    ) {
+    const cleanupErrors = [];
+    const attemptCleanup = async (label, run) => {
+      try {
+        await run();
+      } catch (error) {
+        cleanupErrors.push({ label, error: String(error) });
+      }
+    };
+    await attemptCleanup(
+      'restore original branch without overwriting dirty files',
+      async () => {
+        if (
+          (await git('symbolic-ref', '--short', 'HEAD').catch(() => ''))
+            .trim()
+            .startsWith(branch)
+        ) {
+          if (
+            await git('rev-parse', '-q', '--verify', 'MERGE_HEAD').then(
+              () => true,
+              () => false,
+            )
+          )
+            await git('merge', '--abort');
+          await git('switch', originalBranch);
+        }
+      },
+    );
+    await attemptCleanup('remove owned fixture remote', async () => {
       if (
-        await git('rev-parse', '-q', '--verify', 'MERGE_HEAD').then(
-          () => true,
-          () => false,
-        )
+        addedOrigin &&
+        (await git('remote', 'get-url', 'origin').catch(() => '')).trim() ===
+          remote
       )
-        await git('merge', '--abort');
-      await git('switch', originalBranch);
-    }
-    if (
-      addedOrigin &&
-      (await git('remote', 'get-url', 'origin').catch(() => '')).trim() ===
-        remote
-    )
-      await git('remote', 'remove', 'origin');
-    for (const [key, value] of Object.entries(oldConfig)) {
-      if (value === null)
-        await git('config', '--local', '--unset-all', key).catch(() => {});
-      else await git('config', '--local', key, value);
+        await git('remote', 'remove', 'origin');
+    });
+    for (const [key, value] of Object.entries(oldConfig))
+      await attemptCleanup('restore local config ' + key, async () => {
+        if (value === null)
+          await git('config', '--local', '--unset-all', key).catch((error) => {
+            if (error.code !== 5) throw error;
+          });
+        else await git('config', '--local', key, value);
+      });
+    if (cleanupErrors.length) {
+      await writeFile(
+        path.join(output, 'native-git-cleanup-failure.json'),
+        JSON.stringify(
+          {
+            primaryFailure: primaryFailure && String(primaryFailure),
+            cleanupErrors,
+          },
+          null,
+          2,
+        ) + '\n',
+      );
+      if (!primaryFailure)
+        throw Error(
+          'native Git cleanup failed: ' + JSON.stringify(cleanupErrors),
+        );
     }
   }
 }

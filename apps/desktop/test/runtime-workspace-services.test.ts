@@ -10,12 +10,13 @@ import {
   symlink,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { realpathSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { DeliveryService } from '../src/workspace/delivery.ts';
+import { startNodeCliFixture } from './helpers/node-cli-fixture.ts';
 import { WorkspaceEventStream } from '../src/workspace/event-stream.ts';
 import { setTimeout as delay } from 'node:timers/promises';
 import { RuntimeController } from '../src/runtime-controller.ts';
@@ -404,6 +405,7 @@ test('task bridge runs isolated writers and read-only reviewer while task approv
   await f.call('select-session', { id: parent });
   const until = Date.now() + 8000;
   let tasks: any[] = [];
+  const bridgeTimeline: unknown[] = [];
   while (Date.now() < until) {
     for (const row of f.controller
       .snapshot()
@@ -417,7 +419,10 @@ test('task bridge runs isolated writers and read-only reviewer while task approv
     }
     const list = await f.service('tasks', 'list', {}, parent);
     assert.equal(list.ok, true, list.error);
-    tasks = list.data as any[];
+    const nextTasks = list.data as any[];
+    if (JSON.stringify(tasks) !== JSON.stringify(nextTasks))
+      bridgeTimeline.push({ at: Date.now(), tasks: nextTasks });
+    tasks = nextTasks;
     if (
       tasks.every((task) =>
         ['needs_review', 'succeeded', 'failed'].includes(task.state),
@@ -426,12 +431,57 @@ test('task bridge runs isolated writers and read-only reviewer while task approv
       break;
     await delay(10);
   }
+  let bridgeFailureReceipt: string | undefined;
+  if (!tasks.every((task) => task.state === 'needs_review')) {
+    const directory = join(import.meta.dirname, '../artifacts/runtime');
+    await mkdir(directory, { recursive: true });
+    bridgeFailureReceipt = join(
+      directory,
+      `controller-task-bridge-failure-${randomUUID()}.json`,
+    );
+    await writeFile(
+      bridgeFailureReceipt,
+      JSON.stringify(
+        {
+          deadline: until,
+          observedAt: Date.now(),
+          tasks,
+          authoritativeAfterFailure: (
+            await f.service('tasks', 'list', {}, parent)
+          ).data,
+          timeline: bridgeTimeline,
+          interactions: f.controller.snapshot().interactions,
+          modelRequestCount: f.model.requests.length,
+          requests: f.model.requests,
+          events: f.events,
+          files: await Promise.all(
+            tasks.map(async (task) => ({
+              id: task.spec.id,
+              worktree: task.worktree,
+              content: task.worktree
+                ? await readFile(join(task.worktree, 'same.txt'), 'utf8').catch(
+                    (error) => String(error),
+                  )
+                : undefined,
+            })),
+          ),
+        },
+        null,
+        2,
+      ),
+    );
+  }
   assert.equal(tasks.length, 3);
   assert.ok(
     tasks.every((task) => task.state === 'needs_review'),
-    JSON.stringify(
-      tasks.map((t) => ({ id: t.spec.id, state: t.state, reason: t.reason })),
-    ),
+    JSON.stringify({
+      bridgeFailureReceipt,
+      tasks: tasks.map((t) => ({
+        id: t.spec.id,
+        state: t.state,
+        reason: t.reason,
+      })),
+    }),
   );
   assert.notEqual(tasks[0].worktree, tasks[1].worktree);
   for (const id of ['left', 'right'])
@@ -622,6 +672,7 @@ test('workspace journal failure cancels its producers and remains visible after 
         );
       }),
   ]);
+  await writeFile(join(f.workspace, 'README.md'), 'existing document');
   await f.call('prompt', { text: 'stay running while native journal fails' });
   await wait(() => f.model.requests.length === 1);
   let attemptedJournal: string | undefined;
@@ -636,12 +687,16 @@ test('workspace journal failure cancels its producers and remains visible after 
       options?: Parameters<typeof WorkspaceEventStream.open>[1],
     ) => {
       attemptedJournal = path;
-      await mkdir(path, { recursive: true });
+      // Opening a directory with a+ is platform dependent on Windows. Corrupt
+      // the actual journal bytes instead, preserving sibling PTY directories.
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, '{synthetic invalid journal record}\n');
       return open(path, options);
     },
   );
   const failed = await f.service('documents', 'read', { path: 'README.md' });
   assert.equal(failed.ok, false);
+  assert.match(failed.error ?? '', /JSON|Unexpected token|invalid/i);
   assert.ok(attemptedJournal?.endsWith('events.jsonl'));
   try {
     await wait(() => aborted);
@@ -903,52 +958,77 @@ test('controller task verification executes a pinned project oracle in an isolat
 
 test('controller isolates same-named cycles by session and repairs real PR checks before human merge', async (t) => {
   const tools = await mkdtemp(join(tmpdir(), 'circle-cycle-gh-'));
-  t.after(() => rm(tools, { recursive: true, force: true }));
+  const cliTranscript = join(
+    import.meta.dirname,
+    '../artifacts/runtime',
+    `controller-cli-${randomUUID()}.jsonl`,
+  );
+  t.after(async () => {
+    await mkdir(dirname(cliTranscript), { recursive: true });
+    await writeFile(
+      cliTranscript,
+      await readFile(join(tools, 'calls'), 'utf8').catch((error) =>
+        JSON.stringify({ error: String(error) }),
+      ),
+    );
+    await rm(tools, { recursive: true, force: true });
+  });
   const gh = join(tools, 'fake-gh.cjs');
   await writeFile(
     gh,
     `const fs=require('node:fs'),cp=require('node:child_process'),path=require('node:path'),crypto=require('node:crypto');
-const args=process.argv.slice(2), key=crypto.createHash('sha256').update(process.cwd()).digest('hex'), state=path.join(${JSON.stringify(tools)},key+'.json');
-const git=(...args)=>cp.execFileSync('git',args,{encoding:'utf8'}).trim();
-fs.appendFileSync(${JSON.stringify(join(tools, 'calls'))},JSON.stringify(args)+'\\n');
-const pr=()=>({number:1,url:'https://example.invalid/pull/1',isDraft:!fs.existsSync(state+'.ready'),headRefOid:git('rev-parse','HEAD'),headRefName:git('branch','--show-current'),state:'OPEN'});
-if(args[0]==='pr'&&args[1]==='create'){fs.writeFileSync(state,'{}'); console.log('created')}
-else if(args[0]==='pr'&&args[1]==='view'){if(!fs.existsSync(state))process.exit(1);console.log(JSON.stringify(pr()))}
-else if(args[0]==='pr'&&args[1]==='list')console.log('[]');
-else if(args[0]==='pr'&&args[1]==='checks'){const pass=fs.readFileSync('app.cjs','utf8').includes('readyForCI=true');console.log(JSON.stringify([{name:'integration',bucket:pass?'pass':'fail',state:pass?'SUCCESS':'FAILURE',link:'https://example.invalid/actions/runs/19'}]))}
-else if(args[0]==='pr'&&args[1]==='ready'){fs.writeFileSync(state+'.ready','yes');console.log('ready')}
-else if(args[0]==='run'&&args[1]==='view')console.log('CI requires readyForCI=true; repair app.cjs');
-else if(args[0]==='auth')console.log('authenticated');
-else if(args[0]==='--version')console.log('gh version 2.83.2');
-else process.exit(2);
+function execute(args){
+ const cwd=process.cwd(),key=crypto.createHash('sha256').update(cwd).digest('hex'),state=path.join(${JSON.stringify(tools)},key+'.json');
+ const git=(...args)=>cp.execFileSync('git',args,{cwd,encoding:'utf8'}).trim();
+ const pr=()=>({number:1,url:'https://example.invalid/pull/1',isDraft:!fs.existsSync(state+'.ready'),headRefOid:git('rev-parse','HEAD'),headRefName:git('branch','--show-current'),state:'OPEN'});
+ let result;
+ try {
+  let stdout='',code=0;
+  if(args[0]==='pr'&&args[1]==='create'){fs.writeFileSync(state,'{}');stdout='created'}
+  else if(args[0]==='pr'&&args[1]==='view'){if(!fs.existsSync(state))code=1;else stdout=JSON.stringify(pr())}
+  else if(args[0]==='pr'&&args[1]==='list')stdout='[]';
+  else if(args[0]==='pr'&&args[1]==='checks'){const pass=fs.readFileSync('app.cjs','utf8').includes('readyForCI=true');stdout=JSON.stringify([{name:'integration',bucket:pass?'pass':'fail',state:pass?'SUCCESS':'FAILURE',link:'https://example.invalid/actions/runs/19'}])}
+  else if(args[0]==='pr'&&args[1]==='ready'){fs.writeFileSync(state+'.ready','yes');stdout='ready'}
+  else if(args[0]==='run'&&args[1]==='view')stdout='CI requires readyForCI=true; repair app.cjs';
+  else if(args[0]==='auth')stdout='authenticated';
+  else if(args[0]==='--version')stdout='gh version 2.83.2';
+  else {code=2;stdout=''}
+  result={code,stdout:stdout+'\\n',stderr:code?'fixture command unavailable':''};
+ } catch(error){result={code:1,stdout:error.stdout?String(error.stdout):'',stderr:String(error)}}
+ fs.appendFileSync(${JSON.stringify(join(tools, 'calls'))},JSON.stringify({args,cwd,argv:process.argv,pid:process.pid,result,at:new Date().toISOString()})+'\\n');
+ return result;
+}
+if(process.argv[2]==='--ipc'){
+ process.on('message',request=>{try{process.chdir(request.cwd);process.argv=[process.execPath,__filename,...request.args];process.send({id:request.id,...execute(process.argv.slice(2))})}catch(error){process.send({id:request.id,code:1,stdout:'',stderr:String(error)})}});
+}else{const result=execute(process.argv.slice(2));process.stdout.write(result.stdout);process.stderr.write(result.stderr);process.exitCode=result.code;}
 `,
     { mode: 0o600 },
   );
   const executeFixture = promisify(execFile);
+  const oneShot = await executeFixture(process.execPath, [gh, '--version'], {
+    encoding: 'utf8',
+  });
+  assert.match(
+    oneShot.stdout,
+    /gh version 2\.83\.2/,
+    'one-shot real Node CLI portability remains covered',
+  );
+  const fixtureProcess = await startNodeCliFixture(gh);
+  t.after(() => fixtureProcess.close());
   const originalNodeOptions = process.env.NODE_OPTIONS;
   const transports: { file: string; args: string[]; cwd: string }[] = [];
-  // Inject only the trusted CLI transport. Keep DeliveryService's real PR/CI
-  // state machine and every Git/TaskService operation. Windows does not execute
-  // a Unix shebang, so run the same fixture with Node on every platform.
+  // Only CLI startup is shared. The actual child receives every argv/cwd and
+  // checks real Git HEAD/branch/files; DeliveryService still owns PR/CI gates.
   t.mock.method(
     DeliveryService.prototype,
     'gh',
     async function (this: DeliveryService, args: string[]) {
-      const argv = [gh, ...args];
-      transports.push({ file: process.execPath, args: argv, cwd: this.root });
-      return (
-        await executeFixture(process.execPath, argv, {
-          cwd: this.root,
-          encoding: 'utf8',
-          maxBuffer: 8 * 1024 * 1024,
-          timeout: 120000,
-          env: {
-            ...process.env,
-            GH_PROMPT_DISABLED: '1',
-            GH_NO_UPDATE_NOTIFIER: '1',
-          },
-        })
-      ).stdout;
+      transports.push({
+        file: process.execPath,
+        args: [gh, ...args],
+        cwd: this.root,
+      });
+      return fixtureProcess.call(args, this.root);
     },
   );
   const handler = async (request: any) => ({
@@ -979,245 +1059,319 @@ else process.exit(2);
       ghPath: gh,
     },
   });
-  execFileSync('git', ['-C', f.workspace, 'config', 'user.name', 'Fixture']);
-  execFileSync('git', [
-    '-C',
-    f.workspace,
-    'config',
-    'user.email',
-    'fixture@example.invalid',
-  ]);
-  await mkdir(join(f.workspace, '.circle'));
-  await writeFile(
-    join(f.workspace, 'app.cjs'),
-    'exports.answer=0;exports.readyForCI=false;',
-  );
-  await writeFile(
-    join(f.workspace, 'package.json'),
-    JSON.stringify({ scripts: { test: 'node oracle.cjs' } }),
-  );
-  await writeFile(
-    join(f.workspace, 'oracle.cjs'),
-    "require('node:assert/strict').equal(require('./app.cjs').answer,42)",
-  );
-  await writeFile(
-    join(f.workspace, '.circle/verification.json'),
-    JSON.stringify({
-      version: 1,
-      checks: [
-        {
-          criterion: 'answer equals 42',
-          script: 'test',
-          oraclePaths: ['oracle.cjs'],
-        },
-      ],
-    }),
-  );
-  execFileSync('git', [
-    '-C',
-    f.workspace,
-    'add',
-    'app.cjs',
-    'package.json',
-    'oracle.cjs',
-    '.circle/verification.json',
-  ]);
-  execFileSync('git', ['-C', f.workspace, 'commit', '-qm', 'Baseline']);
-  const remote = join(f.root, 'remote.git');
-  execFileSync('git', ['init', '--bare', '-q', remote]);
-  execFileSync('git', ['-C', f.workspace, 'remote', 'add', 'origin', remote]);
-  execFileSync('git', [
-    '-C',
-    f.workspace,
-    'push',
-    '-q',
-    '-u',
-    'origin',
-    'HEAD',
-  ]);
-  const ownerA = f.controller.snapshot().activeSessionId;
-  await f.call('new-session');
-  const ownerB = f.controller.snapshot().activeSessionId;
-  for (const owner of [ownerA, ownerB]) {
-    const created = await f.service(
-      'cycles',
-      'create',
-      {
-        id: 'same-cycle',
-        operationId: 'create-' + owner,
-        title: 'Implement answer',
-        body: 'Set app answer to42',
-        acceptanceCriteria: ['answer equals 42'],
-      },
-      owner,
-    );
-    assert.equal(created.ok, true, created.error);
-  }
-  const end = Date.now() + 30000;
-  const final = new Map<string, any>();
-  const observedAt = new Map<string, number>();
-  const timeline: unknown[] = [];
-  let answering = true;
-  // Human approval remains responsive while a cycle is doing Git/verification;
-  // awaiting an advance must not suspend the test's independent user actor.
-  const approvalActor = (async () => {
-    while (answering) {
-      for (const interaction of f.controller
-        .snapshot()
-        .interactions.filter((item) => item.status === 'pending')) {
-        await f.call(
-          'answer',
-          {
-            id: interaction.id,
-            revision: interaction.revision,
-            answer: 'approve',
-          },
-          interaction.sessionId,
-        );
-      }
-      await delay(10);
-    }
-  })();
   try {
-    while (Date.now() < end) {
-      // Independent owner worktrees must advance concurrently. A slow B Git
-      // operation cannot prevent observing A's background delivery progress.
-      await Promise.all(
-        [ownerA, ownerB].map(async (owner) => {
-          const advanced = await f.service(
-            'cycles',
-            'advance',
-            { id: 'same-cycle' },
-            owner,
-          );
-          assert.equal(advanced.ok, true, advanced.error);
-          // The return value can predate background timer progress while the
-          // other owner was doing work. Read the authoritative ledger snapshot.
-          const observed = await f.service(
-            'cycles',
-            'snapshot',
-            { id: 'same-cycle' },
-            owner,
-          );
-          assert.equal(observed.ok, true, observed.error);
-          if (
-            JSON.stringify(final.get(owner)) !== JSON.stringify(observed.data)
-          )
-            timeline.push({ at: Date.now(), owner, cycle: observed.data });
-          final.set(owner, observed.data);
-          observedAt.set(owner, Date.now());
-        }),
+    execFileSync('git', ['-C', f.workspace, 'config', 'user.name', 'Fixture']);
+    execFileSync('git', [
+      '-C',
+      f.workspace,
+      'config',
+      'user.email',
+      'fixture@example.invalid',
+    ]);
+    await mkdir(join(f.workspace, '.circle'));
+    await writeFile(
+      join(f.workspace, 'app.cjs'),
+      'exports.answer=0;exports.readyForCI=false;',
+    );
+    await writeFile(
+      join(f.workspace, 'package.json'),
+      JSON.stringify({ scripts: { test: 'node oracle.cjs' } }),
+    );
+    await writeFile(
+      join(f.workspace, 'oracle.cjs'),
+      "require('node:assert/strict').equal(require('./app.cjs').answer,42)",
+    );
+    await writeFile(
+      join(f.workspace, '.circle/verification.json'),
+      JSON.stringify({
+        version: 1,
+        checks: [
+          {
+            criterion: 'answer equals 42',
+            script: 'test',
+            oraclePaths: ['oracle.cjs'],
+          },
+        ],
+      }),
+    );
+    execFileSync('git', [
+      '-C',
+      f.workspace,
+      'add',
+      'app.cjs',
+      'package.json',
+      'oracle.cjs',
+      '.circle/verification.json',
+    ]);
+    execFileSync('git', ['-C', f.workspace, 'commit', '-qm', 'Baseline']);
+    const remote = join(f.root, 'remote.git');
+    execFileSync('git', ['init', '--bare', '-q', remote]);
+    execFileSync('git', ['-C', f.workspace, 'remote', 'add', 'origin', remote]);
+    execFileSync('git', [
+      '-C',
+      f.workspace,
+      'push',
+      '-q',
+      '-u',
+      'origin',
+      'HEAD',
+    ]);
+    const ownerA = f.controller.snapshot().activeSessionId;
+    await f.call('new-session');
+    const ownerB = f.controller.snapshot().activeSessionId;
+    for (const owner of [ownerA, ownerB]) {
+      const created = await f.service(
+        'cycles',
+        'create',
+        {
+          id: 'same-cycle',
+          operationId: 'create-' + owner,
+          title: 'Implement answer',
+          body: 'Set app answer to42',
+          acceptanceCriteria: ['answer equals 42'],
+        },
+        owner,
       );
-      if (
-        [...final.values()].every(
-          (cycle) => cycle.state === 'pending_human_merge',
-        )
-      )
-        break;
-      await delay(30);
+      assert.equal(created.ok, true, created.error);
     }
-  } finally {
-    answering = false;
-    await approvalActor;
-  }
-  const passed =
-    final.size === 2 &&
-    [...final.entries()].every(
-      ([owner, cycle]) =>
-        cycle.state === 'pending_human_merge' &&
-        Date.parse(cycle.updatedAt) <= end &&
-        observedAt.get(owner)! <= end,
-    );
-  let failureReceipt: string | undefined;
-  if (!passed) {
-    const taskReply = await f.service('tasks', 'list', {}, ownerA);
-    const records = (taskReply.data ?? []) as any[];
-    const receipt = {
-      cycles: [...final.values()],
-      deadline: end,
-      finalObservations: Object.fromEntries(observedAt),
-      observedAt: Date.now(),
-      authoritativeAfterFailure: await Promise.all(
-        [ownerA, ownerB].map(async (owner) => ({
-          owner,
-          reply: await f.service(
-            'cycles',
-            'snapshot',
-            { id: 'same-cycle' },
+    const end = Date.now() + 30000;
+    const final = new Map<string, any>();
+    const observedAt = new Map<string, number>();
+    const timeline: unknown[] = [];
+    let answering = true;
+    // Human approval remains responsive while a cycle is doing Git/verification;
+    // awaiting an advance must not suspend the test's independent user actor.
+    const approvalActor = (async () => {
+      while (answering) {
+        for (const interaction of f.controller
+          .snapshot()
+          .interactions.filter((item) => item.status === 'pending')) {
+          await f.call(
+            'answer',
+            {
+              id: interaction.id,
+              revision: interaction.revision,
+              answer: 'approve',
+            },
+            interaction.sessionId,
+          );
+        }
+        await delay(10);
+      }
+    })();
+    try {
+      while (Date.now() < end) {
+        // Independent owner worktrees must advance concurrently. A slow B Git
+        // operation cannot prevent observing A's background delivery progress.
+        await Promise.all(
+          [ownerA, ownerB].map(async (owner) => {
+            const advanced = await f.service(
+              'cycles',
+              'advance',
+              { id: 'same-cycle' },
+              owner,
+            );
+            assert.equal(advanced.ok, true, advanced.error);
+            // The return value can predate background timer progress while the
+            // other owner was doing work. Read the authoritative ledger snapshot.
+            const observed = await f.service(
+              'cycles',
+              'snapshot',
+              { id: 'same-cycle' },
+              owner,
+            );
+            assert.equal(observed.ok, true, observed.error);
+            if (
+              JSON.stringify(final.get(owner)) !== JSON.stringify(observed.data)
+            )
+              timeline.push({ at: Date.now(), owner, cycle: observed.data });
+            final.set(owner, observed.data);
+            observedAt.set(owner, Date.now());
+          }),
+        );
+        if (
+          [...final.values()].every(
+            (cycle) => cycle.state === 'pending_human_merge',
+          )
+        )
+          break;
+        await delay(30);
+      }
+    } finally {
+      answering = false;
+      await approvalActor;
+    }
+    const passed =
+      final.size === 2 &&
+      [...final.entries()].every(
+        ([owner, cycle]) =>
+          cycle.state === 'pending_human_merge' &&
+          Date.parse(cycle.updatedAt) <= end &&
+          observedAt.get(owner)! <= end,
+      );
+    let failureReceipt: string | undefined;
+    if (!passed) {
+      const taskReply = await f.service('tasks', 'list', {}, ownerA);
+      const records = (taskReply.data ?? []) as any[];
+      const receipt = {
+        cliTranscript,
+        cycles: [...final.values()],
+        deadline: end,
+        finalObservations: Object.fromEntries(observedAt),
+        observedAt: Date.now(),
+        authoritativeAfterFailure: await Promise.all(
+          [ownerA, ownerB].map(async (owner) => ({
             owner,
-          ),
-        })),
-      ),
-      timeline,
-      tasks: await Promise.all(
-        records.map(async (task) => ({
-          ...task,
-          actualCandidate: task.worktree
-            ? await readFile(join(task.worktree, 'app.cjs'), 'utf8').catch(
-                (error) => String(error),
-              )
-            : undefined,
-        })),
-      ),
-      interactions: f.controller.snapshot().interactions,
-      modelRequestCount: f.model.requests.length,
-      events: f.events,
-    };
-    const directory = join(import.meta.dirname, '../artifacts/runtime');
-    await mkdir(directory, { recursive: true });
-    failureReceipt = join(
-      directory,
-      `controller-cycle-failure-${randomUUID()}.json`,
+            reply: await f.service(
+              'cycles',
+              'snapshot',
+              { id: 'same-cycle' },
+              owner,
+            ),
+          })),
+        ),
+        timeline,
+        tasks: await Promise.all(
+          records.map(async (task) => ({
+            ...task,
+            actualCandidate: task.worktree
+              ? await readFile(join(task.worktree, 'app.cjs'), 'utf8').catch(
+                  (error) => String(error),
+                )
+              : undefined,
+          })),
+        ),
+        interactions: f.controller.snapshot().interactions,
+        modelRequestCount: f.model.requests.length,
+        events: f.events,
+      };
+      const directory = join(import.meta.dirname, '../artifacts/runtime');
+      await mkdir(directory, { recursive: true });
+      failureReceipt = join(
+        directory,
+        `controller-cycle-failure-${randomUUID()}.json`,
+      );
+      await writeFile(failureReceipt, JSON.stringify(receipt, null, 2));
+    }
+    assert.deepEqual(
+      [...final.values()].map((cycle) => cycle.state),
+      ['pending_human_merge', 'pending_human_merge'],
+      JSON.stringify({ failureReceipt, cycles: [...final.values()] }),
     );
-    await writeFile(failureReceipt, JSON.stringify(receipt, null, 2));
+    assert.ok(
+      passed,
+      JSON.stringify({
+        failureReceipt,
+        deadline: end,
+        readyAt: [...final.values()].map((cycle) => cycle.updatedAt),
+      }),
+    );
+    const tasks = await f.service('tasks', 'list', {}, ownerA);
+    const owners = new Set(
+      (tasks.data as any[]).map((task) => task.spec.sessionId),
+    );
+    assert.ok(owners.has(ownerA) && owners.has(ownerB));
+    assert.ok(
+      (tasks.data as any[]).length >= 4,
+      'both cycles spawned independent repair tasks',
+    );
+    assert.equal(
+      await readFile(join(f.workspace, 'app.cjs'), 'utf8'),
+      'exports.answer=0;exports.readyForCI=false;',
+    );
+    const calls = await readFile(join(tools, 'calls'), 'utf8');
+    assert.ok(calls.includes('"ready"'));
+    assert.equal(calls.includes('"merge"'), false);
+    const commandRecords = calls
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    const ipcRecords = commandRecords.filter(
+      (record) => record.pid === fixtureProcess.pid,
+    );
+    assert.equal(
+      ipcRecords.length,
+      transports.length,
+      'each requested CLI action has a persisted child-process record',
+    );
+    for (const [index, record] of ipcRecords.entries()) {
+      assert.deepEqual(record.args, transports[index].args.slice(1));
+      assert.deepEqual(
+        record.argv.slice(2),
+        record.args,
+        'actual child argv tracks the current request',
+      );
+      assert.equal(
+        realpathSync.native(record.cwd),
+        realpathSync.native(transports[index].cwd),
+      );
+    }
+    assert.equal(
+      new Set(ipcRecords.map((record) => record.pid)).size,
+      1,
+      'one owned Node fixture process serves all CLI actions',
+    );
+    assert.equal(
+      ipcRecords.filter(
+        (record) => record.args[0] === 'pr' && record.args[1] === 'create',
+      ).length,
+      2,
+    );
+    assert.equal(
+      ipcRecords.filter(
+        (record) => record.args[0] === 'pr' && record.args[1] === 'ready',
+      ).length,
+      2,
+    );
+    assert.ok(
+      ipcRecords.some((record) => record.result.code !== 0),
+      'missing-PR CLI errors retain their real nonzero status',
+    );
+    const checkRecords = ipcRecords.filter(
+      (record) => record.args[0] === 'pr' && record.args[1] === 'checks',
+    );
+    assert.ok(
+      checkRecords.some((record) =>
+        JSON.parse(record.result.stdout).some(
+          (check: any) => check.bucket === 'fail',
+        ),
+      ),
+    );
+    assert.ok(
+      checkRecords.some((record) =>
+        JSON.parse(record.result.stdout).every(
+          (check: any) => check.bucket === 'pass',
+        ),
+      ),
+    );
+
+    assert.ok(transports.length > 0);
+    assert.ok(
+      transports.every(
+        (call) => call.file === process.execPath && call.args[0] === gh,
+      ),
+    );
+    assert.ok(
+      transports.every(
+        (call) =>
+          realpathSync.native(call.cwd) !== realpathSync.native(f.workspace),
+      ),
+      'CLI operates only in the owned integration worktrees',
+    );
+    assert.equal(
+      process.env.NODE_OPTIONS,
+      originalNodeOptions,
+      'fixture transport does not change global Node options',
+    );
+  } finally {
+    await f.controller.close();
+    await fixtureProcess.close();
+    assert.equal(
+      fixtureProcess.exited,
+      true,
+      'owned fixture process close is awaited',
+    );
   }
-  assert.deepEqual(
-    [...final.values()].map((cycle) => cycle.state),
-    ['pending_human_merge', 'pending_human_merge'],
-    JSON.stringify({ failureReceipt, cycles: [...final.values()] }),
-  );
-  assert.ok(
-    passed,
-    JSON.stringify({
-      failureReceipt,
-      deadline: end,
-      readyAt: [...final.values()].map((cycle) => cycle.updatedAt),
-    }),
-  );
-  const tasks = await f.service('tasks', 'list', {}, ownerA);
-  const owners = new Set(
-    (tasks.data as any[]).map((task) => task.spec.sessionId),
-  );
-  assert.ok(owners.has(ownerA) && owners.has(ownerB));
-  assert.ok(
-    (tasks.data as any[]).length >= 4,
-    'both cycles spawned independent repair tasks',
-  );
-  assert.equal(
-    await readFile(join(f.workspace, 'app.cjs'), 'utf8'),
-    'exports.answer=0;exports.readyForCI=false;',
-  );
-  const calls = await readFile(join(tools, 'calls'), 'utf8');
-  assert.ok(calls.includes('"ready"'));
-  assert.equal(calls.includes('"merge"'), false);
-  assert.ok(transports.length > 0);
-  assert.ok(
-    transports.every(
-      (call) => call.file === process.execPath && call.args[0] === gh,
-    ),
-  );
-  assert.ok(
-    transports.every(
-      (call) =>
-        realpathSync.native(call.cwd) !== realpathSync.native(f.workspace),
-    ),
-    'CLI operates only in the owned integration worktrees',
-  );
-  assert.equal(
-    process.env.NODE_OPTIONS,
-    originalNodeOptions,
-    'fixture transport does not change global Node options',
-  );
 });
 
 test('nested agent patch reports committed paths to the next model after a real competing disk write', async (t) => {
@@ -1556,14 +1710,37 @@ test('native controller mutations share a canonical root across actual filesyste
   const canonical = realpathSync.native(f.workspace);
   let alias: string;
   if (process.platform === 'win32') {
-    const command = `for %I in ("${canonical}") do @echo %~sI`;
+    // Call Windows' API directly: cmd/execFile's quote re-escaping can return
+    // literal \" characters rather than a filesystem path.
+    const script = `
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class CircleShortPath {
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  public static extern uint GetShortPathName(string path, StringBuilder buffer, uint length);
+}
+'@
+$buffer = New-Object System.Text.StringBuilder 32768
+$result = [CircleShortPath]::GetShortPathName($env:CIRCLE_TEST_ALIAS_PATH, $buffer, $buffer.Capacity)
+if ($result -eq 0 -or $result -ge $buffer.Capacity) { throw "GetShortPathName failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())" }
+[Console]::WriteLine($buffer.ToString())
+`;
     alias = execFileSync(
-      process.env.ComSpec ?? 'cmd.exe',
-      ['/d', '/c', command],
-      { encoding: 'utf8' },
-    )
-      .trim()
-      .replace(/^"(.*)"$/s, '$1');
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-EncodedCommand',
+        Buffer.from(script, 'utf16le').toString('base64'),
+      ],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, CIRCLE_TEST_ALIAS_PATH: canonical },
+      },
+    ).trim();
     assert.ok(
       alias && realpathSync.native(alias) === canonical,
       'Windows short name must resolve to the exact granted directory',

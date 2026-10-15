@@ -249,7 +249,10 @@ test('the screenshot tool asks first, takes the front window of the app it names
     '42',
   ]);
   const result = model.requests[3]!.messages.at(-1)!;
-  const folder = join(projectDataDir(root, root), 'screenshots');
+  const folder = join(
+    projectDataDir(root, runtime.options.home),
+    'screenshots',
+  );
   const saved = readdirSync(folder);
   assert.equal(saved.length, 1);
   assert.equal(calls[1]!.at(-1), join(folder, saved[0]!));

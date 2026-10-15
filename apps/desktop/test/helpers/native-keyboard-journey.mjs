@@ -53,12 +53,34 @@ export async function runNativeKeyboardJourney({
     await message.evaluate((node) => [node.selectionStart, node.selectionEnd]),
     [3, 10],
   );
+  // The parent journey can arrive in either layout. Compare a roundtrip
+  // between identical task-layout geometries, not two differently wrapped panes.
+  await page.getByRole('button', { name: 'task layout', exact: true }).click();
   const transcript = page.locator('.transcript');
+  const geometry = () =>
+    transcript.evaluate(async (node) => {
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      );
+      return {
+        top: node.scrollTop,
+        max: Math.max(0, node.scrollHeight - node.clientHeight),
+        clientHeight: node.clientHeight,
+        scrollHeight: node.scrollHeight,
+        layout: document
+          .querySelector('.developer-workbench')
+          ?.getAttribute('data-layout'),
+      };
+    });
+  await geometry();
   await transcript.evaluate(
     (node) =>
-      (node.scrollTop = Math.min(120, node.scrollHeight - node.clientHeight)),
+      (node.scrollTop = Math.min(
+        120,
+        Math.max(0, node.scrollHeight - node.clientHeight),
+      )),
   );
-  const scrollBefore = await transcript.evaluate((node) => node.scrollTop);
+  const before = await geometry();
   await page
     .getByRole('button', { name: 'developer layout', exact: true })
     .click();
@@ -68,10 +90,13 @@ export async function runNativeKeyboardJourney({
     await message.evaluate((node) => [node.selectionStart, node.selectionEnd]),
     [3, 10],
   );
+  const after = await geometry();
+  assert.equal(before.layout, 'task');
+  assert.equal(after.layout, 'task');
   assert.ok(
-    Math.abs(
-      (await transcript.evaluate((node) => node.scrollTop)) - scrollBefore,
-    ) <= 2,
+    Math.abs(after.top - before.top) <= 2,
+    'same-layout transcript position changed: ' +
+      JSON.stringify({ before, after }),
   );
   checks?.push(
     'native quick-open keyboard, palette Escape focus, and layout draft/selection/scroll retention',

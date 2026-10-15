@@ -17,6 +17,7 @@ export async function runNativeEditorSemantics({
   workspace,
   sessionId,
   output,
+  assertDevToolsClosed,
 }) {
   const checks = [];
   const observed = {};
@@ -50,6 +51,13 @@ export async function runNativeEditorSemantics({
     throw Error(label);
   };
   try {
+    if (process.platform === 'linux')
+      assert.equal(
+        typeof assertDevToolsClosed,
+        'function',
+        'Linux native journey must inspect actual Electron DevTools state',
+      );
+    await assertDevToolsClosed?.();
     const refs = await call('references', { path: file, line: 1, column: 8 });
     observed.references = refs;
     assert(refs.some((r) => r.path === file && r.range.startLineNumber === 1));
@@ -104,6 +112,7 @@ export async function runNativeEditorSemantics({
     );
     // Monaco binds document format differently on Linux.
     await page.keyboard.press(nativeEditorFormatShortcut());
+    await assertDevToolsClosed?.();
     await until(
       async () =>
         (await lines.textContent())
@@ -111,6 +120,7 @@ export async function runNativeEditorSemantics({
           .includes('value = 2'),
       'format shortcut applies real language edits',
     );
+    await assertDevToolsClosed?.();
     await page.keyboard.press(`${modifier}+s`);
     await until(
       async () =>

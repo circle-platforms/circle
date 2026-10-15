@@ -8,6 +8,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   runtimeTestArguments,
+  runtimeTestGroups,
+  runRuntimeTestGroups,
   orderRuntimeTestFiles,
   WINDOWS_NATIVE_TEST_PRIORITY,
 } from '../scripts/runtime-test-options.mjs';
@@ -100,5 +102,87 @@ test('Windows native priority retains each discovered file exactly once and leav
   assert.throws(
     () => orderRuntimeTestFiles(['same.test.ts', 'same.test.ts'], 'win32'),
     /duplicate/,
+  );
+});
+
+test('Windows priority child completes before remaining children start and all files run once despite failure', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'circle-runtime-stages-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const events = join(directory, 'events.jsonl');
+  const names = [
+    'aaa-first.test.mjs',
+    'workspace-terminal-windows.test.ts',
+    'zzz-last.test.mjs',
+  ];
+  const files = await Promise.all(
+    names.map(async (name, index) => {
+      const file = join(directory, name);
+      await writeFile(
+        file,
+        `import test from 'node:test';import assert from 'node:assert/strict';import {appendFileSync} from 'node:fs';import {setTimeout} from 'node:timers/promises';test('stage-${index}',async()=>{const record=event=>appendFileSync(${JSON.stringify(events)},JSON.stringify({event,id:${index}})+'\\n');record('start');try{await setTimeout(80);${index === 1 ? 'assert.fail("intentional priority failure");' : ''}}finally{record('end')}});`,
+      );
+      return file;
+    }),
+  );
+  const groups = runtimeTestGroups(files, 'win32');
+  assert.deepEqual(
+    groups.map((group) => group.name),
+    ['windows-native', 'remaining'],
+  );
+  assert.deepEqual(
+    groups.flatMap((group) => group.files).sort(),
+    [...files].sort(),
+  );
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  const receiptDirectory = join(directory, 'receipts');
+  const result = runRuntimeTestGroups({
+    executable: process.execPath,
+    tsxPath: tsx,
+    groups,
+    env,
+    ci: true,
+    receiptDirectory,
+    stdio: 'pipe',
+  });
+  assert.equal(result.exitCode, 1);
+  assert.deepEqual(
+    result.receipts.map((receipt) => receipt.status),
+    ['failed', 'passed'],
+  );
+  const entries = (await readFile(events, 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as { id: number; event: string });
+  assert.deepEqual(entries.slice(0, 2), [
+    { event: 'start', id: 1 },
+    { event: 'end', id: 1 },
+  ]);
+  for (const id of [0, 1, 2]) {
+    assert.equal(
+      entries.filter((entry) => entry.id === id && entry.event === 'start')
+        .length,
+      1,
+    );
+    assert.equal(
+      entries.filter((entry) => entry.id === id && entry.event === 'end')
+        .length,
+      1,
+    );
+  }
+  assert.equal(
+    JSON.parse(
+      await readFile(
+        join(receiptDirectory, 'stage-1-windows-native.json'),
+        'utf8',
+      ),
+    ).status,
+    'failed',
+  );
+  assert.equal(
+    JSON.parse(
+      await readFile(join(receiptDirectory, 'stage-2-remaining.json'), 'utf8'),
+    ).status,
+    'passed',
   );
 });

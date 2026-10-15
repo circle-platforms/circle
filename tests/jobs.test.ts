@@ -65,7 +65,7 @@ test('background shells retain complete ordered output, UTF-8 bytes, exit codes 
   assert.equal(jobs.get(job.id)!.exitCode, 7);
   assert.equal(
     sandbox.resolvePath(job.virtualPath),
-    realpathSync(job.outputPath),
+    realpathSync.native(job.outputPath),
   );
   const output = readFileSync(job.outputPath, 'utf8');
   assert.ok(output.startsWith('first\nsecond\n中文🙂\n'));

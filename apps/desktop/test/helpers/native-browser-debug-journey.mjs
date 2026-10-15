@@ -108,6 +108,16 @@ export async function runNativeBrowserDebugJourney({
     await page.screenshot({
       path: join(output, 'browser-gui-breakpoint-locals-source.png'),
     });
+    // Source navigation replaces the inspector; reopen the existing browser target.
+    await page
+      .getByRole('button', { name: 'browser panel', exact: true })
+      .click();
+    await page
+      .getByRole('button', { name: 'page diagnostics', exact: true })
+      .click();
+    await panel
+      .getByRole('tab', { name: 'page debugger', exact: true })
+      .click();
     await panel.getByRole('button', { name: 'resume', exact: true }).click();
     await until(
       async () =>

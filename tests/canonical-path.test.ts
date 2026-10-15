@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { test } from 'node:test';
 import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { realpath } from 'node:fs/promises';
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { join, resolve } from 'node:path';
 import {
@@ -135,11 +135,16 @@ test(
     mkdirSync(workspace);
     writeFileSync(join(workspace, 'source.txt'), 'source');
     const canonical = await realpath(workspace);
-    const short = execFileSync(
+    const command = spawnSync(
       'cmd.exe',
       ['/d', '/c', `for %I in ("${workspace}") do @echo %~sI`],
-      { encoding: 'utf8' },
-    ).trim();
+      // cmd parses the command itself. Node's generic argument escaping would
+      // otherwise pass literal backslash-escaped quotes to the FOR variable.
+      { encoding: 'utf8', windowsVerbatimArguments: true },
+    );
+    assert.ifError(command.error);
+    assert.equal(command.status, 0, command.stderr);
+    const short = command.stdout.trim();
     assert.equal(realpathSync.native(short), canonical);
     assert.equal(normalizeWorkspace(short), canonical);
     assert.equal(normalizeWorkspace(workspace), canonical);

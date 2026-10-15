@@ -18,6 +18,19 @@ await git.git(['add', 'baseline.txt']);
 await git.git(['commit', '-m', 'Create baseline']);
 await writeFile(join(repo, 'first.txt'), 'first change');
 const requests = [];
+const gates = [];
+const deferStatus = () => {
+  let release, entered;
+  const promise = new Promise((resolve) => {
+    release = resolve;
+  });
+  const seen = new Promise((resolve) => {
+    entered = resolve;
+  });
+  const gate = { release, entered, promise, seen };
+  gates.push(gate);
+  return gate;
+};
 const server = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
   server: { host: '127.0.0.1', port: 0 },
@@ -34,7 +47,13 @@ const server = await createServer({
           try {
             const p = command.payload;
             if (p.service !== 'git') throw Error('only git allowed');
+            const gate = p.method === 'status' ? gates.shift() : undefined;
             const data = await git.call(p.method, p.params);
+            if (gate) {
+              gate.entered();
+              await gate.promise;
+              if (gate.error) throw Error(gate.error);
+            }
             res.end(JSON.stringify({ ok: true, data }));
           } catch (error) {
             res.end(JSON.stringify({ ok: false, error: String(error) }));
@@ -68,6 +87,66 @@ try {
     name: 'commit message',
     exact: true,
   });
+  const panel = page.locator('.native-git');
+  const refresh = panel
+    .getByRole('button', { name: 'refresh', exact: true })
+    .first();
+  await page
+    .getByRole('checkbox', { name: 'first.txt', exact: true })
+    .waitFor();
+  await git.git(['switch', '-c', 'codex/deferred']);
+  const delayed = deferStatus();
+  await refresh.click();
+  await delayed.seen;
+  assert.equal(await panel.getAttribute('aria-busy'), 'true');
+  assert.equal(await refresh.isDisabled(), true);
+  assert.equal(await panel.getByRole('status').count(), 1);
+  assert.notEqual(await panel.getAttribute('data-branch'), 'codex/deferred');
+  delayed.release();
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.native-git')?.getAttribute('data-branch') ===
+        'codex/deferred' &&
+      document.querySelector('.native-git')?.getAttribute('aria-busy') ===
+        'false',
+  );
+  const oldSession = deferStatus();
+  await refresh.click();
+  await oldSession.seen;
+  await git.git(['switch', '-c', 'codex/current']);
+  const newSession = deferStatus();
+  await page.evaluate(() => window.__gitSetSession('current'));
+  await newSession.seen;
+  oldSession.release();
+  await page.waitForTimeout(50);
+  assert.equal(
+    await panel.getAttribute('aria-busy'),
+    'true',
+    'old completion cannot clear newer busy',
+  );
+  newSession.release();
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.native-git')?.getAttribute('data-branch') ===
+        'codex/current' &&
+      document.querySelector('.native-git')?.getAttribute('aria-busy') ===
+        'false',
+  );
+  const failedRefresh = deferStatus();
+  failedRefresh.error = 'fixture refresh failed';
+  await refresh.click();
+  await failedRefresh.seen;
+  failedRefresh.release();
+  await page
+    .getByRole('alert')
+    .filter({ hasText: 'fixture refresh failed' })
+    .waitFor();
+  assert.equal(await refresh.isEnabled(), true);
+  await refresh.click();
+  await page.getByRole('alert').waitFor({ state: 'detached' });
+  console.log(
+    'deferred refresh exposes busy/errors and drops stale session snapshots',
+  );
   await page.getByRole('checkbox', { name: 'first.txt', exact: true }).check();
   await stage.click();
   await message.fill('First UI commit');

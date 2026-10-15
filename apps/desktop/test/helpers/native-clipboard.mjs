@@ -7,23 +7,27 @@ export async function preserveNativeClipboard(app) {
     // Electron 44 read() items are not writable instances. Materialize all
     // formats before changing the system clipboard, then construct fresh items.
     const items = await Promise.all(
-      (await clipboard.read()).map(
-        async (item) =>
-          new ClipboardItem(
-            Object.fromEntries(
-              await Promise.all(
-                item.types.map(async (type) => [
-                  // macOS standard HTML writes prepend a new meta tag. The
-                  // raw native format restores the original blob unchanged.
-                  process.platform === 'darwin' && type === 'text/html'
-                    ? 'electron application/osclipboard;format="public.html"'
-                    : type,
-                  await item.getType(type),
-                ]),
+      // An empty native pasteboard may read as one item with no MIME types.
+      // It has no payload to restore; ClipboardItem({}) is invalid in Electron.
+      (await clipboard.read())
+        .filter((item) => item.types.length > 0)
+        .map(
+          async (item) =>
+            new ClipboardItem(
+              Object.fromEntries(
+                await Promise.all(
+                  item.types.map(async (type) => [
+                    // macOS standard HTML writes prepend a new meta tag. The
+                    // raw native format restores the original blob unchanged.
+                    process.platform === 'darwin' && type === 'text/html'
+                      ? 'electron application/osclipboard;format="public.html"'
+                      : type,
+                    await item.getType(type),
+                  ]),
+                ),
               ),
             ),
-          ),
-      ),
+        ),
     );
     snapshots.set(key, items);
   }, key);

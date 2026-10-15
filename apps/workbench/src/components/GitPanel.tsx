@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { workspaceCall } from '../model/workspace-client';
 import { t } from '../i18n';
 import './GitPanel.css';
@@ -35,69 +35,102 @@ export function GitPanel({
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const refresh = async () => {
-    const next = await workspaceCall<GitSnapshot>(sessionId, 'git', 'status');
+  const generation = useRef(0);
+  const owner = useRef(sessionId);
+  if (owner.current !== sessionId) {
+    owner.current = sessionId;
+    generation.current++;
+  }
+  const current = (request: number, session: string) =>
+    request === generation.current && owner.current === session;
+  const begin = () => {
+    const request = ++generation.current;
+    setBusy(true);
+    setError('');
+    return request;
+  };
+  const applySnapshot = (next: GitSnapshot, method?: string) => {
     setState(next);
     const visible = new Set(next.entries.map((entry) => entry.path));
-    setSelected((current) => current.filter((path) => visible.has(path)));
-    return next;
+    setSelected((selection) =>
+      method === 'commit' ? [] : selection.filter((path) => visible.has(path)),
+    );
+  };
+  const refresh = async () => {
+    const request = begin(),
+      session = sessionId;
+    try {
+      const next = await workspaceCall<GitSnapshot>(session, 'git', 'status');
+      if (current(request, session)) applySnapshot(next);
+    } catch (e) {
+      if (current(request, session)) setError(String(e));
+    } finally {
+      if (current(request, session)) setBusy(false);
+    }
   };
   useEffect(() => {
     setState(null);
     setSelected([]);
     setDiff('');
-    refresh().catch((e) => setError(String(e)));
+    void refresh();
+    return () => {
+      generation.current++;
+    };
   }, [sessionId]);
   async function run(method: string, extra: Record<string, unknown> = {}) {
-    setBusy(true);
-    setError('');
+    const request = begin(),
+      session = sessionId;
     try {
-      const next = await workspaceCall<GitSnapshot>(sessionId, 'git', method, {
+      const next = await workspaceCall<GitSnapshot>(session, 'git', method, {
         revision: state?.revision,
         paths: selected,
         ...extra,
       });
-      setState(next);
-      const visible = new Set(next.entries.map((entry) => entry.path));
-      setSelected((current) =>
-        method === 'commit' ? [] : current.filter((path) => visible.has(path)),
-      );
-      setDiff('');
+      if (current(request, session)) {
+        applySnapshot(next, method);
+        setDiff('');
+      }
     } catch (e) {
-      setError(String(e));
-      await refresh().catch(() => {});
+      if (current(request, session)) setError(String(e));
+      try {
+        const next = await workspaceCall<GitSnapshot>(session, 'git', 'status');
+        if (current(request, session)) applySnapshot(next);
+      } catch {
+        /* Retain the action error if refreshing its result also fails. */
+      }
     } finally {
-      setBusy(false);
+      if (current(request, session)) setBusy(false);
     }
   }
   async function showDiff(nextScope: string, paths = selected) {
+    const request = begin(),
+      session = sessionId;
     setScope(nextScope);
-    setError('');
     try {
-      const r = await workspaceCall<{ text: string }>(
-        sessionId,
-        'git',
-        'diff',
-        {
-          scope: nextScope,
-          paths: paths.length ? paths : undefined,
-          base,
-        },
-      );
-      setDiff(r.text);
+      const r = await workspaceCall<{ text: string }>(session, 'git', 'diff', {
+        scope: nextScope,
+        paths: paths.length ? paths : undefined,
+        base,
+      });
+      if (current(request, session)) setDiff(r.text);
     } catch (e) {
-      setError(String(e));
+      if (current(request, session)) setError(String(e));
+    } finally {
+      if (current(request, session)) setBusy(false);
     }
   }
   return (
-    <section className="native-git" aria-label={t('git workspace')}>
+    <section
+      className="native-git"
+      aria-label={t('git workspace')}
+      aria-busy={busy}
+      data-revision={state?.revision}
+      data-branch={state?.branch}
+    >
       <header>
         <strong>{t('git workspace')}</strong>
         <span>{state?.branch}</span>
-        <button
-          disabled={busy}
-          onClick={() => refresh().catch((e) => setError(String(e)))}
-        >
+        <button disabled={busy} onClick={() => void refresh()}>
           {t('refresh')}
         </button>
       </header>
@@ -115,6 +148,7 @@ export function GitPanel({
         {(['working', 'index', 'branch'] as const).map((s) => (
           <button
             key={s}
+            disabled={busy}
             aria-pressed={scope === s}
             onClick={() => showDiff(s)}
           >

@@ -427,14 +427,18 @@ test('the folder is the first word without spaces or the last word, and -p takes
   const last = await circle(home, ['what is here', workspace]);
   assert.equal(last.code, 0, last.stderr);
   assert.equal(userText(endpoint.bodies[0]!), 'what is here');
-  assert.ok(systemText(endpoint.bodies[0]!).includes(workspace));
+  assert.ok(
+    systemText(endpoint.bodies[0]!).includes(realpathSync.native(workspace)),
+  );
   // -p before a folder is a flag; the prompt is piped in.
   const piped = await circle(home, ['-p', workspace], {
     stdin: 'piped prompt\n',
   });
   assert.equal(piped.code, 0, piped.stderr);
   assert.equal(userText(endpoint.bodies[1]!), 'piped prompt');
-  assert.ok(systemText(endpoint.bodies[1]!).includes(workspace));
+  assert.ok(
+    systemText(endpoint.bodies[1]!).includes(realpathSync.native(workspace)),
+  );
   // One word without spaces is a folder, so a typo is an error, not a message.
   const typo = await circle(home, ['-p', 'question', 'no-such-folder'], {
     cwd: workspace,
@@ -525,16 +529,16 @@ test('parsing: -n collapses spaces and cuts to 80, @files are kept apart, a fold
     options.run.session_name,
     ('a long title ' + 'x'.repeat(100)).slice(0, 80),
   );
-  assert.equal(options.workspace, workspace);
+  assert.equal(options.workspace, realpathSync.native(workspace));
   assert.deepEqual(options.prompts, ['review this']);
   assert.deepEqual(options.files, ['src/app.ts']);
   // -p as a flag: the first word after the options is the prompt, the second the folder.
   const flag = parseCli(['-p', '-c', 'what changed?', workspace]);
   assert.deepEqual(flag.prompts, ['what changed?']);
-  assert.equal(flag.workspace, workspace);
+  assert.equal(flag.workspace, realpathSync.native(workspace));
   // A single word is the folder even when it does not exist.
   const typo = parseCli(['--line', 'hello'], workspace);
-  assert.equal(typo.workspace, join(workspace, 'hello'));
+  assert.equal(typo.workspace, join(realpathSync.native(workspace), 'hello'));
   assert.deepEqual(typo.prompts, []);
 });
 
@@ -772,8 +776,12 @@ test('the trust question asked line by line saves the folder, and no keeps it un
   assert.match(no.shown, /Not trusted\./);
   assert.deepEqual(loadSettings(home).trusted_folders, []);
   const yes = await answer('yes\n');
-  assert.deepEqual(yes.result?.trusted_folders, [workspace]);
-  assert.deepEqual(loadSettings(home).trusted_folders, [workspace]);
+  assert.deepEqual(yes.result?.trusted_folders, [
+    realpathSync.native(workspace),
+  ]);
+  assert.deepEqual(loadSettings(home).trusted_folders, [
+    realpathSync.native(workspace),
+  ]);
 });
 
 test('line setup keeps the saved key only on the saved host; another host needs its own key', async (t) => {
