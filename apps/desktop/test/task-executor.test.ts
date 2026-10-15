@@ -37,6 +37,7 @@ async function git(path: string, ...args: string[]): Promise<string> {
 }
 async function repository(path: string): Promise<string> {
   await git(path, 'init', '--initial-branch=main');
+  await git(path, 'config', 'core.autocrlf', 'false');
   await writeFile(join(path, 'value.txt'), 'base\n');
   await git(path, 'add', 'value.txt');
   await git(
@@ -642,36 +643,59 @@ test('integration applies verified bytes from stdin and prevents concurrent stag
     identity: { name: 'Fixture', email: 'fixture@example.invalid' },
   });
   const workspace = await integrator.create(baseline);
-  const originalPath = process.env.PATH;
-  const realGit = (
-    await exec('/usr/bin/which', ['git'], { encoding: 'utf8' })
-  ).stdout.trim();
   const patchPath = (tasks[0]!.result as { changes: { patchPath: string } })
     .changes.patchPath;
   const stageResult = join(data, 'concurrent-stage.txt');
-  const script = `#!${process.execPath}\nconst {spawnSync}=require('node:child_process');const fs=require('node:fs');const args=process.argv.slice(2);if(args.includes('apply')){fs.writeFileSync(${JSON.stringify(patchPath)},'tampered after hash');fs.writeFileSync(${JSON.stringify(join(workspace.path, 'unrelated.txt'))},'human concurrent file');const stageEnv={...process.env};delete stageEnv.GIT_INDEX_FILE;const stage=spawnSync(${JSON.stringify(realGit)},['-C',${JSON.stringify(workspace.path)},'add','--','unrelated.txt'],{encoding:'utf8',env:stageEnv});fs.writeFileSync(${JSON.stringify(stageResult)},String(stage.status));}const result=spawnSync(${JSON.stringify(realGit)},args,{stdio:'inherit'});process.exit(result.status??1);\n`;
-  await writeFile(join(shim, 'git'), script, { mode: 0o700 });
-  process.env.PATH = shim + ':' + originalPath;
-  try {
-    const result = await integrator.mergeCandidates(workspace.id, tasks, {
-      expectedHead: baseline,
-    });
-    assert.equal(result.status, 'merged', result.reason);
-    assert.equal(
-      await readFile(join(workspace.path, 'a.txt'), 'utf8'),
-      'verified',
-    );
-    assert.equal(await readFile(patchPath, 'utf8'), 'tampered after hash');
-    assert.notEqual(await readFile(stageResult, 'utf8'), '0');
-    await assert.rejects(git(workspace.path, 'show', 'HEAD:unrelated.txt'));
-    assert.equal(
-      await readFile(join(workspace.path, 'unrelated.txt'), 'utf8'),
-      'human concurrent file',
-    );
-    assert.equal(await git(repo, 'rev-parse', 'HEAD'), baseline);
-  } finally {
-    process.env.PATH = originalPath;
-  }
+  // A fresh Node child installs its interception before loading the real merger.
+  // This preserves actual Git processes/stdin/index locks on Windows and POSIX,
+  // without executable shebangs, global PATH changes or production test hooks.
+  const script = `
+import cp from 'node:child_process';
+import fs from 'node:fs';
+import {syncBuiltinESMExports} from 'node:module';
+const original=cp.spawn;
+cp.spawn=function(file,args,options){
+ if(file==='git'&&args.includes('apply')){
+  fs.writeFileSync(${JSON.stringify(patchPath)},'tampered after hash');
+  fs.writeFileSync(${JSON.stringify(join(workspace.path, 'unrelated.txt'))},'human concurrent file');
+  const env={...process.env};delete env.GIT_INDEX_FILE;
+  const stage=cp.spawnSync('git',['-C',${JSON.stringify(workspace.path)},'add','--','unrelated.txt'],{encoding:'utf8',env});
+  fs.writeFileSync(${JSON.stringify(stageResult)},String(stage.status));
+ }
+ return original.call(this,file,args,options);
+};
+syncBuiltinESMExports();
+const {TaskIntegrator}=await import(${JSON.stringify(new URL('../src/workspace/task-merge.ts', import.meta.url).href)});
+const integrator=new TaskIntegrator(${JSON.stringify({ workspace: repo, dataDir: data, identity: { name: 'Fixture', email: 'fixture@example.invalid' } })});
+const result=await integrator.mergeCandidates(${JSON.stringify(workspace.id)},${JSON.stringify(tasks)},{expectedHead:${JSON.stringify(baseline)}});
+process.stdout.write(JSON.stringify(result));
+`;
+  const childFile = join(shim, 'merge-race.mjs');
+  await writeFile(childFile, script);
+  const child = await exec(
+    process.execPath,
+    [
+      '--import',
+      new URL('../../../node_modules/tsx/dist/loader.mjs', import.meta.url)
+        .href,
+      childFile,
+    ],
+    { encoding: 'utf8' },
+  );
+  const result = JSON.parse(child.stdout);
+  assert.equal(result.status, 'merged', result.reason);
+  assert.equal(
+    await readFile(join(workspace.path, 'a.txt'), 'utf8'),
+    'verified',
+  );
+  assert.equal(await readFile(patchPath, 'utf8'), 'tampered after hash');
+  assert.notEqual(await readFile(stageResult, 'utf8'), '0');
+  await assert.rejects(git(workspace.path, 'show', 'HEAD:unrelated.txt'));
+  assert.equal(
+    await readFile(join(workspace.path, 'unrelated.txt'), 'utf8'),
+    'human concurrent file',
+  );
+  assert.equal(await git(repo, 'rev-parse', 'HEAD'), baseline);
 });
 
 test('task runtime cannot inherit parent-only native task tools through a mistaken factory', async (t) => {

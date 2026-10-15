@@ -1,14 +1,80 @@
-import test from 'node:test';
+import nodeTest from 'node:test';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, readFile, rm, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { GitWorkspaceService } from '../src/workspace/git.ts';
+// CI may buffer a later test file's TAP behind another file. A separate journal
+// records actual entry, each Git completion and cleanup without changing limits.
+const progressPath =
+  process.env.CIRCLE_GIT_TEST_PROGRESS ??
+  (process.env.CI && process.platform === 'win32'
+    ? fileURLToPath(
+        new URL(
+          `../artifacts/runtime/git-progress-${process.pid}.jsonl`,
+          import.meta.url,
+        ),
+      )
+    : undefined);
+const pendingGit = new Map<number, string>();
+let commandId = 0;
+function progress(event: string, details: Record<string, unknown> = {}) {
+  if (!progressPath) return;
+  mkdirSync(path.dirname(progressPath), { recursive: true });
+  appendFileSync(
+    progressPath,
+    JSON.stringify({
+      at: new Date().toISOString(),
+      pid: process.pid,
+      event,
+      ...details,
+    }) + '\n',
+  );
+}
+const test = (name: string, run: () => Promise<void>) =>
+  nodeTest(name, async () => {
+    progress('test-start', { name });
+    try {
+      await run();
+    } finally {
+      progress('test-cleanup-complete', {
+        name,
+        pending: [...pendingGit.values()],
+        resources: process.getActiveResourcesInfo(),
+      });
+    }
+  });
+class ObservedGit extends GitWorkspaceService {
+  override async git(args: string[], input?: string) {
+    const id = ++commandId,
+      command = args[0];
+    pendingGit.set(id, command ?? 'unknown');
+    progress('git-start', { id, command });
+    try {
+      const result = await super.git(args, input);
+      progress('git-close', { id, command });
+      return result;
+    } catch (error) {
+      progress('git-error', {
+        id,
+        command,
+        code: (error as NodeJS.ErrnoException).code,
+      });
+      throw error;
+    } finally {
+      pendingGit.delete(id);
+    }
+  }
+}
+
 test('explicit staging, partial patch, stale revision and selected commits', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'circle-git-'));
-  const service = new GitWorkspaceService(root);
+  const service = new ObservedGit(root);
   try {
     await service.git(['init']);
+    await service.git(['config', 'core.autocrlf', 'false']);
     await service.git(['config', 'user.name', 'Test']);
     await service.git(['config', 'user.email', 'test@example.invalid']);
     await writeFile(path.join(root, 'a.txt'), 'one\ntwo\n');
@@ -53,9 +119,10 @@ test('explicit staging, partial patch, stale revision and selected commits', asy
 });
 test('merge conflict is resolved and continued through service', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'circle-conflict-'));
-  const s = new GitWorkspaceService(root);
+  const s = new ObservedGit(root);
   try {
     await s.git(['init', '-b', 'main']);
+    await s.git(['config', 'core.autocrlf', 'false']);
     await s.git(['config', 'user.name', 'Test']);
     await s.git(['config', 'user.email', 'test@example.invalid']);
     await writeFile(path.join(root, 'a'), 'base\n');
@@ -88,9 +155,10 @@ test('merge conflict is resolved and continued through service', async () => {
 });
 test('literal filenames and one hunk preserve other unstaged edits', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'circle-hunk-'));
-  const s = new GitWorkspaceService(root);
+  const s = new ObservedGit(root);
   try {
     await s.git(['init']);
+    await s.git(['config', 'core.autocrlf', 'false']);
     await s.git(['config', 'user.name', 'Test']);
     await s.git(['config', 'user.email', 'test@example.invalid']);
     const lines = Array.from({ length: 30 }, (_, i) => `line ${i}`);
@@ -129,13 +197,17 @@ test('literal filenames and one hunk preserve other unstaged edits', async () =>
       revision: (await s.snapshot()).revision,
       paths: ['file'],
     });
-    await writeFile(path.join(root, '*'), 'literal');
+    const literal = process.platform === 'win32' ? '[literal]' : '*';
+    await writeFile(path.join(root, literal), 'literal');
     await writeFile(path.join(root, 'other'), 'private');
     await s.call('stage', {
       revision: (await s.snapshot()).revision,
-      paths: ['*'],
+      paths: [literal],
     });
-    assert.equal(await s.git(['diff', '--cached', '--name-only']), '*\n');
+    assert.equal(
+      await s.git(['diff', '--cached', '--name-only']),
+      literal + '\n',
+    );
     await assert.rejects(
       s.call('stage', {
         revision: (await s.snapshot()).revision,
@@ -149,12 +221,13 @@ test('literal filenames and one hunk preserve other unstaged edits', async () =>
 });
 test('trusted constructor identity signs commits while renderer identity overrides are ignored', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'circle-git-identity-'));
-  const s = new GitWorkspaceService(root, {
+  const s = new ObservedGit(root, {
     identity: { name: 'Trusted Maintainer', email: 'trusted@example.invalid' },
     signoff: true,
   });
   try {
     await s.git(['init']);
+    await s.git(['config', 'core.autocrlf', 'false']);
     await s.git(['config', 'user.name', 'Original']);
     await s.git(['config', 'user.email', 'original@example.invalid']);
     await writeFile(path.join(root, 'feature'), 'verified');
@@ -184,7 +257,7 @@ test('trusted constructor identity signs commits while renderer identity overrid
       (await s.git(['config', 'user.email'])).trim(),
       'original@example.invalid',
     );
-    const manual = new GitWorkspaceService(root);
+    const manual = new ObservedGit(root);
     await writeFile(path.join(root, 'feature'), 'manual change');
     await manual.call('stage', {
       revision: (await manual.snapshot()).revision,
@@ -213,9 +286,10 @@ test('same-head branch changes and origin push destination changes invalidate ol
   const root = await mkdtemp(path.join(tmpdir(), 'circle-git-base-'));
   const remoteA = await mkdtemp(path.join(tmpdir(), 'circle-git-remote-a-'));
   const remoteB = await mkdtemp(path.join(tmpdir(), 'circle-git-remote-b-'));
-  const s = new GitWorkspaceService(root);
+  const s = new ObservedGit(root);
   try {
     await s.git(['init', '-b', 'codex/a']);
+    await s.git(['config', 'core.autocrlf', 'false']);
     await s.git(['config', 'user.name', 'Test']);
     await s.git(['config', 'user.email', 'test@example.invalid']);
     await writeFile(path.join(root, 'feature'), 'base');
@@ -273,9 +347,10 @@ test('same-head branch changes and origin push destination changes invalidate ol
 
 test('read-only refresh preserves index bytes and required write locks', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'circle-git-read-lock-'));
-  const s = new GitWorkspaceService(root);
+  const s = new ObservedGit(root);
   try {
     await s.git(['init', '-b', 'codex/a']);
+    await s.git(['config', 'core.autocrlf', 'false']);
     await s.git(['config', 'user.name', 'Test']);
     await s.git(['config', 'user.email', 'test@example.invalid']);
     for (let i = 0; i < 40; i++)
