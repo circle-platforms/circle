@@ -29,6 +29,11 @@ import {
   relative,
   resolve,
 } from 'node:path';
+import {
+  readWindowsQueryMarkers,
+  windowsProcessQuery,
+  WindowsProcessQueryObservation,
+} from './windows_process_query.js';
 
 export interface InstallerCopy {
   kind: 'installer';
@@ -307,6 +312,9 @@ export function runningCopies(
   where: Surroundings,
   run: Run = runCommand,
   opened: (path: string) => string | undefined = openError,
+  report: (summary: string) => void = (summary) => {
+    process.stderr.write(`[circle-install] ${summary}\n`);
+  },
 ): number[] {
   const pids = new Set<number>();
   const folders = copies.flatMap((copy) =>
@@ -363,14 +371,10 @@ export function runningCopies(
           programs.map((path) => basename(path).replace(/\.exe$/i, '')),
         ),
       ];
-      const encodedNames = Buffer.from(JSON.stringify(names), 'utf8').toString(
-        'base64',
-      );
       // Query the native process API for the known image names. CIM/WMI can stall
       // independently of the process table, even when the held executable is ours.
-      const lookup = unread
-        ? '[Diagnostics.Process]::GetProcesses()'
-        : `foreach ($circleName in $circleNames) { [Diagnostics.Process]::GetProcessesByName($circleName) }`;
+      const query = windowsProcessQuery(names, unread);
+      const queryStarted = performance.now();
       const result = run(
         join(
           process.env.SystemRoot || 'C:\\Windows',
@@ -379,19 +383,11 @@ export function runningCopies(
           'v1.0',
           'powershell.exe',
         ),
-        [
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          `$circleNames = @([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedNames}')) | ConvertFrom-Json); ` +
-            `$circleProcesses = @(${lookup}); ` +
-            'foreach ($circleProcess in $circleProcesses) { try { ' +
-            '$circlePath = $circleProcess.MainModule.FileName; if ($circlePath) { ' +
-            '"$($circleProcess.Id) $([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($circlePath)))" ' +
-            '} } catch {} finally { $circleProcess.Dispose() } }',
-        ],
+        ['-NoProfile', '-NonInteractive', '-Command', query.script],
         LIST_TIMEOUT,
       );
+      const queryElapsedMs = performance.now() - queryStarted;
+      const markers = readWindowsQueryMarkers(result.stderr || '', query.nonce);
       for (const line of (result.stdout || '').split(/\r?\n/)) {
         const [pid = '', encoded] = line.trim().split(' ');
         if (!/^\d+$/.test(pid) || !encoded) continue;
@@ -422,14 +418,26 @@ export function runningCopies(
           : result.error
             ? result.error.message
             : result.status !== 0
-              ? result.stderr?.trim() || `exit status ${result.status}`
+              ? markers.cleaned.trim() || `exit status ${result.status}`
               : undefined;
         const files = `${busy.join(', ')} ${busy.length > 1 ? 'are' : 'is'} in use`;
-        throw new Error(
+        const observation = new WindowsProcessQueryObservation(
+          markers,
+          queryElapsedMs,
+          result,
+        );
+        const error = new Error(
           reason
             ? `${files}, and the running programs could not be listed (${reason})`
             : `${files} by another program`,
+          { cause: observation },
         );
+        try {
+          report(observation.message);
+        } catch {
+          // A diagnostic sink cannot replace the original installation failure.
+        }
+        throw error;
       }
     }
   } else {
