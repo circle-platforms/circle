@@ -44,7 +44,7 @@ test('component gate runs real child processes serially and retains the first fa
   );
 });
 
-test('the component gate adds the task panel once and preserves all eight prior journeys', () => {
+test('the component gate preserves prior journeys and includes each native regression once', () => {
   const original = [
     'editor-ui.mjs',
     'resource-boundary-ui.mjs',
@@ -56,12 +56,28 @@ test('the component gate adds the task panel once and preserves all eight prior 
     'keyboard-navigation-ui.mjs',
   ];
   assert.deepEqual(
-    COMPONENT_SUITES.filter((name) => name !== 'tasks-panel-ui.mjs'),
+    COMPONENT_SUITES.filter(
+      (name) =>
+        ![
+          'tasks-panel-ui.mjs',
+          'windowed-mount-ui.mjs',
+          'native-terminal-search-ui.mjs',
+        ].includes(name),
+    ),
     original,
   );
   assert.equal(
     COMPONENT_SUITES.filter((name) => name === 'tasks-panel-ui.mjs').length,
     1,
   );
-  assert.equal(new Set(COMPONENT_SUITES).size, 9);
+  assert.equal(
+    COMPONENT_SUITES.filter((name) => name === 'windowed-mount-ui.mjs').length,
+    1,
+  );
+  assert.equal(
+    COMPONENT_SUITES.filter((name) => name === 'native-terminal-search-ui.mjs')
+      .length,
+    1,
+  );
+  assert.equal(new Set(COMPONENT_SUITES).size, 11);
 });

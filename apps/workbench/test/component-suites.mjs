@@ -15,6 +15,8 @@ export const COMPONENT_SUITES = Object.freeze([
   'debug-panel-ui.mjs',
   'browser-diagnostics-ui.mjs',
   'keyboard-navigation-ui.mjs',
+  'windowed-mount-ui.mjs',
+  'native-terminal-search-ui.mjs',
 ]);
 
 /** Explicit suites run serially; a failed suite prevents later execution. */
@@ -61,6 +63,8 @@ export async function runComponentSuites({
       ...environment,
       CIRCLE_COMPONENT_UI_EVIDENCE: directory,
       CIRCLE_BROWSER_UI_EVIDENCE: join(directory, 'browser-diagnostics'),
+      CIRCLE_WINDOWED_EVIDENCE_DIR: join(directory, 'windowed-mount'),
+      CIRCLE_TERMINAL_SEARCH_EVIDENCE: join(directory, 'terminal-search'),
     };
     const child = spawn(process.execPath, [...nodeArguments, file], {
       cwd: root,
