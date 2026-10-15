@@ -414,6 +414,7 @@ test('resume without an argument opens the session picker; explicit selection op
   assert.equal(runtime.command('resume', 'session2').openSession, true);
   assert.equal(runtime.getSnapshot().activeSessionId, 'session2');
   assert.equal(runtime.command('new').openSession, true);
+  assert.equal(runtime.command('new').focusComposer, true);
   assert.equal(runtime.command('redo').notice, 'nothing to redo');
 });
 

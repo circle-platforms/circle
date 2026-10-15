@@ -189,7 +189,12 @@ function configureMenu() {
         {
           label: text('new session'),
           accelerator: 'CmdOrCtrl+N',
-          click: () => sendAction('new'),
+          click: () => {
+            // The menu takes the key. Hand the window back before the
+            // renderer focuses the composer, or the typed message is lost.
+            window?.webContents.focus();
+            sendAction('new');
+          },
         },
         {
           label: text('open folder'),

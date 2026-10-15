@@ -465,7 +465,7 @@ export class PreviewRuntime implements RuntimePort {
     };
     if (name === 'new') {
       this.newSession();
-      return { openSession: true };
+      return { openSession: true, focusComposer: true };
     }
     if (name === 'resume') {
       const sessions = this.snapshot.sessions;

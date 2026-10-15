@@ -66,10 +66,12 @@ import { DialogHost, InteractionDialog } from '../features/Dialogs';
 import { applyTheme } from '../theme';
 import { t } from '../i18n';
 import { isSessionBrowser } from '../model/browser';
+import { requestComposerFocus } from '../model/composer-focus';
 import {
   effectiveBindings,
   DESKTOP_SEARCH_CHORD,
   formatChord,
+  isDesktopNewSession,
   isDesktopSearch,
   isDesktopSettings,
   matchingAction,
@@ -431,6 +433,7 @@ export function App() {
   };
   setRouter((result) => {
     if (result.openSession) onSession();
+    if (result.focusComposer) requestComposerFocus();
     if (result.page) navigate('/page/' + result.page);
     if (result.dialog) onDialog(result.dialog, result.selection);
     if (result.panel) onPanel(result.panel, result.selection);
@@ -475,6 +478,13 @@ export function App() {
         navigate('/page/settings');
         return;
       }
+      // The desktop File menu owns Ctrl+N. Handling it here as well would
+      // open a second session. The preview has no menu, so the chord is here.
+      if (!desktopHost() && isDesktopNewSession(event)) {
+        event.preventDefault();
+        act(() => runtime.command('new'));
+        return;
+      }
       if (
         matchingAction(
           event,
@@ -488,7 +498,7 @@ export function App() {
     };
     addEventListener('keydown', handle, true);
     return () => removeEventListener('keydown', handle, true);
-  }, [narrow, navigate, snapshot.settings.keybindings]);
+  }, [act, narrow, navigate, runtime, snapshot.settings.keybindings]);
   const activeAgent = snapshot.agents.find((item) => item.id === agent);
   const pluginPage = pluginPages.find((item) => item.page.id === page);
   const installedPage = registry.plugins.find((plugin) =>

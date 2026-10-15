@@ -66,6 +66,17 @@ export function isDesktopSearch(event: {
 }): boolean {
   return chordFromEvent(event) === DESKTOP_SEARCH_CHORD;
 }
+/** Desktop new session. The File menu owns this chord in the app window. */
+export const DESKTOP_NEW_SESSION_CHORD = 'ctrl+n';
+export function isDesktopNewSession(event: {
+  key: string;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+  metaKey: boolean;
+}): boolean {
+  return chordFromEvent(event) === DESKTOP_NEW_SESSION_CHORD;
+}
 /** Desktop settings. Not a terminal binding, so it stays out of KEY_ACTIONS. */
 export const DESKTOP_SETTINGS_CHORD = 'ctrl+,';
 export function isDesktopSettings(event: {

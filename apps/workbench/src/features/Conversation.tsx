@@ -56,6 +56,11 @@ import {
   saveSessionScroll,
   useSessionPresentation,
 } from '../model/presentation';
+import {
+  composerFocusActive,
+  holdComposerFocus,
+  subscribeComposerFocus,
+} from '../model/composer-focus';
 interface Props {
   onDialog: (dialog: DialogId, selection?: string) => void;
   onPanel: (panel: PanelId, selection?: string) => void;
@@ -226,6 +231,24 @@ export function Conversation({
     setFind('');
     setFindIndex(0);
   }, [session.id]);
+  // Ctrl+N and new session ask for this box. Focus it once the empty view is
+  // committed, including when that view is the session already open, and keep
+  // it through the menu and the button taking the key back. Selecting a listed
+  // session does not ask, so it does not move the keyboard.
+  useLayoutEffect(() => {
+    let stop = () => {};
+    const start = () => {
+      stop();
+      if (!composerFocusActive()) return;
+      stop = holdComposerFocus(() => input.current);
+    };
+    start();
+    const unsubscribe = subscribeComposerFocus(start);
+    return () => {
+      unsubscribe();
+      stop();
+    };
+  }, []);
   const latestView = useRef({ session, onDialog, onPanel });
   latestView.current = { session, onDialog, onPanel };
   const matches = messages.filter((message) =>

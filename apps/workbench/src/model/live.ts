@@ -624,7 +624,7 @@ export class LiveRuntime implements RuntimePort {
     ) => this.native(name, payload, session.id);
     if (name === 'new') {
       await this.newSession(session.workspaceId);
-      return { openSession: true };
+      return { openSession: true, focusComposer: true };
     }
     if (name === 'resume' && args) {
       const target =

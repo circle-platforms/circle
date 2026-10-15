@@ -46,6 +46,7 @@ import {
 } from '../model/state';
 import { EFFORT_TEXT, MODE_TEXT } from './Composer';
 import { shownTime } from '../model/time';
+import { requestComposerFocus } from '../model/composer-focus';
 import { workspaceLabel } from '../model/workspace-label';
 import type {
   DialogId,
@@ -162,6 +163,7 @@ function SessionsPage({ onSession, onDialog }: Props) {
             perform(async () => {
               await runtime.newSession();
               onSession();
+              requestComposerFocus();
             })
           }
         >
