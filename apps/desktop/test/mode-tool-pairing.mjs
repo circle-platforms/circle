@@ -85,7 +85,26 @@ for (const protocol of ['anthropic', 'openai']) {
     page.setDefaultTimeout(15000);
     page.on('pageerror', (e) => errors.push(String(e)));
     await page.waitForFunction(() => Boolean(window.circleDesktop));
+    await routeReady();
   };
+  const routeReady = () =>
+    waitDesktopReady(
+      () =>
+        page.evaluate(async () => {
+          const { snapshot } = await window.circleDesktop.runtimeState();
+          return {
+            active: snapshot.activeSessionId,
+            configured: snapshot.runtime?.configured,
+            connected: snapshot.runtime?.connected,
+            hash: location.hash,
+          };
+        }),
+      (s) =>
+        Boolean(
+          s.configured && s.connected && s.hash === '#/session/' + s.active,
+        ),
+      { label: 'native renderer route ready', timeoutMs: 15000 },
+    );
   const command = async (name, payload = {}) => {
     const reply = await page.evaluate(
       async ({ name, payload }) => {
@@ -100,17 +119,16 @@ for (const protocol of ['anthropic', 'openai']) {
       { name, payload },
     );
     assert.equal(reply.ok, true, `${name}: ${reply.error}`);
-    if (name === 'select-session')
-      await waitDesktopReady(
-        () =>
-          page.evaluate(
-            async () => (await window.circleDesktop.runtimeState()).snapshot,
-          ),
-        (snapshot) =>
-          snapshot.activeSessionId === payload.id &&
-          snapshot.sessions.some((row) => row.id === payload.id),
-        { label: 'selected native session published', timeoutMs: 15000 },
+    if (name === 'select-session') {
+      await page.evaluate((id) => {
+        location.hash = '/session/' + id;
+      }, payload.id);
+      await routeReady();
+      const { snapshot } = await page.evaluate(() =>
+        window.circleDesktop.runtimeState(),
       );
+      assert.equal(snapshot.activeSessionId, payload.id);
+    }
     return reply;
   };
   const done = async (count, assistantCount) =>
