@@ -98,9 +98,11 @@ await git(
 );
 await writeFile(join(repo, 'git-probe.txt'), 'baseline\nJOURNEY_GIT_HUNK\n');
 const fixture = join(temp, 'model.json');
+const requestsPath = join(temp, 'requests.jsonl');
 await writeFile(
   fixture,
   JSON.stringify({
+    requestsPath,
     replies: [
       {
         message: {
