@@ -302,6 +302,32 @@ try {
       document.documentElement.dataset.theme === 'dark' &&
       document.querySelector('.monaco-editor.vs-dark'),
   );
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty('--code-size', '16px'),
+  );
+  await page.waitForFunction(
+    () =>
+      getComputedStyle(document.querySelector('.view-lines')).fontSize ===
+      '16px',
+  );
+  assert.equal(
+    await page.evaluate(() => {
+      const editor = document.querySelector('.monaco-editor');
+      const probe = document.createElement('span');
+      editor.append(probe);
+      probe.style.backgroundColor = 'var(--vscode-menu-background)';
+      const actual = getComputedStyle(probe).backgroundColor;
+      probe.style.backgroundColor = 'var(--surface)';
+      const expected = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return actual === expected;
+    }),
+    true,
+    'Monaco popup surface follows the original Circle palette',
+  );
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty('--code-size', '13px'),
+  );
   await page.locator('.view-lines').first().click();
   await page.keyboard.press(`${modifier}+End`);
   await page.keyboard.type('// restored after reload');
