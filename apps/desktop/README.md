@@ -79,6 +79,7 @@ npm --prefix apps/desktop run build
 npm --prefix apps/desktop run test:desktop
 npm --prefix apps/desktop run test:interface
 npm --prefix apps/desktop run test:live
+npm --prefix apps/desktop run test:thinking # API switching and signature recovery; also in test:live
 ```
 
 The old layout checks explicitly select `CIRCLE_WORKBENCH_MODE=preview`. Ordinary runs use the live adapter. Runtime checks use isolated directories, scripted models and a local HTTP gateway; the live desktop checks also verify actual file/process effects. `CIRCLE_WORKBENCH_TEST_PROFILE` controls development dialog choices, and `CIRCLE_DESKTOP_RUNTIME_FIXTURE` supplies a scripted model only when that test profile is present. Ordinary runs use native dialogs and the configured endpoint.
@@ -86,3 +87,9 @@ The old layout checks explicitly select `CIRCLE_WORKBENCH_MODE=preview`. Ordinar
 [Coverage and scope](../../docs/workbench/coverage.md) distinguishes implemented frontend behavior from runtime integration. [Architecture](../../docs/workbench/architecture.md) explains the ownership boundaries and the references used.
 
 [Native validation](../../docs/workbench/validation.md) records the checked source, individual behaviors and development/package receipts.
+
+`test:thinking` drives the restricted native bridge and bundled runtime against a
+local Anthropic fixture with isolated settings and checkpoint history. It checks
+API switching, legacy signature recovery, unchanged original checkpoints and
+restart. Set `CIRCLE_DESKTOP_EXECUTABLE` to a packaged executable to run the same
+check on the packaged app; no real API or user data is used.

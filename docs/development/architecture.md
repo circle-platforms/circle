@@ -57,6 +57,17 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 | `context_middleware.ts` | What the model sees of a long session: large results kept in files, older messages summarized, older images left out, and the originals read back when needed. |
 | `middleware/` | Reminders added to a request: running and polled jobs (`job_notice.ts`), repeated tool calls (`loop_guard.ts`), the plan (`plan_tail.ts`), and pruning of old tool results (`tool_result_prune.ts`). |
 
+Anthropic responses carry an opaque `thinking_scope` derived from the API URL,
+key and requested model. When that identity changes, `model.ts` leaves historical
+`thinking` and `redacted_thinking` blocks out of the outbound request, keeping
+text, tool calls and results. Original checkpoint messages are unchanged. For
+older or imported messages without a scope, an explicit HTTP 400 error rejecting
+a thinking signature triggers one retry without historical thinking. The model instance
+remembers fingerprints of the rejected signed payloads, so reused message ids do
+not suppress different valid thinking. A
+restart can need that recovery again for unscoped history. Other errors are not
+handled as signature errors, and signature errors do not disable thinking.
+
 ## Tools and safety
 
 | Module | What it does |
