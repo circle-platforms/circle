@@ -150,6 +150,25 @@ try {
   const a = (await state()).activeSessionId;
   assert.equal((await command('new-session')).ok, true);
   const b = (await state()).activeSessionId;
+  assert.notEqual(b, a);
+  // The sidebar and the session list hide a placeholder title with no messages.
+  // Name this one before either surface is asked to open it. Sending would
+  // consume the scripted write that the approval turn still needs.
+  assert.equal(
+    (
+      await command('rename-session', {
+        id: b,
+        title: 'managed fixture B',
+      })
+    ).ok,
+    true,
+  );
+  await until(
+    async () =>
+      (await state()).sessions.find((session) => session.id === b).title ===
+      'managed fixture B',
+    'the second session is named before it is listed',
+  );
   const current = (await state()).sessions.find((session) => session.id === a);
   await page
     .getByRole('button', {
