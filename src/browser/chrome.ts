@@ -322,17 +322,17 @@ export class ChromeBrowser implements BrowserPort {
     );
     // The browser's last words, for a start that fails. A message it repeats (a headless
     // browser's display errors, many a second) is kept once.
-    this.stderr = [];
+    const stderr: string[] = [];
+    this.stderr = stderr;
     const plain = (line: string) => line.replace(/^\[[\d:./]+/, '');
     child.stderr?.on('data', (chunk: Buffer) => {
       for (const line of chunk.toString('utf8').split('\n')) {
         if (!line.trim()) continue;
-        const last = this.stderr.at(-1);
+        const last = stderr.at(-1);
         if (last && plain(last) === plain(line)) continue;
-        this.stderr.push(line.slice(0, 300));
+        stderr.push(line.slice(0, 300));
       }
-      if (this.stderr.length > 40)
-        this.stderr.splice(0, this.stderr.length - 40);
+      if (stderr.length > 40) stderr.splice(0, stderr.length - 40);
     });
     const cdp = new CdpPipe(
       child.stdio[3] as Writable,
@@ -359,6 +359,7 @@ export class ChromeBrowser implements BrowserPort {
       void removeProfile(profile);
     });
     cdp.on((event) => this.event(cdp, event));
+    let phase = 'Browser.getVersion';
     try {
       const limit = this.options.startTimeout ?? START_TIMEOUT;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -373,18 +374,50 @@ export class ChromeBrowser implements BrowserPort {
           );
         }),
       ]).finally(() => clearTimeout(timer));
-      await cdp.send('Target.setDiscoverTargets', { discover: true });
+      phase = 'Target.setDiscoverTargets';
+      await cdp.send(phase, { discover: true });
       // Downloads arrive under the browser's own id, and Circle names them when they are done
-      await cdp.send('Browser.setDownloadBehavior', {
+      phase = 'Browser.setDownloadBehavior';
+      await cdp.send(phase, {
         behavior: 'allowAndName',
         downloadPath: this.staging,
         eventsEnabled: true,
       });
     } catch (error) {
-      child.kill();
-      const said = this.stderr.slice(-3).join(' / ');
-      throw Error(
-        `${error instanceof Error ? error.message : String(error)}${said ? ` (the browser said: ${said})` : ''}`,
+      // Freeze what was actually observed before our cleanup signal changes it.
+      // A closed protocol pipe alone does not establish that the process exited.
+      const processAtFailure = {
+        observedExit: child.exitCode !== null || child.signalCode !== null,
+        exitCode: child.exitCode ?? 'unknown',
+        signal: child.signalCode ?? 'unknown',
+      };
+      const received = stderr.slice(-3);
+      const stderrComplete = child.stderr?.readableEnded ?? false;
+      const cleanupTerminationRequested = child.kill();
+      const message = error instanceof Error ? error.message : String(error);
+      // Existing startup timeout text is a public error contract. A closed start
+      // needs metadata in its message too: tool consumers may discard Error fields.
+      const context =
+        message === 'the browser was closed'
+          ? ` (startup ${phase}; exitCode=${processAtFailure.exitCode}; signal=${processAtFailure.signal}; stderrComplete=${stderrComplete})`
+          : '';
+      const said = received.join(' / ');
+      throw Object.assign(
+        Error(
+          `${message}${context}${said ? ` (the browser said: ${said})` : ''}`,
+          {
+            cause: error,
+          },
+        ),
+        {
+          browserStartup: {
+            phase,
+            processAtFailure,
+            stderr: received,
+            stderrComplete,
+            cleanupTerminationRequested,
+          },
+        },
       );
     }
     return cdp;
