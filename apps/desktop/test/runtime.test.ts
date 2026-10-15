@@ -3136,6 +3136,75 @@ async function setupScratch(
     call,
   };
 }
+test('the default workspace retains its circle identity through a linked home', async (t) => {
+  const root = realpathSync(
+    await mkdtemp(join(tmpdir(), 'circle-linked-home-')),
+  );
+  const actualHome = join(root, 'actual-home');
+  const home = join(root, 'linked-home');
+  await mkdir(actualHome);
+  symlinkSync(actualHome, home, 'junction');
+  saveSettings(defaultSettings(), home);
+  const model = new ScriptedModel([
+    { message: assistant('answered in the default workspace') },
+  ]);
+  const controller = new RuntimeController({
+    home,
+    userHome: home,
+    model,
+    emit: () => {},
+  });
+  t.after(async () => {
+    await controller.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const initial = controller.snapshot();
+  const sessionId = initial.activeSessionId;
+  const session = initial.sessions.find((row) => row.id === sessionId)!;
+  const workspace = initial.workspaces.find(
+    (row) => row.id === session.workspaceId,
+  )!;
+  assert.equal(workspace.path, realpathSync(join(home, 'workspace')));
+  assert.notEqual(workspace.path, join(home, 'workspace'));
+  assert.equal(workspace.name, 'circle');
+  assert.equal(workspace.trusted, true);
+  const reply = await controller.dispatch({
+    id: randomUUID(),
+    name: 'prompt',
+    sessionId,
+    payload: { text: 'keep the default workspace identity' },
+  });
+  assert.equal(reply.ok, true, reply.error);
+  await wait(
+    () =>
+      controller
+        .snapshot()
+        .sessions.find((row) => row.id === sessionId)!
+        .messages.some(
+          (message) =>
+            message.role === 'assistant' &&
+            message.text === 'answered in the default workspace',
+        ),
+    'the scripted turn in the linked default workspace',
+  );
+  assert.equal(model.requests.length, 1);
+  const store = new CheckpointStore(home);
+  try {
+    assert.equal(store.get(sessionId)?.workspace, workspace.path);
+    assert.ok(
+      store
+        .messages(sessionId)
+        .some(
+          (message) =>
+            message.role === 'user' &&
+            message.content === 'keep the default workspace identity',
+        ),
+    );
+  } finally {
+    store.close();
+  }
+});
+
 const activeWorkspacePath = (controller: RuntimeController) => {
   const snapshot = controller.snapshot();
   const session = snapshot.sessions.find(
