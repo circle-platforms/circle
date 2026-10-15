@@ -11,6 +11,11 @@ import { defaultSettings } from '../../../src/settings.ts';
 import { ScriptedModel } from '../../../src/testing.ts';
 import type { Message, ToolCall } from '../../../src/types.ts';
 import type { FileMutations } from '../../../src/file_mutations.ts';
+import {
+  browserTools,
+  runtimeBrowserOptions,
+  type BrowserPort,
+} from '../../../src/browser/tools.ts';
 
 const assistant = (calls: ToolCall[] = []): Message => ({
   id: randomUUID(),
@@ -175,7 +180,7 @@ for (const scenario of scenarios) {
     const approval = new Promise<void>((done) => {
       approve = done;
     });
-    const runtime = new AgentRuntime({
+    const runtime: AgentRuntime = new AgentRuntime({
       home,
       workspace,
       settings: defaultSettings(),
@@ -258,7 +263,7 @@ test('successful native patch coordinates nested create, move and delete with re
     },
     { message: assistant() },
   ]);
-  const runtime = new AgentRuntime({
+  const runtime: AgentRuntime = new AgentRuntime({
     home,
     workspace,
     settings: defaultSettings(),
@@ -300,7 +305,7 @@ test('cancelling an approval abandons its prepared native write and preserves di
   const waiting = new Promise<void>((done) => {
     entered = done;
   });
-  const runtime = new AgentRuntime({
+  const runtime: AgentRuntime = new AgentRuntime({
     home,
     workspace,
     settings: defaultSettings(),
@@ -330,4 +335,127 @@ test('cancelling an approval abandons its prepared native write and preserves di
   assert.equal(await readFile(join(workspace, 'a.txt'), 'utf8'), 'original\n');
   assert.equal(writes.length, 0);
   runtime.store.requireBalancedTools(runtime.harness.messages);
+});
+
+test('browser_record shares the core writer CAS while its approval waits', async (t) => {
+  const { home, workspace, documents, backend, register } = await fixture(t);
+  const path = 'recording.circle-browser.json';
+  await writeFile(join(workspace, path), 'old recording\n');
+  let entered!: () => void;
+  let approve!: () => void;
+  const waiting = new Promise<void>((done) => {
+    entered = done;
+  });
+  const approval = new Promise<void>((done) => {
+    approve = done;
+  });
+  const port: BrowserPort = {
+    async request() {
+      return { text: 'page loaded' };
+    },
+  };
+  const model = new ScriptedModel([
+    {
+      message: assistant([
+        call('browser_navigate', { url: 'http://127.0.0.1/example' }),
+      ]),
+    },
+    { message: assistant([call('browser_record', { path })]) },
+    { message: assistant() },
+  ]);
+  const runtime: AgentRuntime = new AgentRuntime({
+    home,
+    workspace,
+    settings: defaultSettings(),
+    model,
+    headless: true,
+    fileMutations: backend,
+    extraTools: browserTools(
+      port,
+      runtimeBrowserOptions(() => runtime),
+    ),
+    approve: async (tool) => {
+      if (tool.name === 'browser_record') {
+        entered();
+        await approval;
+      }
+      return 'approve';
+    },
+  });
+  register(runtime);
+  const running = runtime.harness.run('record the page');
+  await Promise.race([
+    waiting,
+    running.then(() => {
+      throw Error('recording ended before approval');
+    }),
+  ]);
+  const current = await documents.read(path);
+  await documents.save(path, 'human edited the recording\n', current.revision);
+  approve();
+  await running;
+  assert.equal(
+    await readFile(join(workspace, path), 'utf8'),
+    'human edited the recording\n',
+  );
+  assert.match(
+    model.requests
+      .at(-1)!
+      .messages.findLast((message) => message.role === 'tool')!.content,
+    /file changed on disk/,
+  );
+});
+
+test('browser_record reuses an earlier read_file version instead of silently replacing it', async (t) => {
+  const { home, workspace, documents, backend, writes, register } =
+    await fixture(t);
+  const path = 'recording.circle-browser.json';
+  await writeFile(join(workspace, path), 'model read this version\n');
+  const port: BrowserPort = {
+    async request() {
+      const current = await documents.read(path);
+      await documents.save(
+        path,
+        'human changed before the recording proposal\n',
+        current.revision,
+      );
+      return { text: 'page loaded' };
+    },
+  };
+  const model = new ScriptedModel([
+    { message: assistant([call('read_file', { file_path: path })]) },
+    {
+      message: assistant([
+        call('browser_navigate', { url: 'http://127.0.0.1/example' }),
+      ]),
+    },
+    { message: assistant([call('browser_record', { path })]) },
+    { message: assistant() },
+  ]);
+  const runtime: AgentRuntime = new AgentRuntime({
+    home,
+    workspace,
+    settings: defaultSettings(),
+    model,
+    headless: true,
+    fileMutations: backend,
+    extraTools: browserTools(
+      port,
+      runtimeBrowserOptions(() => runtime),
+    ),
+    approve: async () => 'approve',
+  });
+  register(runtime);
+  await runtime.harness.run('read and record');
+  assert.equal(
+    await readFile(join(workspace, path), 'utf8'),
+    'human changed before the recording proposal\n',
+  );
+  assert.equal(writes.length, 0);
+  assert.match(
+    model.requests
+      .at(-1)!
+      .messages.findLast((message) => message.role === 'tool')!.content,
+    /file changed since read_file/,
+  );
 });
