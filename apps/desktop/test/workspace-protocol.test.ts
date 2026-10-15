@@ -44,7 +44,14 @@ test('native workflow capabilities and recovery use explicit service routes', ()
         method,
       );
   }
-  for (const service of ['inputs', 'events', 'debug', 'git', 'tasks', 'delivery'])
+  for (const service of [
+    'inputs',
+    'events',
+    'debug',
+    'git',
+    'tasks',
+    'delivery',
+  ])
     assert.throws(() =>
       validateWorkspaceRequest({ service, method: 'executeRaw' }),
     );
