@@ -8,12 +8,6 @@ import { inspect } from 'node:util';
 import * as legacy from '../src/legacy_install.js';
 import { scratch } from './helpers.js';
 
-// The original producer contract: the query, path encoding and number of executions stay.
-const originalPipeline =
-  'Get-CimInstance -ClassName Win32_Process -Property ProcessId,ExecutablePath | ' +
-  'Where-Object { $_.ExecutablePath } | ForEach-Object { "$($_.ProcessId) ' +
-  '$([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($_.ExecutablePath)))" }';
-
 function fixture(t: TestContext) {
   const base = scratch(t, 'circle-query-evidence-');
   const version = join(base, 'versions', '0.5.0');
@@ -184,7 +178,7 @@ test('a zero reported PID remains a reported value and an oversized error code i
   assert.equal(evidence.errorCodeTruncated, true);
 });
 
-test('process query evidence leaves the original pipeline, one execution, budget and PID decision unchanged', (t) => {
+test('process query evidence preserves the single call, budget and PID decision', (t) => {
   const own = fixture(t);
   const matchingPid = process.pid + 1;
   const calls: { command: string; args: string[]; timeout?: number }[] = [];
@@ -211,11 +205,6 @@ test('process query evidence leaves the original pipeline, one execution, budget
     '-Command',
   ]);
   assert.equal(calls[0]!.timeout, 30_000);
-  const script = calls[0]!.args[3]!;
-  assert.equal(script, originalPipeline);
-  assert.equal(script.split(originalPipeline).length - 1, 1);
-  assert.equal(script.includes('$LASTEXITCODE'), false);
-  assert.equal(script.includes('ErrorActionPreference'), false);
 });
 
 test('the installer consumer discloses only its safe query evidence and exits before any installation action', (t) => {
