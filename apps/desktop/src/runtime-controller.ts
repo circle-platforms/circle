@@ -586,7 +586,11 @@ export class RuntimeController {
     if (this.workspaceStreamFailures.has(workspace)) return;
     const failure = (error: unknown) => this.workspaceFailure(workspace, error);
     try {
-      const pending = this.services(workspace).publishSource(event);
+      const services = this.closing
+        ? this.workspaceServices.get(workspace)
+        : this.services(workspace);
+      if (!services) return;
+      const pending = services.publishSource(event);
       this.workspaceEventPending.add(pending);
       void pending
         .catch(failure)
@@ -597,6 +601,8 @@ export class RuntimeController {
   }
 
   private workspaceFailure(workspace: string, error: unknown): void {
+    if ((error as { code?: string })?.code === 'WORKSPACE_SERVICES_CLOSED')
+      return;
     if (this.workspaceStreamFailures.has(workspace)) return;
     const message = `workspace event persistence failed: ${String(error)}`;
     this.workspaceStreamFailures.set(workspace, message);

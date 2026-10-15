@@ -1325,3 +1325,63 @@ test('private input drafts remain recoverable after workspace trust is revoked',
     await restarted.close();
   }
 });
+
+test('late events after normal service disposal do not become storage failures or cancel live models', async (t) => {
+  let signal: AbortSignal | undefined;
+  const f = await setup(t, [
+    async (request) => {
+      signal = request.signal;
+      return new Promise((_resolve, reject) =>
+        request.signal.addEventListener(
+          'abort',
+          () => reject(request.signal.reason),
+          { once: true },
+        ),
+      );
+    },
+  ]);
+  await f.call('prompt', { text: 'keep model active' });
+  await wait(() => !!signal);
+  await writeFile(join(f.workspace, 'file.txt'), 'fixture');
+  assert.equal(
+    (await f.service('documents', 'read', { path: 'file.txt' })).ok,
+    true,
+  );
+  const root = realpathSync(f.workspace),
+    controller = f.controller as any;
+  const service = controller.workspaceServices.get(root);
+  await service.dispose();
+  const event = {
+    workspaceId: createHash('sha256').update(root).digest('hex').slice(0, 24),
+    sessionId: f.controller.snapshot().activeSessionId,
+    service: 'tasks',
+    resourceId: 'late',
+    epoch: 'late',
+    seq: 1,
+    at: new Date().toISOString(),
+    data: { type: 'late-cleanup' },
+  };
+  await assert.rejects(
+    () => service.publishSource(event),
+    (error: any) => error.code === 'WORKSPACE_SERVICES_CLOSED',
+  );
+  controller.workspaceEvent(root, event);
+  await delay(30);
+  assert.equal(
+    signal!.aborted,
+    false,
+    'normal closed stream must not abort another ongoing model',
+  );
+  assert.equal(controller.workspaceStreamFailures.size, 0);
+  assert.equal(service.eventHealth.error, undefined);
+  await f.controller.close();
+  const count = controller.workspaceServices.size;
+  controller.workspaceEvent(join(f.root, 'never-opened'), event);
+  await delay(10);
+  assert.equal(
+    controller.workspaceServices.size,
+    count,
+    'closing does not create a new service',
+  );
+  assert.equal(controller.workspaceStreamFailures.size, 0);
+});
