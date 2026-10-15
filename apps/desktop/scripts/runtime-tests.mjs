@@ -35,6 +35,14 @@ async function prepared() {
       !receipt.files?.[entry.split('/').join(sep)]
     )
       throw Error(`unprepared ${name} developer tool receipt`);
+    if (name === 'node') {
+      const npmEntry = join('lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+      if (
+        !receipt.files?.[npmEntry] ||
+        !(await stat(join(directory, npmEntry))).isFile()
+      )
+        throw Error('missing bundled npm CLI');
+    }
     if (!(await stat(join(directory, entry))).isFile())
       throw Error(`missing ${name} developer tool entry`);
   }

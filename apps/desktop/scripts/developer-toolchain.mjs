@@ -174,6 +174,10 @@ export async function prepareDeveloperTools(
         if (
           cached.version === spec.version &&
           cached.files?.[entry] &&
+          (spec.name !== 'node' ||
+            cached.files?.[
+              join('lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')
+            ]) &&
           cached.sha256 === spec.sha256 &&
           cached.target === target &&
           cached.format === 1 &&
@@ -182,6 +186,9 @@ export async function prepareDeveloperTools(
         ) {
           if (platform !== 'win32' && spec.name !== 'js-debug')
             await chmod(join(destination, entry), 0o755);
+          if (platform !== 'win32' && spec.name === 'node')
+            for (const tool of ['npm', 'npx'])
+              await chmod(join(destination, 'bin', tool), 0o755);
           continue;
         }
       } catch {}
@@ -223,6 +230,28 @@ export async function prepareDeveloperTools(
         );
         for (const name of ['LICENSE', 'README.md', 'CHANGELOG.md'])
           await cp(join(source, name), join(destination, name));
+        await cp(
+          join(
+            source,
+            platform === 'win32' ? 'node_modules/npm' : 'lib/node_modules/npm',
+          ),
+          join(destination, 'lib/node_modules/npm'),
+          { recursive: true, verbatimSymlinks: true },
+        );
+        for (const tool of ['npm', 'npx']) {
+          if (platform === 'win32') {
+            await writeFile(
+              join(destination, 'bin', `${tool}.cmd`),
+              `@ECHO OFF\r\n"%~dp0node.exe" "%~dp0..\\lib\\node_modules\\npm\\bin\\${tool}-cli.js" %*\r\n`,
+            );
+          } else {
+            await writeFile(
+              join(destination, 'bin', tool),
+              `#!/bin/sh\nbasedir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$basedir/node" "$basedir/../lib/node_modules/npm/bin/${tool}-cli.js" "$@"\n`,
+              { mode: 0o755 },
+            );
+          }
+        }
         if (platform !== 'win32')
           await chmod(join(destination, 'bin/node'), 0o755);
       } else await cp(source, destination, { recursive: true });

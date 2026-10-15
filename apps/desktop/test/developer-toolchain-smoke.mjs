@@ -49,6 +49,14 @@ const node = path.join(dist, 'tools/node/bin', process.platform === 'win32' ? 'n
 const nodeVersion = cp.spawnSync(node, ['--version'], { encoding: 'utf8', env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined } });
 assert.equal(nodeVersion.status, 0, nodeVersion.stderr);
 assert.equal(nodeVersion.stdout.trim(), 'v24.21.0');
+const npmCLI = path.join(dist, 'tools/node/lib/node_modules/npm/bin/npm-cli.js');
+assert.ok(fs.existsSync(npmCLI));
+fs.writeFileSync(path.join(${JSON.stringify(scratch)}, 'package.json'), JSON.stringify({ private: true, scripts: { outer: 'npm run inner --silent', inner: 'node -p "process.execPath"' } }));
+fs.writeFileSync(path.join(${JSON.stringify(scratch)}, 'empty.npmrc'), '');
+const npm = cp.spawnSync(node, [npmCLI, 'run', 'outer', '--silent'], { cwd: ${JSON.stringify(scratch)}, encoding: 'utf8', env: { ...process.env, PATH: path.dirname(node) + path.delimiter + (process.platform === 'win32' ? path.join(process.env.SystemRoot, 'System32') : '/usr/bin:/bin'), NPM_CONFIG_USERCONFIG: path.join(${JSON.stringify(scratch)}, 'empty.npmrc'), NPM_CONFIG_GLOBALCONFIG: path.join(${JSON.stringify(scratch)}, 'empty-global.npmrc'), NPM_CONFIG_CACHE: path.join(${JSON.stringify(scratch)}, 'npm-cache'), NPM_CONFIG_UPDATE_NOTIFIER: 'false', ELECTRON_RUN_AS_NODE: undefined } });
+assert.equal(npm.status, 0, npm.stderr);
+assert.equal(fs.realpathSync(npm.stdout.trim()), fs.realpathSync(node));
+
 const pty = load('node-pty');
 const shell = process.platform === 'win32' ? process.env.ComSpec ?? 'cmd.exe' : '/bin/sh';
 const args = process.platform === 'win32' ? ['/d', '/s', '/c', 'set /p value=&call echo PTY:%%value%%'] : ['-c', 'read value; printf "PTY:%s\\n" "$value"'];
