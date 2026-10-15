@@ -625,23 +625,21 @@ export class BrowserSessions {
             { source: promptScript(tab.promptPath), runImmediately: true },
           ),
         ]);
-        for (const breakpoint of tab.diagnostics!.state.debugger.breakpoints) {
-          const restored = await contents.debugger.sendCommand(
-            'Debugger.setBreakpointByUrl',
-            { url: breakpoint.source.path, lineNumber: breakpoint.line - 1 },
-          );
-          breakpoint.id = restored.breakpointId;
-          breakpoint.verified = !!restored.locations?.length;
-        }
+        await tab.diagnostics!.restoreBreakpoints();
         tab.diagnostics!.state.owner = 'circle';
+        tab.diagnostics!.state.reconnectError = undefined;
         tab.diagnostics!.resetEpoch();
         tab.screenshot = undefined;
         conversation.events.push(
           'devtools closed; browser observations must be refreshed',
         );
         this.publish(conversation.id);
-      })().catch(() => {
-        conversation.events.push('browser diagnostics could not reconnect');
+      })().catch((error) => {
+        tab.diagnostics!.state.reconnectError = String(error);
+        tab.diagnostics!.resetEpoch();
+        conversation.events.push(
+          'browser diagnostics could not reconnect: ' + String(error),
+        );
         this.publish(conversation.id);
       });
     });
@@ -1567,6 +1565,7 @@ export class BrowserSessions {
       this.control(id, 'take');
       // Human-only API: no model tool can invoke this explicit ownership handoff.
       tab.diagnostics!.invalidateConnection();
+      tab.diagnostics!.state.reconnectError = undefined;
       tab.diagnostics!.state.owner = 'devtools';
       tab.diagnostics!.resetEpoch();
       tab.screenshot = undefined;

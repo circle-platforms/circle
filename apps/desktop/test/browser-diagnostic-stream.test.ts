@@ -200,3 +200,32 @@ test('ownership gaps discard stale pause, object and script ids while preserving
     'http://localhost/new.js',
   );
 });
+
+test('breakpoint restoration removes retained Chromium URL identities before recreating them', async () => {
+  let installed = true;
+  const calls: string[] = [];
+  const d = new BrowserDiagnostics(async (method) => {
+    calls.push(method);
+    if (method === 'Debugger.removeBreakpoint') {
+      installed = false;
+      return {};
+    }
+    if (installed)
+      throw Error('Breakpoint at specified location already exists');
+    installed = true;
+    return { breakpointId: 'restored', locations: [{ lineNumber: 2 }] };
+  });
+  d.state.debugger.breakpoints.push({
+    id: 'retained',
+    verified: false,
+    line: 3,
+    source: { path: 'http://localhost/a.js' },
+  });
+  await d.restoreBreakpoints();
+  assert.deepEqual(calls, [
+    'Debugger.removeBreakpoint',
+    'Debugger.setBreakpointByUrl',
+  ]);
+  assert.equal(d.state.debugger.breakpoints[0].verified, true);
+  assert.equal(d.state.debugger.breakpoints[0].id, 'restored');
+});

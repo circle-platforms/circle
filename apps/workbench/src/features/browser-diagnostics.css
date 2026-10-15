@@ -50,3 +50,38 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* Keep page controls and live diagnostics inside the inspector's available
+   height. The native guest may shrink; logs must not extend below the window. */
+.native-browser:has(.browser-diagnostics) {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.native-browser:has(.browser-diagnostics) .native-browser-viewport {
+  flex: 1 1 180px;
+  min-height: 80px;
+}
+.native-browser > .browser-diagnostics {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 60%;
+  overflow: auto;
+}
+.browser-diagnostics > button,
+.browser-diagnostic-tools,
+.browser-diagnostic-tabs,
+.browser-diagnostics > p {
+  flex-shrink: 0;
+}
+.browser-diagnostic-results {
+  flex: 1 1 180px;
+  min-height: 90px;
+}
+.native-browser > .context-source {
+  flex: 0 1 auto;
+  min-height: 24px;
+  max-height: 25%;
+  overflow: auto;
+}

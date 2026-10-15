@@ -103,6 +103,21 @@ export class BrowserDiagnostics {
       }, 25);
   }
 
+  async restoreBreakpoints() {
+    for (const breakpoint of this.state.debugger.breakpoints) {
+      // Chromium can retain the URL breakpoint across frontend handoff. Its id
+      // is deterministic, so remove our old intent before restoring it.
+      await this.send('Debugger.removeBreakpoint', {
+        breakpointId: breakpoint.id,
+      }).catch(() => {});
+      const restored = await this.send('Debugger.setBreakpointByUrl', {
+        url: breakpoint.source.path,
+        lineNumber: breakpoint.line - 1,
+      });
+      breakpoint.id = restored.breakpointId;
+      breakpoint.verified = !!restored.locations?.length;
+    }
+  }
   async enable() {
     await Promise.all(
       [

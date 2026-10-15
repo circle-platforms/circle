@@ -66,6 +66,7 @@ export interface BrowserNetworkEntry {
 }
 export interface BrowserDiagnosticState {
   owner: 'circle' | 'devtools';
+  reconnectError?: string;
   console: BrowserConsoleEntry[];
   network: BrowserNetworkEntry[];
   debugger: {
