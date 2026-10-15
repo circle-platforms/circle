@@ -1,7 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import type {
   BrowserDiagnosticState,
   BrowserDiagnosticRequest,
   BrowserDiagnosticResult,
+  BrowserDiagnosticDomain,
+  BrowserDiagnosticEvent,
 } from './browser-diagnostics-contracts';
 type Send = (method: string, params?: Record<string, unknown>) => Promise<any>;
 const LIMIT = 500;
@@ -15,7 +18,79 @@ export class BrowserDiagnostics {
   };
   private sequence = 0;
   private scriptUrls = new Map<string, string>();
-  constructor(private send: Send) {}
+  private epoch = randomUUID();
+  private eventSequence = 0;
+  private watchers = new Map<string, Set<BrowserDiagnosticDomain>>();
+  private dirty = new Set<BrowserDiagnosticDomain>();
+  private dirtyAt = 0;
+  private timer?: ReturnType<typeof setTimeout>;
+  constructor(
+    private send: Send,
+    private emit: (
+      event: Omit<BrowserDiagnosticEvent, 'sessionId' | 'tab'>,
+    ) => void = () => {},
+  ) {}
+  cursor() {
+    return { epoch: this.epoch, sequence: this.eventSequence };
+  }
+  watch(
+    subscription: string,
+    domains: BrowserDiagnosticDomain[],
+    enabled: boolean,
+  ) {
+    if (enabled) {
+      if (!this.watchers.has(subscription) && this.watchers.size >= 32)
+        throw Error('too many browser diagnostic subscriptions');
+      this.watchers.set(subscription, new Set(domains));
+    } else this.watchers.delete(subscription);
+    if (!this.watchers.size) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+      this.dirty.clear();
+    }
+    return { state: this.state, stream: this.cursor() };
+  }
+  clearWatches() {
+    this.watchers.clear();
+    clearTimeout(this.timer);
+    this.timer = undefined;
+    this.dirty.clear();
+  }
+  dispose() {
+    this.clearWatches();
+  }
+  resetEpoch() {
+    this.epoch = randomUUID();
+    this.eventSequence = 0;
+    this.invalidate('lifecycle');
+  }
+  invalidate(domain: BrowserDiagnosticDomain) {
+    if (
+      !this.watchers.size ||
+      ![...this.watchers.values()].some(
+        (domains) => domain === 'lifecycle' || domains.has(domain),
+      )
+    )
+      return;
+    if (!this.dirty.size) this.dirtyAt = Date.now();
+    this.dirty.add(domain);
+    if (!this.timer)
+      this.timer = setTimeout(() => {
+        this.timer = undefined;
+        const domains = [...this.dirty];
+        this.dirty.clear();
+        if (!this.watchers.size) return;
+        this.emit({
+          ...this.cursor(),
+          sequence: ++this.eventSequence,
+          domains,
+          at: this.dirtyAt,
+          emittedAt: Date.now(),
+          consoleId: this.state.console.at(-1)?.id,
+        });
+      }, 25);
+  }
+
   async enable() {
     await Promise.all(
       [
@@ -27,6 +102,31 @@ export class BrowserDiagnostics {
     );
   }
   event(method: string, p: any) {
+    if (
+      ['Runtime.consoleAPICalled', 'Runtime.exceptionThrown'].includes(method)
+    )
+      this.invalidate('console');
+    if (
+      [
+        'Network.requestWillBeSent',
+        'Network.responseReceived',
+        'Network.loadingFinished',
+        'Network.loadingFailed',
+      ].includes(method)
+    )
+      this.invalidate('network');
+    if (
+      [
+        'Debugger.paused',
+        'Debugger.resumed',
+        'Debugger.breakpointResolved',
+      ].includes(method)
+    )
+      this.invalidate('debug');
+    if (method.startsWith('DOMStorage.')) this.invalidate('storage');
+    if (method === 'Runtime.executionContextsCleared')
+      this.invalidate('lifecycle');
+
     if (method === 'Debugger.scriptParsed')
       this.scriptUrls.set(p.scriptId, p.url);
     if (method === 'Debugger.breakpointResolved') {
@@ -130,9 +230,38 @@ export class BrowserDiagnostics {
   ): Promise<BrowserDiagnosticResult> {
     if (this.state.owner !== 'circle' && r.action !== 'read')
       throw Error('browser diagnostics are handed to devtools');
-    const result: BrowserDiagnosticResult = { state: this.state };
-    if (r.action === 'clearConsole') this.state.console = [];
-    if (r.action === 'clearNetwork') this.state.network = [];
+    const domains: BrowserDiagnosticDomain[] | undefined =
+      r.action === 'read'
+        ? r.domains
+        : r.action === 'storage'
+          ? ['storage', 'debug']
+          : undefined;
+    const result: BrowserDiagnosticResult = {
+      stream: this.cursor(),
+      domains,
+      state: domains
+        ? {
+            ...this.state,
+            console: domains.includes('console') ? this.state.console : [],
+            network: domains.includes('network') ? this.state.network : [],
+            debugger: domains.includes('debug')
+              ? this.state.debugger
+              : {
+                  paused: this.state.debugger.paused,
+                  stackFrames: [],
+                  breakpoints: [],
+                },
+          }
+        : this.state,
+    };
+    if (r.action === 'clearConsole') {
+      this.state.console = [];
+      this.invalidate('console');
+    }
+    if (r.action === 'clearNetwork') {
+      this.state.network = [];
+      this.invalidate('network');
+    }
     if (r.action === 'source') {
       const script = [...this.scriptUrls]
         .reverse()
@@ -252,6 +381,7 @@ export class BrowserDiagnostics {
         }));
       }
     }
+    if (r.action === 'debug') this.invalidate('debug');
     return result;
   }
 }

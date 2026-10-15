@@ -392,6 +392,16 @@ async function createWindow() {
     // How the person handed over the browser: auto mode takes it back by itself
     (id) =>
       runtime?.state().snapshot.sessions.find((row) => row.id === id)?.mode,
+    (event) => {
+      if (window && !window.isDestroyed())
+        window.webContents.send('circle:browser-diagnostic-event', event);
+    },
+  );
+  window.webContents.on('did-start-loading', () =>
+    browsers?.clearDiagnosticSubscriptions(),
+  );
+  window.webContents.on('render-process-gone', () =>
+    browsers?.clearDiagnosticSubscriptions(),
   );
   runtime?.onSessionCleanup(async (id) => {
     await browsers?.deleteSession(id);
@@ -688,7 +698,7 @@ app
       if (!session) throw Error('browser session not found');
       const request = validateBrowserDiagnosticRequest(value);
       if (
-        request.action !== 'read' &&
+        !['read', 'watch'].includes(request.action) &&
         !snapshot.workspaces.find((row) => row.id === session.workspaceId)
           ?.trusted
       )

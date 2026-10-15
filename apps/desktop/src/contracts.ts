@@ -1,4 +1,5 @@
 import type {
+  BrowserDiagnosticEvent,
   BrowserDiagnosticRequest,
   BrowserDiagnosticResult,
 } from './browser-diagnostics-contracts';
@@ -85,6 +86,9 @@ export interface DesktopBridge {
   ) => Promise<void>;
   /** Opens a human-requested HTTPS link; credentials are never accepted. */
   openExternal?: (url: string) => Promise<void>;
+  onBrowserDiagnosticEvent?: (
+    listener: (event: BrowserDiagnosticEvent) => void,
+  ) => () => void;
   browserDiagnostics?: (
     sessionId: string,
     request: BrowserDiagnosticRequest,

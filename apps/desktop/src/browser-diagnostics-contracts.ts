@@ -1,8 +1,16 @@
 /** Human-facing diagnostics use the browser's existing CDP connection. */
 export type BrowserDiagnosticRequest =
-  | { action: 'read' | 'clearConsole' | 'clearNetwork' | 'devtools' }
+  | { action: 'read'; domains?: BrowserDiagnosticDomain[] }
+  | { action: 'clearConsole' | 'clearNetwork' | 'devtools' }
   | { action: 'response'; requestId: string }
   | { action: 'source'; url: string }
+  | {
+      action: 'watch';
+      tab: string;
+      subscription: string;
+      domains: BrowserDiagnosticDomain[];
+      enabled: boolean;
+    }
   | {
       action: 'storage';
       kind: 'local' | 'session';
@@ -27,6 +35,18 @@ export type BrowserDiagnosticRequest =
       line?: number;
       reference?: string;
     };
+export type BrowserDiagnosticDomain =
+  'console' | 'network' | 'storage' | 'debug' | 'lifecycle';
+export interface BrowserDiagnosticEvent {
+  sessionId: string;
+  tab: string;
+  epoch: string;
+  sequence: number;
+  domains: BrowserDiagnosticDomain[];
+  at: number;
+  emittedAt: number;
+  consoleId?: number;
+}
 export interface BrowserConsoleEntry {
   id: number;
   level: string;
@@ -67,6 +87,8 @@ export interface BrowserDiagnosticState {
   };
 }
 export interface BrowserDiagnosticResult {
+  stream?: { epoch: string; sequence: number };
+  domains?: BrowserDiagnosticDomain[];
   state: BrowserDiagnosticState;
   source?: { url: string; content: string };
   response?: { body: string; base64Encoded: boolean };
@@ -86,12 +108,13 @@ export function validateBrowserDiagnosticRequest(
     throw Error('invalid browser diagnostic request');
   const r = value as Record<string, unknown>;
   const allowed: Record<string, string[]> = {
-    read: [],
+    read: ['domains'],
     clearConsole: [],
     clearNetwork: [],
     devtools: [],
     response: ['requestId'],
     source: ['url'],
+    watch: ['tab', 'subscription', 'domains', 'enabled'],
     storage: ['kind', 'origin', 'operation', 'key', 'value'],
     viewport: ['width', 'height', 'mobile'],
     debug: ['command', 'url', 'line', 'reference'],
@@ -145,5 +168,35 @@ export function validateBrowserDiagnosticRequest(
     throw Error('invalid storage request');
   if (r.mobile !== undefined && typeof r.mobile !== 'boolean')
     throw Error('invalid viewport mode');
+  if (
+    r.action === 'watch' &&
+    (typeof r.tab !== 'string' ||
+      !/^t[1-9][0-9]*$/.test(r.tab) ||
+      typeof r.subscription !== 'string' ||
+      !/^[a-zA-Z0-9_-]{1,100}$/.test(r.subscription) ||
+      typeof r.enabled !== 'boolean' ||
+      !Array.isArray(r.domains) ||
+      r.domains.length > 5 ||
+      r.domains.some(
+        (d) =>
+          !['console', 'network', 'storage', 'debug', 'lifecycle'].includes(
+            String(d),
+          ),
+      ))
+  )
+    throw Error('invalid browser diagnostic subscription');
+  if (
+    r.action === 'read' &&
+    r.domains !== undefined &&
+    (!Array.isArray(r.domains) ||
+      r.domains.length > 5 ||
+      r.domains.some(
+        (d) =>
+          !['console', 'network', 'storage', 'debug', 'lifecycle'].includes(
+            String(d),
+          ),
+      ))
+  )
+    throw Error('invalid browser diagnostic domains');
   return r as unknown as BrowserDiagnosticRequest;
 }
