@@ -323,6 +323,41 @@ try {
     '10k history loaded',
     60000,
   );
+  report.initialTranscript = await page
+    .locator('.transcript')
+    .evaluate((node) => {
+      const frame = node.getBoundingClientRect();
+      const messages = [...node.querySelectorAll('.message')];
+      return {
+        scrollTop: node.scrollTop,
+        scrollHeight: node.scrollHeight,
+        clientHeight: node.clientHeight,
+        mountedMessages: messages.length,
+        visibleMessages: messages.filter((message) => {
+          const rect = message.getBoundingClientRect();
+          return (
+            rect.height > 0 &&
+            rect.bottom > frame.top &&
+            rect.top < frame.bottom
+          );
+        }).length,
+        firstMessageRect: messages[0]?.getBoundingClientRect().toJSON(),
+      };
+    });
+  await page.screenshot({ path: join(output, 'initial-transcript.png') });
+  report.initialTranscriptPassed = report.initialTranscript.visibleMessages > 0;
+  if (!report.initialTranscriptPassed)
+    report.initialTranscriptFailure =
+      '10k history loaded with no mounted message intersecting the visible transcript; later scrolling is an explicit stress setup, not recovery acceptance';
+  report.stressSetup =
+    'explicitly navigate transcript top then bottom to reveal the tail of virtualized history';
+  await page.locator('.transcript').evaluate(async (node) => {
+    node.scrollTo({ top: 0 });
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    );
+    node.scrollTo({ top: node.scrollHeight });
+  });
   await page
     .locator('.transcript')
     .getByText('PERF_HISTORY_READY', { exact: false })
@@ -663,7 +698,8 @@ try {
   report.complete = true;
   report.passed =
     Object.values(report.metrics).every((metric) => metric.passed) &&
-    !errors.length;
+    !errors.length &&
+    report.initialTranscriptPassed;
 } catch (error) {
   report.failure = String(error.stack ?? error);
   try {
