@@ -467,6 +467,7 @@ export class TerminalManager {
         if (!(await untilStopped(entry, 3000)))
           throw Error('terminal child process stop has not been confirmed');
       }
+      await drainObserver(entry);
       return clone(entry.snapshot);
     }
     if (entry.closing) return entry.closing;
@@ -478,6 +479,7 @@ export class TerminalManager {
         if (!(await untilStopped(entry, 3000)))
           throw Error('terminal stop has not been confirmed');
       }
+      await drainObserver(entry);
       return clone(entry.snapshot);
     })();
     return entry.closing;
@@ -867,6 +869,29 @@ export class TerminalManager {
     } finally {
       entry.resolveDone();
     }
+  }
+}
+
+/** A stopped PTY can still have durable consumer events queued behind disk I/O. */
+async function drainObserver(entry: Entry): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      entry.observerQueue,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              Error(
+                'terminal event delivery did not finish after process exit',
+              ),
+            ),
+          5000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
