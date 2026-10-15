@@ -21,7 +21,7 @@ const CJK_CHAR = /[\u3400-\u9fff]/g;
  * "what is TCP" is not one of these. Trailing punctuation is ignored.
  */
 const ACK =
-  /^(?:hi|hello|hey|yo|hiya|howdy|ok|okay|k|thanks|thank you|thx|ty|thanks a lot|thank you so much|thanks so much|thank you very much|thanks very much|cheers|bye|goodbye|good morning|good afternoon|good evening|good night|you'?re welcome|no problem|got it|noted|你好|您好|嗨|谢谢|感谢|多谢|谢谢你|好的|嗯|哦|收到)$/i;
+  /^(?:hi|hello|hey|yo|hiya|howdy|ok|okay|k|thanks|thank you|thx|ty|thanks a lot|thank you so much|thanks so much|thank you very much|thanks very much|cheers|bye|goodbye|good morning|good afternoon|good evening|good night|you'?re welcome|no problem|got it|noted|你好|你好啊|你好呀|您好|您好啊|嗨|嗨啊|谢谢|谢谢啊|谢谢啦|感谢|多谢|谢谢你|好的|好的呀|嗯|哦|收到|收到啦)$/i;
 
 function counted(text: string): { line: string; cjk: number; words: number } {
   const line = text.replace(/\s+/g, ' ').trim();
@@ -242,8 +242,42 @@ export function sanitizeGeneratedTitle(text: string): string | undefined {
 }
 
 /**
+ * Letters and digits only, so "What is TCP?" and "what is TCP" are the same
+ * title. A noun phrase such as "TCP overview" is not.
+ */
+function foldTitle(text: string): string {
+  return text
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * The candidate is the prompt, or its short typed title, with only case or
+ * punctuation changed.
+ */
+export function echoesPrompt(title: string, prompt: string): boolean {
+  const folded = foldTitle(title);
+  if (!folded) return false;
+  if (folded === foldTitle(prompt)) return true;
+  const fallback = foldTitle(fallbackTitle(prompt));
+  return Boolean(fallback) && folded === fallback;
+}
+
+/**
+ * The second title request. The first reply restated the user's words.
+ */
+export function titleRetrySystem(system: string): string {
+  return `${system}\n\nThe previous title only changed capitalization or punctuation. That is not a title. Reply with a short noun phrase for the topic, such as "TCP overview". Do not repeat the user's sentence.`;
+}
+
+/**
  * What the model returned, or why it is not a title. A number fragment is its
- * own reason: the fallback already has the full number.
+ * own reason: the fallback already has the full number. A case or punctuation
+ * copy of the prompt is `echoes prompt`: the caller retries once, then keeps
+ * the short title.
  */
 export function acceptGeneratedTitle(
   content: string,
@@ -265,6 +299,8 @@ export function acceptGeneratedTitle(
     fragment.split(/\s+/).length <= TITLE_MAX_WORDS
   )
     return { reason: 'number fragment' };
+  if (fragment && echoesPrompt(fragment, prompt))
+    return { reason: 'echoes prompt' };
   if (!title) return { reason: content.trim() ? 'not a title' : 'empty title' };
   return { title, reason: '' };
 }

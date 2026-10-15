@@ -9,6 +9,8 @@ import { ExtensionHost } from '../src/extensions.js';
 import { Harness } from '../src/harness.js';
 import { AgentRuntime } from '../src/runtime.js';
 import {
+  acceptGeneratedTitle,
+  echoesPrompt,
   fallbackTitle,
   firstUserSource,
   isNumberFragment,
@@ -236,6 +238,25 @@ test('generated titles keep one short phrase and drop a reply', () => {
   assert.equal(titleWorthy('解释 React hooks'), true);
   assert.equal(titleWorthy('什么是 Rust'), true);
   assert.equal(titleWorthy('你好'), false);
+  assert.equal(titleWorthy('你好啊'), false);
+  assert.equal(echoesPrompt('What is TCP', 'what is TCP'), true);
+  assert.equal(echoesPrompt('What is TCP?', 'what is TCP'), true);
+  assert.equal(echoesPrompt('what is TCP!', 'what is TCP'), true);
+  assert.equal(echoesPrompt('TCP overview', 'what is TCP'), false);
+  assert.equal(echoesPrompt('什么是 rust', '什么是 Rust'), true);
+  assert.equal(echoesPrompt('Rust 简介', '什么是 Rust'), false);
+  assert.equal(
+    acceptGeneratedTitle('What is TCP', 'what is TCP').reason,
+    'echoes prompt',
+  );
+  assert.equal(
+    acceptGeneratedTitle('What is TCP', 'what is TCP').title,
+    undefined,
+  );
+  assert.equal(
+    acceptGeneratedTitle('TCP overview', 'what is TCP').title,
+    'TCP overview',
+  );
   assert.equal(titleWorthy('一二三'), true);
   assert.equal(titleWorthy('一二三四'), true);
   assert.equal(titleWorthy('请'), false);
@@ -305,12 +326,16 @@ class TitleModel implements ChatModel {
   ) {}
   failTitle = false;
   thinking = '';
+  /** Title replies in order. Later calls use `title`. */
+  scriptedTitles?: string[];
   async complete(request: ModelRequest): Promise<ModelResponse> {
     this.requests.push(request);
     const titleCall = request.maxTokens === Harness.titleOutputTokens;
     if (titleCall && this.failTitle) throw new Error('title exploded');
     if (titleCall) await this.gate;
-    const content = titleCall ? this.title : this.answer;
+    const content = titleCall
+      ? (this.scriptedTitles?.shift() ?? this.title)
+      : this.answer;
     if (content && !titleCall) request.token(content);
     return {
       message: {
@@ -442,6 +467,58 @@ test('a three-word question asks for a summary title', async (t) => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(session.id)!.title, 'TCP overview');
   assert.deepEqual(notes, []);
+});
+
+test('a capitalized copy of the prompt is retried once as a noun phrase', async (t) => {
+  const root = scratch(t);
+  const model = new TitleModel('done', 'unused');
+  model.scriptedTitles = ['What is TCP', 'TCP overview'];
+  const { harness: run, store, session } = harness(root, model);
+  cleanup(t, () => store.close());
+  const notes: string[] = [];
+  run.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as
+      { event?: string; message?: string } | undefined;
+    if (notice?.event === 'title_failed') notes.push(String(notice.message));
+  });
+  await run.run('what is TCP');
+  const calls = () =>
+    model.requests.filter(
+      (request) => request.maxTokens === Harness.titleOutputTokens,
+    );
+  assert.equal(calls().length, 1);
+  model.releaseTitle();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls().length, 2);
+  assert.match(String(calls()[1]!.system), /TCP overview/);
+  assert.match(String(calls()[1]!.system), /capitalization or punctuation/);
+  assert.equal(store.get(session.id)!.title, 'TCP overview');
+  assert.deepEqual(notes, []);
+});
+
+test('a second near-duplicate keeps the short typed title', async (t) => {
+  const root = scratch(t);
+  const model = new TitleModel('done', 'unused');
+  model.scriptedTitles = ['What is TCP', 'what is TCP!'];
+  const { harness: run, store, session } = harness(root, model);
+  cleanup(t, () => store.close());
+  const notes: string[] = [];
+  run.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as
+      { event?: string; message?: string } | undefined;
+    if (notice?.event === 'title_failed') notes.push(String(notice.message));
+  });
+  await run.run('what is TCP');
+  model.releaseTitle();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    model.requests.filter(
+      (request) => request.maxTokens === Harness.titleOutputTokens,
+    ).length,
+    2,
+  );
+  assert.equal(store.get(session.id)!.title, 'what is TCP');
+  assert.deepEqual(notes, ['echoes prompt']);
 });
 
 test('CJK and Latin units are counted together, and a greeting is not titled', async (t) => {

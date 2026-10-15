@@ -28,6 +28,7 @@ import {
   fallbackTitle,
   TITLE_MAX_TOKENS,
   titleConversation,
+  titleRetrySystem,
   titleSkipReason,
 } from './session_title.js';
 import { tokenLen } from './middleware/tool_result_prune.js';
@@ -395,9 +396,10 @@ export class Harness {
     titleTrace(
       `request model=${model.model} chars=${prompt.length} maxTokens=${Harness.titleOutputTokens} thinking=disabled`,
     );
-    return model
-      .complete({
-        system: readPrompt('agent', 'title.md'),
+    const system = readPrompt('agent', 'title.md');
+    const ask = (text: string) =>
+      model.complete({
+        system: text,
         messages: [
           {
             id: 'title',
@@ -412,10 +414,24 @@ export class Harness {
         effort: '',
         maxTokens: Harness.titleOutputTokens,
         token: () => {},
-      })
-      .then((response) => {
+      });
+    return ask(system)
+      .then(async (response) => {
         // Reasoning is never a title, even when the answer is empty.
-        const decision = acceptGeneratedTitle(response.message.content, prompt);
+        let decision = acceptGeneratedTitle(response.message.content, prompt);
+        // One stricter retry. A second copy is not stored.
+        if (decision.reason === 'echoes prompt') {
+          const held = this.options.store.get(sessionId);
+          if (!held || held.title_locked) return;
+          if (held.title !== fallback) {
+            this.bus.emit('info', {
+              payload: { title: held.title, session_id: sessionId },
+            });
+            return;
+          }
+          const again = await ask(titleRetrySystem(system));
+          decision = acceptGeneratedTitle(again.message.content, prompt);
+        }
         if (!decision.title) {
           titleTrace(`discarded (${decision.reason})`);
           report(decision.reason);

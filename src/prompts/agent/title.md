@@ -20,6 +20,7 @@ Your output must be:
 - you MUST write the title in the same language as the user message you are summarizing. A Chinese conversation gets a Chinese title. An English conversation gets an English title
 - Title must be grammatically correct and read naturally - no word salad
 - Write a natural topic title, the way a person would name the subject: "尾递归解释", "罗马帝国简介", "Production 500 errors"
+- Prefer a noun phrase such as "TCP overview". Do not repeat the user's sentence with only capitalization or punctuation changed. "what is TCP" must not become "What is TCP"
 - Do not end titles with 请求 or "request". Use that word only when a plain title would read as if the work is already done, and the work may have been rejected or left unfinished
 - "Creating hello.txt with hi" is wrong. "hello.txt creation request" is right. "尾递归解释请求" is wrong. "尾递归解释" is right
 - No parentheses, and no aside such as "（含共和国等术语）"
