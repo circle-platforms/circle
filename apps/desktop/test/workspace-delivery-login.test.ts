@@ -1,3 +1,5 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, chmod, rm, access } from 'node:fs/promises';
@@ -41,7 +43,10 @@ test('device code flow encrypts then removes dedicated config before completion'
   const root = await mkdtemp(path.join(tmpdir(), 'circle-login-test-'));
   try {
     const gh = path.join(root, 'gh');
-    await writeFile(gh, '#!/bin/sh\nprintf "test-secret-not-returned\\n"\n');
+    await writeFile(
+      gh,
+      `#!${process.execPath}\nprocess.stdout.write('test-secret-not-returned\\n');`,
+    );
     await chmod(gh, 0o755);
     const child = fake();
     let dir = '';
@@ -60,6 +65,12 @@ test('device code flow encrypts then removes dedicated config before completion'
           saved = token;
         },
       },
+      async (file, args, options) => {
+        assert.equal(file, gh);
+        assert.deepEqual(args, ['auth', 'token', '--hostname', 'github.com']);
+        assert.equal(options.env.GH_CONFIG_DIR, dir);
+        return promisify(execFile)(process.execPath, [gh, ...args], options);
+      },
     );
     const state = await login.start();
     child.emit(
@@ -70,6 +81,11 @@ test('device code flow encrypts then removes dedicated config before completion'
     child.finish();
     for (let i = 0; i < 100 && login.poll(state.id).status !== 'complete'; i++)
       await new Promise((r) => setTimeout(r, 10));
+    assert.equal(
+      login.poll(state.id).status,
+      'complete',
+      JSON.stringify(login.poll(state.id)),
+    );
     assert.equal(login.poll(state.id).storage, 'encrypted');
     assert.equal(saved, 'test-secret-not-returned');
     assert.ok(!JSON.stringify(login.poll(state.id)).includes(saved));
