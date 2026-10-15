@@ -23,178 +23,68 @@ try {
   await page.addInitScript(() =>
     localStorage.setItem('circle.workbench.language', 'en'),
   );
-  page.on('pageerror', (error) => console.error(String(error)));
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
   await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
   page.setDefaultTimeout(8000);
-
-  await page
-    .getByRole('button', { name: 'developer layout', exact: true })
-    .click();
-  const message = page.getByRole('textbox', { name: 'message', exact: true });
-  await message.fill('keyboard developer draft');
-  await message.evaluate((node) => node.setSelectionRange(3, 10));
-  await message.focus();
-  await page.keyboard.press('Control+p');
-  const search = page.getByRole('textbox', {
-    name: 'global search',
-    exact: true,
-  });
-  await search.waitFor();
-  await search.press('ArrowDown');
+  const checks = [];
+  await runNativeKeyboardJourney({ page, checks });
+  assert.equal(checks.length, 1);
   assert.equal(
-    await page.locator('.search-results button.selected strong').textContent(),
-    'tests/reconnect.test.ts',
-  );
-  await search.press('ArrowUp');
-  assert.equal(
-    await page.locator('.search-results button.selected strong').textContent(),
-    'src/connection.ts',
-  );
-  await search.fill('README.md');
-  await search.press('Enter');
-  await page
-    .locator('.file-view')
-    .getByText('README.md', { exact: false })
-    .first()
-    .waitFor();
-  await message.focus();
-  await message.evaluate((node) => node.setSelectionRange(3, 10));
-  await page.keyboard.press('Control+Shift+p');
-  await search.waitFor();
-  const firstCommand = await page
-    .locator('.search-results button.selected strong')
-    .textContent();
-  await search.press('ArrowDown');
-  await search.press('ArrowUp');
-  assert.equal(
-    await page.locator('.search-results button.selected strong').textContent(),
-    firstCommand,
-  );
-  await search.press('Escape');
-  await search.waitFor({ state: 'hidden' });
-  await page.waitForFunction(
-    () =>
-      document.activeElement ===
-      document.querySelector('textarea[aria-label="message"]'),
-  );
-  assert.equal(
-    await message.evaluate((node) => document.activeElement === node),
-    true,
-    'Escape should restore original input focus',
-  );
-  assert.deepEqual(
-    await message.evaluate((node) => [node.selectionStart, node.selectionEnd]),
-    [3, 10],
-  );
-  await page.getByRole('button', { name: 'task layout', exact: true }).click();
-  await page.evaluate(
-    () =>
-      new Promise((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(resolve)),
-      ),
+    await page
+      .getByRole('button', { name: 'developer layout', exact: true })
+      .count(),
+    0,
   );
   const transcript = page.locator('.transcript');
+  const frame = () =>
+    page.evaluate(
+      () =>
+        new Promise((r) =>
+          requestAnimationFrame(() => requestAnimationFrame(r)),
+        ),
+    );
   await transcript.evaluate((node) =>
-    node.scrollTo({ top: 120, behavior: 'instant' }),
-  );
-  await page.evaluate(
-    () =>
-      new Promise((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(resolve)),
-      ),
-  );
-  const scrollBefore = await transcript.evaluate((node) => node.scrollTop);
-  assert.ok(scrollBefore > 0);
-  await page
-    .getByRole('button', { name: 'developer layout', exact: true })
-    .click();
-  await page.getByRole('button', { name: 'task layout', exact: true }).click();
-  assert.equal(await message.inputValue(), 'keyboard developer draft');
-  assert.deepEqual(
-    await message.evaluate((node) => [node.selectionStart, node.selectionEnd]),
-    [3, 10],
-  );
-  assert.ok(
-    Math.abs(
-      (await transcript.evaluate((node) => node.scrollTop)) - scrollBefore,
-    ) <= 2,
-    'layout preserves transcript reading position ' +
-      JSON.stringify({
-        scrollBefore,
-        after: await transcript.evaluate((node) => node.scrollTop),
-      }),
-  );
-  await page
-    .getByRole('button', { name: 'developer layout', exact: true })
-    .click();
-  const nativeHelperChecks = [];
-  await runNativeKeyboardJourney({ page, checks: nativeHelperChecks });
-  assert.equal(nativeHelperChecks.length, 1);
-  await page.getByRole('button', { name: 'task layout', exact: true }).click();
-  await page.evaluate(
-    () =>
-      new Promise((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(resolve)),
-      ),
-  );
-  const nearBottom = await transcript.evaluate(async (node) => {
     node.scrollTo({
       top: Math.max(0, node.scrollHeight - node.clientHeight - 15),
       behavior: 'instant',
-    });
-    await new Promise((resolve) =>
-      requestAnimationFrame(() => requestAnimationFrame(resolve)),
-    );
-    return { top: node.scrollTop, max: node.scrollHeight - node.clientHeight };
-  });
-  assert.ok(nearBottom.max > 15);
-  await page
-    .getByRole('button', { name: 'developer layout', exact: true })
-    .click();
-  await page.getByRole('button', { name: 'task layout', exact: true }).click();
-  await page.evaluate(
-    () =>
-      new Promise((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(resolve)),
-      ),
+    }),
   );
-  const afterNearBottom = await transcript.evaluate((node) => ({
-    top: node.scrollTop,
-    max: node.scrollHeight - node.clientHeight,
-  }));
+  await frame();
+  const geometry = () =>
+    transcript.evaluate((node) => ({
+      top: node.scrollTop,
+      max: node.scrollHeight - node.clientHeight,
+    }));
+  const before = await geometry();
+  assert.ok(before.max > 15);
+  const files = page.getByRole('button', { name: 'files panel', exact: true });
+  await files.click();
+  await frame();
+  await files.click();
+  await frame();
+  const after = await geometry();
   assert.ok(
-    Math.abs(afterNearBottom.top - nearBottom.top) <= 2,
-    'manual reading 15px above bottom must survive layout resize: ' +
-      JSON.stringify({ nearBottom, afterNearBottom }),
+    Math.abs(before.top - after.top) <= 2,
+    'manual reading15px above end survives original Inspector resize ' +
+      JSON.stringify({ before, after }),
   );
   await transcript.evaluate((node) =>
     node.scrollTo({ top: node.scrollHeight, behavior: 'instant' }),
   );
-  await page.evaluate(
-    () =>
-      new Promise((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(resolve)),
-      ),
-  );
+  await frame();
   await page.setViewportSize({ width: 1000, height: 900 });
+  await frame();
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.evaluate(
-    () =>
-      new Promise((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(resolve)),
-      ),
-  );
-  const following = await transcript.evaluate((node) => ({
-    top: node.scrollTop,
-    max: node.scrollHeight - node.clientHeight,
-  }));
+  await frame();
+  const following = await geometry();
   assert.ok(
     Math.abs(following.top - following.max) <= 2,
-    'a person at the actual end still follows layout reflow: ' +
-      JSON.stringify(following),
+    'actual bottom follows viewport reflow ' + JSON.stringify(following),
   );
+  assert.deepEqual(errors, []);
   console.log(
-    'quick-open keyboard, palette Escape focus, layout draft/selection passed',
+    'original-shell quick open, file/Inspector continuity, palette focus, draft/selection and exact reading scroll passed',
   );
 } finally {
   await browser?.close();
