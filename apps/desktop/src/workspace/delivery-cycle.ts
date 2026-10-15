@@ -53,6 +53,7 @@ export interface CycleRecord extends CycleSpec {
   attempt: number;
   taskIds: string[];
   publishedHead?: string;
+  ciQueryRetry?: { failures: number; notBefore: number };
   pr?: { url: string; number?: number; head: string };
   lastFailure?: {
     fingerprint: string;
@@ -121,6 +122,7 @@ export interface CyclePorts {
     ): Promise<void>;
   };
 }
+class CiQueryUnavailable extends Error {}
 interface Operation {
   id: string;
   cycleId: string;
@@ -150,12 +152,14 @@ export class DeliveryCycleService {
       dataDir: string;
       ports: CyclePorts;
       onEvent?: (cycle: CycleRecord) => void;
+      clock?: () => number;
     },
   ) {}
   static async open(options: {
     dataDir: string;
     ports: CyclePorts;
     onEvent?: (cycle: CycleRecord) => void;
+    clock?: () => number;
   }): Promise<DeliveryCycleService> {
     const service = new DeliveryCycleService(options);
     await mkdir(options.dataDir, { recursive: true, mode: 0o700 });
@@ -555,8 +559,32 @@ export class DeliveryCycleService {
         await this.update(cycle, 'waiting_ci');
       }
       if (cycle.state === 'waiting_ci') {
-        const results = await ports.delivery.checks(copy(cycle));
-        const state = await ports.git.snapshot(copy(cycle));
+        const timestamp = this.options.clock?.() ?? Date.now();
+        if (cycle.ciQueryRetry && timestamp < cycle.ciQueryRetry.notBefore)
+          return copy(cycle);
+        // Read failures may be retried. Mutations below still use the durable
+        // operation journal and must never be classified as safe to replay.
+        const query = async <T>(read: () => Promise<T>): Promise<T> => {
+          try {
+            return await read();
+          } catch {
+            const failures = (cycle.ciQueryRetry?.failures ?? 0) + 1;
+            cycle.ciQueryRetry = {
+              failures,
+              notBefore:
+                timestamp +
+                Math.min(30_000, 1000 * 2 ** Math.min(failures - 1, 5)),
+            };
+            await this.update(
+              cycle,
+              'waiting_ci',
+              'CI status or logs are temporarily unavailable; retrying after connection or authentication recovers',
+            );
+            throw new CiQueryUnavailable();
+          }
+        };
+        const results = await query(() => ports.delivery.checks(copy(cycle)));
+        const state = await query(() => ports.git.snapshot(copy(cycle)));
         if (
           results.head !== cycle.publishedHead ||
           state.head !== cycle.publishedHead ||
@@ -579,14 +607,17 @@ export class DeliveryCycleService {
           .sort((left, right) => left.name.localeCompare(right.name));
         if (failures.length) {
           const logs = (
-            await Promise.all(
-              failures.map((item) =>
-                item.runId
-                  ? ports.delivery.logs(copy(cycle), item.runId)
-                  : Promise.resolve(`${item.name}: no log run available`),
+            await query(() =>
+              Promise.all(
+                failures.map((item) =>
+                  item.runId
+                    ? ports.delivery.logs(copy(cycle), item.runId)
+                    : Promise.resolve(`${item.name}: no log run available`),
+                ),
               ),
             )
           ).join('\n');
+          delete cycle.ciQueryRetry;
           const fingerprint = hash({
             checks: failures.map(({ name, bucket }) => ({ name, bucket })),
             logs: logs
@@ -628,6 +659,7 @@ export class DeliveryCycleService {
           );
           return copy(cycle);
         }
+        delete cycle.ciQueryRetry;
         const operationId = `${cycle.id}:ready:${cycle.attempt}`;
         await this.operation(
           cycle,
@@ -648,6 +680,7 @@ export class DeliveryCycleService {
         );
       }
     } catch (error) {
+      if (error instanceof CiQueryUnavailable) return copy(cycle);
       if (cycle.state !== 'needs_review')
         await this.update(cycle, 'needs_review', String(error));
     }
