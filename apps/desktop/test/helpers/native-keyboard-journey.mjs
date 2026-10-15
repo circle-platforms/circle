@@ -39,6 +39,12 @@ export async function runNativeKeyboardJourney({
   );
   await search.waitFor();
   await search.press('Escape');
+  await search.waitFor({ state: 'hidden' });
+  // Radix restores focus when the exit transition unmounts the dialog.
+  await page.waitForFunction(() => {
+    const input = document.querySelector('textarea[aria-label="message"]');
+    return input && document.activeElement === input;
+  });
   assert.equal(
     await message.evaluate((node) => document.activeElement === node),
     true,
