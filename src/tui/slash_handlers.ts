@@ -21,6 +21,7 @@ import {
   saveSettingsChange,
   VARIABLE_NAME,
   settingsForRun,
+  withConnectionLock,
   type CircleSettings,
 } from '../settings.js';
 import { removeSecret, saveSecret, secretNames } from '../secrets.js';
@@ -1196,6 +1197,7 @@ function effort(host: CommandHost, args: string): void {
           saveSettingsChange(host.home, (file) => {
             file.default_thinking = item.key;
           });
+          host.settings.default_thinking = item.key;
           setThinking(host, item.key, true);
         },
       },
@@ -1204,12 +1206,14 @@ function effort(host: CommandHost, args: string): void {
 }
 
 function logout(host: CommandHost): void {
-  clearCredentials(host.home);
-  host.settings.auth = defaultAuth();
-  host.settings.initialized = false;
-  saveSettingsChange(host.home, (saved) => {
-    saved.auth = defaultAuth();
-    saved.initialized = false;
+  withConnectionLock(host.home, () => {
+    clearCredentials(host.home);
+    host.settings.auth = defaultAuth();
+    host.settings.initialized = false;
+    saveSettingsChange(host.home, (saved) => {
+      saved.auth = defaultAuth();
+      saved.initialized = false;
+    });
   });
   host.refreshConnection?.();
   host.notice(
@@ -1366,9 +1370,10 @@ function redrawn(host: CommandHost, note: string): void {
 }
 async function newSession(host: CommandHost): Promise<void> {
   const runtime = host.runtime;
-  host.previousSession = runtime.session.id;
+  const previous = runtime.session.id;
   if (host.createSession) await host.createSession();
   else await runtime.newSession();
+  host.previousSession = previous;
   host.state.usage = emptyUsage();
   redrawn(host, `New session ${host.runtime.session.id}`);
 }
@@ -1379,9 +1384,10 @@ async function continueSession(host: CommandHost): Promise<void> {
     host.flash('No previous session');
     return;
   }
-  host.previousSession = runtime.session.id;
+  const current = runtime.session.id;
   if (host.openSession) await host.openSession(previous);
   else await runtime.switchSession(previous);
+  host.previousSession = current;
   host.notice(
     `Continued ${previous} · ${(host.runtime.store.get(previous)?.title || previous).slice(0, 40)}`,
   );
@@ -1530,9 +1536,10 @@ async function tree(
         host.workspace,
         point,
       );
-      host.previousSession = runtime.session.id;
+      const previous = runtime.session.id;
       if (host.openSession) await host.openSession(session.id);
       else await runtime.switchSession(session.id);
+      host.previousSession = previous;
     } else runtime.store.select(runtime.session.id, point);
     if (user)
       host.setDraft(
@@ -1780,10 +1787,11 @@ async function secrets(host: CommandHost, args: string): Promise<void> {
 }
 async function clone(host: CommandHost): Promise<void> {
   const runtime = host.runtime;
+  const previous = runtime.session.id;
   const session = runtime.store.fork(runtime.session.id, host.workspace);
-  host.previousSession = runtime.session.id;
   if (host.openSession) await host.openSession(session.id);
   else await runtime.switchSession(session.id);
+  host.previousSession = previous;
   redrawn(host, `Cloned this branch → ${session.id}`);
 }
 

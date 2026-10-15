@@ -42,6 +42,7 @@ import {
   trustFolder,
   isFolderTrusted,
   isReady,
+  withConnectionLock,
 } from '../settings.js';
 import { resolveEndpoint } from '../probe.js';
 import { PROVIDER_PRESETS } from '../providers.js';
@@ -837,15 +838,17 @@ export class SessionApp {
   // 0.5.0 save it; the typed one when nothing answered.
   private saveConnection(flow: SetupFlow): void {
     const auth = flow.auth();
-    saveCredentials({ api_key: flow.apiKey }, this.home);
-    this.settings = saveSettingsChange(this.home, (saved) => {
-      if (
-        saved.auth.base_url.replace(/\/+$/, '') !==
-        auth.base_url.replace(/\/+$/, '')
-      )
-        saved.enabled_models = [];
-      saved.auth = auth;
-      saved.initialized = true;
+    withConnectionLock(this.home, () => {
+      saveCredentials({ api_key: flow.apiKey }, this.home);
+      this.settings = saveSettingsChange(this.home, (saved) => {
+        if (
+          saved.auth.base_url.replace(/\/+$/, '') !==
+          auth.base_url.replace(/\/+$/, '')
+        )
+          saved.enabled_models = [];
+        saved.auth = auth;
+        saved.initialized = true;
+      });
     });
   }
   private trustWorkspace(): void {
@@ -2737,18 +2740,25 @@ export class SessionApp {
       try {
         await runtime.reloadIntegrations();
       } catch (error) {
-        this.fail(
-          `Reload partly failed: ${error instanceof Error ? error.message : String(error)}`,
+        if (this.ended || runtime.isClosing) return;
+        this.inView(view, () =>
+          this.fail(
+            `Reload partly failed: ${error instanceof Error ? error.message : String(error)}`,
+          ),
         );
         return;
       }
-      this.settings = runtime.options.settings;
-      runtime.setModel(this.settings.auth.model);
-      if (this.theme.mode !== this.settings.theme) {
-        this.theme.mode = this.settings.theme;
-        this.theme.apply();
-      }
-      this.notice('Reloaded settings and the model');
+      if (this.ended || runtime.isClosing) return;
+      this.inView(view, () => {
+        this.settings = structuredClone(runtime.options.settings);
+        runtime.setModel(this.settings.auth.model);
+        if (this.theme.mode !== this.settings.theme) {
+          this.theme.mode = this.settings.theme;
+          this.theme.apply();
+        }
+        this.notice('Reloaded settings and the model');
+      });
+      this.repaint();
       return;
     }
     this.flash(`Unknown command /${name} · try /help`);

@@ -11,9 +11,12 @@ import { ScriptedModel } from '../src/testing.js';
 import {
   defaultSettings,
   loadCredentials,
+  loadSettings,
   saveCredentials,
   saveSettings,
+  saveSettingsChange,
 } from '../src/settings.js';
+import { InputHistory } from '../src/tui/input_history.js';
 import {
   emptyUsage,
   type ModelRequest,
@@ -728,3 +731,154 @@ test('TUI failed pre-delete cleanup retains the selected history and supports a 
   await until(() => other.store.get(id) === undefined);
   assert.equal(app.runtime, other);
 });
+
+test('TUI interleaved conversation input keeps every persisted history entry and each parked history cursor', async (t) => {
+  const { app, ui, home, key } = await appFor(t, [
+    answer('first'),
+    answer('second'),
+    answer('third'),
+  ]);
+  const send = async (text: string) => {
+    ui.composer.paste(text);
+    key('enter');
+    await until(() => !app.runtime!.busy);
+  };
+  const a = app.runtime!;
+  await send('A first');
+  assert.equal(ui.history.up('A parked draft'), 'A first');
+  await app.command('new', '');
+  const b = app.runtime!;
+  await send('B second');
+  await ui.changeSession(a.session.id);
+  assert.equal(ui.history.down(), 'A parked draft');
+  await send('A third');
+  assert.deepEqual(new InputHistory(join(home, 'history')).items, [
+    'A first',
+    'B second',
+    'A third',
+  ]);
+  await ui.changeSession(b.session.id);
+  assert.equal(ui.history.up('B parked draft'), 'A third');
+  assert.equal(ui.history.down(), 'B parked draft');
+});
+
+test('TUI saved thinking depth starts future sessions without changing other live sessions', async (t) => {
+  const { app, ui, home, key } = await appFor(t, []);
+  const a = app.runtime!;
+  await app.command('effort', 'low');
+  await app.command('new', '');
+  const b = app.runtime!;
+  assert.equal(b.thinkingLevel, '');
+  await app.command('effort', '');
+  app.state.picker!.focus = app.state
+    .picker!.matches()
+    .findIndex((item) => item.key === 'high');
+  key('ctrl+s');
+  await until(() => b.thinkingLevel === 'high');
+  assert.equal(loadSettings(home).default_thinking, 'high');
+  assert.equal(a.thinkingLevel, 'low');
+  await app.command('new', '');
+  assert.equal(app.runtime!.thinkingLevel, 'high');
+  await ui.changeSession(a.session.id);
+  assert.equal(app.runtime!.thinkingLevel, 'low');
+});
+
+for (const outcome of ['success', 'failure', 'deleted'] as const)
+  test(`TUI delayed reload ${outcome} stays with its source conversation`, async (t) => {
+    const gateway = await localGateway(t, 'reload');
+    const { app, ui, home } = await connectedApp(t, gateway.base);
+    const a = app.runtime!;
+    await app.command('new', '');
+    const b = app.runtime!;
+    await ui.changeSession(a.session.id);
+    saveSettingsChange(home, (saved) => {
+      saved.auth.model = 'reloaded-model';
+    });
+    const reload = a.reloadIntegrations.bind(a);
+    let ready = false;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    a.reloadIntegrations = async () => {
+      await reload();
+      ready = true;
+      await gate;
+      if (outcome === 'failure') throw new Error('source reload failure');
+    };
+    let modelChanges = 0;
+    const setModel = a.setModel.bind(a);
+    a.setModel = (model) => {
+      modelChanges++;
+      setModel(model);
+    };
+    const work = app.command('reload', '');
+    await until(() => ready);
+    await ui.changeSession(b.session.id);
+    if (outcome === 'deleted') await ui.deleteSession(a.session.id);
+    release();
+    await work;
+    assert.equal(app.runtime, b);
+    assert(
+      !app.state.notices.some((notice) => /[Rr]eload/.test(notice)),
+      'the selected conversation receives no source reload notices',
+    );
+    if (outcome === 'deleted') {
+      assert.equal(modelChanges, 0, 'deleted runtime is never reconfigured');
+      assert.equal(b.store.get(a.session.id), undefined);
+    } else {
+      await ui.changeSession(a.session.id);
+      assert(
+        app.state.notices.some((notice) =>
+          notice.includes(
+            outcome === 'success'
+              ? 'Reloaded settings and the model'
+              : 'source reload failure',
+          ),
+        ),
+      );
+      if (outcome === 'success') {
+        await app.submit('source after reload');
+        await ui.changeSession(b.session.id);
+        await app.submit('other remains unchanged');
+        assert.deepEqual(gateway.requests, [
+          { model: 'reloaded-model', key: 'Bearer old-key' },
+          { model: 'old-model', key: 'Bearer old-key' },
+        ]);
+        await ui.changeSession(a.session.id);
+        await app.command('effort', 'low');
+        await app.command('new', '');
+        assert.equal(
+          app.runtime!.thinkingLevel,
+          '',
+          'reloaded session settings remain separate from new-session defaults',
+        );
+      }
+    }
+  });
+
+for (const name of ['new', 'continue', 'fork', 'clone'])
+  test(`TUI failed ${name} retains the working previous-session destination`, async (t) => {
+    const { app, ui } = await appFor(t, [answer('source answer')]);
+    const previous = app.runtime!;
+    await app.command('new', '');
+    const current = app.runtime!;
+    await app.submit('source prompt');
+    const checkpoint = current.store
+      .tree(current.session.id)
+      .find((entry) => entry.message.role === 'user')!.id;
+    assert.equal(ui.previousSession, previous.session.id);
+    const change = ui.changeSession.bind(ui);
+    ui.changeSession = async () => {
+      throw new Error('session selection failed');
+    };
+    try {
+      await app.command(name, name === 'fork' ? checkpoint : '');
+      assert.equal(app.runtime, current);
+      assert.equal(ui.previousSession, previous.session.id);
+    } finally {
+      ui.changeSession = change;
+    }
+    await app.command('continue', '');
+    assert.equal(app.runtime, previous);
+  });
