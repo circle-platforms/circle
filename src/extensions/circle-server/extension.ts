@@ -128,7 +128,7 @@ const USAGE = [
   '/server get <id>                 save a delivered task’s results again',
   '/server refresh                  read work, execution, knowledge and methods from the server',
   '/server approve <id> <approval>  approve an action a task waits on (reject: /server reject …)',
-  '/server reconcile <id>           ask the server to check an operation whose outcome is unknown',
+  '/server reconcile <id> [op]     check an unknown operation; without op the server only explains',
   '/server tools                    the server’s tools the model can use, read again',
   '/server trial start              record the server tool calls of a trial run from now',
   '/server skill push <folder>      submit a skill pack with the trial record (--outputs a,b)',
@@ -2027,6 +2027,13 @@ export async function register(api: ExtensionAPI): Promise<void> {
         throw new ServerError(
           'Circle runs with a token from circle-server here; there is no sign-out',
         );
+      // Revoke the whole token family at the server first; a server without the
+      // route, or one that already forgot the token, does not trap the local sign-out.
+      try {
+        await request('POST', '/v1/auth/logout', { json: {} });
+      } catch {
+        /* the local sign-out stands */
+      }
       const removed = await api.secrets.delete('token');
       const config = readConfig();
       if (config) writeJson('config.json', { ...config, expiresAt: undefined });
@@ -2226,12 +2233,15 @@ export async function register(api: ExtensionAPI): Promise<void> {
     async reject(rest, context) {
       await decide(rest, false, context);
     },
-    async reconcile([taskId], context) {
-      if (!taskId) throw new ServerError('usage: /server reconcile <id>');
+    async reconcile([taskId, operationId], context) {
+      if (!taskId)
+        throw new ServerError('usage: /server reconcile <id> [operationId]');
+      // Only a request naming the operation is a real reconciliation; without one
+      // the server answers with an explanation of what is missing.
       const { data } = await request(
         'POST',
         `/v1/tasks/${encodeURIComponent(taskId)}/reconcile`,
-        { json: {} },
+        { json: operationId ? { operationId } : {} },
       );
       context.append(
         `  ${taskId} · reconcile · ${JSON.stringify(data).slice(0, 200)}`,

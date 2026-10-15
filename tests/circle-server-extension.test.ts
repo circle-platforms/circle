@@ -69,6 +69,8 @@ async function fakeServer(t: Parameters<typeof scratch>[0]) {
         status: 'failed',
         error: { code: 'UNAUTHENTICATED', message: 'expired' },
       });
+    if (url.pathname === '/v1/auth/logout' && request.method === 'POST')
+      return send(200, { data: { signedOut: true } });
     if (url.pathname === '/v1/status')
       return send(200, { data: { apiVersion: '1.0.0' } });
     if (url.pathname === '/v1/sources')
@@ -681,8 +683,57 @@ test('the connector reads work, execution, knowledge and methods from the server
   );
   await command.handler('reconcile task_one', context);
   assert.match(lines.at(-1)!, /task_one · reconcile · .*reconciled/);
+  // Naming the operation makes it a real reconciliation request.
+  await command.handler('reconcile task_one op_9', context);
+  assert.deepEqual(
+    JSON.parse(
+      server.seen
+        .filter((call) => call.path === '/v1/tasks/task_one/reconcile')
+        .at(-1)!
+        .body.toString(),
+    ),
+    { operationId: 'op_9' },
+  );
   assert.ok(!JSON.stringify(host.view('circle-server')).includes(TOKEN));
   await delay(50);
+});
+
+test('signing out revokes the token family at the server before forgetting it locally', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = await fakeServer(t);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { 'circle-server': { enabled: true } },
+    secret: async (request) => submitAnswer(home, request.id, PASSWORD),
+  }).load();
+  const context = {
+    workspace,
+    toast: () => {},
+    append: () => {},
+    sendUserMessage: () => {},
+  };
+  await host
+    .commands()
+    .get('server')!
+    .handler(`login ${server.url} tester`, context);
+  await host.commands().get('server')!.handler('logout', context);
+  const revocation = server.seen.find(
+    (call) => call.path === '/v1/auth/logout',
+  );
+  assert.ok(revocation, 'the server revoked the family');
+  assert.equal(revocation.auth, `Bearer ${TOKEN}`);
+  assert.equal(
+    await new ExtensionSecrets(home, 'circle-server').get('token'),
+    undefined,
+    'the local token is gone too',
+  );
+  await delay(100);
 });
 
 test('a repair pending input is answered with a replacement, a clarification with a response', async (t) => {
