@@ -16,7 +16,9 @@ try {
   await server.listen();
   browser = await chromium.launch({
     headless: true,
-    channel: process.env.CIRCLE_TEST_BROWSER_CHANNEL || 'chrome',
+    ...(process.env.CIRCLE_TEST_BROWSER_CHANNEL
+      ? { channel: process.env.CIRCLE_TEST_BROWSER_CHANNEL }
+      : {}),
   });
   const page = await browser.newPage({
     viewport: { width: 1200, height: 800 },
