@@ -1,3 +1,5 @@
+import { createRequire } from 'node:module';
+import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { verifyNativeBuildManifest } from './helpers/native-build-manifest.mjs';
@@ -80,7 +82,10 @@ test('executed evidence reads bytes only from the actual app identity and preloa
     }
     const app = {
       evaluate: async (callback, arg) =>
-        callback(
+        runInNewContext('(' + callback.toString() + ')', {
+          require: createRequire(import.meta.url),
+          process,
+        })(
           {
             app: { getAppPath: () => root, isPackaged: false },
             BrowserWindow: {
