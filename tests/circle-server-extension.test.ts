@@ -871,7 +871,9 @@ test('a repair pending input is answered with a replacement, a clarification wit
     context,
   );
   const repair = JSON.parse(
-    server.seen.find((call) => call.path === '/v1/tasks/task_two/input')!.body.toString(),
+    server.seen
+      .find((call) => call.path === '/v1/tasks/task_two/input')!
+      .body.toString(),
   );
   assert.deepEqual(repair, {
     inputRevisionId: 'inrev_2',
@@ -940,13 +942,18 @@ test('module-execute submits the flow input as it is, with no uploaded source', 
       .body.toString(),
   );
   assert.deepEqual(sent.input, flow, 'the flow input goes as it is');
-  assert.ok(!('sourceRevisionId' in sent.input) && !('sourceSha256' in sent.input));
+  assert.ok(
+    !('sourceRevisionId' in sent.input) && !('sourceSha256' in sent.input),
+  );
   assert.ok(
     !server.seen.some((call) => call.path === '/v1/sources'),
     'nothing is uploaded',
   );
   // The command form takes the flow as one JSON word.
-  await command.handler(`submit module-execute ${JSON.stringify(flow)}`, context);
+  await command.handler(
+    `submit module-execute ${JSON.stringify(flow)}`,
+    context,
+  );
   const again = JSON.parse(
     server.seen
       .filter((call) => call.path === '/v1/tasks/submit')
@@ -955,10 +962,7 @@ test('module-execute submits the flow input as it is, with no uploaded source', 
   );
   assert.deepEqual(again.input, flow);
   // A file pack keeps refusing module-execute's input shape and vice versa.
-  await assert.rejects(
-    tool.run({ pack: 'module-execute' }, run),
-    /flow input/,
-  );
+  await assert.rejects(tool.run({ pack: 'module-execute' }, run), /flow input/);
   await assert.rejects(
     tool.run({ pack: 'mindmap-compile' }, run),
     /file is required/,

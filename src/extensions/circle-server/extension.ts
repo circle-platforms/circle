@@ -813,11 +813,18 @@ export async function register(api: ExtensionAPI): Promise<void> {
       'reason',
       'workerId',
     ])
-      if (typeof payload[key] === 'string' && !parts.includes(String(payload[key])))
+      if (
+        typeof payload[key] === 'string' &&
+        !parts.includes(String(payload[key]))
+      )
         parts.push(String(payload[key]));
     for (const key of ['reason', 'error']) {
       const value = payload[key];
-      if (isRecord(value) && typeof value.code === 'string' && !parts.includes(value.code))
+      if (
+        isRecord(value) &&
+        typeof value.code === 'string' &&
+        !parts.includes(value.code)
+      )
         parts.push(value.code);
     }
     return `  ${event.taskId} · ${event.seq} · ${event.kind}${parts.length ? ' · ' + parts.join(' · ') : ''}`;
@@ -924,10 +931,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
 
   // A failed task carries its own error; hub 60220cf adds the rejected flow action
   // (stepId/kind) and the bounded cause (code/message) in error.details.
-  async function failureNote(
-    taskId: string,
-    phase: string,
-  ): Promise<string> {
+  async function failureNote(taskId: string, phase: string): Promise<string> {
     let error: Record<string, unknown> | undefined;
     try {
       const { data } = await request(
@@ -983,10 +987,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         } catch (error) {
           // The retained window moved past this cursor: restart at its first
           // retained position instead of sitting on the stale one forever.
-          if (
-            error instanceof ServerError &&
-            error.code === 'CURSOR_EXPIRED'
-          ) {
+          if (error instanceof ServerError && error.code === 'CURSOR_EXPIRED') {
             cursor = Number(error.details.minCursor) || 0;
             remember(taskId, { seq: cursor });
             continue;
@@ -2323,7 +2324,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
       type: 'object',
       properties: {
         pack: { type: 'string', description: 'capability pack id' },
-        file: { type: 'string', description: 'path in the workspace (file packs)' },
+        file: {
+          type: 'string',
+          description: 'path in the workspace (file packs)',
+        },
         input: {
           type: 'object',
           description:

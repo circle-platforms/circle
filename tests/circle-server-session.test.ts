@@ -35,7 +35,13 @@ async function sessionServer(t: Parameters<typeof scratch>[0]) {
     releaseEvents: undefined as (() => void) | undefined,
   };
   const expiries = new Map<string, number>();
-  const counts = { logins: 0, refreshes: 0, missingRefresh: 0, toolCalls: 0, events: 0 };
+  const counts = {
+    logins: 0,
+    refreshes: 0,
+    missingRefresh: 0,
+    toolCalls: 0,
+    events: 0,
+  };
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://x');
     const text = (await read(request)).toString();
@@ -75,7 +81,10 @@ async function sessionServer(t: Parameters<typeof scratch>[0]) {
       // The hub rotates the token: a fresh one, and the old one dies five seconds later.
       expiries.set(token, Date.now() + 5_000);
       return send(200, {
-        data: issued(`tok-session-${counts.logins}-r${counts.refreshes}`, 3_600_000),
+        data: issued(
+          `tok-session-${counts.logins}-r${counts.refreshes}`,
+          3_600_000,
+        ),
       });
     }
     if (!valid) return fail(401, 'UNAUTHENTICATED');
