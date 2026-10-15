@@ -27,6 +27,9 @@ import {
   fallbackTitle,
   isNumberFragment,
   sanitizeGeneratedTitle,
+  TITLE_MAX_CHARS,
+  TITLE_MAX_WORDS,
+  titleConversation,
 } from './session_title.js';
 import { tokenLen } from './middleware/tool_result_prune.js';
 function titleTrace(message: string): void {
@@ -359,8 +362,9 @@ export class Harness {
   /**
    * Ask the model for a short title after the fallback is already saved. A scripted model
    * never sees this call. A rename that landed first is left alone. The request disables
-   * thinking: glm-5.3 still reasons when the field is omitted, fills the cap, and the
-   * reasoning text is not a title.
+   * thinking: glm-5.3 still reasons when the field is omitted. Reasoning text is
+   * not a title. The prompt is wrapped as data, and a reply that answers the
+   * user is discarded.
    */
   private generateTitle(display: string, fallback: string): void {
     // `this.model`, not the model passed at construction: /model and a reload replace it.
@@ -394,7 +398,7 @@ export class Harness {
           {
             id: 'title',
             role: 'user',
-            content: prompt.slice(0, 2000),
+            content: titleConversation(prompt),
           },
         ],
         tools: [],
@@ -407,26 +411,29 @@ export class Harness {
       })
       .then((response) => {
         // Reasoning is never a title, even when the answer is empty.
-        const raw = response.message.content;
-        const title = sanitizeGeneratedTitle(raw);
-        const cleaned = raw
+        const content = response.message.content;
+        const title = sanitizeGeneratedTitle(content);
+        const cleaned = content
           .split('\n')
           .map((row) => row.trim())
           .find(Boolean)
           ?.replace(/^["'“”‘’«»]+|["'“”‘’«»]+$/g, '')
           .replace(/[。．.]+$/g, '')
           .trim();
-        // `150` from "Write a 1500 word essay" is not a title. Keep the fallback.
-        if (!title || isNumberFragment(title, prompt)) {
-          if (isNumberFragment(title ?? cleaned ?? '', prompt)) {
-            titleTrace(
-              `discarded number fragment ${JSON.stringify(title ?? cleaned)}`,
-            );
-            return;
-          }
-          report(
-            `empty title (content ${response.message.content.length} chars)`,
-          );
+        // `150` from "Write a 1500 word essay" is not a title. Keep the fallback
+        // without saying the request failed: the model did return a fragment.
+        const fragment = (title ?? cleaned ?? '').trim();
+        if (
+          fragment &&
+          isNumberFragment(fragment, prompt) &&
+          fragment.length <= TITLE_MAX_CHARS &&
+          fragment.split(/\s+/).length <= TITLE_MAX_WORDS
+        ) {
+          titleTrace(`discarded number fragment ${JSON.stringify(fragment)}`);
+          return;
+        }
+        if (!title) {
+          report(content.trim() ? 'not a title' : 'empty title');
           return;
         }
         const current = this.options.store.get(this.sessionId);

@@ -12,6 +12,9 @@ import {
   fallbackTitle,
   isNumberFragment,
   sanitizeGeneratedTitle,
+  TITLE_MAX_CHARS,
+  TITLE_MAX_WORDS,
+  titleConversation,
 } from '../src/session_title.js';
 import { defaultSettings, saveCredentials } from '../src/settings.js';
 import { SessionApp } from '../src/tui/session_app.js';
@@ -68,13 +71,48 @@ test('fallback titles stay short and drop a leading please', () => {
   assert.equal([...cjk].length, 22);
 });
 
-test('generated titles keep one line and drop a refusal', () => {
+test('generated titles keep one short phrase and drop a reply', () => {
   assert.equal(sanitizeGeneratedTitle('  "Login bug"\nextra'), 'Login bug');
   assert.equal(sanitizeGeneratedTitle('会话标题。'), '会话标题');
   assert.equal(sanitizeGeneratedTitle('Sorry, I cannot do that'), undefined);
   assert.equal(sanitizeGeneratedTitle('150'), undefined);
   assert.equal(sanitizeGeneratedTitle('1500.'), undefined);
   assert.equal(sanitizeGeneratedTitle('   '), undefined);
+  assert.equal(
+    sanitizeGeneratedTitle('First heading in README.md'),
+    'First heading in README.md',
+  );
+  assert.equal(
+    sanitizeGeneratedTitle('Fix your login page'),
+    'Fix your login page',
+  );
+  assert.equal(sanitizeGeneratedTitle('登录故障修复'), '登录故障修复');
+  const words = Array.from({ length: TITLE_MAX_WORDS }, (_, i) => `w${i}`).join(
+    ' ',
+  );
+  assert.equal(sanitizeGeneratedTitle(words), words);
+  assert.equal(sanitizeGeneratedTitle(`${words} extra`), undefined);
+  const chars = 'a'.repeat(TITLE_MAX_CHARS);
+  assert.equal(sanitizeGeneratedTitle(chars), chars);
+  assert.equal(sanitizeGeneratedTitle(`${chars}b`), undefined);
+  assert.equal(sanitizeGeneratedTitle('What is README.md?'), undefined);
+  assert.equal(sanitizeGeneratedTitle('这是什么？'), undefined);
+  assert.equal(sanitizeGeneratedTitle('Login bug. Write tests'), undefined);
+  assert.equal(sanitizeGeneratedTitle('登录故障。请再看一眼'), undefined);
+  assert.equal(sanitizeGeneratedTitle("I don't see the file"), undefined);
+  assert.equal(sanitizeGeneratedTitle('Could you paste it'), undefined);
+  assert.equal(sanitizeGeneratedTitle('You left out the file'), undefined);
+  assert.equal(sanitizeGeneratedTitle('我看不到附件内容'), undefined);
+  assert.equal(
+    sanitizeGeneratedTitle(
+      "I don't see any README.md content attached to your message. Could you paste…",
+    ),
+    undefined,
+  );
+  assert.equal(
+    sanitizeGeneratedTitle('<conversation>\nLogin bug\n</conversation>'),
+    undefined,
+  );
   const essay =
     'Write a 1500 word essay about the history of roman citizenship and the legal meaning of that status across the empire';
   const fallback = fallbackTitle(essay);
@@ -88,11 +126,12 @@ test('generated titles keep one line and drop a refusal', () => {
   );
   assert.match(cjkNumber, /1500/);
   assert.equal(/150(?!0)/.test(cjkNumber), false);
-  const long = sanitizeGeneratedTitle(
-    'Refactor the session title generator so the sidebar shows a short summary of the first prompt',
+  assert.equal(
+    sanitizeGeneratedTitle(
+      'Refactor the session title generator so the sidebar shows a short summary of the first prompt',
+    ),
+    undefined,
   );
-  assert.ok(long && long.length <= 50, long);
-  assert.ok(!long!.endsWith(' '), long);
 });
 
 class TitleModel implements ChatModel {
@@ -165,6 +204,8 @@ test('a side request names the session and does not take the answer', async (t) 
   );
   assert.equal(titleCalls.length, 1);
   assert.equal(titleCalls[0]!.effort, '');
+  assert.equal(titleCalls[0]!.messages[0]!.content, titleConversation(LONG));
+  assert.match(String(titleCalls[0]!.system), /Do not answer it/);
   assert.equal(
     model.requests.filter((request) => !request.maxTokens).length,
     1,
@@ -292,10 +333,44 @@ test('a refusal leaves the fallback title', async (t) => {
   const model = new TitleModel('done', 'Sorry, I cannot title this');
   const { harness: run, store, session } = harness(root, model);
   cleanup(t, () => store.close());
+  const notes: string[] = [];
+  run.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as
+      { event?: string; message?: string } | undefined;
+    if (notice?.event === 'title_failed') notes.push(String(notice.message));
+  });
   await run.run(LONG);
   model.releaseTitle();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
+  assert.equal(notes[0], 'not a title');
+});
+
+test('an answer instead of a title keeps the fallback', async (t) => {
+  const root = scratch(t);
+  const model = new TitleModel(
+    'done',
+    "I don't see any README.md content attached to your message. Could you paste…",
+  );
+  const { harness: run, store, session } = harness(root, model);
+  cleanup(t, () => store.close());
+  const notes: string[] = [];
+  run.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as
+      { event?: string; message?: string } | undefined;
+    if (notice?.event === 'title_failed') notes.push(String(notice.message));
+  });
+  await run.run(LONG);
+  model.releaseTitle();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
+  assert.equal(notes[0], 'not a title');
+  assert.match(
+    model.requests.find(
+      (request) => request.maxTokens === Harness.titleOutputTokens,
+    )!.messages[0]!.content,
+    /^<conversation>\n/,
+  );
 });
 
 test('a failed side request keeps the fallback and is reported', async (t) => {
@@ -494,6 +569,12 @@ test('an Anthropic title request through the terminal replaces the fallback', as
   );
   assert.ok(title, JSON.stringify(bodies.map((body) => body.max_tokens)));
   assert.match(String(title.system), /title generator/);
+  assert.match(String(title.system), /Do not answer it/);
+  assert.match(JSON.stringify(title.messages), /<conversation>\\nlist all/);
+  assert.match(
+    JSON.stringify(title.messages),
+    /in the workspace\\n<\/conversation>/,
+  );
   assert.equal(title.output_config, undefined);
   assert.deepEqual(title.thinking, { type: 'disabled' });
   assert.equal(title.max_tokens, Harness.titleOutputTokens);
@@ -660,6 +741,8 @@ test('an Anthropic title reply that is only thinking keeps the fallback', async 
   assert.deepEqual(title.thinking, { type: 'disabled' });
   assert.equal(title.max_tokens, Harness.titleOutputTokens);
   assert.equal(title.output_config, undefined);
+  assert.match(String(title.system), /Do not answer it/);
+  assert.match(JSON.stringify(title.messages), /<conversation>\\nlook at/);
   const stored = runtime.store.get(runtime.session.id)!.title;
   assert.equal(stored, fallbackTitle(prompt));
   assert.equal(stored.includes('The user is asking'), false);
