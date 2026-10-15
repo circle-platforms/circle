@@ -940,6 +940,11 @@ try {
       { sessionId, origin },
     );
     assert(actual.storage.some(([k, v]) => k === 'journey' && v === 'after'));
+    const viewportSettings = panel.locator('details').filter({
+      has: page.locator('summary', { hasText: 'viewport and developer tools' }),
+    });
+    if (!(await viewportSettings.evaluate((node) => node.open)))
+      await viewportSettings.locator('summary').click();
     await panel.getByLabel('viewport width', { exact: true }).fill('375');
     await panel.getByLabel('viewport height', { exact: true }).fill('812');
     await panel

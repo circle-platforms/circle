@@ -1,3 +1,4 @@
+import { Button, Status } from '../components/common';
 import { useSources, sourceLocation } from '../components/SourceNavigation';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { desktopHost } from '../host';
@@ -308,52 +309,56 @@ export function BrowserDiagnostics({
     });
   };
   return (
-    <section className="browser-diagnostics">
-      <button aria-expanded={open} onClick={() => setOpen(!open)}>
+    <section className="browser-diagnostics panel-section">
+      <Button aria-expanded={open} onClick={() => setOpen(!open)}>
         {t('page diagnostics')}
-      </button>
+      </Button>
       {open && (
         <>
-          <div className="browser-diagnostic-tools">
-            <button onClick={() => void request({ action: 'devtools' })}>
-              {t('hand over to devtools')}
-            </button>
-            <label>
-              {t('viewport width')}
-              <input
-                value={width}
-                onChange={(e) => setWidth(e.target.value)}
-                inputMode="numeric"
-              />
-            </label>
-            <label>
-              {t('viewport height')}
-              <input
-                value={height}
-                onChange={(e) => setHeight(e.target.value)}
-                inputMode="numeric"
-              />
-            </label>
-            <button
-              onClick={() =>
-                void request({
-                  action: 'viewport',
-                  width: Number(width),
-                  height: Number(height),
-                  mobile: true,
-                })
-              }
-            >
-              {t('apply viewport')}
-            </button>
-            <button onClick={() => void request({ action: 'viewport' })}>
-              {t('reset viewport')}
-            </button>
-          </div>
-          <div className="browser-diagnostic-tabs" role="tablist">
+          <details className="context-source browser-diagnostic-settings">
+            <summary>{t('viewport and developer tools')}</summary>
+            <div className="browser-diagnostic-tools">
+              <Button onClick={() => void request({ action: 'devtools' })}>
+                {t('hand over to devtools')}
+              </Button>
+              <label>
+                {t('viewport width')}
+                <input
+                  value={width}
+                  onChange={(e) => setWidth(e.target.value)}
+                  inputMode="numeric"
+                />
+              </label>
+              <label>
+                {t('viewport height')}
+                <input
+                  value={height}
+                  onChange={(e) => setHeight(e.target.value)}
+                  inputMode="numeric"
+                />
+              </label>
+              <Button
+                onClick={() =>
+                  void request({
+                    action: 'viewport',
+                    width: Number(width),
+                    height: Number(height),
+                    mobile: true,
+                  })
+                }
+              >
+                {t('apply viewport')}
+              </Button>
+              <Button onClick={() => void request({ action: 'viewport' })}>
+                {t('reset viewport')}
+              </Button>
+            </div>
+          </details>
+          <div className="browser-diagnostic-tabs segmented" role="tablist">
             <button
               role="tab"
               aria-selected={section === 'console'}
+              className={section === 'console' ? 'active' : undefined}
               onClick={() => setSection('console')}
             >
               {t('console')}
@@ -361,6 +366,7 @@ export function BrowserDiagnostics({
             <button
               role="tab"
               aria-selected={section === 'network'}
+              className={section === 'network' ? 'active' : undefined}
               onClick={() => setSection('network')}
             >
               {t('network')}
@@ -368,6 +374,7 @@ export function BrowserDiagnostics({
             <button
               role="tab"
               aria-selected={section === 'storage'}
+              className={section === 'storage' ? 'active' : undefined}
               onClick={() => {
                 setSection('storage');
                 storage('read');
@@ -378,6 +385,7 @@ export function BrowserDiagnostics({
             <button
               role="tab"
               aria-selected={section === 'debug'}
+              className={section === 'debug' ? 'active' : undefined}
               onClick={() => setSection('debug')}
             >
               {t('page debugger')}
@@ -386,16 +394,20 @@ export function BrowserDiagnostics({
           {(error || result?.state.reconnectError) && (
             <p role="alert">{error || result?.state.reconnectError}</p>
           )}
-          <p role="status">
-            {result?.state.debugger.paused
-              ? t('page paused')
-              : t('page running')}
-          </p>
+          <div role="status">
+            <Status
+              value={
+                result?.state.debugger.paused
+                  ? t('page paused')
+                  : t('page running')
+              }
+            />
+          </div>
           {result?.state.owner === 'devtools' && (
             <p>{t('devtools owns this page; close it to reconnect')}</p>
           )}
           {result?.source && (
-            <details open className="browser-source-preview">
+            <details open className="browser-source-preview context-source">
               <summary>
                 {t('browser source')} · {result.source.url}
               </summary>
@@ -415,23 +427,27 @@ export function BrowserDiagnostics({
           >
             {section === 'console' && (
               <>
-                <button
+                <Button
                   onClick={() => void request({ action: 'clearConsole' })}
                 >
                   {t('clear console')}
-                </button>
+                </Button>
                 {result?.state.console.map((entry) => (
-                  <details key={entry.id} data-console-id={entry.id}>
+                  <details
+                    className="context-source"
+                    key={entry.id}
+                    data-console-id={entry.id}
+                  >
                     <summary>
                       {entry.level} · {entry.text}
                     </summary>
                     {entry.stack.map((f, i) => (
                       <div key={i}>
-                        <button
+                        <Button
                           onClick={() => openSource(f.url, f.line, f.column)}
                         >
                           {f.name} {f.url}:{f.line}:{f.column}
-                        </button>
+                        </Button>
                       </div>
                     ))}
                   </details>
@@ -440,20 +456,20 @@ export function BrowserDiagnostics({
             )}
             {section === 'network' && (
               <>
-                <button
+                <Button
                   onClick={() => void request({ action: 'clearNetwork' })}
                 >
                   {t('clear network')}
-                </button>
+                </Button>
                 {result?.state.network.map((n) => (
                   <div key={n.id}>
-                    <button
+                    <Button
                       onClick={() =>
                         void request({ action: 'response', requestId: n.id })
                       }
                     >
                       {n.method} {n.status ?? '…'} {n.url}
-                    </button>
+                    </Button>
                     <span>
                       {n.duration === undefined
                         ? '…'
@@ -485,9 +501,9 @@ export function BrowserDiagnostics({
                   <option value="local">localStorage</option>
                   <option value="session">sessionStorage</option>
                 </select>
-                <button onClick={() => storage('read')}>
+                <Button onClick={() => storage('read')}>
                   {t('refresh storage')}
-                </button>
+                </Button>
                 <input
                   aria-label={t('storage key')}
                   value={key}
@@ -498,17 +514,17 @@ export function BrowserDiagnostics({
                   value={value}
                   onChange={(e) => setValue(e.target.value)}
                 />
-                <button onClick={() => storage('set')}>
+                <Button onClick={() => storage('set')}>
                   {t('save storage item')}
-                </button>
+                </Button>
                 {result?.storage?.map(([k, v]) => (
                   <div key={k}>
                     <code>
                       {k}: {v}
                     </code>
-                    <button onClick={() => storage('remove', k)}>
+                    <Button onClick={() => storage('remove', k)}>
                       {t('remove storage item')}
-                    </button>
+                    </Button>
                   </div>
                 ))}
               </>
@@ -525,7 +541,7 @@ export function BrowserDiagnostics({
                       'stepOut',
                     ] as const
                   ).map((command) => (
-                    <button
+                    <Button
                       key={command}
                       onClick={() => void request({ action: 'debug', command })}
                     >
@@ -538,7 +554,7 @@ export function BrowserDiagnostics({
                             : command === 'stepInto'
                               ? t('step into')
                               : t('step out')}
-                    </button>
+                    </Button>
                   ))}
                 </div>
                 <input
@@ -551,7 +567,7 @@ export function BrowserDiagnostics({
                   value={line}
                   onChange={(e) => setLine(e.target.value)}
                 />
-                <button
+                <Button
                   onClick={() =>
                     void request({
                       action: 'debug',
@@ -562,13 +578,13 @@ export function BrowserDiagnostics({
                   }
                 >
                   {t('add breakpoint')}
-                </button>
+                </Button>
                 {result?.state.debugger.breakpoints.map((b) => (
                   <div key={b.id}>
                     <code>
                       {b.verified ? '●' : '○'} {b.source.path}:{b.line}
                     </code>
-                    <button
+                    <Button
                       onClick={() =>
                         void request({
                           action: 'debug',
@@ -578,23 +594,23 @@ export function BrowserDiagnostics({
                       }
                     >
                       {t('remove breakpoint')}
-                    </button>
+                    </Button>
                   </div>
                 ))}
                 {result?.state.debugger.stackFrames.map((f) => (
-                  <details key={f.id}>
+                  <details className="context-source" key={f.id}>
                     <summary>
                       {f.name} {f.source.path}:{f.line}
                     </summary>
-                    <button
+                    <Button
                       onClick={() =>
                         openSource(f.source.path, f.line, f.column)
                       }
                     >
                       {t('open source location')}
-                    </button>
+                    </Button>
                     {f.scopes.map((s) => (
-                      <button
+                      <Button
                         key={s.variablesReference}
                         onClick={() => {
                           selectedScope.current = s.name;
@@ -608,7 +624,7 @@ export function BrowserDiagnostics({
                         }}
                       >
                         {s.name}
-                      </button>
+                      </Button>
                     ))}
                   </details>
                 ))}
