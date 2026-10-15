@@ -490,3 +490,29 @@ test('configuration extends cannot load files outside the granted root', (t) => 
     ),
   );
 });
+
+test('inferred JavaScript projects suppress emit collisions but configured projects retain them', (t) => {
+  const { root, service } = fixture(t);
+  rmSync(join(root, 'tsconfig.json'));
+  writeFileSync(
+    join(root, 'debug.js'),
+    'const value = 1; console.log(value);\n',
+  );
+  service.invalidate();
+  const inferred = service.call('request', { method: 'project' }) as {
+    diagnostics: { code: string }[];
+  };
+  assert(!inferred.diagnostics.some((d) => d.code === '5055'));
+  writeFileSync(
+    join(root, 'tsconfig.json'),
+    JSON.stringify({
+      compilerOptions: { allowJs: true, noEmit: false },
+      include: ['debug.js'],
+    }),
+  );
+  service.invalidate();
+  const configured = service.call('request', { method: 'project' }) as {
+    diagnostics: { code: string }[];
+  };
+  assert(configured.diagnostics.some((d) => d.code === '5055'));
+});

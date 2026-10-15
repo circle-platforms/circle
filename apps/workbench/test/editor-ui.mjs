@@ -502,9 +502,12 @@ try {
   await viewer
     .getByRole('button', { name: 'break project config', exact: true })
     .click();
-  await viewer
-    .getByText('project configuration needs attention', { exact: true })
-    .waitFor();
+  await viewer.locator('.editor-project-diagnostics summary').waitFor();
+  assert.equal(
+    await viewer.locator('.editor-project-diagnostics').getAttribute('open'),
+    null,
+  );
+  await viewer.locator('.editor-project-diagnostics summary').click();
   await viewer
     .getByRole('button', { name: 'tsconfig.json', exact: true })
     .first()
@@ -517,7 +520,7 @@ try {
     .getByRole('button', { name: 'fix project config', exact: true })
     .click();
   await viewer
-    .getByText('project configuration needs attention', { exact: true })
+    .locator('.editor-project-diagnostics summary')
     .waitFor({ state: 'hidden' });
   await viewer.close();
   assert.deepEqual(errors, []);

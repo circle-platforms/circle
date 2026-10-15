@@ -567,15 +567,19 @@ export function FileViewer({
         )}
       </div>
       {!!projectErrors.length && (
-        <div className="editor-notice" role="alert">
-          <strong>
+        <details
+          className="editor-notice editor-project-diagnostics"
+          role="alert"
+        >
+          <summary>
             {projectErrors.every(
               (problem) => problem.source === 'configuration',
             )
               ? t('project configuration needs attention')
-              : t('language service needs attention')}
-          </strong>
-          {projectErrors.slice(0, 3).map((problem, index) => (
+              : t('language service needs attention')}{' '}
+            ({projectErrors.length})
+          </summary>
+          {projectErrors.map((problem, index) => (
             <span key={index}>
               {problem.path && (
                 <Button
@@ -600,7 +604,7 @@ export function FileViewer({
               {problem.message}
             </span>
           ))}
-        </div>
+        </details>
       )}
       {error && (
         <div className="editor-notice" role="alert">
