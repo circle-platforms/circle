@@ -313,6 +313,10 @@ test('resource queues do not block unrelated work; UI serializes, build defaults
   assert.equal(maxUi, 1);
   assert.equal(maxBuilds, 2);
   scheduler.setLimits({ agents: 1 });
+  assert.equal(scheduler.getLimits().agents, 1);
+  const copy = scheduler.getLimits();
+  copy.agents = 20;
+  assert.equal(scheduler.getLimits().agents, 1);
 });
 
 test('cancel waits for cleanup, removes resource waiters, leaves successors blocked and other tasks running', async (t) => {

@@ -467,6 +467,9 @@ export class CollaborationScheduler {
     this.started = true;
     this.schedule();
   }
+  getLimits(): CollaborationLimits {
+    return { ...this.limits };
+  }
   setLimits(limits: Partial<CollaborationLimits>): void {
     this.assertOpen();
     const next = { ...this.limits, ...limits };
