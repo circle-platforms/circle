@@ -557,7 +557,7 @@ try {
       );
       await screenshot('01b-instruction-source');
       await page
-        .getByRole('button', { name: 'close inspector', exact: true })
+        .getByRole('button', { name: 'close file', exact: true })
         .click();
     },
   );
