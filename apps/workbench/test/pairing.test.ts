@@ -63,11 +63,7 @@ test('the shown plugins are the chosen plain ones and the live paired ones, what
     'hub',
   ]);
   assert.deepEqual(
-    effectivePlugins(
-      plugins,
-      ['files', 'hub'],
-      [row({ enabled: false })],
-    ),
+    effectivePlugins(plugins, ['files', 'hub'], [row({ enabled: false })]),
     ['files'],
   );
   assert.deepEqual(effectivePlugins(plugins, [], [row()]), ['hub']);

@@ -105,14 +105,10 @@ try {
   assert.equal(bundled.version, '0.1.0');
   assert.equal(bundled.enabled, false);
   assert.equal(
-    await page
-      .getByRole('link', { name: 'hub', exact: true })
-      .count(),
+    await page.getByRole('link', { name: 'hub', exact: true }).count(),
     0,
   );
-  checks.push(
-    'the bundled hub extension ships off, and its page is hidden',
-  );
+  checks.push('the bundled hub extension ships off, and its page is hidden');
 
   await route('/page/extensions');
   await page
@@ -139,17 +135,13 @@ try {
     await readFile(join(data, 'runtime-home', 'settings.json'), 'utf8'),
   );
   assert.equal(saved.extensions['hub'].enabled, true);
-  await page
-    .getByRole('link', { name: 'hub', exact: true })
-    .waitFor();
+  await page.getByRole('link', { name: 'hub', exact: true }).waitFor();
   checks.push(
     'turning the paired interface on turns its runtime extension on, saved, and shows its page',
   );
 
   await page.getByRole('link', { name: 'hub', exact: true }).click();
-  await page
-    .getByRole('heading', { name: 'hub', exact: true })
-    .waitFor();
+  await page.getByRole('heading', { name: 'hub', exact: true }).waitFor();
   await page.getByText('signed out', { exact: true }).waitFor();
   const view = (await row('hub')).view;
   assert.equal(view.signedIn, false);
@@ -202,9 +194,8 @@ try {
   );
   await waitFor(
     async () =>
-      (await page
-        .getByRole('link', { name: 'hub', exact: true })
-        .count()) === 0,
+      (await page.getByRole('link', { name: 'hub', exact: true }).count()) ===
+      0,
     'page hidden',
   );
   for (const id of ['knowledge', 'work', 'execution', 'methods'])
