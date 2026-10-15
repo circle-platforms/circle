@@ -181,6 +181,8 @@ export class WorkspaceStreamStore {
             typeof event.data !== 'object' ||
             Array.isArray(event.data) ||
             ![
+              'cycles',
+              'events',
               'documents',
               'terminal',
               'git',
