@@ -348,10 +348,11 @@ export class Harness {
     // `this.model`, not the model passed at construction: /model and a reload replace it.
     const model = this.model;
     const prompt = display.trim();
-    if (!model.sideRequests || prompt.length < 24) {
-      titleTrace(
-        `skipped (${!model.sideRequests ? 'model has no sideRequests' : `prompt length ${prompt.length} < 24`})`,
-      );
+    // A short line keeps the fallback on purpose. A long line with no side
+    // request used to return here with no footer: the extension wrapper had
+    // dropped `sideRequests`, and harness tests never saw that wrapper.
+    if (prompt.length < 24) {
+      titleTrace(`skipped (prompt length ${prompt.length} < 24)`);
       return;
     }
     const report = (message: string): void => {
@@ -360,6 +361,11 @@ export class Harness {
         payload: { model_notice: { event: 'title_failed', message } },
       });
     };
+    if (!model.sideRequests) {
+      titleTrace('skipped (model has no sideRequests)');
+      report('model has no side request');
+      return;
+    }
     titleTrace(
       `request model=${model.model} chars=${prompt.length} maxTokens=128 effort=`,
     );

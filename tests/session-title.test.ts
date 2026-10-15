@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ApprovalPolicy, ApprovalStore } from '../src/approvals.js';
 import { CheckpointStore } from '../src/checkpoint_store.js';
+import { ExtensionHost } from '../src/extensions.js';
 import { Harness } from '../src/harness.js';
+import { AgentRuntime } from '../src/runtime.js';
 import { fallbackTitle, sanitizeGeneratedTitle } from '../src/session_title.js';
 import { defaultSettings, saveCredentials } from '../src/settings.js';
 import { SessionApp } from '../src/tui/session_app.js';
@@ -170,6 +172,11 @@ test('a short prompt keeps the fallback and skips the model', async (t) => {
   const model = new TitleModel('done', 'Should not appear');
   const { harness: run, store, session } = harness(root, model);
   cleanup(t, () => store.close());
+  const notes: string[] = [];
+  run.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as { event?: string } | undefined;
+    if (notice?.event === 'title_failed') notes.push('failed');
+  });
   await run.run('hello there');
   model.releaseTitle();
   await new Promise((resolve) => setImmediate(resolve));
@@ -177,6 +184,60 @@ test('a short prompt keeps the fallback and skips the model', async (t) => {
   assert.equal(
     model.requests.filter((request) => request.maxTokens === 128).length,
     0,
+  );
+  assert.deepEqual(notes, []);
+});
+
+test('a long prompt with no side request reports title failed', async (t) => {
+  const root = scratch(t);
+  const model = new TitleModel('done', 'Login bug fix');
+  model.sideRequests = false;
+  const { harness: run, store, session } = harness(root, model);
+  cleanup(t, () => store.close());
+  const notes: string[] = [];
+  run.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as
+      { event?: string; message?: string } | undefined;
+    if (notice?.event === 'title_failed') notes.push(String(notice.message));
+  });
+  await run.run(LONG);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
+  assert.equal(
+    model.requests.filter((request) => request.maxTokens === 128).length,
+    0,
+  );
+  assert.match(notes[0] ?? '', /no side request/);
+});
+
+test('the runtime wrapper keeps side requests and can name the session', async (t) => {
+  const root = scratch(t);
+  const model = new TitleModel('done', 'Login bug fix');
+  const wrapped = new ExtensionHost({
+    home: root,
+    workspace: root,
+    trusted: false,
+    bundledRoot: false,
+  }).model(model);
+  assert.equal(wrapped.sideRequests, true);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: defaultSettings(),
+    model: wrapped,
+    headless: true,
+    localContext: false,
+    bundledExtensions: false,
+  });
+  cleanup(t, () => runtime.close());
+  assert.equal(runtime.harness.model.sideRequests, true);
+  await runtime.harness.run(LONG);
+  model.releaseTitle();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(runtime.store.get(runtime.session.id)!.title, 'Login bug fix');
+  assert.equal(
+    model.requests.filter((request) => request.maxTokens === 128).length,
+    1,
   );
 });
 
