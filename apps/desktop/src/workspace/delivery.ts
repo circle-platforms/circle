@@ -1,6 +1,11 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { GitWorkspaceService } from './git.ts';
+import {
+  DeliveryLogin,
+  type LoginSpawn,
+  type CredentialStore,
+} from './delivery-login.ts';
 const exec = promisify(execFile);
 const deliveryLocks = new Map<string, Promise<unknown>>();
 export const GH_VERSION = '2.83.2';
@@ -8,12 +13,25 @@ export class DeliveryService {
   readonly git: GitWorkspaceService;
   readonly root: string;
   readonly ghPath: string;
-  constructor(root: string, ghPath = 'gh') {
+  readonly login?: DeliveryLogin;
+  constructor(
+    root: string,
+    ghPath = 'gh',
+    options?: { spawn: LoginSpawn; credentialStore?: CredentialStore },
+  ) {
     this.root = root;
     this.ghPath = ghPath;
     this.git = new GitWorkspaceService(root);
+    if (options)
+      this.login = new DeliveryLogin(
+        options.spawn,
+        ghPath,
+        root,
+        options.credentialStore,
+      );
   }
   async gh(args: string[]) {
+    const token = await this.login?.token();
     return (
       await exec(this.ghPath, args, {
         cwd: this.root,
@@ -22,11 +40,15 @@ export class DeliveryService {
         timeout: 120_000,
         env: {
           ...process.env,
+          ...(token ? { GH_TOKEN: token } : {}),
           GH_PROMPT_DISABLED: '1',
           GH_NO_UPDATE_NOTIFIER: '1',
         },
       })
     ).stdout;
+  }
+  async dispose() {
+    await this.login?.dispose();
   }
   private async pr() {
     return JSON.parse(
@@ -60,6 +82,13 @@ export class DeliveryService {
     method: string,
     params: Record<string, unknown>,
   ): Promise<unknown> {
+    if (method === 'login') {
+      if (!this.login) throw Error('native login helper is unavailable');
+      if (params.action === 'poll') return this.login.poll(String(params.id));
+      if (params.action === 'cancel')
+        return this.login.cancel(String(params.id));
+      return this.login.start();
+    }
     if (method === 'status') {
       const auth = await this.gh(['auth', 'status']).then(
         () => true,

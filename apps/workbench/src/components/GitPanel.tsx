@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { workspaceCall } from '../model/workspace-client';
 import { t } from '../i18n';
 import './GitPanel.css';
+import { DeliveryPanel } from './DeliveryPanel';
 import type { GitSnapshot } from '../../../desktop/src/workspace/git';
 export function gitHunks(diff: string): string[] {
   const result: string[] = [];
@@ -20,9 +21,11 @@ export function gitHunks(diff: string): string[] {
 export function GitPanel({
   sessionId,
   onFile,
+  onOpenExternal,
 }: {
   sessionId: string;
   onFile?: (path: string) => void;
+  onOpenExternal?: (url: string) => void;
 }) {
   const [state, setState] = useState<GitSnapshot | null>(null);
   const [scope, setScope] = useState('working');
@@ -32,7 +35,6 @@ export function GitPanel({
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [delivery, setDelivery] = useState('');
   const refresh = async () => {
     const next = await workspaceCall<GitSnapshot>(sessionId, 'git', 'status');
     setState(next);
@@ -79,26 +81,6 @@ export function GitPanel({
       setDiff(r.text);
     } catch (e) {
       setError(String(e));
-    }
-  }
-  async function github(method: string, extra: Record<string, unknown> = {}) {
-    setBusy(true);
-    setError('');
-    try {
-      setDelivery(
-        JSON.stringify(
-          await workspaceCall(sessionId, 'delivery', method, {
-            revision: state?.revision,
-            ...extra,
-          }),
-          null,
-          2,
-        ),
-      );
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
     }
   }
   return (
@@ -256,26 +238,11 @@ export function GitPanel({
           </button>
         </div>
       )}
-      <details>
-        <summary>{t('GitHub delivery')}</summary>
-        <button disabled={busy} onClick={() => github('status')}>
-          {t('connection and PR status')}
-        </button>
-        <button
-          disabled={busy}
-          onClick={() => github('publish', { title: message, body: '' })}
-        >
-          {t('publish draft PR')}
-        </button>
-        <button disabled={busy} onClick={() => github('checks')}>
-          {t('check CI')}
-        </button>
-        <button disabled={busy} onClick={() => github('ready')}>
-          {t('request review after checks pass')}
-        </button>
-        <pre tabIndex={0}>{delivery}</pre>
-        <p>{t('merging remains a human decision')}</p>
-      </details>
+      <DeliveryPanel
+        sessionId={sessionId}
+        revision={state?.revision}
+        onOpenExternal={onOpenExternal}
+      />
       {busy && <p role="status">{t('working…')}</p>}
     </section>
   );
