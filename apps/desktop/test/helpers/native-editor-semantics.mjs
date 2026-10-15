@@ -3,6 +3,8 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+export const nativeEditorFormatShortcut = (platform = process.platform) =>
+  platform === 'linux' ? 'Control+Shift+i' : 'Alt+Shift+f';
 const file = 'editor-supplement.ts';
 // Explicit module scope prevents unrelated script fixtures from redeclaring value.
 const initial = 'const value=1;\nconsole.log(value);\nexport {};\n';
@@ -100,7 +102,8 @@ export async function runNativeEditorSemantics({
       initial,
       'range replacement stays in buffer until save',
     );
-    await page.keyboard.press('Alt+Shift+f');
+    // Monaco binds document format differently on Linux.
+    await page.keyboard.press(nativeEditorFormatShortcut());
     await until(
       async () =>
         (await lines.textContent())

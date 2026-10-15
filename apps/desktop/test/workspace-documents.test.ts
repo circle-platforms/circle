@@ -146,6 +146,9 @@ test('save checks disk revisions, preserves file mode and keeps a stable file id
   await writeFile(join(root, 'main.ts'), 'export const value = 1;\n', {
     mode: 0o640,
   });
+  // Windows exposes writable/read-only mode bits rather than POSIX group bits.
+  // Preserve the mode the filesystem actually granted on every platform.
+  const originalMode = (await stat(join(root, 'main.ts'))).mode & 0o777;
   const first = await documents.read('main.ts');
   const saved = await documents.save(
     'main.ts',
@@ -156,7 +159,7 @@ test('save checks disk revisions, preserves file mode and keeps a stable file id
   assert.equal(saved.id, first.id);
   assert.notEqual(saved.revision, first.revision);
   assert.equal(saved.size, Buffer.byteLength(saved.content));
-  assert.equal((await stat(join(root, 'main.ts'))).mode & 0o777, 0o640);
+  assert.equal((await stat(join(root, 'main.ts'))).mode & 0o777, originalMode);
   assert.deepEqual(await readdir(root), ['main.ts']);
   await assert.rejects(
     documents.save('main.ts', 'stale edit', first.revision),

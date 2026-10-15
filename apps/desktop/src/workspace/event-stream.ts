@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
 import { open, mkdir, chmod } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import type { FileHandle } from 'node:fs/promises';
@@ -81,7 +82,13 @@ export class WorkspaceEventStream {
         );
       }
       await chmod(leasePath, 0o600);
-      stream.handle = await open(path, 'a+', 0o600);
+      // Windows append-only handles cannot truncate a crash tail. The writer
+      // lease serializes appends; use read/write access and explicit offsets.
+      stream.handle = await open(
+        path,
+        constants.O_RDWR | constants.O_CREAT,
+        0o600,
+      );
       for await (const row of stream.lines(0)) {
         const event = JSON.parse(row.text) as PersistedWorkspaceEvent;
         stream.validateRecord(event, row.end);
@@ -198,6 +205,7 @@ export class WorkspaceEventStream {
             buffer,
             written,
             buffer.length - written,
+            this.offset + written,
           );
           if (!result.bytesWritten)
             throw Error('workspace event journal made no write progress');

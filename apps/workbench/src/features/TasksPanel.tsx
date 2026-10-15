@@ -36,6 +36,8 @@ export function TasksPanel({
   >('agent');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const instruction = useRef<HTMLTextAreaElement>(null);
   const generation = useRef(0);
   useEffect(() => {
     if (focusTaskId) {
@@ -99,158 +101,136 @@ export function TasksPanel({
     <section className="tasks-panel" aria-label={t('collaboration tasks')}>
       <header>
         <strong>{t('collaboration tasks')}</strong>
-        <Button onClick={() => void refresh()}>{t('refresh')}</Button>
-      </header>
-      <PendingOperations key={sessionId} sessionId={sessionId} />
-      <div className="tasks-limits">
-        <label>
-          {t('active agents')}{' '}
-          <input
-            type="number"
-            min={1}
-            max={32}
-            value={agents}
-            onChange={(event) => setAgents(event.target.value)}
-          />
-        </label>
         <Button
-          disabled={
-            busy ||
-            !limits ||
-            !Number.isInteger(Number(agents)) ||
-            Number(agents) < 1 ||
-            Number(agents) > 32
-          }
+          type="button"
+          aria-expanded={createOpen}
+          aria-controls={'new-task-' + sessionId}
+          onClick={() => {
+            setCreateOpen((value) => !value);
+            if (!createOpen)
+              requestAnimationFrame(() => instruction.current?.focus());
+          }}
+        >
+          {createOpen ? t('close task form') : t('new task')}
+        </Button>
+        <Button onClick={() => void refresh()}>{t('refresh')}</Button>
+        <Button
+          type="button"
+          disabled={busy || !tasks.some((task) => task.state === 'queued')}
           onClick={() =>
-            void run(() =>
-              workspaceCall(sessionId, 'tasks', 'settings', {
-                limits: { ...limits, agents: Number(agents) },
-              }),
-            )
+            void run(() => workspaceCall(sessionId, 'tasks', 'start'))
           }
         >
-          {t('save limits')}
+          {t('start ready tasks')}
         </Button>
-        {limits && (
-          <small>
-            {t(
-              'builds {builds} · browsers {browsers} · foreground {ui}',
-              limits as unknown as Record<string, string | number>,
-            )}
-          </small>
-        )}
-      </div>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          void run(async () => {
-            const epoch = generation.current;
-            await workspaceCall(sessionId, 'tasks', 'enqueue', {
-              operationId: crypto.randomUUID(),
-              tasks: [
-                {
-                  id: crypto.randomUUID(),
-                  prompt: prompt.trim(),
-                  acceptanceCriteria: criteria
-                    .split('\n')
-                    .map((line) => line.trim())
-                    .filter(Boolean),
-                  dependencies,
-                  access,
-                  resource,
-                },
-              ],
+      </header>
+      <div id={'new-task-' + sessionId} hidden={!createOpen}>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void run(async () => {
+              const epoch = generation.current;
+              await workspaceCall(sessionId, 'tasks', 'enqueue', {
+                operationId: crypto.randomUUID(),
+                tasks: [
+                  {
+                    id: crypto.randomUUID(),
+                    prompt: prompt.trim(),
+                    acceptanceCriteria: criteria
+                      .split('\n')
+                      .map((line) => line.trim())
+                      .filter(Boolean),
+                    dependencies,
+                    access,
+                    resource,
+                  },
+                ],
+              });
+              if (epoch === generation.current) {
+                setPrompt('');
+                setCriteria('');
+                setDependencies([]);
+                setCreateOpen(false);
+              }
             });
-            if (epoch === generation.current) {
-              setPrompt('');
-              setCriteria('');
-              setDependencies([]);
-            }
-          });
-        }}
-      >
-        <label>
-          {t('task instruction')}
-          <textarea
-            required
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-          />
-        </label>
-        <label>
-          {t('acceptance criteria')}
-          <textarea
-            required
-            value={criteria}
-            onChange={(event) => setCriteria(event.target.value)}
-          />
-        </label>
-        <label>
-          {t('workspace access')}
-          <select
-            value={access}
-            onChange={(event) =>
-              setAccess(event.target.value as 'write' | 'readonly')
-            }
-          >
-            <option value="write">{t('isolated write worktree')}</option>
-            <option value="readonly">{t('read-only baseline')}</option>
-          </select>
-        </label>
-        <label>
-          {t('execution resource')}
-          <select
-            value={resource}
-            onChange={(event) =>
-              setResource(event.target.value as typeof resource)
-            }
-          >
-            <option value="agent">{t('agent')}</option>
-            <option value="build">{t('build')}</option>
-            <option value="browser">{t('browser')}</option>
-            <option value="ui">{t('foreground interface')}</option>
-          </select>
-        </label>
-        {tasks.length > 0 && (
+          }}
+        >
           <label>
-            {t('dependencies')}
+            {t('task instruction')}
+            <textarea
+              ref={instruction}
+              required
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+            />
+          </label>
+          <label>
+            {t('acceptance criteria')}
+            <textarea
+              required
+              value={criteria}
+              onChange={(event) => setCriteria(event.target.value)}
+            />
+          </label>
+          <label>
+            {t('workspace access')}
             <select
-              multiple
-              value={dependencies}
+              value={access}
               onChange={(event) =>
-                setDependencies(
-                  Array.from(
-                    event.target.selectedOptions,
-                    (option) => option.value,
-                  ),
-                )
+                setAccess(event.target.value as 'write' | 'readonly')
               }
             >
-              {tasks.map((task) => (
-                <option key={task.spec.id} value={task.spec.id}>
-                  {task.spec.prompt.slice(0, 80)}
-                </option>
-              ))}
+              <option value="write">{t('isolated write worktree')}</option>
+              <option value="readonly">{t('read-only baseline')}</option>
             </select>
           </label>
-        )}
-        <div>
-          <Button
-            type="submit"
-            disabled={busy || !prompt.trim() || !criteria.trim()}
-          >
-            {t('queue task')}
-          </Button>
-          <Button
-            disabled={busy || !tasks.some((task) => task.state === 'queued')}
-            onClick={() =>
-              void run(() => workspaceCall(sessionId, 'tasks', 'start'))
-            }
-          >
-            {t('start ready tasks')}
-          </Button>
-        </div>
-      </form>
+          <label>
+            {t('execution resource')}
+            <select
+              value={resource}
+              onChange={(event) =>
+                setResource(event.target.value as typeof resource)
+              }
+            >
+              <option value="agent">{t('agent')}</option>
+              <option value="build">{t('build')}</option>
+              <option value="browser">{t('browser')}</option>
+              <option value="ui">{t('foreground interface')}</option>
+            </select>
+          </label>
+          {tasks.length > 0 && (
+            <label>
+              {t('dependencies')}
+              <select
+                multiple
+                value={dependencies}
+                onChange={(event) =>
+                  setDependencies(
+                    Array.from(
+                      event.target.selectedOptions,
+                      (option) => option.value,
+                    ),
+                  )
+                }
+              >
+                {tasks.map((task) => (
+                  <option key={task.spec.id} value={task.spec.id}>
+                    {task.spec.prompt.slice(0, 80)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <div>
+            <Button
+              type="submit"
+              disabled={busy || !prompt.trim() || !criteria.trim()}
+            >
+              {t('queue task')}
+            </Button>
+          </div>
+        </form>
+      </div>
       {error && (
         <p role="alert" className="tasks-error">
           {error}
@@ -270,32 +250,35 @@ export function TasksPanel({
               <small>{t('attempt {n}', { n: task.attempt })}</small>
             </header>
             <p>{task.spec.prompt}</p>
-            <code>{task.spec.id}</code>
-            <dl>
-              <dt>{t('baseline')}</dt>
-              <dd>
-                <code>{task.spec.baseline}</code>
-              </dd>
-              <dt>{t('workspace')}</dt>
-              <dd>{task.worktree ?? task.spec.workspace}</dd>
-              {task.branch && (
-                <>
-                  <dt>{t('branch')}</dt>
-                  <dd>{task.branch}</dd>
-                </>
-              )}
-              {task.spec.dependencies.length > 0 && (
-                <>
-                  <dt>{t('dependencies')}</dt>
-                  <dd>{task.spec.dependencies.join(', ')}</dd>
-                </>
-              )}
-            </dl>
-            <ul>
-              {task.spec.acceptanceCriteria.map((criterion, index) => (
-                <li key={index}>{criterion}</li>
-              ))}
-            </ul>
+            <details>
+              <summary>{t('task details and acceptance')}</summary>
+              <code>{task.spec.id}</code>
+              <dl>
+                <dt>{t('baseline')}</dt>
+                <dd>
+                  <code>{task.spec.baseline}</code>
+                </dd>
+                <dt>{t('workspace')}</dt>
+                <dd>{task.worktree ?? task.spec.workspace}</dd>
+                {task.branch && (
+                  <>
+                    <dt>{t('branch')}</dt>
+                    <dd>{task.branch}</dd>
+                  </>
+                )}
+                {task.spec.dependencies.length > 0 && (
+                  <>
+                    <dt>{t('dependencies')}</dt>
+                    <dd>{task.spec.dependencies.join(', ')}</dd>
+                  </>
+                )}
+              </dl>
+              <ul>
+                {task.spec.acceptanceCriteria.map((criterion, index) => (
+                  <li key={index}>{criterion}</li>
+                ))}
+              </ul>
+            </details>
             {task.reason && <p role="status">{task.reason}</p>}
             {task.result !== undefined && (
               <>
@@ -368,6 +351,48 @@ export function TasksPanel({
           </article>
         ))}
       </div>
+      <details>
+        <summary>{t('collaboration settings')}</summary>
+        <div className="tasks-limits">
+          <label>
+            {t('active agents')}{' '}
+            <input
+              type="number"
+              min={1}
+              max={32}
+              value={agents}
+              onChange={(event) => setAgents(event.target.value)}
+            />
+          </label>
+          <Button
+            disabled={
+              busy ||
+              !limits ||
+              !Number.isInteger(Number(agents)) ||
+              Number(agents) < 1 ||
+              Number(agents) > 32
+            }
+            onClick={() =>
+              void run(() =>
+                workspaceCall(sessionId, 'tasks', 'settings', {
+                  limits: { ...limits, agents: Number(agents) },
+                }),
+              )
+            }
+          >
+            {t('save limits')}
+          </Button>
+          {limits && (
+            <small>
+              {t(
+                'builds {builds} · browsers {browsers} · foreground {ui}',
+                limits as unknown as Record<string, string | number>,
+              )}
+            </small>
+          )}
+        </div>
+      </details>
+      <PendingOperations key={sessionId} sessionId={sessionId} />
     </section>
   );
 }

@@ -1,5 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  writeFile,
+} from 'node:fs/promises';
 import {
   basename,
   dirname,
@@ -444,13 +451,22 @@ export function createWorkspaceCyclePorts(
     },
     verify: async (cycle) => {
       const { owner, snapshot } = await state(cycle);
-      const artifactDirectory = join(
-        options.dataDir,
-        'cycle-verification',
-        hash(cycle.id),
-        randomUUID(),
+      // Keep temporary index paths within native Windows mkdtemp limits even
+      // when the authorized application data root is already deeply nested.
+      // Atomic allocation isolates attempts; full ownership stays in metadata.
+      const artifactDirectory = await mkdtemp(join(options.dataDir, 'cv-'));
+      await writeFile(
+        join(artifactDirectory, 'verification.json'),
+        JSON.stringify({
+          sessionId: options.sessionId,
+          cycleId: cycle.id,
+          attempt: cycle.attempt,
+          workspace: owner.integration.path,
+          head: snapshot.head,
+          revision: snapshot.revision,
+        }),
+        { mode: 0o600 },
       );
-      await mkdir(artifactDirectory, { recursive: true, mode: 0o700 });
       const task: TaskRecord = {
         spec: {
           id: `cycle-verification-${hash(cycle.id).slice(0, 32)}`,

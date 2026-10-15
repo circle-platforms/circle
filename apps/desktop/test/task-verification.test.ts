@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { existsSync, realpathSync, writeFileSync } from 'node:fs';
 import {
   mkdir,
+  copyFile,
   readFile,
   readdir,
   symlink,
@@ -12,6 +13,8 @@ import {
 } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { syncBuiltinESMExports } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 import { test, type TestContext } from 'node:test';
 import { promisify } from 'node:util';
 import { AgentRuntime } from '../../../src/runtime.ts';
@@ -69,6 +72,29 @@ async function fixture(
   options: { explicitOracle?: boolean; script?: string; source?: string } = {},
 ) {
   const root = realpathSync(scratch(t, 'circle-verifier-'));
+  // Preserve the actual oracle stderr before scratch cleanup, including on
+  // assertion failure. Synthetic fixture logs contain no user credentials.
+  cleanup(t, async () => {
+    const logs = (await readdir(root, { recursive: true })).filter((name) =>
+      /^(?:check-.*\.log|changes\.patch|verification-.*\.json)$/.test(
+        basename(name),
+      ),
+    );
+    if (!logs.length) return;
+    const destination = fileURLToPath(
+      new URL(
+        `../artifacts/task-verification/${randomUUID()}/`,
+        import.meta.url,
+      ),
+    );
+    await mkdir(destination, { recursive: true });
+    for (const [index, name] of logs.entries())
+      await copyFile(
+        join(root, name),
+        join(destination, `${index}-${basename(name)}`),
+      );
+    t.diagnostic(`Real oracle logs preserved: ${destination}`);
+  });
   const workspace = join(root, 'project with spaces ; literal');
   const dataDir = join(root, 'data');
   const artifactDirectory = join(root, 'artifacts');
@@ -77,6 +103,8 @@ async function fixture(
   await mkdir(artifactDirectory);
   await mkdir(join(workspace, '.circle'));
   await git(workspace, 'init', '--initial-branch=main');
+  // Oracle asserts exact LF fixture bytes; inherit no host checkout conversion.
+  await git(workspace, 'config', 'core.autocrlf', 'false');
   await writeFile(join(workspace, 'value.txt'), 'base\n');
   await writeFile(join(workspace, 'verify.cjs'), options.source ?? oracle);
   await writeFile(

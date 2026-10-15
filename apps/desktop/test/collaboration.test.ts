@@ -22,6 +22,8 @@ async function git(path: string, ...args: string[]): Promise<string> {
 }
 async function repository(path: string): Promise<string> {
   await git(path, 'init', '--initial-branch=main');
+  // Fixture bytes must not depend on the developer/CI machine's checkout policy.
+  await git(path, 'config', '--local', 'core.autocrlf', 'false');
   await writeFile(join(path, 'same.txt'), 'baseline\n');
   await git(path, 'add', 'same.txt');
   await git(
@@ -118,6 +120,7 @@ test('two write tasks isolate same-named files; readonly review pins baseline an
   assert.deepEqual(
     scheduler.list().map((task) => task.state),
     ['succeeded', 'succeeded', 'succeeded'],
+    JSON.stringify(scheduler.list()),
   );
   assert.equal(
     await readFile(join(repo, 'same.txt'), 'utf8'),

@@ -5,7 +5,11 @@ export function assertSupportedWindowsPtyVersion(
 ): void;
 export function installWindowsPtyExitCleanup(
   terminal: IPty,
-  options: { version: unknown; platform?: string },
+  options: {
+    version: unknown;
+    platform?: string;
+    onError?: (error: Error) => void;
+  },
 ): IDisposable;
 export function hasExitedWindowsPtyProcess(
   terminal: IPty,

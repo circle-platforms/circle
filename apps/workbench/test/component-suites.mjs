@@ -10,6 +10,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'resource-boundary-ui.mjs',
   'pending-operations-ui.mjs',
   'recovered-input-ui.mjs',
+  'tasks-panel-ui.mjs',
   'git-continuity-ui.mjs',
   'debug-panel-ui.mjs',
   'browser-diagnostics-ui.mjs',

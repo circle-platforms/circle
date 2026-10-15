@@ -3105,7 +3105,7 @@ async function setupScratch(
 ) {
   // One spelling for every path: on macOS the temp folder is a symlink, and the
   // controller answers with realpath'd ones.
-  const root = realpathSync(
+  const root = realpathSync.native(
     await mkdtemp(join(tmpdir(), 'circle-core-desktop-')),
   );
   const home = join(root, 'home');
@@ -3239,7 +3239,7 @@ test('the default workspace refuses the data folder and cannot be set through sa
 test('the whole application data folder is refused, not only its runtime home', async (t) => {
   // As the runtime worker runs: home is runtime-home inside the data folder, beside the
   // updates folder the updater clears
-  const root = realpathSync(
+  const root = realpathSync.native(
     await mkdtemp(join(tmpdir(), 'circle-core-desktop-')),
   );
   const data = join(root, 'Circle');
@@ -3310,7 +3310,7 @@ test('the data folder keeps its protection when home is reached through a link',
 
 test('startup prefers the last-used folder, then workspace_folder, then the scratch folder', async (t) => {
   // One spelling for every path, as in setupScratch: macOS temp folders are symlinks.
-  const root = realpathSync(
+  const root = realpathSync.native(
     await mkdtemp(join(tmpdir(), 'circle-core-desktop-')),
   );
   const home = join(root, 'home');
@@ -4227,7 +4227,7 @@ test('trusting a folder initializes every idle session with its own project cont
   assert(
     f.controller
       .snapshot()
-      .workspaces.find((row) => row.path === realpathSync(f.workspace))!
+      .workspaces.find((row) => row.path === realpathSync.native(f.workspace))!
       .trusted,
   );
 });

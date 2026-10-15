@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { connect } from 'node:net';
-import { mkdtemp, writeFile, rm, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +44,8 @@ test(
       },
       emit: () => {},
     });
+    let phase = 'workspace-created';
+    let originalFailure: unknown;
     try {
       const program = path.join(root, 'interactive.cjs');
       await writeFile(
@@ -56,6 +58,7 @@ test(
         args: argv,
         stopOnEntry: true,
       });
+      phase = 'launched';
       for (let i = 0; i < 500; i++) {
         const snapshot = (await service.call(
           'debug-owner',
@@ -71,6 +74,7 @@ test(
         'stackTrace',
       )) as { stackFrames: { id: number }[] };
       assert.ok(stack.stackFrames.length);
+      phase = 'paused-with-stack';
       const evaluated = (await service.call(
         'debug-owner',
         'debug',
@@ -141,11 +145,13 @@ test(
         );
       }
       await outputContains(expected);
+      phase = 'literal-argv-observed';
       await service.call('debug-owner', 'terminal', 'write', {
         id: terminal.id,
         data: 'human input\r',
       });
       await outputContains('INPUT:human input');
+      phase = 'stdin-observed';
       await assert.rejects(
         service.call('other-owner', 'terminal', 'write', {
           id: terminal.id,
@@ -154,6 +160,20 @@ test(
         /owner|owned|unknown|not found|belong/i,
       );
       await service.call('debug-owner', 'debug', 'stop');
+      phase = 'stop-returned';
+      const stopped = (
+        (await service.call(
+          'debug-owner',
+          'terminal',
+          'list',
+        )) as TerminalSnapshot[]
+      ).find((item) => item.id === terminal.id);
+      assert.equal(
+        stopped?.error,
+        undefined,
+        'normal debug stop must not hide a failed terminal transport',
+      );
+      assert.equal(stopped?.status, 'exited');
       assert.throws(() => process.kill(terminal.pid!, 0));
       assert.equal(await service.hasActiveSession('debug-owner'), false);
       await new Promise<void>((resolve, reject) => {
@@ -191,10 +211,63 @@ test(
             2,
           ) + '\n',
         );
+      phase = 'complete';
+    } catch (error) {
+      originalFailure = error;
+      throw error;
     } finally {
-      await service.dispose();
+      let cleanupFailure: unknown;
+      try {
+        await service.dispose();
+      } catch (error) {
+        cleanupFailure = error;
+      }
+      const evidence = process.env.CIRCLE_NATIVE_TEST_PROGRESS_DIR;
+      if (evidence) {
+        await mkdir(evidence, { recursive: true });
+        const snapshots = await service.terminals.list('debug-owner');
+        const record = {
+          phase,
+          failure:
+            originalFailure instanceof Error
+              ? {
+                  message: originalFailure.message,
+                  stack: originalFailure.stack,
+                }
+              : String(originalFailure ?? ''),
+          cleanupFailure:
+            cleanupFailure instanceof Error
+              ? { message: cleanupFailure.message, stack: cleanupFailure.stack }
+              : String(cleanupFailure ?? ''),
+          snapshots,
+        };
+        await writeFile(
+          path.join(evidence, `debug-terminal-${process.platform}.json`),
+          JSON.stringify(record, null, 2) + '\n',
+        );
+        for (const snapshot of snapshots) {
+          const replay = await service.terminals.replay(
+            'debug-owner',
+            snapshot.id,
+          );
+          await writeFile(
+            path.join(
+              evidence,
+              `debug-terminal-${process.platform}-${snapshot.id}.events.json`,
+            ),
+            JSON.stringify(replay, null, 2) + '\n',
+          );
+        }
+      }
       await rm(root, { recursive: true, force: true });
       await rm(data, { recursive: true, force: true });
+      if (cleanupFailure)
+        throw originalFailure
+          ? new AggregateError(
+              [originalFailure, cleanupFailure],
+              'debug terminal verification and cleanup both failed',
+            )
+          : cleanupFailure;
     }
   },
 );

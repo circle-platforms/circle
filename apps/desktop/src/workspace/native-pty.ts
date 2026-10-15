@@ -10,7 +10,12 @@ let native: typeof NodePty | undefined;
 let version: unknown;
 
 /** Keep optional native dependencies out of workers until a terminal is opened. */
-export const spawnPty: typeof NodePty.spawn = (...args) => {
+export function spawnPty(
+  ...args: [
+    ...Parameters<typeof NodePty.spawn>,
+    onError?: (error: Error) => void,
+  ]
+): NodePty.IPty {
   // esbuild also emits the main process as CJS; its module filename resolves
   // dist/node_modules while the ESM runtime worker resolves from import.meta.url.
   const requireNative = createPtyRequire(
@@ -20,10 +25,10 @@ export const spawnPty: typeof NodePty.spawn = (...args) => {
   version ??= (requireNative('node-pty/package.json') as { version: unknown })
     .version;
   assertSupportedWindowsPtyVersion(version);
-  const terminal = native.spawn(...args);
-  installWindowsPtyExitCleanup(terminal, { version });
+  const terminal = native.spawn(args[0], args[1], args[2]);
+  installWindowsPtyExitCleanup(terminal, { version, onError: args[3] });
   return terminal;
-};
+}
 
 export function hasNativePtyProcessExited(terminal: NodePty.IPty): boolean {
   return hasExitedWindowsPtyProcess(terminal, { version });

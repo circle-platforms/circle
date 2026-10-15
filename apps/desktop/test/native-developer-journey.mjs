@@ -557,7 +557,7 @@ try {
       );
       await screenshot('01b-instruction-source');
       await page
-        .getByRole('button', { name: 'close inspector', exact: true })
+        .getByRole('button', { name: 'close file', exact: true })
         .click();
     },
   );
@@ -973,6 +973,11 @@ try {
       await page.locator('#dock-tab-tasks').click();
       const panel = page.locator('.tasks-panel');
       const queue = async (prompt, access) => {
+        const newTask = panel.getByRole('button', {
+          name: 'new task',
+          exact: true,
+        });
+        if (await newTask.isVisible()) await newTask.click();
         await panel
           .getByLabel('task instruction', { exact: true })
           .fill(prompt);

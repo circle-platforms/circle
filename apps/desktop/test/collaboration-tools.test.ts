@@ -70,6 +70,14 @@ async function fixture(
   await mkdir(workspace);
   await mkdir(home);
   await exec('git', ['init', workspace]);
+  await exec('git', [
+    '-C',
+    workspace,
+    'config',
+    '--local',
+    'core.autocrlf',
+    'false',
+  ]);
   await writeFile(join(workspace, 'README.md'), '# fixture\n');
   await exec('git', ['-C', workspace, 'add', 'README.md']);
   await exec('git', [
@@ -429,7 +437,8 @@ test('plan parent schedules two actual parallel read-only analyses without allow
             (message) => message.tool_call_id === id,
           )!;
           assert.equal(result.status, 'success');
-          assert.equal(JSON.parse(result.content).tasks[0].state, 'succeeded');
+          const completed = JSON.parse(result.content).tasks[0];
+          assert.equal(completed.state, 'succeeded', JSON.stringify(completed));
         }
         assert.equal(
           model.requests[3]!.messages.find(

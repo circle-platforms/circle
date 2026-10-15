@@ -1,4 +1,7 @@
-import { runtimeTestArguments } from './runtime-test-options.mjs';
+import {
+  runtimeTestArguments,
+  orderRuntimeTestFiles,
+} from './runtime-test-options.mjs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -57,10 +60,11 @@ try {
 if (process.argv.includes('--prepare-only')) {
   console.log(`Developer tool receipts ready for ${target}`);
 } else {
-  const tests = (await readdir(join(root, 'test')))
-    .filter((name) => name.endsWith('.test.ts'))
-    .sort()
-    .map((name) => join(root, 'test', name));
+  const tests = orderRuntimeTestFiles(
+    (await readdir(join(root, 'test'))).filter((name) =>
+      name.endsWith('.test.ts'),
+    ),
+  ).map((name) => join(root, 'test', name));
   const result = spawnSync(
     process.execPath,
     runtimeTestArguments(
