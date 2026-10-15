@@ -1162,3 +1162,98 @@ test('native document access applies trusted project credential file rules', asy
     if (method === 'read') assert.equal(reply.ok, false);
   }
 });
+
+test('controller preserves queued input across restart and requires explicit idempotent recovery', async (t) => {
+  const f = await setup(t, [
+    async (request) =>
+      new Promise((_resolve, reject) =>
+        request.signal.addEventListener(
+          'abort',
+          () => reject(request.signal.reason),
+          { once: true },
+        ),
+      ),
+  ]);
+  await f.call('prompt', { text: 'stay busy' });
+  await wait(() => f.model.requests.length === 1);
+  const sessionId = f.controller.snapshot().activeSessionId;
+  const queued = {
+    id: randomUUID(),
+    name: 'prompt',
+    sessionId,
+    payload: {
+      text: 'recover exact original content',
+      display: 'short shown draft',
+      kind: 'follow-up',
+    },
+  };
+  assert.equal((await f.controller.dispatch(queued)).ok, true);
+  await f.controller.close();
+  const model = new ScriptedModel([{ message: assistant('recovered once') }]);
+  const restarted = new RuntimeController({
+    home: f.home,
+    workspace: f.workspace,
+    userHome: f.home,
+    model,
+    emit: () => {},
+  });
+  const service = (method: string, params: Record<string, unknown> = {}) =>
+    restarted.dispatch({
+      id: randomUUID(),
+      name: 'workspace-service',
+      sessionId,
+      payload: { service: 'inputs', method, params },
+    });
+  try {
+    const listing = await service('list');
+    assert.equal(listing.ok, true, listing.error);
+    const recovery = listing.data as any;
+    assert.equal(recovery.items.length, 1);
+    assert.equal(recovery.items[0].payload.text, queued.payload.text);
+    assert.equal(recovery.items[0].payload.display, queued.payload.display);
+    await delay(30);
+    assert.equal(model.requests.length, 0);
+    const oldRPC = await restarted.dispatch(queued);
+    assert.equal(oldRPC.ok, true, oldRPC.error);
+    assert.equal(
+      model.requests.length,
+      0,
+      'lost queued receipt cannot turn into a new prompt after restart',
+    );
+    const toDraft = await service('resolve', {
+      ids: [queued.id],
+      expectedVersion: recovery.version,
+      operationId: 'return-draft',
+      action: 'returnToDraft',
+    });
+    assert.equal(toDraft.ok, true, toDraft.error);
+    assert.equal(
+      ((await service('list')).data as any).items.length,
+      1,
+      'draft return retains durable source',
+    );
+    const fresh = (await service('list')).data as any;
+    const request = {
+      ids: [queued.id],
+      expectedVersion: fresh.version,
+      operationId: 'resume-once',
+      action: 'resume',
+    };
+    const resumed = await service('resolve', request);
+    assert.equal(resumed.ok, true, resumed.error);
+    await wait(() => model.requests.length === 1);
+    assert.ok(
+      model.requests[0].messages.some(
+        (message) =>
+          message.role === 'user' && message.content === queued.payload.text,
+      ),
+    );
+    const repeat = await service('resolve', request);
+    assert.equal(repeat.ok, true, repeat.error);
+    assert.equal((repeat.data as any).applied, false);
+    await delay(30);
+    assert.equal(model.requests.length, 1);
+  } finally {
+    await restarted.close();
+  }
+});

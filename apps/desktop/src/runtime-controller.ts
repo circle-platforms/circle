@@ -1,4 +1,5 @@
-import { spawn as spawnPty } from 'node-pty';
+import type { ResolveInputsRequest } from '../../../src/input_outbox.js';
+import { spawnPty } from './workspace/native-pty.js';
 import { createWorkspaceCyclePorts } from './workspace/cycle-ports.js';
 import { GitWorkspaceService } from './workspace/git.js';
 import { DeliveryService } from './workspace/delivery.js';
@@ -992,8 +993,33 @@ export class RuntimeController {
         request.params?.after as { offset: number; seq: number } | undefined,
         request.params?.limit as number | undefined,
       );
+    if (request.service === 'inputs' && request.method === 'list') {
+      const owner =
+        this.runtimes.get(id) ??
+        [...this.taskRuntimes.values()].find(
+          (runtime) => runtime.session.id === id,
+        );
+      if (owner) return owner.harness.recoverableInputs;
+      this.store.inputs.recover(id, randomUUID());
+      return this.store.inputs.recoverable(id);
+    }
     if (this.metadata.archivedAt(id))
       throw Error('restore this session before continuing');
+    if (request.service === 'inputs') {
+      const owner =
+        this.runtimes.get(id) ??
+        [...this.taskRuntimes.values()].find(
+          (runtime) => runtime.session.id === id,
+        ) ??
+        this.runtimes.open(workspace, id);
+      const result = owner.harness.resolveInputs(
+        request.params as unknown as ResolveInputsRequest,
+      );
+      if (result.applied && result.action === 'resume' && !owner.busy)
+        this.track(owner.harness.run(), owner);
+      this.publish();
+      return result;
+    }
     if (request.service === 'tasks')
       return this.workspaceOperation(command, workspace, request, () =>
         this.collaboration(workspace, id).call(
@@ -2532,11 +2558,21 @@ export class RuntimeController {
             text(item.name, 'filename', 500),
           ),
         );
-        if (runtime.busy)
+        if (
+          runtime.busy ||
+          this.store.inputs.get(runtime.session.id, command.id)
+        )
           runtime.harness.queue(
             prompt,
             kind === 'follow-up' ? 'followUp' : 'steer',
             attachments,
+            {
+              inputId: command.id,
+              display:
+                p.display === undefined
+                  ? undefined
+                  : text(p.display, 'display'),
+            },
           );
         else {
           const display =
