@@ -45,8 +45,22 @@ export const EFFORT_LEVELS = [
   'xhigh',
   'max',
 ] as const;
+/** Depth when the user has not chosen one. Anthropic used to fall back to `xhigh`. */
+export function defaultEffort(
+  protocol: string,
+  saved = '',
+  env = process.env.CIRCLE_REASONING_EFFORT || '',
+): string {
+  const fallback = protocol === 'anthropic' ? 'medium' : '';
+  const chosen = (env || saved || fallback).trim();
+  if (chosen && !(EFFORT_LEVELS as readonly string[]).includes(chosen))
+    return fallback;
+  return chosen;
+}
 export class GatewayModel implements ChatModel {
   readonly model: string;
+  /** A title request may call `complete` while a turn is in flight. */
+  readonly sideRequests = true;
   private openai?: OpenAI;
   private anthropic?: Anthropic;
   // How long a request waits for the answer to start (`CIRCLE_LLM_TIMEOUT`)
@@ -85,15 +99,10 @@ export class GatewayModel implements ChatModel {
     if (settings.auth.protocol === 'anthropic')
       this.anthropic = new Anthropic(options);
     else this.openai = new OpenAI(options);
-    this.effort =
-      process.env.CIRCLE_REASONING_EFFORT ||
-      settings.default_thinking ||
-      (this.anthropic ? 'xhigh' : '');
-    if (
-      this.effort &&
-      !(EFFORT_LEVELS as readonly string[]).includes(this.effort)
-    )
-      this.effort = this.anthropic ? 'xhigh' : '';
+    this.effort = defaultEffort(
+      this.anthropic ? 'anthropic' : 'openai',
+      settings.default_thinking,
+    );
     this.guard = new ModelGuard(
       (parameter) => this.dropParameter(parameter),
       guardOptions,
@@ -165,6 +174,12 @@ export class GatewayModel implements ChatModel {
         this.modelFacts.outputLimit ?? profile?.max_output_tokens ?? Infinity,
       ),
     );
+  }
+  private effortFor(request: ModelRequest): string {
+    const chosen = request.effort ?? this.effort;
+    if (chosen && !(EFFORT_LEVELS as readonly string[]).includes(chosen))
+      return this.effort;
+    return chosen;
   }
   get downgrades(): Record<string, string> {
     return Object.fromEntries(this.guard.downgrades);
@@ -265,9 +280,10 @@ export class GatewayModel implements ChatModel {
           parameters: tool.parameters,
         },
       }));
-    if (this.effort)
-      body.reasoning_effort = this
-        .effort as ChatCompletionCreateParamsStreaming['reasoning_effort'];
+    const effort = this.effortFor(request);
+    if (effort)
+      body.reasoning_effort =
+        effort as ChatCompletionCreateParamsStreaming['reasoning_effort'];
     this.configureBody(body as unknown as Record<string, unknown>);
     const stream = await this.openai!.chat.completions.create(body, {
       signal: request.signal,
@@ -444,7 +460,8 @@ export class GatewayModel implements ChatModel {
         description: tool.description,
         input_schema: { ...tool.parameters, type: 'object' },
       }));
-    if (this.effort) {
+    const effort = this.effortFor(request);
+    if (effort) {
       const profile = modelProfile('anthropic', this.model);
       const claude = this.model
         .toLowerCase()
@@ -452,7 +469,7 @@ export class GatewayModel implements ChatModel {
         .at(-1)
         ?.startsWith('claude');
       if (claude && profile && !profile.reasoning_effort_levels?.length) {
-        const requested = THINKING_BUDGET[this.effort] ?? 16000;
+        const requested = THINKING_BUDGET[effort] ?? 16000;
         const budget =
           requested >= body.max_tokens
             ? Math.max(1024, Math.floor(body.max_tokens / 2))
@@ -463,8 +480,8 @@ export class GatewayModel implements ChatModel {
         if (claude) body.thinking = { type: 'adaptive' };
         body.output_config = {
           effort: (profile?.reasoning_effort_levels?.length
-            ? fitEffort(this.effort, profile.reasoning_effort_levels)
-            : this.effort) as NonNullable<
+            ? fitEffort(effort, profile.reasoning_effort_levels)
+            : effort) as NonNullable<
             MessageCreateParamsNonStreaming['output_config']
           >['effort'],
         };

@@ -96,6 +96,11 @@ export interface ModelRequest {
   notice?: (event: ModelNotice) => void;
   /** Wait this many times the configured request timeout for the answer to start. */
   timeoutScale?: number;
+  /**
+   * Thinking depth for this request only. A side request (a session title) uses it so the
+   * turn's depth stays put.
+   */
+  effort?: string;
 }
 export interface ModelNotice {
   event: string;
@@ -112,6 +117,11 @@ export interface ChatModel {
   modelFacts?: import('./model_catalog.js').ModelFacts;
   /** Whether the model reads images: false when it is known not to, undefined when unknown. */
   imageInput?: boolean;
+  /**
+   * True when `complete` may be called beside the turn (a session title) without consuming
+   * the reply the turn is waiting for. Scripted models leave this unset.
+   */
+  sideRequests?: boolean;
   complete(request: ModelRequest): Promise<ModelResponse>;
 }
 export const emptyUsage = (): Usage => ({

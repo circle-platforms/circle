@@ -65,7 +65,7 @@ Circle asks models for extended thinking when the protocol supports it. The dept
 
 A change applies from the next message. When the model has a depth, the header shows it after the model name, such as `step-3.7-flash • high`.
 
-- **Anthropic protocol**: the default is `xhigh`. For a model whose profile lists the levels it supports, Circle sends the highest one at or below your choice. For older Claude models that take a thinking budget, the budgets are 1,024 for `minimal`, 2,048 for `low`, 8,192 for `medium`, 16,000 for `high` and `xhigh`, and 31,999 for `max`, kept below the answer limit.
+- **Anthropic protocol**: the default is `medium`. For a model whose profile lists the levels it supports, Circle sends the highest one at or below your choice. For older Claude models that take a thinking budget, the budgets are 1,024 for `minimal`, 2,048 for `low`, 8,192 for `medium`, 16,000 for `high` and `xhigh`, and 31,999 for `max`, kept below the answer limit.
 - **OpenAI protocol**: nothing is sent unless you choose a depth; then it is sent as `reasoning_effort`.
 
 If an endpoint rejects a parameter Circle sent (thinking, reasoning effort, stream options and a few others), Circle drops that parameter, sends the request again, and does not send it again for the rest of the session. You see one line saying so. A request drops at most four parameters.

@@ -22,6 +22,8 @@ import {
 } from './secrets.js';
 import { httpStatus } from './model_guard.js';
 import { validateAttachments } from './media.js';
+import { readPrompt } from './system_prompt.js';
+import { fallbackTitle, sanitizeGeneratedTitle } from './session_title.js';
 export type ApprovalDecision =
   | 'approve'
   | 'reject'
@@ -321,6 +323,41 @@ export class Harness {
     } while (this.followUps.length);
     return { answer, usage: total };
   }
+  /**
+   * Ask the model for a short title after the fallback is already saved. A scripted model
+   * never sees this call. A rename that landed first is left alone.
+   */
+  private generateTitle(display: string, fallback: string): void {
+    const model = this.options.model;
+    const prompt = display.trim();
+    if (!model.sideRequests || prompt.length <= 40) return;
+    void model
+      .complete({
+        system: readPrompt('agent', 'title.md'),
+        messages: [
+          {
+            id: 'title',
+            role: 'user',
+            content: prompt.slice(0, 2000),
+          },
+        ],
+        tools: [],
+        signal: AbortSignal.timeout(20_000),
+        effort: 'minimal',
+        token: () => {},
+      })
+      .then((response) => {
+        const title = sanitizeGeneratedTitle(response.message.content);
+        if (!title) return;
+        const current = this.options.store.get(this.sessionId);
+        if (!current || current.title !== fallback) return;
+        this.options.store.rename(this.sessionId, title);
+        this.bus.emit('info', { payload: { title } });
+      })
+      .catch(() => {
+        /* The fallback title stays. A side request must not fail the turn. */
+      });
+  }
   private async runTurn(
     prompt: string | undefined,
     signal: AbortSignal,
@@ -344,11 +381,12 @@ export class Harness {
         ...shown,
       });
     const session = this.options.store.get(this.sessionId)!;
-    if (!session.title && shown?.display !== undefined)
-      this.options.store.rename(
-        this.sessionId,
-        shown.display.split('\n')[0]!.slice(0, 100),
-      );
+    if (!session.title && shown?.display !== undefined) {
+      const fallback = fallbackTitle(shown.display);
+      this.options.store.rename(this.sessionId, fallback);
+      this.bus.emit('info', { payload: { title: fallback } });
+      void this.generateTitle(shown.display, fallback);
+    }
     this.bus.emit('run_start', { payload: { message: prompt } });
     try {
       for (let step = 0; step < (this.options.maxSteps ?? 9999); step++) {
