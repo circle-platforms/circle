@@ -1,6 +1,16 @@
-import ts from 'typescript';
+import type ts from 'typescript';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire as createLanguageRequire } from 'node:module';
+
+let typescript: typeof ts | undefined;
+function loadTypescript(): typeof ts {
+  const requireLanguage = createLanguageRequire(
+    typeof __filename === 'string' ? __filename : import.meta.url,
+  );
+  return (typescript ??= requireLanguage('typescript') as typeof ts);
+}
+const sourceFile = (file: string) => /\.[cm]?[jt]sx?$/i.test(file);
 
 /** Project-scoped semantic service. Overlays never write project files. */
 export class LanguageService {
@@ -18,6 +28,7 @@ export class LanguageService {
   private projectVersion = 0;
   private disposed = false;
   constructor(root: string) {
+    const ts = loadTypescript();
     this.root = fs.realpathSync(root);
     this.libraryRoot = fs.realpathSync(
       path.dirname(ts.getDefaultLibFilePath({})),
@@ -68,6 +79,7 @@ export class LanguageService {
     if (this.insideRoot(directory)) this.observe(directory);
   }
   private ensureProject(): void {
+    const ts = loadTypescript();
     if (this.disposed) throw Error('language service is closed');
     if (
       !this.invalidated &&
@@ -163,7 +175,10 @@ export class LanguageService {
     const host: ts.LanguageServiceHost = {
       getScriptFileNames: () =>
         [
-          ...new Set([...this.files, ...this.opened, ...this.overlays.keys()]),
+          ...new Set([
+            ...this.files,
+            ...[...this.opened, ...this.overlays.keys()].filter(sourceFile),
+          ]),
         ].filter(fileExists),
       getProjectVersion: () => String(this.projectVersion),
       getScriptVersion: (file) =>
@@ -195,6 +210,7 @@ export class LanguageService {
     this.service = ts.createLanguageService(host);
   }
   private configDiagnostics() {
+    const ts = loadTypescript();
     const diagnostics = [
       ...this.configErrors,
       ...this.service.getCompilerOptionsDiagnostics(),
@@ -254,6 +270,7 @@ export class LanguageService {
     return target;
   }
   private range(file: string, span: ts.TextSpan) {
+    const ts = loadTypescript();
     const text =
       this.overlays.get(path.normalize(file))?.content ??
       (this.allowed(file) ? ts.sys.readFile(file) : undefined) ??
@@ -273,6 +290,7 @@ export class LanguageService {
     };
   }
   call(method: string, params: Record<string, unknown>): unknown {
+    const ts = loadTypescript();
     if (method === 'request') {
       if (
         typeof params.method !== 'string' ||
@@ -445,6 +463,8 @@ export class LanguageService {
           : []),
       ];
     }
+    if (method === 'diagnostics' && !sourceFile(file))
+      return this.configDiagnostics();
     if (method === 'diagnostics')
       return [
         ...this.configDiagnostics(),

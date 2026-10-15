@@ -119,6 +119,38 @@ test('formatting returns actual edits and close releases unsaved overlay', (t) =
   }) as unknown[];
   assert.equal(diagnostics.length, 0);
 });
+test('opened markdown and JSON overlays do not become TypeScript source roots or pollute project diagnostics', (t) => {
+  const { root, service } = fixture(t);
+  writeFileSync(join(root, 'AGENTS.md'), '# rules\nRead the project first.\n');
+  service.call('change', {
+    path: 'AGENTS.md',
+    content: '# unsaved rules\nKeep these instructions.',
+  });
+  service.call('change', {
+    path: 'tsconfig.json',
+    content: readFileSync(join(root, 'tsconfig.json'), 'utf8'),
+  });
+  service.call('change', {
+    path: 'notes.json',
+    content: '{"humanDraft":true}',
+  });
+  for (const file of ['AGENTS.md', 'tsconfig.json', 'notes.json']) {
+    const diagnostics = service.call('diagnostics', { path: file }) as {
+      code: string;
+    }[];
+    assert.deepEqual(diagnostics, [], file);
+  }
+  const diagnostics = service.call('diagnostics', {
+    path: 'main.ts',
+    content: 'const value: number = "still invalid";',
+  }) as { code: string; message: string }[];
+  assert.ok(diagnostics.some((item) => item.code === '2322'));
+  assert.ok(diagnostics.every((item) => item.code !== '6054'));
+  assert.equal(
+    readFileSync(join(root, 'AGENTS.md'), 'utf8'),
+    '# rules\nRead the project first.\n',
+  );
+});
 test('language requests reject traversal, symlink escapes and invalid symbol names', (t) => {
   const { root, service } = fixture(t);
   assert.throws(
