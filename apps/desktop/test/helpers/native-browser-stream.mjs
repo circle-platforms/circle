@@ -15,8 +15,12 @@ export async function runNativeBrowserStream({
       samples = [],
       pending = new Set();
     const stop = window.circleDesktop.onBrowserDiagnosticEvent((event) => {
-      if (event.sessionId === sessionId && event.consoleId)
+      if (event.sessionId === sessionId && event.consoleId) {
         events.set(event.consoleId, event);
+        // An initial visible-domain read can paint before the batched dirty
+        // event arrives. Observe both arrival orders without polling.
+        queueMicrotask(observe);
+      }
     });
     const observe = () => {
       for (const row of document.querySelectorAll(
@@ -53,7 +57,11 @@ export async function runNativeBrowserStream({
       }
     };
     const observer = new MutationObserver(observe);
-    observer.observe(document.body, { subtree: true, childList: true });
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+    });
     window.__journeyBrowserStream = {
       samples,
       events,

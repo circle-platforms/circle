@@ -518,3 +518,64 @@ test(
     }
   },
 );
+
+test(
+  'a breakpoint configured after natural termination keeps its requested position on the next launch',
+  {
+    timeout: 30000,
+    skip: !existsSync(adapterPath) && 'set CIRCLE_JS_DEBUG_ADAPTER',
+  },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'circle-debug-relaunch-'));
+    const service = new WorkspaceDebugService({
+      workspaceRoot: root,
+      nodeExecutable,
+      runtimeExecutable:
+        process.env.CIRCLE_JS_DEBUG_RUNTIME ?? process.execPath,
+      adapterPath,
+    });
+    try {
+      await writeFile(
+        path.join(root, 'first.cjs'),
+        'console.log("FIRST_COMPLETED");\n',
+      );
+      await writeFile(
+        path.join(root, 'second.cjs'),
+        'const value=41;\nconsole.log(value+1);\nsetInterval(()=>{},1000);\n',
+      );
+      await service.handle('launch', { program: 'first.cjs' });
+      let deadline = Date.now() + 10000;
+      while (service.snapshot().status !== 'stopped' && Date.now() < deadline)
+        await new Promise((r) => setTimeout(r, 20));
+      assert.equal(service.snapshot().status, 'stopped');
+      const configured = await service.handle('setBreakpoints', {
+        path: 'second.cjs',
+        lines: [2],
+        columns: [1],
+      });
+      assert.equal(configured.breakpoints[0].requestedLine, 2);
+      assert.equal(configured.breakpoints[0].requestedColumn, 1);
+      assert.equal(
+        configured.breakpoints[0].line,
+        2,
+        'unbound adapter reply must not erase the requested line',
+      );
+      assert.ok(configured.breakpoints[0].source.path.endsWith('second.cjs'));
+      await service.handle('launch', { program: 'second.cjs' });
+      deadline = Date.now() + 10000;
+      while (service.snapshot().status !== 'paused' && Date.now() < deadline)
+        await new Promise((r) => setTimeout(r, 20));
+      assert.equal(
+        service.snapshot().status,
+        'paused',
+        JSON.stringify(service.snapshot()),
+      );
+      const stack = await service.handle('stackTrace');
+      assert.equal(stack.stackFrames[0].line, 2);
+      assert.ok(stack.stackFrames[0].source.path.endsWith('second.cjs'));
+    } finally {
+      await service.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

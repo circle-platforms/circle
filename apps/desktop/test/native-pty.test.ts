@@ -73,6 +73,8 @@ test('bundled native PTY stays lazy without native resources and resolves real d
       import assert from 'node:assert/strict';import {createRequire} from 'node:module';
       const module=${load(packaged)};
       const pty=module.spawnPty(process.execPath,['-e',${JSON.stringify(program)}],{cwd:${JSON.stringify(root)},env:process.env,cols:80,rows:24});
+      const {installWindowsPtyExitCleanup}=await import(${JSON.stringify(new URL('../src/workspace/pty-exit-cleanup.mjs', import.meta.url).href)});
+      installWindowsPtyExitCleanup(pty,{version:createRequire(${JSON.stringify(pathToFileURL(join(dist, 'probe.cjs')).href)})('node-pty/package.json').version});
       let output='',sent=false;
       const timer=setTimeout(()=>{pty.kill();process.exitCode=1},5000);
       pty.onData(bytes=>{output+=bytes;if(!sent && output.includes('PTY_READY:true')){sent=true;pty.write('from bundled terminal\\r')}});

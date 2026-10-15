@@ -1,3 +1,8 @@
+import { nativeTaskJourneyFixture } from './helpers/native-task-fixture.mjs';
+import {
+  preserveNativeClipboard,
+  restoreNativeClipboard,
+} from './helpers/native-clipboard.mjs';
 import {
   createNativeGitFixture,
   runNativeGitJourney,
@@ -127,79 +132,7 @@ const fixture = join(temp, 'model.json');
 const requestsPath = join(temp, 'requests.jsonl');
 await writeFile(
   fixture,
-  JSON.stringify({
-    requestsPath,
-    replies: [
-      {
-        message: {
-          id: 'journey-baseline',
-          role: 'assistant',
-          content: 'Native journey ready: README.md and debug.cjs',
-        },
-      },
-      { waitForAbort: true },
-      {
-        message: {
-          id: 'task-write-a',
-          role: 'assistant',
-          content: '',
-          tool_calls: [
-            {
-              id: 'task-a-file',
-              name: 'write_file',
-              args: {
-                file_path: 'agent-result.txt',
-                content: 'isolated task output\n',
-              },
-            },
-            {
-              id: 'task-a-git',
-              name: 'execute',
-              args: { command: 'git status --short' },
-            },
-          ],
-        },
-      },
-      {
-        message: {
-          id: 'task-write-b',
-          role: 'assistant',
-          content: '',
-          tool_calls: [
-            {
-              id: 'task-b-file',
-              name: 'write_file',
-              args: {
-                file_path: 'agent-result.txt',
-                content: 'isolated task output\n',
-              },
-            },
-          ],
-        },
-      },
-      {
-        message: {
-          id: 'task-readonly',
-          role: 'assistant',
-          content: '',
-          tool_calls: [
-            {
-              id: 'task-read',
-              name: 'read_file',
-              args: { file_path: 'README.md' },
-            },
-          ],
-        },
-      },
-      ...[1, 2, 3].map((n) => ({
-        message: {
-          id: 'task-completed-' + n,
-          role: 'assistant',
-          content: 'Task effects ready for independent verification',
-        },
-      })),
-    ],
-  }),
+  JSON.stringify(nativeTaskJourneyFixture(requestsPath)),
 );
 const browserStreams = new Set();
 const server = createServer((request, response) => {
@@ -258,6 +191,7 @@ const checks = [];
 const errors = [];
 const recoveries = [];
 let rendererUnavailable = false;
+let clipboardRecoveryPending = false;
 let phase = 'launch';
 let sessionId;
 let receipt;
@@ -284,6 +218,8 @@ const check = async (name, action) => {
       checks.find((c) => c.name === dependency)?.status !== 'passed',
   );
   if (rendererUnavailable) blocked.push('renderer recovery');
+  if (clipboardRecoveryPending)
+    blocked.push('native clipboard recovery; preserve live main checkpoint');
   if (blocked.length) {
     checks.push({
       name,
@@ -313,6 +249,10 @@ const check = async (name, action) => {
       result,
     });
   } catch (error) {
+    if (app)
+      clipboardRecoveryPending = await app
+        .evaluate(() => !!globalThis.__circleJourneyClipboard?.size)
+        .catch(() => clipboardRecoveryPending);
     const image =
       'phase-' +
       checks.length +
@@ -388,6 +328,8 @@ for (const file of [
     'native-keyboard-journey',
     'native-git-journey',
     'native-journey-platform',
+    'native-clipboard',
+    'native-task-fixture',
   ].map((name) => 'helpers/' + name + '.mjs'),
 ]) {
   buildIdentity.driverFiles[file] = createHash('sha256')
@@ -699,9 +641,7 @@ try {
   await check(
     'terminal search complete copy independent buffers and managed service lifecycle',
     async () => {
-      await app.evaluate(async ({ clipboard }) => {
-        globalThis.__terminalClipboard = await clipboard.read();
-      });
+      const clipboardKey = await preserveNativeClipboard(app);
       try {
         await runNativeTerminalJourney({
           page,
@@ -718,10 +658,7 @@ try {
           screenshot,
         });
       } finally {
-        await app.evaluate(async ({ clipboard }) => {
-          await clipboard.write(globalThis.__terminalClipboard ?? []);
-          delete globalThis.__terminalClipboard;
-        });
+        await restoreNativeClipboard(app, clipboardKey);
       }
     },
   );
@@ -1089,15 +1026,31 @@ try {
             (t) => t.spec.id === writer.spec.id,
           );
           if (['succeeded', 'needs_review'].includes(record.state)) break;
-          await until(
-            async () =>
+          assert(
+            record.runtimeSessionId,
+            'real task child session identity exists',
+          );
+          await until(async () => {
+            const fresh = (await query('tasks', 'list')).find(
+              (task) => task.spec.id === writer.spec.id,
+            );
+            return (
+              ['succeeded', 'needs_review'].includes(fresh.state) ||
               (await state()).interactions.some(
                 (i) =>
                   i.sessionId === record.runtimeSessionId &&
                   i.status === 'pending',
-              ),
-            'child approval is projected',
-          );
+              )
+            );
+          }, 'child approval is projected or actual task verification completes');
+          if (
+            ['succeeded', 'needs_review'].includes(
+              (await query('tasks', 'list')).find(
+                (task) => task.spec.id === writer.spec.id,
+              ).state,
+            )
+          )
+            break;
           const pending = (await state()).interactions.find(
             (i) =>
               i.sessionId === record.runtimeSessionId && i.status === 'pending',
@@ -1176,6 +1129,23 @@ try {
       await writeFile(
         join(output, 'task-results.json'),
         JSON.stringify({ concurrent, complete, gitApprovalObserved }, null, 2),
+      );
+      const journal = (await readFile(requestsPath, 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      const routes = new Set(
+        journal.map((request) => request.fixture?.routeId).filter(Boolean),
+      );
+      for (const expected of ['writer-a', 'writer-b', 'readonly'])
+        assert(
+          routes.has(expected),
+          'real task routed model conversation ' + expected,
+        );
+      assert(
+        journal.filter((request) => request.fixture?.role === 'reviewer')
+          .length >= 3,
+        'three actual independent reviewer requests recorded',
       );
       await screenshot('08c-parallel-task-results');
     },
@@ -1289,9 +1259,20 @@ try {
 } finally {
   let cleanupError;
   try {
-    await app?.close();
+    if (app) {
+      const keys = await app.evaluate(() => [
+        ...(globalThis.__circleJourneyClipboard?.keys() ?? []),
+      ]);
+      for (const key of keys) await restoreNativeClipboard(app, key);
+      clipboardRecoveryPending = false;
+      await app.close();
+    }
   } catch (e) {
     cleanupError = String(e);
+    clipboardRecoveryPending = true;
+    console.error(
+      'Native clipboard recovery failed; application and main checkpoint are retained. No automatic close or profile deletion.',
+    );
   }
   const fixtureFinal = {};
   for (const file of [
@@ -1323,9 +1304,11 @@ try {
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
-  server.closeAllConnections();
-  await new Promise((done) => server.close(done));
-  await rm(temp, { recursive: true, force: true });
+  if (!clipboardRecoveryPending) {
+    server.closeAllConnections();
+    await new Promise((done) => server.close(done));
+    await rm(temp, { recursive: true, force: true });
+  }
   await writeFile(
     join(output, 'receipt.json'),
     JSON.stringify(
@@ -1335,14 +1318,17 @@ try {
         recoveries,
         buildIdentity,
         cleanup: {
-          applicationClosed: !cleanupError,
+          applicationClosed: !cleanupError && !clipboardRecoveryPending,
+          clipboardRecoveryPending,
+          ...(clipboardRecoveryPending ? { retainedProfile: temp } : {}),
           error: cleanupError,
-          serverClosed: true,
-          temporaryProfileRemoved: true,
+          serverClosed: !clipboardRecoveryPending,
+          temporaryProfileRemoved: !clipboardRecoveryPending,
         },
       },
       null,
       2,
     ) + '\n',
   );
+  if (clipboardRecoveryPending) await new Promise(() => {});
 }

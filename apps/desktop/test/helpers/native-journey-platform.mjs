@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { realpath } from 'node:fs/promises';
-import { join, win32 } from 'node:path';
+import { win32, posix } from 'node:path';
 import { promisify } from 'node:util';
 import assert from 'node:assert/strict';
 const exec = promisify(execFile);
@@ -56,7 +56,7 @@ export function journeyBundledNodePath({
   applicationPath,
   platform = process.platform,
 }) {
-  const paths = platform === 'win32' ? win32 : { join };
+  const paths = platform === 'win32' ? win32 : posix;
   const dist = applicationPath
     ? paths.join(
         applicationPath,
@@ -91,7 +91,7 @@ export function journeyBundledNodeFromApp(
   { isPackaged, resourcesPath, appPath },
   platform = process.platform,
 ) {
-  const paths = platform === 'win32' ? win32 : { join };
+  const paths = platform === 'win32' ? win32 : posix;
   const dist = isPackaged
     ? paths.join(resourcesPath, 'app.asar.unpacked/dist')
     : paths.join(appPath, 'dist');

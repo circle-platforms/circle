@@ -316,6 +316,16 @@ export async function runNativeDebugJourney({
   } catch (error) {
     report.passed = false;
     report.error = String(error);
+    report.debugSnapshot = await observe('debug', 'snapshot').catch(
+      (failure) => ({ error: String(failure) }),
+    );
+    report.actualFixture = await readFile(
+      join(workspace, program),
+      'utf8',
+    ).catch(String);
+    report.terminals = await observe('terminal', 'list').catch((failure) => ({
+      error: String(failure),
+    }));
     await capture('debug-interaction-failure').catch(() => {});
     throw error;
   } finally {

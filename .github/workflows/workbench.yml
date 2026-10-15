@@ -83,9 +83,13 @@ jobs:
       - run: npm --prefix apps/desktop run format:check
       - run: npm --prefix apps/workbench test
       - run: npm --prefix apps/desktop test
+        timeout-minutes: 5
       - name: Verify native developer tool resources
+        timeout-minutes: 5
         run: node --test apps/desktop/test/developer-toolchain.test.mjs apps/desktop/test/journey-platform.test.mjs
       - run: npm --prefix apps/desktop run test:runtime
+        # Bound leaked native handles without forcing tests to report success.
+        timeout-minutes: 10
       - run: npm --prefix apps/desktop run build
       - run: node apps/desktop/scripts/developer-toolchain.mjs
       - run: node apps/desktop/test/developer-toolchain-smoke.mjs
@@ -160,8 +164,11 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.dotnet\tools"
           & "$env:USERPROFILE\.dotnet\tools\wix.exe" extension add --global WixToolset.UI.wixext/5.0.2
       - name: Verify native developer tool resources
+        timeout-minutes: 5
         run: node --test apps/desktop/test/developer-toolchain.test.mjs apps/desktop/test/journey-platform.test.mjs
       - run: npm --prefix apps/desktop run test:runtime
+        # Bound leaked native handles without forcing tests to report success.
+        timeout-minutes: 10
       - run: npm --prefix apps/desktop run package
       - run: node apps/desktop/test/developer-toolchain-smoke.mjs
       - run: node apps/desktop/test/developer-debug-smoke.mjs

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import vm from 'node:vm';
 import {
   preserveNativeClipboard,
   restoreNativeClipboard,
@@ -59,7 +60,13 @@ test('native clipboard checkpoints retain every opaque ClipboardItem in main and
   assert.notEqual(current, original);
   assert.deepEqual(
     current.map((item) => item.types),
-    original.map((item) => item.types),
+    original.map((item) =>
+      item.types.map((type) =>
+        process.platform === 'darwin' && type === 'text/html'
+          ? 'electron application/osclipboard;format="public.html"'
+          : type,
+      ),
+    ),
   );
   assert.deepEqual(
     [
@@ -70,7 +77,13 @@ test('native clipboard checkpoints retain every opaque ClipboardItem in main and
     [0, 1, 2, 255],
   );
   assert.equal(
-    await (await current[0].getType('text/html')).text(),
+    await (
+      await current[0].getType(
+        process.platform === 'darwin'
+          ? 'electron application/osclipboard;format="public.html"'
+          : 'text/html',
+      )
+    ).text(),
     '<b>original</b>',
   );
   assert.equal(globalThis.__circleJourneyClipboard, undefined);
@@ -81,3 +94,54 @@ test('native clipboard checkpoints retain every opaque ClipboardItem in main and
   await restoreNativeClipboard(app, empty);
   assert.deepEqual(current, []);
 });
+
+for (const platform of ['darwin', 'win32', 'linux']) {
+  test(`clipboard snapshot maps only macOS HTML to its verified raw platform format (${platform})`, async () => {
+    const blob = new Blob(['<meta charset="utf-8"><b>exact original</b>'], {
+      type: 'text/html',
+    });
+    let written;
+    class ClipboardItem {
+      constructor(data) {
+        this.data = data;
+        this.types = Object.keys(data);
+      }
+      async getType(type) {
+        return this.data[type];
+      }
+    }
+    const clipboard = {
+      read: async () => [{ types: ['text/html'], getType: async () => blob }],
+      write: async (items) => {
+        written = items;
+      },
+    };
+    const context = vm.createContext({
+      process: { platform },
+      clipboard,
+      ClipboardItem,
+      Map,
+      Error,
+    });
+    const app = {
+      evaluate: async (callback, arg) => {
+        context.arg = arg;
+        return vm.runInContext(
+          `(${callback})({clipboard,ClipboardItem},arg)`,
+          context,
+        );
+      },
+    };
+    const key = await preserveNativeClipboard(app);
+    await restoreNativeClipboard(app, key);
+    const expected =
+      platform === 'darwin'
+        ? 'electron application/osclipboard;format="public.html"'
+        : 'text/html';
+    assert.deepEqual(written[0].types, [expected]);
+    assert.equal(
+      await (await written[0].getType(expected)).text(),
+      await blob.text(),
+    );
+  });
+}

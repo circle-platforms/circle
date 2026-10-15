@@ -205,6 +205,8 @@ export async function runNativeEditorJourney({
     diagnostics.some((item) => item.message.includes('not assignable')),
   );
   assert.equal(await disk(main), before);
+  // This synthetic diagnostic overlay is not a developer buffer. Release it.
+  await call('language', 'close', { path: main });
   checks.push(
     'native language service analyzes unsaved content without disk writes',
   );

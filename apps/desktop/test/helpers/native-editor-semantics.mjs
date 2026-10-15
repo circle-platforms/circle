@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 const file = 'editor-supplement.ts';
-const initial = 'const value=1;\nconsole.log(value);\n';
+// Explicit module scope prevents unrelated script fixtures from redeclaring value.
+const initial = 'const value=1;\nconsole.log(value);\nexport {};\n';
 export async function createNativeEditorSemanticsFixture(workspace) {
   await writeFile(join(workspace, file), initial, { flag: 'wx' });
   return { file };
@@ -16,6 +17,7 @@ export async function runNativeEditorSemantics({
   output,
 }) {
   const checks = [];
+  const observed = {};
   const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
   const disk = () => readFile(join(workspace, file), 'utf8');
   assert.equal(await disk(), initial);
@@ -47,6 +49,7 @@ export async function runNativeEditorSemantics({
   };
   try {
     const refs = await call('references', { path: file, line: 1, column: 8 });
+    observed.references = refs;
     assert(refs.some((r) => r.path === file && r.range.startLineNumber === 1));
     assert(refs.some((r) => r.path === file && r.range.startLineNumber === 2));
     checks.push('actual declaration and usage references');
@@ -107,7 +110,9 @@ export async function runNativeEditorSemantics({
     );
     await page.keyboard.press(`${modifier}+s`);
     await until(
-      async () => (await disk()) === 'const value = 2;\nconsole.log(value);\n',
+      async () =>
+        (await disk()) ===
+        'const value = 2;\nconsole.log(value);\nexport {};\n',
       'range replacement and format save exact expected disk bytes',
     );
     checks.push('native range replacement and formatting save exact content');
@@ -125,7 +130,7 @@ export async function runNativeEditorSemantics({
       await writeFile(
         join(output, 'editor-semantics-failure.json'),
         JSON.stringify(
-          { checks, error: String(error), disk: await disk() },
+          { checks, observed, error: String(error), disk: await disk() },
           null,
           2,
         ),

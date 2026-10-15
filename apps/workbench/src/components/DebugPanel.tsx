@@ -400,7 +400,7 @@ export function DebugPanel({
                     path: file,
                     lines: rows
                       .filter((_, index) => index !== i)
-                      .map((b) => b.line),
+                      .map((b) => b.requestedLine ?? b.line),
                   })
                 }
               >

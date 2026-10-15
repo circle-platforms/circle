@@ -1,7 +1,12 @@
 import { createRequire as createPtyRequire } from 'node:module';
 import type * as NodePty from 'node-pty';
+import {
+  assertSupportedWindowsPtyVersion,
+  installWindowsPtyExitCleanup,
+} from './pty-exit-cleanup.mjs';
 
 let native: typeof NodePty | undefined;
+let version: unknown;
 
 /** Keep optional native dependencies out of workers until a terminal is opened. */
 export const spawnPty: typeof NodePty.spawn = (...args) => {
@@ -11,5 +16,10 @@ export const spawnPty: typeof NodePty.spawn = (...args) => {
     typeof __filename === 'string' ? __filename : import.meta.url,
   );
   native ??= requireNative('node-pty') as typeof NodePty;
-  return native.spawn(...args);
+  version ??= (requireNative('node-pty/package.json') as { version: unknown })
+    .version;
+  assertSupportedWindowsPtyVersion(version);
+  const terminal = native.spawn(...args);
+  installWindowsPtyExitCleanup(terminal, { version });
+  return terminal;
 };
