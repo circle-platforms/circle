@@ -1,4 +1,4 @@
-export const VERSION = '1.7.1';
+export const VERSION = '1.7.2';
 export function validVersion(value: string): boolean {
   return (
     value === value.trim() &&

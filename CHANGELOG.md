@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.7.2 - 2026-10-15
+
 ### Fixed
 
 - Trusted desktop integrations initialize before the first turn, so Hub records appear on a fresh start without Reload or an unrelated trust interaction.
