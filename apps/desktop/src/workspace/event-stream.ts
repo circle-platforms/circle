@@ -10,8 +10,14 @@ export interface StreamCursor {
 }
 export interface PersistedWorkspaceEvent extends WorkspaceServiceEvent {
   cursor: StreamCursor;
+  /** Producer sequence is distinct from this journal's global sequence. */
+  sourceSeq?: number;
+  sourceEpoch?: string;
 }
-export type EventInput = Omit<WorkspaceServiceEvent, 'epoch' | 'seq' | 'at'>;
+export type EventInput = Omit<WorkspaceServiceEvent, 'epoch' | 'seq' | 'at'> & {
+  sourceSeq?: number;
+  sourceEpoch?: string;
+};
 export interface ReplayPage {
   events: PersistedWorkspaceEvent[];
   cursor: StreamCursor;
@@ -87,6 +93,14 @@ export class WorkspaceEventStream {
 
   append(input: EventInput): Promise<PersistedWorkspaceEvent> {
     return this.appendBatch([input]).then((events) => events[0]);
+  }
+
+  /** Bridge an independently sequenced service without destroying its cursor. */
+  appendSource(event: WorkspaceServiceEvent): Promise<PersistedWorkspaceEvent> {
+    const { seq, epoch, at: _at, ...input } = event;
+    if (!Number.isSafeInteger(seq) || seq < 1 || !epoch)
+      return Promise.reject(Error('invalid workspace source sequence'));
+    return this.append({ ...input, sourceSeq: seq, sourceEpoch: epoch });
   }
 
   appendBatch(

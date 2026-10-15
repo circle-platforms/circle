@@ -21,6 +21,12 @@ Host integration:
 - Forward committed events with their `cursor`. Keep journal sequence ordering;
   filtering by session before delivery creates intentional gaps. Use one
   `WorkspaceStreamStore` per journal, then subscribe by resource key in React.
+- Use `appendSource(event)` for already sequenced service events. `seq`/`epoch`
+  on the persisted event belong to the workspace journal; `sourceSeq` and
+  `sourceEpoch` retain the original service cursor. PTY byte replay must keep
+  using the terminal's raw sequence, never the global journal sequence. Duplicate
+  raw chunks are suppressed by the raw terminal replay cursor, while duplicate
+  journal deliveries are suppressed by the renderer store cursor.
 - Replay requests must recheck the requesting window's workspace grant. Install
   the live listener first, fetch bounded pages, and deduplicate buffered live
   events after replay. On `gap`, replay from the last applied cursor; do not

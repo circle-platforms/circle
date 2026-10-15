@@ -6,6 +6,8 @@ export interface WorkspaceStreamCursor {
 }
 export type WorkspaceStreamEvent = WorkspaceServiceEvent & {
   cursor: WorkspaceStreamCursor;
+  sourceSeq?: number;
+  sourceEpoch?: string;
 };
 export type StreamApplyResult = 'applied' | 'duplicate' | 'stale-epoch' | 'gap';
 

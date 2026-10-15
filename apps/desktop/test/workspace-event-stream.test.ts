@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mkdtemp, appendFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   WorkspaceEventStream,
   type EventInput,
 } from '../src/workspace/event-stream.ts';
+import { WorkspaceStreamStore } from '../../workbench/src/model/workspace-stream-store.ts';
+import { spawn as spawnPty } from 'node-pty';
 
 const input = (text: string): EventInput => ({
   workspaceId: 'w',
@@ -134,4 +136,141 @@ test('queued records snapshot producer data and reject overflow explicitly', () 
     const reopened = await WorkspaceEventStream.open(path);
     assert.equal((await reopened.replay()).events[0].data.text, 'original');
     await reopened.close();
+  }));
+
+test('mixed task/PTY producer cursors survive journal replay without conflation', () =>
+  fixture(async (path) => {
+    const stream = await WorkspaceEventStream.open(path);
+    const source = (
+      service: 'tasks' | 'terminal',
+      seq: number,
+      text: string,
+    ) => ({
+      ...input(text),
+      service,
+      resourceId: service === 'terminal' ? 'pty1' : 'task1',
+      epoch: `${service}-epoch`,
+      seq,
+      at: 'source-time',
+    });
+    // A real PTY is already independently sequenced before subscribing. Task
+    // events interleave; journal global 1/2/3 must not become PTY 41/42.
+    await stream.appendSource(source('terminal', 41, 'first chunk'));
+    await stream.appendSource(source('tasks', 1, 'running'));
+    await stream.appendSource(source('terminal', 42, 'second chunk'));
+    await stream.appendSource(source('tasks', 2, 'completed'));
+    const page = await stream.replay();
+    assert.deepEqual(
+      page.events.map((event) => event.seq),
+      [1, 2, 3, 4],
+    );
+    assert.deepEqual(
+      page.events.map((event) => event.sourceSeq),
+      [41, 1, 42, 2],
+    );
+    const store = new WorkspaceStreamStore();
+    for (const event of page.events)
+      assert.equal(store.apply(event), 'applied');
+    for (const event of page.events)
+      assert.equal(store.apply(event), 'duplicate');
+    const ptyEvents = store.snapshot(
+      WorkspaceStreamStore.resourceKey(page.events[0]),
+    );
+    assert.deepEqual(
+      ptyEvents.map((event) => event.sourceSeq),
+      [41, 42],
+    );
+    assert.deepEqual(
+      ptyEvents.map((event) => event.sourceEpoch),
+      ['terminal-epoch', 'terminal-epoch'],
+    );
+    // Raw terminal replay cursor is the last producer sequence, not journal #3.
+    const rawReplayAfter = ptyEvents.at(-1)!.sourceSeq!;
+    assert.equal(rawReplayAfter, 42);
+    const remainingRawRecords = [41, 42, 43].filter(
+      (seq) => seq > rawReplayAfter,
+    );
+    assert.deepEqual(remainingRawRecords, [43]);
+    await stream.close();
+  }));
+
+test('real PTY bytes and task-state records replay with separate source sequences', () =>
+  fixture(async (path) => {
+    const stream = await WorkspaceEventStream.open(path);
+    const toTask = (seq: number, state: string) =>
+      stream.appendSource({
+        ...input(state),
+        service: 'tasks',
+        resourceId: 'task1',
+        epoch: 'task-epoch',
+        seq,
+        at: new Date().toISOString(),
+      });
+    await toTask(1, 'queued');
+    await toTask(2, 'running');
+    let terminalSequence = 0;
+    const writes: Promise<unknown>[] = [];
+    const processPty = spawnPty(
+      process.execPath,
+      [
+        '-e',
+        'process.stdout.write(`native-pty:${!!process.stdout.isTTY}\\n`); setTimeout(() => process.exit(0), 60)',
+      ],
+      {
+        name: 'xterm',
+        cols: 80,
+        rows: 24,
+        cwd: dirname(path),
+        env: {
+          ...process.env,
+          HOME: dirname(path),
+          CIRCLE_HOME: dirname(path),
+        },
+      },
+    );
+    const exited = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        processPty.kill();
+        reject(Error('PTY test timeout'));
+      }, 5000);
+      processPty.onData((text) => {
+        writes.push(
+          stream.appendSource({
+            ...input(text),
+            epoch: 'pty-epoch',
+            seq: ++terminalSequence,
+            at: new Date().toISOString(),
+          }),
+        );
+      });
+      processPty.onExit(({ exitCode }) => {
+        clearTimeout(timer);
+        if (exitCode !== 0) reject(Error(`PTY exited ${exitCode}`));
+        else resolve();
+      });
+    });
+    await exited;
+    await Promise.all(writes);
+    await toTask(3, 'completed');
+    const page = await stream.replay();
+    const store = new WorkspaceStreamStore();
+    for (const event of page.events)
+      assert.equal(store.apply(event), 'applied');
+    for (const event of page.events)
+      assert.equal(store.apply(event), 'duplicate');
+    const ptyRows = page.events.filter((event) => event.service === 'terminal');
+    assert.match(
+      ptyRows.map((event) => event.data.text).join(''),
+      /native-pty:true/,
+    );
+    assert.equal(ptyRows[0].sourceSeq, 1);
+    assert.equal(ptyRows[0].seq, 3);
+    assert.equal(ptyRows.at(-1)!.sourceSeq, terminalSequence);
+    assert.deepEqual(
+      page.events
+        .filter((event) => event.service === 'tasks')
+        .map((event) => event.sourceSeq),
+      [1, 2, 3],
+    );
+    await stream.close();
   }));
