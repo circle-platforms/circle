@@ -100,7 +100,10 @@ export async function runNativeEditorSemantics({
       initial,
       'range replacement stays in buffer until save',
     );
-    await page.keyboard.press('Alt+Shift+f');
+    // Monaco binds document format differently on Linux.
+    await page.keyboard.press(
+      process.platform === 'linux' ? 'Control+Shift+i' : 'Alt+Shift+f',
+    );
     await until(
       async () =>
         (await lines.textContent())
