@@ -157,8 +157,8 @@ export interface Workspace {
   trusted: boolean;
   origin?: 'native' | 'preview';
   /**
-   * The app-owned scratch folder is not a project the person opened.
-   * Home treats it as working without a project.
+   * `project` is a folder the person can pick, including the default circle
+   * workspace. `scratch` is a conversation that is not in any project.
    */
   kind?: 'project' | 'scratch';
   instructions: { name: string; content: string }[];
@@ -369,7 +369,7 @@ export interface CommandResult {
 }
 /** The first message from the home composer. No session exists until this runs. */
 export interface BeginConversation {
-  /** A known project. Omit it to work without a project, in the scratch folder. */
+  /** A known project. Omit it, or pass null, to work without a project. */
   workspaceId?: string | null;
   text: string;
 }

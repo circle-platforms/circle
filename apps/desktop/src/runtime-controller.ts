@@ -832,7 +832,9 @@ export class RuntimeController {
         branch: this.branch(path),
         trusted: isFolderTrusted(savedSettings, path),
         origin: 'native' as const,
-        kind: this.isScratch(path)
+        // The default circle folder is a project the person can pick. Scratch is
+        // only the separate folder used by "work without a project".
+        kind: this.isUnscoped(path)
           ? ('scratch' as const)
           : ('project' as const),
         instructions: [],
@@ -1721,12 +1723,24 @@ export class RuntimeController {
     tracker.reset(runtime.todos);
     this.planCompletions.set(runtime.session.id, tracker);
   }
-  // The built-in scratch folder is the place a conversation lives when the
-  // person is not working in a project. It is the app's own folder, so it is trusted.
-  private ensureScratch(): string {
-    const scratch = this.scratchPath();
-    mkdirSync(scratch, { recursive: true, mode: 0o700 });
-    const resolved = realpathSync(scratch);
+  // Conversations with no project live here, not in the default circle workspace.
+  // That folder is a project of its own; sharing it made "no project" look like circle.
+  private unscopedPath(): string {
+    return join(this.home, 'unscoped');
+  }
+  private isUnscoped(target: string): boolean {
+    const unscoped = this.unscopedPath();
+    if (target === unscoped) return true;
+    try {
+      return target === realpathSync(unscoped);
+    } catch {
+      return false;
+    }
+  }
+  private ensureUnscoped(): string {
+    const folder = this.unscopedPath();
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    const resolved = realpathSync(folder);
     saveSettingsChange(this.home, (saved) => {
       Object.assign(saved, trustFolder(saved, resolved));
     });
@@ -1923,7 +1937,7 @@ export class RuntimeController {
         if (!promptText.trim()) throw Error('prompt is empty');
         const workspace =
           p.workspaceId === undefined
-            ? this.ensureScratch()
+            ? this.ensureUnscoped()
             : this.workspaceById(text(p.workspaceId, 'workspace', 200));
         if (!isFolderTrusted(loadSettings(this.home), workspace))
           throw Error('trust the workspace before running Circle');

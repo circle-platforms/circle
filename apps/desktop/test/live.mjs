@@ -223,6 +223,12 @@ try {
   page = await app.firstWindow();
   observe(page);
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
+  await page
+    .getByRole('heading', {
+      name: 'what should we build in circle?',
+      exact: true,
+    })
+    .waitFor();
   if (process.env.CIRCLE_DESKTOP_TEST_WIDTH) {
     viewportSizing = await setViewport(
       app,
@@ -355,13 +361,26 @@ try {
     'cancel',
   );
   checks.push('native stop awaits the actual model abort');
-  const countBeforeNew = (await state()).sessions.length;
+  const beforeNew = await state();
+  const countBeforeNew = beforeNew.sessions.length;
+  const active = beforeNew.sessions.find(
+    (session) => session.id === beforeNew.activeSessionId,
+  );
+  const currentProject = beforeNew.workspaces.find(
+    (row) => row.id === active.workspaceId,
+  );
   await page
     .getByRole('button', { name: 'new session', exact: true })
     .first()
     .click();
   await page
-    .getByRole('heading', { name: 'what are we working on?', exact: true })
+    .getByRole('heading', {
+      name:
+        currentProject && currentProject.kind !== 'scratch'
+          ? `what should we build in ${currentProject.name}?`
+          : 'what are we working on?',
+      exact: true,
+    })
     .waitFor();
   assert.equal((await state()).sessions.length, countBeforeNew);
   assert.equal((await state()).activeSessionId, sessionId);

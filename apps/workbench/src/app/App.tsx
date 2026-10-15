@@ -117,7 +117,11 @@ export function App() {
     ? (location.pathname.slice(6) as PageId)
     : null;
   const home = location.pathname === '/home';
-  const homeWorkspace = new URLSearchParams(location.search).get('workspace');
+  const homeQuery = new URLSearchParams(location.search);
+  // No query keeps the current project. An empty value is "work without a project".
+  const homeRequested = homeQuery.has('workspace')
+    ? (homeQuery.get('workspace') ?? '')
+    : null;
   const inspectorVisible = inspectorOpen && !page;
   const onSession = () => {
     setFile(null);
@@ -195,8 +199,20 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot.openUrl?.id, session.id]);
   useEffect(() => {
-    if (location.pathname === '/')
-      navigate(`/session/${session.id}`, { replace: true });
+    if (location.pathname === '/') {
+      const active = snapshot.sessions.find((item) => item.id === session.id);
+      // A configured app with nothing to resume opens the same home as new
+      // session, aimed at this project. Before a model is connected, stay on
+      // the conversation so setup and its commands have the composer.
+      const configured = snapshot.runtime?.configured !== false;
+      navigate(
+        !configured || (active && sessionHasContent(active))
+          ? `/session/${session.id}`
+          : homePath(),
+        { replace: true },
+      );
+      return;
+    }
     if (location.pathname === '/home') return;
     const id = location.pathname.startsWith('/session/')
       ? location.pathname.slice(9)
@@ -526,7 +542,7 @@ export function App() {
     </section>
   ) : home ? (
     <Home
-      workspaceId={homeWorkspace}
+      requestedId={homeRequested}
       onDialog={onDialog}
       onStarted={(id) => navigate(`/session/${id}`)}
     />

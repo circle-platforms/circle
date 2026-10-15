@@ -179,6 +179,10 @@ export function Sidebar({
                 (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0),
             );
           const open = all.includes(workspace.id);
+          const name =
+            workspace.kind === 'scratch'
+              ? t('work without a project')
+              : workspace.name;
           return (
             <section className="project" key={workspace.id}>
               <div className="project-header" title={workspace.path}>
@@ -193,11 +197,11 @@ export function Sidebar({
                     )
                   }
                 >
-                  {workspace.name}
+                  {name}
                 </button>
                 <div className="project-actions">
                   <IconButton
-                    label={t('new session in {name}', { name: workspace.name })}
+                    label={t('new session in {name}', { name })}
                     onClick={() => newSession(workspace.id)}
                   >
                     <Plus size={13} />

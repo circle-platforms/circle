@@ -255,8 +255,8 @@ export class PreviewRuntime implements RuntimePort {
     if (!workspace) {
       created = {
         id: crypto.randomUUID(),
-        name: 'circle',
-        path: this.snapshot.settings.workspaceFolder || 'scratch',
+        name: 'unscoped',
+        path: 'unscoped',
         branch: '',
         trusted: true,
         kind: 'scratch',

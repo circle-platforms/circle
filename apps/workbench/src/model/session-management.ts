@@ -13,7 +13,7 @@ export function sessionHasContent(session: Session): boolean {
   );
 }
 
-/** Folders in the sidebar: opened projects stay, empty scratch does not. */
+/** Folders in the sidebar: opened projects stay, an empty no-project group does not. */
 export function workspaceListed(
   workspace: Workspace,
   sessions: readonly Session[],

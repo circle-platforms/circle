@@ -18,6 +18,12 @@ import {
   workspaceListed,
   workspaceSessions,
 } from '../src/model/session-management.ts';
+import {
+  homePath,
+  homeProjects,
+  selectedHomeProject,
+} from '../src/features/home-selection.ts';
+import type { Workspace } from '../src/model/types.ts';
 function storage() {
   const values = new Map<string, string>();
   return {
@@ -424,6 +430,87 @@ test('the first message from home creates one session in the chosen project', ()
     }),
     false,
   );
+});
+
+function folder(
+  id: string,
+  name: string,
+  kind: Workspace['kind'] = 'project',
+): Workspace {
+  return {
+    id,
+    name,
+    path: '/folders/' + name,
+    branch: '',
+    trusted: true,
+    kind,
+    instructions: [],
+  };
+}
+
+test('the home picker lists known projects and the sidebar choice wins', () => {
+  const circle = folder('circle', 'circle');
+  const docs = folder('docs', 'docs-site');
+  const loose = folder('loose', 'unscoped', 'scratch');
+  const workspaces = [docs, loose, circle];
+  assert.deepEqual(
+    homeProjects(workspaces).map((item) => item.name),
+    ['circle', 'docs-site'],
+  );
+  const sessions = [{ id: 'current', workspaceId: 'circle' }];
+  assert.equal(
+    selectedHomeProject(workspaces, sessions, 'current', null)?.id,
+    'circle',
+  );
+  assert.equal(
+    selectedHomeProject(workspaces, sessions, 'current', 'circle')?.id,
+    'circle',
+  );
+  assert.equal(
+    selectedHomeProject(workspaces, sessions, 'current', 'docs')?.id,
+    'docs',
+  );
+  assert.equal(
+    selectedHomeProject(workspaces, sessions, 'current', ''),
+    undefined,
+  );
+  assert.equal(
+    selectedHomeProject(workspaces, sessions, 'current', 'loose'),
+    undefined,
+  );
+  assert.equal(homePath(), '/home');
+  assert.equal(homePath('circle'), '/home?workspace=circle');
+  assert.equal(homePath(null), '/home?workspace=');
+});
+
+test('the picker choice decides where the first message is stored', () => {
+  const runtime = new PreviewRuntime();
+  runtime.change((state) => {
+    state.workspaces.push(folder('circle', 'circle'));
+  });
+  const inCircle = runtime.beginConversation({
+    workspaceId: 'circle',
+    text: 'build in circle',
+  });
+  assert.ok('sessionId' in inCircle);
+  const circleSession = runtime
+    .getSnapshot()
+    .sessions.find((session) => session.id === inCircle.sessionId)!;
+  assert.equal(circleSession.workspaceId, 'circle');
+  const loose = runtime.beginConversation({
+    workspaceId: null,
+    text: 'a loose question',
+  });
+  assert.ok('sessionId' in loose);
+  const looseSession = runtime
+    .getSnapshot()
+    .sessions.find((session) => session.id === loose.sessionId)!;
+  const looseWorkspace = runtime
+    .getSnapshot()
+    .workspaces.find((item) => item.id === looseSession.workspaceId)!;
+  assert.notEqual(looseSession.workspaceId, 'circle');
+  assert.equal(looseWorkspace.kind, 'scratch');
+  assert.equal(looseSession.messages[0]!.text, 'a loose question');
 });
 
 test('working without a project creates one scratch session, and empty rows stay unlisted', () => {

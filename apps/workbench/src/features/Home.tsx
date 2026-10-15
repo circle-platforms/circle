@@ -14,19 +14,17 @@ import { desktopHost, openNativeWorkspace } from '../host';
 import { useRuntime } from '../app/context';
 import type { DialogId } from '../model/types';
 import { t } from '../i18n';
+import { homePath, homeProjects, selectedHomeProject } from './home-selection';
 
-export function homePath(workspaceId?: string | null) {
-  return workspaceId
-    ? `/home?workspace=${encodeURIComponent(workspaceId)}`
-    : '/home';
-}
+export { homePath };
 
 export function Home({
-  workspaceId,
+  requestedId,
   onDialog,
   onStarted,
 }: {
-  workspaceId?: string | null;
+  /** `null` keeps the current project. `''` is working without a project. */
+  requestedId: string | null;
   onDialog: (dialog: DialogId, selection?: string) => void;
   onStarted: (sessionId: string) => void;
 }) {
@@ -34,18 +32,17 @@ export function Home({
   const navigate = useNavigate();
   const [draft, setDraft] = useState('');
   const [query, setQuery] = useState('');
-  const requested = workspaceId
-    ? snapshot.workspaces.find((item) => item.id === workspaceId)
-    : undefined;
-  const project = requested?.kind === 'scratch' ? undefined : requested;
-  const projects = snapshot.workspaces
-    .filter((item) => item.kind !== 'scratch')
-    .filter((item) =>
-      (item.name + ' ' + item.path)
-        .toLowerCase()
-        .includes(query.trim().toLowerCase()),
-    )
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const project = selectedHomeProject(
+    snapshot.workspaces,
+    snapshot.sessions,
+    snapshot.activeSessionId,
+    requestedId,
+  );
+  const projects = homeProjects(snapshot.workspaces).filter((item) =>
+    (item.name + ' ' + item.path)
+      .toLowerCase()
+      .includes(query.trim().toLowerCase()),
+  );
   const model =
     snapshot.settings.defaultModel ||
     snapshot.sessions.find((item) => item.id === snapshot.activeSessionId)

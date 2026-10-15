@@ -352,7 +352,10 @@ try {
   const beforeNew = await state();
   await page.getByRole('button', { name: 'new session', exact: true }).click();
   await page
-    .getByRole('heading', { name: 'what are we working on?', exact: true })
+    .getByRole('heading', {
+      name: 'what should we build in orbit-api?',
+      exact: true,
+    })
     .waitFor();
   assert.equal(new URL(page.url()).hash, '#/home');
   // Sample data stays in memory until a view writes it. Home must not add a row.

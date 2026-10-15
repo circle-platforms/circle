@@ -4328,4 +4328,75 @@ test('the first message from home creates one session in the chosen project', as
     .snapshot()
     .workspaces.find((item) => item.id === scratch[0]!.workspaceId);
   assert.equal(scratchWorkspace?.kind, 'scratch');
+  assert.notEqual(scratchWorkspace?.path, realpathSync(f.workspace));
+});
+
+test('the default circle workspace stays a project, and no project is a different folder', async (t) => {
+  const f = await setupScratch(t, [
+    { message: assistant('in circle') },
+    { message: assistant('loose answer') },
+  ]);
+  const circle = f.controller
+    .snapshot()
+    .workspaces.find((row) => row.path === f.scratch);
+  assert.ok(circle);
+  assert.equal(circle.name, 'circle');
+  assert.equal(circle.kind, 'project');
+  const inCircle = () =>
+    f.controller
+      .snapshot()
+      .sessions.filter((session) => session.workspaceId === circle.id);
+  const before = inCircle().length;
+  const begun = await f.call('begin-session', {
+    workspaceId: circle.id,
+    text: 'build in circle',
+    display: 'build in circle',
+  });
+  assert.equal(begun.ok, true, begun.error);
+  await wait(
+    () =>
+      inCircle().some((session) =>
+        session.messages.some((message) =>
+          message.text.includes('build in circle'),
+        ),
+      ),
+    'circle message stored',
+  );
+  assert.equal(inCircle().length, before);
+  await wait(
+    () =>
+      inCircle().some((session) =>
+        session.messages.some((message) => message.role === 'assistant'),
+      ),
+    'circle turn finished',
+  );
+  const loose = await f.call('begin-session', {
+    text: 'a loose question',
+    display: 'a loose question',
+  });
+  assert.equal(loose.ok, true, loose.error);
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .sessions.some((session) =>
+          session.messages.some((message) =>
+            message.text.includes('a loose question'),
+          ),
+        ),
+    'loose message stored',
+  );
+  const looseSession = f.controller
+    .snapshot()
+    .sessions.find((session) =>
+      session.messages.some((message) =>
+        message.text.includes('a loose question'),
+      ),
+    )!;
+  assert.notEqual(looseSession.workspaceId, circle.id);
+  const looseWorkspace = f.controller
+    .snapshot()
+    .workspaces.find((item) => item.id === looseSession.workspaceId);
+  assert.equal(looseWorkspace?.kind, 'scratch');
+  assert.notEqual(looseWorkspace?.path, f.scratch);
 });
