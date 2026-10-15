@@ -34,6 +34,7 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
   documents: new Set(['read', 'save', 'applyEdits', 'refresh']),
   terminal: new Set([
     'create',
+    'restart',
     'write',
     'resize',
     'signal',
