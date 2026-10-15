@@ -87,6 +87,8 @@ interface Followed {
 }
 class ServerError extends Error {
   status = 0;
+  code = '';
+  details: Record<string, unknown> = {};
 }
 // What a refusal names besides its message (the rows, tools or limits it is about), kept
 // short so a model reads it beside the code instead of a whole response.
@@ -119,14 +121,14 @@ const USAGE = [
   '/server login <url> <user>       sign in; the password is asked on a masked card',
   '/server logout                   forget the token',
   '/server packs                    what the server can do',
-  '/server submit <pack> <file>     hand it work with this file, follow it, save the results',
+  '/server submit <pack> <file>     hand it work with this file, follow it, save the results (module-execute takes the flow input JSON instead of a file)',
   '/server tasks                    the tasks you handed over from here',
   '/server task <id>                show a task and follow it until it ends',
   '/server respond <id> <answer>    answer what a task is waiting on (text, key=value or JSON)',
   '/server get <id>                 save a delivered task’s results again',
   '/server refresh                  read work, execution, knowledge and methods from the server',
   '/server approve <id> <approval>  approve an action a task waits on (reject: /server reject …)',
-  '/server reconcile <id>           ask the server to check an operation whose outcome is unknown',
+  '/server reconcile <id> [op]     check an unknown operation; without op the server only explains',
   '/server tools                    the server’s tools the model can use, read again',
   '/server trial start              record the server tool calls of a trial run from now',
   '/server skill push <folder>      submit a skill pack with the trial record (--outputs a,b)',
@@ -637,6 +639,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
         `${String(error.code ?? response.status)}: ${String(error.message ?? 'request failed')}${details ? ` · ${details.length > MAX_DETAIL_CHARS ? `${details.slice(0, MAX_DETAIL_CHARS)}…` : details}` : ''}`,
       );
       failed.status = response.status;
+      failed.code = typeof error.code === 'string' ? error.code : '';
+      failed.details = isRecord(error.details) ? error.details : {};
       throw failed;
     }
     return {
@@ -680,8 +684,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
   }
 
   // A session stays alive without asking anyone: shortly before the token runs out it is
-  // renewed at the server (POST /v1/auth/refresh), which keeps the same token and moves its
-  // expiry. A server without that route, or a run token, is left to expire.
+  // renewed at the server (POST /v1/auth/refresh), which issues a new token; the old one
+  // dies five seconds later. A server without that route, or a run token, is left to expire.
   let refreshing: Promise<boolean> | undefined;
   let refreshUnsupported = false;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -745,6 +749,11 @@ export async function register(api: ExtensionAPI): Promise<void> {
       const due = refreshDue(readConfig()?.expiresAt);
       if (due !== undefined && Date.now() >= due) await refresh();
     }
+    // Refresh rotates the token: the old one dies five seconds later, so a long poll
+    // started before the refresh can come back 401. Retry once on the current token
+    // before calling the session expired.
+    const used =
+      options.anonymous || fromRun ? undefined : await currentToken();
     try {
       return await send(method, path, options);
     } catch (error) {
@@ -756,6 +765,14 @@ export async function register(api: ExtensionAPI): Promise<void> {
         throw error;
       if (fromRun)
         throw new ServerError('circle-server turned down the run token');
+      const current = await currentToken();
+      if (used && current && current !== used)
+        try {
+          return await send(method, path, options);
+        } catch (again) {
+          if (!(again instanceof ServerError) || again.status !== 401)
+            throw again;
+        }
       expired = true;
       scheduleRefresh();
       void showStatus();
@@ -796,11 +813,18 @@ export async function register(api: ExtensionAPI): Promise<void> {
       'reason',
       'workerId',
     ])
-      if (typeof payload[key] === 'string' && !parts.includes(String(payload[key])))
+      if (
+        typeof payload[key] === 'string' &&
+        !parts.includes(String(payload[key]))
+      )
         parts.push(String(payload[key]));
     for (const key of ['reason', 'error']) {
       const value = payload[key];
-      if (isRecord(value) && typeof value.code === 'string' && !parts.includes(value.code))
+      if (
+        isRecord(value) &&
+        typeof value.code === 'string' &&
+        !parts.includes(value.code)
+      )
         parts.push(value.code);
     }
     return `  ${event.taskId} · ${event.seq} · ${event.kind}${parts.length ? ' · ' + parts.join(' · ') : ''}`;
@@ -819,7 +843,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
   }
 
   // Save every artifact of a delivered task in the workspace, after checking the bytes
-  // against the SHA-256 the server recorded for it.
+  // against the SHA-256 the server recorded for it. A module-execute run produces a
+  // flow original per step, so artifacts land in tasks/<taskId>/, not the root.
   async function deliver(
     taskId: string,
     context: CommandContext,
@@ -838,6 +863,22 @@ export async function register(api: ExtensionAPI): Promise<void> {
           : ''
       }${unmapped.length ? ` · ${unmapped.length} unmapped (listed in the workbook)` : ''}`,
     );
+    // A flow result summarizes its cases and the terminal execution observations.
+    const outcome = isRecord(result.result) ? result.result : {};
+    const cases = Array.isArray(outcome.cases) ? outcome.cases : [];
+    for (const item of cases)
+      if (isRecord(item))
+        context.append(
+          `    case ${String(item.autoid)} · ${String(item.verdict)}`,
+        );
+    const executionObservations = Array.isArray(result.executionObservations)
+      ? result.executionObservations
+      : [];
+    for (const item of executionObservations)
+      if (isRecord(item))
+        context.append(
+          `    execution ${String(item.operationId)} · terminal ${String(item.terminal)} · remote lease released ${String(item.remoteLeaseReleased)}`,
+        );
     for (const item of unmapped.slice(0, 5))
       if (isRecord(item))
         context.append(
@@ -861,6 +902,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
       context.append(`  ${taskId} delivered no files`);
       return;
     }
+    const folder = join(context.workspace, 'tasks', taskId);
+    mkdirSync(folder, { recursive: true });
     for (const artifact of artifacts) {
       const { bytes, headers } = await request(
         'GET',
@@ -877,13 +920,39 @@ export async function register(api: ExtensionAPI): Promise<void> {
         );
         continue;
       }
-      const path = freePath(context.workspace, name);
+      const path = freePath(folder, name);
       writeFileSync(path, bytes, { flag: 'wx' });
       remember(taskId, { saved: true });
       context.append(
         `✓ saved ${path} · ${bytes.byteLength} bytes · sha256 ${short(actual)} matches the server (${artifact.artifactId})`,
       );
     }
+  }
+
+  // A failed task carries its own error; hub 60220cf adds the rejected flow action
+  // (stepId/kind) and the bounded cause (code/message) in error.details.
+  async function failureNote(taskId: string, phase: string): Promise<string> {
+    let error: Record<string, unknown> | undefined;
+    try {
+      const { data } = await request(
+        'GET',
+        `/v1/tasks/${encodeURIComponent(taskId)}/result`,
+      );
+      if (isRecord(data) && isRecord(data.error)) error = data.error;
+    } catch {
+      /* The plain line stands. */
+    }
+    if (!error) return `✖ ${taskId} ${phase}`;
+    const details = isRecord(error.details) ? error.details : {};
+    const cause = isRecord(details.cause) ? details.cause : undefined;
+    const where =
+      typeof details.stepId === 'string'
+        ? ` · step ${details.stepId}${typeof details.kind === 'string' ? ` (${details.kind})` : ''}`
+        : '';
+    const why = cause
+      ? ` · ${String(cause.code ?? '')}: ${String(cause.message ?? '')}`
+      : '';
+    return `✖ ${taskId} ${phase}: ${String(error.code ?? '')} · ${String(error.message ?? '')}${where}${why}`;
   }
 
   // Follow a task from the last event this window showed until it ends, writing each event
@@ -906,11 +975,25 @@ export async function register(api: ExtensionAPI): Promise<void> {
         const current = await status(taskId);
         const phase = String(current.phase ?? '');
         const over = TERMINAL.has(phase);
-        const { data } = await request(
-          'GET',
-          `/v1/tasks/${encodeURIComponent(taskId)}/events?after=${cursor}&waitMs=${over ? 0 : 20000}`,
-          { timeoutMs: 40_000 },
-        );
+        let data: unknown;
+        try {
+          data = (
+            await request(
+              'GET',
+              `/v1/tasks/${encodeURIComponent(taskId)}/events?after=${cursor}&waitMs=${over ? 0 : 20000}`,
+              { timeoutMs: 40_000 },
+            )
+          ).data;
+        } catch (error) {
+          // The retained window moved past this cursor: restart at its first
+          // retained position instead of sitting on the stale one forever.
+          if (error instanceof ServerError && error.code === 'CURSOR_EXPIRED') {
+            cursor = Number(error.details.minCursor) || 0;
+            remember(taskId, { seq: cursor });
+            continue;
+          }
+          throw error;
+        }
         const events = (
           isRecord(data) && Array.isArray(data.events) ? data.events : []
         ) as ServerEvent[];
@@ -930,7 +1013,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
             context.append(
               `✖ ${taskId}: the outcome is unknown and the server does not guess it · /server task ${taskId} later`,
             );
-          else context.append(`✖ ${taskId} ${phase}`);
+          else context.append(await failureNote(taskId, phase));
           ended = true;
           return;
         }
@@ -1007,13 +1090,37 @@ export async function register(api: ExtensionAPI): Promise<void> {
       throw new ServerError(
         'no project: sign in again with /server login <url> <user>',
       );
-    const path = resolve(context.workspace, file);
-    if (!existsSync(path)) throw new ServerError(`no such file: ${path}`);
-    const source = await upload(path, config.scopeId);
-    context.append(
-      `  uploaded ${source.name} · sha256 ${short(source.sha256)} → ${source.id}`,
-    );
-    const title = `${pack}: ${source.name}`;
+    // module-execute is the hub's generic execution flow: its input is the frozen
+    // FlowSubmission itself (flowId, methodPin, resources, sources, value,
+    // controlledBytes), validated strictly by the hub. No file upload, and no
+    // sourceRevisionId/sourceSha256 — the hub refuses those with INVALID_PAYLOAD.
+    const moduleExecute = pack === 'module-execute';
+    if (moduleExecute && file)
+      throw new ServerError(
+        'module-execute takes the flow input, not a file: /server submit module-execute <input-json>',
+      );
+    if (
+      moduleExecute &&
+      (typeof extra.flowId !== 'string' ||
+        !extra.flowId ||
+        !isRecord(extra.methodPin) ||
+        !isRecord(extra.resources))
+    )
+      throw new ServerError(
+        'module-execute input is the flow: {flowId, methodPin, resources, sources?, value?, controlledBytes?}',
+      );
+    let source: Awaited<ReturnType<typeof upload>> | undefined;
+    if (!moduleExecute) {
+      const path = resolve(context.workspace, file);
+      if (!existsSync(path)) throw new ServerError(`no such file: ${path}`);
+      source = await upload(path, config.scopeId);
+      context.append(
+        `  uploaded ${source.name} · sha256 ${short(source.sha256)} → ${source.id}`,
+      );
+    }
+    const title = moduleExecute
+      ? `${pack}: ${String(extra.flowId)}`
+      : `${pack}: ${source!.name}`;
     const idempotencyKey =
       'circle-' +
       sha256(
@@ -1021,7 +1128,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
           JSON.stringify([
             config.scopeId,
             pack,
-            source.sha256,
+            source?.sha256 ?? '',
             again ? Date.now() : 0,
             ...(Object.keys(extra).length
               ? [
@@ -1039,11 +1146,13 @@ export async function register(api: ExtensionAPI): Promise<void> {
         title,
         capabilityPackId: pack,
         idempotencyKey,
-        input: {
-          ...extra,
-          sourceRevisionId: source.id,
-          sourceSha256: source.sha256,
-        },
+        input: moduleExecute
+          ? extra
+          : {
+              ...extra,
+              sourceRevisionId: source!.id,
+              sourceSha256: source!.sha256,
+            },
       },
     });
     const task = isRecord(data) ? data : {};
@@ -1919,6 +2028,13 @@ export async function register(api: ExtensionAPI): Promise<void> {
         throw new ServerError(
           'Circle runs with a token from circle-server here; there is no sign-out',
         );
+      // Revoke the whole token family at the server first; a server without the
+      // route, or one that already forgot the token, does not trap the local sign-out.
+      try {
+        await request('POST', '/v1/auth/logout', { json: {} });
+      } catch {
+        /* the local sign-out stands */
+      }
       const removed = await api.secrets.delete('token');
       const config = readConfig();
       if (config) writeJson('config.json', { ...config, expiresAt: undefined });
@@ -1944,6 +2060,30 @@ export async function register(api: ExtensionAPI): Promise<void> {
     async submit(rest, context) {
       const again = rest.includes('--again');
       const [pack, ...files] = rest.filter((word) => word !== '--again');
+      if (pack === 'module-execute') {
+        if (files.length !== 1)
+          throw new ServerError(
+            'usage: /server submit module-execute <input-json> [--again]',
+          );
+        let flow: unknown;
+        try {
+          flow = JSON.parse(files[0]!);
+        } catch {
+          throw new ServerError(
+            'module-execute takes the flow input as a JSON object',
+          );
+        }
+        if (!isRecord(flow))
+          throw new ServerError(
+            'module-execute takes the flow input as a JSON object',
+          );
+        const task = await handOver(pack, '', again, context, flow);
+        context.append(
+          `✓ accepted ${task.taskId} · ${task.phase} · input ${task.inputRevisionId}${task.deduplicated ? ' · the same request as before, no new task' : ''} · following it; closing Circle does not stop it`,
+        );
+        void follow(task.taskId, context);
+        return;
+      }
       if (!pack || files.length !== 1)
         throw new ServerError('usage: /server submit <pack> <file> [--again]');
       const task = await handOver(pack, files[0]!, again, context);
@@ -1996,14 +2136,22 @@ export async function register(api: ExtensionAPI): Promise<void> {
       );
       if (!isRecord(open))
         throw new ServerError(`${taskId} is not waiting for an answer`);
+      // A repair input is a replacement of the bound input; anything else is a response.
+      const repair = open.kind === 'repair';
       await request('POST', `/v1/tasks/${encodeURIComponent(taskId)}/input`, {
         json: {
           inputRevisionId: current.inputRevisionId,
           requestId: open.requestId,
-          response: answerOf(answer.join(' ')),
+          ...(repair
+            ? { replacement: answerOf(answer.join(' ')) }
+            : { response: answerOf(answer.join(' ')) }),
         },
       });
-      context.append(`✓ answered ${taskId} (${String(open.requestId)})`);
+      context.append(
+        repair
+          ? `✓ replaced the input of ${taskId} (${String(open.requestId)})`
+          : `✓ answered ${taskId} (${String(open.requestId)})`,
+      );
       void follow(taskId, context);
     },
     async get([taskId], context) {
@@ -2086,12 +2234,15 @@ export async function register(api: ExtensionAPI): Promise<void> {
     async reject(rest, context) {
       await decide(rest, false, context);
     },
-    async reconcile([taskId], context) {
-      if (!taskId) throw new ServerError('usage: /server reconcile <id>');
+    async reconcile([taskId, operationId], context) {
+      if (!taskId)
+        throw new ServerError('usage: /server reconcile <id> [operationId]');
+      // Only a request naming the operation is a real reconciliation; without one
+      // the server answers with an explanation of what is missing.
       const { data } = await request(
         'POST',
         `/v1/tasks/${encodeURIComponent(taskId)}/reconcile`,
-        { json: {} },
+        { json: operationId ? { operationId } : {} },
       );
       context.append(
         `  ${taskId} · reconcile · ${JSON.stringify(data).slice(0, 200)}`,
@@ -2168,26 +2319,33 @@ export async function register(api: ExtensionAPI): Promise<void> {
   );
   api.registerTool(
     'circle_server_submit',
-    'Hand circle-server a task on one file of the workspace with a capability pack, for example mindmap-compile on an .xmind. The server keeps the task; this waits in the background and, once it is delivered, saves the results in the workspace after checking their SHA-256. It sends the file to the server and writes files, so it asks first.',
+    'Hand circle-server a task with a capability pack: for a file pack (for example mindmap-compile) give the workspace file; for module-execute give the flow input object instead (flowId, methodPin, resources, sources, value, controlledBytes — the hub validates it strictly). The server keeps the task; this waits in the background and, once it is delivered, saves the results in the workspace after checking their SHA-256. It sends the file to the server and writes files, so it asks first.',
     {
       type: 'object',
       properties: {
         pack: { type: 'string', description: 'capability pack id' },
-        file: { type: 'string', description: 'path in the workspace' },
+        file: {
+          type: 'string',
+          description: 'path in the workspace (file packs)',
+        },
         input: {
           type: 'object',
           description:
-            'the rest of the task input the pack asks for, for example the asset ids it binds and the build; the uploaded file’s sourceRevisionId and sourceSha256 are filled in here',
+            'module-execute: the whole flow input. Other packs: the rest of the task input the pack asks for, for example the asset ids it binds and the build; the uploaded file’s sourceRevisionId and sourceSha256 are filled in here',
         },
       },
-      required: ['pack', 'file'],
+      required: ['pack'],
     },
     async (args) => {
       const pack = String(args.pack ?? '');
       const file = String(args.file ?? '');
-      if (!pack || !file) throw new api.ToolError('pack and file are required');
+      if (!pack) throw new api.ToolError('pack is required');
       if (args.input !== undefined && !isRecord(args.input))
         throw new api.ToolError('input is an object of task input fields');
+      if (pack === 'module-execute' && !isRecord(args.input))
+        throw new api.ToolError('module-execute needs the flow input object');
+      if (pack !== 'module-execute' && !file)
+        throw new api.ToolError('file is required');
       const accepted = collecting();
       let task;
       try {

@@ -186,28 +186,46 @@ async function toolServer(t: Parameters<typeof scratch>[0]) {
             message: 'Payload does not satisfy the contract',
           },
         });
-      pack.scopeHeader = request.headers['x-scope-id'];
-      packs.push(pack);
       const declared = new Set(pack.manifest.tools);
       const offered = new Set(catalog().map((tool) => tool.name));
-      return send(200, {
+      const undeclaredTools = [
+        ...new Set(
+          pack.trial.toolCalls
+            .map((call: { name: string }) => call.name)
+            .filter((name: string) => !declared.has(name)),
+        ),
+      ];
+      const missingTools = pack.manifest.tools.filter(
+        (name: string) => !offered.has(name),
+      );
+      // The hub refuses an unchecked pack outright; success is 201 with candidate.
+      if (undeclaredTools.length || missingTools.length)
+        return send(422, {
+          status: 'failed',
+          error: {
+            code: 'SKILLPACK_CHECK_FAILED',
+            message: [
+              undeclaredTools.length
+                ? `Undeclared trial tools: ${undeclaredTools.join(', ')}`
+                : '',
+              missingTools.length
+                ? `Tools unavailable in caller catalog: ${missingTools.join(', ')}`
+                : '',
+            ]
+              .filter(Boolean)
+              .join('; '),
+            details: { check: { undeclaredTools, missingTools } },
+          },
+        });
+      pack.scopeHeader = request.headers['x-scope-id'];
+      packs.push(pack);
+      return send(201, {
         data: {
           skillPackId: 'skp_1',
           digest: 'd'.repeat(64),
-          status: 'submitted',
+          status: 'candidate',
           approvalTaskId: 'task_approve',
-          check: {
-            undeclaredTools: [
-              ...new Set(
-                pack.trial.toolCalls
-                  .map((call: { name: string }) => call.name)
-                  .filter((name: string) => !declared.has(name)),
-              ),
-            ],
-            missingTools: pack.manifest.tools.filter(
-              (name: string) => !offered.has(name),
-            ),
-          },
+          check: { undeclaredTools: [], missingTools: [] },
         },
       });
     }
@@ -216,7 +234,7 @@ async function toolServer(t: Parameters<typeof scratch>[0]) {
         data: packs.map(() => ({
           skillPackId: 'skp_1',
           manifest: { id: 'mindmap-compile', version: '0.1.0' },
-          status: 'submitted',
+          status: 'candidate',
         })),
       });
     if (url.pathname === '/v1/tasks/task_approve/approvals')
@@ -241,7 +259,8 @@ async function toolServer(t: Parameters<typeof scratch>[0]) {
           events: [
             {
               seq: 1,
-              type: 'task.delivered',
+              taskId: 'task_run',
+              kind: 'task.delivered',
               payload: { status: 'succeeded' },
             },
           ],
@@ -497,7 +516,8 @@ test('a trial records which server tools the model used, and /server skill push 
     own.run(request.args, request.context),
   );
 
-  // The trial record outlives a reload of the extension.
+  // The trial record outlives a reload of the extension — and the hub refuses the
+  // push outright: a trial call the manifest does not declare is a 422, not a warning.
   const reloaded = await new ExtensionHost({
     home,
     workspace,
@@ -505,13 +525,27 @@ test('a trial records which server tools the model used, and /server skill push 
     bundledRoot: bundledExtensionsRoot(),
     settings: { 'circle-server': { enabled: true } },
   }).load();
-  await reloaded
-    .commands()
-    .get('server')!
-    .handler('skill push skills/mindmap-compile --outputs cases.xlsx', context);
-  assert.equal(server.packs.length, 1);
-  assert.equal(server.packs[0]!.trial.toolCalls.length, 2);
-  server.packs.length = 0;
+  await assert.rejects(async () => {
+    await reloaded
+      .commands()
+      .get('server')!
+      .handler(
+        'skill push skills/mindmap-compile --outputs cases.xlsx',
+        context,
+      );
+  }, /SKILLPACK_CHECK_FAILED: Undeclared trial tools: env\.inventory/);
+  assert.equal(server.packs.length, 0, 'a refused push registers nothing');
+  assert.ok(
+    lines.some((line) =>
+      /the trial used tools skillpack\.json does not declare: env\.inventory/.test(
+        line,
+      ),
+    ),
+  );
+
+  // A clean trial record (declared tools only) goes through: 201, candidate.
+  await command.handler('trial start', context);
+  await call('srv_docs_list', { folder: 'manuals', depth: 1 });
   await command.handler(
     'skill push skills/mindmap-compile --outputs cases.xlsx',
     context,
@@ -544,10 +578,7 @@ test('a trial records which server tools the model used, and /server skill push 
       item.name,
       item.ok,
     ]),
-    [
-      ['docs.list', true],
-      ['env.inventory', false],
-    ],
+    [['docs.list', true]],
   );
   // Arguments travel only as a hash of their canonical form.
   assert.equal(
@@ -564,21 +595,7 @@ test('a trial records which server tools the model used, and /server skill push 
   ]);
   assert.ok(
     lines.some((line) =>
-      /the trial used tools skillpack\.json does not declare: env\.inventory/.test(
-        line,
-      ),
-    ),
-  );
-  assert.ok(
-    lines.some((line) =>
-      /✓ submitted mindmap-compile 0\.1\.0 · 3 files · 2 trial calls · skp_1/.test(
-        line,
-      ),
-    ),
-  );
-  assert.ok(
-    lines.some((line) =>
-      /✖ the server found tools the trial used but the pack does not declare: env\.inventory/.test(
+      /✓ submitted mindmap-compile 0\.1\.0 · 3 files · 1 trial calls · skp_1/.test(
         line,
       ),
     ),
@@ -592,7 +609,7 @@ test('a trial records which server tools the model used, and /server skill push 
     ),
   );
   await command.handler('skill list', context);
-  assert.match(lines.at(-1)!, /skp_1 · mindmap-compile 0\.1\.0 · submitted/);
+  assert.match(lines.at(-1)!, /skp_1 · mindmap-compile 0\.1\.0 · candidate/);
   writeFileSync(join(workspace, 'LBX-200.json'), '[{"data":{},"children":[]}]');
   await command.handler(
     'skill run skp_1 {"mindmap":"LBX-200.json"} --file LBX-200.json',

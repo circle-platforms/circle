@@ -69,6 +69,8 @@ async function fakeServer(t: Parameters<typeof scratch>[0]) {
         status: 'failed',
         error: { code: 'UNAUTHENTICATED', message: 'expired' },
       });
+    if (url.pathname === '/v1/auth/logout' && request.method === 'POST')
+      return send(200, { data: { signedOut: true } });
     if (url.pathname === '/v1/status')
       return send(200, { data: { apiVersion: '1.0.0' } });
     if (url.pathname === '/v1/sources')
@@ -183,6 +185,132 @@ async function fakeServer(t: Parameters<typeof scratch>[0]) {
           verification: { reader: 'read-excel-file/9.3.12', rowCount: 8 },
         },
       });
+    // A repair pending input waits for a replacement of the bound input; a
+    // clarification waits for a response.
+    if (url.pathname === '/v1/tasks/task_two/status')
+      return send(200, {
+        data: {
+          taskId: 'task_two',
+          phase: 'waiting-input',
+          title: 'repair the build',
+          inputRevisionId: 'inrev_2',
+          pendingInputs: [
+            {
+              requestId: 'pin_2',
+              inputRevisionId: 'inrev_2',
+              status: 'open',
+              kind: 'repair',
+              question: 'Repair build-mismatch and replace the bound input',
+            },
+          ],
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_three/status')
+      return send(200, {
+        data: {
+          taskId: 'task_three',
+          phase: 'waiting-input',
+          title: 'a question',
+          inputRevisionId: 'inrev_3',
+          pendingInputs: [
+            {
+              requestId: 'pin_3',
+              inputRevisionId: 'inrev_3',
+              status: 'open',
+              kind: 'clarification',
+              question: 'Which bed?',
+            },
+          ],
+        },
+      });
+    if (
+      /^\/v1\/tasks\/task_(two|three)\/input$/.test(url.pathname) &&
+      request.method === 'POST'
+    )
+      return send(200, { data: { phase: 'running' } });
+    // A stale event cursor is refused with the retained window's first position.
+    if (url.pathname === '/v1/tasks/task_stale/status')
+      return send(200, {
+        data: {
+          taskId: 'task_stale',
+          phase: 'delivered',
+          title: 'an old task',
+          inputRevisionId: 'inrev_1',
+          pendingInputs: [],
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_stale/events') {
+      const after = Number(url.searchParams.get('after'));
+      if (after < 5)
+        return send(409, {
+          status: 'failed',
+          error: {
+            code: 'CURSOR_EXPIRED',
+            message: 'Events were retained for a bounded window',
+            details: { minCursor: 5 },
+          },
+        });
+      return send(200, {
+        data: {
+          events: [
+            {
+              seq: 5,
+              taskId: 'task_stale',
+              kind: 'task.delivered',
+              payload: { status: 'succeeded' },
+            },
+          ],
+          after: 5,
+        },
+      });
+    }
+    if (url.pathname === '/v1/tasks/task_stale/result')
+      return send(200, {
+        data: {
+          taskId: 'task_stale',
+          phase: 'delivered',
+          status: 'succeeded',
+          artifacts: [],
+          evidence: [],
+          unmapped: [],
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_bad/events')
+      return send(200, { data: { events: [], after: 0 } });
+    // A failed flow names the rejected step and its bounded cause.
+    if (url.pathname === '/v1/tasks/task_bad/status')
+      return send(200, {
+        data: {
+          taskId: 'task_bad',
+          phase: 'failed',
+          title: 'a failed flow',
+          inputRevisionId: 'inrev_1',
+          pendingInputs: [],
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_bad/result')
+      return send(200, {
+        data: {
+          taskId: 'task_bad',
+          phase: 'failed',
+          status: 'failed',
+          error: {
+            code: 'HOOK_FAILED',
+            message: 'Product flow did not complete',
+            details: {
+              stepId: 'submit',
+              kind: 'provider.call',
+              cause: {
+                code: 'BUILD_MISMATCH',
+                message: 'device reports OTHER, gateway bundle is EXPECTED',
+              },
+            },
+          },
+          artifacts: [],
+          evidence: [],
+          unmapped: [],
+        },
+      });
     if (
       url.pathname === '/v1/tasks' &&
       url.searchParams.get('kind') === 'work' &&
@@ -256,8 +384,27 @@ async function fakeServer(t: Parameters<typeof scratch>[0]) {
           },
         ],
       });
-    if (url.pathname === '/v1/tasks/task_one/reconcile')
-      return send(200, { data: { operationId: 'op_1', status: 'reconciled' } });
+    if (url.pathname === '/v1/tasks/task_one/reconcile') {
+      // Hub rule: only a request naming the operation reconciles; without one it
+      // explains what is missing.
+      const asked = JSON.parse(body.toString() || '{}');
+      if (!asked.operationId)
+        return send(200, {
+          data: {
+            taskId: 'task_one',
+            phase: 'unknown',
+            reconciliation:
+              'No independently observed receipt is available for an unknown execution',
+          },
+        });
+      return send(202, {
+        data: {
+          operationId: 'op_new',
+          parentOperationId: asked.operationId,
+          status: 'accepted',
+        },
+      });
+    }
     if (url.pathname === '/v1/artifacts/art_1/content') {
       response.writeHead(200, {
         'content-type': 'application/octet-stream',
@@ -342,7 +489,7 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
   });
   assert.equal(upload.auth, `Bearer ${TOKEN}`);
   assert.deepEqual(
-    readFileSync(join(workspace, 'cases.xlsx')),
+    readFileSync(join(workspace, 'tasks', 'task_one', 'cases.xlsx')),
     server.workbook,
   );
   assert.ok(
@@ -384,7 +531,7 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
   await command.handler('get task_one', context);
   assert.equal(lines.filter((line) => line.startsWith('✓ saved')).length, 2);
   assert.deepEqual(
-    readFileSync(join(workspace, 'cases-1.xlsx')),
+    readFileSync(join(workspace, 'tasks', 'task_one', 'cases-1.xlsx')),
     server.workbook,
   );
 
@@ -501,7 +648,7 @@ test('the connector tools let a model list packs, hand over a file and get the c
     submitted.lines.some((line: string) => /✓ saved .*cases\.xlsx/.test(line)),
   );
   assert.deepEqual(
-    readFileSync(join(workspace, 'cases.xlsx')),
+    readFileSync(join(workspace, 'tasks', 'task_one', 'cases.xlsx')),
     server.workbook,
   );
   // Files become one source artifact: each uploaded as an original, listed with its role.
@@ -637,7 +784,266 @@ test('the connector reads work, execution, knowledge and methods from the server
     /has no approval apr_missing/,
   );
   await command.handler('reconcile task_one', context);
-  assert.match(lines.at(-1)!, /task_one · reconcile · .*reconciled/);
+  assert.match(
+    lines.at(-1)!,
+    /task_one · reconcile · .*No independently observed receipt/,
+  );
+  // Naming the operation makes it a real reconciliation request.
+  await command.handler('reconcile task_one op_9', context);
+  assert.deepEqual(
+    JSON.parse(
+      server.seen
+        .filter((call) => call.path === '/v1/tasks/task_one/reconcile')
+        .at(-1)!
+        .body.toString(),
+    ),
+    { operationId: 'op_9' },
+  );
+  assert.match(lines.at(-1)!, /task_one · reconcile · .*accepted/);
   assert.ok(!JSON.stringify(host.view('circle-server')).includes(TOKEN));
   await delay(50);
+});
+
+test('signing out revokes the token family at the server before forgetting it locally', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = await fakeServer(t);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { 'circle-server': { enabled: true } },
+    secret: async (request) => submitAnswer(home, request.id, PASSWORD),
+  }).load();
+  const context = {
+    workspace,
+    toast: () => {},
+    append: () => {},
+    sendUserMessage: () => {},
+  };
+  await host
+    .commands()
+    .get('server')!
+    .handler(`login ${server.url} tester`, context);
+  await host.commands().get('server')!.handler('logout', context);
+  const revocation = server.seen.find(
+    (call) => call.path === '/v1/auth/logout',
+  );
+  assert.ok(revocation, 'the server revoked the family');
+  assert.equal(revocation.auth, `Bearer ${TOKEN}`);
+  assert.equal(
+    await new ExtensionSecrets(home, 'circle-server').get('token'),
+    undefined,
+    'the local token is gone too',
+  );
+  await delay(100);
+});
+
+test('a repair pending input is answered with a replacement, a clarification with a response', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = await fakeServer(t);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { 'circle-server': { enabled: true } },
+    secret: async (request) => submitAnswer(home, request.id, PASSWORD),
+  }).load();
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('server')!;
+  await command.handler(`login ${server.url} tester`, context);
+
+  await command.handler(
+    'respond task_two {"sourceRevisionId":"src_new"}',
+    context,
+  );
+  const repair = JSON.parse(
+    server.seen
+      .find((call) => call.path === '/v1/tasks/task_two/input')!
+      .body.toString(),
+  );
+  assert.deepEqual(repair, {
+    inputRevisionId: 'inrev_2',
+    requestId: 'pin_2',
+    replacement: { sourceRevisionId: 'src_new' },
+  });
+  assert.ok(lines.some((line) => /replaced the input of task_two/.test(line)));
+
+  await command.handler('respond task_three bed=east', context);
+  const clarification = JSON.parse(
+    server.seen
+      .find((call) => call.path === '/v1/tasks/task_three/input')!
+      .body.toString(),
+  );
+  assert.deepEqual(clarification, {
+    inputRevisionId: 'inrev_3',
+    requestId: 'pin_3',
+    response: { bed: 'east' },
+  });
+  assert.ok(lines.some((line) => /✓ answered task_three/.test(line)));
+  await delay(100);
+});
+
+test('module-execute submits the flow input as it is, with no uploaded source', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = await fakeServer(t);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { 'circle-server': { enabled: true } },
+    secret: async (request) => submitAnswer(home, request.id, PASSWORD),
+  }).load();
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('server')!;
+  await command.handler(`login ${server.url} tester`, context);
+  const flow = {
+    flowId: 'apv-case-execute-v2',
+    methodPin: { assetId: 'ast_m', version: '1.3.0', sha256: 'f'.repeat(64) },
+    resources: {
+      gateway: { assetId: 'ast_g', version: '2.0.0', sha256: 'e'.repeat(64) },
+    },
+    sources: {},
+    value: { build: 'SYNTHETIC_BUILD_301' },
+    controlledBytes: [],
+  };
+  const run = { signal: new AbortController().signal, sessionId: 's' } as never;
+  const tool = host
+    .tools()
+    .find((item) => item.name === 'circle_server_submit')!;
+  await tool.run({ pack: 'module-execute', input: flow }, run);
+  const sent = JSON.parse(
+    server.seen
+      .filter((call) => call.path === '/v1/tasks/submit')
+      .at(-1)!
+      .body.toString(),
+  );
+  assert.deepEqual(sent.input, flow, 'the flow input goes as it is');
+  assert.ok(
+    !('sourceRevisionId' in sent.input) && !('sourceSha256' in sent.input),
+  );
+  assert.ok(
+    !server.seen.some((call) => call.path === '/v1/sources'),
+    'nothing is uploaded',
+  );
+  // The command form takes the flow as one JSON word.
+  await command.handler(
+    `submit module-execute ${JSON.stringify(flow)}`,
+    context,
+  );
+  const again = JSON.parse(
+    server.seen
+      .filter((call) => call.path === '/v1/tasks/submit')
+      .at(-1)!
+      .body.toString(),
+  );
+  assert.deepEqual(again.input, flow);
+  // A file pack keeps refusing module-execute's input shape and vice versa.
+  await assert.rejects(tool.run({ pack: 'module-execute' }, run), /flow input/);
+  await assert.rejects(
+    tool.run({ pack: 'mindmap-compile' }, run),
+    /file is required/,
+  );
+  await delay(200);
+});
+
+test('a stale event cursor restarts at the retained window instead of sticking', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = await fakeServer(t);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { 'circle-server': { enabled: true } },
+    secret: async (request) => submitAnswer(home, request.id, PASSWORD),
+  }).load();
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  await host
+    .commands()
+    .get('server')!
+    .handler(`login ${server.url} tester`, context);
+  await host.commands().get('server')!.handler('task task_stale', context);
+  await until(
+    () => lines.some((line) => /task_stale · 5 · task\.delivered/.test(line)),
+    5000,
+  );
+  const reads = server.seen
+    .filter((call) => call.path === '/v1/tasks/task_stale/events')
+    .map((call) => call.path);
+  assert.ok(reads.length >= 2, 'the expired cursor was retried');
+  assert.ok(
+    !lines.some((line) => /CURSOR_EXPIRED/.test(line)),
+    'the refusal stays off the screen',
+  );
+  await delay(100);
+});
+
+test('a failed flow shows the rejected step and the bounded cause', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = await fakeServer(t);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { 'circle-server': { enabled: true } },
+    secret: async (request) => submitAnswer(home, request.id, PASSWORD),
+  }).load();
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  await host
+    .commands()
+    .get('server')!
+    .handler(`login ${server.url} tester`, context);
+  await host.commands().get('server')!.handler('task task_bad', context);
+  await until(() => lines.some((line) => /✖ task_bad failed/.test(line)), 5000);
+  assert.ok(
+    lines.some((line) =>
+      /✖ task_bad failed: HOOK_FAILED · Product flow did not complete · step submit \(provider\.call\) · BUILD_MISMATCH: device reports OTHER, gateway bundle is EXPECTED/.test(
+        line,
+      ),
+    ),
+  );
+  await delay(100);
 });
