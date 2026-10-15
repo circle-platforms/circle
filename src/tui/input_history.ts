@@ -1,5 +1,13 @@
-import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import {
+  readFileSync,
+  mkdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
+import { withPrivateJsonLock } from '../settings.js';
 export class InputHistory {
   private values: string[] = [];
   private cursor?: number;
@@ -10,30 +18,41 @@ export class InputHistory {
     readonly path: string,
     readonly maximum = 1000,
   ) {
+    this.refresh();
+  }
+  private read(): string[] | undefined {
     try {
-      const body = readFileSync(path, 'utf8');
-      if (body.startsWith('{"format":"circle-history"')) {
+      const body = readFileSync(this.path, 'utf8');
+      try {
         const data: unknown = JSON.parse(body);
         if (
           data &&
           typeof data === 'object' &&
+          'format' in data &&
+          data.format === 'circle-history' &&
           'items' in data &&
           Array.isArray(data.items)
         )
-          this.values = data.items
+          return data.items
             .filter(
               (item): item is string =>
                 typeof item === 'string' && Boolean(item.trim()),
             )
-            .slice(-maximum);
-      } else
-        this.values = body
-          .split(/\r?\n/)
-          .filter((line) => line.trim())
-          .slice(-maximum);
+            .slice(-this.maximum);
+      } catch {
+        /* Python releases and older Circle versions wrote one line per entry. */
+      }
+      return body
+        .split(/\r?\n/)
+        .filter((line) => line.trim())
+        .slice(-this.maximum);
     } catch {
       /* An unavailable history file must not prevent typing. */
+      return undefined;
     }
+  }
+  private refresh(): void {
+    this.values = this.read() ?? this.values;
   }
   static forHome(home: string): InputHistory {
     return new InputHistory(
@@ -51,15 +70,31 @@ export class InputHistory {
     this.reset();
     try {
       mkdirSync(dirname(this.path), { recursive: true });
-      writeFileSync(
-        this.path,
-        JSON.stringify({
-          format: 'circle-history',
-          version: 1,
-          items: this.values,
-        }) + '\n',
-        { mode: 0o600 },
-      );
+      withPrivateJsonLock(this.path, () => {
+        // Other views and terminals have their own navigation state. Merge against the
+        // latest file while holding its lock, without changing their browsing snapshots.
+        const latest = this.read() ?? this.values;
+        this.values = (
+          latest.at(-1) === text ? latest : [...latest, text]
+        ).slice(-this.maximum);
+        const temporary = `${this.path}.${randomUUID()}.tmp`;
+        try {
+          // Keep the compact prefix older readers recognise; publish the entire history
+          // atomically so another terminal never reads part of a multiline JSON entry.
+          writeFileSync(
+            temporary,
+            JSON.stringify({
+              format: 'circle-history',
+              version: 1,
+              items: this.values,
+            }) + '\n',
+            { mode: 0o600, flag: 'wx' },
+          );
+          renameSync(temporary, this.path);
+        } finally {
+          rmSync(temporary, { force: true });
+        }
+      });
     } catch {
       /* Keep the in-memory history usable. */
     }
@@ -69,6 +104,7 @@ export class InputHistory {
     this.draft = '';
   }
   up(current: string): string | undefined {
+    if (this.cursor === undefined) this.refresh();
     if (!this.values.length) return undefined;
     if (this.cursor === undefined) {
       this.draft = current;
@@ -88,6 +124,7 @@ export class InputHistory {
   }
   /** Is there an older message? An empty box scrolls the conversation when there is not. */
   canGoUp(): boolean {
+    if (this.cursor === undefined) this.refresh();
     return (
       this.values.length > 0 && (this.cursor === undefined || this.cursor > 0)
     );
@@ -96,6 +133,7 @@ export class InputHistory {
     return this.cursor !== undefined && this.cursor < this.values.length - 1;
   }
   beginSearch(current: string): string | undefined {
+    this.refresh();
     this.draft = current;
     this.query = current;
     this.at = -1;

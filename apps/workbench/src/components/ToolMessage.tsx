@@ -1,5 +1,8 @@
 import { copyText } from '../host';
-import { useEffect, useState } from 'react';
+import {
+  useSessionDisclosure,
+  useSessionPresentation,
+} from '../model/presentation';
 import {
   Check,
   ChevronDown,
@@ -31,13 +34,17 @@ export function ToolMessage({
   onFile: (path: string) => void;
   onAgent: (id: string) => void;
 }) {
-  const [open, setOpen] = useState(expanded);
-  const [tab, setTab] = useState<'output' | 'input'>('output');
+  const [open, setOpen] = useSessionDisclosure('tool:' + tool.id, expanded);
+  const { view, update } = useSessionPresentation();
+  const tab = view.toolTabs?.[tool.id] ?? 'output';
+  const setTab = (value: 'input' | 'output') =>
+    update((target) => {
+      (target.toolTabs ??= {})[tool.id] = value;
+    });
   const { notify, runtime, snapshot } = useRuntime();
   const root = snapshot.workspaces.find(
     (workspace) => workspace.id === currentSession(snapshot).workspaceId,
   )?.path;
-  useEffect(() => setOpen(expanded), [expanded]);
   const Icon =
     tool.name === 'task'
       ? Users

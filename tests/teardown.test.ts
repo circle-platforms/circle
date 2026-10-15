@@ -30,6 +30,12 @@ test('a repaint that comes after the runtime closed reads nothing from the close
   assert.equal(painted, 1);
   // a stopped job or a late reply settles after leaving and asks for a repaint
   await app.runtime.close();
+  app.runtime.store.get = () => {
+    throw new Error('late store get');
+  };
+  app.runtime.store.messages = () => {
+    throw new Error('late store messages');
+  };
   assert.doesNotThrow(() => ui.repaint());
   assert.equal(painted, 1);
 });

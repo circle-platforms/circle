@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
+import { useSessionDisclosure } from '../model/presentation';
 import { Brain, ChevronDown, ChevronRight, LoaderCircle } from 'lucide-react';
 import type { Message, Session } from '../model/types';
 import { TurnClock } from './TurnClock';
@@ -101,8 +102,10 @@ export function ToolGroup({
     ['running', 'waiting'].includes(tool.status),
   );
   const failed = tools.filter((tool) => tool.status === 'error').length;
-  const [open, setOpen] = useState(expanded);
-  useEffect(() => setOpen(expanded), [expanded]);
+  const [open, setOpen] = useSessionDisclosure(
+    'group:' + rows[0]?.id,
+    expanded,
+  );
   const summary = toolSummary(rows);
   const running = tools.find((tool) => tool.status === 'running');
   return (
@@ -151,26 +154,38 @@ export function ToolGroup({
                 />
               </div>
             ) : row.thinking ? (
-              <details
-                key={row.id}
-                data-message-id={row.id}
-                className="thinking group-thinking"
-              >
-                <summary>
-                  <Brain size={13} />
-                  <span>{t('thinking')}</span>
-                  <span className="thinking-preview">
-                    {row.thinking.trim().split('\n')[0]?.slice(0, 120)}
-                  </span>
-                </summary>
-                <p>{row.thinking}</p>
-              </details>
+              <GroupThinking key={row.id} row={row} />
             ) : null,
           )}
         </div>
       )}
       {children}
     </div>
+  );
+}
+
+function GroupThinking({ row }: { row: Message }) {
+  const [open, setOpen] = useSessionDisclosure('thinking:' + row.id);
+  return (
+    <details
+      data-message-id={row.id}
+      className="thinking group-thinking"
+      open={open}
+    >
+      <summary
+        onClick={(event) => {
+          event.preventDefault();
+          setOpen(!open);
+        }}
+      >
+        <Brain size={13} />
+        <span>{t('thinking')}</span>
+        <span className="thinking-preview">
+          {row.thinking?.trim().split('\n')[0]?.slice(0, 120)}
+        </span>
+      </summary>
+      <p>{row.thinking}</p>
+    </details>
   );
 }
 

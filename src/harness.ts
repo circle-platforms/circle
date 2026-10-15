@@ -51,6 +51,8 @@ export interface HarnessOptions {
   maxSteps?: number;
   headless?: boolean;
   beforeRun?: (signal: AbortSignal) => Promise<void>;
+  /** Called for each turn, including queued follow-ups, before consuming its message. */
+  beforeTurn?: () => void;
   beforeStep?: () => void;
   priceUsage?: (
     model: string,
@@ -306,14 +308,18 @@ export class Harness {
     signal.throwIfAborted();
     const total = emptyUsage();
     let answer = '';
-    let next: string | undefined =
-      prompt ?? this.steering.shift() ?? this.followUps.shift();
+    let first = true;
     do {
+      this.options.beforeTurn?.();
+      signal.throwIfAborted();
+      const next = first
+        ? (prompt ?? this.steering.shift() ?? this.followUps.shift())
+        : this.followUps.shift();
       const result = await this.runTurn(next, signal);
       answer = result.answer;
       addUsage(total, result.usage);
-      next = this.followUps.shift();
-    } while (next !== undefined);
+      first = false;
+    } while (this.followUps.length);
     return { answer, usage: total };
   }
   private async runTurn(

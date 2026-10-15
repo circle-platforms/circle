@@ -265,11 +265,18 @@ try {
         .title,
     })
     .click();
+  await until(
+    async () => (await state()).activeSessionId === b,
+    'background session selected',
+  );
   await page
     .locator('.sidebar .session-link')
     .filter({ hasText: 'managed fixture A' })
     .click();
-  assert.equal((await state()).activeSessionId, a);
+  await until(
+    async () => (await state()).activeSessionId === a,
+    'approval session selected',
+  );
   const decision = (await state()).interactions.find(
     (row) => row.status === 'pending',
   );
