@@ -34,6 +34,8 @@ export function DebugPanel({
   });
   const [program, setProgram] = useState('');
   const [port, setPort] = useState('9229');
+  const [args, setArgs] = useState<string[]>([]);
+  const [stopOnEntry, setStopOnEntry] = useState(false);
   const [line, setLine] = useState('1');
   const [frames, setFrames] = useState<any[]>([]);
   const [variables, setVariables] = useState<any[]>([]);
@@ -114,6 +116,43 @@ export function DebugPanel({
           {state.reason ? ` · ${state.reason}` : ''}
         </span>
       </header>
+      <details className="debug-launch-options">
+        <summary>{t('launch options')}</summary>
+        <p>{t('each argument is passed literally without shell expansion')}</p>
+        {args.map((argument, index) => (
+          <div className="debug-argument" key={index}>
+            <input
+              aria-label={`${t('program argument')} ${index + 1}`}
+              value={argument}
+              onChange={(event) =>
+                setArgs((current) =>
+                  current.map((value, i) =>
+                    i === index ? event.target.value : value,
+                  ),
+                )
+              }
+            />
+            <button
+              onClick={() =>
+                setArgs((current) => current.filter((_, i) => i !== index))
+              }
+            >
+              {t('remove argument')} {index + 1}
+            </button>
+          </div>
+        ))}
+        <button onClick={() => setArgs((current) => [...current, ''])}>
+          {t('add argument')}
+        </button>
+        <label className="debug-entry-option">
+          <input
+            type="checkbox"
+            checked={stopOnEntry}
+            onChange={(event) => setStopOnEntry(event.target.checked)}
+          />
+          {t('pause at entry')}
+        </label>
+      </details>
       <div className="debug-controls">
         <input
           aria-label={t('program path')}
@@ -127,7 +166,7 @@ export function DebugPanel({
             !program ||
             !['idle', 'stopped', 'failed'].includes(state.status)
           }
-          onClick={() => void act('launch', { program })}
+          onClick={() => void act('launch', { program, args, stopOnEntry })}
         >
           {t('launch')}
         </button>

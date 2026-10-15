@@ -1,5 +1,12 @@
 export const debug: Record<string, string> = {
   attach: '附加',
+  'launch options': '启动选项',
+  'each argument is passed literally without shell expansion':
+    '每项参数按原文传入，不进行命令行展开；空项作为空参数传入。',
+  'program argument': '程序参数',
+  'remove argument': '移除参数',
+  'add argument': '添加参数',
+  'pause at entry': '在入口暂停',
   pause: '暂停',
   'debug idle': '空闲',
   'debug starting': '启动中',
