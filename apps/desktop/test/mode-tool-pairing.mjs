@@ -85,7 +85,6 @@ for (const protocol of ['anthropic', 'openai']) {
     page.setDefaultTimeout(15000);
     page.on('pageerror', (e) => errors.push(String(e)));
     await page.waitForFunction(() => Boolean(window.circleDesktop));
-    await routeReady();
   };
   const routeReady = () =>
     waitDesktopReady(
