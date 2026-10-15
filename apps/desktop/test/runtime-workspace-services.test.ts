@@ -264,7 +264,10 @@ test('human save while agent write approval waits prevents stale agent overwrite
 });
 
 test('loaded project rules expose their real source path in the native snapshot', async (t) => {
-  const f = await setup(t, [{ message: assistant('rules loaded') }]);
+  const f = await setup(t, [
+    { message: assistant('rules loaded') },
+    { message: assistant('new session rules loaded') },
+  ]);
   await writeFile(
     join(f.workspace, 'AGENTS.md'),
     'independent loaded rule marker',
@@ -291,6 +294,19 @@ test('loaded project rules expose their real source path in the native snapshot'
   assert.equal(
     await readFile(rule.path!, 'utf8'),
     'independent loaded rule marker',
+  );
+  await writeFile(join(f.workspace, 'AGENTS.md'), 'new session actual rule');
+  await f.call('new-session');
+  await f.call('prompt', { text: 'load changed rules in this session' });
+  await wait(() => f.model.requests.length === 2);
+  assert.ok(
+    f.controller
+      .snapshot()
+      .workspaces.some((workspace) =>
+        workspace.instructions.some((rule) =>
+          rule.content.includes('new session actual rule'),
+        ),
+      ),
   );
 });
 
@@ -484,5 +500,100 @@ test('a replaced trusted root cannot redirect an existing session into another t
   assert.equal(
     await readFile(join(other, 'marker.txt'), 'utf8'),
     'replacement inode',
+  );
+});
+
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+test('archive refuses native processes and confirmed delete awaits only its owning PTY', async (t) => {
+  const f = await setup(t);
+  const first = f.controller.snapshot().activeSessionId;
+  const create = () =>
+    f.service('terminal', 'create', {
+      command: {
+        file: process.execPath,
+        args: ['-e', 'setInterval(()=>{},1000)'],
+      },
+    });
+  const a = await create();
+  assert.equal(a.ok, true, a.error);
+  const pidA = (a.data as any).pid;
+  assert.ok(alive(pidA));
+  await f.call('new-session');
+  const second = f.controller.snapshot().activeSessionId;
+  const b = await create();
+  assert.equal(b.ok, true, b.error);
+  const pidB = (b.data as any).pid;
+  const archive = await f.call('archive-session', {
+    id: first,
+    archived: true,
+  });
+  assert.equal(archive.ok, false);
+  assert.match(archive.error!, /native resources/);
+  const unconfirmed = await f.call('delete-session', { id: first });
+  assert.equal(unconfirmed.ok, false);
+  assert.match(unconfirmed.error!, /confirm/);
+  assert.ok(alive(pidA));
+  const deleted = await f.call('delete-session', {
+    id: first,
+    confirmed: true,
+  });
+  assert.equal(deleted.ok, true, deleted.error);
+  await wait(() => !alive(pidA));
+  assert.ok(alive(pidB));
+  assert.equal(f.controller.snapshot().activeSessionId, second);
+  const close = await f.service('terminal', 'close', {
+    id: (b.data as any).id,
+  });
+  assert.equal(close.ok, true, close.error);
+  await wait(() => !alive(pidB));
+});
+
+test('streaming token IPC sends deltas while final snapshots remain authoritative', async (t) => {
+  const content = Array(128).fill('chunk ').join('');
+  const f = await setup(t, [
+    async (request) => {
+      for (let i = 0; i < 128; i++) request.token('chunk ');
+      return {
+        message: assistant(content),
+        usage: { input_tokens: 1, output_tokens: 128, cache_read_tokens: 0 },
+      };
+    },
+  ]);
+  const deltas: any[] = [];
+  f.controller.options.emitTokenDelta = (delta) => deltas.push(delta);
+  await f.call('prompt', { text: 'stream a response' });
+  await wait(() =>
+    f.controller
+      .snapshot()
+      .sessions.some((session) =>
+        session.messages.some((message) => message.text === content),
+      ),
+  );
+  assert.equal(deltas.length, 128);
+  assert.equal(deltas.map((delta) => delta.text ?? '').join(''), content);
+  assert.ok(
+    deltas.every(
+      (delta, index) => delta.seq === index + 1 && delta.baseSeq > 0,
+    ),
+  );
+  assert.ok(
+    f.updates.length < 20,
+    'tokens must not amplify into full history snapshots',
+  );
+  assert.ok(f.updates.every((update) => update.event?.kind !== 'llm_token'));
+  await wait(() => f.updates.some((update) => update.tokenStream?.seq === 128));
+  assert.ok(
+    f.updates
+      .at(-1)
+      .snapshot.sessions.some((session: any) =>
+        session.messages.some((message: any) => message.text === content),
+      ),
   );
 });

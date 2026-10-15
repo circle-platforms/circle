@@ -132,6 +132,7 @@ import {
   type RuntimeCommand,
   type RuntimeReply,
   type RuntimeUpdate,
+  type RuntimeTokenDelta,
 } from './runtime-protocol';
 
 const identity = (path: string) =>
@@ -215,6 +216,7 @@ interface Streaming {
 export interface ControllerOptions {
   home: string;
   emitWorkspaceEvent?: (event: WorkspaceServiceEvent) => void;
+  emitTokenDelta?: (delta: RuntimeTokenDelta) => void;
   credentialStore?: RuntimeCredentialStore;
   workspaceTools?: {
     nodeExecutable: string;
@@ -267,6 +269,8 @@ export class RuntimeController {
   private pendingTrustReloads = new Set<AgentRuntime>();
   private previous: string | null = null;
   private sequence = 0;
+  private tokenEpoch = randomUUID();
+  private tokenSequence = 0;
   private pending = new Map<string, Pending>();
   private history: Interaction[] = [];
   private streams = new Map<string, Streaming>();
@@ -521,6 +525,35 @@ export class RuntimeController {
       });
     }
   }
+  private async releaseSessionResources(
+    sessionId: string,
+    workspace: string,
+  ): Promise<void> {
+    const results = await Promise.allSettled(
+      [...this.taskServices.values()].map((service) =>
+        service.cancelSession(sessionId),
+      ),
+    );
+    const taskErrors = results
+      .filter((result) => result.status === 'rejected')
+      .map((result) => result.reason);
+    if (taskErrors.length)
+      throw new AggregateError(taskErrors, 'session task cleanup failed');
+    await this.workspaceServices.get(workspace)?.releaseSession(sessionId);
+  }
+  private async nativeSessionActive(
+    sessionId: string,
+    workspace: string,
+  ): Promise<boolean> {
+    return (
+      [...this.taskServices.values()].some((service) =>
+        service.hasActiveSession(sessionId),
+      ) ||
+      (await this.workspaceServices
+        .get(workspace)
+        ?.hasActiveSession(sessionId)) === true
+    );
+  }
   private workspaceEvent(
     workspace: string,
     event: WorkspaceServiceEvent,
@@ -530,8 +563,21 @@ export class RuntimeController {
       if (this.workspaceStreamFailures.has(workspace)) return;
       this.workspaceStreamFailures.add(workspace);
       this.error = `workspace event persistence failed: ${String(error)}`;
-      const runtime = this.taskRuntimes.get(event.resourceId);
-      if (runtime) void runtime.cancel({ keepQueue: false }).catch(() => {});
+      const origin = this.taskWorkspaces.get(workspace) ?? workspace;
+      void this.taskServices
+        .get(origin)
+        ?.close()
+        .catch(() => {});
+      for (const runtime of [
+        ...this.runtimes.values(),
+        ...this.taskRuntimes.values(),
+      ]) {
+        if (
+          (this.taskWorkspaces.get(runtime.options.workspace) ??
+            runtime.options.workspace) === origin
+        )
+          void runtime.cancel({ keepQueue: false }).catch(() => {});
+      }
       if (!this.closing) this.publish();
     };
     try {
@@ -733,8 +779,24 @@ export class RuntimeController {
     if (!row) throw Error('session not found');
     if (this.runtimes.lifecycle(id) !== 'open')
       throw Error('session is deleting or deleted');
-    const workspace = this.trustedWorkspace(row.workspace);
     const request = validateWorkspaceRequest(command.payload);
+    const emergency =
+      (request.service === 'terminal' &&
+        ['signal', 'close'].includes(request.method)) ||
+      (request.service === 'debug' && request.method === 'stop') ||
+      (request.service === 'delivery' && request.method === 'login.cancel');
+    if (emergency) {
+      const existing = this.workspaceServices.get(row.workspace);
+      if (!existing)
+        throw Error('no native resources are owned by this session');
+      return existing.call(id, request.service, request.method, request.params);
+    }
+    if (request.service === 'tasks' && request.method === 'cancel') {
+      const origin = this.taskWorkspaces.get(row.workspace) ?? row.workspace;
+      const existing = this.taskServices.get(origin);
+      if (existing) return existing.call(id, request.method, request.params);
+    }
+    const workspace = this.trustedWorkspace(row.workspace);
     if (request.service === 'events')
       return this.services(workspace).replay(
         request.params?.after as { offset: number; seq: number } | undefined,
@@ -767,8 +829,10 @@ export class RuntimeController {
         workspace,
         fileMutations: this.fileMutations(workspace),
         home: this.home,
-        beforeDelete: () =>
-          this.options.beforeDelete?.(runtime.session.id) ?? Promise.resolve(),
+        beforeDelete: async () => {
+          await this.releaseSessionResources(runtime.session.id, workspace);
+          await this.options.beforeDelete?.(runtime.session.id);
+        },
         userHome: this.options.userHome,
         localContext: !!task || isFolderTrusted(settings, workspace),
         settings,
@@ -1181,17 +1245,23 @@ export class RuntimeController {
         path,
         branch: this.validWorkspaceRoot(path) ? this.branch(path) : '',
         trusted:
-          this.validWorkspaceRoot(path) && isFolderTrusted(savedSettings, path),
+          this.validWorkspaceRoot(path) &&
+          isFolderTrusted(savedSettings, this.taskWorkspaces.get(path) ?? path),
         origin: 'native',
         instructions:
-          !inspecting && isFolderTrusted(savedSettings, path)
-            ? ([...this.runtimes.values()]
-                .find((owner) => owner.options.workspace === path)
-                ?.loadedInstructions.map((file) => ({
-                  name: file.path,
-                  path: file.path,
-                  content: file.content,
-                })) ?? [])
+          !inspecting &&
+          this.validWorkspaceRoot(path) &&
+          isFolderTrusted(savedSettings, this.taskWorkspaces.get(path) ?? path)
+            ? ((runtime.options.workspace === path
+                ? runtime
+                : [...this.runtimes.values()].find(
+                    (owner) => owner.options.workspace === path,
+                  )
+              )?.loadedInstructions.map((file) => ({
+                name: file.path,
+                path: file.path,
+                content: file.content,
+              })) ?? [])
             : [],
       })),
       sessions,
@@ -1528,6 +1598,7 @@ export class RuntimeController {
       seq: ++this.sequence,
       connected: true,
       snapshot: this.snapshot(),
+      tokenStream: { epoch: this.tokenEpoch, seq: this.tokenSequence },
       event,
     });
   }
@@ -1666,6 +1737,29 @@ export class RuntimeController {
       });
     }
     // The bus is observation only. Enforcement remains inside Harness and awaited callbacks.
+    if (
+      publishSnapshot &&
+      event.kind === 'llm_token' &&
+      this.options.emitTokenDelta
+    ) {
+      const stream = this.streams.get(id);
+      if (stream) {
+        const chunk = String(event.payload.text ?? '');
+        this.options.emitTokenDelta({
+          epoch: this.tokenEpoch,
+          seq: ++this.tokenSequence,
+          baseSeq: this.sequence,
+          sessionId: id,
+          streamId: stream.id,
+          parentId: this.store.get(id)?.head ?? null,
+          text: event.payload.thinking ? undefined : chunk,
+          thinking: event.payload.thinking ? chunk : undefined,
+          at: event.ts,
+          turn: this.turn(id),
+        });
+        return;
+      }
+    }
     if (!publishSnapshot) return;
     this.publish({
       kind: event.kind,
@@ -2069,12 +2163,16 @@ export class RuntimeController {
     }
     return result;
   }
-  private assertArchivable(
+  private async assertArchivable(
     id: string,
     workspace: string,
     action = 'archiving',
-  ): void {
+  ): Promise<void> {
     const owner = this.runtimes.get(id);
+    if (await this.nativeSessionActive(id, workspace))
+      throw Error(
+        `stop this session's native resources and tasks before ${action} it`,
+      );
     if (
       [...this.taskServices.values()].some((service) =>
         service.hasActiveSession(id),
@@ -2120,8 +2218,13 @@ export class RuntimeController {
       'trust',
       'export',
     ];
-    if (!navigation.includes(command.name))
+    if (!navigation.includes(command.name)) {
       this.workspaceRoot(runtime.options.workspace);
+      const viewed = this.viewedSessionId
+        ? this.store.get(this.viewedSessionId)
+        : undefined;
+      if (viewed) this.workspaceRoot(viewed.workspace);
+    }
     if (
       this.viewedSessionId &&
       ![
@@ -2279,6 +2382,7 @@ export class RuntimeController {
       case 'background':
         return runtime.jobs.backgroundForeground();
       case 'new-session': {
+        this.workspaceRoot(this.selectedWorkspace);
         const owner = this.runtimes.create(this.selectedWorkspace);
         this.selectRuntime(owner);
         return { sessionId: owner.session.id };
@@ -2313,6 +2417,15 @@ export class RuntimeController {
         const id = text(p.id, 'session', 200);
         const row = this.store.get(id);
         if (!row || row.parent_id) throw Error('session not found');
+        const taskRuntime = [...this.taskRuntimes.values()].find(
+          (runtime) => runtime.session.id === id,
+        );
+        if (taskRuntime) {
+          if (p.confirmed !== true)
+            throw Error('confirm stopping this task before deleting it');
+          await this.releaseSessionResources(id, row.workspace);
+        }
+        if (!this.runtimes.get(id)) this.workspaceRoot(row.workspace);
         const owner =
           this.runtimes.get(id) ?? this.runtimes.open(row.workspace, id);
         const owned = new Set([id]);
@@ -2332,7 +2445,8 @@ export class RuntimeController {
         }
         if (
           p.confirmed !== true &&
-          (owner.busy ||
+          ((await this.nativeSessionActive(id, row.workspace)) ||
+            owner.busy ||
             owner.jobs.list().some((job) => job.status === 'running') ||
             [...this.pending.values()].some((pending) =>
               owned.has(pending.row.sessionId),
@@ -2392,7 +2506,7 @@ export class RuntimeController {
         const row = this.store.get(id);
         if (!row || row.parent_id) throw Error('session not found');
         const archive = flag(p.archived);
-        if (archive) this.assertArchivable(id, row.workspace);
+        if (archive) await this.assertArchivable(id, row.workspace);
         this.metadata.set([id], archive);
         return { sessionId: id, archivedAt: this.metadata.archivedAt(id) };
       }
@@ -2402,7 +2516,8 @@ export class RuntimeController {
           .list()
           .filter((row) => identity(row.workspace) === workspaceId);
         if (!rows.length) throw Error('workspace not found');
-        for (const row of rows) this.assertArchivable(row.id, row.workspace);
+        for (const row of rows)
+          await this.assertArchivable(row.id, row.workspace);
         this.metadata.set(
           rows.map((row) => row.id),
           true,
