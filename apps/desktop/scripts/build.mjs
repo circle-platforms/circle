@@ -1,4 +1,9 @@
 import { build } from 'esbuild';
+import {
+  prepareNativeDependencies,
+  prepareDeveloperTools,
+} from './developer-toolchain.mjs';
+import { resetDesktopOutput } from './build-output.mjs';
 import { mkdir, rm, cp, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -6,8 +11,7 @@ import { Resvg } from '@resvg/resvg-js';
 import { execFileSync } from 'node:child_process';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const dist = join(root, 'dist');
-await rm(dist, { recursive: true, force: true });
-await mkdir(dist, { recursive: true });
+await resetDesktopOutput(dist);
 await build({
   entryPoints: [join(root, 'src/runtime-worker.ts')],
   outfile: join(dist, 'runtime-worker.mjs'),
@@ -19,6 +23,7 @@ await build({
     js: "import { createRequire as circleCreateRequire } from 'node:module'; const require = circleCreateRequire(import.meta.url);",
   },
   sourcemap: true,
+  external: ['node-pty', 'typescript-language-server', 'typescript'],
 });
 await cp(join(root, '../../src/prompts'), join(dist, 'prompts'), {
   recursive: true,
@@ -36,7 +41,13 @@ await build({
   platform: 'node',
   target: 'node24',
   format: 'cjs',
-  external: ['electron', 'original-fs'],
+  external: [
+    'electron',
+    'original-fs',
+    'node-pty',
+    'typescript-language-server',
+    'typescript',
+  ],
   sourcemap: true,
 });
 await build({
@@ -103,5 +114,7 @@ if (process.platform === 'darwin') {
   ]);
   await rm(icons, { recursive: true, force: true });
 }
+await prepareNativeDependencies(root, dist);
+await prepareDeveloperTools(dist);
 await import('./notices.mjs');
 console.log('Built native main/preload and bundled local renderer');

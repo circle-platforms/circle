@@ -1,0 +1,877 @@
+import test, { type TestContext } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  mkdtemp,
+  mkdir,
+  writeFile,
+  readFile,
+  rm,
+  rename,
+  symlink,
+} from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID, createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
+import { RuntimeController } from '../src/runtime-controller.ts';
+import { ScriptedModel } from '../../../src/testing.ts';
+import { AgentRuntime } from '../../../src/runtime.ts';
+import {
+  defaultSettings,
+  trustFolder,
+  saveSettings,
+  saveSettingsChange,
+} from '../../../src/settings.ts';
+import type { WorkspaceServiceEvent } from '../src/workspace-protocol.ts';
+const assistant = (content: string, calls?: any[]) => ({
+  id: randomUUID(),
+  role: 'assistant' as const,
+  content,
+  tool_calls: calls,
+});
+async function wait(check: () => boolean) {
+  const until = Date.now() + 8000;
+  while (!check()) {
+    if (Date.now() > until) throw Error('fixture timed out');
+    await delay(10);
+  }
+}
+async function setup(
+  t: TestContext,
+  replies: ConstructorParameters<typeof ScriptedModel>[0] = [],
+  trusted = true,
+) {
+  const root = await mkdtemp(join(tmpdir(), 'circle-controller-services-'));
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  await mkdir(home);
+  await mkdir(workspace);
+  execFileSync('git', ['init', '-q', workspace]);
+  saveSettings(
+    trusted ? trustFolder(defaultSettings(), workspace) : defaultSettings(),
+    home,
+  );
+  const model = new ScriptedModel(replies);
+  const events: WorkspaceServiceEvent[] = [];
+  const updates: any[] = [];
+  const controller = new RuntimeController({
+    home,
+    workspace,
+    userHome: home,
+    model,
+    emit: (u) => updates.push(u),
+    emitWorkspaceEvent: (e) => events.push(e),
+  });
+  const call = (
+    name: string,
+    payload: Record<string, unknown> = {},
+    sessionId = controller.snapshot().activeSessionId,
+  ) => controller.dispatch({ id: randomUUID(), name, payload, sessionId });
+  const service = (
+    name: string,
+    method: string,
+    params: Record<string, unknown> = {},
+    sessionId = controller.snapshot().activeSessionId,
+  ) => call('workspace-service', { service: name, method, params }, sessionId);
+  t.after(async () => {
+    await controller.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  return {
+    root,
+    home,
+    workspace,
+    model,
+    controller,
+    call,
+    service,
+    events,
+    updates,
+  };
+}
+test('busy and inactive known sessions can save with CAS without switching selection or publishing chat snapshots', async (t) => {
+  const f = await setup(t, [
+    async (request) =>
+      new Promise((_resolve, reject) => {
+        request.signal.addEventListener(
+          'abort',
+          () => reject(request.signal.reason),
+          { once: true },
+        );
+      }),
+  ]);
+  await writeFile(join(f.workspace, 'README.md'), 'before');
+  const first = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('prompt', { text: 'stay active' })).ok, true);
+  await wait(() => f.model.requests.length === 1);
+  const initial = await f.service(
+    'documents',
+    'read',
+    { path: 'README.md' },
+    first,
+  );
+  assert.equal(initial.ok, true);
+  assert.equal((await f.call('new-session')).ok, true);
+  const selected = f.controller.snapshot().activeSessionId;
+  assert.notEqual(first, selected);
+  const count = f.updates.length;
+  const doc = initial.data as any;
+  const saved = await f.service(
+    'documents',
+    'save',
+    {
+      path: 'README.md',
+      content: 'human edit',
+      expectedRevision: doc.revision,
+    },
+    first,
+  );
+  assert.equal(saved.ok, true, saved.error);
+  assert.equal(
+    await readFile(join(f.workspace, 'README.md'), 'utf8'),
+    'human edit',
+  );
+  assert.equal(f.controller.snapshot().activeSessionId, selected);
+  assert.equal(f.updates.length, count);
+  await wait(() => f.events.length > 0);
+  const id = f.controller.snapshot().workspaces[0]!.id;
+  assert.ok(f.events.every((event) => event.workspaceId === id));
+  const replay = await f.service(
+    'events',
+    'replay',
+    { after: { offset: 0, seq: 0 }, limit: 256 },
+    first,
+  );
+  assert.equal(replay.ok, true, replay.error);
+  assert.ok((replay.data as any).events.length);
+  assert.equal(typeof (replay.data as any).cursor.offset, 'number');
+  const conflict = await f.service(
+    'documents',
+    'save',
+    {
+      path: 'README.md',
+      content: 'stale edit',
+      expectedRevision: doc.revision,
+    },
+    first,
+  );
+  assert.equal(conflict.ok, false);
+  assert.match(conflict.error!, /changed/);
+  assert.equal(
+    await readFile(join(f.workspace, 'README.md'), 'utf8'),
+    'human edit',
+  );
+});
+test('unknown and untrusted service requests cannot acquire workspace authority', async (t) => {
+  const f = await setup(t, [], false);
+  await writeFile(join(f.workspace, 'README.md'), 'untouched');
+  const denied = await f.service('documents', 'read', { path: 'README.md' });
+  assert.equal(denied.ok, false);
+  assert.match(denied.error!, /trust/);
+  const unknown = await f.service(
+    'documents',
+    'save',
+    { path: 'README.md', content: 'bad', expectedRevision: null },
+    'unknown-session',
+  );
+  assert.equal(unknown.ok, false);
+  assert.match(unknown.error!, /session not found/);
+  assert.equal(
+    await readFile(join(f.workspace, 'README.md'), 'utf8'),
+    'untouched',
+  );
+  assert.equal(f.events.length, 0);
+});
+test('foreign occupied viewed history can use workspace documents without acquiring its runtime lease', async (t) => {
+  const f = await setup(t);
+  await writeFile(join(f.workspace, 'README.md'), 'foreign view');
+  const settings = trustFolder(defaultSettings(), f.workspace);
+  const foreign = new AgentRuntime({
+    workspace: f.workspace,
+    home: f.home,
+    userHome: f.home,
+    settings,
+    model: new ScriptedModel([]),
+  });
+  t.after(() => foreign.close());
+  const selected = await f.call('select-session', { id: foreign.session.id });
+  assert.equal(selected.ok, true, selected.error);
+  const read = await f.service(
+    'documents',
+    'read',
+    { path: 'README.md' },
+    foreign.session.id,
+  );
+  assert.equal(read.ok, true, read.error);
+  assert.equal((read.data as any).content, 'foreign view');
+  assert.equal(f.controller.snapshot().activeSessionId, foreign.session.id);
+});
+test('human save while agent write approval waits prevents stale agent overwrite', async (t) => {
+  const f = await setup(t, [
+    {
+      message: assistant('', [
+        { id: 'read', name: 'read_file', args: { file_path: 'README.md' } },
+      ]),
+    },
+    {
+      message: assistant('', [
+        {
+          id: 'write',
+          name: 'write_file',
+          args: { file_path: 'README.md', content: 'agent stale' },
+        },
+      ]),
+    },
+    { message: assistant('stale write rejected') },
+  ]);
+  await writeFile(join(f.workspace, 'README.md'), 'before');
+  await f.call('prompt', { text: 'read and update README' });
+  await wait(() =>
+    f.controller
+      .snapshot()
+      .interactions.some(
+        (i) => i.kind === 'approval' && i.status === 'pending',
+      ),
+  );
+  const read = await f.service('documents', 'read', { path: 'README.md' });
+  const doc = read.data as any;
+  const save = await f.service('documents', 'save', {
+    path: 'README.md',
+    content: 'human latest',
+    expectedRevision: doc.revision,
+  });
+  assert.equal(save.ok, true, save.error);
+  const approval = f.controller
+    .snapshot()
+    .interactions.find((i) => i.kind === 'approval' && i.status === 'pending')!;
+  const answer = await f.call(
+    'answer',
+    { id: approval.id, revision: approval.revision, answer: 'approve' },
+    approval.sessionId,
+  );
+  assert.equal(answer.ok, true, answer.error);
+  await wait(() => f.model.requests.length >= 3);
+  assert.equal(
+    await readFile(join(f.workspace, 'README.md'), 'utf8'),
+    'human latest',
+  );
+  assert.ok(
+    f.model.requests[2]!.messages.some(
+      (m) => m.role === 'tool' && /changed|revision|conflict/.test(m.content),
+    ),
+  );
+});
+
+test('loaded project rules expose their real source path in the native snapshot', async (t) => {
+  const f = await setup(t, [
+    { message: assistant('rules loaded') },
+    { message: assistant('new session rules loaded') },
+  ]);
+  await writeFile(
+    join(f.workspace, 'AGENTS.md'),
+    'independent loaded rule marker',
+  );
+  await f.call('prompt', { text: 'load actual project context' });
+  await wait(() => f.model.requests.length === 1);
+  assert.ok(
+    f.model.requests[0]!.tools.some(
+      (tool) => tool.name === 'native_tasks_enqueue',
+    ),
+  );
+  const instructions = f.controller
+    .snapshot()
+    .workspaces.find(
+      (w) =>
+        w.path ===
+        f.controller.snapshot().workspaces.find((p) => p.trusted)?.path,
+    )!.instructions;
+  const rule = instructions.find((rule) =>
+    rule.content.includes('independent loaded rule marker'),
+  );
+  assert.ok(rule);
+  assert.ok(rule.path);
+  assert.equal(
+    await readFile(rule.path!, 'utf8'),
+    'independent loaded rule marker',
+  );
+  await writeFile(join(f.workspace, 'AGENTS.md'), 'new session actual rule');
+  await f.call('new-session');
+  await f.call('prompt', { text: 'load changed rules in this session' });
+  await wait(() => f.model.requests.length === 2);
+  assert.ok(
+    f.controller
+      .snapshot()
+      .workspaces.some((workspace) =>
+        workspace.instructions.some((rule) =>
+          rule.content.includes('new session actual rule'),
+        ),
+      ),
+  );
+});
+
+test('task bridge runs isolated writers and read-only reviewer while task approval can be opened', async (t) => {
+  const handler: NonNullable<
+    ConstructorParameters<typeof ScriptedModel>[0]
+  >[number] = async (request) => {
+    const prompt =
+      request.messages.find((m) => m.role === 'user')?.content ?? '';
+    const match = /Task (left|right|review), attempt/.exec(prompt);
+    if (!match)
+      return {
+        message: assistant('parent ready'),
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+        },
+      };
+    assert.ok(
+      !request.tools.some((tool) => tool.name.startsWith('native_tasks_')),
+    );
+    const name = match[1];
+    const hadTool = request.messages.some((m) => m.role === 'tool');
+    return {
+      message: hadTool
+        ? assistant(`finished ${name}`)
+        : assistant('', [
+            {
+              id: `${name}-call`,
+              name: name === 'review' ? 'read_file' : 'write_file',
+              args:
+                name === 'review'
+                  ? { file_path: 'README.md' }
+                  : { file_path: 'same.txt', content: name },
+            },
+          ]),
+      usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+      },
+    };
+  };
+  const f = await setup(t, Array(30).fill(handler));
+  await writeFile(join(f.workspace, 'README.md'), 'baseline');
+  execFileSync('git', ['-C', f.workspace, 'add', 'README.md']);
+  execFileSync('git', [
+    '-C',
+    f.workspace,
+    '-c',
+    'user.name=Circle Fixture',
+    '-c',
+    'user.email=fixture@example.invalid',
+    'commit',
+    '-qm',
+    'Baseline',
+  ]);
+  const parent = f.controller.snapshot().activeSessionId;
+  const enqueue = await f.service(
+    'tasks',
+    'enqueue',
+    {
+      operationId: 'fixture-isolated-three',
+      tasks: ['left', 'right', 'review'].map((id) => ({
+        id,
+        access: id === 'review' ? 'readonly' : 'write',
+        prompt: `perform ${id}`,
+        acceptanceCriteria: ['inspect actual result'],
+      })),
+    },
+    parent,
+  );
+  assert.equal(enqueue.ok, true, enqueue.error);
+  await wait(() =>
+    f.controller.snapshot().interactions.some((i) => i.status === 'pending'),
+  );
+  const waiting = f.controller
+    .snapshot()
+    .interactions.find((i) => i.status === 'pending')!;
+  const selected = await f.call('select-session', { id: waiting.sessionId });
+  assert.equal(selected.ok, true, selected.error);
+  assert.equal(f.controller.snapshot().activeSessionId, waiting.sessionId);
+  await f.call('select-session', { id: parent });
+  const until = Date.now() + 8000;
+  let tasks: any[] = [];
+  while (Date.now() < until) {
+    for (const row of f.controller
+      .snapshot()
+      .interactions.filter((i) => i.status === 'pending')) {
+      const answer = await f.call(
+        'answer',
+        { id: row.id, revision: row.revision, answer: 'approve' },
+        row.sessionId,
+      );
+      assert.equal(answer.ok, true, answer.error);
+    }
+    const list = await f.service('tasks', 'list', {}, parent);
+    assert.equal(list.ok, true, list.error);
+    tasks = list.data as any[];
+    if (
+      tasks.every((task) =>
+        ['needs_review', 'succeeded', 'failed'].includes(task.state),
+      )
+    )
+      break;
+    await delay(10);
+  }
+  assert.equal(tasks.length, 3);
+  assert.ok(
+    tasks.every((task) => task.state === 'needs_review'),
+    JSON.stringify(
+      tasks.map((t) => ({ id: t.spec.id, state: t.state, reason: t.reason })),
+    ),
+  );
+  assert.notEqual(tasks[0].worktree, tasks[1].worktree);
+  for (const id of ['left', 'right'])
+    assert.equal(
+      await readFile(
+        join(tasks.find((task) => task.spec.id === id).worktree, 'same.txt'),
+        'utf8',
+      ),
+      id,
+    );
+  await assert.rejects(readFile(join(f.workspace, 'same.txt')));
+  assert.ok(f.events.some((event) => event.service === 'tasks'));
+});
+
+test('a replaced trusted root cannot redirect an existing session into another trusted repository', async (t) => {
+  const f = await setup(t);
+  await writeFile(join(f.workspace, 'marker.txt'), 'A');
+  const first = f.controller.snapshot().activeSessionId;
+  const other = join(f.root, 'other');
+  await mkdir(other);
+  execFileSync('git', ['init', '-q', other]);
+  await writeFile(join(other, 'marker.txt'), 'B');
+  saveSettingsChange(f.home, (settings) =>
+    Object.assign(settings, trustFolder(settings, other)),
+  );
+  const initial = await f.service(
+    'documents',
+    'read',
+    { path: 'marker.txt' },
+    first,
+  );
+  assert.equal(initial.ok, true);
+  const revision = (initial.data as any).revision;
+  await rename(f.workspace, f.workspace + '.old');
+  await symlink(other, f.workspace, 'dir');
+  for (const [service, method, params] of [
+    ['documents', 'read', { path: 'marker.txt' }],
+    [
+      'documents',
+      'save',
+      { path: 'marker.txt', content: 'redirected', expectedRevision: revision },
+    ],
+    ['git', 'status', {}],
+  ] as const) {
+    const denied = await f.service(service, method, params, first);
+    assert.equal(denied.ok, false);
+    assert.match(denied.error!, /workspace root changed/);
+  }
+  const shell = await f.call(
+    'shell',
+    { command: 'node -e process.exit(0)' },
+    first,
+  );
+  assert.equal(shell.ok, false);
+  assert.match(shell.error!, /workspace root changed/);
+  assert.equal(f.model.requests.length, 0);
+  assert.equal(await readFile(join(other, 'marker.txt'), 'utf8'), 'B');
+  assert.equal(
+    await readFile(join(f.workspace + '.old', 'marker.txt'), 'utf8'),
+    'A',
+  );
+  const opened = await f.call('open-workspace', { path: other });
+  assert.equal(opened.ok, true, opened.error);
+  const independent = await f.service('documents', 'read', {
+    path: 'marker.txt',
+  });
+  assert.equal(independent.ok, true, independent.error);
+  assert.equal((independent.data as any).content, 'B');
+  await rename(other, other + '.old');
+  await mkdir(other);
+  await writeFile(join(other, 'marker.txt'), 'replacement inode');
+  const replaced = await f.service('documents', 'read', { path: 'marker.txt' });
+  assert.equal(replaced.ok, false);
+  assert.match(replaced.error!, /workspace root changed/);
+  assert.equal(
+    await readFile(join(other, 'marker.txt'), 'utf8'),
+    'replacement inode',
+  );
+});
+
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+test('archive refuses native processes and confirmed delete awaits only its owning PTY', async (t) => {
+  const f = await setup(t);
+  const first = f.controller.snapshot().activeSessionId;
+  const create = () =>
+    f.service('terminal', 'create', {
+      command: {
+        file: process.execPath,
+        args: ['-e', 'setInterval(()=>{},1000)'],
+      },
+    });
+  const a = await create();
+  assert.equal(a.ok, true, a.error);
+  const pidA = (a.data as any).pid;
+  assert.ok(alive(pidA));
+  await f.call('new-session');
+  const second = f.controller.snapshot().activeSessionId;
+  const b = await create();
+  assert.equal(b.ok, true, b.error);
+  const pidB = (b.data as any).pid;
+  const archive = await f.call('archive-session', {
+    id: first,
+    archived: true,
+  });
+  assert.equal(archive.ok, false);
+  assert.match(archive.error!, /native resources/);
+  const unconfirmed = await f.call('delete-session', { id: first });
+  assert.equal(unconfirmed.ok, false);
+  assert.match(unconfirmed.error!, /confirm/);
+  assert.ok(alive(pidA));
+  const deleted = await f.call('delete-session', {
+    id: first,
+    confirmed: true,
+  });
+  assert.equal(deleted.ok, true, deleted.error);
+  await wait(() => !alive(pidA));
+  assert.ok(alive(pidB));
+  assert.equal(f.controller.snapshot().activeSessionId, second);
+  const close = await f.service('terminal', 'close', {
+    id: (b.data as any).id,
+  });
+  assert.equal(close.ok, true, close.error);
+  await wait(() => !alive(pidB));
+});
+
+test('streaming token IPC sends deltas while final snapshots remain authoritative', async (t) => {
+  const content = Array(128).fill('chunk ').join('');
+  const f = await setup(t, [
+    async (request) => {
+      for (let i = 0; i < 128; i++) request.token('chunk ');
+      return {
+        message: assistant(content),
+        usage: { input_tokens: 1, output_tokens: 128, cache_read_tokens: 0 },
+      };
+    },
+  ]);
+  const deltas: any[] = [];
+  f.controller.options.emitTokenDelta = (delta) => deltas.push(delta);
+  await f.call('prompt', { text: 'stream a response' });
+  await wait(() =>
+    f.controller
+      .snapshot()
+      .sessions.some((session) =>
+        session.messages.some((message) => message.text === content),
+      ),
+  );
+  assert.equal(deltas.length, 128);
+  assert.equal(deltas.map((delta) => delta.text ?? '').join(''), content);
+  assert.ok(
+    deltas.every(
+      (delta, index) => delta.seq === index + 1 && delta.baseSeq > 0,
+    ),
+  );
+  assert.ok(
+    f.updates.length < 20,
+    'tokens must not amplify into full history snapshots',
+  );
+  assert.ok(f.updates.every((update) => update.event?.kind !== 'llm_token'));
+  await wait(() => f.updates.some((update) => update.tokenStream?.seq === 128));
+  assert.ok(
+    f.updates
+      .at(-1)
+      .snapshot.sessions.some((session: any) =>
+        session.messages.some((message: any) => message.text === content),
+      ),
+  );
+});
+
+test('workspace journal failure cancels its producers and remains visible after state polling', async (t) => {
+  let aborted = false;
+  const f = await setup(t, [
+    async (request) =>
+      new Promise((_resolve, reject) => {
+        request.signal.addEventListener(
+          'abort',
+          () => {
+            aborted = true;
+            reject(request.signal.reason);
+          },
+          { once: true },
+        );
+      }),
+  ]);
+  await f.call('prompt', { text: 'stay running while native journal fails' });
+  await wait(() => f.model.requests.length === 1);
+  const hash = createHash('sha256')
+    .update(realpathSync(f.workspace))
+    .digest('hex');
+  await mkdir(
+    join(f.home, 'workspace-services', 'workspaces', hash, 'events.jsonl'),
+    { recursive: true },
+  );
+  const failed = await f.service('documents', 'read', { path: 'README.md' });
+  assert.equal(failed.ok, false);
+  await wait(() => aborted);
+  assert.match(
+    f.controller.snapshot().runtime?.error ?? '',
+    /persistence failed/,
+  );
+  await f.call('state');
+  assert.match(
+    f.controller.snapshot().runtime?.error ?? '',
+    /persistence failed/,
+  );
+});
+
+test('parent conversations share the configured app model pool without holding leases for whole turns', async (t) => {
+  const f = await setup(t, [
+    async (request) =>
+      new Promise((_resolve, reject) => {
+        request.signal.addEventListener(
+          'abort',
+          () => reject(request.signal.reason),
+          { once: true },
+        );
+      }),
+    { message: assistant('second parent completed') },
+  ]);
+  const configured = await f.service('tasks', 'settings', {
+    limits: { agents: 1 },
+  });
+  assert.equal(configured.ok, true, configured.error);
+  const first = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'first parent blocked' });
+  await wait(() => f.model.requests.length === 1);
+  await f.call('new-session');
+  const second = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'second parent queued' });
+  await delay(50);
+  assert.equal(f.model.requests.length, 1);
+  await f.call('select-session', { id: first });
+  await f.call('abort');
+  await wait(() => f.model.requests.length === 2);
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .sessions.find((s) => s.id === second)
+        ?.messages.some((m) => m.text === 'second parent completed') === true,
+  );
+});
+
+test('completed native saves survive controller restart without replaying writes', async (t) => {
+  const f = await setup(t);
+  await writeFile(join(f.workspace, 'answer.txt'), 'before');
+  const read = await f.service('documents', 'read', { path: 'answer.txt' });
+  assert.equal(read.ok, true, read.error);
+  const command = {
+    id: randomUUID(),
+    name: 'workspace-service',
+    sessionId: f.controller.snapshot().activeSessionId,
+    payload: {
+      service: 'documents',
+      method: 'save',
+      params: {
+        path: 'answer.txt',
+        content: 'saved once',
+        expectedRevision: (read.data as any).revision,
+      },
+    },
+  };
+  const saved = await f.controller.dispatch(command);
+  assert.equal(saved.ok, true, saved.error);
+  await f.controller.close();
+  await writeFile(join(f.workspace, 'answer.txt'), 'external edit after save');
+  const restarted = new RuntimeController({
+    home: f.home,
+    workspace: f.workspace,
+    userHome: f.home,
+    model: new ScriptedModel([]),
+    emit: () => {},
+  });
+
+  const replay = await restarted.dispatch(command);
+  assert.equal(replay.ok, true, replay.error);
+  assert.deepEqual(replay.data, saved.data);
+  assert.equal(
+    await readFile(join(f.workspace, 'answer.txt'), 'utf8'),
+    'external edit after save',
+  );
+  const different = await restarted.dispatch({
+    ...command,
+    payload: {
+      ...command.payload,
+      params: { ...command.payload.params, content: 'wrong second input' },
+    },
+  });
+  assert.equal(different.ok, false);
+  assert.equal(
+    await readFile(join(f.workspace, 'answer.txt'), 'utf8'),
+    'external edit after save',
+  );
+  await restarted.close();
+});
+
+test('pending operation review is restricted to its owning session and never replays effects', async (t) => {
+  const f = await setup(t);
+  const owner = f.controller.snapshot().activeSessionId;
+  const operationId = randomUUID();
+  const failed = await f.controller.dispatch({
+    id: operationId,
+    name: 'workspace-service',
+    sessionId: owner,
+    payload: {
+      service: 'terminal',
+      method: 'write',
+      params: { id: 'missing-terminal', data: 'private input' },
+    },
+  });
+  assert.equal(failed.ok, false);
+  const listed = await f.service('operations', 'list', {
+    state: 'needs_review',
+  });
+  assert.equal(listed.ok, true, listed.error);
+  const metadata = (listed.data as any[]).find((row) => row.id === operationId);
+  assert.equal(metadata.sessionId, owner);
+  assert.equal(JSON.stringify(metadata).includes('private input'), false);
+  await f.call('new-session');
+  const foreign = await f.service('operations', 'review', {
+    id: operationId,
+    note: 'checked',
+  });
+  assert.equal(foreign.ok, false);
+  const reviewed = await f.service(
+    'operations',
+    'review',
+    { id: operationId, note: 'confirmed no terminal was created' },
+    owner,
+  );
+  assert.equal(reviewed.ok, true, reviewed.error);
+  assert.equal((reviewed.data as any).state, 'reconciled');
+  const pending = await f.service(
+    'operations',
+    'list',
+    { state: 'needs_review' },
+    owner,
+  );
+  assert.equal((pending.data as any[]).length, 0);
+});
+test('controller task verification executes a pinned project oracle in an isolated candidate', async (t) => {
+  const handler = async (request: any) => ({
+    message: request.messages.some((m: any) => m.role === 'tool')
+      ? assistant('implemented answer')
+      : assistant('', [
+          {
+            id: 'oracle-write',
+            name: 'write_file',
+            args: { file_path: 'answer.txt', content: '42' },
+          },
+        ]),
+    usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+    },
+  });
+  const f = await setup(t, Array(15).fill(handler));
+  await mkdir(join(f.workspace, '.circle'));
+  await writeFile(
+    join(f.workspace, 'package.json'),
+    JSON.stringify({ scripts: { test: 'node verify.cjs' } }),
+  );
+  await writeFile(
+    join(f.workspace, 'verify.cjs'),
+    "if(require('node:fs').readFileSync('answer.txt','utf8')!=='42')process.exit(1)",
+  );
+  await writeFile(join(f.workspace, 'answer.txt'), '0');
+  await writeFile(
+    join(f.workspace, '.circle/verification.json'),
+    JSON.stringify({
+      version: 1,
+      checks: [
+        {
+          criterion: 'answer is 42',
+          script: 'test',
+          oraclePaths: ['verify.cjs'],
+        },
+      ],
+    }),
+  );
+  execFileSync('git', [
+    '-C',
+    f.workspace,
+    'add',
+    'package.json',
+    'verify.cjs',
+    'answer.txt',
+    '.circle/verification.json',
+  ]);
+  execFileSync('git', [
+    '-C',
+    f.workspace,
+    '-c',
+    'user.name=Fixture',
+    '-c',
+    'user.email=fixture@example.invalid',
+    'commit',
+    '-qm',
+    'Baseline',
+  ]);
+  const parent = f.controller.snapshot().activeSessionId;
+  const started = await f.service(
+    'tasks',
+    'enqueue',
+    {
+      operationId: 'controller-oracle',
+      tasks: [
+        {
+          id: 'oracle',
+          access: 'write',
+          prompt: 'write answer.txt with 42',
+          acceptanceCriteria: ['answer is 42'],
+        },
+      ],
+    },
+    parent,
+  );
+  assert.equal(started.ok, true, started.error);
+  let task: any;
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    for (const interaction of f.controller
+      .snapshot()
+      .interactions.filter((i) => i.status === 'pending'))
+      await f.call(
+        'answer',
+        {
+          id: interaction.id,
+          revision: interaction.revision,
+          answer: 'approve',
+        },
+        interaction.sessionId,
+      );
+    const list = await f.service('tasks', 'list', {}, parent);
+    task = (list.data as any[])?.[0];
+    if (task && ['succeeded', 'failed', 'needs_review'].includes(task.state))
+      break;
+    await delay(20);
+  }
+  assert.equal(task?.state, 'succeeded', JSON.stringify(task));
+  assert.equal(await readFile(join(f.workspace, 'answer.txt'), 'utf8'), '0');
+  assert.equal(await readFile(join(task.worktree, 'answer.txt'), 'utf8'), '42');
+});

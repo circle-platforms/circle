@@ -1,0 +1,22 @@
+.native-code-editor {
+  flex: 1;
+  min-height: 180px;
+  overflow: hidden;
+}
+.file-view .editor-notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+}
+.file-view .editor-notice[role='alert'] {
+  border-left: 3px solid var(--negative);
+}
+.file-view .editor-notice span {
+  flex: 1;
+  min-width: 180px;
+}

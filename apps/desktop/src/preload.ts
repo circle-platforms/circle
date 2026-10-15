@@ -32,6 +32,19 @@ const bridge: DesktopBridge = {
     ipcRenderer.on('circle:runtime-update', handler);
     return () => ipcRenderer.removeListener('circle:runtime-update', handler);
   },
+  onRuntimeDelta: (listener) => {
+    const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
+      listener(value);
+    ipcRenderer.on('circle:runtime-token-delta', handler);
+    return () =>
+      ipcRenderer.removeListener('circle:runtime-token-delta', handler);
+  },
+  onWorkspaceEvent: (listener) => {
+    const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
+      listener(value);
+    ipcRenderer.on('circle:workspace-event', handler);
+    return () => ipcRenderer.removeListener('circle:workspace-event', handler);
+  },
   chooseFiles: (purpose) => ipcRenderer.invoke('circle:choose-files', purpose),
   chooseWorkspace: () => ipcRenderer.invoke('circle:choose-workspace'),
   revealWorkspace: (workspaceId) =>
@@ -45,6 +58,11 @@ const bridge: DesktopBridge = {
   copyText: (text) => ipcRenderer.invoke('circle:copy-text', text),
   windowControl: (action) =>
     ipcRenderer.invoke('circle:window-control', action),
+  openExternal: (url) => ipcRenderer.invoke('circle:open-external', url),
+  browserDiagnostics: (id, request) =>
+    ipcRenderer
+      .invoke('circle:browser-diagnostics', id, request)
+      .catch(raiseBrowserError),
   browserState: (id) => ipcRenderer.invoke('circle:browser-state', id),
   browserNavigate: (id, url) =>
     ipcRenderer

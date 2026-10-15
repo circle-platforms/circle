@@ -1,3 +1,5 @@
+import { BrowserDiagnostics } from './browser-diagnostics';
+import { validateBrowserDiagnosticRequest } from './browser-diagnostics-contracts';
 import {
   checkCoordinateTarget,
   checkScreenshot,
@@ -192,6 +194,7 @@ interface Tab {
   wake: Set<() => void>;
   closed: boolean;
   screenshot?: ScreenshotCapture;
+  diagnostics?: BrowserDiagnostics;
   // The same-origin path the page's prompt() asks; Circle answers it, never the site.
   promptPath: string;
   // Dialogs as the debugger saw them open, oldest first, to pair with their closing
@@ -591,8 +594,47 @@ export class BrowserSessions {
     this.prepareSession(conversation, contents.session);
     this.handle(conversation, tab);
     contents.debugger.attach('1.3');
+    tab.diagnostics = new BrowserDiagnostics((method, params) =>
+      contents.debugger.sendCommand(method, params),
+    );
+    const enableDiagnostics = () => tab.diagnostics!.enable();
+    contents.on('devtools-closed', () => {
+      void (async () => {
+        if (tab.closed || contents.isDestroyed()) return;
+        if (!contents.debugger.isAttached()) contents.debugger.attach('1.3');
+        await Promise.all([
+          enableDiagnostics(),
+          contents.debugger.sendCommand('Page.enable'),
+          contents.debugger.sendCommand('Fetch.enable', {
+            patterns: [{ urlPattern: '*' + tab.promptPath + '*' }],
+          }),
+          contents.debugger.sendCommand(
+            'Page.addScriptToEvaluateOnNewDocument',
+            { source: promptScript(tab.promptPath), runImmediately: true },
+          ),
+        ]);
+        for (const breakpoint of tab.diagnostics!.state.debugger.breakpoints) {
+          const restored = await contents.debugger.sendCommand(
+            'Debugger.setBreakpointByUrl',
+            { url: breakpoint.source.path, lineNumber: breakpoint.line - 1 },
+          );
+          breakpoint.id = restored.breakpointId;
+          breakpoint.verified = !!restored.locations?.length;
+        }
+        tab.diagnostics!.state.owner = 'circle';
+        tab.screenshot = undefined;
+        conversation.events.push(
+          'devtools closed; browser observations must be refreshed',
+        );
+        this.publish(conversation.id);
+      })().catch(() => {
+        conversation.events.push('browser diagnostics could not reconnect');
+        this.publish(conversation.id);
+      });
+    });
     // A page opened by another may not answer until it navigates: do not wait for these
     const enable = Promise.all([
+      enableDiagnostics(),
       contents.debugger.sendCommand('Page.enable'),
       contents.debugger.sendCommand('Network.enable'),
       contents.debugger.sendCommand('Fetch.enable', {
@@ -1075,6 +1117,7 @@ export class BrowserSessions {
       );
     });
     contents.debugger.on('message', (_event, method, params) => {
+      tab.diagnostics?.event(method, params);
       if (method === 'Fetch.requestPaused') {
         this.prompt(conversation, tab, params);
         return;
@@ -1479,6 +1522,36 @@ export class BrowserSessions {
     this.visibility(conversation);
     return this.state(id);
   }
+  async diagnostics(idValue: unknown, request: unknown) {
+    const id = this.validId(idValue);
+    const input = validateBrowserDiagnosticRequest(request);
+    const conversation = this.conversation(id);
+    const tab = this.activeTab(conversation);
+    await tab.ready;
+    if (
+      input.action !== 'read' &&
+      (conversation.operating ||
+        conversation.control === 'agent' ||
+        conversation.control === 'user_pending')
+    )
+      throw Error('take over the browser before changing diagnostics');
+    if (input.action === 'devtools') {
+      this.control(id, 'take');
+      // Human-only API: no model tool can invoke this explicit ownership handoff.
+      tab.diagnostics!.state.owner = 'devtools';
+      tab.screenshot = undefined;
+      tab.contents.openDevTools({ mode: 'detach', activate: true });
+      return { state: tab.diagnostics!.state };
+    }
+    const result = await tab.diagnostics!.request(input, tab.contents.getURL());
+    if (input.action === 'viewport') {
+      tab.screenshot = undefined;
+      conversation.events.push(
+        'browser viewport changed; take a new snapshot and screenshot before using coordinates',
+      );
+    }
+    return result;
+  }
   async navigate(idValue: unknown, urlValue: unknown) {
     const id = this.validId(idValue);
     if (typeof urlValue !== 'string' || urlValue.length > 4096)
@@ -1586,6 +1659,12 @@ export class BrowserSessions {
       this.control(conversation.id, 'return');
   }
   private giveBack(conversation: Conversation, event: string, auto = false) {
+    if (
+      [...conversation.tabs.values()].some(
+        (tab) => tab.diagnostics?.state.owner === 'devtools',
+      )
+    )
+      return;
     clearInterval(conversation.autoReturn);
     conversation.autoReturn = undefined;
     conversation.takenBack = auto;

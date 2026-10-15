@@ -1,3 +1,4 @@
+import { useSources } from '../components/SourceNavigation';
 import { desktopHost } from '../host';
 import { agentActivityText } from '../model/activity';
 import { NativeBrowser } from './NativeBrowser';
@@ -370,6 +371,7 @@ function SampleChanges({ onFile }: Pick<Props, 'onFile'>) {
   );
 }
 export function ContextPanel({ onDialog }: Pick<Props, 'onDialog'>) {
+  const sources = useSources();
   const { snapshot, runtime, perform } = useRuntime();
   const session = currentSession(snapshot);
   const workspace = snapshot.workspaces.find(
@@ -400,14 +402,22 @@ export function ContextPanel({ onDialog }: Pick<Props, 'onDialog'>) {
       <div className="panel-section">
         <h3>{t('instructions')}</h3>
         {!workspace.instructions.length && (
-          <p className="muted">{t('no instruction files in this folder')}</p>
+          <p className="muted">{t('no instruction files loaded')}</p>
         )}
         {workspace.instructions.map((item) => (
-          <details key={item.name} className="context-source">
+          <details key={item.path ?? item.name} className="context-source">
             <summary>
               <FileText size={14} />
               {item.name}
             </summary>
+            {item.path && (
+              <button
+                className="text-button"
+                onClick={() => sources?.openFile(item.path!)}
+              >
+                {item.path}
+              </button>
+            )}
             <pre>{item.content}</pre>
           </details>
         ))}

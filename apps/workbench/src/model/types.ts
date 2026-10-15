@@ -54,7 +54,15 @@ export interface ToolCall {
   name: string;
   input: Record<string, unknown>;
   output: string;
-  status: 'running' | 'success' | 'error' | 'waiting' | 'unknown';
+  status:
+    | 'running'
+    | 'success'
+    | 'error'
+    | 'waiting'
+    | 'unknown'
+    | 'cancelled'
+    | 'rejected';
+  attachments?: Attachment[];
   elapsed?: string;
   filePath?: string;
   before?: string;
@@ -114,6 +122,7 @@ export interface Session {
   undoStack: string[][];
   attachments: Attachment[];
   queue: { id: string; text: string; kind: 'steering' | 'follow-up' }[];
+  queueVersion?: number;
   state: 'idle' | 'waiting' | 'paused';
   readOnly: boolean;
   auto: boolean;
@@ -156,7 +165,7 @@ export interface Workspace {
   branch: string;
   trusted: boolean;
   origin?: 'native' | 'preview';
-  instructions: { name: string; content: string }[];
+  instructions: { name: string; content: string; path?: string }[];
 }
 export interface WorkspaceFile {
   id: string;
@@ -187,7 +196,14 @@ export interface Job {
   sessionId: string;
   kind: 'command' | 'agent' | 'watch';
   title: string;
-  state: 'running' | 'waiting' | 'completed' | 'failed';
+  state:
+    | 'running'
+    | 'waiting'
+    | 'completed'
+    | 'failed'
+    | 'cancelled'
+    | 'stopping'
+    | 'interrupted';
   elapsed: string;
   output: string;
   outputPath: string;
@@ -362,6 +378,21 @@ export interface CommandResult {
   selection?: string;
   effect?: 'copy' | 'import' | 'download';
 }
+/** Local fields only: this API cannot edit history, permissions or execution. */
+export type SessionViewPatch = Partial<
+  Pick<
+    Session,
+    | 'draft'
+    | 'attachments'
+    | 'hiddenIds'
+    | 'undoStack'
+    | 'showThinking'
+    | 'expandTools'
+    | 'pinned'
+    | 'shared'
+    | 'presentation'
+  >
+>;
 export interface RuntimePort {
   readonly mode: 'preview' | 'live';
   /** Changes when a reset replaces renderer session identities, even if IDs recur. */
@@ -369,6 +400,7 @@ export interface RuntimePort {
   getSnapshot: () => WorkbenchSnapshot;
   subscribe: (listener: () => void) => () => void;
   change: (update: (draft: WorkbenchSnapshot) => void) => void;
+  updateSessionView: (sessionId: string, patch: SessionViewPatch) => boolean;
   send: (
     kind?: 'steering' | 'follow-up',
   ) => CommandResult | Promise<CommandResult>;

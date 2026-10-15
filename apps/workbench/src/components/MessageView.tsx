@@ -6,6 +6,7 @@ import { fullTime, shownTime } from '../model/time';
 import { FileChip, IconButton } from './common';
 import { Markdown } from './Markdown';
 import { t } from '../i18n';
+import { useSources } from './SourceNavigation';
 import { useSessionDisclosure } from '../model/presentation';
 
 /**
@@ -22,6 +23,7 @@ export function MessageView({
   onAttachment: () => void;
 }) {
   const { notify } = useRuntime();
+  const sources = useSources();
   const [thinkingOpen, setThinkingOpen] = useSessionDisclosure(
     'thinking:' + message.id,
   );
@@ -48,7 +50,13 @@ export function MessageView({
         {message.attachments?.length ? (
           <div className="message-attachments">
             {message.attachments.map((file) => (
-              <FileChip key={file.id} name={file.name} onClick={onAttachment} />
+              <FileChip
+                key={file.id}
+                name={file.name}
+                onClick={() =>
+                  sources ? sources.openAttachment(file) : onAttachment()
+                }
+              />
             ))}
           </div>
         ) : null}

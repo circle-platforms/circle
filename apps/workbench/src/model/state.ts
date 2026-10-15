@@ -104,21 +104,20 @@ export function branchMessages(session: Session): Message[] {
     seen.add(id);
     const message = messages.get(id);
     if (!message) break;
-    result.unshift(message);
+    result.push(message);
     id = message.parentId;
   }
-  return result;
+  return result.reverse();
 }
 export function visibleMessages(session: Session) {
-  if (session.branchIds)
+  const hidden = new Set(session.hiddenIds);
+  if (session.branchIds) {
+    const branch = new Set(session.branchIds);
     return session.messages.filter(
-      (message) =>
-        session.branchIds!.includes(message.id) &&
-        !session.hiddenIds.includes(message.id),
+      (message) => branch.has(message.id) && !hidden.has(message.id),
     );
-  return branchMessages(session).filter(
-    (message) => !session.hiddenIds.includes(message.id),
-  );
+  }
+  return branchMessages(session).filter((message) => !hidden.has(message.id));
 }
 export function sessionText(session: Session) {
   return visibleMessages(session)
@@ -214,6 +213,36 @@ export class PreviewRuntime implements RuntimePort {
     return () => {
       this.listeners.delete(listener);
     };
+  };
+  updateSessionView = (
+    sessionId: string,
+    patch: import('./types').SessionViewPatch,
+  ): boolean => {
+    if (!this.snapshot.sessions.some((session) => session.id === sessionId))
+      return false;
+    const allowed = [
+      'draft',
+      'attachments',
+      'hiddenIds',
+      'undoStack',
+      'showThinking',
+      'expandTools',
+      'pinned',
+      'shared',
+      'presentation',
+    ];
+    if (
+      !patch ||
+      typeof patch !== 'object' ||
+      Array.isArray(patch) ||
+      Object.keys(patch).some((key) => !allowed.includes(key))
+    )
+      throw Error('use a native session operation');
+    this.change((snapshot) => {
+      const session = snapshot.sessions.find((item) => item.id === sessionId);
+      if (session) Object.assign(session, structuredClone(patch));
+    });
+    return true;
   };
   change = (update: (draft: WorkbenchSnapshot) => void) => {
     const next = structuredClone(this.snapshot);

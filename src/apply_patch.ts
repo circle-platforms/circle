@@ -7,12 +7,12 @@ import {
 } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Sandbox } from './sandbox.js';
-interface Change {
+export interface PatchChange {
   path: string;
   original: string | null;
   content: string | null;
 }
-export function applyPatch(patch: string, sandbox: Sandbox): string {
+function patchLines(patch: string): string[] {
   const lines = patch.replace(/\r\n/g, '\n').split('\n');
   if (lines.shift() !== '*** Begin Patch')
     throw new Error('patch must start with *** Begin Patch');
@@ -20,10 +20,36 @@ export function applyPatch(patch: string, sandbox: Sandbox): string {
   if (end < 0 || lines.slice(end + 1).some((line) => line.trim()))
     throw new Error('patch must end with *** End Patch');
   lines.splice(end);
-  const changes: Change[] = [];
+  return lines;
+}
+
+/** Paths needed to prepare a patch; this performs no reads or writes. */
+export function patchFilePaths(patch: string, sandbox: Sandbox): string[] {
+  const paths = new Set<string>();
+  for (const line of patchLines(patch)) {
+    const match = line.match(
+      /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/,
+    );
+    if (!match) continue;
+    const path = sandbox.resolvePath(match[1]!);
+    sandbox.checkMutablePath(path);
+    paths.add(path);
+  }
+  return [...paths];
+}
+
+/** Parse and validate against one caller-owned snapshot before any writes. */
+export function planPatch(
+  patch: string,
+  sandbox: Sandbox,
+  read: (path: string) => string | null = (path) =>
+    existsSync(path) ? readFileSync(path, 'utf8') : null,
+): PatchChange[] {
+  const lines = patchLines(patch);
+  const changes: PatchChange[] = [];
   const seen = new Set<string>();
   let i = 0;
-  const add = (change: Change): void => {
+  const add = (change: PatchChange): void => {
     sandbox.checkMutablePath(change.path);
     if (seen.has(change.path))
       throw new Error('a path appears more than once in the patch');
@@ -38,7 +64,7 @@ export function applyPatch(patch: string, sandbox: Sandbox): string {
     const kind = header[1]!;
     const path = sandbox.resolvePath(header[2]!);
     sandbox.checkMutablePath(path);
-    const original = existsSync(path) ? readFileSync(path, 'utf8') : null;
+    const original = read(path);
     if (kind === 'Delete File') {
       if (original === null) throw new Error('cannot delete a missing file');
       add({ path, original, content: null });
@@ -58,8 +84,10 @@ export function applyPatch(patch: string, sandbox: Sandbox): string {
     }
     if (original === null) throw new Error('cannot update a missing file');
     let move: string | undefined;
-    if (lines[i]?.startsWith('*** Move to: '))
+    if (lines[i]?.startsWith('*** Move to: ')) {
       move = sandbox.resolvePath(lines[i++]!.slice(13));
+      sandbox.checkMutablePath(move);
+    }
     const textLines = original.split('\n');
     if (textLines.at(-1) === '') textLines.pop();
     let cursor = 0;
@@ -113,13 +141,31 @@ export function applyPatch(patch: string, sandbox: Sandbox): string {
     if (!applied) throw new Error('update has no hunks');
     const content = textLines.join('\n') + '\n';
     if (move) {
-      if (existsSync(move)) throw new Error('move destination already exists');
+      if (read(move) !== null)
+        throw new Error('move destination already exists');
       add({ path: move, original: null, content });
       add({ path, original, content: null });
     } else add({ path, original, content });
   }
   if (!changes.length) throw new Error('patch contains no changes');
-  const completed: Change[] = [];
+  return changes;
+}
+
+export function patchSummary(changes: PatchChange[]): string {
+  return (
+    'Success. Updated the following files:\n' +
+    changes
+      .map(
+        (change) =>
+          `${change.original === null ? 'A' : change.content === null ? 'D' : 'M'} ${change.path}`,
+      )
+      .join('\n')
+  );
+}
+
+export function applyPatch(patch: string, sandbox: Sandbox): string {
+  const changes = planPatch(patch, sandbox);
+  const completed: PatchChange[] = [];
   try {
     for (const change of changes) {
       if (change.content === null) unlinkSync(change.path);
@@ -137,13 +183,5 @@ export function applyPatch(patch: string, sandbox: Sandbox): string {
     }
     throw error;
   }
-  return (
-    'Success. Updated the following files:\n' +
-    changes
-      .map(
-        (change) =>
-          `${change.original === null ? 'A' : change.content === null ? 'D' : 'M'} ${change.path}`,
-      )
-      .join('\n')
-  );
+  return patchSummary(changes);
 }

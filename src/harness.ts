@@ -91,6 +91,7 @@ export class Harness {
   private step?: AbortController;
   private steering: string[] = [];
   private followUps: string[] = [];
+  private queueVersion = 0;
   /** How the input box showed a prompt the model reads in full: long pastes stay folded on screen. */
   readonly shown = new Map<
     string,
@@ -123,6 +124,10 @@ export class Harness {
   get pendingMessageCount(): number {
     return this.steering.length + this.followUps.length;
   }
+  /** Native queue editors freeze this with the row to reject same-text ABA races. */
+  get queuedVersion(): number {
+    return this.queueVersion;
+  }
   get messages(): Message[] {
     return this.options.store.messages(this.sessionId);
   }
@@ -142,6 +147,7 @@ export class Harness {
       });
     }
     (mode === 'steer' ? this.steering : this.followUps).push(message);
+    this.queueVersion++;
   }
   get queuedMessages(): { steering: string[]; followUp: string[] } {
     return { steering: [...this.steering], followUp: [...this.followUps] };
@@ -155,9 +161,77 @@ export class Harness {
     if (!Number.isSafeInteger(index) || index < 0 || queue[index] !== expected)
       throw Error('queued message changed');
     const [message] = queue.splice(index, 1);
+    this.queueVersion++;
     if (![...this.steering, ...this.followUps].includes(message!))
       this.shown.delete(message!);
     return message!;
+  }
+  /** Save an unsent edit in place; a consumed or changed row must never edit its neighbour. */
+  editQueued(
+    mode: 'steer' | 'followUp',
+    index: number,
+    expectedText: string,
+    updatedText: string,
+    expectedVersion?: number,
+  ): string {
+    if (mode !== 'steer' && mode !== 'followUp')
+      throw Error('invalid queue kind');
+    if (
+      expectedVersion !== undefined &&
+      (!Number.isSafeInteger(expectedVersion) ||
+        expectedVersion < 0 ||
+        expectedVersion !== this.queueVersion)
+    )
+      throw Error('queued messages changed; reopen the message to edit');
+    const queue = mode === 'steer' ? this.steering : this.followUps;
+    if (
+      !Number.isSafeInteger(index) ||
+      index < 0 ||
+      queue[index] !== expectedText
+    )
+      throw Error('queued message changed');
+    if (typeof updatedText !== 'string' || !updatedText.trim())
+      throw Error('queued message cannot be empty');
+    const previous = this.shown.get(expectedText);
+    const reference = /\[(?:Pasted text|Image|PDF) #(\d+)(?: \+\d+ lines)?\]/g;
+    const message = updatedText.replace(
+      reference,
+      (match, id: string) => previous?.pastes?.[id] ?? match,
+    );
+    let display = updatedText;
+    for (const match of (previous?.display ?? '').matchAll(reference)) {
+      const content = previous?.pastes?.[match[1]!];
+      if (content) display = display.replaceAll(content, match[0]);
+    }
+    const pastes = Object.fromEntries(
+      [...display.matchAll(reference)].flatMap((match) => {
+        const content = previous?.pastes?.[match[1]!];
+        return content === undefined ? [] : [[match[1]!, content]];
+      }),
+    );
+    const shown = {
+      display,
+      ...(Object.keys(pastes).length ? { pastes } : {}),
+      ...(previous?.attachments
+        ? { attachments: structuredClone(previous.attachments) }
+        : {}),
+    };
+    const existing = this.shown.get(message);
+    if (
+      message !== expectedText &&
+      existing &&
+      [...this.steering, ...this.followUps].includes(message) &&
+      JSON.stringify(existing) !== JSON.stringify(shown)
+    )
+      throw Error(
+        'queued message already has different attachments or folded text',
+      );
+    queue[index] = message;
+    this.queueVersion++;
+    this.shown.set(message, shown);
+    if (![...this.steering, ...this.followUps].includes(expectedText))
+      this.shown.delete(expectedText);
+    return message;
   }
   /** The waiting messages as the input box showed them (long pastes and images folded). */
   get queuedShown(): { steering: string[]; followUp: string[] } {
@@ -173,14 +247,18 @@ export class Harness {
    * (the last follow-up, else the last steering message), or `all` of them in list order.
    */
   takeBack(all = false): QueuedMessage[] {
+    const presentations = new Map(this.shown);
     const taken = all
       ? [...this.steering.splice(0), ...this.followUps.splice(0)]
       : this.followUps.length
         ? this.followUps.splice(-1)
         : this.steering.splice(-1);
+    this.queueVersion++;
+    for (const message of taken)
+      if (![...this.steering, ...this.followUps].includes(message))
+        this.shown.delete(message);
     return taken.map((message) => {
-      const shown = this.shown.get(message);
-      this.shown.delete(message);
+      const shown = presentations.get(message);
       return {
         message,
         display: shown?.display ?? message,
@@ -200,6 +278,7 @@ export class Harness {
     return true;
   }
   clearQueue(): { steering: string[]; followUp: string[] } {
+    this.queueVersion++;
     const result = {
       steering: this.steering.splice(0),
       followUp: this.followUps.splice(0),
@@ -211,6 +290,7 @@ export class Harness {
   // Stop the turn. `keepQueue`, as esc in 0.5.0: the messages it had not read yet stay, each
   // to be sent as a turn of its own (the steering ones first), and nothing starts them here.
   async cancel(options: { keepQueue?: boolean } = {}): Promise<void> {
+    this.queueVersion++;
     if (options.keepQueue) this.followUps.unshift(...this.steering.splice(0));
     else {
       this.followUps = [];
@@ -265,12 +345,18 @@ export class Harness {
   }
   private shownAs(prompt: string): Pick<Message, 'display' | 'pastes'> {
     const shown = this.shown.get(prompt);
-    this.shown.delete(prompt);
+    if (![...this.steering, ...this.followUps].includes(prompt))
+      this.shown.delete(prompt);
     if (!shown) return { display: prompt };
     return {
       display: shown.display,
       ...(shown.pastes ? { pastes: shown.pastes } : {}),
     };
+  }
+  private shiftQueued(mode: 'steer' | 'followUp'): string | undefined {
+    const message = (mode === 'steer' ? this.steering : this.followUps).shift();
+    if (message !== undefined) this.queueVersion++;
+    return message;
   }
   // `display` is what the conversation shows for the prompt when it differs from the text
   // the model gets (`circle "question" @file`).
@@ -312,8 +398,8 @@ export class Harness {
       this.options.beforeTurn?.();
       signal.throwIfAborted();
       const next = first
-        ? (prompt ?? this.steering.shift() ?? this.followUps.shift())
-        : this.followUps.shift();
+        ? (prompt ?? this.shiftQueued('steer') ?? this.shiftQueued('followUp'))
+        : this.shiftQueued('followUp');
       const result = await this.runTurn(next, signal);
       answer = result.answer;
       addUsage(total, result.usage);
@@ -360,6 +446,7 @@ export class Harness {
         // One at a time, each left waiting until it is stored: one that fails, or is taken
         // back while its files are read, does not take the others with it
         while (this.steering.length) {
+          const version = this.queueVersion;
           const message = this.steering[0]!;
           const content = await this.attach(
             message,
@@ -367,9 +454,10 @@ export class Harness {
             signal,
             this.shown.get(message)?.attachments,
           );
-          const at = this.steering.indexOf(message);
-          if (at < 0) continue;
-          this.steering.splice(at, 1);
+          if (version !== this.queueVersion || this.steering[0] !== message)
+            continue;
+          this.steering.shift();
+          this.queueVersion++;
           this.save({
             id: randomUUID(),
             role: 'user',
@@ -542,6 +630,15 @@ export class Harness {
         call.name,
         call.args,
       );
+      const preparedRun = tool.prepare
+        ? await tool.prepare(resolved, {
+            signal,
+            sessionId: this.sessionId,
+            callId: call.id,
+            imageInput: this.model.imageInput,
+          })
+        : undefined;
+      signal.throwIfAborted();
       if (
         !settingsAllowed &&
         tool.effect !== 'read' &&
@@ -622,7 +719,7 @@ export class Harness {
             !this.options.planFileMutation?.(call)
           )
             throw new Error('read-only mode: this tool cannot run');
-          return tool.run(args, context);
+          return (preparedRun ?? tool.run)(args, context);
         },
       };
       content = this.options.toolBoundary

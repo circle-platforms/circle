@@ -61,6 +61,11 @@ export interface Tool {
     args: Record<string, unknown>,
     sessionId: string,
   ) => Record<string, unknown> | undefined;
+  /** Snapshot authorized inputs before waiting for approval; never perform writes here. */
+  prepare?: (
+    args: Record<string, unknown>,
+    context: ToolContext,
+  ) => Promise<Tool['run']>;
   run(args: Record<string, unknown>, context: ToolContext): Promise<string>;
 }
 export interface ToolContext {

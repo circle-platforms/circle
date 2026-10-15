@@ -48,7 +48,6 @@ import {
 import {
   discoverCustomCommands,
   substituteArguments,
-  splitArguments,
 } from '../../../src/commands.js';
 import { loadSkillBody } from '../../../src/skills.js';
 import { attachmentFromBase64, MAX_MEDIA_BYTES } from '../../../src/media.js';
@@ -87,6 +86,22 @@ import { formatCosts } from '../../../src/pricing.js';
 import { TurnStatus } from '../../../src/tui/turn_status.js';
 import { currentNetworkStatus } from '../../../src/net.js';
 import { SessionMetadata } from './session-metadata';
+import { WorkspaceServices } from './workspace/workspace-services';
+import { OperationLedger } from './workspace/operation-ledger';
+import { TaskService } from './workspace/task-service';
+import { createTaskVerifier } from './workspace/task-verification';
+import { CollaborationResources } from './workspace/collaboration';
+import { createCollaborationTools } from './workspace/collaboration-tools';
+import type { TaskRecord } from './workspace/task-store';
+import type { FileMutations } from '../../../src/file_mutations.js';
+import { wrapModelCompletion } from '../../../src/model_wrapper.js';
+import type { RuntimeCredentialStore } from './runtime-private-channel';
+import {
+  validateWorkspaceRequest,
+  type WorkspaceServiceEvent,
+  type WorkspaceServiceRequest,
+} from './workspace-protocol';
+import { formatMcpArguments, parseMcpArguments } from './mcp-arguments';
 import { PlanCompletionTracker } from '../../../src/plan_state.js';
 import { nextAgentActivity } from '../../../src/session_activity.js';
 import { formatElapsed, type TurnUsage } from '../../../src/tui/status_rows.js';
@@ -121,6 +136,7 @@ import {
   type RuntimeCommand,
   type RuntimeReply,
   type RuntimeUpdate,
+  type RuntimeTokenDelta,
 } from './runtime-protocol';
 
 const identity = (path: string) =>
@@ -203,6 +219,15 @@ interface Streaming {
 }
 export interface ControllerOptions {
   home: string;
+  emitWorkspaceEvent?: (event: WorkspaceServiceEvent) => void;
+  emitTokenDelta?: (delta: RuntimeTokenDelta) => void;
+  credentialStore?: RuntimeCredentialStore;
+  workspaceTools?: {
+    nodeExecutable: string;
+    runtimeExecutable: string;
+    adapterPath: string;
+    ghPath: string;
+  };
   /** The application's data folder, which holds home beside the updates and Chromium's
    * own files: the default workspace may not be in it. Home when not given. */
   dataFolder?: string;
@@ -248,6 +273,8 @@ export class RuntimeController {
   private pendingTrustReloads = new Set<AgentRuntime>();
   private previous: string | null = null;
   private sequence = 0;
+  private tokenEpoch = randomUUID();
+  private tokenSequence = 0;
   private pending = new Map<string, Pending>();
   private history: Interaction[] = [];
   private streams = new Map<string, Streaming>();
@@ -280,6 +307,25 @@ export class RuntimeController {
   private closing = false;
   private closePromise?: Promise<void>;
   private mutation = Promise.resolve();
+  private workspaceServices = new Map<string, WorkspaceServices>();
+  private taskServices = new Map<string, TaskService>();
+  private taskResources = new CollaborationResources();
+  private taskVerifiers = new Map<
+    string,
+    ReturnType<typeof createTaskVerifier>
+  >();
+  private taskWorkspaces = new Map<string, string>();
+  private workspaceRoots = new Map<
+    string,
+    { canonical: string; dev: number; ino: number }
+  >();
+  private taskRuntimes = new Map<string, AgentRuntime>();
+  private workspaceEventPending = new Set<Promise<unknown>>();
+  private workspaceStreamFailures = new Map<string, string>();
+  private workspaceEpoch = randomUUID();
+  private workspaceSeq = 0;
+  private stoppedJobs = new Set<string>();
+  private operationLedger?: Promise<OperationLedger>;
   private accepted = new Map<
     string,
     { signature: string; reply: Promise<RuntimeReply> }
@@ -311,6 +357,13 @@ export class RuntimeController {
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
     this.metadata = new SessionMetadata(this.home);
     this.store = new CheckpointStore(this.home);
+    for (const session of this.store.list(undefined, true)) {
+      try {
+        this.bindWorkspace(session.workspace);
+      } catch {
+        /* Deleted histories require explicitly reopening an existing folder. */
+      }
+    }
     const saved = this.savedLocation();
     const settings = loadSettings(this.home);
     const workspace =
@@ -481,53 +534,536 @@ export class RuntimeController {
       });
     }
   }
-  private createRuntime(workspace: string, sessionId?: string): AgentRuntime {
+  private async releaseSessionResources(
+    sessionId: string,
+    workspace: string,
+  ): Promise<void> {
+    const owned = new Map<string, string>();
+    owned.set(sessionId, workspace);
+    for (const service of this.taskServices.values())
+      for (const child of service.ownedRuntimeSessions(sessionId))
+        owned.set(child.sessionId, child.worktree ?? workspace);
+    const results = await Promise.allSettled(
+      [...this.taskServices.values()].map((service) =>
+        service.cancelSession(sessionId),
+      ),
+    );
+    const errors = results
+      .filter((result) => result.status === 'rejected')
+      .map((result) => result.reason);
+    if (errors.length)
+      throw new AggregateError(errors, 'session task cleanup failed');
+    for (const [id, root] of owned) {
+      await this.workspaceServices
+        .get(this.workspaceRoots.get(root)?.canonical ?? root)
+        ?.releaseSession(id);
+      if (id !== sessionId) await this.options.beforeDelete?.(id);
+    }
+  }
+
+  private async nativeSessionActive(
+    sessionId: string,
+    workspace: string,
+  ): Promise<boolean> {
+    return (
+      [...this.taskServices.values()].some((service) =>
+        service.hasActiveSession(sessionId),
+      ) ||
+      (await this.workspaceServices
+        .get(workspace)
+        ?.hasActiveSession(sessionId)) === true
+    );
+  }
+  private workspaceEvent(
+    workspace: string,
+    event: WorkspaceServiceEvent,
+  ): void {
+    if (this.workspaceStreamFailures.has(workspace)) return;
+    const failure = (error: unknown) => this.workspaceFailure(workspace, error);
+    try {
+      const pending = this.services(workspace).publishSource(event);
+      this.workspaceEventPending.add(pending);
+      void pending
+        .catch(failure)
+        .finally(() => this.workspaceEventPending.delete(pending));
+    } catch (error) {
+      failure(error);
+    }
+  }
+
+  private workspaceFailure(workspace: string, error: unknown): void {
+    if (this.workspaceStreamFailures.has(workspace)) return;
+    const message = `workspace event persistence failed: ${String(error)}`;
+    this.workspaceStreamFailures.set(workspace, message);
+    this.error = message;
+    const origin = this.taskWorkspaces.get(workspace) ?? workspace;
+    void this.taskServices
+      .get(origin)
+      ?.close()
+      .catch(() => {});
+    for (const runtime of [
+      ...this.runtimes.values(),
+      ...this.taskRuntimes.values(),
+    ])
+      if (
+        (this.taskWorkspaces.get(runtime.options.workspace) ??
+          runtime.options.workspace) === origin
+      )
+        void runtime.cancel({ keepQueue: false }).catch(() => {});
+    if (!this.closing) this.publish();
+  }
+  private bindWorkspace(workspace: string): void {
+    const canonical = realpathSync(workspace);
+    const directory = statSync(canonical);
+    if (!directory.isDirectory()) throw Error('workspace must be a directory');
+    const previous = this.workspaceRoots.get(workspace);
+    if (
+      previous &&
+      (previous.canonical !== canonical ||
+        previous.dev !== directory.dev ||
+        previous.ino !== directory.ino)
+    )
+      throw Error('workspace root changed; reopen and authorize the folder');
+    if (!previous)
+      this.workspaceRoots.set(workspace, {
+        canonical,
+        dev: directory.dev,
+        ino: directory.ino,
+      });
+  }
+  private workspaceRoot(workspace: string): string {
+    const bound = this.workspaceRoots.get(workspace);
+    if (!bound)
+      throw Error('workspace authorization is missing; reopen the folder');
+    const canonical = realpathSync(workspace);
+    const directory = statSync(canonical);
+    if (
+      canonical !== bound.canonical ||
+      directory.dev !== bound.dev ||
+      directory.ino !== bound.ino
+    )
+      throw Error('workspace root changed; reopen and authorize the folder');
+    return bound.canonical;
+  }
+  private trustedWorkspace(workspace: string): string {
+    const canonical = this.workspaceRoot(workspace);
+    const origin = this.taskWorkspaces.get(canonical) ?? canonical;
+    if (origin !== canonical) this.trustedWorkspace(origin);
+    if (!isFolderTrusted(loadSettings(this.home), origin))
+      throw Error('trust this workspace first');
+    return canonical;
+  }
+  private validWorkspaceRoot(workspace: string): boolean {
+    try {
+      this.workspaceRoot(workspace);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  private services(workspace: string): WorkspaceServices {
+    const root = this.trustedWorkspace(workspace);
+    let services = this.workspaceServices.get(root);
+    if (!services) {
+      const tools = this.options.workspaceTools ?? {
+        nodeExecutable: process.execPath,
+        runtimeExecutable: process.execPath,
+        adapterPath: join(
+          this.home,
+          'tools',
+          'js-debug',
+          'src',
+          'dapDebugServer.js',
+        ),
+        ghPath: 'gh',
+      };
+      services = new WorkspaceServices({
+        workspaceRoot: root,
+        dataDir: join(
+          this.options.dataFolder ?? this.home,
+          'workspace-services',
+        ),
+        ...tools,
+        credentialStore: this.options.credentialStore
+          ? {
+              get: () => this.options.credentialStore!.get('github.com'),
+              put: (token) =>
+                this.options.credentialStore!.put('github.com', token),
+            }
+          : undefined,
+        workspaceId: identity(root),
+        credentialFiles: loadSettings(this.home).credential_files,
+        emit: (event) => this.options.emitWorkspaceEvent?.(event),
+        onPersistenceError: (error) => this.workspaceFailure(root, error),
+      });
+      this.workspaceServices.set(root, services);
+    }
+    services.setCredentialFiles(loadSettings(this.home).credential_files);
+    return services;
+  }
+  private fileMutations(workspace: string): FileMutations {
+    return {
+      read: async (path, signal) => {
+        const documents = this.services(workspace).documents;
+        const document = await documents.snapshot(
+          relative(documents.root, path),
+          { signal },
+        );
+        return {
+          path,
+          content: document?.content ?? null,
+          revision: document?.revision ?? null,
+        };
+      },
+      apply: async (changes, signal) => {
+        const documents = this.services(workspace).documents;
+        const result = await documents.applyChanges(
+          changes.map((change) => ({
+            ...change,
+            path: relative(documents.root, change.path),
+          })),
+          { signal },
+        );
+        if (result.status !== 'applied')
+          throw Object.assign(
+            Error(
+              result.failures.map((f) => `${f.path}: ${f.message}`).join('; '),
+            ),
+            { committedPaths: result.committedPaths },
+          );
+      },
+    };
+  }
+  private taskVerifier(
+    workspace: string,
+    baseline: string,
+  ): ReturnType<typeof createTaskVerifier> {
+    const root = this.trustedWorkspace(workspace);
+    const key = `${root}\0${baseline}`;
+    let verifier = this.taskVerifiers.get(key);
+    if (!verifier) {
+      verifier = createTaskVerifier({
+        workspace: root,
+        baseline,
+        dataDir: join(
+          this.options.dataFolder ?? this.home,
+          'verification',
+          identity(root),
+          baseline,
+        ),
+        runtimeExecutable:
+          this.options.workspaceTools?.runtimeExecutable ?? process.execPath,
+        withBuildResource: (run, _signal, context) =>
+          context.withResource('build', run),
+        createReviewer: (task, context) =>
+          this.createRuntime(context.worktree, undefined, task),
+      });
+      this.taskVerifiers.set(key, verifier);
+    }
+    return verifier;
+  }
+  private collaboration(
+    workspace: string,
+    ownerSessionId: string,
+  ): TaskService {
+    const granted = this.trustedWorkspace(workspace);
+    const root = this.taskWorkspaces.get(granted) ?? granted;
+    let service = this.taskServices.get(root);
+    if (!service) {
+      service = new TaskService({
+        workspace: root,
+        resources: this.taskResources,
+        settingsPath: join(
+          this.options.dataFolder ?? this.home,
+          'workspace-services',
+          'task-settings.json',
+        ),
+        dataDir: join(
+          this.options.dataFolder ?? this.home,
+          'collaboration',
+          identity(root),
+        ),
+        createRuntime: (task, context) => {
+          this.taskWorkspaces.set(realpathSync(context.worktree), root);
+          this.taskVerifier(root, task.spec.baseline);
+          return this.createRuntime(context.worktree, undefined, task);
+        },
+        verify: (task, context) =>
+          this.taskVerifier(root, task.spec.baseline)(task, context),
+        onRuntimeCreated: (task, runtime) => {
+          this.taskRuntimes.set(task.spec.id, runtime);
+          this.activeRuns.add(runtime.session.id);
+        },
+        onRuntimeClosed: (task, runtime) => {
+          this.taskRuntimes.delete(task.spec.id);
+          this.activeRuns.delete(runtime.session.id);
+          if (this.active === runtime) {
+            this.viewedSessionId = runtime.session.id;
+            const parent = task.spec.sessionId
+              ? this.runtimes.get(task.spec.sessionId)
+              : undefined;
+            this.active = parent ?? [...this.runtimes.values()][0] ?? runtime;
+          }
+        },
+        emit: (event) => {
+          const task = event.taskId
+            ? service?.getTask(event.taskId)
+            : undefined;
+          this.workspaceEvent(root, {
+            workspaceId: identity(root),
+            sessionId: task?.spec.sessionId ?? ownerSessionId,
+            service: 'tasks',
+            resourceId: event.taskId ?? 'collaboration',
+            epoch: event.epoch,
+            seq: event.seq,
+            at: new Date(event.createdAt).toISOString(),
+            data: { ...event },
+          });
+        },
+      });
+      this.taskServices.set(root, service);
+    }
+    return service;
+  }
+  private ledger(): Promise<OperationLedger> {
+    return (this.operationLedger ??= OperationLedger.open({
+      directory: join(
+        this.options.dataFolder ?? this.home,
+        'workspace-operations',
+      ),
+      redactError: (error) =>
+        (error as { code?: string })?.code === 'DOCUMENT_CONFLICT'
+          ? 'file changed on disk; reload and compare your draft before saving'
+          : 'operation failed; inspect effects before retrying',
+    }));
+  }
+  private async workspaceOperation(
+    command: RuntimeCommand,
+    workspace: string,
+    request: WorkspaceServiceRequest,
+    action: () => Promise<unknown>,
+  ): Promise<unknown> {
+    const reads: Record<string, string[]> = {
+      documents: ['read', 'refresh', 'resolveSource'],
+      terminal: ['list', 'replay'],
+      git: ['status', 'snapshot', 'diff', 'branches'],
+      debug: [
+        'snapshot',
+        'list',
+        'threads',
+        'stack',
+        'stackTrace',
+        'scopes',
+        'variables',
+        'setBreakpoints',
+        'breakpoints',
+        'pause',
+        'stop',
+      ],
+      tasks: ['list', 'events', 'artifacts', 'readArtifact'],
+      delivery: ['status', 'checks', 'logs'],
+    };
+    const read =
+      request.service === 'language' ||
+      request.service === 'events' ||
+      reads[request.service]?.includes(request.method) ||
+      (request.service === 'tasks' &&
+        request.method === 'settings' &&
+        request.params?.limits === undefined) ||
+      (request.service === 'delivery' &&
+        request.method === 'login' &&
+        request.params?.action === 'poll');
+    if (read) return action();
+    const paramsHash = createHash('sha256')
+      .update(
+        JSON.stringify({
+          workspace,
+          grant: this.workspaceRoots.get(workspace),
+          params: request.params ?? {},
+        }),
+      )
+      .digest('hex');
+    return (await this.ledger()).run(
+      {
+        id: command.id,
+        sessionId: command.sessionId!,
+        service: request.service,
+        method: request.method,
+        paramsHash,
+      },
+      action,
+    );
+  }
+  private async workspaceCommand(command: RuntimeCommand): Promise<unknown> {
+    this.metadata.refresh();
+    const id = text(command.sessionId, 'session', 200);
+    const row = this.store.get(id);
+    if (!row) throw Error('session not found');
+    if (this.runtimes.lifecycle(id) !== 'open')
+      throw Error('session is deleting or deleted');
+    const request = validateWorkspaceRequest(command.payload);
+    const emergency =
+      (request.service === 'terminal' &&
+        ['signal', 'close'].includes(request.method)) ||
+      (request.service === 'debug' && request.method === 'stop') ||
+      (request.service === 'delivery' &&
+        request.method === 'login' &&
+        request.params?.action === 'cancel');
+    if (emergency) {
+      const existing = this.workspaceServices.get(row.workspace);
+      if (!existing)
+        throw Error('no native resources are owned by this session');
+      return this.workspaceOperation(command, row.workspace, request, () =>
+        existing.call(id, request.service, request.method, request.params),
+      );
+    }
+    if (request.service === 'tasks' && request.method === 'cancel') {
+      const origin = this.taskWorkspaces.get(row.workspace) ?? row.workspace;
+      const existing = this.taskServices.get(origin);
+      if (existing)
+        return this.workspaceOperation(command, row.workspace, request, () =>
+          existing.call(id, request.method, request.params),
+        );
+    }
+    const workspace = this.trustedWorkspace(row.workspace);
+    if (request.service === 'operations') {
+      const ledger = await this.ledger();
+      if (request.method === 'list')
+        return ledger.list({ ...request.params, sessionId: id });
+      const operationId = text(request.params?.id, 'operation', 200);
+      let before: number | undefined;
+      let found = false;
+      do {
+        const page = ledger.list({ sessionId: id, limit: 500, before });
+        found = page.some((operation) => operation.id === operationId);
+        if (found || page.length < 500) break;
+        before = page[page.length - 1].cursor;
+      } while (true);
+      if (!found) throw Error('operation is not owned by this session');
+      return ledger.acknowledgeUnknown(operationId, {
+        note: text(request.params?.note, 'review note', 4096),
+      });
+    }
+    if (request.service === 'events')
+      return this.services(workspace).replay(
+        request.params?.after as { offset: number; seq: number } | undefined,
+        request.params?.limit as number | undefined,
+      );
+    if (this.metadata.archivedAt(id))
+      throw Error('restore this session before continuing');
+    if (request.service === 'tasks')
+      return this.workspaceOperation(command, workspace, request, () =>
+        this.collaboration(workspace, id).call(
+          id,
+          request.method,
+          request.params,
+        ),
+      );
+    return this.workspaceOperation(command, workspace, request, () =>
+      this.services(workspace).call(
+        id,
+        request.service,
+        request.method,
+        request.params,
+      ),
+    );
+  }
+  private createRuntime(
+    workspace: string,
+    sessionId?: string,
+    task?: TaskRecord,
+  ): AgentRuntime {
+    this.bindWorkspace(workspace);
     const settings = settingsForRun(this.home, workspace).settings;
     const create = (session?: string) =>
       new AgentRuntime({
         workspace,
+        fileMutations: this.fileMutations(workspace),
+        wrapModel: (model) =>
+          wrapModelCompletion(model, (request, invoke) =>
+            this.taskResources.withResource(
+              'agent',
+              () => invoke(request),
+              request.signal,
+            ),
+          ),
         home: this.home,
-        beforeDelete: () =>
-          this.options.beforeDelete?.(runtime.session.id) ?? Promise.resolve(),
+        beforeDelete: async () => {
+          await this.releaseSessionResources(runtime.session.id, workspace);
+          await this.options.beforeDelete?.(runtime.session.id);
+        },
         userHome: this.options.userHome,
-        localContext: isFolderTrusted(settings, workspace),
+        localContext: !!task || isFolderTrusted(settings, workspace),
         settings,
         model:
           this.options.model ??
           (isReady(settings) ? undefined : new DisconnectedModel()),
         catalog: this.options.catalog?.(this.home),
         session,
-        extraTools: this.options.browser
-          ? browserTools(this.options.browser, {
-              confirm: (_sessionId, approval, signal, callId) =>
-                approval.kind === 'upload'
-                  ? this.confirmUpload(runtime, approval, signal, callId)
-                  : approval.kind === 'download'
-                    ? this.confirmDownload(runtime, approval, signal, callId)
-                    : approval.kind === 'coordinate'
-                      ? this.confirmCoordinate(
-                          runtime,
-                          approval,
-                          signal,
-                          callId,
-                        )
-                      : this.confirmCertificate(
-                          runtime,
-                          approval,
-                          signal,
-                          callId,
-                        ),
-              // Paths as the file tools take them (a credential file never goes), the
-              // conversation to record and the values a replayed script takes
-              ...runtimeBrowserOptions(() => runtime),
-            })
-          : undefined,
+        extraTools: [
+          ...(!task
+            ? createCollaborationTools({
+                sessionId: () => runtime.session.id,
+                service: () =>
+                  this.collaboration(
+                    runtime.options.workspace,
+                    runtime.session.id,
+                  ),
+              })
+            : []),
+          ...(this.options.browser
+            ? browserTools(this.options.browser, {
+                confirm: (_sessionId, approval, signal, callId) =>
+                  approval.kind === 'upload'
+                    ? this.confirmUpload(runtime, approval, signal, callId)
+                    : approval.kind === 'download'
+                      ? this.confirmDownload(runtime, approval, signal, callId)
+                      : approval.kind === 'coordinate'
+                        ? this.confirmCoordinate(
+                            runtime,
+                            approval,
+                            signal,
+                            callId,
+                          )
+                        : this.confirmCertificate(
+                            runtime,
+                            approval,
+                            signal,
+                            callId,
+                          ),
+                // Paths as the file tools take them (a credential file never goes), the
+                // conversation to record and the values a replayed script takes
+                ...runtimeBrowserOptions(() => runtime),
+              })
+            : []),
+        ],
         approve: (call, signal, origin) =>
-          this.approve(runtime, call, signal, origin),
+          this.approve(
+            runtime,
+            call,
+            signal,
+            task
+              ? { ...origin, name: task.spec.id, agent: runtime.session.id }
+              : origin,
+          ),
         question: (args, signal, origin) =>
-          this.question(runtime, args, signal, origin),
+          this.question(
+            runtime,
+            args,
+            signal,
+            task
+              ? { ...origin, name: task.spec.id, agent: runtime.session.id }
+              : origin,
+          ),
         secret: (request, signal, origin) =>
-          this.secret(runtime, request, signal, origin),
+          this.secret(
+            runtime,
+            request,
+            signal,
+            task
+              ? { ...origin, name: task.spec.id, agent: runtime.session.id }
+              : origin,
+          ),
         onExtensionStatus: () => this.publish(),
         openUrl: async (url) => {
           this.openRequest = {
@@ -548,7 +1084,36 @@ export class RuntimeController {
         runtime = create();
       else throw error;
     }
-    runtime.bus.subscribe((event) => this.event(runtime, event));
+    runtime.bus.subscribe((event) => {
+      if (task) {
+        this.event(
+          runtime,
+          event,
+          this.selectedSessionId === runtime.session.id,
+        );
+        const eventRoot =
+          this.taskWorkspaces.get(realpathSync(workspace)) ?? workspace;
+        this.workspaceEvent(eventRoot, {
+          workspaceId: identity(eventRoot),
+          sessionId: task.spec.sessionId ?? runtime.session.id,
+          service: 'tasks',
+          resourceId: task.spec.id,
+          epoch: this.workspaceEpoch,
+          seq: ++this.workspaceSeq,
+          at: new Date().toISOString(),
+          data: {
+            kind: 'runtime-event',
+            taskId: task.spec.id,
+            attempt: task.attempt,
+            event: JSON.parse(
+              JSON.stringify(event, (_key, value) =>
+                typeof value === 'string' ? runtime.redact(value) : value,
+              ),
+            ),
+          },
+        });
+      } else this.event(runtime, event);
+    });
     const tracker = new PlanCompletionTracker();
     tracker.reset(runtime.todos);
     this.planCompletions.set(runtime.session.id, tracker);
@@ -577,6 +1142,13 @@ export class RuntimeController {
             ...call,
             id: node.id,
             parentId: node.parent,
+            attachments: raw.attachments?.map((a, index) => ({
+              id: `${node.id}-attachment-${index}`,
+              name: a.filename,
+              kind: a.kind,
+              content: a.data,
+              mime: a.mime_type,
+            })),
             tool: {
               ...call.tool,
               output: raw.content,
@@ -713,7 +1285,11 @@ export class RuntimeController {
       ]),
     ];
     const sessions: Session[] = rows.map((row) => {
-      const owner = this.runtimes.get(row.id);
+      const owner =
+        this.runtimes.get(row.id) ??
+        [...this.taskRuntimes.values()].find(
+          (task) => task.session.id === row.id,
+        );
       const selected = owner?.session.id === row.id;
       const queue = selected
         ? owner.harness.queuedMessages
@@ -757,6 +1333,7 @@ export class RuntimeController {
         branchIds,
         hiddenIds: [],
         undoStack: [],
+        queueVersion: owner?.harness.queuedVersion,
         queue: [
           ...queue.steering.map((value, i) => ({
             id: `steer-${i}`,
@@ -823,16 +1400,32 @@ export class RuntimeController {
         observedAt: new Date().toISOString(),
         configured: !!this.options.model || isReady(settings),
         hasKey: (this.keySaved ??= Boolean(this.savedKey())),
-        error: this.error,
+        error: this.error ?? this.workspaceStreamFailures.values().next().value,
       },
       workspaces: paths.map((path) => ({
         id: identity(path),
         name: path === join(this.home, 'workspace') ? 'circle' : basename(path),
         path,
-        branch: this.branch(path),
-        trusted: isFolderTrusted(savedSettings, path),
+        branch: this.validWorkspaceRoot(path) ? this.branch(path) : '',
+        trusted:
+          this.validWorkspaceRoot(path) &&
+          isFolderTrusted(savedSettings, this.taskWorkspaces.get(path) ?? path),
         origin: 'native',
-        instructions: [],
+        instructions:
+          !inspecting &&
+          this.validWorkspaceRoot(path) &&
+          isFolderTrusted(savedSettings, this.taskWorkspaces.get(path) ?? path)
+            ? ((runtime.options.workspace === path
+                ? runtime
+                : [...this.runtimes.values()].find(
+                    (owner) => owner.options.workspace === path,
+                  )
+              )?.loadedInstructions.map((file) => ({
+                name: file.path,
+                path: file.path,
+                content: file.content,
+              })) ?? [])
+            : [],
       })),
       sessions,
       files: [],
@@ -867,14 +1460,18 @@ export class RuntimeController {
           title: job.title,
           state:
             job.status === 'running'
-              ? ('running' as const)
+              ? this.stoppedJobs.has(`${job.sessionId}:${job.id}`)
+                ? ('stopping' as const)
+                : ('running' as const)
               : job.status === 'done'
                 ? ('completed' as const)
-                : ('failed' as const),
+                : job.status === 'stopped'
+                  ? ('cancelled' as const)
+                  : ('failed' as const),
           elapsed: elapsed(job),
           output: existsSync(job.outputPath) ? outputTail(job.outputPath) : '',
           outputPath: job.virtualPath,
-          stopRequested: false,
+          stopRequested: this.stoppedJobs.has(`${job.sessionId}:${job.id}`),
         })),
       ),
       interactions: [
@@ -948,9 +1545,7 @@ export class RuntimeController {
           name: String(spec.name ?? `server ${i + 1}`),
           transport: String(spec.transport ?? 'stdio') as 'stdio',
           command: String(spec.command ?? ''),
-          args: Array.isArray(spec.args)
-            ? spec.args.map((arg) => JSON.stringify(arg)).join(' ')
-            : '',
+          args: Array.isArray(spec.args) ? formatMcpArguments(spec.args) : '',
           url: String(spec.url ?? ''),
           enabled: spec.enabled !== false,
           status: pendingReload
@@ -1166,10 +1761,15 @@ export class RuntimeController {
       seq: ++this.sequence,
       connected: true,
       snapshot: this.snapshot(),
+      tokenStream: { epoch: this.tokenEpoch, seq: this.tokenSequence },
       event,
     });
   }
-  private event(runtime: AgentRuntime, event: CircleEvent) {
+  private event(
+    runtime: AgentRuntime,
+    event: CircleEvent,
+    publishSnapshot = true,
+  ) {
     if (runtime.isClosing) return;
     if (
       ['run_end', 'run_error'].includes(event.kind) &&
@@ -1300,6 +1900,30 @@ export class RuntimeController {
       });
     }
     // The bus is observation only. Enforcement remains inside Harness and awaited callbacks.
+    if (
+      publishSnapshot &&
+      event.kind === 'llm_token' &&
+      this.options.emitTokenDelta
+    ) {
+      const stream = this.streams.get(id);
+      if (stream) {
+        const chunk = String(event.payload.text ?? '');
+        this.options.emitTokenDelta({
+          epoch: this.tokenEpoch,
+          seq: ++this.tokenSequence,
+          baseSeq: this.sequence,
+          sessionId: id,
+          streamId: stream.id,
+          parentId: this.store.get(id)?.head ?? null,
+          text: event.payload.thinking ? undefined : chunk,
+          thinking: event.payload.thinking ? chunk : undefined,
+          at: event.ts,
+          turn: this.turn(id),
+        });
+        return;
+      }
+    }
+    if (!publishSnapshot) return;
     this.publish({
       kind: event.kind,
       sessionId: id,
@@ -1664,11 +2288,13 @@ export class RuntimeController {
             'archive-session',
             'answer',
             'stop-job',
+            'workspace-service',
           ].includes(command.name)
         )
           throw Error('session changed; retry from the current session');
         const data = await this.execute(command);
-        if (!this.closing) this.publish();
+        if (!this.closing && command.name !== 'workspace-service')
+          this.publish();
         return { id: command.id, ok: true, data };
       } catch (error) {
         return {
@@ -1688,6 +2314,8 @@ export class RuntimeController {
       'background',
       'stop-job',
       'delete-session',
+      'workspace-service',
+      'select-session',
     ].includes(command.name);
     const result = immediate ? operation() : this.mutation.then(operation);
     if (!immediate) this.mutation = result.then(() => {});
@@ -1698,12 +2326,22 @@ export class RuntimeController {
     }
     return result;
   }
-  private assertArchivable(
+  private async assertArchivable(
     id: string,
     workspace: string,
     action = 'archiving',
-  ): void {
+  ): Promise<void> {
     const owner = this.runtimes.get(id);
+    if (await this.nativeSessionActive(id, workspace))
+      throw Error(
+        `stop this session's native resources and tasks before ${action} it`,
+      );
+    if (
+      [...this.taskServices.values()].some((service) =>
+        service.hasActiveSession(id),
+      )
+    )
+      throw Error(`stop this session's tasks before ${action} it`);
     if (
       (!owner && sessionOccupied(this.home, id)) ||
       (owner?.session.id === id &&
@@ -1719,10 +2357,37 @@ export class RuntimeController {
     this.planCompletions.set(runtime.session.id, tracker);
   }
   private async execute(command: RuntimeCommand): Promise<unknown> {
+    if (command.name === 'workspace-service')
+      return this.workspaceCommand(command);
     this.metadata.refresh();
     this.synchronizeSharedSettings(loadSettings(this.home));
     const p = command.payload;
     let runtime = this.active;
+    const navigation = [
+      'state',
+      'close',
+      'abort',
+      'answer',
+      'select-session',
+      'new-session',
+      'open-workspace',
+      'set-default-workspace',
+      'delete-session',
+      'archive-session',
+      'archive-workspace',
+      'rename-session',
+      'stop-job',
+      'save-settings',
+      'trust',
+      'export',
+    ];
+    if (!navigation.includes(command.name)) {
+      this.workspaceRoot(runtime.options.workspace);
+      const viewed = this.viewedSessionId
+        ? this.store.get(this.viewedSessionId)
+        : undefined;
+      if (viewed) this.workspaceRoot(viewed.workspace);
+    }
     if (
       this.viewedSessionId &&
       ![
@@ -1747,6 +2412,7 @@ export class RuntimeController {
       if (!row) throw Error('session not found');
       // This acquires a lease only after the previous writer released it. A live
       // foreign writer rejects the action without touching the selected history.
+      this.workspaceRoot(row.workspace);
       runtime = this.runtimes.open(row.workspace, row.id);
       this.active = runtime;
       this.viewedSessionId = undefined;
@@ -1860,9 +2526,26 @@ export class RuntimeController {
           text(p.text, 'queued message'),
         );
       }
+      case 'edit-queued': {
+        if (
+          !Number.isSafeInteger(p.expectedQueueVersion) ||
+          Number(p.expectedQueueVersion) < 0
+        )
+          throw Error('queued message revision is required');
+        if (!['steering', 'follow-up'].includes(String(p.kind)))
+          throw Error('invalid queue kind');
+        return runtime.harness.editQueued(
+          p.kind === 'steering' ? 'steer' : 'followUp',
+          Number(p.index),
+          text(p.text, 'queued message'),
+          text(p.updatedText, 'updated message'),
+          Number(p.expectedQueueVersion),
+        );
+      }
       case 'background':
         return runtime.jobs.backgroundForeground();
       case 'new-session': {
+        this.workspaceRoot(this.selectedWorkspace);
         const owner = this.runtimes.create(this.selectedWorkspace);
         this.selectRuntime(owner);
         return { sessionId: owner.session.id };
@@ -1870,6 +2553,13 @@ export class RuntimeController {
       case 'select-session': {
         const id = text(p.id, 'session', 200);
         const row = this.store.get(id);
+        const taskRuntime = [...this.taskRuntimes.values()].find(
+          (task) => task.session.id === id,
+        );
+        if (taskRuntime && !taskRuntime.isClosing) {
+          this.selectRuntime(taskRuntime);
+          return { sessionId: id };
+        }
         if (!row || row.parent_id) throw Error('session not found');
         if (id === this.selectedSessionId && !this.viewedSessionId)
           return { sessionId: id };
@@ -1890,6 +2580,15 @@ export class RuntimeController {
         const id = text(p.id, 'session', 200);
         const row = this.store.get(id);
         if (!row || row.parent_id) throw Error('session not found');
+        const taskRuntime = [...this.taskRuntimes.values()].find(
+          (runtime) => runtime.session.id === id,
+        );
+        if (taskRuntime) {
+          if (p.confirmed !== true)
+            throw Error('confirm stopping this task before deleting it');
+          await this.releaseSessionResources(id, row.workspace);
+        }
+        if (!this.runtimes.get(id)) this.workspaceRoot(row.workspace);
         const owner =
           this.runtimes.get(id) ?? this.runtimes.open(row.workspace, id);
         const owned = new Set([id]);
@@ -1909,7 +2608,8 @@ export class RuntimeController {
         }
         if (
           p.confirmed !== true &&
-          (owner.busy ||
+          ((await this.nativeSessionActive(id, row.workspace)) ||
+            owner.busy ||
             owner.jobs.list().some((job) => job.status === 'running') ||
             [...this.pending.values()].some((pending) =>
               owned.has(pending.row.sessionId),
@@ -1969,7 +2669,7 @@ export class RuntimeController {
         const row = this.store.get(id);
         if (!row || row.parent_id) throw Error('session not found');
         const archive = flag(p.archived);
-        if (archive) this.assertArchivable(id, row.workspace);
+        if (archive) await this.assertArchivable(id, row.workspace);
         this.metadata.set([id], archive);
         return { sessionId: id, archivedAt: this.metadata.archivedAt(id) };
       }
@@ -1979,7 +2679,8 @@ export class RuntimeController {
           .list()
           .filter((row) => identity(row.workspace) === workspaceId);
         if (!rows.length) throw Error('workspace not found');
-        for (const row of rows) this.assertArchivable(row.id, row.workspace);
+        for (const row of rows)
+          await this.assertArchivable(row.id, row.workspace);
         this.metadata.set(
           rows.map((row) => row.id),
           true,
@@ -2298,7 +2999,7 @@ export class RuntimeController {
                 name: text(row.name, 'server name', 100),
                 transport,
                 command: text(row.command ?? '', 'command', 4000),
-                args: splitArguments(text(row.args ?? '', 'args', 4000)),
+                args: parseMcpArguments(text(row.args ?? '', 'args', 4000)),
                 url: text(row.url ?? '', 'url', 4000),
                 enabled: flag(row.enabled),
               };
@@ -2438,7 +3139,14 @@ export class RuntimeController {
             `${command.sessionId}:${jobId}` === id,
         );
         if (!owner) throw Error('job not found in this session');
-        await owner.jobs.stop(jobId, 'user');
+        this.stoppedJobs.add(id);
+        this.publish();
+        try {
+          await owner.jobs.stop(jobId, 'user');
+        } catch (error) {
+          this.stoppedJobs.delete(id);
+          throw error;
+        }
         return {};
       }
       case 'revoke-approval': {
@@ -2620,31 +3328,22 @@ export class RuntimeController {
           !isFolderTrusted(runtime.options.settings, runtime.options.workspace)
         )
           throw Error('trust this workspace first');
-        if (runtime.busy) throw Error('finish the current turn before saving');
         const path = text(p.path, 'path', 8000);
         const target = runtime.sandbox.resolvePath(path);
-        const rel = relative(runtime.options.workspace, target);
-        if (
-          !rel ||
-          rel === '..' ||
-          rel.startsWith('../') ||
-          rel.startsWith('..\\') ||
-          isAbsolute(rel)
-        )
-          throw Error('file must be inside this workspace');
-        if (runtime.harness.planMode && basename(target) !== 'plan.md')
-          throw Error('plan mode allows saving plan.md only');
-        const tool = runtime.allTools.find(
-          (tool) => tool.name === 'write_file',
-        )!;
-        const output = await tool.run(
-          { file_path: path, content: text(p.content, 'file', 4_000_000) },
-          {
-            sessionId: runtime.session.id,
-            signal: new AbortController().signal,
-          },
+        const documents = this.services(runtime.options.workspace).documents;
+        const file = relative(documents.root, target);
+        const expected =
+          p.expectedRevision === undefined
+            ? ((await documents.snapshot(file))?.revision ?? null)
+            : p.expectedRevision;
+        if (expected !== null && typeof expected !== 'string')
+          throw Error('invalid expected document revision');
+        const document = await documents.save(
+          file,
+          text(p.content, 'file', 4_000_000),
+          expected,
         );
-        return { output };
+        return { output: `saved ${file}`, document };
       }
       case 'share':
       case 'unshare': {
@@ -2754,8 +3453,16 @@ export class RuntimeController {
     for (const pending of this.pending.values())
       pending.reject(new Error('runtime closed'));
     this.pending.clear();
+    await Promise.all(
+      [...this.taskServices.values()].map((service) => service.close()),
+    );
     await this.runtimes.close();
     await Promise.allSettled(this.tasks);
+    await Promise.allSettled(this.workspaceEventPending);
+    await Promise.all(
+      [...this.workspaceServices.values()].map((service) => service.dispose()),
+    );
+    if (this.operationLedger) await (await this.operationLedger).close();
     this.store.close();
   }
 }

@@ -22,6 +22,8 @@ import { DiffBlock } from './DiffBlock';
 import { t } from '../i18n';
 import { relativePath } from '../model/format';
 import { currentSession } from '../model/state';
+import { useSources } from './SourceNavigation';
+import type { Attachment } from '../model/types';
 import { hasToolInput } from '../model/browser';
 export function ToolMessage({
   tool,
@@ -34,6 +36,9 @@ export function ToolMessage({
   onFile: (path: string) => void;
   onAgent: (id: string) => void;
 }) {
+  const sources = useSources();
+  const attachments =
+    (tool as ToolCall & { attachments?: Attachment[] }).attachments ?? [];
   const [open, setOpen] = useSessionDisclosure('tool:' + tool.id, expanded);
   const { view, update } = useSessionPresentation();
   const tab = view.toolTabs?.[tool.id] ?? 'output';
@@ -161,6 +166,19 @@ export function ToolMessage({
               title={tab === 'input' ? t('raw input') : t('raw output')}
               value={tab === 'input' ? tool.input : tool.output}
             />
+          )}
+          {attachments.length > 0 && (
+            <div className="message-attachments">
+              {attachments.map((attachment) => (
+                <button
+                  className="text-button"
+                  key={attachment.id}
+                  onClick={() => sources?.openAttachment(attachment)}
+                >
+                  {attachment.name}
+                </button>
+              ))}
+            </div>
           )}
           {runtime.mode !== 'live' && (
             <div className="tool-meta">{tool.id} · sample record</div>

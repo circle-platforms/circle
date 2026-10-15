@@ -171,6 +171,12 @@ export interface BrowserToolOptions {
   writable?: (path: string) => string;
   /** A conversation's stored messages, which `browser_record` writes a script from. */
   history?: (sessionId: string) => Message[];
+  /** Reuse the runtime's versioned file writer without a second tool call. */
+  prepareWrite?: (
+    path: string,
+    content: string,
+    context: ToolContext,
+  ) => Promise<Tool['run'] | undefined>;
   /** Circle's plain variables and its secrets, which a replayed script's %NAME% take. */
   variables?: () => Record<string, string>;
   secrets?: () => Record<string, string>;
@@ -194,6 +200,10 @@ export function runtimeBrowserOptions(
       return full;
     },
     history: (sessionId) => runtime().store.messages(sessionId),
+    prepareWrite: async (path, content, context) =>
+      runtime()
+        .allTools.find((tool) => tool.name === 'write_file')
+        ?.prepare?.({ file_path: path, content }, context),
     variables: () => runtime().options.settings.variables ?? {},
     secrets: () => loadSecrets(runtime().options.home),
   };
@@ -212,6 +222,7 @@ export function browserTools(
     files = full,
     writable = full,
     history,
+    prepareWrite,
     variables = () => ({}),
     secrets = () => ({}),
   } = options;
@@ -673,6 +684,46 @@ export function browserTools(
       site: startSite(steps, values, sites.get(sessionId) ?? ''),
     };
   };
+  const recordPlan = (args: Record<string, unknown>, context: ToolContext) => {
+    if (!history) throw Error('this conversation has no history to record');
+    const path = writable(String(args.path));
+    const { steps, left } = recordSteps(history(context.sessionId), actions);
+    if (!steps.length)
+      throw Error(
+        `this conversation has no browser action to record${left.length ? `; left out: ${leftOutText(left)}` : ''}`,
+      );
+    const first = args.first === undefined ? 1 : Number(args.first);
+    const last = args.last === undefined ? steps.length : Number(args.last);
+    if (
+      !Number.isInteger(first) ||
+      !Number.isInteger(last) ||
+      first < 1 ||
+      last > steps.length ||
+      first > last
+    )
+      throw Error(
+        `first and last are step numbers from 1 to ${steps.length}, the steps recorded: ${steps.map((step, index) => `${index + 1}. ${inline(step)}`).join(' ')}`,
+      );
+    const script: BrowserScript = {
+      circle: SCRIPT_FORMAT,
+      name:
+        typeof args.name === 'string' && args.name.trim()
+          ? args.name.trim()
+          : nameFromPath(path),
+      steps: steps.slice(first - 1, last),
+    };
+    const count = script.steps.length;
+    return {
+      path,
+      content: formatScript(script),
+      description: [
+        `Recorded ${count} step${count === 1 ? '' : 's'} in ${path}${first > 1 || last < steps.length ? ` (steps ${first}–${last} of the ${steps.length} recorded)` : ''}:`,
+        ...script.steps.map((step, index) => `${index + 1}. ${inline(step)}`),
+        ...(left.length ? [`Left out: ${leftOutText(left)}.`] : []),
+        'Clean it up before you replay it: read it with read_file, then with edit_file drop detours, add expect steps that check the outcome, and write values that change between runs as %NAME%.',
+      ].join('\n'),
+    };
+  };
   const record: Tool = {
     name: 'browser_record',
     description: loadToolPrompt('browser_record'),
@@ -707,44 +758,50 @@ export function browserTools(
       required: ['path'],
       additionalProperties: false,
     },
+    ...(prepareWrite
+      ? {
+          prepare: async (
+            args: Record<string, unknown>,
+            context: ToolContext,
+          ) => {
+            const planned = recordPlan(args, context);
+            const prepared = await prepareWrite(
+              planned.path,
+              planned.content,
+              context,
+            );
+            if (!prepared) return record.run;
+            return async (
+              _args: Record<string, unknown>,
+              approved: ToolContext,
+            ) => {
+              await prepared(
+                { file_path: planned.path, content: planned.content },
+                approved,
+              );
+              return planned.description;
+            };
+          },
+        }
+      : {}),
     async run(args, context) {
-      if (!history) throw Error('this conversation has no history to record');
-      const path = writable(String(args.path));
-      const { steps, left } = recordSteps(history(context.sessionId), actions);
-      if (!steps.length)
-        throw Error(
-          `this conversation has no browser action to record${left.length ? `; left out: ${leftOutText(left)}` : ''}`,
+      const planned = recordPlan(args, context);
+      const prepared = await prepareWrite?.(
+        planned.path,
+        planned.content,
+        context,
+      );
+      if (prepared)
+        await prepared(
+          { file_path: planned.path, content: planned.content },
+          context,
         );
-      const first = args.first === undefined ? 1 : Number(args.first);
-      const last = args.last === undefined ? steps.length : Number(args.last);
-      if (
-        !Number.isInteger(first) ||
-        !Number.isInteger(last) ||
-        first < 1 ||
-        last > steps.length ||
-        first > last
-      )
-        throw Error(
-          `first and last are step numbers from 1 to ${steps.length}, the steps recorded: ${steps.map((step, index) => `${index + 1}. ${inline(step)}`).join(' ')}`,
-        );
-      const script: BrowserScript = {
-        circle: SCRIPT_FORMAT,
-        name:
-          typeof args.name === 'string' && args.name.trim()
-            ? args.name.trim()
-            : nameFromPath(path),
-        steps: steps.slice(first - 1, last),
-      };
-      context.signal.throwIfAborted();
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, formatScript(script));
-      const count = script.steps.length;
-      return [
-        `Recorded ${count} step${count === 1 ? '' : 's'} in ${path}${first > 1 || last < steps.length ? ` (steps ${first}–${last} of the ${steps.length} recorded)` : ''}:`,
-        ...script.steps.map((step, index) => `${index + 1}. ${inline(step)}`),
-        ...(left.length ? [`Left out: ${leftOutText(left)}.`] : []),
-        'Clean it up before you replay it: read it with read_file, then with edit_file drop detours, add expect steps that check the outcome, and write values that change between runs as %NAME%.',
-      ].join('\n');
+      else {
+        context.signal.throwIfAborted();
+        mkdirSync(dirname(planned.path), { recursive: true });
+        writeFileSync(planned.path, planned.content);
+      }
+      return planned.description;
     },
   };
   const replayTool: Tool = {
