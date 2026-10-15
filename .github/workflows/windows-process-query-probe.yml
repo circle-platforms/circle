@@ -22,6 +22,7 @@ jobs:
       CIRCLE_NO_UPDATE_CHECK: '1'
       CIRCLE_NO_MODELS_REFRESH: '1'
       CIRCLE_QUERY_PROBE: '1'
+      CIRCLE_QUERY_PROBE_NATIVE: '1'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
