@@ -24,6 +24,19 @@ export interface OperationIdentity {
   method: string;
   paramsHash: string;
 }
+export type OperationState =
+  'started' | 'completed' | 'needs_review' | 'reconciled';
+export interface OperationMetadata {
+  cursor: number;
+  id: string;
+  sessionId: string;
+  service: string;
+  method: string;
+  state: OperationState;
+  createdAt: number;
+  updatedAt: number;
+  errorCode?: string;
+}
 export interface OperationResultCodec {
   seal(value: string): Promise<string>;
   unseal(value: string): Promise<string>;
@@ -154,6 +167,7 @@ export class OperationLedger {
         throw Error('operation ledger requires a newer Circle version');
       db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
         CREATE TABLE IF NOT EXISTS owner(id INTEGER PRIMARY KEY CHECK(id=1),pid INTEGER NOT NULL,token TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS operation_reviews(operation_id TEXT PRIMARY KEY,note_hash TEXT NOT NULL,reviewed_at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY,identity_hash TEXT NOT NULL,session_id TEXT NOT NULL,service TEXT NOT NULL,method TEXT NOT NULL,params_hash TEXT NOT NULL,state TEXT NOT NULL,result TEXT,artifact_hash TEXT,error_code TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
         PRAGMA user_version=1;`);
       const ledger = new OperationLedger(
@@ -212,7 +226,12 @@ export class OperationLedger {
     if (saved) {
       if (saved.identity_hash !== identity)
         throw new OperationIdentityConflictError();
-      if (saved.state !== 'completed') throw new OperationNeedsReviewError();
+      if (saved.state !== 'completed')
+        throw new OperationNeedsReviewError(
+          saved.state === 'reconciled'
+            ? 'operation was reconciled; a new action requires a new operation id'
+            : undefined,
+        );
       const replay = Promise.resolve()
         .then(async () => {
           try {
@@ -338,6 +357,117 @@ export class OperationLedger {
           ...(row.error_code ? { errorCode: String(row.error_code) } : {}),
         }
       : undefined;
+  }
+  list(
+    options: {
+      sessionId?: string;
+      state?: OperationState;
+      limit?: number;
+      before?: number;
+    } = {},
+  ): OperationMetadata[] {
+    if (this.closed) throw Error('operation ledger is closed');
+    const limit = options.limit ?? 100;
+    if (
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > 500 ||
+      (options.before !== undefined &&
+        (!Number.isSafeInteger(options.before) || options.before < 1))
+    )
+      throw Error('valid operation list bounds are required');
+    const filters: string[] = [],
+      values: (string | number)[] = [];
+    if (options.sessionId !== undefined) {
+      if (!/^[A-Za-z0-9:_-]{1,200}$/.test(options.sessionId))
+        throw Error('valid session id is required');
+      filters.push('session_id=?');
+      values.push(options.sessionId);
+    }
+    if (options.state !== undefined) {
+      if (
+        !['started', 'completed', 'needs_review', 'reconciled'].includes(
+          options.state,
+        )
+      )
+        throw Error('valid operation state is required');
+      filters.push('state=?');
+      values.push(options.state);
+    }
+    if (options.before !== undefined) {
+      filters.push('rowid<?');
+      values.push(options.before);
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT rowid AS cursor,id,session_id,service,method,state,error_code,created_at,updated_at FROM operations ${filters.length ? 'WHERE ' + filters.join(' AND ') : ''} ORDER BY rowid DESC LIMIT ?`,
+      )
+      .all(...values, limit);
+    return rows.map((row) => ({
+      cursor: Number(row.cursor),
+      id: String(row.id),
+      sessionId: String(row.session_id),
+      service: String(row.service),
+      method: String(row.method),
+      state: String(row.state) as OperationState,
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+      ...(row.error_code ? { errorCode: String(row.error_code) } : {}),
+    }));
+  }
+  /** Acknowledgement never repeats the original effect or authorizes a new one. */
+  acknowledgeUnknown(id: string, input: { note: string }): OperationMetadata {
+    if (this.closed || this.closing) throw Error('operation ledger is closed');
+    if (
+      typeof input.note !== 'string' ||
+      !input.note.trim() ||
+      input.note.length > 4096
+    )
+      throw Error('a non-empty review note is required');
+    const row = this.db
+      .prepare('SELECT state FROM operations WHERE id=?')
+      .get(id);
+    if (!row || !['needs_review', 'reconciled'].includes(String(row.state)))
+      throw Error('only an operation needing review can be acknowledged');
+    if (row.state === 'needs_review') {
+      this.db.exec('BEGIN IMMEDIATE');
+      try {
+        const at = Date.now();
+        // The human note may itself quote sensitive input: retain only its digest.
+        this.db
+          .prepare(
+            'INSERT INTO operation_reviews(operation_id,note_hash,reviewed_at) VALUES(?,?,?)',
+          )
+          .run(id, digest(input.note.trim()), at);
+        this.db
+          .prepare(
+            "UPDATE operations SET state='reconciled',updated_at=? WHERE id=?",
+          )
+          .run(at, id);
+        this.db.exec('COMMIT');
+      } catch (error) {
+        this.db.exec('ROLLBACK');
+        throw error;
+      }
+    }
+    const metadata = this.db
+      .prepare(
+        'SELECT rowid AS cursor,id,session_id,service,method,state,error_code,created_at,updated_at FROM operations WHERE id=?',
+      )
+      .get(id)!;
+    return {
+      cursor: Number(metadata.cursor),
+      id: String(metadata.id),
+      sessionId: String(metadata.session_id),
+      service: String(metadata.service),
+      method: String(metadata.method),
+      state: String(metadata.state) as OperationState,
+      createdAt: Number(metadata.created_at),
+      updatedAt: Number(metadata.updated_at),
+      ...(metadata.error_code
+        ? { errorCode: String(metadata.error_code) }
+        : {}),
+    };
   }
   async close(): Promise<void> {
     if (this.closed || this.closing) return;

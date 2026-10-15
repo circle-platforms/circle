@@ -318,3 +318,67 @@ test('cached results preserve optional undefined fields and structured runtime m
     value,
   );
 });
+
+test('pending review metadata is safe and explicit acknowledgement never replays the effect', async (t) => {
+  const f = await fixture(t),
+    ledger = await f.open();
+  const secret = 'PRIVATE_REVIEW_NOTE_PASSWORD_7139';
+  let calls = 0;
+  await assert.rejects(
+    ledger.run(identity('pending-review', secret), async () => {
+      calls++;
+      throw Error(secret);
+    }),
+    OperationNeedsReviewError,
+  );
+  const pending = ledger.list({
+    sessionId: 'session-a',
+    state: 'needs_review',
+  });
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].id, 'pending-review');
+  assert.ok(!JSON.stringify(pending).includes(secret));
+  for (const key of ['paramsHash', 'result', 'artifactHash', 'key', 'note'])
+    assert.equal(Object.hasOwn(pending[0], key), false);
+  assert.throws(
+    () => ledger.acknowledgeUnknown('pending-review', { note: '  ' }),
+    /non-empty review note/,
+  );
+  assert.equal(
+    ledger.acknowledgeUnknown('pending-review', { note: secret }).state,
+    'reconciled',
+  );
+  assert.equal(
+    ledger.acknowledgeUnknown('pending-review', { note: secret }).state,
+    'reconciled',
+  );
+  await assert.rejects(
+    ledger.run(identity('pending-review', secret), async () => ++calls),
+    /new operation id/,
+  );
+  assert.equal(calls, 1);
+  assert.equal(ledger.list({ state: 'needs_review' }).length, 0);
+  await ledger.close();
+  const restarted = await f.open();
+  assert.equal(restarted.list({ state: 'reconciled' })[0].id, 'pending-review');
+  for (const file of await bytes(f.directory))
+    assert.equal(file.includes(Buffer.from(secret)), false);
+});
+
+test('operation lists are bounded and page by stable ledger cursor', async (t) => {
+  const f = await fixture(t),
+    ledger = await f.open();
+  for (let i = 0; i < 4; i++)
+    await ledger.run(identity(`page-${i}`), async () => ({ accepted: true }));
+  const first = ledger.list({ limit: 2 });
+  const second = ledger.list({ limit: 2, before: first[1].cursor });
+  assert.deepEqual(
+    [...first, ...second].map((item) => item.id),
+    ['page-3', 'page-2', 'page-1', 'page-0'],
+  );
+  assert.throws(() => ledger.list({ limit: 501 }), /list bounds/);
+  assert.throws(
+    () => ledger.acknowledgeUnknown('page-0', { note: 'already completed' }),
+    /only an operation needing review/,
+  );
+});
