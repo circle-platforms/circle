@@ -174,7 +174,8 @@ delete env.ELECTRON_RUN_AS_NODE;
 const executable = process.env.CIRCLE_DESKTOP_EXECUTABLE ?? require('electron');
 const appPath = resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? desktopRoot);
 const samples = {
-  input: [],
+  inputKeystroke: [],
+  inputPaste: [],
   click: [],
   sessionSwitch: [],
   fileSwitch: [],
@@ -421,14 +422,38 @@ try {
     window.__circleNativePerfObserver = observer;
   });
   const input = page.getByRole('textbox', { name: 'message', exact: true });
-  // Alternating blank/nonblank requires a React-derived Send state change;
-  // checking textarea.value alone would only measure the browser's native fill.
+  // Empty/nonempty transitions require React-derived Send state, not only
+  // the browser's native textarea value. Keystrokes and whole-input paste
+  // updates are reported separately; neither waits for a model request.
   await input.fill('');
   await page
     .getByRole('button', { name: 'send message', exact: true })
     .waitFor();
   for (let index = 0; index < 40; index++) {
-    const value = index % 2 ? '' : `input performance ${index}`;
+    const value = index % 2 ? '' : 'x';
+    await arm('input', 'textarea[aria-label="message"]', {
+      selector: 'textarea[aria-label="message"]',
+      value,
+      feedback: {
+        selector: 'button[aria-label="send message"]',
+        disabled: !value,
+      },
+    });
+    await input.press(index % 2 ? 'Backspace' : 'x');
+    await finish('inputKeystroke');
+  }
+  const longPaste = Array.from(
+    { length: 600 },
+    (_, line) => `full pasted line ${line} ${'developer input '.repeat(4)}`,
+  ).join('\n');
+  report.inputWorkloads = {
+    keystrokes: 40,
+    wholeInputUpdates: 40,
+    longPasteLines: 600,
+    longPasteCharacters: longPaste.length,
+  };
+  for (let index = 0; index < 40; index++) {
+    const value = index % 2 ? '' : longPaste;
     await arm('input', 'textarea[aria-label="message"]', {
       selector: 'textarea[aria-label="message"]',
       value,
@@ -438,7 +463,7 @@ try {
       },
     });
     await input.fill(value);
-    await finish('input');
+    await finish('inputPaste');
   }
   for (let index = 0; index < 40; index++) {
     const label = index % 2 ? 'task layout' : 'developer layout';
@@ -608,7 +633,8 @@ try {
   );
   await page.screenshot({ path: join(output, 'native-performance.png') });
   for (const [metric, budget] of Object.entries({
-    input: 100,
+    inputKeystroke: 100,
+    inputPaste: 100,
     click: 100,
     eventToFrame: 200,
     sessionSwitch: 300,
@@ -624,7 +650,7 @@ try {
     };
   }
   report.measurement =
-    'renderer input requires textarea value plus React-derived Send disabled state (40 alternating empty/nonempty values); input/click to two animation frames after actual visible state; PTY producer Date.now to accessibility rows plus two animation frames, a paint-opportunity approximation rather than a compositor pixel timestamp';
+    'renderer input requires textarea value plus React-derived Send disabled state; 40 actual x/Backspace key presses and 40 whole-input updates alternating empty/600-line input are reported separately; input/click to two animation frames after actual visible state; PTY producer Date.now to accessibility rows plus two animation frames, a paint-opportunity approximation rather than a compositor pixel timestamp';
   report.complete = true;
   report.passed =
     Object.values(report.metrics).every((metric) => metric.passed) &&
