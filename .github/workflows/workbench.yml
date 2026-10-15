@@ -28,6 +28,7 @@ jobs:
   native:
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
         include:
           - runner: macos-15
@@ -44,7 +45,8 @@ jobs:
             executable: Circle-linux-x64/Circle
     runs-on: ${{ matrix.runner }}
     # Both application modes and both viewport widths run on each native architecture.
-    timeout-minutes: 40
+    # Existing two-width live suites plus the full native journey in both modes.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -92,6 +94,9 @@ jobs:
       - run: npm --prefix apps/desktop run test:live
       - run: CIRCLE_DESKTOP_TEST_WIDTH=1024 npm --prefix apps/desktop run test:live
       - run: cp apps/desktop/artifacts/desktop/receipt.json apps/desktop/artifacts/desktop/development-receipt.json
+      - name: Exercise the native developer journey in development
+        timeout-minutes: 12
+        run: node apps/desktop/test/native-developer-journey.mjs
       - run: npm --prefix apps/desktop run test:interface
       - run: npm --prefix apps/desktop run package
       - name: Check the packaged application
@@ -110,6 +115,7 @@ jobs:
           cp apps/desktop/artifacts/desktop/receipt.json apps/desktop/artifacts/desktop/packaged-receipt.json
           npm --prefix apps/desktop run test:live
           CIRCLE_DESKTOP_TEST_WIDTH=1024 npm --prefix apps/desktop run test:live
+          node apps/desktop/test/native-developer-journey.mjs
           npm --prefix apps/desktop run test:update
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         if: always()
@@ -125,12 +131,18 @@ jobs:
             ${{ runner.temp }}/circle-xvfb.log
           if-no-files-found: error
   package-other-platforms:
+    # Native builds occupy at most two runners; Windows follows without becoming
+    # silently skipped when a different operating system has a test failure.
+    needs: native
+    if: ${{ always() && !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    # Two native journeys (12m each), existing MSI/update budget (15m),
+    # installation, runtime tests, packaging and artifact upload headroom.
+    timeout-minutes: 65
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -153,6 +165,13 @@ jobs:
       - run: npm --prefix apps/desktop run package
       - run: node apps/desktop/test/developer-toolchain-smoke.mjs
       - run: node apps/desktop/test/developer-debug-smoke.mjs
+      - name: Exercise the development application on Windows
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          npm --prefix apps/desktop run test:desktop
+          node apps/desktop/test/native-developer-journey.mjs
       - name: Check invalid browser addresses on Windows
         if: runner.os == 'Windows'
         shell: pwsh
@@ -163,6 +182,8 @@ jobs:
           $env:CIRCLE_DESKTOP_EXECUTABLE = Join-Path $env:CIRCLE_DESKTOP_APP_PATH 'Circle.exe'
           node apps/desktop/test/developer-toolchain-smoke.mjs
           node apps/desktop/test/developer-debug-smoke.mjs
+          npm --prefix apps/desktop run test:desktop
+          node apps/desktop/test/native-developer-journey.mjs
           node apps/desktop/test/browser-address.mjs
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         if: runner.os == 'Windows' && always()
@@ -192,5 +213,7 @@ jobs:
         if: always()
         with:
           name: circle-desktop-${{ matrix.os }}-development
-          path: apps/desktop/out/
+          path: |
+            apps/desktop/out/
+            apps/desktop/artifacts/
           if-no-files-found: error
