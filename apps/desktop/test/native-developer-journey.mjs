@@ -1093,20 +1093,20 @@ try {
             async () =>
               (await state()).interactions.some(
                 (i) =>
-                  i.sessionId === record.spec.sessionId &&
+                  i.sessionId === record.runtimeSessionId &&
                   i.status === 'pending',
               ),
             'child approval is projected',
           );
           const pending = (await state()).interactions.find(
             (i) =>
-              i.sessionId === record.spec.sessionId && i.status === 'pending',
+              i.sessionId === record.runtimeSessionId && i.status === 'pending',
           );
           if (pending.command?.includes('git status'))
             gitApprovalObserved = true;
           await page
             .locator(
-              `.sidebar .session-link[href="#/session/${record.spec.sessionId}"]`,
+              `.sidebar .session-link[href="#/session/${record.runtimeSessionId}"]`,
             )
             .click();
           await page
@@ -1133,7 +1133,7 @@ try {
           );
           await page
             .locator(
-              `.sidebar .session-link[href="#/session/${record.spec.sessionId}"]`,
+              `.sidebar .session-link[href="#/session/${record.runtimeSessionId}"]`,
             )
             .click();
           await page
