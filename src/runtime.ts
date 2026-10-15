@@ -129,6 +129,8 @@ export interface RuntimeOptions {
    * By default it is offered where there is a desktop on this machine. */
   screenshot?: Omit<ScreenshotOptions, 'app' | 'target'> | false;
   headless?: boolean;
+  /** Load MCP servers and extensions even when headless (`--extensions`). */
+  integrations?: boolean;
   approve?: (
     call: ToolCall,
     signal: AbortSignal,
@@ -175,6 +177,9 @@ export class AgentRuntime {
   private integrationsReady?: Promise<void>;
   private baseModel?: ChatModel;
   private coreTools: Tool[] = [];
+  // An extension changed its tools after loading; applied between turns, never inside one.
+  private toolsStale = false;
+  private toolsCheck?: ReturnType<typeof setTimeout>;
   get allTools(): Tool[] {
     return this.withIntegrationTools(this.coreTools, false);
   }
@@ -291,13 +296,14 @@ export class AgentRuntime {
           ...event.payload,
           session_id: event.run_id,
         });
-      else if (event.kind === 'run_end')
+      else if (event.kind === 'run_end') {
         this.extensions.emit('turn_end', {
           ...event.payload,
           session_id: event.run_id,
           usage: event.usage,
         });
-      else if (event.kind === 'tool_result')
+        if (this.toolsStale) this.scheduleToolRefresh();
+      } else if (event.kind === 'tool_result')
         this.extensions.emit('tool_result', {
           ...event.payload,
           session_id: event.run_id,
@@ -713,6 +719,10 @@ export class AgentRuntime {
         : undefined,
       bundledRoot: this.options.bundledExtensions,
       onStatus: () => this.options.onExtensionStatus?.(),
+      onTools: () => {
+        this.toolsStale = true;
+        this.scheduleToolRefresh();
+      },
       openUrl: this.options.openUrl,
       settings: this.options.settings.extensions,
       reservedTools: new Set([...BUILTIN_TOOL_NAMES, ...reservedTools]),
@@ -842,7 +852,7 @@ export class AgentRuntime {
     );
   }
   async initialize(signal?: AbortSignal): Promise<void> {
-    if (this.options.headless) return;
+    if (this.options.headless && !this.options.integrations) return;
     if (!this.integrationsReady) {
       this.integrationsReady = (async () => {
         const base = this.coreTools;
@@ -880,6 +890,22 @@ export class AgentRuntime {
       });
     }
     await this.integrationsReady;
+  }
+  private scheduleToolRefresh(): void {
+    if (this.toolsCheck) return;
+    // A macrotask later: several changes in a row become one rebuild, and a turn that just
+    // ended has let go of the harness.
+    this.toolsCheck = setTimeout(() => {
+      this.toolsCheck = undefined;
+      if (!this.toolsStale || !this.integrationsReady || this.busy) return;
+      this.toolsStale = false;
+      this.harness.tools = this.withIntegrationTools(
+        this.coreTools.filter((tool) => tool.name !== 'wait_jobs'),
+      );
+      this.describeSubagents(this.harness.tools);
+      this.refreshSystemPrompt();
+    }, 0);
+    this.toolsCheck.unref?.();
   }
   async reloadIntegrations(): Promise<void> {
     if (this.busy) throw new Error('reload after the current turn');
@@ -1131,6 +1157,7 @@ export class AgentRuntime {
     return this.closingPromise;
   }
   private async closeResources(saveJobNotes: boolean): Promise<void> {
+    if (this.toolsCheck) clearTimeout(this.toolsCheck);
     await this.catalog.close();
     this.compactionController?.abort(new Error('Interrupted'));
     await this.activeCompaction?.catch(() => {});
