@@ -33,7 +33,13 @@ export interface WorkspaceServiceEvent {
 const methods: Record<WorkspaceService, ReadonlySet<string>> = {
   cycles: new Set(['list', 'snapshot', 'create', 'advance', 'retryCI']),
   events: new Set(['replay']),
-  documents: new Set(['read', 'save', 'applyEdits', 'refresh']),
+  documents: new Set([
+    'read',
+    'save',
+    'applyEdits',
+    'refresh',
+    'resolveSource',
+  ]),
   terminal: new Set([
     'create',
     'restart',
@@ -94,6 +100,8 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
     'createIntegration',
     'mergeCandidates',
     'review',
+    'artifacts',
+    'readArtifact',
   ]),
   delivery: new Set([
     'status',
