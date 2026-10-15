@@ -174,7 +174,12 @@ export function App() {
   const openedLink = useRef(snapshot.openUrl?.id);
   useEffect(() => {
     const request = snapshot.openUrl;
-    if (!request || request.id === openedLink.current) return;
+    if (
+      !request ||
+      request.id === openedLink.current ||
+      request.sessionId !== session.id
+    )
+      return;
     openedLink.current = request.id;
     if (desktopHost() && enabled.includes('browser')) {
       // The browser panel sits beside the session: show the session, then the panel.
@@ -184,7 +189,7 @@ export function App() {
     // Without the panel, the window's own handler hands it to the system browser.
     else window.open(request.url, '_blank', 'noopener');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [snapshot.openUrl?.id]);
+  }, [snapshot.openUrl?.id, session.id]);
   useEffect(() => {
     if (location.pathname === '/')
       navigate(`/session/${session.id}`, { replace: true });
@@ -200,6 +205,11 @@ export function App() {
   useEffect(() => {
     setFile(null);
     setAgent(null);
+    const id = location.pathname.startsWith('/session/')
+      ? location.pathname.slice(9)
+      : undefined;
+    if (id && !snapshot.sessions.some((item) => item.id === id))
+      navigate(`/session/${session.id}`, { replace: true });
   }, [session.id]);
   useEffect(() => {
     const apply = () => {
@@ -215,6 +225,7 @@ export function App() {
     return () => media.removeEventListener('change', apply);
   }, [snapshot.settings.theme, snapshot.settings.textSize]);
   const pickFiles = async (importing = false) => {
+    const originSessionId = runtime.getSnapshot().activeSessionId;
     if (desktopHost()) {
       try {
         const files = await desktopHost()!.chooseFiles(
@@ -223,9 +234,13 @@ export function App() {
         for (const item of files) {
           if (importing) {
             if (runtime.mode === 'live') {
-              await runtime.request('import-native-session', {
-                content: item.content,
-              });
+              await runtime.request(
+                'import-native-session',
+                {
+                  content: item.content,
+                },
+                originSessionId,
+              );
               onSession();
               continue;
             }
@@ -265,11 +280,16 @@ export function App() {
             });
             onSession();
           } else
-            runtime.change((state) =>
-              currentSession(state).attachments.push(nativeAttachment(item)),
-            );
+            runtime.change((state) => {
+              const target = state.sessions.find(
+                (session) => session.id === originSessionId,
+              );
+              if (target && target.lifecycle !== 'deleting')
+                target.attachments.push(nativeAttachment(item));
+            });
         }
       } catch (error) {
+        if (runtime.getSnapshot().activeSessionId !== originSessionId) return;
         notify(
           error instanceof Error
             ? error.message
@@ -294,7 +314,11 @@ export function App() {
           if (importing) {
             const text = await item.text();
             if (runtime.mode === 'live') {
-              await runtime.request('import-native-session', { content: text });
+              await runtime.request(
+                'import-native-session',
+                { content: text },
+                originSessionId,
+              );
               onSession();
               continue;
             }
@@ -367,11 +391,16 @@ export function App() {
             size: item.size,
             truncated: kind === 'file' && item.size > 256000,
           };
-          runtime.change((state) =>
-            currentSession(state).attachments.push(attachment),
-          );
+          runtime.change((state) => {
+            const target = state.sessions.find(
+              (session) => session.id === originSessionId,
+            );
+            if (target && target.lifecycle !== 'deleting')
+              target.attachments.push(attachment);
+          });
         }
       } catch (error) {
+        if (runtime.getSnapshot().activeSessionId !== originSessionId) return;
         notify(
           error instanceof Error
             ? error.message

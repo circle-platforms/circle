@@ -1,0 +1,69 @@
+import { createHash } from 'node:crypto';
+import { mkdirSync, realpathSync } from 'node:fs';
+import { join } from 'node:path';
+import lockfile from 'proper-lockfile';
+import { ensureHome } from './paths.js';
+
+// A lease outlives a turn: queued work, approvals and background jobs still own history.
+// proper-lockfile uses atomic mkdir and a heartbeat; no PID-based takeover is involved.
+const STALE = 30000;
+const UPDATE = 5000;
+export class SessionOccupiedError extends Error {
+  constructor(readonly sessionId: string) {
+    super(
+      'session is in use by another Circle runtime; stop and release it there, or fork it',
+    );
+    this.name = 'SessionOccupiedError';
+  }
+}
+function leasePath(home: string, sessionId: string): string {
+  const directory = join(realpathSync(ensureHome(home)), 'session-locks');
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  return join(directory, createHash('sha256').update(sessionId).digest('hex'));
+}
+export interface SessionLease {
+  assertActive(): void;
+  release(): void;
+}
+export function acquireSessionLease(
+  home: string,
+  sessionId: string,
+  onCompromised?: (error: Error) => void,
+): SessionLease {
+  let compromised: Error | undefined;
+  let released = false;
+  let unlock: () => void;
+  try {
+    unlock = lockfile.lockSync(leasePath(home, sessionId), {
+      realpath: false,
+      stale: STALE,
+      update: UPDATE,
+      onCompromised(error) {
+        compromised = error;
+        onCompromised?.(error);
+      },
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ELOCKED')
+      throw new SessionOccupiedError(sessionId);
+    throw error;
+  }
+  return {
+    assertActive() {
+      if (compromised) throw compromised;
+      if (released) throw new Error('session ownership has been released');
+    },
+    release() {
+      if (released) return;
+      released = true;
+      // A compromised lease has already been removed from proper-lockfile's registry.
+      if (!compromised) unlock();
+    },
+  };
+}
+export function sessionOccupied(home: string, sessionId: string): boolean {
+  return lockfile.checkSync(leasePath(home, sessionId), {
+    realpath: false,
+    stale: STALE,
+  });
+}

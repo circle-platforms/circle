@@ -1,6 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { writePrivateJson } from '../../../src/settings.js';
+import {
+  withPrivateJsonLock,
+  writePrivateJson,
+} from '../../../src/settings.js';
 
 /** Desktop organization is separate from shared checkpoint history and user files. */
 export class SessionMetadata {
@@ -8,7 +11,10 @@ export class SessionMetadata {
   private readonly path: string;
   constructor(home: string) {
     this.path = join(home, 'desktop-session-metadata.json');
-    if (!existsSync(this.path)) return;
+    this.refresh();
+  }
+  private read(): Map<string, string> {
+    if (!existsSync(this.path)) return new Map();
     const value = JSON.parse(readFileSync(this.path, 'utf8'));
     if (
       !value ||
@@ -19,7 +25,7 @@ export class SessionMetadata {
       Array.isArray(value.archived)
     )
       throw Error('invalid desktop session metadata');
-    this.archived = new Map(
+    return new Map(
       Object.entries(value.archived as Record<string, unknown>).filter(
         (entry): entry is [string, string] =>
           entry[0].length <= 200 &&
@@ -28,11 +34,17 @@ export class SessionMetadata {
       ),
     );
   }
+  refresh(): void {
+    this.archived = this.read();
+  }
   archivedAt(id: string): string | undefined {
     return this.archived.get(id);
   }
   set(ids: string[], archive: boolean): void {
-    const next = new Map(this.archived);
+    withPrivateJsonLock(this.path, () => this.update(ids, archive));
+  }
+  private update(ids: string[], archive: boolean): void {
+    const next = this.read();
     const at = new Date().toISOString();
     for (const id of ids) {
       if (archive && !next.has(id)) next.set(id, at);

@@ -10,7 +10,7 @@ import {
   type ScreenshotCapture,
 } from './coordinates.js';
 import { waitForDownloadStart, type NavigationOutcome } from './navigation.js';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID, X509Certificate } from 'node:crypto';
 import {
   copyFileSync,
@@ -134,6 +134,8 @@ export interface ChromeOptions {
   handoff?: (reason: string, signal: AbortSignal) => Promise<void>;
   /** How long the browser has to start, in milliseconds: a minute unless given. */
   startTimeout?: number;
+  /** Bounded process shutdown, in milliseconds per phase; three seconds unless given. */
+  closeTimeout?: number;
   /**
    * Host names mapped to addresses, as Chrome's --host-resolver-rules: for tests, which reach
    * a local site by a public name.
@@ -258,6 +260,7 @@ const originOf = (url: string) => {
 
 export class ChromeBrowser implements BrowserPort {
   private child?: ChildProcess;
+  private processGroups = new Set<number>();
   private cdp?: CdpPipe;
   private stderr: string[] = [];
   private starting?: Promise<CdpPipe>;
@@ -272,6 +275,7 @@ export class ChromeBrowser implements BrowserPort {
   private staging = '';
   private trusted: TrustedCertificates;
   private closed = false;
+  private closing?: Promise<void>;
   constructor(private options: ChromeOptions) {
     this.trusted = new TrustedCertificates(options.trustFile);
   }
@@ -309,7 +313,10 @@ export class ChromeBrowser implements BrowserPort {
           : []),
         BLANK,
       ],
-      { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] },
+      {
+        stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'],
+        detached: process.platform !== 'win32',
+      },
     );
     // The browser's last words, for a start that fails. A message it repeats (a headless
     // browser's display errors, many a second) is kept once.
@@ -330,6 +337,8 @@ export class ChromeBrowser implements BrowserPort {
       child.stdio[4] as Readable,
     );
     this.child = child;
+    if (process.platform !== 'win32' && child.pid)
+      this.processGroups.add(child.pid);
     this.cdp = cdp;
     this.staging = join(profile, 'downloads');
     const failed = new Promise<never>((_resolve, reject) =>
@@ -398,25 +407,125 @@ export class ChromeBrowser implements BrowserPort {
     if (!this.cdp) return Promise.reject(Error('the browser was closed'));
     return this.cdp.send<T>(method, params, session);
   }
-  async close(): Promise<void> {
+  close(): Promise<void> {
     this.closed = true;
-    const child = this.child;
-    if (!child) return;
-    const exited = new Promise<void>((resolve) => child.once('exit', resolve));
-    await this.limit(this.send('Browser.close'), undefined, 2000).catch(
-      () => {},
+    this.closing ??= this.closeProcess().catch((error) => {
+      this.closing = undefined;
+      throw error;
+    });
+    return this.closing;
+  }
+  private exited(child: ChildProcess): boolean {
+    return (
+      child.pid === undefined ||
+      child.exitCode !== null ||
+      child.signalCode !== null
     );
-    await Promise.race([exited, delay(3000)]);
-    // A stopped browser exits a second or more later on a loaded machine; close returns when it
-    // is gone, and kills one that will not stop
-    for (const [signal, wait] of [
-      ['SIGTERM', 2000],
-      ['SIGKILL', 1000],
-    ] as const) {
-      if (child.exitCode !== null || child.signalCode !== null) return;
-      child.kill(signal);
-      await Promise.race([exited, delay(wait)]);
+  }
+  private waitForExit(child: ChildProcess, timeout: number): Promise<boolean> {
+    if (this.exited(child)) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const finish = (exited: boolean): void => {
+        clearTimeout(timer);
+        child.off('exit', done);
+        child.off('error', done);
+        resolve(exited);
+      };
+      const done = (): void => finish(true);
+      const timer = setTimeout(() => finish(this.exited(child)), timeout);
+      child.once('exit', done);
+      child.once('error', done);
+    });
+  }
+  private async stopProcess(
+    child: ChildProcess,
+    force: boolean,
+  ): Promise<void> {
+    if (this.exited(child)) return;
+    if (process.platform === 'win32') {
+      await new Promise<void>((resolve, reject) =>
+        execFile(
+          'taskkill',
+          ['/PID', String(child.pid), '/T', ...(force ? ['/F'] : [])],
+          (error) => {
+            if (error && !this.exited(child)) reject(error);
+            else resolve();
+          },
+        ),
+      );
+      return;
     }
+    try {
+      // This process group was created by launch; never target the person's browser.
+      process.kill(-child.pid!, force ? 'SIGKILL' : 'SIGTERM');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+      // Fixtures/embedders may supply a child without its own process group.
+      if (!this.exited(child)) child.kill(force ? 'SIGKILL' : 'SIGTERM');
+    }
+  }
+  private async groupRunning(pid: number): Promise<boolean> {
+    try {
+      process.kill(-pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+      throw error;
+    }
+    // An exited grandchild can remain a zombie until the OS reaps it; it cannot run or write.
+    const output = await new Promise<string>((resolve, reject) =>
+      execFile('ps', ['-A', '-o', 'pgid=,stat='], (error, stdout) =>
+        error ? reject(error) : resolve(stdout),
+      ),
+    );
+    return output.split('\n').some((line) => {
+      const [group, status] = line.trim().split(/\s+/);
+      return Number(group) === pid && status && !status.startsWith('Z');
+    });
+  }
+  private async closeProcess(): Promise<void> {
+    const child = this.child;
+    const timeout = Math.max(1, this.options.closeTimeout ?? 3000);
+    if (child) {
+      if (process.platform !== 'win32' && child.pid)
+        this.processGroups.add(child.pid);
+      await this.limit(
+        this.send('Browser.close'),
+        undefined,
+        Math.min(timeout, 2000),
+      ).catch(() => {});
+      if (!(await this.waitForExit(child, timeout))) {
+        // Windows taskkill can refuse a graceful stop and require /F. Still give the
+        // process its bounded grace period, then escalate; a forced-stop failure rejects.
+        await this.stopProcess(child, false).catch(() => {});
+        if (!(await this.waitForExit(child, Math.min(timeout, 1000)))) {
+          await this.stopProcess(child, true);
+          if (!(await this.waitForExit(child, timeout)))
+            throw new Error(
+              'the browser process did not stop; retry closing the session',
+            );
+        }
+      }
+    }
+    // A root can exit before a renderer. Keep group ownership through failed cleanup/retry.
+    for (const pid of this.processGroups) {
+      if (await this.groupRunning(pid)) {
+        try {
+          process.kill(-pid, 'SIGKILL');
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+        }
+        const deadline = Date.now() + timeout;
+        while (await this.groupRunning(pid)) {
+          if (Date.now() >= deadline)
+            throw new Error(
+              'the browser child processes did not stop; retry closing the session',
+            );
+          await delay(20);
+        }
+      }
+      this.processGroups.delete(pid);
+    }
+    this.cdp?.close();
   }
   // ---- tabs
   private conversation(id: string): Conversation {

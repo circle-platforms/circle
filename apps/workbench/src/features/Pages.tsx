@@ -230,8 +230,11 @@ function SessionsPage({ onSession, onDialog }: Props) {
             <IconButton
               label={t('delete {title}', { title: session.title })}
               disabled={
-                session.id === current.id ||
-                !canArchiveSession(snapshot, session)
+                session.lifecycle === 'deleting' ||
+                session.occupied ||
+                (runtime.mode !== 'live' &&
+                  (session.id === current.id ||
+                    !canArchiveSession(snapshot, session)))
               }
               onClick={() => onDialog('delete-session', session.id)}
             >

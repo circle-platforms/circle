@@ -112,8 +112,11 @@ export function SessionMenu({
       <DropdownMenu.Separator className="dropdown-separator" />
       <DropdownMenu.Item
         disabled={
-          session.id === snapshot.activeSessionId ||
-          !canArchiveSession(snapshot, session)
+          session.lifecycle === 'deleting' ||
+          session.occupied ||
+          (runtime.mode !== 'live' &&
+            (session.id === snapshot.activeSessionId ||
+              !canArchiveSession(snapshot, session)))
         }
         onSelect={() => onDialog('delete-session', session.id)}
       >
