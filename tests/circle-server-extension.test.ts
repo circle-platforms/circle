@@ -183,6 +183,49 @@ async function fakeServer(t: Parameters<typeof scratch>[0]) {
           verification: { reader: 'read-excel-file/9.3.12', rowCount: 8 },
         },
       });
+    // A repair pending input waits for a replacement of the bound input; a
+    // clarification waits for a response.
+    if (url.pathname === '/v1/tasks/task_two/status')
+      return send(200, {
+        data: {
+          taskId: 'task_two',
+          phase: 'waiting-input',
+          title: 'repair the build',
+          inputRevisionId: 'inrev_2',
+          pendingInputs: [
+            {
+              requestId: 'pin_2',
+              inputRevisionId: 'inrev_2',
+              status: 'open',
+              kind: 'repair',
+              question: 'Repair build-mismatch and replace the bound input',
+            },
+          ],
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_three/status')
+      return send(200, {
+        data: {
+          taskId: 'task_three',
+          phase: 'waiting-input',
+          title: 'a question',
+          inputRevisionId: 'inrev_3',
+          pendingInputs: [
+            {
+              requestId: 'pin_3',
+              inputRevisionId: 'inrev_3',
+              status: 'open',
+              kind: 'clarification',
+              question: 'Which bed?',
+            },
+          ],
+        },
+      });
+    if (
+      /^\/v1\/tasks\/task_(two|three)\/input$/.test(url.pathname) &&
+      request.method === 'POST'
+    )
+      return send(200, { data: { phase: 'running' } });
     if (
       url.pathname === '/v1/tasks' &&
       url.searchParams.get('kind') === 'work' &&
@@ -640,4 +683,57 @@ test('the connector reads work, execution, knowledge and methods from the server
   assert.match(lines.at(-1)!, /task_one · reconcile · .*reconciled/);
   assert.ok(!JSON.stringify(host.view('circle-server')).includes(TOKEN));
   await delay(50);
+});
+
+test('a repair pending input is answered with a replacement, a clarification with a response', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = await fakeServer(t);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { 'circle-server': { enabled: true } },
+    secret: async (request) => submitAnswer(home, request.id, PASSWORD),
+  }).load();
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('server')!;
+  await command.handler(`login ${server.url} tester`, context);
+
+  await command.handler(
+    'respond task_two {"sourceRevisionId":"src_new"}',
+    context,
+  );
+  const repair = JSON.parse(
+    server.seen.find((call) => call.path === '/v1/tasks/task_two/input')!.body.toString(),
+  );
+  assert.deepEqual(repair, {
+    inputRevisionId: 'inrev_2',
+    requestId: 'pin_2',
+    replacement: { sourceRevisionId: 'src_new' },
+  });
+  assert.ok(lines.some((line) => /replaced the input of task_two/.test(line)));
+
+  await command.handler('respond task_three bed=east', context);
+  const clarification = JSON.parse(
+    server.seen
+      .find((call) => call.path === '/v1/tasks/task_three/input')!
+      .body.toString(),
+  );
+  assert.deepEqual(clarification, {
+    inputRevisionId: 'inrev_3',
+    requestId: 'pin_3',
+    response: { bed: 'east' },
+  });
+  assert.ok(lines.some((line) => /✓ answered task_three/.test(line)));
+  await delay(100);
 });

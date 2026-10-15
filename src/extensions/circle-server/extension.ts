@@ -2128,14 +2128,22 @@ export async function register(api: ExtensionAPI): Promise<void> {
       );
       if (!isRecord(open))
         throw new ServerError(`${taskId} is not waiting for an answer`);
+      // A repair input is a replacement of the bound input; anything else is a response.
+      const repair = open.kind === 'repair';
       await request('POST', `/v1/tasks/${encodeURIComponent(taskId)}/input`, {
         json: {
           inputRevisionId: current.inputRevisionId,
           requestId: open.requestId,
-          response: answerOf(answer.join(' ')),
+          ...(repair
+            ? { replacement: answerOf(answer.join(' ')) }
+            : { response: answerOf(answer.join(' ')) }),
         },
       });
-      context.append(`✓ answered ${taskId} (${String(open.requestId)})`);
+      context.append(
+        repair
+          ? `✓ replaced the input of ${taskId} (${String(open.requestId)})`
+          : `✓ answered ${taskId} (${String(open.requestId)})`,
+      );
       void follow(taskId, context);
     },
     async get([taskId], context) {
