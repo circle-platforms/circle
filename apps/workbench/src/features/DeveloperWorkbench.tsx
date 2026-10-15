@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { t } from '../i18n';
 import { desktopHost } from '../host';
 import { useRuntime } from '../app/context';
+import { NativeResourceBoundary } from '../components/NativeResourceBoundary';
 import { DeliveryCyclePanel } from './DeliveryCyclePanel';
 import { TasksPanel } from './TasksPanel';
 import '../styles/developer-workbench.css';
@@ -103,14 +104,22 @@ export function DeveloperWorkbench({
         </button>
         <button onClick={() => setMobile('editor')}>{t('editor')}</button>
       </div>
-      <div className="developer-conversation">{conversation}</div>
+      <div className="developer-conversation">
+        <NativeResourceBoundary name={t('conversation')}>
+          {conversation}
+        </NativeResourceBoundary>
+      </div>
       <div className="developer-editor">
-        {editor ?? (
-          <div className="empty-state">
-            <h3>{t('open a file to start editing')}</h3>
-            <p>{t('use quick open or choose a source in the conversation')}</p>
-          </div>
-        )}
+        <NativeResourceBoundary name={t('editor')}>
+          {editor ?? (
+            <div className="empty-state">
+              <h3>{t('open a file to start editing')}</h3>
+              <p>
+                {t('use quick open or choose a source in the conversation')}
+              </p>
+            </div>
+          )}
+        </NativeResourceBoundary>
       </div>
       <div className="developer-dock">
         <div
@@ -175,10 +184,12 @@ export function DeveloperWorkbench({
                 aria-labelledby="dock-tab-terminal"
                 hidden={dock !== 'terminal'}
               >
-                <NativeTerminal
-                  sessionId={sessionId}
-                  active={open && dock === 'terminal'}
-                />
+                <NativeResourceBoundary name={t('terminal')}>
+                  <NativeTerminal
+                    sessionId={sessionId}
+                    active={open && dock === 'terminal'}
+                  />
+                </NativeResourceBoundary>
               </div>
             )}
             {visited.has('git') && (
@@ -188,11 +199,13 @@ export function DeveloperWorkbench({
                 aria-labelledby="dock-tab-git"
                 hidden={dock !== 'git'}
               >
-                <GitPanel
-                  sessionId={sessionId}
-                  onFile={onFile}
-                  onOpenExternal={openExternal}
-                />
+                <NativeResourceBoundary name={t('git workspace')}>
+                  <GitPanel
+                    sessionId={sessionId}
+                    onFile={onFile}
+                    onOpenExternal={openExternal}
+                  />
+                </NativeResourceBoundary>
               </div>
             )}
             {visited.has('debug') && (
@@ -202,7 +215,9 @@ export function DeveloperWorkbench({
                 aria-labelledby="dock-tab-debug"
                 hidden={dock !== 'debug'}
               >
-                <DebugPanel sessionId={sessionId} onFile={onFile} />
+                <NativeResourceBoundary name={t('debug')}>
+                  <DebugPanel sessionId={sessionId} onFile={onFile} />
+                </NativeResourceBoundary>
               </div>
             )}
             {visited.has('delivery') && (
@@ -212,15 +227,17 @@ export function DeveloperWorkbench({
                 aria-labelledby="dock-tab-delivery"
                 hidden={dock !== 'delivery'}
               >
-                <DeliveryCyclePanel
-                  sessionId={sessionId}
-                  active={open && dock === 'delivery'}
-                  onOpenExternal={openExternal}
-                  onTask={(id) => {
-                    setFocusTask(id);
-                    select('tasks');
-                  }}
-                />
+                <NativeResourceBoundary name={t('automatic delivery')}>
+                  <DeliveryCyclePanel
+                    sessionId={sessionId}
+                    active={open && dock === 'delivery'}
+                    onOpenExternal={openExternal}
+                    onTask={(id) => {
+                      setFocusTask(id);
+                      select('tasks');
+                    }}
+                  />
+                </NativeResourceBoundary>
               </div>
             )}
             {visited.has('tasks') && (
@@ -230,11 +247,13 @@ export function DeveloperWorkbench({
                 aria-labelledby="dock-tab-tasks"
                 hidden={dock !== 'tasks'}
               >
-                <TasksPanel
-                  sessionId={sessionId}
-                  onSession={onSession}
-                  focusTaskId={focusTask}
-                />
+                <NativeResourceBoundary name={t('collaboration tasks')}>
+                  <TasksPanel
+                    sessionId={sessionId}
+                    onSession={onSession}
+                    focusTaskId={focusTask}
+                  />
+                </NativeResourceBoundary>
               </div>
             )}
           </Suspense>

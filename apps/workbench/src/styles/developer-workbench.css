@@ -226,3 +226,30 @@
 .status-rejected {
   color: var(--secondary);
 }
+
+.native-resource-error {
+  height: 100%;
+  min-height: 160px;
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+}
+.native-resource-error h3 {
+  font-size: var(--ui-size);
+  margin: 0 0 10px;
+}
+.native-resource-error p {
+  color: var(--secondary);
+}
+.native-resource-error details {
+  margin-top: 14px;
+}
+.native-resource-error pre {
+  max-height: 180px;
+  overflow: auto;
+  font-size: var(--ui-small);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

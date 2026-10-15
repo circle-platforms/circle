@@ -2,6 +2,7 @@ import { createContext, useContext, useState, type ReactNode } from 'react';
 import type { Attachment } from '../model/types';
 import { attachmentImage, sourceLocation } from '../model/source-navigation';
 import { Modal, DataBlock } from './common';
+import { NativeResourceBoundary } from './NativeResourceBoundary';
 import { t } from '../i18n';
 
 const Sources = createContext<{
@@ -35,22 +36,24 @@ export function SourceNavigation({
         }}
         title={attachment?.name ?? t('attachment')}
       >
-        {attachment && (
-          <div className="source-preview">
-            {image ? (
-              <a href={image} target="_blank" rel="noreferrer">
-                <img src={image} alt={attachment.name} />
-              </a>
-            ) : attachment.kind === 'image' ? (
-              <p role="status">{t('image data unavailable')}</p>
-            ) : (
-              <DataBlock title={attachment.name} value={attachment.content} />
-            )}
-            {attachment.truncated && (
-              <p role="status">{t('attachment preview is truncated')}</p>
-            )}
-          </div>
-        )}
+        <NativeResourceBoundary name={t('attachment')}>
+          {attachment && (
+            <div className="source-preview">
+              {image ? (
+                <a href={image} target="_blank" rel="noreferrer">
+                  <img src={image} alt={attachment.name} />
+                </a>
+              ) : attachment.kind === 'image' ? (
+                <p role="status">{t('image data unavailable')}</p>
+              ) : (
+                <DataBlock title={attachment.name} value={attachment.content} />
+              )}
+              {attachment.truncated && (
+                <p role="status">{t('attachment preview is truncated')}</p>
+              )}
+            </div>
+          )}
+        </NativeResourceBoundary>
       </Modal>
     </Sources.Provider>
   );

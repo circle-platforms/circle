@@ -73,6 +73,7 @@ import {
   connectWorkspaceStreams,
   workspaceCall,
 } from '../model/workspace-client';
+import { NativeResourceBoundary } from '../components/NativeResourceBoundary';
 import { SourceNavigation } from '../components/SourceNavigation';
 import { Inspector, PanelButtons } from '../features/Panels';
 const FileViewer = lazy(() =>
@@ -698,20 +699,22 @@ export function App() {
     [() => t('redo on screen'), () => act(() => runtime.command('redo'))],
   ] as const;
   const inspector = (
-    <Inspector
-      panel={panel}
-      selection={selection}
-      onPanel={onPanel}
-      onClose={() => setInspectorOpen(false)}
-      onFile={onFile}
-      onAgent={setAgent}
-      onDialog={onDialog}
-      onInteraction={(item) => {
-        if (item.kind === 'secret') {
-          onDialog('secret');
-        } else setInteraction(item);
-      }}
-    />
+    <NativeResourceBoundary name={t('inspector')}>
+      <Inspector
+        panel={panel}
+        selection={selection}
+        onPanel={onPanel}
+        onClose={() => setInspectorOpen(false)}
+        onFile={onFile}
+        onAgent={setAgent}
+        onDialog={onDialog}
+        onInteraction={(item) => {
+          if (item.kind === 'secret') {
+            onDialog('secret');
+          } else setInteraction(item);
+        }}
+      />
+    </NativeResourceBoundary>
   );
   const searchItems = [
     ...[

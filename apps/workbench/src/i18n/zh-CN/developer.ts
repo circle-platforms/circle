@@ -118,4 +118,11 @@ export const developer: Record<string, string> = {
   'read remaining artifact': '读取后续内容',
   'copy shown content': '复制已显示内容',
   'copy complete artifact': '复制完整产物',
+  '{name} unavailable': '{name}不可用',
+  '{name} could not be displayed': '{name}暂时无法显示',
+  'your other views and running work are preserved':
+    '其他视图和正在执行的工作不受影响',
+  'retry this view': '重试此视图',
+  'copy diagnostic': '复制诊断信息',
+  'diagnostic details': '诊断详情',
 };
