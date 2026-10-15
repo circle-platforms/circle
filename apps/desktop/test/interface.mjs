@@ -386,8 +386,11 @@ try {
   await page
     .getByRole('menuitem', { name: 'work without a project', exact: true })
     .click();
-  const message = page.getByRole('textbox', { name: 'message', exact: true });
-  await message.click();
+  const homeMessage = page.getByRole('textbox', {
+    name: 'message',
+    exact: true,
+  });
+  await homeMessage.click();
   assert.equal(
     await page.evaluate(
       () => document.activeElement?.getAttribute('aria-label') ?? '',
@@ -395,7 +398,7 @@ try {
     'message',
   );
   await page.keyboard.type('focused');
-  assert.equal(await message.inputValue(), 'focused');
+  assert.equal(await homeMessage.inputValue(), 'focused');
   assert.equal(
     await page
       .getByRole('textbox', { name: 'search projects', exact: true })
