@@ -5,13 +5,119 @@ import path from 'node:path';
 /** Project-scoped semantic service. Overlays never write project files. */
 export class LanguageService {
   private overlays = new Map<string, { content: string; version: number }>();
-  private service: ts.LanguageService;
+  private opened = new Set<string>();
+  private service!: ts.LanguageService;
   private root: string;
   private libraryRoot: string;
+  private options: ts.CompilerOptions = {};
+  private files: string[] = [];
+  private configPath?: string;
+  private configErrors: readonly ts.Diagnostic[] = [];
+  private observed = new Map<string, string>();
+  private invalidated = true;
+  private projectVersion = 0;
+  private disposed = false;
   constructor(root: string) {
     this.root = fs.realpathSync(root);
-
-    let options: ts.CompilerOptions = {
+    this.libraryRoot = fs.realpathSync(
+      path.dirname(ts.getDefaultLibFilePath({})),
+    );
+    this.ensureProject();
+  }
+  /** Filesystem watchers mark a project stale without touching in-flight drafts. */
+  invalidate(paths?: readonly string[]): void {
+    if (
+      !paths ||
+      paths.some((file) =>
+        /(?:\.[cm]?[jt]sx?|\.json|(?:^|[/\\])(?:tsconfig|jsconfig|package|pnpm-lock|yarn\.lock|bun\.lock)|(?:^|[/\\])node_modules(?:[/\\]|$))/.test(
+          file,
+        ),
+      )
+    )
+      this.invalidated = true;
+  }
+  private fingerprint(file: string): string {
+    try {
+      const stat = fs.lstatSync(file, { bigint: true });
+      return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+    } catch {
+      return 'missing';
+    }
+  }
+  private insideRoot(file: string): boolean {
+    const local = path.relative(this.root, path.resolve(file));
+    return (
+      local !== '..' &&
+      !local.startsWith('..' + path.sep) &&
+      !path.isAbsolute(local)
+    );
+  }
+  private observe(file: string): void {
+    file = path.normalize(file);
+    if (this.insideRoot(file) && !this.observed.has(file))
+      this.observed.set(file, this.fingerprint(file));
+  }
+  private observeParent(file: string): void {
+    let directory = path.dirname(file);
+    while (
+      this.insideRoot(directory) &&
+      !fs.existsSync(directory) &&
+      directory !== this.root
+    )
+      directory = path.dirname(directory);
+    if (this.insideRoot(directory)) this.observe(directory);
+  }
+  private ensureProject(): void {
+    if (this.disposed) throw Error('language service is closed');
+    if (
+      !this.invalidated &&
+      ![...this.observed].some(
+        ([file, stamp]) => this.fingerprint(file) !== stamp,
+      )
+    )
+      return;
+    this.invalidated = false;
+    this.observed.clear();
+    for (const name of [
+      'tsconfig.json',
+      'jsconfig.json',
+      'package.json',
+      'package-lock.json',
+      'pnpm-lock.yaml',
+      'yarn.lock',
+      'bun.lock',
+      'bun.lockb',
+      'node_modules',
+      'node_modules/@types',
+      'node_modules/.package-lock.json',
+    ])
+      this.observe(path.join(this.root, name));
+    this.observe(this.root);
+    const fileExists = (file: string) => {
+      this.observeParent(file);
+      return (
+        this.overlays.has(path.normalize(file)) ||
+        (this.allowed(file) && ts.sys.fileExists(file))
+      );
+    };
+    const readFile = (file: string) => {
+      this.observe(file);
+      this.observeParent(file);
+      return this.allowed(file) ? ts.sys.readFile(file) : undefined;
+    };
+    const readDirectory: typeof ts.sys.readDirectory = (...args) => {
+      this.observe(args[0]);
+      const files = ts.sys
+        .readDirectory(...args)
+        .filter((file) => this.allowed(file));
+      for (const file of files) this.observeParent(file);
+      return files;
+    };
+    const config = ['tsconfig.json', 'jsconfig.json']
+      .map((name) => path.join(this.root, name))
+      .find(fileExists);
+    this.configPath = config;
+    const defaults: ts.CompilerOptions = {
       allowJs: true,
       checkJs: true,
       target: ts.ScriptTarget.ESNext,
@@ -19,22 +125,14 @@ export class LanguageService {
       module: ts.ModuleKind.ESNext,
       jsx: ts.JsxEmit.ReactJSX,
     };
-    this.libraryRoot = fs.realpathSync(
-      path.dirname(ts.getDefaultLibFilePath(options)),
-    );
-    const fileExists = (file: string) =>
-      this.overlays.has(path.normalize(file)) ||
-      (this.allowed(file) && ts.sys.fileExists(file));
-    const readFile = (file: string) =>
-      this.allowed(file) ? ts.sys.readFile(file) : undefined;
-    const readDirectory: typeof ts.sys.readDirectory = (...args) =>
-      ts.sys.readDirectory(...args).filter((file) => this.allowed(file));
-    const configPath = path.join(this.root, 'tsconfig.json');
-    const config = fileExists(configPath) ? configPath : undefined;
-    let files: string[] = [];
+    this.configErrors = [];
     if (config) {
       const read = ts.readConfigFile(config, readFile);
-      if (!read.error) {
+      if (read.error) {
+        this.configErrors = [read.error];
+        this.options = defaults;
+        this.files = [];
+      } else {
         const parsed = ts.parseJsonConfigFileContent(
           read.config,
           {
@@ -44,31 +142,34 @@ export class LanguageService {
             readDirectory,
           },
           path.dirname(config),
+          undefined,
+          config,
         );
-        options = { ...options, ...parsed.options };
-        files = parsed.fileNames;
+        this.options = { ...defaults, ...parsed.options };
+        this.files = parsed.fileNames
+          .map((file) => path.normalize(file))
+          .filter((file) => this.allowed(file));
+        this.configErrors = parsed.errors;
       }
-    }
-    if (!files.length)
-      files = readDirectory(
+    } else {
+      this.options = defaults;
+      this.files = readDirectory(
         this.root,
-        ['.ts', '.tsx', '.js', '.jsx', '.json'],
+        ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'],
         ['**/node_modules/**', '**/.git/**', '**/dist/**'],
       );
+    }
+    this.projectVersion++;
     const host: ts.LanguageServiceHost = {
-      getScriptFileNames: () => [
-        ...new Set([
-          ...files.map((file) => path.normalize(file)),
-          ...this.overlays.keys(),
-        ]),
-      ],
+      getScriptFileNames: () =>
+        [
+          ...new Set([...this.files, ...this.opened, ...this.overlays.keys()]),
+        ].filter(fileExists),
+      getProjectVersion: () => String(this.projectVersion),
       getScriptVersion: (file) =>
         String(
           this.overlays.get(path.normalize(file))?.version ??
-            (this.allowed(file)
-              ? fs.statSync(file, { throwIfNoEntry: false })?.mtimeMs
-              : 0) ??
-            0,
+            (this.allowed(file) ? this.fingerprint(file) : 'missing'),
         ),
       getScriptSnapshot: (file) => {
         const text =
@@ -78,17 +179,50 @@ export class LanguageService {
           : ts.ScriptSnapshot.fromString(text);
       },
       getCurrentDirectory: () => this.root,
-      getCompilationSettings: () => options,
+      getCompilationSettings: () => this.options,
       getDefaultLibFileName: ts.getDefaultLibFilePath,
       fileExists,
       readFile,
       readDirectory,
-      directoryExists: (directory) =>
-        this.allowed(directory) && !!ts.sys.directoryExists?.(directory),
+      directoryExists: (directory) => {
+        this.observe(directory);
+        return this.allowed(directory) && !!ts.sys.directoryExists?.(directory);
+      },
       realpath: (file) =>
         this.allowed(file) ? (ts.sys.realpath?.(file) ?? file) : file,
     };
+    this.service?.dispose();
     this.service = ts.createLanguageService(host);
+  }
+  private configDiagnostics() {
+    const diagnostics = [
+      ...this.configErrors,
+      ...this.service.getCompilerOptionsDiagnostics(),
+    ];
+    const seen = new Set<string>();
+    return diagnostics.flatMap((item) => {
+      const file =
+        item.file?.fileName ??
+        this.configPath ??
+        path.join(this.root, 'tsconfig.json');
+      const message = ts.flattenDiagnosticMessageText(item.messageText, '\n');
+      const key = `${file}:${item.start}:${item.code}:${message}`;
+      if (seen.has(key)) return [];
+      seen.add(key);
+      return [
+        {
+          ...this.range(file, {
+            start: item.start ?? 0,
+            length: item.length ?? 0,
+          }),
+          path: path.relative(this.root, file).split(path.sep).join('/'),
+          source: 'configuration',
+          message,
+          severity: item.category === ts.DiagnosticCategory.Error ? 8 : 4,
+          code: String(item.code),
+        },
+      ];
+    });
   }
   /** Resolution can read only granted project files and the bundled standard libs. */
   private allowed(file: string): boolean {
@@ -125,8 +259,12 @@ export class LanguageService {
       (this.allowed(file) ? ts.sys.readFile(file) : undefined) ??
       '';
     const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest);
-    const a = source.getLineAndCharacterOfPosition(span.start),
-      b = source.getLineAndCharacterOfPosition(span.start + span.length);
+    const a = source.getLineAndCharacterOfPosition(
+        Math.min(span.start, text.length),
+      ),
+      b = source.getLineAndCharacterOfPosition(
+        Math.min(span.start + span.length, text.length),
+      );
     return {
       startLineNumber: a.line + 1,
       startColumn: a.character + 1,
@@ -143,6 +281,19 @@ export class LanguageService {
         throw Error('invalid language request');
       return this.call(params.method, params);
     }
+    if (method === 'refresh') this.invalidated = true;
+    this.ensureProject();
+    if (method === 'project' || method === 'refresh')
+      return {
+        version: this.projectVersion,
+        configPath: this.configPath
+          ? path.relative(this.root, this.configPath).split(path.sep).join('/')
+          : null,
+        files: this.files.map((file) =>
+          path.relative(this.root, file).split(path.sep).join('/'),
+        ),
+        diagnostics: this.configDiagnostics(),
+      };
     if (method === 'open' || method === 'change') method = 'sync';
     if (Array.isArray(params.documents))
       for (const document of params.documents) {
@@ -154,23 +305,33 @@ export class LanguageService {
           throw Error('invalid document overlay');
         const name = this.resolve(document.path),
           old = this.overlays.get(name);
-        if (old?.content !== document.content)
+        if (old?.content !== document.content) {
+          this.projectVersion++;
           this.overlays.set(name, {
             content: document.content,
             version: (old?.version ?? 0) + 1,
           });
+        }
       }
     const file = this.resolve(params.path);
+    if (!this.opened.has(file)) {
+      this.opened.add(file);
+      this.projectVersion++;
+    }
     if (typeof params.content === 'string') {
       const old = this.overlays.get(file);
-      if (old?.content !== params.content)
+      if (old?.content !== params.content) {
+        this.projectVersion++;
         this.overlays.set(file, {
           content: params.content,
           version: (old?.version ?? 0) + 1,
         });
+      }
     }
     if (method === 'close') {
       this.overlays.delete(file);
+      this.opened.delete(file);
+      this.projectVersion++;
       return {};
     }
     const content =
@@ -260,25 +421,57 @@ export class LanguageService {
           range: this.range(file, item.span),
           text: item.newText,
         }));
+    if (method === 'diagnostics' && file.endsWith('.json')) {
+      const error = ts.parseConfigFileTextToJson(file, content).error;
+      return [
+        ...this.configDiagnostics(),
+        ...(error
+          ? [
+              {
+                ...this.range(file, {
+                  start: error.start ?? 0,
+                  length: error.length ?? 0,
+                }),
+                path: path.relative(this.root, file).split(path.sep).join('/'),
+                source: 'configuration',
+                message: ts.flattenDiagnosticMessageText(
+                  error.messageText,
+                  '\n',
+                ),
+                severity: 8,
+                code: String(error.code),
+              },
+            ]
+          : []),
+      ];
+    }
     if (method === 'diagnostics')
       return [
-        ...this.service.getSyntacticDiagnostics(file),
-        ...this.service.getSemanticDiagnostics(file),
-      ].map((item) => ({
-        ...this.range(file, {
-          start: item.start ?? 0,
-          length: item.length ?? 0,
-        }),
-        message: ts.flattenDiagnosticMessageText(item.messageText, '\n'),
-        severity: item.category === ts.DiagnosticCategory.Error ? 8 : 4,
-        code: String(item.code),
-      }));
+        ...this.configDiagnostics(),
+        ...[
+          ...this.service.getSyntacticDiagnostics(file),
+          ...this.service.getSemanticDiagnostics(file),
+        ].map((item) => ({
+          path: path.relative(this.root, file).split(path.sep).join('/'),
+          source: 'typescript',
+          ...this.range(file, {
+            start: item.start ?? 0,
+            length: item.length ?? 0,
+          }),
+          message: ts.flattenDiagnosticMessageText(item.messageText, '\n'),
+          severity: item.category === ts.DiagnosticCategory.Error ? 8 : 4,
+          code: String(item.code),
+        })),
+      ];
     if (method === 'sync')
       return { version: this.overlays.get(path.normalize(file))?.version ?? 0 };
     throw Error(`unknown language method: ${method}`);
   }
   dispose() {
+    this.disposed = true;
     this.service.dispose();
     this.overlays.clear();
+    this.opened.clear();
+    this.observed.clear();
   }
 }

@@ -181,3 +181,280 @@ test('semantic import resolution cannot read through workspace symlink escapes',
   // TypeScript may return the unresolved import's own local alias declaration.
   assert.ok(definitions.every((item) => item.path === 'main.ts'));
 });
+
+test('extends, path aliases and JSX refresh in place while keeping unsaved overlays', (t) => {
+  const { root, service } = fixture(t);
+  mkdirSync(join(root, 'config'));
+  mkdirSync(join(root, 'src'));
+  const base = (target: string) =>
+    JSON.stringify({
+      compilerOptions: {
+        strict: true,
+        target: 'ES2022',
+        module: 'ESNext',
+        moduleResolution: 'Bundler',
+        jsx: 'preserve',
+        baseUrl: '..',
+        paths: { '@value': [target] },
+      },
+    });
+  writeFileSync(join(root, 'config/base.json'), base('src/a.ts'));
+  writeFileSync(
+    join(root, 'tsconfig.json'),
+    JSON.stringify({
+      extends: './config/base.json',
+      include: ['src/**/*.ts', 'src/**/*.tsx', 'jsx.d.ts'],
+    }),
+  );
+  writeFileSync(
+    join(root, 'jsx.d.ts'),
+    'declare namespace JSX { interface IntrinsicElements { button: {label:string} } }',
+  );
+  writeFileSync(join(root, 'src/a.ts'), 'export const title = "first";');
+  writeFileSync(join(root, 'src/b.ts'), 'export const title = 42;');
+  const content =
+    'import { title } from "@value";\nexport const node = <button label={title}/>;';
+  writeFileSync(join(root, 'src/view.tsx'), content);
+  const initial = service.call('request', {
+    method: 'diagnostics',
+    path: 'src/view.tsx',
+  }) as { message: string }[];
+  assert.deepEqual(initial, []);
+  const definitions = () =>
+    service.call('request', {
+      method: 'definition',
+      path: 'src/view.tsx',
+      line: 1,
+      column: 11,
+    }) as { path: string }[];
+  assert.equal(definitions()[0]?.path, 'src/a.ts');
+  service.call('change', {
+    path: 'src/view.tsx',
+    content: content + '\nconst humanDraft: number = "unsaved";',
+  });
+  writeFileSync(join(root, 'config/base.json'), base('src/b.ts'));
+  const changed = service.call('request', {
+    method: 'diagnostics',
+    path: 'src/view.tsx',
+  }) as { message: string }[];
+  assert.ok(
+    changed.filter((item) => item.message.includes('not assignable')).length >=
+      2,
+  );
+  assert.equal(definitions()[0]?.path, 'src/b.ts');
+  assert.equal(readFileSync(join(root, 'src/view.tsx'), 'utf8'), content);
+  const state = service.call('request', { method: 'project' }) as {
+    configPath: string;
+    files: string[];
+  };
+  assert.equal(state.configPath, 'tsconfig.json');
+  assert.ok(state.files.includes('src/view.tsx'));
+});
+
+test('new and deleted project files update definitions without app restart or explicit invalidation', (t) => {
+  const { root, service } = fixture(t);
+  const content = 'export const value = newFeature;';
+  const diagnostic = () =>
+    service.call('request', {
+      method: 'diagnostics',
+      path: 'main.ts',
+      content,
+    }) as { message: string }[];
+  assert.ok(
+    diagnostic().some((item) => item.message.includes('Cannot find name')),
+  );
+  writeFileSync(join(root, 'new-global.ts'), 'const newFeature = 123;');
+  assert.ok(
+    !diagnostic().some((item) => item.message.includes('Cannot find name')),
+  );
+  const definitions = service.call('request', {
+    method: 'definition',
+    path: 'main.ts',
+    line: 1,
+    column: 24,
+  }) as { path: string }[];
+  assert.equal(definitions[0]?.path, 'new-global.ts');
+  rmSync(join(root, 'new-global.ts'));
+  assert.ok(
+    diagnostic().some((item) => item.message.includes('Cannot find name')),
+  );
+  const state = service.call('request', { method: 'project' }) as {
+    files: string[];
+  };
+  assert.ok(!state.files.includes('new-global.ts'));
+});
+
+test('installed, changed and removed dependency declarations refresh diagnostics and completion', (t) => {
+  const { root, service } = fixture(t);
+  const content =
+    'import { greet } from "fixture-package";\nconst result: number = greet();';
+  const diagnostics = () =>
+    service.call('request', {
+      method: 'diagnostics',
+      path: 'main.ts',
+      content,
+    }) as { message: string }[];
+  assert.ok(
+    diagnostics().some((item) => item.message.includes('Cannot find module')),
+  );
+  const pkg = join(root, 'node_modules/fixture-package');
+  mkdirSync(pkg, { recursive: true });
+  writeFileSync(
+    join(pkg, 'package.json'),
+    JSON.stringify({
+      name: 'fixture-package',
+      version: '1.0.0',
+      types: 'index.d.ts',
+    }),
+  );
+  writeFileSync(
+    join(pkg, 'index.d.ts'),
+    'export declare function greet(): number;\nexport declare const installed: string;',
+  );
+  assert.deepEqual(diagnostics(), []);
+  const completion = () =>
+    service.call('request', {
+      method: 'completion',
+      path: 'main.ts',
+      content: 'import * as lib from "fixture-package";\nlib.',
+      line: 2,
+      column: 5,
+    }) as { label: string }[];
+  assert.ok(completion().some((item) => item.label === 'installed'));
+  writeFileSync(
+    join(pkg, 'index.d.ts'),
+    'export declare function greet(): string;\nexport declare const replacement: boolean;',
+  );
+  assert.ok(
+    diagnostics().some((item) => item.message.includes('not assignable')),
+  );
+  const changed = completion();
+  assert.ok(changed.some((item) => item.label === 'replacement'));
+  assert.ok(!changed.some((item) => item.label === 'installed'));
+  rmSync(join(root, 'node_modules'), { recursive: true, force: true });
+  assert.ok(
+    diagnostics().some((item) => item.message.includes('Cannot find module')),
+  );
+});
+
+test('configuration syntax and option errors are explicit diagnostics and recover after edits', (t) => {
+  const { root, service } = fixture(t);
+  const content = 'const humanDraft: number = "unsaved";';
+  service.call('change', { path: 'main.ts', content });
+  writeFileSync(
+    join(root, 'tsconfig.json'),
+    '{"compilerOptions":{"strict": true,,}}',
+  );
+  const syntax = service.call('request', {
+    method: 'diagnostics',
+    path: 'main.ts',
+  }) as { path: string; source: string; message: string }[];
+  assert.ok(
+    syntax.some(
+      (item) =>
+        item.source === 'configuration' && item.path === 'tsconfig.json',
+    ),
+  );
+  const project = service.call('request', { method: 'project' }) as {
+    diagnostics: { source: string }[];
+  };
+  assert.ok(project.diagnostics.length > 0);
+  writeFileSync(
+    join(root, 'tsconfig.json'),
+    JSON.stringify({
+      compilerOptions: { target: 'not-a-target' },
+      include: ['*.ts'],
+    }),
+  );
+  const option = service.call('request', {
+    method: 'diagnostics',
+    path: 'main.ts',
+  }) as { source: string; message: string }[];
+  assert.ok(
+    option.some(
+      (item) =>
+        item.source === 'configuration' && item.message.includes('target'),
+    ),
+  );
+  writeFileSync(
+    join(root, 'tsconfig.json'),
+    JSON.stringify({
+      compilerOptions: {
+        target: 'ES2022',
+        module: 'ESNext',
+        moduleResolution: 'Bundler',
+      },
+      include: ['*.ts'],
+    }),
+  );
+  const fixed = service.call('request', {
+    method: 'diagnostics',
+    path: 'main.ts',
+  }) as { source: string; message: string }[];
+  assert.ok(!fixed.some((item) => item.source === 'configuration'));
+  assert.ok(fixed.some((item) => item.message.includes('not assignable')));
+  assert.doesNotMatch(
+    readFileSync(join(root, 'main.ts'), 'utf8'),
+    /humanDraft/,
+  );
+});
+
+test('explicit invalidation preserves drafts and jsconfig is picked up after tsconfig removal', (t) => {
+  const { root, service } = fixture(t);
+  service.call('change', {
+    path: 'main.ts',
+    content: 'const value: number = "unsaved";',
+  });
+  service.invalidate(['main.ts']);
+  assert.ok(
+    (
+      service.call('request', { method: 'diagnostics', path: 'main.ts' }) as {
+        message: string;
+      }[]
+    ).some((item) => item.message.includes('not assignable')),
+  );
+  rmSync(join(root, 'tsconfig.json'));
+  writeFileSync(
+    join(root, 'jsconfig.json'),
+    JSON.stringify({ compilerOptions: { checkJs: true }, include: ['*.js'] }),
+  );
+  writeFileSync(join(root, 'app.js'), 'const value = 1; value.toUpperCase();');
+  const diagnostics = service.call('request', {
+    method: 'diagnostics',
+    path: 'app.js',
+  }) as { message: string }[];
+  assert.ok(diagnostics.some((item) => item.message.includes('toUpperCase')));
+  const project = service.call('request', { method: 'refresh' }) as {
+    configPath: string;
+  };
+  assert.equal(project.configPath, 'jsconfig.json');
+});
+
+test('configuration extends cannot load files outside the granted root', (t) => {
+  const { root, service } = fixture(t);
+  const outside = root + '-outside.json';
+  t.after(() => rmSync(outside, { force: true }));
+  writeFileSync(
+    outside,
+    JSON.stringify({ compilerOptions: { types: ['outside-sensitive-type'] } }),
+  );
+  writeFileSync(
+    join(root, 'tsconfig.json'),
+    JSON.stringify({ extends: outside, include: ['*.ts'] }),
+  );
+  const project = service.call('request', { method: 'project' }) as {
+    diagnostics: { message: string; source: string }[];
+  };
+  assert.ok(
+    project.diagnostics.some(
+      (item) =>
+        item.source === 'configuration' &&
+        item.message.includes('Cannot read file'),
+    ),
+  );
+  assert.ok(
+    project.diagnostics.every(
+      (item) => !item.message.includes('outside-sensitive-type'),
+    ),
+  );
+});
