@@ -1006,37 +1006,90 @@ else process.exit(2);
   }
   const end = Date.now() + 30000;
   const final = new Map<string, any>();
-  while (Date.now() < end) {
-    for (const interaction of f.controller
-      .snapshot()
-      .interactions.filter((i) => i.status === 'pending'))
-      await f.call(
-        'answer',
-        {
-          id: interaction.id,
-          revision: interaction.revision,
-          answer: 'approve',
-        },
-        interaction.sessionId,
-      );
-    for (const owner of [ownerA, ownerB]) {
-      const advanced = await f.service(
-        'cycles',
-        'advance',
-        { id: 'same-cycle' },
-        owner,
-      );
-      assert.equal(advanced.ok, true, advanced.error);
-      final.set(owner, advanced.data);
+  const timeline: unknown[] = [];
+  let answering = true;
+  // Human approval remains responsive while a cycle is doing Git/verification;
+  // awaiting an advance must not suspend the test's independent user actor.
+  const approvalActor = (async () => {
+    while (answering) {
+      for (const interaction of f.controller
+        .snapshot()
+        .interactions.filter((item) => item.status === 'pending')) {
+        await f.call(
+          'answer',
+          {
+            id: interaction.id,
+            revision: interaction.revision,
+            answer: 'approve',
+          },
+          interaction.sessionId,
+        );
+      }
+      await delay(10);
     }
-    if ([...final.values()].every((c) => c.state === 'pending_human_merge'))
-      break;
-    await delay(30);
+  })();
+  try {
+    while (Date.now() < end) {
+      for (const owner of [ownerA, ownerB]) {
+        const advanced = await f.service(
+          'cycles',
+          'advance',
+          { id: 'same-cycle' },
+          owner,
+        );
+        assert.equal(advanced.ok, true, advanced.error);
+        if (JSON.stringify(final.get(owner)) !== JSON.stringify(advanced.data))
+          timeline.push({ at: Date.now(), owner, cycle: advanced.data });
+        final.set(owner, advanced.data);
+      }
+      if (
+        [...final.values()].every(
+          (cycle) => cycle.state === 'pending_human_merge',
+        )
+      )
+        break;
+      await delay(30);
+    }
+  } finally {
+    answering = false;
+    await approvalActor;
+  }
+  const passed =
+    [...final.values()].length === 2 &&
+    [...final.values()].every((cycle) => cycle.state === 'pending_human_merge');
+  let failureReceipt: string | undefined;
+  if (!passed) {
+    const taskReply = await f.service('tasks', 'list', {}, ownerA);
+    const records = (taskReply.data ?? []) as any[];
+    const receipt = {
+      cycles: [...final.values()],
+      timeline,
+      tasks: await Promise.all(
+        records.map(async (task) => ({
+          ...task,
+          actualCandidate: task.worktree
+            ? await readFile(join(task.worktree, 'app.cjs'), 'utf8').catch(
+                (error) => String(error),
+              )
+            : undefined,
+        })),
+      ),
+      interactions: f.controller.snapshot().interactions,
+      modelRequestCount: f.model.requests.length,
+      events: f.events,
+    };
+    const directory = join(import.meta.dirname, '../artifacts/runtime');
+    await mkdir(directory, { recursive: true });
+    failureReceipt = join(
+      directory,
+      `controller-cycle-failure-${randomUUID()}.json`,
+    );
+    await writeFile(failureReceipt, JSON.stringify(receipt, null, 2));
   }
   assert.deepEqual(
-    [...final.values()].map((c) => c.state),
+    [...final.values()].map((cycle) => cycle.state),
     ['pending_human_merge', 'pending_human_merge'],
-    JSON.stringify([...final.values()]),
+    JSON.stringify({ failureReceipt, cycles: [...final.values()] }),
   );
   const tasks = await f.service('tasks', 'list', {}, ownerA);
   const owners = new Set(
@@ -1324,4 +1377,64 @@ test('private input drafts remain recoverable after workspace trust is revoked',
   } finally {
     await restarted.close();
   }
+});
+
+test('late events after normal service disposal do not become storage failures or cancel live models', async (t) => {
+  let signal: AbortSignal | undefined;
+  const f = await setup(t, [
+    async (request) => {
+      signal = request.signal;
+      return new Promise((_resolve, reject) =>
+        request.signal.addEventListener(
+          'abort',
+          () => reject(request.signal.reason),
+          { once: true },
+        ),
+      );
+    },
+  ]);
+  await f.call('prompt', { text: 'keep model active' });
+  await wait(() => !!signal);
+  await writeFile(join(f.workspace, 'file.txt'), 'fixture');
+  assert.equal(
+    (await f.service('documents', 'read', { path: 'file.txt' })).ok,
+    true,
+  );
+  const root = realpathSync(f.workspace),
+    controller = f.controller as any;
+  const service = controller.workspaceServices.get(root);
+  await service.dispose();
+  const event = {
+    workspaceId: createHash('sha256').update(root).digest('hex').slice(0, 24),
+    sessionId: f.controller.snapshot().activeSessionId,
+    service: 'tasks',
+    resourceId: 'late',
+    epoch: 'late',
+    seq: 1,
+    at: new Date().toISOString(),
+    data: { type: 'late-cleanup' },
+  };
+  await assert.rejects(
+    () => service.publishSource(event),
+    (error: any) => error.code === 'WORKSPACE_SERVICES_CLOSED',
+  );
+  controller.workspaceEvent(root, event);
+  await delay(30);
+  assert.equal(
+    signal!.aborted,
+    false,
+    'normal closed stream must not abort another ongoing model',
+  );
+  assert.equal(controller.workspaceStreamFailures.size, 0);
+  assert.equal(service.eventHealth.error, undefined);
+  await f.controller.close();
+  const count = controller.workspaceServices.size;
+  controller.workspaceEvent(join(f.root, 'never-opened'), event);
+  await delay(10);
+  assert.equal(
+    controller.workspaceServices.size,
+    count,
+    'closing does not create a new service',
+  );
+  assert.equal(controller.workspaceStreamFailures.size, 0);
 });

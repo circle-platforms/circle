@@ -13,6 +13,7 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
+import { GitWorkspaceService } from '../src/workspace/git.ts';
 import { WorkspaceServices } from '../src/workspace/workspace-services.ts';
 import type { WorkspaceDocument } from '../src/workspace/documents.ts';
 import type {
@@ -507,5 +508,46 @@ test('concurrent disposal shares completion and late sources are not reported as
     await service.dispose();
     await rm(root, { recursive: true, force: true });
     await rm(data, { recursive: true, force: true });
+  }
+});
+
+test('Git canonicalizes granted repository aliases without granting its parent to a child workspace', async () => {
+  const container = await mkdtemp(
+    path.join(tmpdir(), 'circle-git-root-grant-'),
+  );
+  const root = path.join(container, 'repo');
+  const alias = path.join(container, 'repo-alias');
+  const child = path.join(root, 'child');
+  await mkdir(child, { recursive: true });
+  const git = new GitWorkspaceService(root);
+  await git.git(['init']);
+  await symlink(root, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const base = {
+    dataDir: path.join(container, 'data'),
+    nodeExecutable: process.execPath,
+    runtimeExecutable: process.execPath,
+    adapterPath: 'unused',
+    ghPath: 'unused',
+    emit: () => {},
+  };
+  const granted = new WorkspaceServices({ ...base, workspaceRoot: root });
+  const aliased = new WorkspaceServices({ ...base, workspaceRoot: alias });
+  const nested = new WorkspaceServices({ ...base, workspaceRoot: child });
+  try {
+    const ordinary = (await granted.call('s', 'git', 'status')) as {
+      root: string;
+    };
+    assert.equal(await realpath(ordinary.root), await realpath(root));
+    const viaAlias = (await aliased.call('s', 'git', 'status')) as {
+      root: string;
+    };
+    assert.equal(await realpath(viaAlias.root), await realpath(root));
+    await assert.rejects(
+      nested.call('s', 'git', 'status'),
+      /open the repository root to grant Git workspace access/,
+    );
+  } finally {
+    await Promise.all([granted.dispose(), aliased.dispose(), nested.dispose()]);
+    await rm(container, { recursive: true, force: true });
   }
 });

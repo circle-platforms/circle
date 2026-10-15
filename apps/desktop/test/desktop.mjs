@@ -466,9 +466,18 @@ try {
   if ((await files.getAttribute('aria-pressed')) !== 'true')
     await files.click();
   await page.getByRole('button', { name: 'hello.ts', exact: true }).click();
-  await page
-    .getByText('export const hello = "native workspace";', { exact: true })
-    .waitFor();
+  const fileLines = page.locator('.file-view .native-code-editor .view-lines');
+  await fileLines.waitFor({ state: 'visible' });
+  assert.equal(await fileLines.count(), 1, 'one visible source editor');
+  await page.waitForFunction(() => {
+    const lines = document.querySelector(
+      '.file-view .native-code-editor .view-lines',
+    );
+    return (
+      lines?.textContent.replaceAll('\u00a0', ' ') ===
+      'export const hello = "native workspace";'
+    );
+  });
   assert.equal(
     await readFile(join(workspace, 'hello.ts'), 'utf8'),
     'export const hello = "native workspace";\n',

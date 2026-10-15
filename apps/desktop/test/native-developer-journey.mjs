@@ -1,4 +1,17 @@
 import {
+  createNativeGitFixture,
+  runNativeGitJourney,
+} from './helpers/native-git-journey.mjs';
+import {
+  createNativeTerminalFixture,
+  runNativeTerminalJourney,
+} from './helpers/native-terminal-journey.mjs';
+import {
+  createNativeDebugFixture,
+  runNativeDebugJourney,
+} from './helpers/native-debug-journey.mjs';
+import { runNativeKeyboardJourney } from './helpers/native-keyboard-journey.mjs';
+import {
   createNativeEditorSemanticsFixture,
   runNativeEditorSemantics,
 } from './helpers/native-editor-semantics.mjs';
@@ -72,8 +85,11 @@ await Promise.all([
     JSON.stringify({ name: 'native-journey', private: true }),
   ),
 ]);
+await createNativeGitFixture(repo);
 await createNativeEditorFixture(repo);
 await createNativeEditorSemanticsFixture(repo);
+const terminalFixture = await createNativeTerminalFixture(repo);
+const debugFixture = await createNativeDebugFixture(repo);
 const isolationFiles = await createNativeEditorIsolationFixture(repo);
 const git = async (...args) =>
   (await promisify(execFile)('git', ['-C', repo, ...args])).stdout;
@@ -82,6 +98,9 @@ await git(
   'add',
   ...isolationFiles,
   '.circle-editor-isolation-fixture.json',
+  ...terminalFixture.files,
+  debugFixture.program,
+  '.circle-native-debug-interaction.json',
   'editor-supplement.ts',
   'editor-main.ts',
   'editor-lib.ts',
@@ -354,7 +373,27 @@ const buildIdentity = {
   sourceBuildHead: process.env.CIRCLE_NATIVE_JOURNEY_SOURCE_BUILD_HEAD ?? null,
   appPath: launchRoot,
   files: {},
+  driverFiles: {},
 };
+for (const file of [
+  'native-developer-journey.mjs',
+  ...[
+    'native-input-recovery',
+    'native-browser-stream',
+    'native-editor-isolation',
+    'native-editor-journey',
+    'native-editor-semantics',
+    'native-terminal-journey',
+    'native-debug-journey',
+    'native-keyboard-journey',
+    'native-git-journey',
+    'native-journey-platform',
+  ].map((name) => 'helpers/' + name + '.mjs'),
+]) {
+  buildIdentity.driverFiles[file] = createHash('sha256')
+    .update(await readFile(join(root, 'test', file)))
+    .digest('hex');
+}
 for (const file of [
   'dist/main.cjs',
   'dist/preload.cjs',
@@ -657,6 +696,35 @@ try {
     }, 'PTY receives actual stdin');
     await screenshot('03-interactive-terminal');
   });
+  await check(
+    'terminal search complete copy independent buffers and managed service lifecycle',
+    async () => {
+      await app.evaluate(async ({ clipboard }) => {
+        globalThis.__terminalClipboard = await clipboard.read();
+      });
+      try {
+        await runNativeTerminalJourney({
+          page,
+          workspace: repo,
+          sessionId,
+          output,
+          nodePath: buildIdentity.bundledNode.path,
+          clipboard: {
+            readText: () =>
+              app.evaluate(({ clipboard }) => clipboard.readText()),
+          },
+          query,
+          until,
+          screenshot,
+        });
+      } finally {
+        await app.evaluate(async ({ clipboard }) => {
+          await clipboard.write(globalThis.__terminalClipboard ?? []);
+          delete globalThis.__terminalClipboard;
+        });
+      }
+    },
+  );
   await check('Git working diff stage and unstage hunk', async () => {
     await page.locator('#dock-tab-git').click();
     const panel = page.locator('.native-git');
@@ -701,6 +769,26 @@ try {
       'actual index hunk unstaged',
     );
   });
+  await check(
+    'Git consecutive scoped commits local push conflict continue and abort',
+    async () => {
+      await page
+        .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+        .click();
+      const beforeBranch = (await git('branch', '--show-current')).trim();
+      const beforeReadme = await readFile(join(repo, 'README.md'), 'utf8');
+      await runNativeGitJourney({ page, workspace: repo, sessionId, output });
+      assert.equal(
+        (await git('branch', '--show-current')).trim(),
+        beforeBranch,
+      );
+      assert.equal(
+        await readFile(join(repo, 'README.md'), 'utf8'),
+        beforeReadme,
+        'extended Git journey preserves existing manual edits',
+      );
+    },
+  );
   await check('Node launch breakpoint variables and step', async () => {
     await page.locator('#dock-tab-debug').click();
     const panel = page.locator('.debug-panel');
@@ -804,6 +892,20 @@ try {
       .getByRole('checkbox', { name: 'pause at entry', exact: true })
       .uncheck();
   });
+  await check(
+    'debug variable editing steps interactive stdin and inspector cleanup',
+    async () => {
+      await runNativeDebugJourney({
+        page,
+        workspace: repo,
+        sessionId,
+        query,
+        until,
+        output,
+        screenshot,
+      });
+    },
+  );
   await check('browser diagnostics actual source navigation', async () => {
     await page
       .getByRole('button', { name: 'browser panel', exact: true })
@@ -941,9 +1043,11 @@ try {
         await panel
           .getByRole('button', { name: 'queue task', exact: true })
           .click();
-        await panel
-          .getByRole('button', { name: 'start ready tasks', exact: true })
-          .click();
+        const startReady = panel.getByRole('button', {
+          name: 'start ready tasks',
+          exact: true,
+        });
+        if (await startReady.isEnabled()) await startReady.click();
       };
       await queue('JOURNEY_WRITE_A', 'write');
       await until(
@@ -989,20 +1093,20 @@ try {
             async () =>
               (await state()).interactions.some(
                 (i) =>
-                  i.sessionId === record.spec.sessionId &&
+                  i.sessionId === record.runtimeSessionId &&
                   i.status === 'pending',
               ),
             'child approval is projected',
           );
           const pending = (await state()).interactions.find(
             (i) =>
-              i.sessionId === record.spec.sessionId && i.status === 'pending',
+              i.sessionId === record.runtimeSessionId && i.status === 'pending',
           );
           if (pending.command?.includes('git status'))
             gitApprovalObserved = true;
           await page
             .locator(
-              `.sidebar .session-link[href="#/session/${record.spec.sessionId}"]`,
+              `.sidebar .session-link[href="#/session/${record.runtimeSessionId}"]`,
             )
             .click();
           await page
@@ -1029,7 +1133,7 @@ try {
           );
           await page
             .locator(
-              `.sidebar .session-link[href="#/session/${record.spec.sessionId}"]`,
+              `.sidebar .session-link[href="#/session/${record.runtimeSessionId}"]`,
             )
             .click();
           await page
@@ -1074,6 +1178,21 @@ try {
         JSON.stringify({ concurrent, complete, gitApprovalObserved }, null, 2),
       );
       await screenshot('08c-parallel-task-results');
+    },
+  );
+  await check(
+    'keyboard quick open palette focus and layout selection retention',
+    async () => {
+      const keyboardChecks = [];
+      await runNativeKeyboardJourney({
+        page,
+        fileName: 'README.md',
+        checks: keyboardChecks,
+      });
+      await writeFile(
+        join(output, 'keyboard-journey.json'),
+        JSON.stringify({ checks: keyboardChecks }, null, 2),
+      );
     },
   );
   await check(
@@ -1196,6 +1315,14 @@ try {
     join(output, 'fixture-final.json'),
     JSON.stringify(fixtureFinal, null, 2),
   );
+  try {
+    await writeFile(
+      join(output, 'actual-scripted-requests.jsonl'),
+      await readFile(requestsPath),
+    );
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
   server.closeAllConnections();
   await new Promise((done) => server.close(done));
   await rm(temp, { recursive: true, force: true });

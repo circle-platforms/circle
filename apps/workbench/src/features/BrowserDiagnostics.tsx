@@ -331,7 +331,9 @@ export function BrowserDiagnostics({
               {t('page debugger')}
             </button>
           </div>
-          {error && <p role="alert">{error}</p>}
+          {(error || result?.state.reconnectError) && (
+            <p role="alert">{error || result?.state.reconnectError}</p>
+          )}
           <p role="status">
             {result?.state.debugger.paused
               ? t('page paused')

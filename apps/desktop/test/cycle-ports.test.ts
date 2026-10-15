@@ -142,7 +142,7 @@ else if(a[0]==='pr'&&a[1]==='checks'){
  if(s.changeDuringChecks==='number')s.pr.number=99;
  if(s.changeDuringChecks==='local')fs.writeFileSync('README.md','concurrent local change');
  const content=git('show',head+':app.cjs');
- out=[{name:'remote acceptance',state:content.includes('readyForCI=true')?'SUCCESS':'FAILURE',bucket:s.holdCI?'pending':s.forcePass||content.includes('readyForCI=true')?'pass':'fail',link:'https://github.invalid/fixture/repo/actions/runs/42/job/3'}];
+ out=s.checks??[{name:'remote acceptance',state:content.includes('readyForCI=true')?'SUCCESS':'FAILURE',bucket:s.holdCI?'pending':s.forcePass||content.includes('readyForCI=true')?'pass':'fail',link:'https://github.invalid/fixture/repo/actions/runs/42/job/3'}];
 }
 else if(a[0]==='pr'&&a[1]==='ready'){pr();if(a.includes('--undo')){s.undos=(s.undos??0)+1;s.pr.isDraft=true;out='draft'}else{s.ready++;s.pr.isDraft=false;if(s.changeDuringReady)s.overrideHead='unverified-head-during-ready';out='ready'}}
 else if(a[0]==='run'&&a[1]==='view'){s.logs++;out='CI_ACTUAL_LOG: remote acceptance requires readyForCI=true';}
@@ -897,5 +897,55 @@ test('cycle verification rejects empty evidence and contradictory command succes
     assert.equal(result.passed, false);
     assert.equal(result.evidence[0].status, 'needs_review');
     assert.match(result.evidence[0].detail, /acceptance requires/);
+  }
+});
+
+test('requesting review treats legitimate skipping as neutral while requiring a real passing check', async (t) => {
+  const f = await fixture(t),
+    owned = join(f.root, 'neutral-owned');
+  await git(f.workspace, 'worktree', 'add', '--detach', owned, f.baseline);
+  await git(owned, 'switch', '-c', 'codex/neutral-checks');
+  await git(owned, 'push', '--set-upstream', 'origin', 'codex/neutral-checks');
+  const delivery = new DeliveryService(owned, f.ghPath);
+  for (const buckets of [
+    ['pass', 'skipping'],
+    ['skipping'],
+    [],
+    ['pass', 'pending'],
+    ['pass', 'fail'],
+    ['pass', 'cancel'],
+    ['pass', 'new-unknown-state'],
+  ]) {
+    await writeFile(
+      f.ghState,
+      JSON.stringify({
+        created: 1,
+        ready: 0,
+        logs: 0,
+        retries: 0,
+        calls: [],
+        holdCI: false,
+        checks: buckets.map((bucket, index) => ({
+          bucket,
+          name: 'check ' + index,
+        })),
+        pr: {
+          number: 7,
+          url: 'https://github.invalid/fixture/repo/pull/7',
+          isDraft: true,
+        },
+      }),
+    );
+    const request = delivery.call('ready', {
+      revision: (await delivery.git.snapshot()).revision,
+    });
+    if (buckets[0] === 'pass' && buckets[1] === 'skipping') await request;
+    else await assert.rejects(request, /CI needs a passing check/);
+    const state = JSON.parse(await readFile(f.ghState, 'utf8'));
+    assert.equal(
+      state.ready,
+      buckets[0] === 'pass' && buckets[1] === 'skipping' ? 1 : 0,
+      JSON.stringify(buckets),
+    );
   }
 });

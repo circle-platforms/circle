@@ -14,6 +14,10 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
+import {
+  preserveNativeClipboard,
+  restoreNativeClipboard,
+} from './helpers/native-clipboard.mjs';
 import { CheckpointStore } from '../../../src/checkpoint_store.ts';
 import {
   defaultSettings,
@@ -327,7 +331,7 @@ try {
   report.source = await sourceEvidence();
   report.renderer = await rendererEvidence(desktopRoot);
   report.appInfo = await page.evaluate(() => window.circleDesktop.info());
-  clipboardBefore = await app.evaluate(({ clipboard }) => clipboard.readText());
+  clipboardBefore = await preserveNativeClipboard(app);
   taskIds = Array.from(
     { length: 8 },
     (_, index) => `performance-agent-${index}`,
@@ -680,11 +684,12 @@ try {
   if (app) {
     try {
       if (clipboardBefore !== undefined)
-        await app.evaluate(
-          ({ clipboard }, text) => clipboard.writeText(text),
-          clipboardBefore,
-        );
-    } catch {}
+        await restoreNativeClipboard(app, clipboardBefore);
+    } catch (error) {
+      report.clipboardRestoreFailure = String(error);
+      report.passed = false;
+      process.exitCode = 1;
+    }
     await app.close().catch(() => {});
   }
   report.finishedAt = new Date().toISOString();

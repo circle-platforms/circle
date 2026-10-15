@@ -61,6 +61,10 @@ try {
   await app.evaluate(
     async (_, { origin }) => {
       await globalThis.fixture.browser.navigate('test', origin);
+      globalThis.fixture.guest =
+        globalThis.fixture.window.contentView.children.find((view) =>
+          view.webContents.getURL().startsWith(origin),
+        ).webContents;
     },
     { origin },
   );
@@ -96,18 +100,12 @@ try {
     }),
   );
   const dimensions = await app.evaluate(() =>
-    globalThis.fixture.window.contentView.children[0].webContents.executeJavaScript(
-      '[innerWidth,innerHeight]',
-    ),
+    globalThis.fixture.guest.executeJavaScript('[innerWidth,innerHeight]'),
   );
   assert.deepEqual(dimensions, [375, 812]);
   if (output) {
     const png = await app.evaluate(async () =>
-      (
-        await globalThis.fixture.window.contentView.children[0].webContents.capturePage()
-      )
-        .toPNG()
-        .toString('base64'),
+      (await globalThis.fixture.guest.capturePage()).toPNG().toString('base64'),
     );
     await writeFile(
       join(output, 'native-375x812.png'),
@@ -125,10 +123,9 @@ try {
     origin,
   );
   await app.evaluate(() => {
-    globalThis.fixture.evaluation =
-      globalThis.fixture.window.contentView.children[0].webContents.executeJavaScript(
-        'breakpointFixture()',
-      );
+    globalThis.fixture.evaluation = globalThis.fixture.guest.executeJavaScript(
+      'breakpointFixture()',
+    );
   });
   for (let i = 0; i < 50; i++) {
     result = await app.evaluate(() =>
@@ -182,7 +179,7 @@ try {
   // Pause again, then let the actual DevTools frontend own and resume it.
   await app.evaluate(() => {
     globalThis.fixture.gapResult = undefined;
-    void globalThis.fixture.window.contentView.children[0].webContents
+    void globalThis.fixture.guest
       .executeJavaScript('breakpointFixture()')
       .then((value) => {
         globalThis.fixture.gapResult = value;
@@ -211,8 +208,7 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 250));
   if (await app.evaluate(() => globalThis.fixture.gapResult === undefined)) {
     await app.evaluate(() => {
-      const guest =
-        globalThis.fixture.window.contentView.children[0].webContents;
+      const guest = globalThis.fixture.guest;
       const frontend = guest.devToolsWebContents;
       if (!frontend) throw Error('owned DevTools frontend missing');
       frontend.focus();
@@ -229,9 +225,7 @@ try {
     4,
     'actual page resumed during DevTools ownership gap',
   );
-  await app.evaluate(() =>
-    globalThis.fixture.window.contentView.children[0].webContents.closeDevTools(),
-  );
+  await app.evaluate(() => globalThis.fixture.guest.closeDevTools());
   for (let i = 0; i < 50; i++) {
     result = await app.evaluate(() =>
       globalThis.fixture.browser.diagnostics('test', { action: 'read' }),
@@ -260,7 +254,7 @@ try {
   }, gapReference);
   assert.match(stale, /stale variable reference/);
   await app.evaluate(() =>
-    globalThis.fixture.window.contentView.children[0].webContents.executeJavaScript(
+    globalThis.fixture.guest.executeJavaScript(
       `console.log('after reconnect')`,
     ),
   );
@@ -276,6 +270,19 @@ try {
   console.log(
     'PASS native diagnostics: actual console/network, storage mutation,375×812 viewport,actual breakpoint/variables/step/resume,DevTools handoff and reconnect',
   );
+} catch (error) {
+  if (output) {
+    await writeFile(
+      join(output, 'failure.json'),
+      JSON.stringify({ error: String(error), stack: error.stack }, null, 2),
+    );
+    if (app)
+      for (const [index, page] of app.windows().entries())
+        await page
+          .screenshot({ path: join(output, `failure-window-${index}.png`) })
+          .catch(() => {});
+  }
+  throw error;
 } finally {
   if (app) await app.close();
   await new Promise((resolve) => server.close(resolve));

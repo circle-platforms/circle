@@ -39,13 +39,15 @@ export async function runNativeInputRecovery({
     page.getByRole('textbox', { name: 'message', exact: true });
   const pasteImage = async () => {
     const app = getApp();
-    await app.evaluate(({ clipboard, nativeImage }, png) => {
-      globalThis.__journeyClipboard = clipboard
-        .availableFormats()
-        .map((format) => [format, clipboard.readBuffer(format)]);
-      clipboard.writeImage(
-        nativeImage.createFromBuffer(Buffer.from(png, 'base64')),
-      );
+    await app.evaluate(async ({ clipboard, ClipboardItem }, png) => {
+      globalThis.__journeyClipboard = await clipboard.read();
+      await clipboard.write([
+        new ClipboardItem({
+          'image/png': new Blob([Buffer.from(png, 'base64')], {
+            type: 'image/png',
+          }),
+        }),
+      ]);
     }, png);
     try {
       const before = (await current()).attachments.length;
@@ -56,10 +58,8 @@ export async function runNativeInputRecovery({
         'real native image paste received',
       );
     } finally {
-      await app.evaluate(({ clipboard }) => {
-        clipboard.clear();
-        for (const [format, buffer] of globalThis.__journeyClipboard ?? [])
-          clipboard.writeBuffer(format, buffer);
+      await app.evaluate(async ({ clipboard }) => {
+        await clipboard.write(globalThis.__journeyClipboard ?? []);
         delete globalThis.__journeyClipboard;
       });
     }

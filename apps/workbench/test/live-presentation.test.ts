@@ -156,3 +156,31 @@ test('ten thousand message branch projection keeps ordering, hidden rows and sou
     runtime.dispose();
   }
 });
+
+test('failed local view persistence reports false while retaining recoverable memory and retries identical patches', () => {
+  const snapshot = createFixtures();
+  const saved = new Map<string, string>();
+  let fails = true;
+  const host = { onRuntime: () => () => {} } as unknown as DesktopBridge;
+  const storage = {
+    getItem: (key: string) => saved.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      if (fails) throw Error('QuotaExceededError');
+      saved.set(key, value);
+    },
+  };
+  const initial = { seq: 1, connected: true, snapshot };
+  const runtime = new LiveRuntime(host, initial, storage);
+  const id = snapshot.sessions[0].id;
+  const patch = { draft: 'complete recovered text' };
+  assert.equal(runtime.updateSessionView(id, patch), false);
+  assert.equal(runtime.getSnapshot().sessions[0].draft, patch.draft);
+  assert.equal(saved.size, 0);
+  fails = false;
+  assert.equal(runtime.updateSessionView(id, patch), true);
+  assert.equal(saved.size, 1);
+  runtime.dispose();
+  const restored = new LiveRuntime(host, initial, storage);
+  assert.equal(restored.getSnapshot().sessions[0].draft, patch.draft);
+  restored.dispose();
+});

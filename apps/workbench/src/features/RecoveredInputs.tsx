@@ -20,6 +20,7 @@ export function RecoveredInputs({ sessionId }: { sessionId: string }) {
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState<string[]>([]);
+  const [memoryOnly, setMemoryOnly] = useState<string[]>([]);
   const [confirmed, setConfirmed] = useState<string[]>([]);
   const generation = useRef(0);
   async function refresh(epoch = generation.current) {
@@ -41,6 +42,7 @@ export function RecoveredInputs({ sessionId }: { sessionId: string }) {
     const epoch = ++generation.current;
     setRecovery(null);
     setCopied([]);
+    setMemoryOnly([]);
     setConfirmed([]);
     setError('');
     setNotice('');
@@ -90,14 +92,21 @@ export function RecoveredInputs({ sessionId }: { sessionId: string }) {
           current.draft,
           current.attachments,
         );
-        if (!runtime.updateSessionView(sessionId, patch))
-          throw Error(t('draft could not be updated; recovery copy retained'));
+        const persisted = runtime.updateSessionView(sessionId, patch);
         setCopied((current) => [...current, input.id]);
-        setNotice(
-          t(
-            'copied to draft without sending; recovery copy retained until you explicitly remove it',
-          ),
-        );
+        if (!persisted) {
+          setMemoryOnly((current) => [...current, input.id]);
+          setError(
+            t(
+              'draft is available only in memory; saving failed and the recovery copy is retained',
+            ),
+          );
+        } else
+          setNotice(
+            t(
+              'copied to draft without sending; recovery copy retained until you explicitly remove it',
+            ),
+          );
       } else
         setNotice(
           action === 'resume'
@@ -113,6 +122,29 @@ export function RecoveredInputs({ sessionId }: { sessionId: string }) {
     } finally {
       if (epoch === generation.current) setBusy(false);
     }
+  }
+  function retrySaving() {
+    const current = runtime
+      .getSnapshot()
+      .sessions.find((item) => item.id === sessionId);
+    if (!current || current.lifecycle === 'deleting') return;
+    if (
+      runtime.updateSessionView(sessionId, {
+        draft: current.draft,
+        attachments: current.attachments,
+      })
+    ) {
+      setMemoryOnly([]);
+      setError('');
+      setNotice(
+        t('draft saved; recovery copy retained until you explicitly remove it'),
+      );
+    } else
+      setError(
+        t(
+          'draft is available only in memory; saving failed and the recovery copy is retained',
+        ),
+      );
   }
   if (recovery?.items.length === 0 && !error && !notice) return null;
   return (
@@ -137,6 +169,11 @@ export function RecoveredInputs({ sessionId }: { sessionId: string }) {
         </p>
       )}
       {notice && <p role="status">{notice}</p>}
+      {memoryOnly.length > 0 && (
+        <Button onClick={retrySaving}>
+          {t('retry saving recovered draft')}
+        </Button>
+      )}
       {recovery?.items.map((input) => (
         <article key={input.id}>
           <strong>
@@ -176,9 +213,11 @@ export function RecoveredInputs({ sessionId }: { sessionId: string }) {
             disabled={busy || copied.includes(input.id)}
             onClick={() => void resolve(input, 'returnToDraft')}
           >
-            {copied.includes(input.id)
-              ? t('copied to draft')
-              : t('return input to draft')}
+            {memoryOnly.includes(input.id)
+              ? t('copied in memory; not saved')
+              : copied.includes(input.id)
+                ? t('copied to draft')
+                : t('return input to draft')}
           </Button>
           <label>
             <input

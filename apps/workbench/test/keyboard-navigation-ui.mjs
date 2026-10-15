@@ -67,6 +67,12 @@ try {
     firstCommand,
   );
   await search.press('Escape');
+  await search.waitFor({ state: 'hidden' });
+  await page.waitForFunction(
+    () =>
+      document.activeElement ===
+      document.querySelector('textarea[aria-label="message"]'),
+  );
   assert.equal(
     await message.evaluate((node) => document.activeElement === node),
     true,

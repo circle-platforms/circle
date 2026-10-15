@@ -1,4 +1,10 @@
 export const developer: Record<string, string> = {
+  'copied in memory; not saved': '已复制到内存；尚未保存',
+  'draft is available only in memory; saving failed and the recovery copy is retained':
+    '草稿仅保留在当前内存中；保存失败，恢复副本已保留',
+  'draft saved; recovery copy retained until you explicitly remove it':
+    '草稿已保存；恢复副本将保留，直到你明确移除',
+  'retry saving recovered draft': '重试保存恢复草稿',
   'recovered queued inputs': '待恢复的排队输入',
   'recovered input payload is unavailable; recovery copy retained':
     '无法读取恢复内容；恢复副本已保留',

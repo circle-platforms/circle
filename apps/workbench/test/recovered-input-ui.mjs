@@ -61,6 +61,71 @@ try {
     .filter((c) => c.payload.method === 'resolve')
     .map((c) => c.payload.params.action);
   assert.deepEqual(actions, ['returnToDraft', 'discard']);
+  const failurePage = await browser.newPage();
+  await failurePage.goto(
+    `${server.resolvedUrls.local[0]}test/recovered-input-ui.html?storageFailure=1`,
+  );
+  await failurePage
+    .getByRole('button', { name: 'return input to draft', exact: true })
+    .click();
+  await failurePage
+    .getByRole('alert')
+    .filter({ hasText: 'draft is available only in memory' })
+    .waitFor();
+  assert.equal(
+    await failurePage
+      .getByText(
+        'copied to draft without sending; recovery copy retained until you explicitly remove it',
+        { exact: true },
+      )
+      .count(),
+    0,
+  );
+  const fullDraft =
+    'existing draft\n\n' +
+    Array.from({ length: 600 }, (_, i) => `preserved line ${i}`).join('\n');
+  assert.equal(
+    await failurePage
+      .getByRole('textbox', { name: 'restored draft' })
+      .inputValue(),
+    fullDraft,
+  );
+  assert.equal(
+    await failurePage
+      .getByRole('button', { name: 'copied in memory; not saved', exact: true })
+      .isDisabled(),
+    true,
+  );
+  await failurePage.evaluate(() => window.allowRecoveryStorage());
+  await failurePage
+    .getByRole('button', { name: 'retry saving recovered draft', exact: true })
+    .click();
+  await failurePage
+    .getByText(
+      'draft saved; recovery copy retained until you explicitly remove it',
+      { exact: true },
+    )
+    .waitFor();
+  assert.equal(
+    await failurePage
+      .getByRole('textbox', { name: 'restored draft' })
+      .inputValue(),
+    fullDraft,
+  );
+  await failurePage.reload();
+  await failurePage.getByRole('textbox', { name: 'restored draft' }).waitFor();
+  assert.equal(
+    await failurePage
+      .getByRole('textbox', { name: 'restored draft' })
+      .inputValue(),
+    fullDraft,
+  );
+  assert.equal(
+    await failurePage
+      .getByRole('status', { name: 'restored media' })
+      .textContent(),
+    'data:image/png;base64,AAEC',
+  );
   console.log(
     'recovered input UI: no automatic replay, complete 600-line draft/media and explicit copy removal passed',
   );

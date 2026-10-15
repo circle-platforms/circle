@@ -684,7 +684,7 @@ app
       return { saved: true, name: basename(result.filePath) };
     });
     handle('circle:copy-text', (value) => {
-      clipboard.writeText(boundedText(value, MAX_EXPORT_BYTES));
+      return clipboard.writeText(boundedText(value, MAX_EXPORT_BYTES));
     });
     handle('circle:open-external', async (value) => {
       const url = nativeHttpsUrl(value);

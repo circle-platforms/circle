@@ -331,3 +331,56 @@ for (const failingRead of ['checks', 'logs'] as const) {
     await service.close();
   });
 }
+
+test('a failed check dispatches repair while unrelated checks are still pending', async (t) => {
+  const f = await fixture(t);
+  const checks = f.ports.delivery.checks;
+  let pending = true;
+  f.ports.delivery.checks = async (cycle) => {
+    const result = await checks(cycle);
+    if (pending)
+      result.checks.push({ name: 'unrelated-long-build', bucket: 'pending' });
+    return result;
+  };
+  await f.cycle.create(f.spec, { operationId: 'create' });
+  assert.equal((await f.cycle.advance('web')).state, 'repairing');
+  assert.equal(f.effects.repair, 1);
+  const waiting = await f.cycle.advance('web');
+  assert.equal(waiting.state, 'waiting_ci');
+  const state = JSON.parse(await readFile(f.fakeState, 'utf8'));
+  assert.equal(state.draft, true);
+  assert.equal(
+    state.calls.filter((args: string[]) => args[0] === 'ready').length,
+    0,
+  );
+  pending = false;
+  assert.equal((await f.cycle.advance('web')).state, 'pending_human_merge');
+  assert.equal(f.effects.repair, 1);
+  assert.equal(f.effects.commit, 2);
+  assert.equal(f.effects.push, 2);
+});
+
+test('conditional skipped jobs are neutral but cannot alone satisfy CI', async (t) => {
+  for (const hasPassedCheck of [false, true]) {
+    const f = await fixture(t);
+    f.ports.delivery.checks = async (cycle) => ({
+      head: (await f.ports.git.snapshot(cycle)).head,
+      checks: [
+        { name: 'conditional-deploy', bucket: 'skipping' },
+        ...(hasPassedCheck
+          ? [{ name: 'real-build', bucket: 'pass' as const }]
+          : []),
+      ],
+    });
+    const state = JSON.parse(await readFile(f.fakeState, 'utf8'));
+    state.ci = 'pass';
+    await writeFile(f.fakeState, JSON.stringify(state));
+    await f.cycle.create(f.spec, { operationId: 'create' });
+    assert.equal(
+      (await f.cycle.advance('web')).state,
+      hasPassedCheck ? 'pending_human_merge' : 'waiting_ci',
+    );
+    assert.equal(f.effects.repair, 0);
+    assert.equal(f.effects.diagnosis, 0);
+  }
+});

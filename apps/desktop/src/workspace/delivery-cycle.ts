@@ -597,13 +597,8 @@ export class DeliveryCycleService {
           );
           return copy(cycle);
         }
-        if (
-          !results.checks.length ||
-          results.checks.some((item) => item.bucket === 'pending')
-        )
-          return copy(cycle);
         const failures = results.checks
-          .filter((item) => item.bucket !== 'pass')
+          .filter((item) => item.bucket === 'fail' || item.bucket === 'cancel')
           .sort((left, right) => left.name.localeCompare(right.name));
         if (failures.length) {
           const logs = (
@@ -657,6 +652,18 @@ export class DeliveryCycleService {
               ? 'same CI failure occurred three times; independent diagnosis dispatched, review the revised plan before continuing'
               : undefined,
           );
+          return copy(cycle);
+        }
+        if (
+          !results.checks.some((item) => item.bucket === 'pass') ||
+          results.checks.some(
+            (item) => item.bucket !== 'pass' && item.bucket !== 'skipping',
+          )
+        ) {
+          if (cycle.ciQueryRetry) {
+            delete cycle.ciQueryRetry;
+            await this.update(cycle, 'waiting_ci');
+          }
           return copy(cycle);
         }
         delete cycle.ciQueryRetry;
