@@ -1,0 +1,320 @@
+import test, { type TestContext } from 'node:test';
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { execFile, spawnSync } from 'node:child_process';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+import { createRequire } from 'node:module';
+import {
+  OperationLedger,
+  OperationIdentityConflictError,
+  OperationNeedsReviewError,
+  type OperationIdentity,
+} from '../src/workspace/operation-ledger.ts';
+const exec = promisify(execFile);
+const paramsHash = (value: string) =>
+  createHash('sha256').update(value).digest('hex');
+const identity = (id: string, params = 'fixture'): OperationIdentity => ({
+  id,
+  sessionId: 'session-a',
+  service: 'terminal',
+  method: 'write',
+  paramsHash: paramsHash(params),
+});
+async function fixture(t: TestContext, inlineResultBytes?: number) {
+  const root = await mkdtemp(join(tmpdir(), 'circle-operation-ledger-'));
+  const directory = join(root, 'private');
+  const ledgers: OperationLedger[] = [];
+  const open = async () => {
+    const ledger = await OperationLedger.open({ directory, inlineResultBytes });
+    ledgers.push(ledger);
+    return ledger;
+  };
+  t.after(async () => {
+    await Promise.all(ledgers.map((ledger) => ledger.close()));
+    await rm(root, { recursive: true, force: true });
+  });
+  return { root, directory, open };
+}
+async function bytes(directory: string): Promise<Buffer[]> {
+  const result: Buffer[] = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) result.push(...(await bytes(path)));
+    else if (entry.isFile()) result.push(await readFile(path));
+  }
+  return result;
+}
+async function until(check: () => Promise<boolean>) {
+  const deadline = Date.now() + 5000;
+  while (!(await check())) {
+    if (Date.now() > deadline) throw Error('effect did not settle');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+test('real Git commit runs once across concurrent duplicates, more than 100 later operations and restart', async (t) => {
+  const f = await fixture(t),
+    ledger = await f.open(),
+    repo = join(f.root, 'repo');
+  await mkdir(repo);
+  const git = async (...args: string[]) =>
+    (await exec('git', ['-C', repo, ...args])).stdout.trim();
+  await git('init', '--initial-branch=main');
+  await writeFile(join(repo, 'one.txt'), 'initial');
+  await git('add', 'one.txt');
+  const commit = () =>
+    git(
+      '-c',
+      'user.name=Fixture',
+      '-c',
+      'user.email=fixture@example.invalid',
+      'commit',
+      '-m',
+      'Update fixture',
+    );
+  await commit();
+  await writeFile(join(repo, 'one.txt'), 'updated');
+  let calls = 0;
+  const action = async () => {
+    calls++;
+    await git('add', 'one.txt');
+    await commit();
+    return { head: await git('rev-parse', 'HEAD') };
+  };
+  const operation = { ...identity('commit'), service: 'git', method: 'commit' };
+  const [a, b] = await Promise.all([
+    ledger.run(operation, action),
+    ledger.run(operation, action),
+  ]);
+  assert.deepEqual(a, b);
+  assert.equal(calls, 1);
+  for (let i = 0; i < 150; i++)
+    await ledger.run(identity(`other-${i}`), async () => ({ accepted: true }));
+  assert.deepEqual(await ledger.run(operation, action), a);
+  await ledger.close();
+  const restarted = await f.open();
+  assert.deepEqual(await restarted.run(operation, action), a);
+  assert.equal(calls, 1);
+  assert.equal(await git('rev-list', '--count', 'HEAD'), '2');
+});
+
+test(
+  'actual PTY input is delivered once and never persisted as plaintext',
+  {
+    skip:
+      process.platform === 'win32' &&
+      'raw-mode shell fixture is Unix-only; Windows ConPTY is exercised by native journey',
+  },
+  async (t) => {
+    const f = await fixture(t),
+      ledger = await f.open(),
+      output = join(f.root, 'input.bin');
+    const require = createRequire(import.meta.url),
+      pty = require('node-pty');
+    const secret = 'PRIVATE_STDIN_PASSWORD_6f12cd';
+    const terminal = pty.spawn(
+      process.execPath,
+      [
+        '-e',
+        `process.stdin.setRawMode(true); process.stdin.on('data',d=>require('node:fs').appendFileSync(${JSON.stringify(output)},d)); console.log('READY');`,
+      ],
+      { cwd: f.root, cols: 80, rows: 24 },
+    );
+    let ready = false;
+    terminal.onData((data: string) => {
+      if (data.includes('READY')) ready = true;
+    });
+    t.after(() => terminal.kill());
+    await until(async () => ready);
+    let calls = 0;
+    const action = async () => {
+      calls++;
+      terminal.write(secret);
+      return { accepted: true, bytes: secret.length };
+    };
+    await Promise.all([
+      ledger.run(identity('stdin', secret), action),
+      ledger.run(identity('stdin', secret), action),
+    ]);
+    await until(
+      async () =>
+        (await readFile(output).catch(() => Buffer.alloc(0))).length ===
+        secret.length,
+    );
+    assert.equal(await readFile(output, 'utf8'), secret);
+    assert.equal(calls, 1);
+    await ledger.close();
+    const restarted = await f.open();
+    await restarted.run(identity('stdin', secret), action);
+    assert.equal(calls, 1);
+    for (const file of await bytes(f.directory))
+      assert.equal(file.includes(Buffer.from(secret)), false);
+  },
+);
+
+test('operation id cannot cross session service method or parameter identity', async (t) => {
+  const f = await fixture(t),
+    ledger = await f.open(),
+    op = identity('same');
+  let calls = 0;
+  await ledger.run(op, async () => ++calls);
+  for (const different of [
+    { ...op, sessionId: 'session-b' },
+    { ...op, service: 'git' },
+    { ...op, method: 'close' },
+    { ...op, paramsHash: paramsHash('other') },
+  ])
+    await assert.rejects(
+      ledger.run(different, async () => ++calls),
+      OperationIdentityConflictError,
+    );
+  assert.equal(calls, 1);
+  await assert.rejects(
+    ledger.run({ ...op, id: 'unsafe secret content' }, async () => 0),
+    /valid operation identity/,
+  );
+});
+
+test('results replay exactly while file content and passwords remain encrypted on disk, with large artifacts verified', async (t) => {
+  const f = await fixture(t, 64),
+    ledger = await f.open();
+  const secret = 'PRIVATE_FILE_AND_PASSWORD_b8c921';
+  const result = {
+    content: secret.repeat(300),
+    password: secret,
+    revision: 'a',
+  };
+  await ledger.run(identity('save'), async () => result);
+  assert.deepEqual(
+    await ledger.run(identity('save'), async () =>
+      assert.fail('must not replay effect'),
+    ),
+    result,
+  );
+  for (const file of await bytes(f.directory))
+    assert.equal(file.includes(Buffer.from(secret)), false);
+  const artifacts = await readdir(join(f.directory, 'results'));
+  assert.equal(artifacts.length, 1);
+  await writeFile(join(f.directory, 'results', artifacts[0]), 'tampered');
+  await assert.rejects(
+    ledger.run(identity('save'), async () =>
+      assert.fail('must not replay effect'),
+    ),
+    OperationNeedsReviewError,
+  );
+  assert.equal(ledger.status('save')?.state, 'needs_review');
+});
+
+test('crashed operation remains unknown on restart and its real file effect is not repeated', async (t) => {
+  const f = await fixture(t),
+    effect = join(f.root, 'effect.txt'),
+    crash = join(f.root, 'crash.mts');
+  const module = pathToFileURL(
+    fileURLToPath(
+      new URL('../src/workspace/operation-ledger.ts', import.meta.url),
+    ),
+  ).href;
+  await writeFile(
+    crash,
+    `import {OperationLedger} from ${JSON.stringify(module)};import {appendFileSync} from 'node:fs';const ledger=await OperationLedger.open({directory:${JSON.stringify(f.directory)}});await ledger.run(${JSON.stringify(identity('crash'))},async()=>{appendFileSync(${JSON.stringify(effect)},'once');process.exit(23)});`,
+  );
+  const tsx = fileURLToPath(
+    new URL('../../../node_modules/tsx/dist/cli.mjs', import.meta.url),
+  );
+  const result = spawnSync(process.execPath, [tsx, crash], {
+    encoding: 'utf8',
+    timeout: 10000,
+  });
+  assert.equal(result.status, 23, result.stderr);
+  const ledger = await f.open();
+  assert.equal(ledger.status('crash')?.state, 'needs_review');
+  await assert.rejects(
+    ledger.run(identity('crash'), async () => writeFile(effect, 'twice')),
+    OperationNeedsReviewError,
+  );
+  assert.equal(await readFile(effect, 'utf8'), 'once');
+});
+
+test('errors persist only safe classification and a live owner cannot be opened twice', async (t) => {
+  const f = await fixture(t),
+    ledger = await f.open();
+  const secret = 'PASSWORD_AND_STDIN_4cfb2a';
+  let calls = 0;
+  await assert.rejects(
+    ledger.run(identity('error', secret), async () => {
+      calls++;
+      throw Error(secret);
+    }),
+    (error) =>
+      error instanceof OperationNeedsReviewError &&
+      !error.message.includes(secret),
+  );
+  await assert.rejects(
+    ledger.run(identity('error', secret), async () => {
+      calls++;
+    }),
+    OperationNeedsReviewError,
+  );
+  assert.equal(calls, 1);
+  for (const file of await bytes(f.directory))
+    assert.equal(file.includes(Buffer.from(secret)), false);
+  await assert.rejects(f.open(), /live owner/);
+});
+
+test('PTY-sized operation persistence reports its observed p95 without synchronous workspace snapshots', async (t) => {
+  const f = await fixture(t),
+    ledger = await f.open(),
+    samples: number[] = [];
+  for (let i = 0; i < 200; i++) {
+    const start = performance.now();
+    await ledger.run(identity(`latency-${i}`), async () => ({
+      accepted: true,
+      bytes: 1,
+    }));
+    samples.push(performance.now() - start);
+  }
+  samples.sort((a, b) => a - b);
+  const p95 = samples[Math.ceil(samples.length * 0.95) - 1];
+  t.diagnostic(
+    JSON.stringify({
+      metric: 'operation-ledger-p95-ms',
+      samples: samples.length,
+      p95,
+      platform: process.platform,
+      arch: process.arch,
+    }),
+  );
+  assert.equal(ledger.status('latency-0')?.state, 'completed');
+});
+
+test('cached results preserve optional undefined fields and structured runtime metadata', async (t) => {
+  const f = await fixture(t),
+    ledger = await f.open();
+  const value = {
+    exitCode: undefined,
+    selected: null,
+    at: new Date(0),
+    count: 4n,
+    bytes: Buffer.from('result'),
+  };
+  await ledger.run(identity('structured'), async () => value);
+  await ledger.close();
+  const restarted = await f.open();
+  assert.deepEqual(
+    await restarted.run(identity('structured'), async () =>
+      assert.fail('must replay stored result'),
+    ),
+    value,
+  );
+});
