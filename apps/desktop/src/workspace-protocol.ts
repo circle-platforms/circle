@@ -93,6 +93,7 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
     'settings',
     'createIntegration',
     'mergeCandidates',
+    'review',
   ]),
   delivery: new Set([
     'status',
