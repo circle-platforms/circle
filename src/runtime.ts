@@ -19,7 +19,7 @@ import {
   written,
   type Redactor,
 } from './secrets.js';
-import { buildSystemPrompt } from './system_prompt.js';
+import { buildSystemPrompt, type ContextInstruction } from './system_prompt.js';
 import { Harness, type ApprovalDecision } from './harness.js';
 import { EventBus } from './events.js';
 import { defaultRunOptions, type RunOptions } from './run_options.js';
@@ -181,6 +181,11 @@ export class AgentRuntime {
   private closingPromise?: Promise<void>;
   readonly policy;
   readonly runOptions: RunOptions;
+  private promptInstructions: ContextInstruction[] = [];
+  /** Project rules actually included in the current system prompt, not a disk scan. */
+  get loadedInstructions(): ContextInstruction[] {
+    return this.promptInstructions.map((file) => ({ ...file }));
+  }
   // Read again with every system prompt, see systemPrompt().
   skills: SkillInfo[] = [];
   readonly mcp: McpManager;
@@ -797,6 +802,9 @@ export class AgentRuntime {
       this.options.home,
       {
         skills: this.skills,
+        onContextFiles: (files) => {
+          this.promptInstructions = files.map((file) => ({ ...file }));
+        },
         extensionTools: this.extensions.tools(),
         userHome: this.options.userHome,
         localContext: this.options.localContext,
