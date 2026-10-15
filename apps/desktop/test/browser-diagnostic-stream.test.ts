@@ -229,3 +229,64 @@ test('breakpoint restoration removes retained Chromium URL identities before rec
   assert.equal(d.state.debugger.breakpoints[0].verified, true);
   assert.equal(d.state.debugger.breakpoints[0].id, 'restored');
 });
+
+test('variable replies bind to the pause epoch even when CDP reuses frame and scope identities', async () => {
+  let resolveProperties!: (value: any) => void;
+  let calls = 0;
+  const d = new BrowserDiagnostics(async () => {
+    calls++;
+    return await new Promise((resolve) => {
+      resolveProperties = resolve;
+    });
+  });
+  const paused = () =>
+    d.event('Debugger.paused', {
+      callFrames: [
+        {
+          callFrameId: 'reused-frame',
+          functionName: 'fixture',
+          location: { scriptId: 'script', lineNumber: 1, columnNumber: 0 },
+          scopeChain: [{ type: 'local', object: { objectId: 'reused-scope' } }],
+        },
+      ],
+    });
+  paused();
+  const epoch = d.state.debugger.pauseEpoch;
+  const pending = d.request(
+    {
+      action: 'debug',
+      command: 'variables',
+      reference: 'reused-scope',
+      expectedPauseEpoch: epoch,
+    },
+    'http://localhost',
+  );
+  d.event('Debugger.resumed', {});
+  paused();
+  assert(d.state.debugger.pauseEpoch > epoch);
+  resolveProperties({ result: [{ name: 'count', value: { value: 1 } }] });
+  await assert.rejects(pending, /pause changed/);
+  await assert.rejects(
+    d.request(
+      {
+        action: 'debug',
+        command: 'variables',
+        reference: 'reused-scope',
+        expectedPauseEpoch: epoch,
+      },
+      'http://localhost',
+    ),
+    /stale browser pause/,
+  );
+  assert.equal(calls, 1, 'stale pause is rejected before a CDP side effect');
+  assert.throws(
+    () =>
+      validateBrowserDiagnosticRequest({
+        action: 'debug',
+        command: 'variables',
+        reference: 'scope',
+        expectedPauseEpoch: -1,
+      }),
+    /pause epoch/,
+  );
+});

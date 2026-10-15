@@ -52,8 +52,16 @@ export function BrowserDiagnostics({
     )
       results.current.scrollTop = results.current.scrollHeight;
   }, [open, section, result?.state.console.at(-1)?.id]);
+  const selectedScope = useRef<string | undefined>(undefined);
+  const latestPause = useRef({ identity: '', epoch: 0, paused: false });
   const identity = useRef('');
   identity.current = sessionId + ':' + tab + ':' + url;
+  if (latestPause.current.identity !== identity.current)
+    latestPause.current = {
+      identity: identity.current,
+      epoch: 0,
+      paused: false,
+    };
   const kindRef = useRef(kind);
   kindRef.current = kind;
   const apply = (
@@ -61,6 +69,13 @@ export function BrowserDiagnostics({
     r: BrowserDiagnosticRequest,
   ) => {
     if (r.action === 'storage' && r.kind !== kindRef.current) return;
+    const pauseEpoch = response.state.debugger.pauseEpoch ?? 0;
+    if (pauseEpoch < latestPause.current.epoch) return;
+    latestPause.current = {
+      identity: identity.current,
+      epoch: pauseEpoch,
+      paused: response.state.debugger.paused,
+    };
     setResult((previous) => ({
       ...previous,
       ...response,
@@ -80,7 +95,11 @@ export function BrowserDiagnostics({
             : response.state.debugger,
       },
       variables: response.state.debugger.paused
-        ? (response.variables ?? previous?.variables)
+        ? (response.variables ??
+          (previous?.state.debugger.pauseEpoch ===
+          response.state.debugger.pauseEpoch
+            ? previous?.variables
+            : undefined))
         : undefined,
       ...(r.action === 'clearNetwork' ? { response: undefined } : {}),
     }));
@@ -96,10 +115,32 @@ export function BrowserDiagnostics({
       if (r.action !== 'read') setError('');
     } catch (e) {
       if (ownIdentity !== identity.current) return;
+      if (
+        r.action === 'debug' &&
+        r.command === 'variables' &&
+        r.expectedPauseEpoch !== undefined &&
+        (r.expectedPauseEpoch !== latestPause.current.epoch ||
+          !latestPause.current.paused)
+      )
+        return;
       setError(e instanceof Error ? e.message : String(e));
     }
   };
   useEffect(() => {
+    if (!result?.state.debugger.paused || !selectedScope.current) return;
+    const scope = result.state.debugger.stackFrames[0]?.scopes.find(
+      (scope) => scope.name === selectedScope.current,
+    );
+    if (scope)
+      void request({
+        action: 'debug',
+        command: 'variables',
+        reference: scope.variablesReference,
+        expectedPauseEpoch: result.state.debugger.pauseEpoch,
+      });
+  }, [result?.state.debugger.pauseEpoch, result?.state.debugger.paused]);
+  useEffect(() => {
+    selectedScope.current = undefined;
     setResult(undefined);
     setError('');
   }, [sessionId, tab, url]);
@@ -544,13 +585,16 @@ export function BrowserDiagnostics({
                     {f.scopes.map((s) => (
                       <button
                         key={s.variablesReference}
-                        onClick={() =>
+                        onClick={() => {
+                          selectedScope.current = s.name;
                           void request({
                             action: 'debug',
                             command: 'variables',
                             reference: s.variablesReference,
-                          })
-                        }
+                            expectedPauseEpoch:
+                              result.state.debugger.pauseEpoch,
+                          });
+                        }}
                       >
                         {s.name}
                       </button>
