@@ -151,6 +151,19 @@ export class GitWorkspaceService {
       params = { ...params, action: 'discard' };
     }
     if (method === 'snapshot') return this.snapshot();
+    if (method === 'branches')
+      return {
+        branches: (
+          await this.git([
+            'for-each-ref',
+            '--format=%(refname:short)',
+            'refs/heads',
+            'refs/remotes',
+          ])
+        )
+          .split('\n')
+          .filter(Boolean),
+      };
     if (method === 'diff') {
       const scope = params.scope ?? 'working';
       if (!['working', 'index', 'branch'].includes(String(scope)))
