@@ -85,7 +85,27 @@ export async function runNativeEditorJourney({
   const append = async (text) => {
     await page.locator('.native-code-editor .view-lines').first().click();
     await page.keyboard.press(`${modifier}+End`);
+    const beforeInput = await page
+      .locator('.native-code-editor .view-lines')
+      .first()
+      .textContent();
     await page.keyboard.insertText(text);
+    await until(
+      () =>
+        page
+          .locator('.native-code-editor .view-lines')
+          .first()
+          .evaluate(
+            (node, { inserted, beforeInput }) =>
+              node.textContent !== beforeInput &&
+              node.textContent
+                .replaceAll('\u00a0', ' ')
+                .includes(inserted.trim()),
+            { inserted: text, beforeInput },
+          ),
+      'inserted text reaches the active Monaco model',
+    );
+    await page.getByText('unsaved buffer', { exact: true }).waitFor();
   };
   const save = async () =>
     page.getByRole('button', { name: 'save to disk', exact: true }).click();
@@ -101,6 +121,18 @@ export async function runNativeEditorJourney({
     'CmdS actual disk effect',
   );
   await page.keyboard.press(`${modifier}+z`);
+  await until(
+    () =>
+      page
+        .locator('.native-code-editor .view-lines')
+        .first()
+        .evaluate(
+          (node, original) =>
+            node.textContent.replace(/\s/g, '') === original.replace(/\s/g, ''),
+          source,
+        ),
+    'Undo reaches Monaco before CmdS',
+  );
   await page.keyboard.press(`${modifier}+s`);
   await until(
     async () => (await disk(main)) === source,

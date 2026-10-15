@@ -67,8 +67,13 @@ export async function runNativeEditorIsolation({ page, workspace, output }) {
   const appendSingleEdit = async (text) => {
     await page.locator('.file-view .view-lines').first().click();
     await page.keyboard.press(`${modifier}+End`);
-    // insertText creates one editor insertion: Undo must remove exactly this edit.
+    // EditContext applies input asynchronously; confirm the actual buffer before navigation/save.
     await page.keyboard.insertText(text);
+    await until(
+      async () => (await visibleText()).includes(text.trim()),
+      'inserted text reaches the active Monaco model',
+    );
+    await page.getByText('unsaved buffer', { exact: true }).waitFor();
   };
   const save = () => page.keyboard.press(`${modifier}+s`);
   const a = 'isolation-a.ts',
