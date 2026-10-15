@@ -1055,6 +1055,7 @@ else process.exit(2);
   }
   const end = Date.now() + 30000;
   const final = new Map<string, any>();
+  const observedAt = new Map<string, number>();
   const timeline: unknown[] = [];
   let answering = true;
   // Human approval remains responsive while a cycle is doing Git/verification;
@@ -1079,18 +1080,34 @@ else process.exit(2);
   })();
   try {
     while (Date.now() < end) {
-      for (const owner of [ownerA, ownerB]) {
-        const advanced = await f.service(
-          'cycles',
-          'advance',
-          { id: 'same-cycle' },
-          owner,
-        );
-        assert.equal(advanced.ok, true, advanced.error);
-        if (JSON.stringify(final.get(owner)) !== JSON.stringify(advanced.data))
-          timeline.push({ at: Date.now(), owner, cycle: advanced.data });
-        final.set(owner, advanced.data);
-      }
+      // Independent owner worktrees must advance concurrently. A slow B Git
+      // operation cannot prevent observing A's background delivery progress.
+      await Promise.all(
+        [ownerA, ownerB].map(async (owner) => {
+          const advanced = await f.service(
+            'cycles',
+            'advance',
+            { id: 'same-cycle' },
+            owner,
+          );
+          assert.equal(advanced.ok, true, advanced.error);
+          // The return value can predate background timer progress while the
+          // other owner was doing work. Read the authoritative ledger snapshot.
+          const observed = await f.service(
+            'cycles',
+            'snapshot',
+            { id: 'same-cycle' },
+            owner,
+          );
+          assert.equal(observed.ok, true, observed.error);
+          if (
+            JSON.stringify(final.get(owner)) !== JSON.stringify(observed.data)
+          )
+            timeline.push({ at: Date.now(), owner, cycle: observed.data });
+          final.set(owner, observed.data);
+          observedAt.set(owner, Date.now());
+        }),
+      );
       if (
         [...final.values()].every(
           (cycle) => cycle.state === 'pending_human_merge',
@@ -1104,14 +1121,33 @@ else process.exit(2);
     await approvalActor;
   }
   const passed =
-    [...final.values()].length === 2 &&
-    [...final.values()].every((cycle) => cycle.state === 'pending_human_merge');
+    final.size === 2 &&
+    [...final.entries()].every(
+      ([owner, cycle]) =>
+        cycle.state === 'pending_human_merge' &&
+        Date.parse(cycle.updatedAt) <= end &&
+        observedAt.get(owner)! <= end,
+    );
   let failureReceipt: string | undefined;
   if (!passed) {
     const taskReply = await f.service('tasks', 'list', {}, ownerA);
     const records = (taskReply.data ?? []) as any[];
     const receipt = {
       cycles: [...final.values()],
+      deadline: end,
+      finalObservations: Object.fromEntries(observedAt),
+      observedAt: Date.now(),
+      authoritativeAfterFailure: await Promise.all(
+        [ownerA, ownerB].map(async (owner) => ({
+          owner,
+          reply: await f.service(
+            'cycles',
+            'snapshot',
+            { id: 'same-cycle' },
+            owner,
+          ),
+        })),
+      ),
       timeline,
       tasks: await Promise.all(
         records.map(async (task) => ({
@@ -1139,6 +1175,14 @@ else process.exit(2);
     [...final.values()].map((cycle) => cycle.state),
     ['pending_human_merge', 'pending_human_merge'],
     JSON.stringify({ failureReceipt, cycles: [...final.values()] }),
+  );
+  assert.ok(
+    passed,
+    JSON.stringify({
+      failureReceipt,
+      deadline: end,
+      readyAt: [...final.values()].map((cycle) => cycle.updatedAt),
+    }),
   );
   const tasks = await f.service('tasks', 'list', {}, ownerA);
   const owners = new Set(
