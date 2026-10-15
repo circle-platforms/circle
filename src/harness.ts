@@ -542,6 +542,15 @@ export class Harness {
         call.name,
         call.args,
       );
+      const preparedRun = tool.prepare
+        ? await tool.prepare(resolved, {
+            signal,
+            sessionId: this.sessionId,
+            callId: call.id,
+            imageInput: this.model.imageInput,
+          })
+        : undefined;
+      signal.throwIfAborted();
       if (
         !settingsAllowed &&
         tool.effect !== 'read' &&
@@ -622,7 +631,7 @@ export class Harness {
             !this.options.planFileMutation?.(call)
           )
             throw new Error('read-only mode: this tool cannot run');
-          return tool.run(args, context);
+          return (preparedRun ?? tool.run)(args, context);
         },
       };
       content = this.options.toolBoundary

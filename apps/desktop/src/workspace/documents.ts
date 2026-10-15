@@ -8,12 +8,14 @@ import {
 } from 'node:fs';
 import {
   lstat,
+  mkdir,
   open,
   readdir,
   realpath,
   rename,
   rm,
   stat,
+  unlink,
 } from 'node:fs/promises';
 import {
   basename,
@@ -40,11 +42,16 @@ export interface WorkspaceDocument {
   size: number;
 }
 
-export interface WorkspaceDocumentEdit {
+export interface WorkspaceDocumentChange {
   path: string;
-  content: string;
+  /** null deletes an existing file after checking its revision. */
+  content: string | null;
   /** null explicitly means that the file must not exist yet. */
   expectedRevision: string | null;
+}
+
+export interface WorkspaceDocumentEdit extends WorkspaceDocumentChange {
+  content: string;
 }
 
 export interface WorkspaceFileEntry {
@@ -72,13 +79,17 @@ export interface WorkspaceEditFailure {
   current?: WorkspaceDocument | null;
 }
 
-export interface WorkspaceEditResult {
+export interface WorkspaceChangeResult {
   status: 'applied' | 'rejected' | 'partial';
   applied: WorkspaceDocument[];
   /** Includes a replacement even if reading its resulting document failed. */
   committedPaths: string[];
   failures: WorkspaceEditFailure[];
   /** Inputs not committed, including the failed input. Safe to present for recovery. */
+  remaining: WorkspaceDocumentChange[];
+}
+
+export interface WorkspaceEditResult extends WorkspaceChangeResult {
   remaining: WorkspaceDocumentEdit[];
 }
 
@@ -250,6 +261,7 @@ export class WorkspaceDocuments {
         );
     }
     let current = this.root;
+    let existingParent = this.root;
     for (const [index, part] of parts.entries()) {
       current = join(current, part);
       try {
@@ -258,16 +270,16 @@ export class WorkspaceDocuments {
           throw new DocumentPathError('symbolic link was not granted');
         if (index < parts.length - 1 && !info.isDirectory())
           throw new DocumentPathError('file parent is not a folder');
+        if (index < parts.length - 1) existingParent = current;
       } catch (error) {
-        if (!(allowMissing && index === parts.length - 1 && missing(error)))
-          throw error;
+        if (!(allowMissing && missing(error))) throw error;
       }
     }
-    const parent = await realpath(dirname(current));
+    const parent = await realpath(existingParent);
     const local = relative(this.root, parent);
     if (local === '..' || local.startsWith('..' + sep) || isAbsolute(local))
       throw new DocumentPathError('file moved outside the selected workspace');
-    return { full: join(parent, basename(current)), path: parts.join('/') };
+    return { full: current, path: parts.join('/') };
   }
 
   private identity(path: string): string {
@@ -351,19 +363,31 @@ export class WorkspaceDocuments {
     }
   }
 
+  /** Preparation-time read, including an explicit missing-file version. */
+  async snapshot(
+    path: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<WorkspaceDocument | null> {
+    return this.serial(
+      () => this.current(path, options.signal),
+      options.signal,
+    );
+  }
+
   private async check(
-    edit: WorkspaceDocumentEdit,
+    edit: WorkspaceDocumentChange,
     signal?: AbortSignal,
   ): Promise<WorkspaceDocument | null> {
     if (
-      typeof edit.content !== 'string' ||
+      (edit.content !== null && typeof edit.content !== 'string') ||
       (edit.expectedRevision !== null &&
         typeof edit.expectedRevision !== 'string')
     )
       throw Error('content and expected revision are required');
     if (
-      Buffer.byteLength(edit.content) > this.options.maxBytes ||
-      edit.content.includes('\0')
+      edit.content !== null &&
+      (Buffer.byteLength(edit.content) > this.options.maxBytes ||
+        edit.content.includes('\0'))
     )
       throw Error('content is too large or is binary');
     const current = await this.current(edit.path, signal);
@@ -373,6 +397,8 @@ export class WorkspaceDocuments {
         edit.expectedRevision,
         current,
       );
+    if (edit.content === null && current === null)
+      throw Error('cannot delete a missing file');
     return current;
   }
 
@@ -381,6 +407,8 @@ export class WorkspaceDocuments {
     signal?: AbortSignal,
   ): Promise<{ full: string; temporary: string }> {
     const { full } = await this.target(edit.path, true);
+    await mkdir(dirname(full), { recursive: true });
+    await this.target(edit.path, true);
     const temporary = join(
       dirname(full),
       `.circle-document-${randomUUID()}.tmp`,
@@ -432,11 +460,18 @@ export class WorkspaceDocuments {
     edits: WorkspaceDocumentEdit[],
     options: { signal?: AbortSignal } = {},
   ): Promise<WorkspaceEditResult> {
+    return this.applyChanges(edits, options) as Promise<WorkspaceEditResult>;
+  }
+
+  async applyChanges(
+    edits: WorkspaceDocumentChange[],
+    options: { signal?: AbortSignal } = {},
+  ): Promise<WorkspaceChangeResult> {
     return this.serial(async () => {
       const applied: WorkspaceDocument[] = [];
       const committedPaths: string[] = [];
-      const staged: { full: string; temporary: string }[] = [];
-      let result: WorkspaceEditResult | undefined;
+      const staged: { full: string; temporary?: string }[] = [];
+      let result: WorkspaceChangeResult | undefined;
       let active = 0;
       try {
         if (new Set(edits.map((edit) => edit.path)).size !== edits.length)
@@ -448,7 +483,14 @@ export class WorkspaceDocuments {
         }
         for (const [index, edit] of edits.entries()) {
           active = index;
-          staged.push(await this.stage(edit, options.signal));
+          staged.push(
+            edit.content === null
+              ? { full: (await this.target(edit.path)).full }
+              : await this.stage(
+                  { ...edit, content: edit.content },
+                  options.signal,
+                ),
+          );
         }
         for (const [index, edit] of edits.entries()) {
           active = index;
@@ -458,10 +500,12 @@ export class WorkspaceDocuments {
           active = index;
           await this.check(edit, options.signal);
           options.signal?.throwIfAborted();
-          await rename(staged[index]!.temporary, staged[index]!.full);
+          if (edit.content === null) await unlink(staged[index]!.full);
+          else await rename(staged[index]!.temporary!, staged[index]!.full);
           committedPaths.push(edit.path);
           // Once replacement happened, report it even if cancellation arrives.
-          applied.push(await this.readTarget(staged[index]!.full, edit.path));
+          if (edit.content !== null)
+            applied.push(await this.readTarget(staged[index]!.full, edit.path));
         }
         result = {
           status: 'applied',
@@ -498,7 +542,9 @@ export class WorkspaceDocuments {
         return result;
       } finally {
         const cleanup = await Promise.allSettled(
-          staged.map(({ temporary }) => rm(temporary, { force: true })),
+          staged.map(({ temporary }) =>
+            temporary ? rm(temporary, { force: true }) : Promise.resolve(),
+          ),
         );
         for (const [index, outcome] of cleanup.entries()) {
           if (outcome.status !== 'rejected') continue;
@@ -507,7 +553,7 @@ export class WorkspaceDocuments {
           result.failures.push({
             path: relative(this.root, staged[index]!.full).split(sep).join('/'),
             kind: 'io',
-            message: `could not remove staged file ${basename(staged[index]!.temporary)}: ${errorMessage(outcome.reason)}`,
+            message: `could not remove staged file ${basename(staged[index]!.temporary!)}: ${errorMessage(outcome.reason)}`,
           });
         }
       }

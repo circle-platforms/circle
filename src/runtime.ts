@@ -43,6 +43,7 @@ import { BUILTIN_SLASH } from './tui/slash_commands.js';
 import { discoverCustomCommands } from './commands.js';
 import { LspManager } from './lsp_tool.js';
 import type { Tool, ToolContext } from './types.js';
+import type { FileMutations } from './file_mutations.js';
 import {
   ContextManager,
   restoredTodos,
@@ -107,6 +108,8 @@ export interface InteractionContext {
   agent?: string;
 }
 export interface RuntimeOptions {
+  /** Native workspace compare-and-save backend; omitted by the CLI. */
+  fileMutations?: FileMutations;
   workspace: string;
   home: string;
   // Embedders can isolate global context without changing the process HOME.
@@ -357,6 +360,7 @@ export class AgentRuntime {
     this.baseModel = model;
     const system = this.systemPrompt(model.model);
     let tools = buildTools(this.sandbox, {
+      fileMutations: this.options.fileMutations,
       jobs: this.jobs,
       screenshot:
         this.options.screenshot === false
@@ -527,6 +531,7 @@ export class AgentRuntime {
               EXPLORE_TOOLS.has(tool.name)),
         );
         const jobTools = buildTools(this.sandbox, {
+          fileMutations: this.options.fileMutations,
           jobs: this.jobs,
           jobOwner: () => ({
             sessionId: parentSessionId,
