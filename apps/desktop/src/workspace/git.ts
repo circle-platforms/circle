@@ -5,6 +5,22 @@ import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 const exec = promisify(execFile);
 const locks = new Map<string, Promise<unknown>>();
+/** Shared by native Git mutations and task integration; callers pass a real common Git directory. */
+export async function serializeGitMutation<T>(
+  commonDirectory: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const key = await realpath(commonDirectory),
+    previous = locks.get(key) ?? Promise.resolve();
+  const operation = previous.catch(() => {}).then(run);
+  locks.set(key, operation);
+  try {
+    return await operation;
+  } finally {
+    if (locks.get(key) === operation) locks.delete(key);
+  }
+}
+
 export type GitSnapshot = {
   root: string;
   head: string;
@@ -43,6 +59,34 @@ export class GitWorkspaceService {
     this.options = structuredClone(options);
   }
   async git(args: string[], input?: string) {
+    const readonly =
+      input === undefined &&
+      (['rev-parse', 'status'].includes(args[0] ?? '') ||
+        (args[0] === 'diff' &&
+          !args.some((arg) => arg.startsWith('--output'))) ||
+        (args.length === 4 &&
+          args[0] === 'symbolic-ref' &&
+          args[1] === '--short' &&
+          args[2] === '-q' &&
+          args[3] === 'HEAD') ||
+        (args[0] === 'remote' && args[1] === 'get-url'));
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.executeGit(args, input);
+      } catch (error) {
+        const detail = `${error instanceof Error ? error.message : String(error)}\n${(error as { stderr?: string }).stderr ?? ''}`;
+        if (
+          !readonly ||
+          attempt === 2 ||
+          !/Permission denied/i.test(detail) ||
+          !/config(?:uration files)?/i.test(detail)
+        )
+          throw error;
+        await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+      }
+    }
+  }
+  private async executeGit(args: string[], input?: string) {
     const env = {
       ...process.env,
       GIT_TERMINAL_PROMPT: '0',
@@ -249,93 +293,84 @@ export class GitWorkspaceService {
         revision: (await this.snapshot()).revision,
       };
     }
-    const key = await realpath((await this.snapshot()).root);
-    const previous = locks.get(key) ?? Promise.resolve();
-    const operation = previous
-      .catch(() => {})
-      .then(async () => {
-        const state = await this.snapshot();
-        if (params.revision !== state.revision)
+    const common = (await this.git(['rev-parse', '--git-common-dir'])).trim();
+    return serializeGitMutation(path.resolve(this.root, common), async () => {
+      const state = await this.snapshot();
+      if (params.revision !== state.revision)
+        throw Error(
+          'repository, branch or push destination changed; refresh before retrying',
+        );
+      if (method === 'stage')
+        await this.git(['add', '--', ...this.paths(params.paths)]);
+      else if (method === 'unstage')
+        await this.git(
+          state.head === 'unborn'
+            ? ['rm', '--cached', '--', ...this.paths(params.paths)]
+            : ['restore', '--staged', '--', ...this.paths(params.paths)],
+        );
+      else if (method === 'applyPatch') {
+        if (
+          typeof params.patch !== 'string' ||
+          !params.patch.startsWith('diff --git ') ||
+          !['stage', 'unstage', 'discard'].includes(String(params.action))
+        )
+          throw Error('invalid patch');
+        const flags =
+          params.action === 'stage'
+            ? ['--cached']
+            : params.action === 'unstage'
+              ? ['--cached', '--reverse']
+              : ['--reverse'];
+        await this.git(['apply', '--check', ...flags, '-'], params.patch);
+        await this.git(['apply', ...flags, '-'], params.patch);
+      } else if (method === 'commit') {
+        if (typeof params.message !== 'string' || !params.message.trim())
+          throw Error('commit message is required');
+        const expected = this.paths(params.paths).sort();
+        const staged = (
+          await this.git(['diff', '--cached', '--name-only', '-z'])
+        )
+          .split('\0')
+          .filter(Boolean)
+          .sort();
+        if (JSON.stringify(expected) !== JSON.stringify(staged))
           throw Error(
-            'repository, branch or push destination changed; refresh before retrying',
+            'staged files do not match the explicit commit selection',
           );
-        if (method === 'stage')
-          await this.git(['add', '--', ...this.paths(params.paths)]);
-        else if (method === 'unstage')
-          await this.git(
-            state.head === 'unborn'
-              ? ['rm', '--cached', '--', ...this.paths(params.paths)]
-              : ['restore', '--staged', '--', ...this.paths(params.paths)],
-          );
-        else if (method === 'applyPatch') {
-          if (
-            typeof params.patch !== 'string' ||
-            !params.patch.startsWith('diff --git ') ||
-            !['stage', 'unstage', 'discard'].includes(String(params.action))
-          )
-            throw Error('invalid patch');
-          const flags =
-            params.action === 'stage'
-              ? ['--cached']
-              : params.action === 'unstage'
-                ? ['--cached', '--reverse']
-                : ['--reverse'];
-          await this.git(['apply', '--check', ...flags, '-'], params.patch);
-          await this.git(['apply', ...flags, '-'], params.patch);
-        } else if (method === 'commit') {
-          if (typeof params.message !== 'string' || !params.message.trim())
-            throw Error('commit message is required');
-          const expected = this.paths(params.paths).sort();
-          const staged = (
-            await this.git(['diff', '--cached', '--name-only', '-z'])
-          )
-            .split('\0')
-            .filter(Boolean)
-            .sort();
-          if (JSON.stringify(expected) !== JSON.stringify(staged))
-            throw Error(
-              'staged files do not match the explicit commit selection',
-            );
-          const identity = this.options.identity;
-          await this.git([
-            ...(identity
-              ? [
-                  '-c',
-                  `user.name=${identity.name}`,
-                  '-c',
-                  `user.email=${identity.email}`,
-                ]
-              : []),
-            'commit',
-            ...(this.options.signoff ? ['--signoff'] : []),
-            '-m',
-            params.message,
-          ]);
-        } else if (method === 'push') {
-          if (state.branch === 'detached')
-            throw Error('select a branch before pushing');
-          await this.git([
-            'push',
-            ...(this.options.setUpstream === false ? [] : ['--set-upstream']),
-            'origin',
-            state.branch,
-          ]);
-        } else if (method === 'conflictContinue') {
-          if (!state.merging) throw Error('no merge is active');
-          if ((await this.git(['ls-files', '-u'])).trim())
-            throw Error('resolve and stage all conflicts first');
-          await this.git(['merge', '--continue']);
-        } else if (method === 'conflictAbort') {
-          if (!state.merging) throw Error('no merge is active');
-          await this.git(['merge', '--abort']);
-        } else throw Error('unknown git method');
-        return this.snapshot();
-      });
-    locks.set(key, operation);
-    try {
-      return await operation;
-    } finally {
-      if (locks.get(key) === operation) locks.delete(key);
-    }
+        const identity = this.options.identity;
+        await this.git([
+          ...(identity
+            ? [
+                '-c',
+                `user.name=${identity.name}`,
+                '-c',
+                `user.email=${identity.email}`,
+              ]
+            : []),
+          'commit',
+          ...(this.options.signoff ? ['--signoff'] : []),
+          '-m',
+          params.message,
+        ]);
+      } else if (method === 'push') {
+        if (state.branch === 'detached')
+          throw Error('select a branch before pushing');
+        await this.git([
+          'push',
+          ...(this.options.setUpstream === false ? [] : ['--set-upstream']),
+          'origin',
+          state.branch,
+        ]);
+      } else if (method === 'conflictContinue') {
+        if (!state.merging) throw Error('no merge is active');
+        if ((await this.git(['ls-files', '-u'])).trim())
+          throw Error('resolve and stage all conflicts first');
+        await this.git(['merge', '--continue']);
+      } else if (method === 'conflictAbort') {
+        if (!state.merging) throw Error('no merge is active');
+        await this.git(['merge', '--abort']);
+      } else throw Error('unknown git method');
+      return this.snapshot();
+    });
   }
 }

@@ -554,3 +554,131 @@ test('configuration permission errors are not interpreted as an absent remote or
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('native writes in distinct worktrees share the actual repository mutation queue', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-git-common-queue-'));
+  const source = path.join(root, 'source');
+  const { mkdir } = await import('node:fs/promises');
+  await mkdir(source);
+  const s = new ObservedGit(source);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  try {
+    await s.git(['init', '-b', 'main']);
+    await s.git(['config', 'user.name', 'Fixture']);
+    await s.git(['config', 'user.email', 'fixture@example.invalid']);
+    await writeFile(path.join(source, 'base'), 'base');
+    await s.git(['add', 'base']);
+    await s.git(['commit', '-m', 'Create baseline']);
+    const a = path.join(root, 'a'),
+      b = path.join(root, 'b');
+    await s.git(['worktree', 'add', '-b', 'codex/a', a]);
+    await s.git(['worktree', 'add', '-b', 'codex/b', b]);
+    const left = new ObservedGit(a),
+      right = new ObservedGit(b);
+    await writeFile(path.join(a, 'left'), 'left');
+    await writeFile(path.join(b, 'right'), 'right');
+    const [sa, sb] = await Promise.all([left.snapshot(), right.snapshot()]);
+    let entered!: () => void;
+    const firstEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let active = 0,
+      peak = 0,
+      rightWrites = 0;
+    for (const [service, first] of [
+      [left, true],
+      [right, false],
+    ] as const) {
+      const run = service.git.bind(service);
+      service.git = async (args, input) => {
+        if (args[0] !== 'add') return run(args, input);
+        active++;
+        peak = Math.max(peak, active);
+        try {
+          const result = await run(args, input);
+          if (first) {
+            entered();
+            await gate;
+          } else rightWrites++;
+          return result;
+        } finally {
+          active--;
+        }
+      };
+    }
+    const one = left.call('stage', { revision: sa.revision, paths: ['left'] });
+    await firstEntered;
+    const two = right.call('stage', {
+      revision: sb.revision,
+      paths: ['right'],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(
+      rightWrites,
+      0,
+      'second worktree cannot enter its real index write while first owns common repo',
+    );
+    release();
+    await Promise.all([one, two]);
+    assert.equal(peak, 1);
+    assert.equal((await left.git(['show', ':left'])).trim(), 'left');
+    assert.equal((await right.git(['show', ':right'])).trim(), 'right');
+  } finally {
+    release();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('only read-only configuration sharing failures retry with a strict bound', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-git-read-retry-'));
+  const s = new ObservedGit(root);
+  const transport = s as unknown as {
+    executeGit: (args: string[], input?: string) => Promise<string>;
+  };
+  const execute = transport.executeGit.bind(s);
+  let attempts = 0;
+  const denied = () =>
+    Object.assign(Error('unable to access .git/config: Permission denied'), {
+      code: 128,
+    });
+  try {
+    await s.git(['init', '-b', 'codex/retry']);
+    transport.executeGit = async (args, input) => {
+      if (args[0] === 'rev-parse' && ++attempts < 3) throw denied();
+      return execute(args, input);
+    };
+    assert.ok(
+      (await s.git(['rev-parse', '--git-common-dir'])).includes('.git'),
+    );
+    assert.equal(attempts, 3);
+    attempts = 0;
+    transport.executeGit = async () => {
+      attempts++;
+      throw denied();
+    };
+    await assert.rejects(
+      s.git(['rev-parse', '--git-common-dir']),
+      /Permission denied/,
+    );
+    assert.equal(attempts, 3);
+    attempts = 0;
+    await assert.rejects(
+      s.git(['push', 'origin', 'codex/retry']),
+      /Permission denied/,
+    );
+    assert.equal(attempts, 1, 'unknown push effects must never be replayed');
+    attempts = 0;
+    transport.executeGit = async () => {
+      attempts++;
+      throw Error('unrelated failure');
+    };
+    await assert.rejects(s.git(['status', '--porcelain']), /unrelated failure/);
+    assert.equal(attempts, 1);
+  } finally {
+    transport.executeGit = execute;
+    await rm(root, { recursive: true, force: true });
+  }
+});
