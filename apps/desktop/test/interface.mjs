@@ -450,6 +450,103 @@ try {
     'preview reset cancel, confirmation, reopen and persisted data effects',
   );
   await reset();
+  // The panel seen whole, as Codex lets a preview be: the shell offers it, a file list
+  // does not, and the conversation underneath keeps what the person had typed.
+  const boxes = () =>
+    page.evaluate(() => {
+      const at = (selector) => {
+        const node = document.querySelector(selector);
+        if (!node) return null;
+        const box = node.getBoundingClientRect();
+        return {
+          x: Math.round(box.x),
+          y: Math.round(box.y),
+          width: Math.round(box.width),
+          height: Math.round(box.height),
+          shown: node.checkVisibility(),
+        };
+      };
+      return {
+        content: at('.workspace-content'),
+        panel: at('.inspector'),
+        composer: at('.composer-area'),
+        transcript: at('.transcript'),
+        sidebar: at('.sidebar'),
+        draft: document.querySelector('[aria-label="message"]').value,
+      };
+    });
+  const wholeButton = (name) => page.getByRole('button', { name, exact: true });
+  await page.getByRole('button', { name: 'terminal panel', exact: true }).click();
+  assert.equal(await wholeButton('full view').count(), 1, 'the terminal offers the full view');
+  await page.getByRole('button', { name: 'files panel', exact: true }).click();
+  assert.equal(await wholeButton('full view').count(), 0, 'a file list does not');
+  await page.getByRole('button', { name: 'terminal panel', exact: true }).click();
+  const draft = 'kept while the panel is whole';
+  await page.getByRole('textbox', { name: 'message', exact: true }).fill(draft);
+  const split = await boxes();
+  assert.ok(
+    split.panel.width < split.content.width - 100,
+    'the panel starts split: ' + JSON.stringify(split.panel),
+  );
+  await wholeButton('full view').click();
+  const whole = await boxes();
+  assert.equal(
+    whole.panel.width,
+    whole.content.width,
+    'the panel fills the workspace: ' + JSON.stringify(whole),
+  );
+  // The chat and its waiting cards stay below, so the panel trades some height for the
+  // width it was asking for: most of the workspace is still page.
+  assert.ok(
+    whole.panel.height > whole.content.height * 0.5,
+    'the panel keeps the height it can: ' + JSON.stringify([whole.panel, whole.content]),
+  );
+  assert.ok(
+    whole.composer.height > 40 && whole.composer.height < whole.content.height / 2,
+    'the chat is a bar below, not a wall: ' + JSON.stringify(whole.composer),
+  );
+  assert.ok(
+    whole.composer.shown && whole.composer.width === whole.content.width,
+    'the chat stays below it: ' + JSON.stringify(whole.composer),
+  );
+  assert.ok(
+    whole.composer.y >= whole.panel.y + whole.panel.height - 2,
+    'below, not under: ' + JSON.stringify([whole.panel, whole.composer]),
+  );
+  assert.ok(!whole.transcript.shown, 'only the record steps aside');
+  assert.ok(whole.sidebar.shown, 'the sidebar stays beside the whole panel');
+  assert.ok(
+    await page
+      .locator('.sidebar')
+      .getByRole('button', { name: 'Review the request lifecycle' })
+      .isVisible(),
+    'another session can still be chosen from the full view',
+  );
+  assert.equal(whole.draft, draft, 'the full view keeps the draft');
+  await page.getByRole('textbox', { name: 'message', exact: true }).fill('typed in the full view');
+  assert.equal(
+    await page.getByRole('textbox', { name: 'message', exact: true }).inputValue(),
+    'typed in the full view',
+    'the input still takes what the person types',
+  );
+  await page.getByRole('textbox', { name: 'message', exact: true }).fill(draft);
+  await page.screenshot({ path: join(output, 'inspector-full-view.png') });
+  await wholeButton('exit full view').click();
+  const back = await boxes();
+  assert.ok(back.panel.width < back.content.width - 100, 'the split returns');
+  assert.ok(back.transcript.shown, 'the record comes back');
+  assert.equal(back.draft, draft);
+  await wholeButton('full view').click();
+  await page.keyboard.press('Escape');
+  assert.equal(
+    await page.evaluate(() => !!document.querySelector('.inspector-full')),
+    false,
+    'Escape leaves the full view',
+  );
+  checks.push(
+    'the panel fills the workspace in the full view with the chat kept below it, and back',
+  );
+  await reset();
   const narrowViewport = await setViewport(application, page, {
     width: 800,
     height: 650,
@@ -457,6 +554,20 @@ try {
   await page
     .getByRole('dialog', { name: 'inspector', exact: true })
     .waitFor({ state: 'hidden' });
+  // A narrow window already lays the panel over the conversation: there is nothing
+  // left to fill, so the view is not offered there.
+  const terminalButton = page.getByRole('button', {
+    name: 'terminal panel',
+    exact: true,
+  });
+  if (await terminalButton.isVisible()) {
+    await terminalButton.click();
+    assert.equal(
+      await page.getByRole('button', { name: 'full view' }).count(),
+      0,
+      'a narrow window offers a view it cannot fill',
+    );
+  }
   await page.keyboard.press('Escape');
   assert.ok(
     await page.evaluate(
