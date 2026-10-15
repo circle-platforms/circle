@@ -1306,6 +1306,49 @@ test('trust confirms the named project while another session stays open', async 
   );
 });
 
+test('the first prompt after trust reads only the file the model asked for', async (t) => {
+  const f = await setup(
+    t,
+    [
+      {
+        message: assistant('', [
+          { id: 'read', name: 'read_file', args: { file_path: 'README.md' } },
+        ]),
+      },
+      { message: assistant('the readme says hello') },
+    ],
+    false,
+  );
+  await writeFile(join(f.workspace, 'README.md'), 'hello from the readme\n');
+  assert.equal((await f.call('prompt', { text: 'read the readme' })).ok, false);
+  assert.equal(f.model.requests.length, 0);
+  assert.equal((await f.call('trust', { enabled: true })).ok, true);
+  assert.equal((await f.call('prompt', { text: 'read the readme' })).ok, true);
+  await wait(
+    () =>
+      f.model.requests.length === 2 &&
+      f.controller.snapshot().sessions[0]!.state === 'idle',
+    'readme turn finished',
+  );
+  const system = f.model.requests[0]!.system;
+  assert.match(
+    system,
+    /Do not call read_file to discover instruction files \(AGENTS\.md, CLAUDE\.md, AGENTS\.override\.md, MEMORY\.md\)/,
+  );
+  assert.equal(system.includes('hello from the readme'), false);
+  const tools = f.controller
+    .snapshot()
+    .sessions[0]!.messages.filter((message) => message.tool);
+  assert.deepEqual(
+    tools.map((message) => [
+      message.tool!.name,
+      message.tool!.filePath,
+      message.tool!.status,
+    ]),
+    [['read_file', 'README.md', 'success']],
+  );
+});
+
 test('untrusted workspaces cannot load project context, extensions or execute prompts', async (t) => {
   const f = await setup(t, [{ message: assistant('trusted now') }], false);
   await writeFile(join(f.workspace, 'AGENTS.md'), 'private instruction marker');

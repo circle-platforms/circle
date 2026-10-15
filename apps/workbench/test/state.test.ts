@@ -610,7 +610,7 @@ test('search history includes assistant replies and skips tool rows', () => {
   );
 });
 
-test('working without a project creates one scratch session, and empty rows stay unlisted', () => {
+test('working without a project creates one scratch session, and an empty project stays unlisted', () => {
   const runtime = new PreviewRuntime();
   const before = runtime.getSnapshot().sessions.length;
   const started = runtime.beginConversation({
@@ -638,10 +638,12 @@ test('working without a project creates one scratch session, and empty rows stay
   };
   assert.equal(sessionHasContent(placeholder), false);
   assert.equal(workspaceListed(workspace, [placeholder]), false);
+  const opened = { ...workspace, id: 'opened', kind: 'project' as const };
+  const openedPlaceholder = { ...placeholder, workspaceId: 'opened' };
+  assert.equal(workspaceListed(opened, [openedPlaceholder]), false);
+  assert.equal(workspaceListed(opened, []), false);
   assert.equal(
-    workspaceListed({ ...workspace, id: 'opened', kind: 'project' }, [
-      { ...placeholder, workspaceId: 'opened' },
-    ]),
+    homeProjects([opened, workspace]).some((item) => item.id === 'opened'),
     true,
   );
   const again = runtime.beginConversation({ text: 'another question' });

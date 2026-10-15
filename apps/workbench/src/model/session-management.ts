@@ -22,18 +22,22 @@ export function sessionHasContent(session: Session): boolean {
   );
 }
 
-/** Folders in the sidebar: opened projects stay, an empty no-project group does not. */
+/**
+ * Folders in the sidebar. A group appears only when a session in it has
+ * something to show. An opened project with only a placeholder session stays
+ * hidden, the same as an empty scratch group. The home project menu is separate
+ * and still lists the folder.
+ */
 export function workspaceListed(
   workspace: Workspace,
   sessions: readonly Session[],
 ): boolean {
-  const own = sessions.filter(
-    (session) => session.workspaceId === workspace.id,
+  return sessions.some(
+    (session) =>
+      session.workspaceId === workspace.id &&
+      !session.archivedAt &&
+      sessionHasContent(session),
   );
-  const visible = own.filter((session) => !session.archivedAt);
-  if (workspace.kind === 'scratch') return visible.some(sessionHasContent);
-  if (visible.some(sessionHasContent) || visible.length > 0) return true;
-  return own.length === 0;
 }
 
 export function canArchiveSession(
