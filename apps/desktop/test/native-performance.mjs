@@ -504,9 +504,17 @@ try {
   for (let index = 0; index < 40; index++) {
     const label = index % 2 ? 'task layout' : 'developer layout';
     const button = page.getByRole('button', { name: label, exact: true });
-    await button.evaluate((node) => (node.dataset.perfTarget = 'layout'));
-    await arm('click', '[data-perf-target="layout"]', {
-      selector: '[data-perf-target="layout"]',
+    await page.locator('[data-perf-target^="layout-"]').evaluateAll((nodes) => {
+      for (const node of nodes) delete node.dataset.perfTarget;
+    });
+    const target = `layout-${index}`;
+    await button.evaluate(
+      (node, value) => (node.dataset.perfTarget = value),
+      target,
+    );
+    const selector = `[data-perf-target="${target}"]`;
+    await arm('click', selector, {
+      selector,
       attribute: 'aria-pressed',
       equals: 'true',
     });
