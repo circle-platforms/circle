@@ -40,6 +40,7 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 | Module | What it does |
 |---|---|
 | `model.ts` | Talks to OpenAI-compatible and Anthropic-compatible endpoints and turns text, thinking, tool calls and usage into one form. |
+| `tool_history.ts` | Keeps complete tool-result batches before internal mode transitions in outbound requests. Original checkpoints stay unchanged; missing or duplicate results and ordinary user input are not hidden or fabricated. |
 | `model_guard.ts` | Retries by kind of failure, drops parameters an endpoint rejects, and catches stalled streams, repetition and a missing finish. |
 | `text_repetition.ts` | Notices output that repeats itself, for `model_guard.ts`. |
 | `tool_call_compat.ts` | Repairs tool names and arguments when the repair is unambiguous, and validates arguments before anything runs. |

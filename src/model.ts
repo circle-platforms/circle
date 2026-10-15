@@ -37,6 +37,7 @@ import {
   openAIContent,
   anthropicContent,
 } from './model_media.js';
+import { orderModeToolResults } from './tool_history.js';
 export const EFFORT_LEVELS = [
   'minimal',
   'low',
@@ -100,6 +101,7 @@ export class GatewayModel implements ChatModel {
     );
   }
   async complete(request: ModelRequest): Promise<ModelResponse> {
+    request = { ...request, messages: orderModeToolResults(request.messages) };
     checkRequestMedia(request.messages);
     let response: ModelResponse;
     try {
