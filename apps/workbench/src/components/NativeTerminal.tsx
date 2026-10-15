@@ -18,7 +18,7 @@ import type {
   TerminalReplay,
   TerminalSnapshot,
 } from '../../../desktop/src/workspace/terminal';
-import { palette, mix, rgbToHex } from '../../../../src/ink/theme';
+import { terminalTheme } from '../model/terminal-theme';
 import { t, useLocale } from '../i18n';
 import { copyText } from '../host';
 import {
@@ -923,32 +923,4 @@ function localizeTerminal() {
   Terminal.strings.tooMuchOutput = t(
     'more terminal output is available; navigate the terminal to read it',
   );
-}
-
-function terminalTheme() {
-  const p = palette();
-  const color = (index: number) => rgbToHex(p.rainbow_stops[index]![1]);
-  return {
-    background: p.bg_hex,
-    foreground: p.fg_hex,
-    cursor: p.fg_hex,
-    cursorAccent: p.bg_hex,
-    selectionBackground: mix(p.bg_hex, p.fg_hex, 0.24),
-    black: p.bg_hex,
-    red: color(2),
-    green: color(0),
-    yellow: color(3),
-    blue: color(5),
-    magenta: color(1),
-    cyan: color(4),
-    white: p.fg_hex,
-    brightBlack: mix(p.fg_hex, p.bg_hex, 0.39),
-    brightRed: color(2),
-    brightGreen: color(0),
-    brightYellow: color(3),
-    brightBlue: color(5),
-    brightMagenta: color(1),
-    brightCyan: color(4),
-    brightWhite: p.fg_hex,
-  };
 }
