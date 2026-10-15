@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, rm, readdir } from 'node:fs/promises';
+import {
+  mkdtemp,
+  writeFile,
+  readFile,
+  rm,
+  readdir,
+  realpath,
+} from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { WorkspaceServices } from '../src/workspace/workspace-services.ts';
@@ -67,6 +74,37 @@ test('workspace routing preserves revisions, isolates terminal owners and persis
       /integer/,
     );
     await writeFile(path.join(root, 'a.ts'), 'export const a = 1;\n');
+    assert.deepEqual(
+      await service.call('session-a', 'documents', 'resolveSource', {
+        path: path.join(root, 'a.ts'),
+      }),
+      { path: 'a.ts' },
+    );
+    assert.deepEqual(
+      await service.call('session-a', 'documents', 'resolveSource', {
+        path: 'a.ts',
+      }),
+      { path: 'a.ts' },
+    );
+    await writeFile(path.join(data, 'outside.ts'), 'outside');
+    await assert.rejects(
+      service.call('session-a', 'documents', 'resolveSource', {
+        path: path.join(data, 'outside.ts'),
+      }),
+      /outside/,
+    );
+    if (process.platform === 'darwin') {
+      const canonical = await realpath(path.join(root, 'a.ts'));
+      const alias = canonical.startsWith('/private/var/')
+        ? canonical.replace('/private/var/', '/var/')
+        : canonical;
+      assert.deepEqual(
+        await service.call('session-a', 'documents', 'resolveSource', {
+          path: alias,
+        }),
+        { path: 'a.ts' },
+      );
+    }
     const doc = (await service.call('session-a', 'documents', 'read', {
       path: 'a.ts',
     })) as WorkspaceDocument;

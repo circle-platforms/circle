@@ -302,6 +302,21 @@ export class WorkspaceServices {
     if (this.failure && !emergency) throw this.failure;
     this.sessions.add(sessionId);
     if (service === 'documents') {
+      if (method === 'resolveSource') {
+        const input = requiredString(params, 'path');
+        const root = await realpath(this.options.workspaceRoot);
+        const target = await realpath(path.resolve(root, input));
+        const relative = path.relative(root, target);
+        if (
+          !relative ||
+          relative === '..' ||
+          relative.startsWith('..' + path.sep) ||
+          path.isAbsolute(relative)
+        )
+          throw Error('source is outside the granted workspace');
+        await this.documents.read(relative);
+        return { path: relative };
+      }
       let result: unknown;
       const file =
         method === 'read' || method === 'save'
