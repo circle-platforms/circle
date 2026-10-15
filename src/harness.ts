@@ -375,10 +375,14 @@ export class Harness {
         payload: { model_notice: { event: 'title_failed', message } },
       });
     };
-    // A short line keeps the fallback. A long line with no side request used
-    // to return here with no footer: the extension wrapper had dropped
-    // `sideRequests`. Either way the footer says why.
+    // A greeting keeps the fallback and stays quiet. A long line with no side
+    // request used to return here with no footer: the extension wrapper had
+    // dropped `sideRequests`. That one still says why.
     const skip = titleSkipReason(prompt, model.sideRequests);
+    if (skip === 'prompt too short') {
+      titleTrace(`skipped (${skip})`);
+      return;
+    }
     if (skip) {
       titleTrace(`skipped (${skip})`);
       report(skip);
@@ -450,6 +454,13 @@ export class Harness {
     for (const tool of this.tools)
       parts.push(tool.name, tool.description, JSON.stringify(tool.parameters));
     return Math.max(1, tokenLen(parts.join('\n')));
+  }
+  /**
+   * Ask again for a title that is still the trimmed first message. The caller
+   * has already checked that a turn was answered. A short prompt stays quiet.
+   */
+  retitle(display: string, storedTitle: string): void {
+    this.generateTitle(display, storedTitle);
   }
   private flushTitle(): void {
     const pending = this.pendingTitle;

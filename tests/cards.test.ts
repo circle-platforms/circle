@@ -172,6 +172,15 @@ test('an approval card shows the change as a diff instead of JSON, swallows stra
   assert.equal(s.app.state.dialog.input, undefined);
   assert.equal(s.app.state.draft, 'wrong');
   assert.equal(s.app.state.dialog!.focus, 2);
+  const painted = dialogRows(s.app.state.dialog!, 100, 80);
+  const explain = painted.find((row) =>
+    stripAnsi(row).includes('Reject and explain'),
+  );
+  const once = painted.find((row) => stripAnsi(row).includes('Allow once'));
+  assert.ok(explain);
+  assert.ok(once);
+  assert.ok(explain!.includes(palette().sel_bg.slice(2, -1)));
+  assert.equal(once!.includes(palette().sel_bg.slice(2, -1)), false);
   s.key('down');
   assert.equal(s.app.state.dialog!.focus, 0);
   s.key('j');

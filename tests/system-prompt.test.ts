@@ -7,7 +7,8 @@ import { AgentRuntime } from '../src/runtime.js';
 import { ModelCatalog } from '../src/model_catalog.js';
 import { ScriptedModel } from '../src/testing.js';
 import { defaultRunOptions } from '../src/run_options.js';
-import { promptOverrides } from '../src/system_prompt.js';
+import { buildSystemPrompt, promptOverrides } from '../src/system_prompt.js';
+import { discoverSkills } from '../src/skills.js';
 import {
   defaultSettings,
   loadSettings,
@@ -255,4 +256,50 @@ test('/mcp reload and /extensions reload rebuild the extension tool list instead
     const task = request.tools.find((tool) => tool.name === 'task')!;
     assert.match(task.description, /- inspector: inspector marker/);
   }
+});
+
+test('project context stays in the current folder', (t) => {
+  const root = scratch(t);
+  const repo = join(root, 'repo');
+  const workspace = join(repo, 'sub');
+  const home = join(root, 'data');
+  const user = join(root, 'user');
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  mkdirSync(join(repo, '.agents', 'skills', 'packs'), { recursive: true });
+  mkdirSync(join(workspace, '.circle', 'skills', 'local'), { recursive: true });
+  mkdirSync(home);
+  writeFileSync(join(repo, 'AGENTS.md'), 'PARENT REPO RULES circle-packs');
+  writeFileSync(join(workspace, 'AGENTS.md'), 'THIS FOLDER ONLY');
+  writeFileSync(join(home, 'MEMORY.md'), 'personal memory marker');
+  writeFileSync(
+    join(repo, '.agents', 'skills', 'packs', 'SKILL.md'),
+    '---\nname: packs\ndescription: circle-packs repo skill\n---\nbody\n',
+  );
+  writeFileSync(
+    join(workspace, '.circle', 'skills', 'local', 'SKILL.md'),
+    '---\nname: local\ndescription: this folder skill\n---\nbody\n',
+  );
+  const prompt = buildSystemPrompt(
+    workspace,
+    'scripted',
+    'openai',
+    defaultRunOptions(),
+    home,
+    {
+      userHome: user,
+      skills: discoverSkills(workspace, home, user).map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+      })),
+    },
+  );
+  assert.match(prompt, /THIS FOLDER ONLY/);
+  assert.match(prompt, /personal memory marker/);
+  assert.match(prompt, /- local: this folder skill/);
+  assert.equal(prompt.includes('PARENT REPO RULES'), false);
+  assert.equal(prompt.includes('circle-packs'), false);
+  assert.deepEqual(
+    discoverSkills(workspace, home, user).map((skill) => skill.name),
+    ['local'],
+  );
 });

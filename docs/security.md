@@ -154,7 +154,7 @@ Circle writes nothing of its own into your workspace. Older messages after a sum
 
 Circle works only in folders you have trusted: the first time, it asks, and it does not start until you say yes. Trusting a folder lets Circle use what the folder supplies: its instruction files, skills, custom commands, `.circle/settings.json` and extensions, which run their own code. It is an exact match: trusting `/a` does not trust `/a/b`. Trust does not limit what the model does in the folder.
 
-Instruction files and `.agents/skills` in the folders above the workspace, up to the git root, are read too, without being trusted on their own. Do not trust a folder you have not read.
+Instruction files and skills are read from the workspace folder you trusted, not from the folders above it. Your personal instruction files still apply. Do not trust a folder you have not read.
 
 ## Secrets
 

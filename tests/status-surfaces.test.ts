@@ -43,6 +43,7 @@ import { defaultSettings, trustFolder } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
 import { emptyUsage, type Message } from '../src/types.js';
 import type { Job } from '../src/jobs.js';
+import { CheckpointStore } from '../src/checkpoint_store.js';
 import { cleanup, scratch } from './helpers.js';
 
 const PALETTES: [string, Palette][] = [
@@ -603,6 +604,63 @@ test('the welcome lists what the folder brings, unlit until trusted, blinking wh
     trusted: true,
   });
   assert.deepEqual(empty.items, []);
+});
+
+test('the welcome lists a short title and an untitled session, including the newest', async (t) => {
+  const root = scratch(t);
+  const store = new CheckpointStore(root);
+  cleanup(t, () => store.close());
+  const speak = async (title: string, text: string): Promise<string> => {
+    await delay(5);
+    const session = store.create(root, 'm', title);
+    store.append(session.id, [
+      { id: session.id + 'u', role: 'user', content: text },
+      { id: session.id + 'a', role: 'assistant', content: 'ok' },
+    ]);
+    return session.id;
+  };
+  await speak('older task', 'an older request about the build');
+  await speak('', 'a message with no title');
+  const hi = await speak('hi', 'hi');
+  const blank = store.create(root, 'm', '');
+  const welcome = new WelcomeState(root);
+  const settings = defaultSettings();
+  const info = (id: string) =>
+    welcome.info({
+      version: '1',
+      settings,
+      runtime: {
+        session: { id },
+        store,
+        extensions: { extensions: [] },
+        harness: { model: { model: 'm' } },
+        thinkingLevel: '',
+      } as unknown as AgentRuntime,
+      connected: true,
+      trusted: true,
+    });
+  const first = info('other');
+  assert.deepEqual(
+    first.recent.map(([title]) => title),
+    ['hi', '(untitled)', 'older task'],
+  );
+  assert.equal(first.more, 0);
+  assert.equal(
+    store.list(root).some((session) => session.id === blank.id),
+    false,
+  );
+  assert.equal(info(blank.id).recent[0]?.[0], 'hi');
+  const open = info(hi);
+  assert.equal(
+    open.recent.some(([title]) => title === 'hi'),
+    false,
+  );
+  assert.equal(open.recent[0]?.[0], '(untitled)');
+  await speak('just now', 'a newer request');
+  const next = info(blank.id);
+  assert.equal(next.recent[0]?.[0], 'just now');
+  assert.ok(next.recent.some(([title]) => title === 'hi'));
+  assert.equal(next.more, 1);
 });
 
 test('thinking rows have no background on a dark theme and on a light one', () => {

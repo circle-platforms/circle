@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { platform } from 'node:os';
 import { currentBranch } from './git_info.js';
@@ -39,32 +39,27 @@ export function selectSessionPromptName(model: string): string {
 export function discoverContextFiles(workspace: string): [string, string][] {
   const files: [string, string][] = [];
   const seen = new Set<string>();
-  const root = resolve(workspace);
-  for (let directory = root; ; directory = dirname(directory)) {
-    for (const name of [
-      'AGENTS.override.md',
-      'AGENTS.md',
-      'AGENTS.MD',
-      'CLAUDE.md',
-      'CLAUDE.MD',
-    ]) {
-      const path = join(directory, name);
-      try {
-        // bigint: see fileIdentity in memory_sources.ts
-        const stat = statSync(path, { bigint: true });
-        const identity = `${stat.dev}:${stat.ino}`;
-        if (!stat.isFile() || seen.has(identity)) continue;
-        seen.add(identity);
-        files.push([path, readCappedText(path)]);
-      } catch {
-        /* No instruction file here. */
-      }
+  // This folder only. A parent checkout's AGENTS.md must not describe a
+  // different repository to a session opened in a subdirectory.
+  const directory = resolve(workspace);
+  for (const name of [
+    'AGENTS.override.md',
+    'AGENTS.md',
+    'AGENTS.MD',
+    'CLAUDE.md',
+    'CLAUDE.MD',
+  ]) {
+    const path = join(directory, name);
+    try {
+      // bigint: see fileIdentity in memory_sources.ts
+      const stat = statSync(path, { bigint: true });
+      const identity = `${stat.dev}:${stat.ino}`;
+      if (!stat.isFile() || seen.has(identity)) continue;
+      seen.add(identity);
+      files.push([path, readCappedText(path)]);
+    } catch {
+      /* No instruction file here. */
     }
-    if (
-      dirname(directory) === directory ||
-      (existsSync(join(directory, '.git')) && directory !== root)
-    )
-      break;
   }
   return files;
 }

@@ -2297,6 +2297,7 @@ export class SessionApp {
   private explainKey(card: ApprovalCard, key: string, char: string): void {
     if (key === 'escape') {
       card.explaining = false;
+      card.focus = card.options.length - 1;
       card.draft = this.state.draft;
       this.state.completion = undefined;
       this.state.dialog = card.state();

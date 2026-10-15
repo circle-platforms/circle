@@ -75,8 +75,9 @@ export function titleWorthy(text: string): boolean {
 }
 
 /**
- * Why this prompt does not get a title request. Callers show it as
- * `title failed · <reason>`. Undefined means the request should be sent.
+ * Why this prompt does not get a title request. `prompt too short` stays
+ * quiet: the caller logs it only when debugging. Any other reason is shown
+ * as `title failed · <reason>`. Undefined means the request should be sent.
  */
 export function titleSkipReason(
   prompt: string,

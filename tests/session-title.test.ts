@@ -239,6 +239,8 @@ test('a side request names the session and does not take the answer', async (t) 
   assert.equal(titleCalls[0]!.effort, '');
   assert.equal(titleCalls[0]!.messages[0]!.content, titleConversation(LONG));
   assert.match(String(titleCalls[0]!.system), /Do not answer it/);
+  assert.match(String(titleCalls[0]!.system), /noun phrase/);
+  assert.match(String(titleCalls[0]!.system), /hello\.txt creation request/);
   assert.equal(
     model.requests.filter((request) => !request.maxTokens).length,
     1,
@@ -281,7 +283,7 @@ test('a short prompt keeps the fallback and skips the model', async (t) => {
     ).length,
     0,
   );
-  assert.deepEqual(notes, ['prompt too short']);
+  assert.deepEqual(notes, []);
 });
 
 test('a long prompt with no side request reports title failed', async (t) => {
@@ -930,4 +932,86 @@ test('opening a session replaces a reasoning title and a number fragment', async
     fallbackTitle('请用大约200字介绍一下罗马帝国的兴衰'),
   );
   assert.equal(runtime.store.get(kept.id)!.title, 'Login bug fix');
+});
+
+test('opening a finished session re-requests a title that is only the trimmed prompt', async (t) => {
+  const root = scratch(t);
+  const store = new CheckpointStore(root);
+  const prompt = '帮我写一个你好世界的Go程序';
+  const finished = store.create(root, 'scripted');
+  store.append(finished.id, [
+    { id: 'u', role: 'user', content: prompt },
+    { id: 'a', role: 'assistant', content: '好的。' },
+  ]);
+  store.rename(finished.id, fallbackTitle(prompt));
+  const unanswered = store.create(root, 'scripted');
+  store.append(unanswered.id, [{ id: 'u2', role: 'user', content: prompt }]);
+  store.rename(unanswered.id, fallbackTitle(prompt));
+  const chosen = store.create(root, 'scripted');
+  store.append(chosen.id, [
+    { id: 'u3', role: 'user', content: prompt },
+    { id: 'a3', role: 'assistant', content: '好的。' },
+  ]);
+  store.rename(chosen.id, 'Custom name');
+  const hi = store.create(root, 'scripted');
+  store.append(hi.id, [
+    { id: 'u4', role: 'user', content: 'hi' },
+    { id: 'a4', role: 'assistant', content: 'hello' },
+  ]);
+  store.rename(hi.id, 'hi');
+  store.close();
+  const model = new TitleModel('done', 'Go 你好世界程序请求');
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: defaultSettings(),
+    model,
+    session: finished.id,
+    headless: true,
+    localContext: false,
+    bundledExtensions: false,
+  });
+  cleanup(t, () => runtime.close());
+  const titleCalls = () =>
+    model.requests.filter(
+      (request) => request.maxTokens === Harness.titleOutputTokens,
+    );
+  assert.equal(titleCalls().length, 1);
+  assert.match(String(titleCalls()[0]!.system), /noun phrase/);
+  assert.equal(runtime.store.get(finished.id)!.title, fallbackTitle(prompt));
+  model.releaseTitle();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(runtime.store.get(finished.id)!.title, 'Go 你好世界程序请求');
+  assert.equal(runtime.store.get(chosen.id)!.title, 'Custom name');
+  assert.equal(runtime.store.get(hi.id)!.title, 'hi');
+  const quiet = new TitleModel('done', 'should not be asked');
+  const greeting = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: defaultSettings(),
+    model: quiet,
+    session: hi.id,
+    headless: true,
+    localContext: false,
+    bundledExtensions: false,
+  });
+  cleanup(t, () => greeting.close());
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(quiet.requests.length, 0);
+  assert.equal(greeting.store.get(hi.id)!.title, 'hi');
+  const held = new TitleModel('done', 'should not be asked');
+  const pending = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: defaultSettings(),
+    model: held,
+    session: unanswered.id,
+    headless: true,
+    localContext: false,
+    bundledExtensions: false,
+  });
+  cleanup(t, () => pending.close());
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(held.requests.length, 0);
+  assert.equal(pending.store.get(unanswered.id)!.title, fallbackTitle(prompt));
 });

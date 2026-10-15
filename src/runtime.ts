@@ -65,6 +65,11 @@ import { addUsage, emptyUsage } from './types.js';
 import { UserShells } from './user_shell.js';
 import { toolCallLine } from './headless.js';
 import { canScreenshot, type ScreenshotOptions } from './screenshot.js';
+import {
+  fallbackTitle,
+  firstUserSource,
+  titleWorthy,
+} from './session_title.js';
 const BUILTIN_TOOL_NAMES = new Set([
   'ls',
   'read_file',
@@ -340,6 +345,7 @@ export class AgentRuntime {
       this.store.close();
       throw error;
     }
+    this.refreshFallbackTitle();
     this.bus.setRunId(this.session.id);
     if (!options.model)
       void this.catalog.refreshIfStale(() =>
@@ -1333,6 +1339,7 @@ export class AgentRuntime {
     this.applyDefaultMode();
     this.bus.setRunId(session.id);
     if (previous !== session.id) this.store.releaseSession(previous);
+    this.refreshFallbackTitle();
   }
   private requireIdleSession(): void {
     if (this.ownershipError) throw this.ownershipError;
@@ -1357,6 +1364,7 @@ export class AgentRuntime {
       this.store.repairStaleTitles();
       const repaired = this.store.get(session.id);
       if (repaired) this.session = repaired;
+      this.refreshFallbackTitle();
       this.extensions.emit('session_start', {
         workspace: this.options.workspace,
         session_id: session.id,
@@ -1378,6 +1386,27 @@ export class AgentRuntime {
     this.store.repairStaleTitles();
     const repaired = this.store.get(this.session.id);
     if (repaired) this.session = repaired;
+    this.refreshFallbackTitle();
+  }
+  /**
+   * A title saved as the trimmed first message, after a turn was answered, is
+   * asked for once. A greeting such as "hi" is not worth a request, and a
+   * title the person chose is left alone.
+   */
+  private refreshFallbackTitle(): void {
+    const session = this.store.get(this.session.id);
+    if (!session?.title || !session.head) return;
+    let messages;
+    try {
+      messages = this.store.messages(session.id);
+    } catch {
+      return;
+    }
+    const source = firstUserSource(messages);
+    if (!source || session.title !== fallbackTitle(source)) return;
+    if (!titleWorthy(source)) return;
+    if (!messages.some((message) => message.role === 'assistant')) return;
+    this.harness.retitle(source, session.title);
   }
   exportSession(): string {
     if (

@@ -18,9 +18,11 @@ Your output must be:
 <rules>
 - you MUST write the title in the same language as the user message you are summarizing. A Chinese conversation gets a Chinese title. An English conversation gets an English title
 - Title must be grammatically correct and read naturally - no word salad
+- Name the user's request as a noun phrase. Do not write an outcome, and do not write as if the work is already done or under way
+- "Creating hello.txt with hi" is wrong. "hello.txt creation request" is right
 - Never include tool names in the title (e.g. "read tool", "bash tool", "edit tool")
 - Focus on the main topic or question the user needs to retrieve
-- Vary your phrasing - avoid repetitive patterns like always starting with "Analyzing"
+- Vary your phrasing - avoid repetitive patterns like always starting with "Analyzing" or "Creating"
 - When a file is mentioned, focus on WHAT the user wants to do WITH the file, not just that they shared it
 - Keep exact: technical terms, numbers, filenames, HTTP codes
 - Remove: the, this, my, a, an
@@ -36,16 +38,17 @@ Your output must be:
 </rules>
 
 <examples>
-"debug 500 errors in production" → Debugging production 500 errors
-"refactor user service" → Refactoring user service
-"why is app.js failing" → app.js failure investigation
-"implement rate limiting" → Rate limiting implementation
-"how do I connect postgres to my API" → Postgres API connection
-"best practices for React hooks" → React hooks best practices
-"@src/auth.ts can you add refresh token support" → Auth refresh token support
-"@utils/parser.ts this is broken" → Parser bug fix
-"look at @config.json" → Config review
-"@App.tsx add dark mode toggle" → Dark mode toggle in App
-"请用大约200字介绍一下罗马帝国的兴衰" → 罗马帝国兴衰
-"帮我写一个你好世界的Go程序" → Go 你好世界
+"debug 500 errors in production" → Production 500 error debug request
+"refactor user service" → User service refactor request
+"why is app.js failing" → app.js failure question
+"implement rate limiting" → Rate limiting request
+"how do I connect postgres to my API" → Postgres API connection question
+"best practices for React hooks" → React hooks question
+"@src/auth.ts can you add refresh token support" → Auth refresh token request
+"@utils/parser.ts this is broken" → Parser bug report
+"look at @config.json" → Config review request
+"@App.tsx add dark mode toggle" → App dark mode request
+"create hello.txt with hi" → hello.txt creation request
+"请用大约200字介绍一下罗马帝国的兴衰" → 罗马帝国兴衰介绍请求
+"帮我写一个你好世界的Go程序" → Go 你好世界程序请求
 </examples>

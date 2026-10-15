@@ -1,7 +1,8 @@
 // What the welcome block shows, looked up when it can change rather than on every frame:
 // the folder's own things, its recent sessions and the git branch (read again at most every
 // two seconds). The lamps follow the session: unlit until the folder is trusted, blinking
-// while it loads, green once loaded, red for an extension that failed.
+// while it loads, green once loaded, red for an extension that failed. Recent sessions
+// include a short title and an untitled one that has a message.
 import type { AgentRuntime } from '../runtime.js';
 import type { CircleSettings } from '../settings.js';
 import { isReady } from '../settings.js';
@@ -48,10 +49,12 @@ export class WelcomeState {
     return this.branchName;
   }
 
-  // Looked up again once the folder is trusted, once the session loads, and for a new session.
+  // Looked up again once the folder is trusted, once the session loads, when a
+  // session is saved, and for a new session.
   private refresh(input: WelcomeInput, now: number): void {
     const runtime = input.runtime;
-    const key = `${runtime?.session.id ?? ''}|${input.connected}|${input.trusted}`;
+    const version = runtime?.store.version ?? -1;
+    const key = `${runtime?.session.id ?? ''}|${input.connected}|${input.trusted}|${version}`;
     if (key === this.key) return;
     this.key = key;
     try {
@@ -59,6 +62,9 @@ export class WelcomeState {
     } catch {
       this.items = [];
     }
+    // Short titles and untitled sessions with a message are listed. An empty
+    // untitled row is already hidden by the store. The session you are in is
+    // left out; you are already looking at it.
     const saved =
       runtime?.store
         .list(this.workspace)

@@ -36,7 +36,7 @@ The model sees the conversation history and a system prompt that Circle assemble
 
 1. Base instructions chosen by the model family (Claude, GPT, Gemini, Kimi and others each get their own).
 2. Circle's guidelines and a note on how paths work.
-3. Your instruction files: `AGENTS.md` or `CLAUDE.md` from the workspace and its parent folders, then your personal ones. See [Configuration](configuration.md#instruction-files).
+3. Your instruction files: `AGENTS.md` or `CLAUDE.md` from the workspace folder, then your personal ones. A parent folder's files are not included. See [Configuration](configuration.md#instruction-files).
 4. A short description of the environment: working folder, platform, date, whether it is a git repository, model and protocol.
 5. Anything appended with `APPEND_SYSTEM.md` (the project's `.circle/` one, else the data folder's) or `--append-system-prompt`.
 6. The names and descriptions of the [skills](skills.md), and of the extension tools.

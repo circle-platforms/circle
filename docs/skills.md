@@ -57,16 +57,14 @@ Circle looks in all of these. If two skills have the same name, the one lower in
 | `~/.config/opencode/skills` | You, shared with OpenCode |
 | `~/.pi/agent/skills` | You, shared with pi |
 | `~/.circle/skills` | You, Circle only (in the data folder) |
-| `.agents/skills` in the workspace and each folder above it up to the git root | Project |
+| `.agents/skills` in the workspace folder | Project |
 | `.opencode/skills` | Project |
 | `.pi/skills` | Project |
 | `.claude/skills` | Project |
 | `.circle/skills` | Project, Circle only |
 | `.agent/skills` | Project, highest priority |
 
-One quirk: a skill in a parent folder's `.agents/skills` overrides one with the same name in the workspace's own.
-
-Project skills apply once you trust the folder, and the `.agents/skills` folders above it apply with them. A skill can tell the model to do anything, so read the skills in a repository before you trust it.
+Project skills apply once you trust the folder, and only from that folder. A parent folder's `.agents/skills` is not loaded. A skill can tell the model to do anything, so read the skills in a repository before you trust it.
 
 ## Install skills
 
