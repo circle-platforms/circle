@@ -12,7 +12,11 @@ export async function preserveNativeClipboard(app) {
             Object.fromEntries(
               await Promise.all(
                 item.types.map(async (type) => [
-                  type,
+                  // macOS standard HTML writes prepend a new meta tag. The
+                  // raw native format restores the original blob unchanged.
+                  process.platform === 'darwin' && type === 'text/html'
+                    ? 'electron application/osclipboard;format="public.html"'
+                    : type,
                   await item.getType(type),
                 ]),
               ),
