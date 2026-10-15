@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { ChromeBrowser } from '../src/browser/chrome.js';
 import { CheckpointStore } from '../src/checkpoint_store.js';
@@ -294,5 +294,105 @@ test(
     await assert.rejects((browser as any).groupRunning(1_073_741_824), {
       code: 'ENOENT',
     });
+  },
+);
+
+test(
+  'a never-ending process inspector fails within its bound and retains the real browser group for a successful close retry',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const root = join(scratch(t), 'inspection fixture with spaces');
+    mkdirSync(root);
+    const inspectorPid = join(root, 'inspector.pid');
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    // Record the actual inspector PID before blocking on its open stdin pipe.
+    // Ignore TERM so a timeout that only sends TERM still fails this regression.
+    writeFileSync(
+      join(root, 'ps'),
+      `#!/bin/sh\ntrap '' TERM\nprintf '%s' "$$" > ${quote(inspectorPid)}\nexec /bin/cat\n`,
+      { mode: 0o755 },
+    );
+    const child = spawn(
+      process.execPath,
+      ['-e', "process.stdout.write('ready');setInterval(()=>{},1000)"],
+      { detached: true, stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    await new Promise<void>((resolve, reject) => {
+      child.stdout!.once('data', () => resolve());
+      child.once('error', reject);
+    });
+    const exited = new Promise<void>((resolve) =>
+      child.once('exit', () => resolve()),
+    );
+    const browser = new ChromeBrowser({
+      executable: process.execPath,
+      closeTimeout: 1000,
+    });
+    const owned = browser as any;
+    let closed = false;
+    owned.processGroups.add(child.pid);
+    owned.cdp = {
+      close: () => {
+        closed = true;
+      },
+    };
+    const previousPath = process.env.PATH;
+    let closing: Promise<void> | undefined;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    const restorePath = () => {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    };
+    try {
+      process.env.PATH = root;
+      closing = browser.close();
+      const outcome = await Promise.race([
+        closing.then(
+          () => ({ status: 'closed' as const }),
+          (error: any) => ({ status: 'failed' as const, error }),
+        ),
+        new Promise<{ status: 'blocked' }>((resolve) => {
+          watchdog = setTimeout(() => resolve({ status: 'blocked' }), 2000);
+        }),
+      ]);
+      assert.equal(
+        outcome.status,
+        'failed',
+        'a stuck ps must fail instead of hanging or confirming exit',
+      );
+      if (outcome.status !== 'failed') return;
+      assert.equal(outcome.error.killed, true);
+      assert.equal(outcome.error.signal, 'SIGKILL');
+      assert.equal(closed, false);
+      assert.equal(owned.processGroups.has(child.pid), true);
+      assert.equal(child.exitCode, null);
+      assert.equal(child.signalCode, null);
+      assert.ok(
+        existsSync(inspectorPid),
+        'the real inspector fixture started and never exited by itself',
+      );
+      const pid = Number(readFileSync(inspectorPid, 'utf8'));
+      assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+      restorePath();
+      await browser.close();
+      await exited;
+      assert.equal(child.signalCode, 'SIGKILL');
+      assert.equal(owned.processGroups.has(child.pid), false);
+      assert.equal(closed, true);
+    } finally {
+      clearTimeout(watchdog);
+      restorePath();
+      if (existsSync(inspectorPid)) {
+        try {
+          process.kill(Number(readFileSync(inspectorPid, 'utf8')), 'SIGKILL');
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+        }
+      }
+      await closing?.catch(() => {});
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill('SIGKILL');
+      await exited;
+    }
   },
 );

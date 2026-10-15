@@ -475,8 +475,15 @@ export class ChromeBrowser implements BrowserPort {
     }
     // An exited grandchild can remain a zombie until the OS reaps it; it cannot run or write.
     const output = await new Promise<string>((resolve, reject) =>
-      execFile('ps', ['-A', '-o', 'pgid=,stat='], (error, stdout) =>
-        error ? reject(error) : resolve(stdout),
+      execFile(
+        'ps',
+        ['-A', '-o', 'pgid=,stat='],
+        {
+          timeout: Math.max(1, this.options.closeTimeout ?? 3000),
+          // A stalled inspector must not outlive this check by ignoring SIGTERM.
+          killSignal: 'SIGKILL',
+        },
+        (error, stdout) => (error ? reject(error) : resolve(stdout)),
       ),
     );
     return output.split('\n').some((line) => {
