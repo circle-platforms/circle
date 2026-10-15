@@ -272,7 +272,12 @@ export class WorkspaceDebugService {
             ))
               await child.request('setBreakpoints', {
                 source: { path: source },
-                breakpoints: breakpoints.map((b) => ({ line: b.line })),
+                breakpoints: breakpoints.map((b) => ({
+                  line: b.requestedLine ?? b.line,
+                  ...(b.requestedColumn !== undefined
+                    ? { column: b.requestedColumn }
+                    : {}),
+                })),
               });
             await child.request('configurationDone');
             await launched;
@@ -323,7 +328,12 @@ export class WorkspaceDebugService {
               ))
                 await connection.request('setBreakpoints', {
                   source: { path: source },
-                  breakpoints: breakpoints.map((b) => ({ line: b.line })),
+                  breakpoints: breakpoints.map((b) => ({
+                    line: b.requestedLine ?? b.line,
+                    ...(b.requestedColumn !== undefined
+                      ? { column: b.requestedColumn }
+                      : {}),
+                  })),
                 });
               await connection.request('continue', { threadId: body.threadId });
             } catch (e) {
@@ -456,7 +466,12 @@ export class WorkspaceDebugService {
         ))
           await dap.request('setBreakpoints', {
             source: { path: source },
-            breakpoints: breakpoints.map((b) => ({ line: b.line })),
+            breakpoints: breakpoints.map((b) => ({
+              line: b.requestedLine ?? b.line,
+              ...(b.requestedColumn !== undefined
+                ? { column: b.requestedColumn }
+                : {}),
+            })),
           });
         await dap.request('configurationDone');
         await launch;
@@ -479,10 +494,27 @@ export class WorkspaceDebugService {
         lines.some((n) => !Number.isInteger(n) || n < 1)
       )
         throw Error('breakpoint lines must be positive integers');
+      if (
+        params.columns !== undefined &&
+        (!Array.isArray(params.columns) ||
+          params.columns.length !== lines.length ||
+          params.columns.some(
+            (column: unknown) =>
+              !Number.isInteger(column) || Number(column) < 1,
+          ))
+      )
+        throw Error(
+          'breakpoint columns must match the requested positive positions',
+        );
       const result = this.dap
         ? await (this.target ?? this.dap).request(method, {
             source: { path: source },
-            breakpoints: lines.map((line) => ({ line })),
+            breakpoints: lines.map((line, index) => ({
+              line,
+              ...(params.columns?.[index] !== undefined
+                ? { column: params.columns[index] }
+                : {}),
+            })),
           })
         : {
             breakpoints: lines.map((line) => ({
@@ -491,6 +523,18 @@ export class WorkspaceDebugService {
               source: { path: source },
             })),
           };
+      result.breakpoints = lines.map((line, index) => {
+        const bound = result.breakpoints?.[index] ?? { verified: false };
+        return {
+          ...bound,
+          line: bound.line ?? line,
+          source: bound.source ?? { path: source },
+          requestedLine: line,
+          ...(params.columns?.[index] !== undefined
+            ? { requestedColumn: params.columns[index] }
+            : {}),
+        };
+      });
       this.state.breakpoints[source] = result.breakpoints;
       this.publish({});
       return result;
