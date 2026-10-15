@@ -219,6 +219,15 @@ test('generated titles keep one short phrase and drop a reply', () => {
   assert.equal(sanitizeGeneratedTitle('你可以粘贴一下'), undefined);
   assert.equal(titleWorthy('hi'), false);
   assert.equal(titleWorthy('hello there'), false);
+  assert.equal(titleWorthy('ok'), false);
+  assert.equal(titleWorthy('thanks'), false);
+  assert.equal(titleWorthy('Thanks!'), false);
+  assert.equal(titleWorthy('thanks a lot'), false);
+  assert.equal(titleWorthy('what is TCP'), true);
+  assert.equal(titleWorthy('what is TCP?'), true);
+  assert.equal(titleWorthy('你好'), false);
+  assert.equal(titleWorthy('一二三'), false);
+  assert.equal(titleWorthy('一二三四'), true);
   assert.equal(titleWorthy('请'), false);
   assert.equal(titleWorthy('请用大约200字介绍一下罗马帝国的兴衰'), true);
   assert.equal(titleWorthy('帮我写一个你好世界的Go程序'), true);
@@ -388,6 +397,40 @@ test('a short prompt keeps the fallback and skips the model', async (t) => {
     ).length,
     0,
   );
+  assert.deepEqual(notes, []);
+});
+
+test('a three-word question asks for a summary title', async (t) => {
+  const root = scratch(t);
+  const model = new TitleModel('done', 'TCP overview');
+  const { harness: run, store, session } = harness(root, model);
+  cleanup(t, () => store.close());
+  const notes: string[] = [];
+  run.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as
+      { event?: string; message?: string } | undefined;
+    if (notice?.event === 'title_failed') notes.push(String(notice.message));
+  });
+  const prompt = 'what is TCP';
+  assert.equal(prompt.split(' ').length, 3);
+  assert.equal(titleWorthy(prompt), true);
+  await run.run(prompt);
+  assert.equal(store.get(session.id)!.title, 'what is TCP');
+  assert.equal(
+    model.requests.filter(
+      (request) => request.maxTokens === Harness.titleOutputTokens,
+    ).length,
+    1,
+  );
+  assert.equal(
+    model.requests.find(
+      (request) => request.maxTokens === Harness.titleOutputTokens,
+    )!.messages[0]!.content,
+    titleConversation(prompt),
+  );
+  model.releaseTitle();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(store.get(session.id)!.title, 'TCP overview');
   assert.deepEqual(notes, []);
 });
 
