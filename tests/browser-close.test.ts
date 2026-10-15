@@ -184,3 +184,115 @@ test('refused forced browser termination retains session history until a success
   cleanup(t, () => store.close());
   assert.equal(store.get(id), undefined);
 });
+
+test(
+  'permission-denied group probes still verify actual owned processes and exit',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const child = spawn(
+      process.execPath,
+      ['-e', "process.stdout.write('ready');setInterval(()=>{},1000)"],
+      {
+        detached: true,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      },
+    );
+    cleanup(t, () => {
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill('SIGKILL');
+    });
+    await new Promise<void>((resolve, reject) => {
+      child.stdout!.once('data', () => resolve());
+      child.once('error', reject);
+    });
+    const kill = process.kill.bind(process);
+    t.mock.method(
+      process,
+      'kill',
+      (pid: number, signal?: NodeJS.Signals | number) => {
+        if (pid === -child.pid! && signal === 0)
+          throw Object.assign(new Error('probe denied'), { code: 'EPERM' });
+        return kill(pid, signal);
+      },
+    );
+    const browser = browserWithChild(child);
+    assert.equal(
+      await (browser as any).groupRunning(child.pid),
+      true,
+      'EPERM must not mean exited',
+    );
+    await browser.close();
+    assert.notEqual(child.signalCode, null);
+    assert.equal(
+      await (browser as any).groupRunning(child.pid),
+      false,
+      'ps confirms no runnable member after actual exit',
+    );
+  },
+);
+
+test(
+  'permission-denied termination retains owned groups for retry',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const child = spawn(
+      process.execPath,
+      ['-e', "process.stdout.write('ready');setInterval(()=>{},1000)"],
+      { detached: true, stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    cleanup(t, () => {
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill('SIGKILL');
+    });
+    await new Promise<void>((resolve, reject) => {
+      child.stdout!.once('data', () => resolve());
+      child.once('error', reject);
+    });
+    const kill = process.kill.bind(process);
+    t.mock.method(
+      process,
+      'kill',
+      (pid: number, signal?: NodeJS.Signals | number) => {
+        if (pid === -child.pid!)
+          throw Object.assign(new Error('termination denied'), {
+            code: 'EPERM',
+          });
+        return kill(pid, signal);
+      },
+    );
+    const browser = new ChromeBrowser({
+      executable: process.execPath,
+      closeTimeout: 40,
+    });
+    const state = browser as any;
+    state.cdp = {
+      close: () => {
+        throw new Error('must not confirm cleanup');
+      },
+    };
+    state.processGroups.add(child.pid);
+    await assert.rejects(browser.close(), /termination denied/);
+    assert.equal(state.processGroups.has(child.pid), true);
+    assert.equal(child.exitCode, null);
+    assert.equal(child.signalCode, null);
+  },
+);
+
+test(
+  'a denied probe with unavailable process inspection cannot confirm exit',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const originalPath = process.env.PATH;
+    process.env.PATH = scratch(t);
+    t.after(() => {
+      process.env.PATH = originalPath;
+    });
+    t.mock.method(process, 'kill', () => {
+      throw Object.assign(new Error('probe denied'), { code: 'EPERM' });
+    });
+    const browser = new ChromeBrowser({ executable: process.execPath });
+    await assert.rejects((browser as any).groupRunning(1_073_741_824), {
+      code: 'ENOENT',
+    });
+  },
+);
