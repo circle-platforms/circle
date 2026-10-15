@@ -355,16 +355,75 @@ function oneLine(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
+/** Drop a leading please / 请 so a stored cut can match the saved prompt. */
+function leadStripped(text: string): string {
+  let line = foldTitle(text);
+  for (let pass = 0; pass < 3; pass++) {
+    const next = line.replace(LATIN, '').trim();
+    if (!next || next === line) break;
+    line = next;
+  }
+  return line.replace(CJK_LEAD, '').trim() || line;
+}
+
+/** Long enough to be a cut of a sentence, not a one-word greeting. */
+function substantialCut(text: string): boolean {
+  return text.split(' ').length >= 2 || cjkCount(text) >= 4 || text.length >= 8;
+}
+
+/**
+ * `left` is a strict prefix of `right`: a long cut, or a short stub of a
+ * prompt that is worth titling.
+ */
+function prefixCut(left: string, right: string, worthy: boolean): boolean {
+  if (!left || !right || left.length >= right.length || !right.startsWith(left))
+    return false;
+  return substantialCut(left) || worthy;
+}
+
 /**
  * The title is the start of a longer prompt, including a cut that lands inside
  * a word (`hiFib demo` from `hiFib demonstration…`, or the first words of a
- * sentence). A greeting that is the whole message is not one of these.
+ * sentence). Compared after case and punctuation are folded, and again with a
+ * leading please / 请 removed. The other way counts when the prompt is a real
+ * sentence and the title continues it inside a word (`…in two` stored as
+ * `…in twosentences`). `hi` inside `higher order functions` does not: `hi` is
+ * not that sentence.
  */
 function fragmentOf(title: string, prompt: string): boolean {
-  if (!prompt.startsWith(title) || prompt.length === title.length) return false;
-  if (title.split(' ').length >= 2 || cjkCount(title) >= 4 || title.length >= 8)
-    return true;
-  return titleWorthy(prompt);
+  const worthy = titleWorthy(prompt);
+  const pairs = [
+    [oneLine(title), oneLine(prompt)],
+    [foldTitle(title), foldTitle(prompt)],
+    [leadStripped(title), leadStripped(prompt)],
+  ];
+  for (const [left, right] of pairs) {
+    if (prefixCut(left, right, worthy)) return true;
+    if (
+      substantialCut(right) &&
+      left.length > right.length &&
+      left.startsWith(right) &&
+      !left.slice(right.length).startsWith(' ')
+    )
+      return true;
+  }
+  return false;
+}
+
+/**
+ * `hi` + `Fib demo` stored as `hiFib demo`: the first message is glued to
+ * more text at a capital letter, whether or not a later message still has
+ * that tail.
+ */
+function gluedExtension(title: string, first: string): boolean {
+  const line = oneLine(title);
+  const head = oneLine(first);
+  if (!head || line.length <= head.length) return false;
+  if (line.slice(0, head.length).toLowerCase() !== head.toLowerCase())
+    return false;
+  const prev = line[head.length - 1] ?? '';
+  const next = line[head.length] ?? '';
+  return /[\p{Ll}\p{N}]/u.test(prev) && /\p{Lu}/u.test(next);
 }
 
 /**
@@ -381,6 +440,18 @@ function gluedTitle(title: string, parts: string[]): boolean {
     tight += part;
     spaced = `${spaced} ${part}`;
     if (title === tight || title === spaced) return true;
+    const folded = foldTitle(title);
+    const foldedTight = foldTitle(tight);
+    const foldedSpaced = foldTitle(spaced);
+    if (
+      folded &&
+      ((foldedTight &&
+        (folded === foldedTight || foldedTight.startsWith(folded))) ||
+        (foldedSpaced &&
+          (folded === foldedSpaced || foldedSpaced.startsWith(folded)))) &&
+      folded.length > foldTitle(first).length
+    )
+      return true;
     if (title.length <= first.length || !title.startsWith(first)) continue;
     if (fragmentOf(title, tight) || fragmentOf(title, spaced)) return true;
   }
@@ -403,6 +474,10 @@ export function titleNeedsRefresh(
   const prompts = [source, ...later].map(oneLine).filter(Boolean);
   const prompt = prompts[0] ?? '';
   if (!line || !prompt) return false;
+  // `hiFib demo` is `hi` glued to a later turn. A cut such as
+  // `please explain to me briefly in two` still matches once case,
+  // punctuation, and a leading please are folded away.
+  if (gluedExtension(line, prompt) || fragmentOf(line, prompt)) return true;
   const joined = prompts.join(' ');
   if (!titleWorthy(prompt) && !(prompts.length > 1 && titleWorthy(joined)))
     return false;
@@ -436,9 +511,14 @@ export function userPrompts(messages: StoredUser[]): string[] {
     const display = oneLine(message.display ?? '');
     let text = display || content;
     if (content && display && content !== display) {
-      if (content.startsWith(display) || display.startsWith(content))
-        text = content.length >= display.length ? content : display;
-      else text = display;
+      const longer = content.length >= display.length ? content : display;
+      const shorter = longer === content ? display : content;
+      text =
+        content.startsWith(display) ||
+        display.startsWith(content) ||
+        fragmentOf(shorter, longer)
+          ? longer
+          : display;
     } else text = content || display;
     if (text) prompts.push(text);
   }

@@ -207,6 +207,38 @@ test('generated titles keep one short phrase and drop a reply', () => {
     titleNeedsRefresh('hi', 'hi', ['please explain tail recursion in detail']),
     false,
   );
+  assert.equal(
+    titleNeedsRefresh('hiFib demo', 'hi', [
+      'show a Fib demo of tail recursion',
+    ]),
+    true,
+  );
+  assert.equal(
+    titleNeedsRefresh(
+      'please explain to me briefly in two',
+      'Please explain to me briefly, in two sentences, how this works today.',
+    ),
+    true,
+  );
+  assert.equal(
+    titleNeedsRefresh(
+      'please explain to me briefly in two',
+      'explain to me briefly, in two sentences, how this works today',
+    ),
+    true,
+  );
+  assert.equal(
+    titleNeedsRefresh('higher order functions', 'hi', [
+      'show a Fib demo of tail recursion',
+    ]),
+    false,
+  );
+  assert.equal(titleNeedsRefresh('TCP overview', 'what is TCP'), false);
+  assert.equal(
+    titleNeedsRefresh('React hooks 解释', '解释 React hooks'),
+    false,
+  );
+  assert.equal(titleNeedsRefresh('Rust 语言简介', '什么是 Rust'), false);
   assert.deepEqual(
     userPrompts([
       {
@@ -217,6 +249,17 @@ test('generated titles keep one short phrase and drop a reply', () => {
       },
     ]),
     ['please explain to me briefly in two sentences how this works today'],
+  );
+  assert.deepEqual(
+    userPrompts([
+      {
+        role: 'user',
+        display: 'please explain to me briefly in two',
+        content:
+          'Please explain to me briefly, in two sentences, how this works today.',
+      },
+    ]),
+    ['Please explain to me briefly, in two sentences, how this works today.'],
   );
   assert.equal(sanitizeGeneratedTitle('请提供文件内容'), undefined);
   assert.equal(sanitizeGeneratedTitle('你可以粘贴一下'), undefined);
