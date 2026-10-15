@@ -38,6 +38,7 @@ try {
   for (const scenario of [
     'step refreshes selected locals across merged pauses',
     'old asynchronous scope reply cannot restore an obsolete pause',
+    'hidden debug scopes do not keep requesting variables',
   ]) {
     try {
       await setup();
@@ -50,6 +51,23 @@ try {
         await page
           .getByText('count: 2', { exact: true })
           .waitFor({ timeout: 1500 });
+      } else if (scenario.startsWith('hidden')) {
+        await page.getByRole('button', { name: 'local', exact: true }).click();
+        await page.getByText('count: 1', { exact: true }).waitFor();
+        const before = await page.evaluate(() =>
+          window.__browserFixture.requests(),
+        );
+        await page.getByRole('tab', { name: 'console', exact: true }).click();
+        await page.evaluate(() => window.__browserFixture.next());
+        await page.waitForTimeout(100);
+        assert.equal(
+          await page.evaluate(() => window.__browserFixture.requests()),
+          before,
+        );
+        await page
+          .getByRole('tab', { name: 'page debugger', exact: true })
+          .click();
+        await page.getByText('count: 2', { exact: true }).waitFor();
       } else {
         await page.evaluate(() => window.__browserFixture.defer());
         await page.getByRole('button', { name: 'local', exact: true }).click();

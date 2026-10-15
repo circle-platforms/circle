@@ -127,7 +127,13 @@ export function BrowserDiagnostics({
     }
   };
   useEffect(() => {
-    if (!result?.state.debugger.paused || !selectedScope.current) return;
+    if (
+      !open ||
+      section !== 'debug' ||
+      !result?.state.debugger.paused ||
+      !selectedScope.current
+    )
+      return;
     const scope = result.state.debugger.stackFrames[0]?.scopes.find(
       (scope) => scope.name === selectedScope.current,
     );
@@ -138,7 +144,12 @@ export function BrowserDiagnostics({
         reference: scope.variablesReference,
         expectedPauseEpoch: result.state.debugger.pauseEpoch,
       });
-  }, [result?.state.debugger.pauseEpoch, result?.state.debugger.paused]);
+  }, [
+    open,
+    section,
+    result?.state.debugger.pauseEpoch,
+    result?.state.debugger.paused,
+  ]);
   useEffect(() => {
     selectedScope.current = undefined;
     setResult(undefined);

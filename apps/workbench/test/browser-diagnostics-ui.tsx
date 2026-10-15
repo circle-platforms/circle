@@ -5,6 +5,7 @@ import type {
   BrowserDiagnosticState,
   BrowserDiagnosticEvent,
 } from '../../desktop/src/browser-diagnostics-contracts';
+let variableRequests = 0;
 let pause = 1,
   sequence = 0,
   defer = false,
@@ -58,6 +59,7 @@ const notify = () => {
   },
   browserDiagnostics: async (_id: string, request: any) => {
     if (request.action === 'debug' && request.command === 'variables') {
+      variableRequests++;
       const captured = response(),
         epoch = pause;
       if (defer) {
@@ -77,6 +79,7 @@ const notify = () => {
   },
 };
 (window as any).__browserFixture = {
+  requests: () => variableRequests,
   defer: () => {
     defer = true;
   },
