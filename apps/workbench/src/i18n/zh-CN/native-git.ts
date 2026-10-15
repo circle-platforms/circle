@@ -1,4 +1,5 @@
 export const nativeGit: Record<string, string> = {
+  skipped: '已跳过',
   'finishing secure login': '正在完成安全登录',
   'secure storage unavailable; signed in for this session only':
     '安全存储不可用；仅在本次会话中登录',

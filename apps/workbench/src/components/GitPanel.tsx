@@ -3,6 +3,9 @@ import { workspaceCall } from '../model/workspace-client';
 import { t } from '../i18n';
 import './GitPanel.css';
 import { DeliveryPanel } from './DeliveryPanel';
+import { Button } from './common';
+import { DiffBlock } from './DiffBlock';
+import type { DiffView } from '../model/types';
 import type { GitSnapshot } from '../../../desktop/src/workspace/git';
 export function gitHunks(diff: string): string[] {
   const result: string[] = [];
@@ -18,11 +21,27 @@ export function gitHunks(diff: string): string[] {
   }
   return result;
 }
+function gitDiffView(text: string): DiffView {
+  const rows: DiffView['rows'] = text.split('\n').map((text) => ({
+    text,
+    ...(text.startsWith('+') && !text.startsWith('+++')
+      ? { tone: 'added' as const }
+      : text.startsWith('-') && !text.startsWith('---')
+        ? { tone: 'removed' as const }
+        : {}),
+  }));
+  return {
+    summary: `+${rows.filter((row) => row.tone === 'added').length} -${rows.filter((row) => row.tone === 'removed').length}`,
+    rows,
+  };
+}
 export function GitPanel({
   sessionId,
   onFile,
   onOpenExternal,
+  embedded = false,
 }: {
+  embedded?: boolean;
   sessionId: string;
   onFile?: (path: string) => void;
   onOpenExternal?: (url: string) => void;
@@ -121,27 +140,27 @@ export function GitPanel({
   }
   return (
     <section
-      className="native-git"
+      className={`native-git${embedded ? ' embedded' : ''}`}
       aria-label={t('git workspace')}
       aria-busy={busy}
       data-revision={state?.revision}
       data-branch={state?.branch}
     >
-      <header>
-        <strong>{t('git workspace')}</strong>
+      <header className="inspector-heading">
+        {!embedded && <h2>{t('git workspace')}</h2>}
         <span>{state?.branch}</span>
-        <button disabled={busy} onClick={() => void refresh()}>
+        <Button disabled={busy} onClick={() => void refresh()}>
           {t('refresh')}
-        </button>
+        </Button>
       </header>
-      <p>
+      <p className="panel-note">
         {t(
           'git includes manual and agent changes; session changes remain in Changes',
         )}
       </p>
       {error && <p role="alert">{error}</p>}
       <div
-        className="native-git-scopes"
+        className="native-git-scopes segmented"
         role="group"
         aria-label={t('diff scope')}
       >
@@ -149,6 +168,7 @@ export function GitPanel({
           <button
             key={s}
             disabled={busy}
+            className={scope === s ? 'active' : ''}
             aria-pressed={scope === s}
             onClick={() => showDiff(s)}
           >
@@ -161,15 +181,19 @@ export function GitPanel({
         ))}
       </div>
       {scope === 'branch' && (
-        <label>
+        <label className="field-label">
           {t('comparison base')}
-          <input value={base} onChange={(e) => setBase(e.target.value)} />
-          <button onClick={() => showDiff('branch')}>{t('refresh')}</button>
+          <input
+            className="input"
+            value={base}
+            onChange={(e) => setBase(e.target.value)}
+          />
+          <Button onClick={() => showDiff('branch')}>{t('refresh')}</Button>
         </label>
       )}
-      <ul>
+      <ul className="native-git-files">
         {state?.entries.map((e) => (
-          <li key={e.path}>
+          <li className="change-entry" key={e.path}>
             <input
               type="checkbox"
               checked={selected.includes(e.path)}
@@ -187,42 +211,50 @@ export function GitPanel({
               {e.working}
             </code>
             <button
+              className="change-file"
               onClick={() => {
                 setSelected([e.path]);
                 void showDiff(scope, [e.path]);
               }}
             >
-              {e.path}
+              <span>{e.path}</span>
             </button>
-            <button onClick={() => onFile?.(e.path)}>{t('open file')}</button>
+            <Button onClick={() => onFile?.(e.path)}>{t('open file')}</Button>
           </li>
         ))}
       </ul>
       <div className="native-git-actions">
-        <button
+        <Button
           disabled={busy || !selected.length}
           onClick={() => run('stage')}
         >
           {t('stage selected')}
-        </button>
-        <button
+        </Button>
+        <Button
           disabled={busy || !selected.length}
           onClick={() => run('unstage')}
         >
           {t('unstage selected')}
-        </button>
-        <button disabled={busy} onClick={() => run('push')}>
+        </Button>
+        <Button disabled={busy} onClick={() => run('push')}>
           {t('push branch')}
-        </button>
+        </Button>
       </div>
-      <pre tabIndex={0} aria-label={t('git diff')}>
-        {diff || t('select a file to inspect its diff')}
-      </pre>
+      <div tabIndex={0} aria-label={t('git diff')}>
+        {diff ? (
+          <DiffBlock diff={gitDiffView(diff)} />
+        ) : (
+          <p className="muted">{t('select a file to inspect its diff')}</p>
+        )}
+      </div>
       {scope !== 'branch' &&
         gitHunks(diff).map((patch, i) => (
-          <div className="native-git-hunk" key={i}>
-            <pre>{patch.slice(patch.indexOf('@@ '))}</pre>
-            <button
+          <div className="native-git-hunk panel-section" key={i}>
+            <DiffBlock
+              diff={gitDiffView(patch.slice(patch.indexOf('@@ ')))}
+              compact
+            />
+            <Button
               disabled={busy}
               onClick={() =>
                 run('applyHunk', {
@@ -234,9 +266,9 @@ export function GitPanel({
               {scope === 'index'
                 ? t('unstage this hunk')
                 : t('stage this hunk')}
-            </button>
+            </Button>
             {scope === 'working' && (
-              <button
+              <Button
                 disabled={busy}
                 onClick={() => {
                   if (window.confirm(t('discard this hunk from disk?')))
@@ -244,26 +276,30 @@ export function GitPanel({
                 }}
               >
                 {t('discard this hunk')}
-              </button>
+              </Button>
             )}
           </div>
         ))}
-      <label>
+      <label className="field-label">
         {t('commit message')}
-        <input value={message} onChange={(e) => setMessage(e.target.value)} />
+        <input
+          className="input"
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+        />
       </label>
-      <button
+      <Button
         disabled={busy || !message.trim() || !selected.length}
         onClick={() => run('commit', { message })}
       >
         {t('commit selected staged files')}
-      </button>
+      </Button>
       {state?.merging && (
         <div>
-          <button disabled={busy} onClick={() => run('continueMerge')}>
+          <Button disabled={busy} onClick={() => run('continueMerge')}>
             {t('continue merge')}
-          </button>
-          <button
+          </Button>
+          <Button
             disabled={busy}
             onClick={() => {
               if (
@@ -275,10 +311,11 @@ export function GitPanel({
             }}
           >
             {t('abort merge')}
-          </button>
+          </Button>
         </div>
       )}
       <DeliveryPanel
+        embedded
         sessionId={sessionId}
         revision={state?.revision}
         onOpenExternal={onOpenExternal}

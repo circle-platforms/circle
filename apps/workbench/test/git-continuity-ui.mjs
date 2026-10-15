@@ -75,6 +75,34 @@ try {
   const page = await browser.newPage();
   page.setDefaultTimeout(8000);
   await page.goto(`${server.resolvedUrls.local[0]}test/git-continuity-ui.html`);
+  assert.equal(
+    await page
+      .locator('.native-git')
+      .getByRole('heading', { name: 'git workspace', exact: true })
+      .count(),
+    0,
+    'embedded Git inherits the existing inspector title',
+  );
+  assert.ok(
+    (await page.locator('.native-git button.button').count()) > 0,
+    'existing common buttons are reused',
+  );
+  assert.equal(
+    await page
+      .locator('.native-git')
+      .evaluate((el) => getComputedStyle(el).backgroundColor),
+    'rgba(0, 0, 0, 0)',
+    'no independent Git background',
+  );
+  for (const theme of ['dark', 'light']) {
+    await page.evaluate((theme) => window.__gitTheme(theme), theme);
+    assert.equal(
+      await page
+        .locator('.native-git')
+        .evaluate((el) => getComputedStyle(el).backgroundColor),
+      'rgba(0, 0, 0, 0)',
+    );
+  }
   const commit = page.getByRole('button', {
     name: 'commit selected staged files',
     exact: true,

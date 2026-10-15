@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { workspaceCall } from '../model/workspace-client';
 import { t } from '../i18n';
+import { Button, DataBlock, Status } from './common';
 type Login = {
   id: string;
   status: string;
@@ -21,7 +22,9 @@ export function DeliveryPanel({
   sessionId,
   revision,
   onOpenExternal,
+  embedded = false,
 }: {
+  embedded?: boolean;
   sessionId: string;
   revision?: string;
   onOpenExternal?: (url: string) => void;
@@ -91,7 +94,14 @@ export function DeliveryPanel({
     if (/^https:\/\/github\.com\//.test(url)) onOpenExternal?.(url);
   }
   return (
-    <details onToggle={(e) => setOpened(e.currentTarget.open)}>
+    <details
+      className={
+        embedded
+          ? 'panel-section native-delivery'
+          : 'panel-section first native-delivery'
+      }
+      onToggle={(e) => setOpened(e.currentTarget.open)}
+    >
       <summary>{t('GitHub delivery')}</summary>
       {error && <p role="alert">{error}</p>}
       <p>
@@ -101,12 +111,12 @@ export function DeliveryPanel({
             ? t('GitHub connected')
             : t('GitHub login required')}
       </p>
-      <button
+      <Button
         disabled={busy}
         onClick={() => action('login', { action: 'start' })}
       >
         {t('sign in with browser')}
-      </button>
+      </Button>
       {login && (
         <div role="status">
           <p>
@@ -126,22 +136,22 @@ export function DeliveryPanel({
           {login.url && (
             <>
               <p>{login.url}</p>
-              <button
+              <Button
                 disabled={!onOpenExternal}
                 onClick={() => open(login.url!)}
               >
                 {t('open GitHub authorization')}
-              </button>
+              </Button>
             </>
           )}
           {['starting', 'waiting'].includes(login.status) && (
-            <button
+            <Button
               onClick={() =>
                 action('login', { action: 'cancel', id: login.id })
               }
             >
               {t('cancel login')}
-            </button>
+            </Button>
           )}
           {login.error && <p role="alert">{login.error}</p>}
           {login.status === 'complete' && login.storage === 'session' && (
@@ -151,75 +161,106 @@ export function DeliveryPanel({
           )}
         </div>
       )}
-      <button
+      <Button
         disabled={busy}
         onClick={() => refresh().catch((e) => setError(String(e)))}
       >
         {t('connection and PR status')}
-      </button>
+      </Button>
       {pr && (
         <p>
-          <button disabled={!onOpenExternal} onClick={() => open(pr.url)}>
+          <Button disabled={!onOpenExternal} onClick={() => open(pr.url)}>
             #{pr.number} {pr.isDraft ? t('draft PR') : t('ready for review')}
-          </button>
+          </Button>
         </p>
       )}
-      <label>
+      <label className="field-label">
         {t('PR title')}
-        <input value={title} onChange={(e) => setTitle(e.target.value)} />
+        <input
+          className="input"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+        />
       </label>
-      <label>
+      <label className="field-label">
         {t('PR description')}
-        <textarea value={body} onChange={(e) => setBody(e.target.value)} />
+        <textarea
+          className="input"
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+        />
       </label>
-      <button
+      <Button
         disabled={busy || !title.trim()}
         onClick={() => action('publish', { title, body })}
       >
         {t('publish draft PR')}
-      </button>
-      <button disabled={busy || !pr} onClick={() => action('ready')}>
+      </Button>
+      <Button disabled={busy || !pr} onClick={() => action('ready')}>
         {t('request review after checks pass')}
-      </button>
-      <ul>
+      </Button>
+      <ul className="native-delivery-checks">
         {checks.map((check, i) => (
-          <li key={i}>
+          <li className="activity-row" key={i}>
             <span>
-              {check.name} · {check.state}
+              {check.name}
+              <small>
+                {check.bucket === 'skipping' ? (
+                  <span className="muted">{t('skipped')}</span>
+                ) : (
+                  <Status
+                    value={
+                      check.bucket === 'pass'
+                        ? 'completed'
+                        : check.bucket === 'fail'
+                          ? 'failed'
+                          : check.bucket === 'cancel'
+                            ? 'cancelled'
+                            : 'pending'
+                    }
+                  />
+                )}{' '}
+                {check.state}
+              </small>
             </span>
             {check.link && (
-              <button
+              <Button
                 disabled={!onOpenExternal}
                 onClick={() => open(check.link)}
               >
                 {t('open check')}
-              </button>
+              </Button>
             )}
           </li>
         ))}
       </ul>
-      <label>
+      <label className="field-label">
         {t('CI run id')}
         <input
+          className="input"
           value={runId}
           inputMode="numeric"
           onChange={(e) => setRunId(e.target.value)}
         />
       </label>
-      <button
+      <Button
         disabled={busy || !/^\d+$/.test(runId)}
         onClick={() => action('logs', { runId: Number(runId) })}
       >
         {t('show failed CI logs')}
-      </button>
-      <button
+      </Button>
+      <Button
         disabled={busy || !/^\d+$/.test(runId)}
         onClick={() => action('retry', { runId: Number(runId) })}
       >
         {t('retry failed CI jobs')}
-      </button>
-      {logs && <pre tabIndex={0}>{logs}</pre>}
-      <p>{t('merging remains a human decision')}</p>
+      </Button>
+      {logs && (
+        <div tabIndex={0}>
+          <DataBlock title={t('show failed CI logs')} value={logs} />
+        </div>
+      )}
+      <p className="panel-note">{t('merging remains a human decision')}</p>
     </details>
   );
 }

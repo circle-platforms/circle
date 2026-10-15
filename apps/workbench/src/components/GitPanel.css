@@ -1,76 +1,44 @@
+/* Git uses the existing inspector, buttons, fields and diff components.
+   These rules arrange content only; they do not define another control skin. */
 .native-git {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
   min-width: 0;
-  color: var(--fg);
-  background: var(--bg);
-  overflow: auto;
-  height: 100%;
-  box-sizing: border-box;
+  overflow-wrap: anywhere;
 }
-.native-git header,
-.native-git-actions,
-.native-git-scopes,
-.native-git li {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-.native-git header span {
-  flex: 1;
-}
-.native-git ul {
+.native-git-files,
+.native-delivery-checks {
   list-style: none;
   padding: 0;
   margin: 0;
 }
-.native-git li {
-  padding: 4px 0;
-  overflow-wrap: anywhere;
-}
-.native-git li button {
-  text-align: left;
-  overflow-wrap: anywhere;
-}
-.native-git button,
-.native-git input {
-  color: var(--fg);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 5px 8px;
-}
-.native-git button:disabled {
-  opacity: 0.5;
-}
-.native-git button[aria-pressed='true'] {
-  outline: 2px solid var(--fg);
-}
-.native-git pre {
-  min-height: 90px;
-  max-height: 360px;
-  overflow: auto;
-  border: 1px solid var(--border);
-  padding: 8px;
-  white-space: pre;
-  font-size: 12px;
-}
-.native-git label {
+.native-git-files > li {
   display: flex;
+  align-items: center;
   gap: 8px;
 }
-.native-git label input {
+.native-git-files .change-file {
   min-width: 0;
   flex: 1;
 }
-.native-git p {
-  margin: 0;
-  font-size: 12px;
+.native-git-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-block: 12px;
 }
-.native-git [role='alert'] {
-  border-left: 3px solid var(--fg);
-  padding-left: 8px;
+.native-git-scopes {
+  margin-block: 12px;
+}
+.native-git .diff-block pre {
+  overflow: auto;
+}
+.native-git .field-label,
+.native-delivery .field-label {
+  align-items: stretch;
+}
+.native-delivery > .button {
+  margin-block: 4px;
+  margin-inline-end: 6px;
+}
+.native-delivery .activity-row {
+  flex-wrap: wrap;
 }
