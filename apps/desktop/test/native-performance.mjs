@@ -23,6 +23,10 @@ import {
   PERFORMANCE_RAW_MESSAGES,
   PERFORMANCE_PROJECTED_MESSAGES,
 } from './helpers/native-performance-fixture.mjs';
+import {
+  executedNativeBuildEvidence,
+  verifyNativeBuildManifest,
+} from './helpers/native-build-manifest.mjs';
 import { CheckpointStore } from '../../../src/checkpoint_store.ts';
 import {
   defaultSettings,
@@ -291,8 +295,18 @@ try {
   report.driverHead = (
     await exec('git', ['-C', desktopRoot, 'rev-parse', 'HEAD'])
   ).stdout.trim();
-  report.sourceBuildHead =
-    process.env.CIRCLE_NATIVE_PERF_SOURCE_BUILD_HEAD ?? null;
+  const manifestPath = process.env.CIRCLE_NATIVE_PERF_BUILD_MANIFEST;
+  if (!manifestPath)
+    throw Error(
+      'CIRCLE_NATIVE_PERF_BUILD_MANIFEST is required before clipboard or stress actions',
+    );
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  report.executedBuild = verifyNativeBuildManifest(
+    manifest,
+    await executedNativeBuildEvidence(app, manifest),
+  );
+  report.sourceBuildHead = report.executedBuild.sourceBuildHead;
+  report.buildManifestPath = manifestPath;
   report.source = await sourceEvidence();
   report.renderer = await rendererEvidence(desktopRoot);
   report.appInfo = await page.evaluate(() => window.circleDesktop.info());
