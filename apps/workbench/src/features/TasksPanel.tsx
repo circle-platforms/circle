@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TaskRecord } from '../../../desktop/src/workspace/task-store';
 import { workspaceCall, subscribeWorkspace } from '../model/workspace-client';
 import { Button, DataBlock, Status } from '../components/common';
+import { TaskReviewForm } from './TaskReviewForm';
 import { t } from '../i18n';
 
 interface Limits {
@@ -295,6 +296,14 @@ export function TasksPanel({
             {task.reason && <p role="status">{task.reason}</p>}
             {task.result !== undefined && (
               <DataBlock title={t('result')} value={task.result} />
+            )}
+            {String(task.state) === 'needs_review' && (
+              <TaskReviewForm
+                key={task.spec.id}
+                task={task}
+                sessionId={sessionId}
+                onReviewed={() => void refresh()}
+              />
             )}
             <div className="tasks-actions">
               {task.runtimeSessionId && (

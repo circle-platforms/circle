@@ -97,4 +97,16 @@ export const developer: Record<string, string> = {
   passed: '已通过',
   skipped: '已跳过',
   'command history': '命令历史',
+  'independent human review': '独立人工核对',
+  'confirm each criterion using observed evidence; this records your review without claiming an automatic test passed':
+    '逐项填写实际核对依据，此操作记录人工审阅，不代表自动测试通过',
+  'review requires the recorded patch identity': '需先取得实际改动的校验记录',
+  'the task changed; reopen its current result before reviewing':
+    '任务已变化，请重新打开当前结果再核对',
+  'review evidence for {criterion}': '核对依据：{criterion}',
+  'describe what you checked and the observed result':
+    '写明检查内容与实际观察结果',
+  'recording review…': '正在记录核对结果…',
+  'confirm reviewed criteria': '确认已逐项核对',
+  'load current patch and recheck criteria': '载入当前改动并重新逐项核对',
 };
