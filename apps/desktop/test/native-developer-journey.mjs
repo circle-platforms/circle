@@ -1,3 +1,4 @@
+import { nativeTaskJourneyFixture } from './helpers/native-task-fixture.mjs';
 import {
   preserveNativeClipboard,
   restoreNativeClipboard,
@@ -131,79 +132,7 @@ const fixture = join(temp, 'model.json');
 const requestsPath = join(temp, 'requests.jsonl');
 await writeFile(
   fixture,
-  JSON.stringify({
-    requestsPath,
-    replies: [
-      {
-        message: {
-          id: 'journey-baseline',
-          role: 'assistant',
-          content: 'Native journey ready: README.md and debug.cjs',
-        },
-      },
-      { waitForAbort: true },
-      {
-        message: {
-          id: 'task-write-a',
-          role: 'assistant',
-          content: '',
-          tool_calls: [
-            {
-              id: 'task-a-file',
-              name: 'write_file',
-              args: {
-                file_path: 'agent-result.txt',
-                content: 'isolated task output\n',
-              },
-            },
-            {
-              id: 'task-a-git',
-              name: 'execute',
-              args: { command: 'git status --short' },
-            },
-          ],
-        },
-      },
-      {
-        message: {
-          id: 'task-write-b',
-          role: 'assistant',
-          content: '',
-          tool_calls: [
-            {
-              id: 'task-b-file',
-              name: 'write_file',
-              args: {
-                file_path: 'agent-result.txt',
-                content: 'isolated task output\n',
-              },
-            },
-          ],
-        },
-      },
-      {
-        message: {
-          id: 'task-readonly',
-          role: 'assistant',
-          content: '',
-          tool_calls: [
-            {
-              id: 'task-read',
-              name: 'read_file',
-              args: { file_path: 'README.md' },
-            },
-          ],
-        },
-      },
-      ...Array.from({ length: 24 }, (_, index) => index + 1).map((n) => ({
-        message: {
-          id: 'task-completed-' + n,
-          role: 'assistant',
-          content: 'Task effects ready for independent verification',
-        },
-      })),
-    ],
-  }),
+  JSON.stringify(nativeTaskJourneyFixture(requestsPath)),
 );
 const browserStreams = new Set();
 const server = createServer((request, response) => {
@@ -400,6 +329,7 @@ for (const file of [
     'native-git-journey',
     'native-journey-platform',
     'native-clipboard',
+    'native-task-fixture',
   ].map((name) => 'helpers/' + name + '.mjs'),
 ]) {
   buildIdentity.driverFiles[file] = createHash('sha256')
@@ -1199,6 +1129,23 @@ try {
       await writeFile(
         join(output, 'task-results.json'),
         JSON.stringify({ concurrent, complete, gitApprovalObserved }, null, 2),
+      );
+      const journal = (await readFile(requestsPath, 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      const routes = new Set(
+        journal.map((request) => request.fixture?.routeId).filter(Boolean),
+      );
+      for (const expected of ['writer-a', 'writer-b', 'readonly'])
+        assert(
+          routes.has(expected),
+          'real task routed model conversation ' + expected,
+        );
+      assert(
+        journal.filter((request) => request.fixture?.role === 'reviewer')
+          .length >= 3,
+        'three actual independent reviewer requests recorded',
       );
       await screenshot('08c-parallel-task-results');
     },
