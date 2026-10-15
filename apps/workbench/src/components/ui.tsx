@@ -21,13 +21,24 @@ export function Button({
 }
 export function IconButton({
   label,
+  tipOpen,
   children,
+  ref,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  label: string;
+  /** Set to force the tip open or closed. Omit it to follow hover and focus. */
+  tipOpen?: boolean;
+  ref?: Ref<HTMLButtonElement>;
+}) {
   return (
-    <Tooltip.Root>
+    <Tooltip.Root
+      {...(tipOpen === undefined
+        ? {}
+        : { open: tipOpen, onOpenChange: () => {} })}
+    >
       <Tooltip.Trigger asChild>
-        <button className="icon-button" aria-label={label} {...props}>
+        <button ref={ref} className="icon-button" aria-label={label} {...props}>
           {children}
         </button>
       </Tooltip.Trigger>

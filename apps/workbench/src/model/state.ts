@@ -317,10 +317,7 @@ export class PreviewRuntime implements RuntimePort {
       parentId: null,
       role: 'user',
       text,
-      at: new Date().toLocaleTimeString('en-GB', {
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
+      at: new Date().toISOString(),
       ...(input.attachments?.length
         ? { attachments: structuredClone(input.attachments) }
         : {}),
@@ -426,10 +423,7 @@ export class PreviewRuntime implements RuntimePort {
           parentId: target.leafId,
           role: 'user',
           text,
-          at: new Date().toLocaleTimeString('en-GB', {
-            hour: '2-digit',
-            minute: '2-digit',
-          }),
+          at: new Date().toISOString(),
           attachments: structuredClone(target.attachments),
         };
         target.messages.push(message);

@@ -218,6 +218,46 @@ try {
       .count(),
     0,
   );
+  await recentActive.focus();
+  await page.waitForFunction(() => {
+    const tips = document.querySelectorAll('.tooltip');
+    const cards = document.querySelectorAll('.session-hover');
+    return tips.length === 1 && cards.length === 1;
+  });
+  const menuTab = await page
+    .locator('.sidebar button[aria-label^="session actions"]')
+    .evaluateAll((nodes) => nodes.map((node) => node.tabIndex));
+  assert.ok(menuTab.length > 1);
+  assert.ok(menuTab.every((value) => value === -1));
+  await page.keyboard.press('Tab');
+  assert.equal(
+    (
+      await page.evaluate(
+        () => document.activeElement?.getAttribute('aria-label') ?? '',
+      )
+    ).startsWith('session actions'),
+    false,
+  );
+  await recentActive.focus();
+  await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(() => {
+    const tips = document.querySelectorAll('.tooltip');
+    return (
+      document.activeElement?.getAttribute('aria-label') ===
+        'session actions for Fix the reconnect race' &&
+      tips.length === 1 &&
+      !document.querySelector('.session-hover')
+    );
+  });
+  await page.keyboard.press('ArrowLeft');
+  await page.waitForFunction(() =>
+    document.activeElement?.classList.contains('session-link'),
+  );
+  await page.keyboard.press('Shift+F10');
+  await page
+    .getByRole('menuitem', { name: 'rename session', exact: true })
+    .waitFor();
+  await page.keyboard.press('Escape');
   checks.push(
     'the open session stays highlighted in recent and in its project',
   );
@@ -228,6 +268,9 @@ try {
     'a recent hover card sits beside the row and its menu opens on the first click',
   );
   checks.push('arrow keys move between sidebar session rows');
+  checks.push(
+    'tab leaves the session list and a row menu opens from the keyboard without a second tip',
+  );
   await renameCommand.fill('x');
   await page.waitForFunction(() =>
     localStorage.getItem('circle.workbench.preview.v1'),
@@ -290,8 +333,20 @@ try {
     const node = document.querySelector('.project-list');
     return node instanceof HTMLElement && node.scrollTop > 0;
   });
+  const scrolled = await list.evaluate((node) => node.scrollTop);
+  assert.ok(scrolled > 0);
+  const still = page.getByRole('textbox', { name: 'message', exact: true });
+  await still.fill('keep the sidebar still');
+  await still.press('Enter');
+  await page
+    .locator('article.message.user', { hasText: 'keep the sidebar still' })
+    .waitFor();
+  assert.ok(
+    Math.abs((await list.evaluate((node) => node.scrollTop)) - scrolled) < 2,
+  );
   await setViewport(application, page, restored);
   checks.push('the sidebar list scrolls');
+  checks.push('sending a message keeps the sidebar scroll position');
   for (const command of sourceCommands) {
     await reset();
     await page

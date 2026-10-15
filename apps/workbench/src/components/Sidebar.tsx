@@ -2,6 +2,7 @@ import { desktopHost, folderOpenMessage, openNativeWorkspace } from '../host';
 import { openHome } from '../features/home-selection';
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -87,6 +88,17 @@ export function Sidebar({
   const [collapsed, setCollapsed] = useState<string[]>([]);
   const [roving, setRoving] = useState<string | null>(null);
   const anchors = useRef(new Map<string, HTMLAnchorElement>());
+  const listRef = useRef<HTMLDivElement>(null);
+  const listScroll = useRef(0);
+  // Captured during render, so a scroll event from the reorder itself cannot
+  // replace the position the user had before this update.
+  const pinnedScroll = useRef(0);
+  pinnedScroll.current = listScroll.current;
+  useLayoutEffect(() => {
+    const node = listRef.current;
+    if (node && node.scrollTop !== pinnedScroll.current)
+      node.scrollTop = pinnedScroll.current;
+  });
   const goSession = async (id: string) => {
     await runtime.selectSession(id);
     navigate(`/session/${id}`);
@@ -146,7 +158,20 @@ export function Sidebar({
     if (!next) return;
     event.preventDefault();
     setRoving(next);
-    anchors.current.get(next)?.focus();
+    revealRow(next);
+  };
+  const revealRow = (key: string) => {
+    const link = anchors.current.get(key);
+    const list = listRef.current;
+    link?.focus({ preventScroll: true });
+    if (!link || !list) return;
+    const row = link.closest('.session-row') ?? link;
+    const rowBox = row.getBoundingClientRect();
+    const listBox = list.getBoundingClientRect();
+    if (rowBox.top < listBox.top) list.scrollTop -= listBox.top - rowBox.top;
+    else if (rowBox.bottom > listBox.bottom)
+      list.scrollTop += rowBox.bottom - listBox.bottom;
+    listScroll.current = list.scrollTop;
   };
   const waiting = new Set(
     snapshot.interactions
@@ -249,7 +274,13 @@ export function Sidebar({
           ))}
         </nav>
       )}
-      <div className="project-list">
+      <div
+        className="project-list"
+        ref={listRef}
+        onScroll={(event) => {
+          listScroll.current = event.currentTarget.scrollTop;
+        }}
+      >
         {recent.length > 0 && (
           <section className="project">
             <div className="project-header">
@@ -424,10 +455,17 @@ function SessionRow({
   // active row would lose its highlight. The same path is used in a project
   // group, and both rows highlight together.
   const active = useMatch({ path: `/session/${session.id}`, end: true });
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const linkNode = useRef<HTMLAnchorElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [buttonFocused, setButtonFocused] = useState(false);
   const row = (
     <div className="session-row">
       <NavLink
-        ref={linkRef}
+        ref={(node) => {
+          linkNode.current = node;
+          linkRef(node);
+        }}
         tabIndex={tabIndex}
         className={active ? 'session-link active' : 'session-link'}
         end
@@ -436,7 +474,21 @@ function SessionRow({
           event.preventDefault();
           onOpen(session.id);
         }}
-        onKeyDown={onKeyDown}
+        onKeyDown={(event) => {
+          if (
+            event.key === 'ArrowRight' &&
+            !event.altKey &&
+            !event.metaKey &&
+            !event.ctrlKey &&
+            !event.shiftKey
+          ) {
+            event.preventDefault();
+            menuButton.current?.focus({ preventScroll: true });
+          } else if (menuKey(event)) {
+            event.preventDefault();
+            setMenuOpen(true);
+          } else onKeyDown(event);
+        }}
         onFocus={onFocusRow}
       >
         <span>{sessionTitle(session.title)}</span>
@@ -448,17 +500,45 @@ function SessionRow({
       </NavLink>
       <SessionMenu
         session={session}
+        buttonRef={menuButton}
+        open={menuOpen}
+        onOpenChange={setMenuOpen}
+        tipOpen={menuOpen ? false : details ? buttonFocused : undefined}
+        onFocus={() => setButtonFocused(true)}
+        onBlur={() => setButtonFocused(false)}
+        onKeyDown={(event) => {
+          if (
+            event.key === 'ArrowLeft' &&
+            !event.altKey &&
+            !event.metaKey &&
+            !event.ctrlKey &&
+            !event.shiftKey
+          ) {
+            event.preventDefault();
+            linkNode.current?.focus({ preventScroll: true });
+          } else if (menuKey(event)) {
+            event.preventDefault();
+            setMenuOpen(true);
+          }
+        }}
         onDialog={(dialog, selection) => onDialog?.(dialog, selection)}
       />
     </div>
   );
   return details ? (
-    <RecentHover details={details} suppressed={renaming}>
+    <RecentHover
+      details={details}
+      suppressed={renaming || buttonFocused || menuOpen}
+    >
       {row}
     </RecentHover>
   ) : (
     row
   );
+}
+
+function menuKey(event: { key: string; shiftKey: boolean }) {
+  return event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey);
 }
 
 function activityLabel(age: ActivityAge): string {

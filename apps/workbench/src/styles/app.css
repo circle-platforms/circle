@@ -3759,6 +3759,7 @@ pre {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  overflow-anchor: none;
   overscroll-behavior: contain;
   padding-bottom: 10px;
 }
