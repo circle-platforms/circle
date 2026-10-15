@@ -10,6 +10,11 @@ import { GitWorkspaceService } from './git.ts';
 import { LanguageService } from './language.ts';
 import { WorkspaceDebugService } from './debug.ts';
 import { DeliveryService } from './delivery.ts';
+import {
+  DeliveryCycleService,
+  type CyclePorts,
+  type CycleSpec,
+} from './delivery-cycle.ts';
 import type { CredentialStore } from './delivery-login.ts';
 import {
   WorkspaceEventStream,
@@ -32,6 +37,8 @@ export interface WorkspaceServicesOptions {
   credentialStore?: CredentialStore;
   credentialFiles?: string[];
   terminalEnv?: NodeJS.ProcessEnv;
+  cyclePorts?: CyclePorts;
+  cycleIntervalMs?: number;
   emit: (event: WorkspaceServiceEvent) => void;
   onPersistenceError?: (error: Error) => void;
   maxPendingEventBytes?: number;
@@ -56,6 +63,9 @@ export class WorkspaceServices {
   private pendingEventBytes = 0;
   private failureCleanup?: Promise<void>;
   private closed = false;
+  private cycles?: Promise<DeliveryCycleService>;
+  private cycleTimer?: ReturnType<typeof setInterval>;
+  private cycleTick?: Promise<void>;
   private releasing = new Set<string>();
   private loginOwners = new Map<string, string>();
   private activeDelivery?: DeliveryService;
@@ -136,6 +146,60 @@ export class WorkspaceServices {
         })),
     );
     this.delivery.catch(() => {});
+    if (options.cyclePorts) {
+      this.cycles = DeliveryCycleService.open({
+        dataDir: path.join(directory, 'delivery'),
+        ports: options.cyclePorts,
+        onEvent: (cycle) => {
+          for (const session of this.sessions)
+            void this.publish(session, 'cycles', cycle.id, {
+              kind: 'cycle',
+              id: cycle.id,
+              state: cycle.state,
+              attempt: cycle.attempt,
+            });
+        },
+      });
+      this.cycles
+        .then(() => {
+          if (this.closed) return;
+          this.cycleTimer = setInterval(
+            () => this.advanceCycles(),
+            options.cycleIntervalMs ?? 1000,
+          );
+          this.cycleTimer.unref();
+          this.advanceCycles();
+        })
+        .catch((error) => this.failPersistence(error));
+    }
+  }
+  private advanceCycles() {
+    if (this.closed || this.failure || !this.cycles || this.cycleTick) return;
+    this.cycleTick = (async () => {
+      const service = await this.cycles!;
+      for (const cycle of service.list()) {
+        if (this.closed || this.failure) break;
+        if (['needs_review', 'pending_human_merge'].includes(cycle.state))
+          continue;
+        try {
+          await service.advance(cycle.id);
+        } catch (error) {
+          for (const session of this.sessions)
+            await this.publish(session, 'cycles', cycle.id, {
+              kind: 'cycle-error',
+              id: cycle.id,
+              error:
+                error instanceof Error
+                  ? error.message
+                  : 'cycle advancement failed',
+            });
+        }
+      }
+    })()
+      .catch((error) => this.failPersistence(error))
+      .finally(() => {
+        this.cycleTick = undefined;
+      });
   }
   async hasActiveSession(sessionId: string): Promise<boolean> {
     if (
@@ -301,6 +365,54 @@ export class WorkspaceServices {
         params.action === 'cancel');
     if (this.failure && !emergency) throw this.failure;
     this.sessions.add(sessionId);
+    if (service === 'cycles') {
+      if (!this.cycles)
+        throw Error(
+          'automated delivery is unavailable until trusted task and verification services are connected',
+        );
+      const cycles = await this.cycles;
+      if (method === 'list') return cycles.list();
+      const id = requiredString(params, 'id');
+      if (method === 'snapshot') return cycles.snapshot(id);
+      if (method === 'create') {
+        if (params.workspace !== undefined)
+          throw Error('cycle workspace is assigned by the trusted host');
+        const title = requiredString(params, 'title');
+        const body = requiredString(params, 'body', true);
+        if (
+          !Array.isArray(params.acceptanceCriteria) ||
+          !params.acceptanceCriteria.length ||
+          params.acceptanceCriteria.some(
+            (item) => typeof item !== 'string' || !item.trim(),
+          )
+        )
+          throw Error('acceptance criteria must be nonempty strings');
+        const spec: CycleSpec = {
+          id,
+          title,
+          body,
+          workspace: this.options.workspaceRoot,
+          acceptanceCriteria: params.acceptanceCriteria,
+        };
+        const result = await cycles.create(spec, {
+          operationId: requiredString(params, 'operationId'),
+        });
+        this.advanceCycles();
+        return result;
+      }
+      if (method === 'advance') {
+        const result = await cycles.advance(id);
+        this.advanceCycles();
+        return result;
+      }
+      if (method === 'retryCI')
+        return cycles.retryCI(
+          id,
+          requiredInteger(params, 'runId', 1, Number.MAX_SAFE_INTEGER),
+          { operationId: requiredString(params, 'operationId') },
+        );
+      throw Error('unknown delivery cycle method');
+    }
     if (service === 'documents') {
       if (method === 'resolveSource') {
         const input = requiredString(params, 'path');
@@ -519,6 +631,13 @@ export class WorkspaceServices {
   async dispose() {
     if (this.closed) return;
     this.closed = true;
+    if (this.cycleTimer) clearInterval(this.cycleTimer);
+    await this.cycleTick;
+    if (this.cycles)
+      await this.cycles.then(
+        (service) => service.close(),
+        () => undefined,
+      );
     this.watch.close();
     this.documents.close();
     for (const language of this.languages.values()) language.dispose();
