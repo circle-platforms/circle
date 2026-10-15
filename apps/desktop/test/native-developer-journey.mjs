@@ -563,7 +563,8 @@ try {
       .click();
     const editor = page.locator('.file-view .monaco-editor').last();
     await editor.locator('.view-lines').click({ position: { x: 120, y: 10 } });
-    await page.keyboard.press('ControlOrMeta+End');
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.keyboard.press('ArrowRight');
     await page.keyboard.press('Enter');
     await page.keyboard.type('JOURNEY_MANUAL_SAVE');
     await until(
