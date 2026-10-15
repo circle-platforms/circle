@@ -134,9 +134,126 @@ try {
         assert.equal(request.payload.params.tasks[0].resource, 'build');
         await page.close();
       }
+  const race = await browser.newPage({
+    viewport: { width: 1000, height: 650 },
+  });
+  await race.addInitScript(() => {
+    const frame = window.requestAnimationFrame.bind(window);
+    // A busy renderer may deliver a scheduled frame after focus already moved.
+    window.requestAnimationFrame = (callback) =>
+      frame((time) => setTimeout(() => callback(time), 80));
+  });
+  await race.goto(
+    `${server.resolvedUrls.local[0]}test/tasks-panel-ui.html?theme=dark&language=en`,
+  );
+  await race.getByRole('button', { name: 'new task', exact: true }).click();
+  const raceInstruction = race.getByRole('textbox', {
+    name: 'task instruction',
+    exact: true,
+  });
+  const raceCriteria = race.getByRole('textbox', {
+    name: 'acceptance criteria',
+    exact: true,
+  });
+  await raceInstruction.fill('TASK_FOCUS_RACE');
+  await raceCriteria.focus();
+  await race.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(resolve)),
+  );
+  assert.equal(
+    await raceCriteria.evaluate((node) => document.activeElement === node),
+    true,
+    'new task must not steal focus back after the developer moved to acceptance criteria',
+  );
+  await race.keyboard.type('criterion typed once');
+  assert.equal(await raceInstruction.inputValue(), 'TASK_FOCUS_RACE');
+  assert.equal(await raceCriteria.inputValue(), 'criterion typed once');
+  await race.screenshot({ path: join(output, 'delayed-frame-focus-race.png') });
+  await race.getByRole('button', { name: 'queue task', exact: true }).click();
+  await race
+    .locator('.tasks-list')
+    .getByText('TASK_FOCUS_RACE', { exact: true })
+    .waitFor();
+  await race.getByRole('button', { name: 'new task', exact: true }).click();
+  await raceInstruction.fill('TASK_FOCUS_RACE_B');
+  await raceCriteria.focus();
+  await race.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(resolve)),
+  );
+  await race.keyboard.type('second criterion typed once');
+  await race.getByRole('button', { name: 'queue task', exact: true }).click();
+  await race
+    .locator('.tasks-list')
+    .getByText('TASK_FOCUS_RACE_B', { exact: true })
+    .waitFor();
+  const enqueued = (await race.evaluate(() => window.calls)).filter(
+    (call) => call.payload.method === 'enqueue',
+  );
+  assert.deepEqual(
+    enqueued.map((call) => ({
+      prompt: call.payload.params.tasks[0].prompt,
+      criteria: call.payload.params.tasks[0].acceptanceCriteria,
+    })),
+    [
+      { prompt: 'TASK_FOCUS_RACE', criteria: ['criterion typed once'] },
+      {
+        prompt: 'TASK_FOCUS_RACE_B',
+        criteria: ['second criterion typed once'],
+      },
+    ],
+  );
+  await race.close();
+  const background = await browser.newPage();
+  await background.goto(
+    `${server.resolvedUrls.local[0]}test/tasks-panel-ui.html?focusTask=1`,
+  );
+  await background.locator('#task-task-0').waitFor();
+  const manual = background.getByRole('textbox', {
+    name: 'manual editor',
+    exact: true,
+  });
+  await manual.fill('developer is editing another file');
+  await background
+    .getByRole('button', { name: 'refresh', exact: true })
+    .first()
+    .evaluate((node) => node.click());
+  await background.waitForFunction(
+    () =>
+      window.calls.filter(
+        (call) =>
+          call.payload.service === 'tasks' && call.payload.method === 'list',
+      ).length >= 2,
+  );
+  await background.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  );
+  assert.equal(
+    await manual.evaluate((node) => document.activeElement === node),
+    true,
+    'refreshing an already revealed task must not steal manual editor focus',
+  );
+  await background.screenshot({
+    path: join(output, 'background-task-focus.png'),
+  });
+  await background.close();
   await writeFile(
     join(output, 'receipt.json'),
-    JSON.stringify({ native: false, observations }, null, 2),
+    JSON.stringify(
+      {
+        native: false,
+        observations,
+        focusChecks: {
+          delayedFrameCannotStealCriteria: true,
+          twoSequentialTasksKeepIndependentPromptsAndCriteria: true,
+          taskRefreshCannotStealManualEditor: true,
+        },
+      },
+      null,
+      2,
+    ),
   );
   console.log(
     'task panel headless UX: real CSS, 8 theme/language/width cases, visible progress, retained form and separate start/submit passed',
