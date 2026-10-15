@@ -1,12 +1,9 @@
-import { readFileSync, appendFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
 import { RuntimeController } from './runtime-controller';
 import { BrowserBridge } from '../../../src/browser/tools.js';
 import type { BrowserReply } from '../../../src/browser/protocol.js';
-import { ScriptedModel } from '../../../src/testing.js';
-import { emptyUsage, type ModelResponse } from '../../../src/types.js';
+import { RuntimeFixtureModel } from './runtime-fixture';
 import { ModelCatalog } from '../../../src/model_catalog.js';
 import { initializeNetwork } from '../../../src/network_bootstrap.js';
 import { RuntimeCredentialClient } from './runtime-private-channel';
@@ -34,57 +31,12 @@ process.env.PATH = workspaceRuntimePath(
 );
 initializeNetwork(home);
 const fixturePath = process.env.CIRCLE_DESKTOP_RUNTIME_FIXTURE;
-let model: ScriptedModel | undefined;
+let model: RuntimeFixtureModel | undefined;
 if (fixturePath) {
   if (!process.env.CIRCLE_WORKBENCH_TEST_PROFILE)
     throw Error('scripted model requires an explicit test profile');
   const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'));
-  model = new ScriptedModel(
-    fixture.replies.map(
-      (entry: {
-        message?: ModelResponse['message'];
-        delayMs?: number;
-        waitForAbort?: boolean;
-        chunks?: string[];
-      }) =>
-        async (request: Parameters<ScriptedModel['complete']>[0]) => {
-          if (fixture.requestsPath)
-            appendFileSync(
-              fixture.requestsPath,
-              JSON.stringify({
-                system: request.system,
-                messages: request.messages,
-                tools: request.tools.map(
-                  ({ run: _run, approvalFacts: _facts, ...tool }) => tool,
-                ),
-              }) + '\n',
-              { mode: 0o600 },
-            );
-          if (entry.waitForAbort)
-            await new Promise<void>((_resolve, reject) => {
-              const abort = () =>
-                reject(request.signal.reason ?? Error('aborted'));
-              request.signal.addEventListener('abort', abort, { once: true });
-              if (request.signal.aborted) abort();
-            });
-          for (const chunk of entry.chunks ?? []) {
-            request.token(chunk);
-            await delay(entry.delayMs ?? 15, undefined, {
-              signal: request.signal,
-            });
-          }
-          if (entry.delayMs && !entry.chunks)
-            await delay(entry.delayMs, undefined, { signal: request.signal });
-          const message = entry.message ?? {
-            id: randomUUID(),
-            role: 'assistant',
-            content: (entry.chunks ?? []).join(''),
-          };
-          if (message.content && !entry.chunks) request.token(message.content);
-          return { message, usage: emptyUsage() };
-        },
-    ),
-  );
+  model = new RuntimeFixtureModel(fixture);
 }
 const browser = new BrowserBridge((message) => port.postMessage(message));
 const credentialStore = new RuntimeCredentialClient((message) =>
