@@ -180,12 +180,13 @@ export class ExtensionAPI {
   get workspace(): string {
     return this.services?.workspace ?? '';
   }
-  /** A folder of the extension's own for what it keeps that is not secret; made on first use. */
+  /** A folder of the extension's own for what it keeps that is not secret; made on first use.
+   * Closing cleanup may still locate it, but cannot create it after the signal fires. */
   get dataDir(): string {
     if (!this.services?.home)
       throw new ExtensionError('this interface has no data folder');
     const path = join(this.services.home, 'extension_data', this.ext.name);
-    mkdirSync(path, { recursive: true, mode: 0o700 });
+    if (!this.signal.aborted) mkdirSync(path, { recursive: true, mode: 0o700 });
     return path;
   }
   /**
