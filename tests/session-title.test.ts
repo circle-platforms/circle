@@ -23,6 +23,7 @@ import {
   TITLE_MAX_TOKENS,
   TITLE_MAX_WORDS,
   titleConversation,
+  titleUnits,
   titleWorthy,
 } from '../src/session_title.js';
 import { ScriptedModel } from '../src/testing.js';
@@ -129,6 +130,13 @@ test('generated titles keep one short phrase and drop a reply', () => {
   assert.equal(titleWorthy('thanks a lot'), false);
   assert.equal(titleWorthy('what is TCP'), true);
   assert.equal(titleWorthy('what is TCP?'), true);
+  assert.equal(titleWorthy('解释 React hooks'), true);
+  assert.equal(titleWorthy('什么是 Rust'), true);
+  assert.equal(titleWorthy('用Go写'), true);
+  assert.equal(titleWorthy('hi there'), false);
+  assert.equal(titleWorthy('你好'), false);
+  assert.equal(titleUnits('你好啊'), 3);
+  assert.equal(titleWorthy('你好啊'), false);
   assert.equal(titleWorthy('请'), false);
   assert.equal(titleWorthy('请用大约200字介绍一下罗马帝国的兴衰'), true);
   assert.equal(titleWorthy('帮我写一个你好世界的Go程序'), true);
@@ -278,8 +286,20 @@ test('a model title is asked for three words, and a greeting stays local', () =>
   assert.equal(titleWorthy('Thanks!'), false);
   assert.equal(titleWorthy('thanks a lot'), false);
   assert.equal(titleWorthy('hello there'), false);
+  assert.equal(titleWorthy('hi there'), false);
+  assert.equal(titleUnits('hi there'), 2);
   assert.equal(titleWorthy('what is TCP'), true);
+  assert.equal(titleUnits('what is TCP'), 3);
   assert.equal(titleWorthy('what is TCP?'), true);
+  assert.equal(titleWorthy('解释 React hooks'), true);
+  assert.equal(titleUnits('解释 React hooks'), 4);
+  assert.equal(titleWorthy('什么是 Rust'), true);
+  assert.equal(titleUnits('什么是 Rust'), 4);
+  assert.equal(titleWorthy('用Go写'), true);
+  assert.equal(titleUnits('用Go写'), 3);
+  assert.equal(titleUnits('你好啊'), 3);
+  assert.equal(titleWorthy('你好啊'), false);
+  assert.equal(titleWorthy('你好'), false);
   assert.equal(titleWorthy('README.md what is this'), true);
   assert.equal(titleWorthy('@README.md what is this'), true);
   assert.equal(titleWorthy('fix the login bug now!!'), true);
@@ -434,6 +454,57 @@ test('a three-word question asks for a summary title', async (t) => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(session.id)!.title, 'TCP overview');
   assert.deepEqual(notes, []);
+});
+
+test('a mixed Chinese and English prompt asks for a title', async (t) => {
+  const cases = [
+    ['解释 React hooks', 'React hooks'],
+    ['什么是 Rust', 'Rust overview'],
+    ['用Go写', 'Go program'],
+  ] as const;
+  for (const [prompt, title] of cases) {
+    assert.ok(titleUnits(prompt) >= 3, prompt);
+    assert.equal(titleWorthy(prompt), true, prompt);
+    const root = scratch(t);
+    const model = new TitleModel('done', title);
+    const { harness: run, store, session } = harness(root, model);
+    cleanup(t, () => store.close());
+    const notes: string[] = [];
+    run.bus.subscribe((event) => {
+      const notice = event.payload.model_notice as
+        { event?: string; message?: string } | undefined;
+      if (notice?.event === 'title_failed') notes.push(String(notice.message));
+    });
+    await run.run(prompt);
+    assert.equal(store.get(session.id)!.title, '', prompt);
+    assert.equal(
+      model.requests.filter((request) => request.maxTokens === TITLE_MAX_TOKENS)
+        .length,
+      1,
+      prompt,
+    );
+    model.releaseTitle();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(store.get(session.id)!.title, title, prompt);
+    assert.deepEqual(notes, []);
+  }
+  for (const prompt of ['hi there', 'thanks', '你好', '你好啊'] as const) {
+    assert.equal(titleWorthy(prompt), false, prompt);
+    const root = scratch(t);
+    const model = new TitleModel('done', 'Should not appear');
+    const { harness: run, store, session } = harness(root, model);
+    cleanup(t, () => store.close());
+    await run.run(prompt);
+    model.releaseTitle();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      model.requests.filter((request) => request.maxTokens === TITLE_MAX_TOKENS)
+        .length,
+      0,
+      prompt,
+    );
+    assert.notEqual(store.get(session.id)!.title, 'Should not appear', prompt);
+  }
 });
 
 test('a refusal leaves the fallback title', async (t) => {

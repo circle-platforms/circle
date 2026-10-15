@@ -12,7 +12,7 @@ const CJK_CHAR = /[\u3400-\u9fff]/g;
  * "what is TCP" is not one of these. Trailing punctuation is ignored.
  */
 const ACK =
-  /^(?:hi|hello|hey|yo|hiya|howdy|ok|okay|k|thanks|thank you|thx|ty|thanks a lot|thank you so much|thanks so much|thank you very much|thanks very much|cheers|bye|goodbye|good morning|good afternoon|good evening|good night|you'?re welcome|no problem|got it|noted|你好|您好|嗨|谢谢|感谢|多谢|谢谢你|好的|嗯|哦|收到)$/i;
+  /^(?:hi|hello|hey|yo|hiya|howdy|ok|okay|k|thanks|thank you|thx|ty|thanks a lot|thank you so much|thanks so much|thank you very much|thanks very much|cheers|bye|goodbye|good morning|good afternoon|good evening|good night|you'?re welcome|no problem|got it|noted|你好|你好啊|你好呀|您好|您好啊|嗨|嗨啊|谢谢|谢谢啊|谢谢啦|感谢|多谢|谢谢你|好的|好的呀|嗯|哦|收到|收到啦)$/i;
 
 function counted(text: string): { line: string; cjk: number; words: number } {
   const line = text.replace(/\s+/g, ' ').trim();
@@ -78,17 +78,15 @@ export function titleUnits(text: string): number {
 }
 
 /**
- * A side request is worth it for a real question. Three words covers "what is
- * TCP". Two or fewer stay as typed, and so does a greeting or acknowledgement
- * such as "hi", "ok", or "thanks". CJK still counts by characters: four
- * characters ask, and "你好" does not. A long line of 24 characters or more
- * still asks.
+ * A side request is worth it at three combined units. Each CJK character is
+ * one unit and each other word is one, so "解释 React hooks" and "what is
+ * TCP" both ask. Two units stay as typed ("hi there"). A greeting or
+ * acknowledgement stays as typed even at three units ("你好啊", "thanks").
  */
 export function titleWorthy(text: string): boolean {
-  const { line, cjk, words } = counted(text);
+  const { line } = counted(text);
   if (!line || isAck(line)) return false;
-  if (cjk >= 4 || words >= 3) return true;
-  return line.length >= 24;
+  return titleUnits(line) >= 3;
 }
 
 /**

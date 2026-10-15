@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createServer, type ServerResponse } from 'node:http';
 import { ModelCatalog } from '../src/model_catalog.js';
 import { AgentRuntime } from '../src/runtime.js';
+import { TITLE_MAX_TOKENS } from '../src/session_title.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { SessionApp } from '../src/tui/session_app.js';
 import { ScriptedModel } from '../src/testing.js';
@@ -475,7 +476,7 @@ test('TUI preserves a background error and its undo history when switching views
 });
 
 async function localGateway(t: Parameters<typeof scratch>[0], name: string) {
-  const requests: { model: string; key: string }[] = [];
+  const requests: { model: string; key: string; title?: true }[] = [];
   let modelsRelease: (() => void) | undefined;
   let holdModels = false;
   let modelRequested = false;
@@ -509,9 +510,11 @@ async function localGateway(t: Parameters<typeof scratch>[0], name: string) {
     }
     let body = '';
     for await (const chunk of request) body += chunk;
+    const parsed = JSON.parse(body) as { model: string; max_tokens?: number };
     requests.push({
-      model: JSON.parse(body).model,
+      model: parsed.model,
       key: String(request.headers.authorization),
+      ...(parsed.max_tokens === TITLE_MAX_TOKENS ? { title: true } : {}),
     });
     response.writeHead(200, { 'content-type': 'text/event-stream' });
     if (holdReply) {
@@ -549,7 +552,11 @@ async function localGateway(t: Parameters<typeof scratch>[0], name: string) {
       holdReply = true;
     },
     releaseReply: () => {
-      if (heldResponse) finish(heldResponse);
+      // Later calls, including a title request after the held turn, must complete.
+      holdReply = false;
+      const response = heldResponse;
+      heldResponse = undefined;
+      if (response) finish(response);
     },
   };
 }
@@ -614,13 +621,14 @@ test('TUI sign in updates every idle runtime and sign out prevents cached SDK re
       a.options.settings.auth.model === 'new-model' &&
       b.options.settings.auth.model === 'new-model',
   );
-  await app.submit('connect A');
+  await app.submit('A new connection');
   await ui.changeSession(b.session.id);
-  await app.submit('connect B');
-  assert.deepEqual(old.requests, [
+  await app.submit('B new connection');
+  const turns = (rows: { title?: true }[]) => rows.filter((row) => !row.title);
+  assert.deepEqual(turns(old.requests), [
     { model: 'old-model', key: 'Bearer old-key' },
   ]);
-  assert.deepEqual(next.requests, [
+  assert.deepEqual(turns(next.requests), [
     { model: 'new-model', key: 'Bearer new-key' },
     { model: 'new-model', key: 'Bearer new-key' },
   ]);
@@ -630,8 +638,8 @@ test('TUI sign in updates every idle runtime and sign out prevents cached SDK re
   await app.submit('A must also be disconnected');
   await app.command('new', '');
   await app.submit('new disconnected session');
-  assert.equal(old.requests.length, 1);
-  assert.equal(next.requests.length, 2);
+  assert.equal(turns(old.requests).length, 1);
+  assert.equal(turns(next.requests).length, 2);
   assert.equal(app.runtime!.harness.model.model, 'not connected');
 });
 
@@ -838,13 +846,16 @@ for (const outcome of ['success', 'failure', 'deleted'] as const)
         ),
       );
       if (outcome === 'success') {
-        await app.submit('reloaded source');
+        await app.submit('source after reload');
         await ui.changeSession(b.session.id);
-        await app.submit('other unchanged');
-        assert.deepEqual(gateway.requests, [
-          { model: 'reloaded-model', key: 'Bearer old-key' },
-          { model: 'old-model', key: 'Bearer old-key' },
-        ]);
+        await app.submit('other remains unchanged');
+        assert.deepEqual(
+          gateway.requests.filter((request) => !request.title),
+          [
+            { model: 'reloaded-model', key: 'Bearer old-key' },
+            { model: 'old-model', key: 'Bearer old-key' },
+          ],
+        );
         await ui.changeSession(a.session.id);
         await app.command('effort', 'low');
         await app.command('new', '');
