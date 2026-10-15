@@ -51,6 +51,11 @@ const bridge: DesktopBridge = {
   copyText: (text) => ipcRenderer.invoke('circle:copy-text', text),
   windowControl: (action) =>
     ipcRenderer.invoke('circle:window-control', action),
+  openExternal: (url) => ipcRenderer.invoke('circle:open-external', url),
+  browserDiagnostics: (id, request) =>
+    ipcRenderer
+      .invoke('circle:browser-diagnostics', id, request)
+      .catch(raiseBrowserError),
   browserState: (id) => ipcRenderer.invoke('circle:browser-state', id),
   browserNavigate: (id, url) =>
     ipcRenderer

@@ -1,3 +1,8 @@
+import { validateBrowserDiagnosticRequest } from './browser-diagnostics-contracts';
+import {
+  EncryptedCredentialStore,
+  nativeHttpsUrl,
+} from './encrypted-credentials';
 import { BrowserSessions } from './browser';
 import { RuntimeSupervisor } from './runtime-supervisor';
 import { validateRuntimeCommand } from './runtime-protocol';
@@ -14,6 +19,7 @@ import {
   protocol,
   shell,
   session,
+  safeStorage,
 } from 'electron';
 import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
@@ -469,6 +475,23 @@ app
           if (allowed && !fixtureProfile) void shell.openExternal(allowed);
         },
       );
+      runtime.onCredentials(
+        new EncryptedCredentialStore(join(dataPath, 'private-credentials'), {
+          isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
+          encryptString: (value) => safeStorage.encryptString(value),
+          decryptString: (value) => safeStorage.decryptString(value),
+          ...(process.platform === 'linux'
+            ? {
+                getSelectedStorageBackend: () =>
+                  safeStorage.getSelectedStorageBackend(),
+              }
+            : {}),
+        }),
+      );
+      runtime.onWorkspaceEvent((event) => {
+        if (window && !window.isDestroyed())
+          window.webContents.send('circle:workspace-event', event);
+      });
       runtime.subscribe((update) => {
         const current = new Set(
           update.snapshot.sessions.map((session) => session.id),
@@ -648,6 +671,25 @@ app
     });
     handle('circle:copy-text', (value) => {
       clipboard.writeText(boundedText(value, MAX_EXPORT_BYTES));
+    });
+    handle('circle:open-external', async (value) => {
+      const url = nativeHttpsUrl(value);
+      if (!fixtureProfile) await shell.openExternal(url);
+    });
+    handle('circle:browser-diagnostics', (id, value) => {
+      if (!browsers || !runtime) throw Error('window not ready');
+      if (typeof id !== 'string') throw Error('invalid browser session');
+      const snapshot = runtime.state().snapshot;
+      const session = snapshot.sessions.find((row) => row.id === id);
+      if (!session) throw Error('browser session not found');
+      const request = validateBrowserDiagnosticRequest(value);
+      if (
+        request.action !== 'read' &&
+        !snapshot.workspaces.find((row) => row.id === session.workspaceId)
+          ?.trusted
+      )
+        throw Error('trust the workspace before changing page diagnostics');
+      return browsers.diagnostics(id, request);
     });
     handle('circle:browser-state', (id) => {
       if (!browsers) throw Error('window not ready');

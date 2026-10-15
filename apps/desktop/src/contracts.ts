@@ -1,3 +1,7 @@
+import type {
+  BrowserDiagnosticRequest,
+  BrowserDiagnosticResult,
+} from './browser-diagnostics-contracts';
 import type { WorkspaceServiceEvent } from './workspace-protocol';
 
 export interface NativeFile {
@@ -76,6 +80,12 @@ export interface DesktopBridge {
   windowControl: (
     action: 'minimize' | 'maximize' | 'close' | 'quit',
   ) => Promise<void>;
+  /** Opens a human-requested HTTPS link; credentials are never accepted. */
+  openExternal?: (url: string) => Promise<void>;
+  browserDiagnostics?: (
+    sessionId: string,
+    request: BrowserDiagnosticRequest,
+  ) => Promise<BrowserDiagnosticResult>;
   browserState: (sessionId: string) => Promise<BrowserState>;
   browserNavigate: (sessionId: string, url: string) => Promise<BrowserState>;
   browserBounds: (
