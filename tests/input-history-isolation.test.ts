@@ -42,7 +42,15 @@ test('independent terminal processes append every history entry without stale sn
     import { setTimeout as delay } from 'node:timers/promises';
     const history = new InputHistory(process.argv[1]);
     for (let index = 0; index < 20; index++) {
-      history.add(process.argv[2] + ' ' + index);
+      const entry = process.argv[2] + ' ' + index;
+      if (!history.add(entry)) {
+        throw new Error(JSON.stringify({ entry,
+          stage: history.persistenceError?.stage,
+          code: history.persistenceError?.code,
+          message: history.persistenceError?.message,
+          pendingCount: history.pendingCount,
+        }));
+      }
       await delay(1);
     }
   `;
