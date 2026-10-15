@@ -1078,7 +1078,7 @@ else process.exit(2);
       modelRequestCount: f.model.requests.length,
       events: f.events,
     };
-    const directory = join(import.meta.dirname, '../out/artifacts');
+    const directory = join(import.meta.dirname, '../artifacts/runtime');
     await mkdir(directory, { recursive: true });
     failureReceipt = join(
       directory,
