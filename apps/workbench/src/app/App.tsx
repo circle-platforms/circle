@@ -66,7 +66,7 @@ import { DialogHost, InteractionDialog } from '../features/Dialogs';
 import { applyTheme } from '../theme';
 import { t } from '../i18n';
 import { isSessionBrowser } from '../model/browser';
-import { requestComposerFocus } from '../model/composer-focus';
+import { sealComposerFocus } from '../model/composer-focus';
 import {
   effectiveBindings,
   DESKTOP_SEARCH_CHORD,
@@ -433,7 +433,7 @@ export function App() {
   };
   setRouter((result) => {
     if (result.openSession) onSession();
-    if (result.focusComposer) requestComposerFocus();
+    if (result.focusComposer) sealComposerFocus();
     if (result.page) navigate('/page/' + result.page);
     if (result.dialog) onDialog(result.dialog, result.selection);
     if (result.panel) onPanel(result.panel, result.selection);

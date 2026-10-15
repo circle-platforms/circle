@@ -440,6 +440,11 @@ test('an empty new session is not listed, and hi keeps that title', () => {
   assert.equal(runtime.newSession(), created);
   assert.equal(runtime.getSnapshot().sessions.length, before + 1);
   runtime.change((state) => {
+    currentSession(state).draft = 'leftover';
+  });
+  assert.equal(runtime.newSession(), created);
+  assert.equal(currentSession(runtime.getSnapshot()).draft, '');
+  runtime.change((state) => {
     currentSession(state).draft = 'hi';
   });
   runtime.send();

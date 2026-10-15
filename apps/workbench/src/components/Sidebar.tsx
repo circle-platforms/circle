@@ -18,7 +18,11 @@ import {
 import { useRuntime } from '../app/context';
 import { usePlugins } from '../plugins/context';
 import { currentSession, sessionListed, sessionTitle } from '../model/state';
-import { requestComposerFocus } from '../model/composer-focus';
+import {
+  armComposerFocus,
+  cancelComposerFocus,
+  sealComposerFocus,
+} from '../model/composer-focus';
 import { workspaceLabel } from '../model/workspace-label';
 import type { DialogId } from '../model/types';
 import { IconButton } from './common';
@@ -154,13 +158,21 @@ export function Sidebar({
     navigate(`/session/${id}`);
     onNavigate?.();
   };
-  const newSession = (workspaceId?: string) =>
+  const newSession = (workspaceId?: string) => {
+    // Before the await, while the click or the row still owns the keyboard.
+    armComposerFocus();
     perform(async () => {
-      const id = await runtime.newSession(workspaceId);
-      navigate(`/session/${id}`);
-      onNavigate?.();
-      requestComposerFocus();
+      try {
+        const id = await runtime.newSession(workspaceId);
+        navigate(`/session/${id}`);
+        onNavigate?.();
+        sealComposerFocus();
+      } catch (error) {
+        cancelComposerFocus();
+        throw error;
+      }
     });
+  };
   // The open folder first, then the others by their latest session.
   const latest = (id: string) =>
     snapshot.sessions

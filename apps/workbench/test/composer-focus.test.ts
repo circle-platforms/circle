@@ -88,31 +88,18 @@ test(
         await composer.press('Enter');
         await page.getByText(text, { exact: true }).first().waitFor();
       };
-      const blur = async () => {
-        await page.evaluate(() => {
-          if (document.activeElement instanceof HTMLElement)
-            document.activeElement.blur();
-        });
-        await page.waitForFunction(
-          () => !document.activeElement?.matches('.composer textarea'),
-        );
-      };
       const focused = () =>
         page.evaluate(
           () => document.activeElement?.matches('.composer textarea') ?? false,
         );
-      await send('first note about focusing the composer');
-      await blur();
-      await page
-        .locator('nav.sidebar-primary')
-        .getByRole('button', { name: 'new session', exact: true })
-        .click();
-      await page.keyboard.type('typed from the keyboard');
-      assert.equal(await composer.inputValue(), 'typed from the keyboard');
-      await page.waitForTimeout(300);
-      assert.equal(await focused(), true);
-
-      await blur();
+      const focusRow = () =>
+        page.evaluate(() => {
+          const link = document.querySelector('.session-link');
+          if (link instanceof HTMLElement) link.focus({ preventScroll: true });
+        });
+      // A listed row has the keyboard. Ctrl+N must move it before any typing.
+      // The fixture session is idle; a waiting turn refuses the command.
+      await focusRow();
       await page.evaluate(() => {
         window.dispatchEvent(
           new KeyboardEvent('keydown', {
@@ -123,11 +110,59 @@ test(
           }),
         );
       });
-      await page.keyboard.type(' again');
-      assert.equal(
-        await composer.inputValue(),
-        'typed from the keyboard again',
-      );
+      assert.equal(await focused(), true);
+      await page.keyboard.type('focus test');
+      assert.equal(await composer.inputValue(), 'focus test');
+      assert.equal(await focused(), true);
+
+      // Keys in the same turn as Ctrl+N, while a row is focused, are kept.
+      // An empty session stays open and the leftover draft is cleared first.
+      await focusRow();
+      await page.evaluate(() => {
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'n',
+            ctrlKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+        const field = document.activeElement;
+        if (
+          !(field instanceof HTMLTextAreaElement) ||
+          !field.matches('.composer textarea')
+        )
+          throw new Error('composer was not focused before typing');
+        for (const key of 'fast') {
+          field.dispatchEvent(
+            new KeyboardEvent('keydown', {
+              key,
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        }
+      });
+      await page.waitForFunction(() => {
+        const node = document.querySelector('.composer textarea');
+        return node instanceof HTMLTextAreaElement && node.value === 'fast';
+      });
+
+      await composer.fill('leftover');
+      await page
+        .locator('nav.sidebar-primary')
+        .getByRole('button', { name: 'new session', exact: true })
+        .click();
+      await page.waitForFunction(() => {
+        const node = document.querySelector('.composer textarea');
+        return (
+          node instanceof HTMLTextAreaElement &&
+          node.value === '' &&
+          document.activeElement === node
+        );
+      });
+      await page.keyboard.type('fresh');
+      assert.equal(await composer.inputValue(), 'fresh');
       assert.equal(await focused(), true);
 
       await send('second note about focusing the composer');

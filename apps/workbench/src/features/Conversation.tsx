@@ -57,9 +57,13 @@ import {
   useSessionPresentation,
 } from '../model/presentation';
 import {
-  composerFocusActive,
-  holdComposerFocus,
+  claimComposerFocus,
+  composerFocusPending,
+  composerFocusSealed,
+  composerHasBuffer,
+  composerTextPlaced,
   subscribeComposerFocus,
+  takeComposerText,
 } from '../model/composer-focus';
 interface Props {
   onDialog: (dialog: DialogId, selection?: string) => void;
@@ -231,24 +235,59 @@ export function Conversation({
     setFind('');
     setFindIndex(0);
   }, [session.id]);
-  // Ctrl+N and new session ask for this box. Focus it once the empty view is
-  // committed, including when that view is the session already open, and keep
-  // it through the menu and the button taking the key back. Selecting a listed
+  // Ctrl+N and new session ask for this box once the empty view is committed,
+  // including when that view is the session already open. Keys typed during
+  // the switch were buffered and land here before paint. Selecting a listed
   // session does not ask, so it does not move the keyboard.
+  const placeCaret = useRef(false);
   useLayoutEffect(() => {
-    let stop = () => {};
-    const start = () => {
-      stop();
-      if (!composerFocusActive()) return;
-      stop = holdComposerFocus(() => input.current);
+    const apply = () => {
+      if (!composerFocusPending()) return;
+      const node = input.current;
+      if (!node) return;
+      if (!composerFocusSealed()) {
+        node.focus({ preventScroll: true });
+        if (!composerHasBuffer() && node.value)
+          node.setSelectionRange(0, node.value.length);
+        return;
+      }
+      const text = takeComposerText();
+      if (text) {
+        const live = currentSession(runtime.getSnapshot());
+        if (
+          !live.messages.some((message) => message.role === 'user') &&
+          live.draft !== text
+        ) {
+          placeCaret.current = true;
+          runtime.change((state) => {
+            const target = currentSession(state);
+            if (target.messages.some((message) => message.role === 'user'))
+              return;
+            target.draft = text;
+          });
+        }
+      }
+      const field = input.current;
+      if (!field) return;
+      field.focus({ preventScroll: true });
+      const end = field.value.length;
+      if (text || composerTextPlaced()) field.setSelectionRange(end, end);
+      else if (end) field.setSelectionRange(0, end);
+      claimComposerFocus();
     };
-    start();
-    const unsubscribe = subscribeComposerFocus(start);
-    return () => {
-      unsubscribe();
-      stop();
-    };
-  }, []);
+    apply();
+    return subscribeComposerFocus(apply);
+  }, [session.id, runtime]);
+  // The buffered draft commits on the next render. Put the caret after it
+  // once that value is in the box, then leave the caret where the person moves it.
+  useLayoutEffect(() => {
+    if (!placeCaret.current) return;
+    const field = input.current;
+    if (!field || (field.value.length === 0 && composerTextPlaced())) return;
+    placeCaret.current = false;
+    field.focus({ preventScroll: true });
+    field.setSelectionRange(field.value.length, field.value.length);
+  }, [session.draft, session.id]);
   const latestView = useRef({ session, onDialog, onPanel });
   latestView.current = { session, onDialog, onPanel };
   const matches = messages.filter((message) =>

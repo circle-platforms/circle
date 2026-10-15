@@ -25,6 +25,7 @@ import { saveExport } from '../host';
 import { MAX_PROMPT_PAYLOAD } from '../../../desktop/src/runtime-protocol';
 import { t } from '../i18n/index.ts';
 import { SessionActionError } from './action-error';
+import { armComposerFocus, cancelComposerFocus } from './composer-focus';
 
 const LOCAL_SESSION = [
   'draft',
@@ -413,7 +414,25 @@ export class LiveRuntime implements RuntimePort {
       await this.selectSession(session.id);
     }
     const result = (await this.native('new-session')) as { sessionId: string };
-    return result.sessionId;
+    const id = result.sessionId;
+    const row = this.snapshot.sessions.find((item) => item.id === id);
+    // Reused empty session: drop a leftover draft. A new id has none.
+    if (
+      row &&
+      row.draft &&
+      !row.messages.some((message) => message.role === 'user')
+    ) {
+      this.change((state) => {
+        const target = state.sessions.find((item) => item.id === id);
+        if (
+          target &&
+          target.draft &&
+          !target.messages.some((message) => message.role === 'user')
+        )
+          target.draft = '';
+      });
+    }
+    return id;
   };
   selectSession = async (id: string) => {
     await this.changes;
@@ -608,6 +627,21 @@ export class LiveRuntime implements RuntimePort {
     return {};
   };
   command = async (
+    name: string,
+    args = '',
+    sessionId = this.snapshot.activeSessionId,
+  ): Promise<CommandResult> => {
+    const opening = (parseSlash('/' + name)?.name ?? name) === 'new';
+    // Before the awaits, so keys during the native round-trip are kept.
+    if (opening) armComposerFocus();
+    try {
+      return await this.dispatchCommand(name, args, sessionId);
+    } catch (error) {
+      if (opening) cancelComposerFocus();
+      throw error;
+    }
+  };
+  private dispatchCommand = async (
     name: string,
     args = '',
     sessionId = this.snapshot.activeSessionId,

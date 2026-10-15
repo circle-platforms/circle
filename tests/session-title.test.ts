@@ -157,6 +157,7 @@ test('generated titles keep one short phrase and drop a reply', () => {
   assert.equal(titleWorthy('Thanks!'), false);
   assert.equal(titleWorthy('thanks a lot'), false);
   assert.equal(titleWorthy('what is TCP'), true);
+  assert.equal(titleWorthy('focus test 1'), true);
   assert.equal(titleWorthy('what is TCP?'), true);
   assert.equal(titleWorthy('解释 React hooks'), true);
   assert.equal(titleWorthy('什么是 Rust'), true);

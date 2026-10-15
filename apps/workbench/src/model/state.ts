@@ -16,6 +16,7 @@ import type {
 import { createFixtures } from '../preview/fixtures.ts';
 import { t } from '../i18n/index.ts';
 import { fallbackTitle, titleWorthy } from '../../../../src/session_title.ts';
+import { armComposerFocus, cancelComposerFocus } from './composer-focus.ts';
 /** A session's title; the core's placeholder for an untitled one reads in the interface language. */
 export const sessionTitle = (title: string) =>
   title === 'new session' ? t('new session') : title;
@@ -242,8 +243,20 @@ export class PreviewRuntime implements RuntimePort {
       current.title === 'new session' &&
       !current.messages.some((message) => message.role === 'user') &&
       !current.archivedAt
-    )
+    ) {
+      // Same empty session. A leftover draft is not a new message.
+      if (current.draft) {
+        this.change((state) => {
+          const session = state.sessions.find((item) => item.id === current.id);
+          if (
+            session &&
+            !session.messages.some((message) => message.role === 'user')
+          )
+            session.draft = '';
+        });
+      }
       return current.id;
+    }
     const session = freshSession(this.snapshot, workspaceId);
     this.change((state) => {
       state.previousSessionId = state.activeSessionId;
@@ -464,7 +477,13 @@ export class PreviewRuntime implements RuntimePort {
       exit: 'exit',
     };
     if (name === 'new') {
-      this.newSession();
+      armComposerFocus();
+      try {
+        this.newSession();
+      } catch (error) {
+        cancelComposerFocus();
+        throw error;
+      }
       return { openSession: true, focusComposer: true };
     }
     if (name === 'resume') {

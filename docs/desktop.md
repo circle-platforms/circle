@@ -29,7 +29,7 @@ The app starts in a folder of its own, `workspace` inside its data folder, which
 
 ## Organizing sessions
 
-A new session is not kept until its first message. Ctrl+N while the open session is still empty stays on that session, and leaving an unused session does not leave a blank row. Ctrl+N and new session put the cursor in the composer, and keep it there, so the next keys are the message. Search is Ctrl+K. Ctrl+R opens the same search; that is the history-search key, kept on purpose.
+A new session is not kept until its first message. Ctrl+N while the open session is still empty stays on that session and clears a leftover draft, and leaving an unused session does not leave a blank row. Ctrl+N and new session take the keyboard from a sidebar row and put the cursor in the composer before the next key, so the next keys are the message. Search is Ctrl+K. Ctrl+R opens the same search; that is the history-search key, kept on purpose.
 
 The ⋯ beside a folder creates a session, reveals the folder in Finder or the system file manager, collapses the sidebar groups, or archives all its sessions. A session's ⋯ pins, renames, archives, restores or deletes it. Deleting still asks for confirmation and preserves the workspace folder.
 
