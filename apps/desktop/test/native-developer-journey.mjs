@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { setViewport } from './helpers/viewport.mjs';
 const require = createRequire(import.meta.url);
@@ -47,7 +48,14 @@ await Promise.all([
 const git = async (...args) =>
   (await promisify(execFile)('git', ['-C', repo, ...args])).stdout;
 await git('init', '-b', 'main');
-await git('add', 'README.md', 'debug.cjs', 'browser-source.js', 'package.json');
+await git(
+  'add',
+  'AGENTS.md',
+  'README.md',
+  'debug.cjs',
+  'browser-source.js',
+  'package.json',
+);
 await git(
   '-c',
   'user.name=Circle Fixture',
@@ -70,6 +78,66 @@ await writeFile(
         },
       },
       { waitForAbort: true },
+      {
+        message: {
+          id: 'task-write-a',
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              id: 'task-a-file',
+              name: 'write_file',
+              args: {
+                file_path: 'agent-result.txt',
+                content: 'isolated task output\n',
+              },
+            },
+            {
+              id: 'task-a-git',
+              name: 'execute',
+              args: { command: 'git status --short' },
+            },
+          ],
+        },
+      },
+      {
+        message: {
+          id: 'task-write-b',
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              id: 'task-b-file',
+              name: 'write_file',
+              args: {
+                file_path: 'agent-result.txt',
+                content: 'isolated task output\n',
+              },
+            },
+          ],
+        },
+      },
+      {
+        message: {
+          id: 'task-readonly',
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              id: 'task-read',
+              name: 'read_file',
+              args: { file_path: 'README.md' },
+            },
+          ],
+        },
+      },
+      ...[1, 2, 3].map((n) => ({
+        message: {
+          id: 'task-completed-' + n,
+          role: 'assistant',
+          content: 'Task effects ready for independent verification',
+        },
+      })),
     ],
   }),
 );
@@ -120,7 +188,7 @@ let sessionId;
 let receipt;
 const until = async (predicate, label) => {
   const deadline = Date.now() + 20000;
-  while (!(await predicate())) {
+  while (!(await predicate().catch(() => false))) {
     assert(Date.now() < deadline, label);
     await new Promise((done) => setTimeout(done, 40));
   }
@@ -136,6 +204,24 @@ const check = async (name, action) => {
     result,
   });
 };
+const launchRoot = resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? root);
+const buildIdentity = {
+  sourceBuildHead: process.env.CIRCLE_NATIVE_JOURNEY_SOURCE_BUILD_HEAD ?? null,
+  appPath: launchRoot,
+  files: {},
+};
+for (const file of [
+  'dist/main.cjs',
+  'dist/preload.cjs',
+  'dist/runtime-worker.mjs',
+  'dist/renderer/index.html',
+]) {
+  try {
+    buildIdentity.files[file] = createHash('sha256')
+      .update(await readFile(join(launchRoot, file)))
+      .digest('hex');
+  } catch {}
+}
 const screenshot = async (name) => {
   await page.screenshot({ path: join(output, name + '.png') });
 };
@@ -210,6 +296,12 @@ try {
         .getByRole('button', { name: 'context panel', exact: true })
         .click();
       await page
+        .locator('.inspector details')
+        .filter({ hasText: 'AGENTS.md' })
+        .first()
+        .locator('summary')
+        .click();
+      await page
         .locator('.inspector')
         .getByRole('button', { name: /AGENTS\.md/ })
         .first()
@@ -237,8 +329,9 @@ try {
     await send('Remain active while I edit and diagnose');
     await until(
       async () =>
-        (await state()).sessions.find((s) => s.id === sessionId)?.state ===
-        'running',
+        ['running', 'waiting'].includes(
+          (await state()).sessions.find((s) => s.id === sessionId)?.state,
+        ),
       'agent running',
     );
     await page.keyboard.press('ControlOrMeta+p');
@@ -268,7 +361,7 @@ try {
     );
     assert.equal(
       (await state()).sessions.find((s) => s.id === sessionId)?.state,
-      'running',
+      'waiting',
     );
     await screenshot('02-active-manual-edit');
   });
@@ -447,6 +540,168 @@ try {
       .click();
     assert.equal(await message.inputValue(), 'JOURNEY_UNSENT_DRAFT');
   });
+
+  await check(
+    'two isolated write agents and readonly agent with pending Git approval',
+    async () => {
+      if (
+        await page
+          .getByRole('button', { name: 'close inspector', exact: true })
+          .count()
+      )
+        await page
+          .getByRole('button', { name: 'close inspector', exact: true })
+          .click();
+      await page.locator('#dock-tab-tasks').click();
+      const panel = page.locator('.tasks-panel');
+      const queue = async (prompt, access) => {
+        await panel
+          .getByLabel('task instruction', { exact: true })
+          .fill(prompt);
+        await panel
+          .getByLabel('acceptance criteria', { exact: true })
+          .fill('Inspect actual file and git effects');
+        await panel
+          .getByLabel('workspace access', { exact: true })
+          .selectOption(access);
+        await panel
+          .getByRole('button', { name: 'queue task', exact: true })
+          .click();
+        await panel
+          .getByRole('button', { name: 'start ready tasks', exact: true })
+          .click();
+      };
+      await queue('JOURNEY_WRITE_A', 'write');
+      await until(
+        async () =>
+          (await query('tasks', 'list')).some(
+            (t) => t.spec.prompt === 'JOURNEY_WRITE_A' && t.state === 'waiting',
+          ),
+        'first task awaits human',
+      );
+      await queue('JOURNEY_WRITE_B', 'write');
+      await until(
+        async () =>
+          (await query('tasks', 'list')).some(
+            (t) => t.spec.prompt === 'JOURNEY_WRITE_B' && t.state === 'waiting',
+          ),
+        'second task independently awaits human',
+      );
+      await queue('JOURNEY_READ_ONLY', 'readonly');
+      await until(
+        async () =>
+          (await query('tasks', 'list')).some(
+            (t) =>
+              t.spec.prompt === 'JOURNEY_READ_ONLY' &&
+              ['succeeded', 'needs_review'].includes(t.state),
+          ),
+        'readonly task completes while writers await',
+      );
+      const concurrent = await query('tasks', 'list');
+      const writers = concurrent.filter((t) => t.spec.access === 'write');
+      assert.equal(writers.length, 2);
+      assert(writers.every((t) => t.state === 'waiting'));
+      assert.notEqual(writers[0].worktree, writers[1].worktree);
+      assert(writers.every((t) => t.worktree !== repo));
+      await screenshot('08a-parallel-task-approvals');
+      let gitApprovalObserved = false;
+      for (const writer of writers) {
+        for (let iteration = 0; iteration < 4; iteration++) {
+          const record = (await query('tasks', 'list')).find(
+            (t) => t.spec.id === writer.spec.id,
+          );
+          if (['succeeded', 'needs_review'].includes(record.state)) break;
+          await until(
+            async () =>
+              (await state()).interactions.some(
+                (i) =>
+                  i.sessionId === record.spec.sessionId &&
+                  i.status === 'pending',
+              ),
+            'child approval is projected',
+          );
+          const pending = (await state()).interactions.find(
+            (i) =>
+              i.sessionId === record.spec.sessionId && i.status === 'pending',
+          );
+          if (pending.command?.includes('git status'))
+            gitApprovalObserved = true;
+          await page
+            .locator(
+              `.sidebar .session-link[href="#/session/${record.spec.sessionId}"]`,
+            )
+            .click();
+          await page
+            .getByRole('button', { name: 'allow once', exact: true })
+            .first()
+            .waitFor();
+          await page
+            .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+            .click();
+          assert(
+            (await state()).interactions.some(
+              (i) => i.id === pending.id && i.status === 'pending',
+            ),
+          );
+          assert.equal(
+            (await state()).sessions.find((s) => s.id === sessionId)?.state,
+            'waiting',
+          );
+          await screenshot(
+            '08b-pending-request-parent-continues-' +
+              writer.spec.id +
+              '-' +
+              iteration,
+          );
+          await page
+            .locator(
+              `.sidebar .session-link[href="#/session/${record.spec.sessionId}"]`,
+            )
+            .click();
+          await page
+            .getByRole('button', { name: 'allow once', exact: true })
+            .first()
+            .click();
+          await page
+            .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+            .click();
+          await until(
+            async () =>
+              !(await state()).interactions.some(
+                (i) => i.id === pending.id && i.status === 'pending',
+              ),
+            'approval consumed exactly once',
+          );
+        }
+      }
+      await until(
+        async () =>
+          (await query('tasks', 'list')).every((t) =>
+            ['succeeded', 'needs_review'].includes(t.state),
+          ),
+        'all three tasks finish without hiding acceptance review',
+      );
+      const complete = await query('tasks', 'list');
+      for (const writer of writers)
+        assert.equal(
+          await readFile(join(writer.worktree, 'agent-result.txt'), 'utf8'),
+          'isolated task output\n',
+        );
+      assert.equal(
+        gitApprovalObserved,
+        true,
+        'actual git command waited while session navigation continued',
+      );
+      await assert.rejects(readFile(join(repo, 'agent-result.txt'), 'utf8'), {
+        code: 'ENOENT',
+      });
+      await writeFile(
+        join(output, 'task-results.json'),
+        JSON.stringify({ concurrent, complete, gitApprovalObserved }, null, 2),
+      );
+      await screenshot('08c-parallel-task-results');
+    },
+  );
   await check('English Chinese dark light and narrow UI', async () => {
     if (
       await page
@@ -515,6 +770,7 @@ try {
     JSON.stringify(
       {
         ...receipt,
+        buildIdentity,
         cleanup: {
           applicationClosed: !cleanupError,
           error: cleanupError,
