@@ -10,9 +10,9 @@ import {
   symlink,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { realpathSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { DeliveryService } from '../src/workspace/delivery.ts';
@@ -622,6 +622,7 @@ test('workspace journal failure cancels its producers and remains visible after 
         );
       }),
   ]);
+  await writeFile(join(f.workspace, 'README.md'), 'existing document');
   await f.call('prompt', { text: 'stay running while native journal fails' });
   await wait(() => f.model.requests.length === 1);
   let attemptedJournal: string | undefined;
@@ -636,12 +637,16 @@ test('workspace journal failure cancels its producers and remains visible after 
       options?: Parameters<typeof WorkspaceEventStream.open>[1],
     ) => {
       attemptedJournal = path;
-      await mkdir(path, { recursive: true });
+      // Opening a directory with a+ is platform dependent on Windows. Corrupt
+      // the actual journal bytes instead, preserving sibling PTY directories.
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, '{synthetic invalid journal record}\n');
       return open(path, options);
     },
   );
   const failed = await f.service('documents', 'read', { path: 'README.md' });
   assert.equal(failed.ok, false);
+  assert.match(failed.error ?? '', /JSON|Unexpected token|invalid/i);
   assert.ok(attemptedJournal?.endsWith('events.jsonl'));
   try {
     await wait(() => aborted);
@@ -1556,14 +1561,37 @@ test('native controller mutations share a canonical root across actual filesyste
   const canonical = realpathSync.native(f.workspace);
   let alias: string;
   if (process.platform === 'win32') {
-    const command = `for %I in ("${canonical}") do @echo %~sI`;
+    // Call Windows' API directly: cmd/execFile's quote re-escaping can return
+    // literal \" characters rather than a filesystem path.
+    const script = `
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class CircleShortPath {
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  public static extern uint GetShortPathName(string path, StringBuilder buffer, uint length);
+}
+'@
+$buffer = New-Object System.Text.StringBuilder 32768
+$result = [CircleShortPath]::GetShortPathName($env:CIRCLE_TEST_ALIAS_PATH, $buffer, $buffer.Capacity)
+if ($result -eq 0 -or $result -ge $buffer.Capacity) { throw "GetShortPathName failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())" }
+[Console]::WriteLine($buffer.ToString())
+`;
     alias = execFileSync(
-      process.env.ComSpec ?? 'cmd.exe',
-      ['/d', '/c', command],
-      { encoding: 'utf8' },
-    )
-      .trim()
-      .replace(/^"(.*)"$/s, '$1');
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-EncodedCommand',
+        Buffer.from(script, 'utf16le').toString('base64'),
+      ],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, CIRCLE_TEST_ALIAS_PATH: canonical },
+      },
+    ).trim();
     assert.ok(
       alias && realpathSync.native(alias) === canonical,
       'Windows short name must resolve to the exact granted directory',
