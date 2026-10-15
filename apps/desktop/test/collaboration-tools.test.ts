@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import {
+  access,
+  mkdtemp,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -9,8 +18,11 @@ import { randomUUID } from 'node:crypto';
 import { AgentRuntime } from '../../../src/runtime.ts';
 import { ScriptedModel } from '../../../src/testing.ts';
 import { defaultSettings, trustFolder } from '../../../src/settings.ts';
-import type { Message } from '../../../src/types.ts';
-import { TaskService } from '../src/workspace/task-service.ts';
+import { emptyUsage, type Message } from '../../../src/types.ts';
+import {
+  TaskService,
+  type TaskServiceOptions,
+} from '../src/workspace/task-service.ts';
 import { createCollaborationTools } from '../src/workspace/collaboration-tools.ts';
 
 const exec = promisify(execFile);
@@ -45,6 +57,12 @@ async function fixture(
     home: string;
     service: TaskService;
   }) => Promise<void>,
+  options?: (roots: {
+    workspace: string;
+    home: string;
+  }) => Partial<
+    Pick<TaskServiceOptions, 'autoStart' | 'createRuntime' | 'verify'>
+  >,
 ) {
   const root = await mkdtemp(join(tmpdir(), 'circle-parent-tools-'));
   const workspace = join(root, 'workspace'),
@@ -73,6 +91,7 @@ async function fixture(
     createRuntime: () => {
       throw Error('scheduler must remain paused during parent planning test');
     },
+    ...options?.({ workspace, home }),
   });
   try {
     await run({ root, workspace, home, service });
@@ -288,3 +307,316 @@ test('auto parent execution is approved by policy while plan mode remains read-o
       await runtime.close();
     }
   }));
+
+test('plan parent schedules two actual parallel read-only analyses without allowing project writes', async () => {
+  const childModels = new Map<string, ScriptedModel>();
+  const childWorktrees: string[] = [];
+  let entered = 0;
+  let release!: () => void;
+  const parallel = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await fixture(
+    async ({ workspace, home, service }) => {
+      const before = await readFile(join(workspace, 'README.md'));
+      const index = await readFile(join(workspace, '.git', 'index'));
+      const model = new ScriptedModel([
+        {
+          message: assistant('', [
+            {
+              id: 'analyze-graph',
+              name: 'native_tasks_analyze',
+              args: {
+                operationId: 'planning-analysis',
+                tasks: [
+                  {
+                    id: 'inspect-ui',
+                    prompt: 'Read README.md and analyze the interface',
+                    acceptanceCriteria: ['README reviewed without writes'],
+                  },
+                  {
+                    id: 'inspect-diagnostics',
+                    prompt: 'Read README.md and analyze diagnosis',
+                    access: 'readonly',
+                    resource: 'agent',
+                    acceptanceCriteria: ['README reviewed without writes'],
+                  },
+                ],
+              },
+            },
+          ]),
+        },
+        {
+          message: assistant('', [
+            {
+              id: 'wait-ui',
+              name: 'native_tasks_wait',
+              args: { ids: ['inspect-ui'], timeoutMs: 10000 },
+            },
+            {
+              id: 'wait-diagnostics',
+              name: 'native_tasks_wait',
+              args: { ids: ['inspect-diagnostics'], timeoutMs: 10000 },
+            },
+          ]),
+        },
+        {
+          message: assistant('', [
+            {
+              id: 'write-in-plan',
+              name: 'native_tasks_enqueue',
+              args: {
+                operationId: 'forbidden-plan-write',
+                tasks: [{ ...tasks[0], id: 'plan-blocked' }],
+              },
+            },
+          ]),
+        },
+        {
+          message: assistant(
+            'The two read-only analyses completed; implementation requires leaving plan mode',
+          ),
+        },
+      ]);
+      let runtime!: AgentRuntime;
+      let approvals = 0;
+      runtime = new AgentRuntime({
+        workspace,
+        home,
+        userHome: home,
+        settings: trustFolder(defaultSettings(), workspace),
+        model,
+        headless: true,
+        bundledExtensions: false,
+        extraTools: createCollaborationTools({
+          sessionId: () => runtime.session.id,
+          service: () => service,
+        }),
+        approve: async () => {
+          approvals++;
+          return 'approve';
+        },
+      });
+      runtime.harness.planMode = true;
+      try {
+        await runtime.harness.run(
+          'Plan with two independent investigations; do not implement',
+        );
+        assert.equal(
+          entered,
+          2,
+          'both child models entered before either analysis could continue',
+        );
+        assert.equal(
+          approvals,
+          0,
+          'plan analysis and reads never ask for execution approval',
+        );
+        const scheduled = model.requests[1]!.messages.find(
+          (message) => message.tool_call_id === 'analyze-graph',
+        )!;
+        assert.equal(scheduled.status, 'success');
+        const actual = JSON.parse(scheduled.content);
+        assert.equal(actual.tasks.length, 2);
+        for (const task of actual.tasks) {
+          assert.equal(task.spec.access, 'readonly');
+          assert.equal(task.spec.resource, 'agent');
+          assert.equal(task.spec.sessionId, runtime.session.id);
+          assert.match(task.spec.baseline, /^[a-f0-9]{40,64}$/);
+        }
+        for (const id of ['wait-ui', 'wait-diagnostics']) {
+          const result = model.requests[2]!.messages.find(
+            (message) => message.tool_call_id === id,
+          )!;
+          assert.equal(result.status, 'success');
+          assert.equal(JSON.parse(result.content).tasks[0].state, 'succeeded');
+        }
+        assert.equal(
+          model.requests[3]!.messages.find(
+            (message) => message.tool_call_id === 'write-in-plan',
+          )!.status,
+          'error',
+        );
+        assert.equal(service.getTask('plan-blocked'), undefined);
+        assert.deepEqual(await readFile(join(workspace, 'README.md')), before);
+        assert.deepEqual(
+          await readFile(join(workspace, '.git', 'index')),
+          index,
+        );
+        assert.deepEqual((await readdir(workspace)).sort(), [
+          '.git',
+          'README.md',
+        ]);
+        for (const tree of childWorktrees) {
+          await assert.rejects(access(join(tree, 'plan.md')));
+          await assert.rejects(access(join(tree, 'forbidden.txt')));
+          assert.equal(
+            (
+              await exec('git', ['-C', tree, 'status', '--porcelain'], {
+                env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+              })
+            ).stdout,
+            '',
+          );
+        }
+        for (const child of childModels.values()) {
+          assert.ok(
+            child.requests[0]!.tools.every(
+              (tool) =>
+                tool.effect === 'read' &&
+                !tool.name.startsWith('native_tasks_') &&
+                tool.name !== 'task',
+            ),
+          );
+          const results = child.requests[1]!.messages;
+          assert.equal(
+            results.find((message) => message.tool_call_id === 'read')!.status,
+            'success',
+          );
+          for (const id of ['write', 'execute', 'escape'])
+            assert.equal(
+              results.find((message) => message.tool_call_id === id)!.status,
+              'error',
+            );
+        }
+        assert.equal(runtime.harness.planMode, true);
+      } finally {
+        await runtime.close();
+      }
+    },
+    ({ home }) => ({
+      autoStart: true,
+      createRuntime: async (task, context) => {
+        const childHome = join(home, task.spec.id);
+        await mkdir(childHome, { recursive: true });
+        childWorktrees.push(context.worktree);
+        const child = new ScriptedModel([
+          async () => {
+            entered++;
+            if (entered === 2) release();
+            await Promise.race([
+              parallel,
+              delay(8000, undefined, { ref: false }).then(() => {
+                throw Error('read-only analyses did not run concurrently');
+              }),
+            ]);
+            return {
+              message: assistant('', [
+                {
+                  id: 'read',
+                  name: 'read_file',
+                  args: { file_path: 'README.md' },
+                },
+                {
+                  id: 'write',
+                  name: 'write_file',
+                  args: { file_path: 'plan.md', content: 'forbidden' },
+                },
+                {
+                  id: 'execute',
+                  name: 'execute',
+                  args: { command: 'touch forbidden.txt' },
+                },
+                {
+                  id: 'escape',
+                  name: 'native_tasks_enqueue',
+                  args: { operationId: 'child-escape', tasks },
+                },
+              ]),
+              usage: emptyUsage(),
+            };
+          },
+          { message: assistant('README inspected without project changes') },
+        ]);
+        childModels.set(task.spec.id, child);
+        const runtime = new AgentRuntime({
+          workspace: context.worktree,
+          home: childHome,
+          userHome: childHome,
+          settings: trustFolder(defaultSettings(), context.worktree),
+          model: child,
+          headless: true,
+          bundledExtensions: false,
+          approve: async () => 'approve',
+        });
+        runtime.setMode('auto');
+        return runtime;
+      },
+      verify: async (task, context) => {
+        assert.equal(
+          await readFile(join(context.worktree, 'README.md'), 'utf8'),
+          '# fixture\n',
+        );
+        assert.deepEqual(context.changes.paths, []);
+        return [
+          {
+            criterion: task.spec.acceptanceCriteria[0]!,
+            status: 'passed',
+            source: 'inspection',
+            evidence:
+              'README bytes equal baseline; no changed paths or forbidden files',
+          },
+        ];
+      },
+    }),
+  );
+});
+
+test('analysis tool rejects write and authority expansion before calling the trusted service', async () => {
+  let calls = 0;
+  const tools = createCollaborationTools({
+    sessionId: 'parent',
+    service: () => ({
+      call: async () => {
+        calls++;
+        return [];
+      },
+    }),
+  });
+  const analyze = tools.find((tool) => tool.name === 'native_tasks_analyze')!;
+  assert.equal(analyze.effect, 'read');
+  assert.equal(analyze.subagents, false);
+  assert.equal(
+    tools.find((tool) => tool.name === 'native_tasks_enqueue')!.effect,
+    'execute',
+  );
+  const task = {
+    id: 'analysis',
+    prompt: 'Read source',
+    acceptanceCriteria: ['source reviewed'],
+  };
+  const context = { sessionId: 'parent', signal: new AbortController().signal };
+  for (const override of [
+    { access: 'write' },
+    { resource: 'build' },
+    { resource: 'browser' },
+    { resource: 'ui' },
+    { workspace: '/tmp/elsewhere' },
+    { sessionId: 'foreign' },
+    { allowedResources: ['write'] },
+    { executor: 'arbitrary' },
+    { tools: ['execute'] },
+    { permissions: 'auto' },
+    { planMode: false },
+  ])
+    await assert.rejects(
+      analyze.run(
+        { operationId: 'reject', tasks: [{ ...task, ...override }] },
+        context,
+      ),
+    );
+  await assert.rejects(
+    analyze.run(
+      { operationId: 'reject', tasks: [task], limits: { agents: 32 } },
+      context,
+    ),
+  );
+  await assert.rejects(
+    analyze.run(
+      { operationId: 'foreign', tasks: [task] },
+      { ...context, sessionId: 'foreign' },
+    ),
+    /another parent/,
+  );
+  assert.equal(calls, 0);
+});

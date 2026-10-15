@@ -35,8 +35,52 @@ const taskSchema = {
   required: ['id', 'prompt', 'access', 'acceptanceCriteria'],
 };
 
+const analysisTaskSchema = {
+  ...taskSchema,
+  properties: {
+    ...taskSchema.properties,
+    access: { type: 'string', const: 'readonly' },
+    resource: { type: 'string', const: 'agent' },
+  },
+  required: ['id', 'prompt', 'acceptanceCriteria'],
+};
+
+/** Read-effect delegation cannot inherit write or resource authority from input. */
+function analysisTasks(
+  args: Record<string, unknown>,
+): Record<string, unknown>[] {
+  if (Object.keys(args).some((key) => !['operationId', 'tasks'].includes(key)))
+    throw Error('analysis cannot select task authority or execution options');
+  if (
+    typeof args.operationId !== 'string' ||
+    !args.operationId.trim() ||
+    args.operationId.length > 200
+  )
+    throw Error('analysis operationId is required');
+  if (
+    !Array.isArray(args.tasks) ||
+    !args.tasks.length ||
+    args.tasks.length > 1000
+  )
+    throw Error('analysis tasks are required');
+  const allowed = new Set(Object.keys(taskSchema.properties));
+  return args.tasks.map((input: unknown) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input))
+      throw Error('invalid analysis task');
+    const task = input as Record<string, unknown>;
+    if (Object.keys(task).some((key) => !allowed.has(key)))
+      throw Error('analysis task contains ungranted fields');
+    if (task.access !== undefined && task.access !== 'readonly')
+      throw Error('analysis tasks must be readonly');
+    if (task.resource !== undefined && task.resource !== 'agent')
+      throw Error('analysis tasks use only the agent resource');
+    return { ...task, access: 'readonly', resource: 'agent' };
+  });
+}
+
 /** Install on the visible parent runtime only. Harness policy performs approval
- * before run(), plan mode rejects execution, and subagents never receive these.
+ * before execution tools, plan mode admits only restricted read-only delegation,
+ * and subagents never receive these tools.
  */
 export function createCollaborationTools(
   options: CollaborationToolOptions,
@@ -63,7 +107,7 @@ export function createCollaborationTools(
       name: 'native_tasks_enqueue',
       effect: 'execute',
       description:
-        'Create a dependency graph of native agent tasks. Write tasks receive isolated Git worktrees; readonly tasks retain a pinned baseline. Supply concrete acceptance criteria and stable operationId so a retried request cannot duplicate work. Tasks start automatically; this result is scheduling state, not evidence of completion. Child tasks cannot spawn another graph.',
+        'Create a dependency graph of native agent tasks. Write tasks receive isolated Git worktrees; readonly tasks retain a pinned baseline. Supply concrete acceptance criteria and stable operationId so a retried request cannot duplicate work. Tasks start automatically; this result is scheduling state, not evidence of completion. Child tasks cannot spawn another graph. During plan mode use native_tasks_analyze for read-only parallel analysis instead; this execution tool is not permitted.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -91,6 +135,43 @@ export function createCollaborationTools(
         const tasks = (await service.call('enqueue', {
           operationId: args.operationId,
           tasks: args.tasks,
+        })) as TaskRecord[];
+        const artifacts = (
+          await Promise.all(
+            tasks.map((task) =>
+              service.call('artifacts', { id: task.spec.id }),
+            ),
+          )
+        ).flat();
+        return JSON.stringify({ tasks, artifacts });
+      },
+    },
+    {
+      ...base,
+      name: 'native_tasks_analyze',
+      effect: 'read',
+      description:
+        'During planning, split independent investigation, code reading, diagnosis or review into parallel read-only native agent tasks. Every task is forced to readonly access and the agent resource at a pinned baseline; write tools, commands, builds, browser/UI execution and nested delegation are unavailable. Do not supply workspace, session, executor, tool, permission or resource overrides. Include concrete acceptance criteria and a stable operationId. This returns scheduling state; use native_tasks_wait or native_tasks_list for actual results and artifacts. Use native_tasks_enqueue after leaving plan mode when implementation or execution is needed.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          operationId: id,
+          tasks: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 1000,
+            items: analysisTaskSchema,
+          },
+        },
+        required: ['operationId', 'tasks'],
+      },
+      async run(args, context) {
+        const inputs = analysisTasks(args);
+        const service = await owner(context);
+        const tasks = (await service.call('enqueue', {
+          operationId: args.operationId,
+          tasks: inputs,
         })) as TaskRecord[];
         const artifacts = (
           await Promise.all(
