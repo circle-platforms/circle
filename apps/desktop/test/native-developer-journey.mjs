@@ -1,3 +1,4 @@
+import { runNativeInputRecovery } from './helpers/native-input-recovery.mjs';
 import { runNativeBrowserStream } from './helpers/native-browser-stream.mjs';
 import {
   createNativeEditorIsolationFixture,
@@ -1054,6 +1055,38 @@ try {
         JSON.stringify({ concurrent, complete, gitApprovalObserved }, null, 2),
       );
       await screenshot('08c-parallel-task-results');
+    },
+  );
+  await check(
+    'whole app restart preserves inputs without automatic sending',
+    async () => {
+      await runNativeInputRecovery({
+        getApp: () => app,
+        getPage: () => page,
+        state,
+        query,
+        sessionId,
+        fixture,
+        requestsPath,
+        output,
+        until,
+        relaunch: async () => {
+          await app.close();
+          app = await electron.launch({
+            chromiumSandbox: true,
+            executablePath:
+              process.env.CIRCLE_DESKTOP_EXECUTABLE ?? require('electron'),
+            args: [launchRoot],
+            cwd: root,
+            env,
+          });
+          page = await app.firstWindow();
+          page.setDefaultTimeout(15000);
+          page.on('pageerror', (error) =>
+            errors.push({ phase, error: String(error), stack: error.stack }),
+          );
+        },
+      });
     },
   );
   await check('English Chinese dark light and narrow UI', async () => {
