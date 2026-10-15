@@ -82,6 +82,43 @@ const nonce = '1234567890abcdef1234567890abcdef';
 const marker = (stage: string, own = nonce) =>
   `CIRCLE_QUERY_${own} ${stage}\r\n`;
 
+for (const [description, names] of [
+  ['no names', []],
+  ['one empty name', ['']],
+  ['one image name', ['circle']],
+  ['Unicode names', ['用户 image 🧪']],
+  ['spaces and quotes', ['a name \' " `$();']],
+  ['multiple names and empty entries', ['', 'circle', 'second image', '']],
+] satisfies [string, string[]][]) {
+  test(`image name payload preserves ${description} without JSON cmdlets`, () => {
+    for (const all of [false, true]) {
+      const { script } = windowsProcessQuery(names, all, nonce);
+      assert.doesNotMatch(script, /ConvertFrom-Json/i);
+      if (!names.length) {
+        assert.match(script, /\$circleNames = @\(\); /);
+        assert.doesNotMatch(script, /FromBase64String/);
+        continue;
+      }
+      const encoded = script.match(
+        /FromBase64String\('([A-Za-z0-9+/=]*)'\)/,
+      )?.[1];
+      assert.notEqual(encoded, undefined);
+      const decoded = Buffer.from(encoded!, 'base64').toString('utf8');
+      assert.equal(decoded, names.join('\0'));
+      assert.deepEqual(decoded.split('\0'), names);
+      assert.match(script, /\)\.Split\(\[char\[\]\]@\(\[char\]0\)\)\); /);
+    }
+  });
+}
+
+test('image names containing NUL cannot change the payload item boundaries', () => {
+  for (const all of [false, true]) {
+    for (const names of [['\0'], ['a\0b'], ['circle', 'bad\0']]) {
+      assert.throws(() => windowsProcessQuery(names, all, nonce), /NUL/);
+    }
+  }
+});
+
 test('a query with no complete marker reports unknown rather than a startup cause', () => {
   const markers = readWindowsQueryMarkers('original\r\ntail', nonce);
   assert.equal(markers.cleaned, 'original\r\ntail');
@@ -152,7 +189,7 @@ test('only own complete valid lines are stripped and all other stderr characters
   assert.equal(markers.lastCapturedStage, 'LOOKUP');
 });
 
-test('both query bodies preserve original statements and immediately save the final status', () => {
+test('both query bodies preserve the process statements and immediately save the final status', () => {
   for (const all of [false, true]) {
     const names = ['circle', '用户 image'];
     const { script } = windowsProcessQuery(names, all, nonce);
@@ -166,13 +203,13 @@ test('both query bodies preserve original statements and immediately save the fi
         /; \$circleQuerySuccess = \$\?; if \(\$circleQuerySuccess\) \{ exit 0 \} else \{ exit 1 \}$/,
         '',
       );
-    const encoded = Buffer.from(JSON.stringify(names)).toString('base64');
+    const encoded = Buffer.from(names.join('\0')).toString('base64');
     const lookup = all
       ? '[Diagnostics.Process]::GetProcesses()'
       : 'foreach ($circleName in $circleNames) { [Diagnostics.Process]::GetProcessesByName($circleName) }';
     assert.equal(
       stripped,
-      `$circleNames = @([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')) | ConvertFrom-Json); ` +
+      `$circleNames = @([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')).Split([char[]]@([char]0))); ` +
         `$circleProcesses = @(${lookup}); ` +
         'foreach ($circleProcess in $circleProcesses) { try { ' +
         '$circlePath = $circleProcess.MainModule.FileName; if ($circlePath) { ' +

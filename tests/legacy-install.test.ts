@@ -501,7 +501,7 @@ test('on Windows a held program is looked up, and the list names the processes r
   const encoded = query.match(/FromBase64String\('([A-Za-z0-9+/=]+)'\)/)?.[1];
   assert.ok(encoded);
   assert.deepEqual(
-    JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')),
+    Buffer.from(encoded, 'base64').toString('utf8').split('\0'),
     ['circle'],
   );
   assert.equal(asked[0]!.timeout, 30_000);
