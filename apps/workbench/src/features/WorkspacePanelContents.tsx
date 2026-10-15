@@ -162,6 +162,7 @@ export function WorkspacePanelContents({
                   <DebugPanel sessionId={sessionId} embedded onFile={onFile} />
                 ) : item.id === 'tasks' ? (
                   <TasksPanel
+                    embedded
                     sessionId={sessionId}
                     onSession={onSession}
                     focusTaskId={

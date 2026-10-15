@@ -127,6 +127,19 @@ try {
         'Original shell preserved draft',
       );
       await page.screenshot({ path: `${output}/${theme}-${width}.png` });
+      await page.evaluate(async () => {
+        const { setLanguage } = await import('/src/i18n/index.ts');
+        setLanguage('zh-CN');
+      });
+      await page.screenshot({ path: `${output}/zh-${theme}-${width}.png` });
+      const noOverflow = await page
+        .locator('.inspector')
+        .evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
+      assert.equal(
+        noOverflow,
+        true,
+        'Chinese original inspector does not overflow',
+      );
       assert.deepEqual(errors, []);
       receipts.push({ theme, width, geometry, native: false, passed: true });
       await page.close();
