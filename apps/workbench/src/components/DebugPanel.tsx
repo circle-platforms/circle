@@ -256,7 +256,32 @@ export function DebugPanel({
       </form>
       <details>
         <summary>{t('breakpoints')}</summary>
-        <pre>{JSON.stringify(state.breakpoints, null, 2)}</pre>
+        {Object.entries(state.breakpoints).flatMap(([file, rows]) =>
+          rows.map((row, i) => (
+            <div className="debug-breakpoint" key={`${file}:${i}`}>
+              <button onClick={() => onFile?.(file, row.line)}>
+                {file}:{row.line}
+              </button>
+              <span>
+                {row.verified
+                  ? t('verified breakpoint')
+                  : t('pending breakpoint')}
+              </span>
+              <button
+                onClick={() =>
+                  void act('setBreakpoints', {
+                    path: file,
+                    lines: rows
+                      .filter((_, index) => index !== i)
+                      .map((b) => b.line),
+                  })
+                }
+              >
+                {t('remove breakpoint')}
+              </button>
+            </div>
+          )),
+        )}
       </details>
       <pre className="debug-output" aria-label={t('debug output')}>
         {state.output}

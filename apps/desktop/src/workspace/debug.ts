@@ -130,7 +130,10 @@ export class DapConnection extends EventEmitter {
 
 export interface DebugOptions {
   workspaceRoot: string;
+  /** Adapter host; packaged Electron is valid with ELECTRON_RUN_AS_NODE. */
   nodeExecutable: string;
+  /** Real Node runtime for the debuggee; Electron may ignore its bootloader options. */
+  runtimeExecutable?: string;
   adapterPath: string;
   emit?: (snapshot: DebugSnapshot) => void;
   runInTerminal?: (args: {
@@ -151,6 +154,7 @@ export class WorkspaceDebugService {
   private adapter?: ChildProcess;
   private dap?: DapConnection;
   private target?: DapConnection;
+  private generation = 0;
   private launched = false;
   private resumeEntry = false;
   private connections = new Set<DapConnection>();
@@ -179,6 +183,7 @@ export class WorkspaceDebugService {
   }
   private async start() {
     if (this.adapter) throw Error('a debug session is already running');
+    const generation = ++this.generation;
     this.publish({
       status: 'starting',
       output: '',
@@ -227,6 +232,7 @@ export class WorkspaceDebugService {
         adapter.once('error', error);
         adapter.once('exit', exit);
       });
+      if (generation !== this.generation) throw Error('debug launch cancelled');
       const socket = await new Promise<Socket>((resolve, reject) => {
         const s = connect(port, '127.0.0.1', () => resolve(s));
         s.once('error', reject);
@@ -350,6 +356,7 @@ export class WorkspaceDebugService {
       this.publish({ adapterPid: adapter.pid });
       return dap;
     } catch (e) {
+      if (generation !== this.generation) throw e;
       await this.stop();
       this.publish({ status: 'failed', reason: String(e) });
       throw e;
@@ -393,7 +400,8 @@ export class WorkspaceDebugService {
         cwd: this.options.workspaceRoot,
         program,
         args: Array.isArray(params.args) ? params.args : [],
-        runtimeExecutable: this.options.nodeExecutable,
+        runtimeExecutable:
+          this.options.runtimeExecutable ?? this.options.nodeExecutable,
         env: { ELECTRON_RUN_AS_NODE: '1' },
         console: this.options.runInTerminal
           ? 'integratedTerminal'
@@ -469,6 +477,8 @@ export class WorkspaceDebugService {
     return (this.target ?? this.dap).request(method, args);
   }
   async stop() {
+    this.generation++;
+    this.resumeEntry = false;
     this.publish({
       status: 'stopped',
       threadId: undefined,

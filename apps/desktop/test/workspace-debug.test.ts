@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { WorkspaceDebugService } from '../src/workspace/debug.ts';
 
+const nodeExecutable = process.env.CIRCLE_JS_DEBUG_NODE ?? process.execPath;
 const adapterPath =
   process.env.CIRCLE_JS_DEBUG_ADAPTER ??
   '/tmp/circle-native-debugger-adapter/js-debug/src/dapDebugServer.js';
@@ -26,7 +27,9 @@ test(
     );
     const service = new WorkspaceDebugService({
       workspaceRoot: root,
-      nodeExecutable: process.execPath,
+      nodeExecutable,
+      runtimeExecutable:
+        process.env.CIRCLE_JS_DEBUG_RUNTIME ?? process.execPath,
       adapterPath,
     });
     try {
@@ -73,7 +76,8 @@ test('rejects sources outside workspace and malformed launches without spawning'
   await writeFile(outside, '');
   const service = new WorkspaceDebugService({
     workspaceRoot: root,
-    nodeExecutable: process.execPath,
+    nodeExecutable,
+    runtimeExecutable: process.env.CIRCLE_JS_DEBUG_RUNTIME ?? process.execPath,
     adapterPath: 'missing',
   });
   try {
@@ -110,7 +114,9 @@ test(
     );
     const service = new WorkspaceDebugService({
       workspaceRoot: root,
-      nodeExecutable: process.execPath,
+      nodeExecutable,
+      runtimeExecutable:
+        process.env.CIRCLE_JS_DEBUG_RUNTIME ?? process.execPath,
       adapterPath,
       runInTerminal: async (args) => {
         const env = { ...process.env };
@@ -181,7 +187,9 @@ test(
     });
     const service = new WorkspaceDebugService({
       workspaceRoot: root,
-      nodeExecutable: process.execPath,
+      nodeExecutable,
+      runtimeExecutable:
+        process.env.CIRCLE_JS_DEBUG_RUNTIME ?? process.execPath,
       adapterPath,
     });
     try {
@@ -232,7 +240,9 @@ test(
     await writeFile(path.join(root, 'fixture.js.map'), compiled.sourceMapText!);
     const service = new WorkspaceDebugService({
       workspaceRoot: root,
-      nodeExecutable: process.execPath,
+      nodeExecutable,
+      runtimeExecutable:
+        process.env.CIRCLE_JS_DEBUG_RUNTIME ?? process.execPath,
       adapterPath,
     });
     try {
@@ -254,3 +264,37 @@ test(
     }
   },
 );
+
+test('DAP frames survive split headers and reject pending requests on close', async () => {
+  const { createServer, connect } = await import('node:net');
+  const { DapConnection } = await import('../src/workspace/debug.ts');
+  const server = createServer((socket) =>
+    socket.once('data', () => {
+      const body = JSON.stringify({
+        seq: 1,
+        type: 'response',
+        request_seq: 1,
+        success: true,
+        body: { threads: [{ id: 1, name: 'main' }] },
+      });
+      const response = `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`;
+      socket.write(response.slice(0, 12));
+      setTimeout(() => socket.write(response.slice(12)), 5);
+    }),
+  );
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address() as { port: number };
+  const socket = connect(address.port, '127.0.0.1');
+  await new Promise<void>((resolve) => socket.once('connect', resolve));
+  const connection = new DapConnection(socket);
+  try {
+    const reply = await connection.request('threads');
+    assert.equal(reply.threads[0].name, 'main');
+    const pending = connection.request('unanswered');
+    connection.close();
+    await assert.rejects(pending, /closed/);
+  } finally {
+    connection.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
