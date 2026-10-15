@@ -1,6 +1,7 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  appendFile,
   mkdtemp,
   mkdir,
   readFile,
@@ -12,6 +13,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createServer } from 'node:net';
+import { createHash } from 'node:crypto';
+import { terminalInputChunks } from '../../workbench/src/model/terminal-stream.ts';
 import {
   TerminalManager,
   type TerminalEvent,
@@ -157,6 +160,30 @@ test(
 );
 
 test(
+  'large multilingual paste crosses bounded input messages without losing bytes',
+  { skip: !unix },
+  async (t) => {
+    const { manager, events } = await setup(t);
+    const terminal = await shell(manager, events);
+    const payload = '😃中'.repeat(50000);
+    const expected = createHash('sha256').update(payload).digest('hex');
+    const script = `let b=Buffer.alloc(0);process.stdin.setRawMode(true);console.log('INPUT_READY');process.stdin.on('data',d=>{b=Buffer.concat([b,d]);if(b.length>=${Buffer.byteLength(payload)}){console.log('INPUT_SHA:'+require('node:crypto').createHash('sha256').update(b).digest('hex'));process.stdin.setRawMode(false);process.exit(0)}})`;
+    await manager.write(owner, terminal.id, node(script));
+    await wait(
+      () => events.some((event) => event.data?.includes('INPUT_READY')),
+      'raw input reader',
+    );
+    for (const part of terminalInputChunks(payload))
+      await manager.write(owner, terminal.id, part);
+    await wait(
+      () =>
+        events.some((event) => event.data?.includes(`INPUT_SHA:${expected}`)),
+      'large input actual checksum',
+    );
+  },
+);
+
+test(
   'real exit code and stop requests are distinct and ordered',
   { skip: !unix },
   async (t) => {
@@ -243,13 +270,14 @@ test(
     const terminal = await shell(manager, events);
     const expected = Array.from(
       { length: 2000 },
-      (_, index) => `ROW_${String(index).padStart(4, '0')}_${'x'.repeat(160)}`,
+      (_, index) =>
+        `ROW_${String(index).padStart(4, '0')}_${'x'.repeat(160)}😃`,
     ).join('\r\n');
     await manager.write(
       owner,
       terminal.id,
       node(
-        "for(let i=0;i<2000;i++)console.log('ROW_'+String(i).padStart(4,'0')+'_'+'x'.repeat(160));console.log('LOG_COMPLETE')",
+        "for(let i=0;i<2000;i++)console.log('ROW_'+String(i).padStart(4,'0')+'_'+'x'.repeat(160)+'😃');console.log('LOG_COMPLETE')",
       ),
     );
     await wait(
@@ -355,6 +383,7 @@ test(
       'real service ready',
     );
     assert.equal(await portAvailable(port), false);
+    assert.equal(await (await fetch(`http://127.0.0.1:${port}`)).text(), 'ok');
     await manager.close(owner, terminal.id);
     await wait(() => portAvailable(port), 'service port released');
     const restarted = await manager.restart(owner, terminal.id);
@@ -370,6 +399,7 @@ test(
       async () => !(await portAvailable(port)),
       'service ready after explicit restart input',
     );
+    assert.equal(await (await fetch(`http://127.0.0.1:${port}`)).text(), 'ok');
     await manager.close(owner, restarted.id);
     await wait(() => portAvailable(port), 'restarted service released');
   },
@@ -388,12 +418,19 @@ test(
     ) as TerminalSnapshot;
     metadata.status = 'running';
     metadata.pid = process.pid;
+    const lastSequence = metadata.lastSequence;
+    metadata.lastSequence = 0;
     await writeFile(path, JSON.stringify(metadata));
+    await appendFile(
+      join(logRoot, terminal.id, 'events.jsonl'),
+      '{"sequence":999999',
+    );
     const restored = new TerminalManager(options, () => undefined);
     t.after(() => restored.dispose());
     const saved = (await restored.list(owner))[0]!;
     assert.equal(saved.status, 'interrupted');
     assert.equal(saved.pid, undefined);
+    assert.equal(saved.lastSequence, lastSequence);
     assert.match(saved.error!, /not confirmed/);
     await restored.close(owner, terminal.id);
   },

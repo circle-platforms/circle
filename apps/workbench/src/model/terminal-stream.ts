@@ -57,3 +57,13 @@ export async function readTerminalOutput(
       throw Error('terminal output could not be recovered');
   }
 }
+
+/** Long paste uses bounded IPC messages without splitting a Unicode character. */
+export function* terminalInputChunks(data: string): Generator<string> {
+  for (let offset = 0; offset < data.length;) {
+    let end = Math.min(offset + 8192, data.length);
+    if (end < data.length && /[\uD800-\uDBFF]/.test(data[end - 1]!)) end--;
+    yield data.slice(offset, end);
+    offset = end;
+  }
+}

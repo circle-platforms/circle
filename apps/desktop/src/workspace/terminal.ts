@@ -115,6 +115,8 @@ interface Entry {
   resolveDone: () => void;
   persist: Promise<void>;
   ownedProcesses: Map<number, string>;
+  eventBytes: number;
+  offsets: Map<number, number>;
   closing?: Promise<TerminalSnapshot>;
 }
 
@@ -392,19 +394,27 @@ export class TerminalManager {
         bytes += size(event);
       }
     } else {
+      let start = 0;
+      for (const [sequence, offset] of entry.offsets)
+        if (sequence <= afterSequence + 1 && offset > start) start = offset;
+      let offset = start;
       const input = createReadStream(
         join(this.#options.logRoot, id, 'events.jsonl'),
-        { encoding: 'utf8' },
+        { encoding: 'utf8', start },
       );
       const lines = createInterface({ input, crlfDelay: Infinity });
       try {
         for await (const line of lines) {
+          const lineOffset = offset;
+          offset += Buffer.byteLength(line) + 1;
           let event: TerminalEvent;
           try {
             event = JSON.parse(line) as TerminalEvent;
           } catch {
             continue;
           }
+          if ((event.sequence - 1) % 128 === 0)
+            checkpoint(entry, event.sequence, lineOffset);
           if (event.sequence <= afterSequence) continue;
           if (events.length >= limit || bytes > 1024 * 1024) {
             hasMore = true;
@@ -474,18 +484,19 @@ export class TerminalManager {
         );
         try {
           const length = (await eventFile.stat()).size;
+          entry.eventBytes = length;
           const tail = Buffer.alloc(Math.min(length, 128 * 1024));
           await eventFile.read(tail, 0, tail.length, length - tail.length);
-          const final = tail
+          for (const final of tail
             .toString('utf8')
             .split('\n')
             .filter(Boolean)
-            .at(-1);
-          if (final) {
+            .reverse()) {
             try {
               const event = JSON.parse(final) as TerminalEvent;
               if (Number.isSafeInteger(event.sequence))
                 snapshot.lastSequence = event.sequence;
+              break;
             } catch {
               /* A crash can leave a partial last line. */
             }
@@ -536,7 +547,11 @@ export class TerminalManager {
       ...(data !== undefined ? { data } : {}),
       ...(withSnapshot ? { snapshot: clone(s) } : {}),
     };
-    this.#write(entry, entry.events, JSON.stringify(event) + '\n');
+    const line = JSON.stringify(event) + '\n';
+    if ((event.sequence - 1) % 128 === 0)
+      checkpoint(entry, event.sequence, entry.eventBytes);
+    entry.eventBytes += Buffer.byteLength(line);
+    this.#write(entry, entry.events, line);
     entry.ring.push(event);
     entry.ringBytes += size(event);
     const budget = Math.max(
@@ -639,7 +654,14 @@ function makeEntry(snapshot: TerminalSnapshot): Entry {
     resolveDone,
     persist: Promise.resolve(),
     ownedProcesses: new Map(),
+    eventBytes: 0,
+    offsets: new Map([[1, 0]]),
   };
+}
+function checkpoint(entry: Entry, sequence: number, offset: number): void {
+  entry.offsets.set(sequence, offset);
+  if (entry.offsets.size > 8192)
+    entry.offsets.delete(entry.offsets.keys().next().value!);
 }
 function clone<T>(value: T): T {
   return structuredClone(value);

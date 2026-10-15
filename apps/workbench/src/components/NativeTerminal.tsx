@@ -16,6 +16,7 @@ import {
   acceptTerminalEvent,
   mergeTerminalSnapshot,
   readTerminalOutput,
+  terminalInputChunks,
 } from '../model/terminal-stream';
 import { subscribeWorkspace, workspaceCall } from '../model/workspace-client';
 import { Button, IconButton } from './ui';
@@ -229,6 +230,7 @@ export function NativeTerminal({
               role="tab"
               type="button"
               aria-selected={item.id === selected?.id}
+              tabIndex={item.id === selected?.id ? 0 : -1}
               aria-controls={`terminal-${item.id}`}
               title={`${item.cwd} · ${status(item)}`}
               onClick={() => {
@@ -237,6 +239,35 @@ export function NativeTerminal({
                   ...previous,
                   [sessionId]: item.id,
                 }));
+              }}
+              onKeyDown={(event) => {
+                const index = visible.findIndex(
+                  (entry) => entry.id === item.id,
+                );
+                const position =
+                  event.key === 'Home'
+                    ? 0
+                    : event.key === 'End'
+                      ? visible.length - 1
+                      : event.key === 'ArrowLeft'
+                        ? (index + visible.length - 1) % visible.length
+                        : event.key === 'ArrowRight'
+                          ? (index + 1) % visible.length
+                          : -1;
+                const next = visible[position];
+                if (!next) return;
+                event.preventDefault();
+                event.stopPropagation();
+                focusTarget.current = null;
+                setSelected((previous) => ({
+                  ...previous,
+                  [sessionId]: next.id,
+                }));
+                event.currentTarget.parentElement
+                  ?.querySelector<HTMLButtonElement>(
+                    `[aria-controls="terminal-${next.id}"]`,
+                  )
+                  ?.focus();
               }}
             >
               <span
@@ -350,6 +381,11 @@ export function NativeTerminal({
           <Button onClick={() => setReload((value) => value + 1)}>
             {t('retry')}
           </Button>
+        </div>
+      )}
+      {selected?.error && (
+        <div className="native-terminal-error" role="alert">
+          {selected.error}
         </div>
       )}
       {!selected && !error && (
@@ -515,10 +551,11 @@ function TerminalSurface({
       if (statusRef.current !== 'running') return;
       sendInput = sendInput
         .then(async () => {
-          await workspaceCall(snapshot.sessionId, 'terminal', 'write', {
-            id: snapshot.id,
-            data,
-          });
+          for (const part of terminalInputChunks(data))
+            await workspaceCall(snapshot.sessionId, 'terminal', 'write', {
+              id: snapshot.id,
+              data: part,
+            });
         })
         .catch(showError);
     });
@@ -534,11 +571,11 @@ function TerminalSurface({
       if (
         event.type === 'keydown' &&
         (event.metaKey || (event.ctrlKey && event.shiftKey)) &&
-        event.key.toLowerCase() === 'c' &&
-        terminal.hasSelection()
+        event.key.toLowerCase() === 'c'
       ) {
         event.preventDefault();
-        void copyText(terminal.getSelection()).catch(showError);
+        if (terminal.hasSelection())
+          void copyText(terminal.getSelection()).catch(showError);
         return false;
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f')
