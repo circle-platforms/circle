@@ -17,8 +17,33 @@ export function DebugPanel({
   sessionId: string;
   onFile?: (path: string, line?: number) => void;
 }) {
-  const activeSession = useRef(sessionId);
-  activeSession.current = sessionId;
+  const context = useRef({
+    sessionId,
+    epoch: 0,
+    pause: 0,
+    inspection: 0,
+    key: '',
+  });
+  const refreshSequence = useRef(0);
+  const evaluationSequence = useRef(0);
+  if (context.current.sessionId !== sessionId) {
+    context.current = {
+      sessionId,
+      epoch: context.current.epoch + 1,
+      pause: context.current.pause + 1,
+      inspection: context.current.inspection + 1,
+      key: '',
+    };
+  }
+  const ticket = (scope: 'session' | 'pause' | 'inspection' = 'pause') => {
+    const expected = { ...context.current };
+    return () =>
+      context.current.sessionId === expected.sessionId &&
+      context.current.epoch === expected.epoch &&
+      (scope === 'session' || context.current.pause === expected.pause) &&
+      (scope !== 'inspection' ||
+        context.current.inspection === expected.inspection);
+  };
   const statuses: Record<string, string> = {
     idle: t('debug idle'),
     starting: t('debug starting'),
@@ -27,11 +52,16 @@ export function DebugPanel({
     stopped: t('debug stopped'),
     failed: t('debug failed'),
   };
-  const [state, setState] = useState<Snapshot>({
+  const [snapshot, setState] = useState<Snapshot & { sessionId: string }>({
+    sessionId,
     status: 'idle',
     output: '',
     breakpoints: {},
   });
+  const state: Snapshot =
+    snapshot.sessionId === sessionId
+      ? snapshot
+      : { status: 'idle', output: '', breakpoints: {} };
   const [program, setProgram] = useState('');
   const [port, setPort] = useState('9229');
   const [args, setArgs] = useState<string[]>([]);
@@ -47,20 +77,36 @@ export function DebugPanel({
   const call = <T,>(method: string, params: Record<string, unknown> = {}) =>
     workspaceCall<T>(sessionId, 'debug', method, params);
   const refresh = () => {
-    const requested = sessionId;
+    const current = ticket('session');
+    const sequence = ++refreshSequence.current;
     return call<Snapshot>('snapshot')
-      .then((s) => {
-        if (activeSession.current === requested) setState(s);
+      .then((next) => {
+        if (!current() || sequence !== refreshSequence.current) return;
+        const key = `${next.status}:${next.pauseId ?? ''}`;
+        if (key !== context.current.key) {
+          context.current.key = key;
+          context.current.pause++;
+          context.current.inspection++;
+          setFrames([]);
+          setScopeList([]);
+          setVariables([]);
+          setResult('');
+        }
+        setState({ ...next, sessionId });
       })
-      .catch((e) => {
-        if (activeSession.current === requested) setError(String(e));
+      .catch((error) => {
+        if (current() && sequence === refreshSequence.current)
+          setError(String(error));
       });
   };
   useEffect(() => {
     setError('');
     setFrames([]);
     setVariables([]);
+    setScopeList([]);
     setResult('');
+    setExpression('');
+    setBusy(false);
     void refresh();
     return subscribeWorkspace((event) => {
       if (event.sessionId === sessionId && event.service === 'debug')
@@ -68,43 +114,91 @@ export function DebugPanel({
     });
   }, [sessionId]);
   useEffect(() => {
+    const current = ticket();
     if (state.status === 'paused')
       void call<any>('stackTrace')
-        .then((r) => setFrames(r.stackFrames ?? []))
-        .catch((e) => setError(String(e)));
+        .then((result) => {
+          if (current()) setFrames(result.stackFrames ?? []);
+        })
+        .catch((error) => {
+          if (current()) setError(String(error));
+        });
     else {
       setFrames([]);
+      setScopeList([]);
       setVariables([]);
+      setResult('');
     }
-  }, [state.status, state.reason, state.pauseId]);
+  }, [
+    sessionId,
+    snapshot.sessionId,
+    state.status,
+    state.reason,
+    state.pauseId,
+  ]);
   async function act(method: string, params: Record<string, unknown> = {}) {
+    const current = ticket('session');
     setBusy(true);
     setError('');
     try {
       await call(method, params);
-      await refresh();
-    } catch (e) {
-      setError(String(e));
+      if (current()) await refresh();
+    } catch (error) {
+      if (current()) setError(String(error));
     } finally {
-      setBusy(false);
+      if (current()) setBusy(false);
+    }
+  }
+  async function loadVariables(variablesReference: number) {
+    context.current.inspection++;
+    const current = ticket('inspection');
+    setVariables([]);
+    try {
+      const result = await call<any>('variables', { variablesReference });
+      if (current()) setVariables(result.variables);
+    } catch (error) {
+      if (current()) setError(String(error));
     }
   }
   async function inspect(frame: any) {
+    context.current.inspection++;
+    const current = ticket('inspection');
+    setScopeList([]);
+    setVariables([]);
     if (frame.source?.path && !frame.source.path.startsWith('<'))
       onFile?.(frame.source.path, frame.line);
     try {
       const scopes = await call<any>('scopes', { frameId: frame.id });
+      if (!current()) return;
       setScopeList(scopes.scopes);
       const initial =
-        scopes.scopes.find((s: any) => !s.expensive) ?? scopes.scopes[0];
+        scopes.scopes.find((scope: any) => !scope.expensive) ??
+        scopes.scopes[0];
       if (initial) {
         const result = await call<any>('variables', {
           variablesReference: initial.variablesReference,
         });
-        setVariables(result.variables);
-      } else setVariables([]);
-    } catch (e) {
-      setError(String(e));
+        if (current()) setVariables(result.variables);
+      }
+    } catch (error) {
+      if (current()) setError(String(error));
+    }
+  }
+  async function evaluate() {
+    const current = ticket();
+    const sequence = ++evaluationSequence.current;
+    setResult('');
+    try {
+      const result = await call<any>('evaluate', {
+        expression,
+        frameId: frames[0]?.id,
+        context: 'repl',
+      });
+      if (current() && sequence === evaluationSequence.current)
+        setResult(result.result);
+    } catch (error) {
+      if (current() && sequence === evaluationSequence.current)
+        setError(String(error));
     }
   }
   return (
@@ -255,13 +349,7 @@ export function DebugPanel({
           {scopeList.map((scope) => (
             <button
               key={scope.variablesReference}
-              onClick={() =>
-                void call<any>('variables', {
-                  variablesReference: scope.variablesReference,
-                })
-                  .then((r) => setVariables(r.variables))
-                  .catch((e) => setError(String(e)))
-              }
+              onClick={() => void loadVariables(scope.variablesReference)}
             >
               {scope.name}
             </button>
@@ -270,13 +358,7 @@ export function DebugPanel({
             <div key={i}>
               <button
                 disabled={!v.variablesReference}
-                onClick={() =>
-                  void call<any>('variables', {
-                    variablesReference: v.variablesReference,
-                  })
-                    .then((r) => setVariables(r.variables))
-                    .catch((e) => setError(String(e)))
-                }
+                onClick={() => void loadVariables(v.variablesReference)}
               >
                 {v.name}
               </button>
@@ -288,13 +370,7 @@ export function DebugPanel({
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          void call<any>('evaluate', {
-            expression,
-            frameId: frames[0]?.id,
-            context: 'repl',
-          })
-            .then((r) => setResult(r.result))
-            .catch((e) => setError(String(e)));
+          void evaluate();
         }}
       >
         <input
