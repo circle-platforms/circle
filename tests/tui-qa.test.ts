@@ -150,23 +150,44 @@ test('a partial reply reports the same output on the turn line and in the footer
     contextInputOf({ usage: answer?.usage }, 'scripted'),
     answer!.usage!.input_tokens,
   );
-  const footer = stripAnsi(footerRow({ usage: answer!.usage! }, '', 80));
+  const footer = stripAnsi(
+    footerRow(
+      {
+        usage: {
+          ...answer!.usage!,
+          estimated_input_tokens: answer!.usage!.input_tokens,
+          estimated_output_tokens: answer!.usage!.output_tokens,
+        },
+      },
+      '',
+      80,
+    ),
+  );
   assert.match(footer, /↓ 236/);
   assert.equal(footer.includes('↑ 0'), false);
-  assert.equal(footer.includes('N/A'), false);
+  assert.equal(footer.includes('cache 0.0%'), false);
+  assert.match(footer, /cache N\/A/);
   assert.equal(answer?.cost?.amount, 0.0035);
-  assert.equal(formatCosts([messageCosts([answer!])]), '$0.0035');
+  assert.equal(formatCosts([messageCosts([answer!])]), '~$0.0035');
   const unpriced = messageCosts([
     answer!,
     {
       id: 'other',
       role: 'assistant',
       content: '',
-      usage: answer!.usage,
+      usage: { ...answer!.usage!, estimated_input_tokens: undefined },
+      interrupted: false,
       cost: { ...answer!.cost!, amount: null, currency: '' },
     },
   ]);
-  assert.equal(formatCosts([unpriced]), '$0.0035+');
+  assert.equal(formatCosts([unpriced]), '~$0.0035+');
+  const estimateOnly = messageCosts([
+    {
+      ...answer!,
+      cost: { ...answer!.cost!, amount: null, currency: '' },
+    },
+  ]);
+  assert.equal(formatCosts([estimateOnly]), 'N/A');
 });
 
 test('renaming a session does not move it above a newer one', async (t) => {

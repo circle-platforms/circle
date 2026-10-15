@@ -23,7 +23,11 @@ import {
 import { httpStatus } from './model_guard.js';
 import { validateAttachments } from './media.js';
 import { readPrompt } from './system_prompt.js';
-import { fallbackTitle, sanitizeGeneratedTitle } from './session_title.js';
+import {
+  fallbackTitle,
+  isNumberFragment,
+  sanitizeGeneratedTitle,
+} from './session_title.js';
 import { tokenLen } from './middleware/tool_result_prune.js';
 function titleTrace(message: string): void {
   if (!process.env.CIRCLE_DEBUG) return;
@@ -323,11 +327,20 @@ export class Harness {
     let first = true;
     do {
       signal.throwIfAborted();
-      const next = first
-        ? (prompt ?? this.steering.shift() ?? this.followUps.shift())
-        : this.followUps.shift();
-      this.options.beforeTurn?.(next);
+      // Peek, then check the connection, then take the message. Shifting first
+      // drops a queued follow-up when logout throws before the next turn.
+      const upcoming = first
+        ? prompt !== undefined
+          ? prompt
+          : (this.steering[0] ?? this.followUps[0])
+        : this.followUps[0];
+      this.options.beforeTurn?.(upcoming);
       signal.throwIfAborted();
+      const next = first
+        ? prompt !== undefined
+          ? prompt
+          : (this.steering.shift() ?? this.followUps.shift())
+        : this.followUps.shift();
       const result = await this.runTurn(next, signal);
       answer = result.answer;
       addUsage(total, result.usage);
@@ -390,7 +403,21 @@ export class Harness {
       .then((response) => {
         const raw = response.message.content || response.message.thinking || '';
         const title = sanitizeGeneratedTitle(raw);
-        if (!title) {
+        const cleaned = raw
+          .split('\n')
+          .map((row) => row.trim())
+          .find(Boolean)
+          ?.replace(/^["'“”‘’«»]+|["'“”‘’«»]+$/g, '')
+          .replace(/[。．.]+$/g, '')
+          .trim();
+        // `150` from "Write a 1500 word essay" is not a title. Keep the fallback.
+        if (!title || isNumberFragment(title, prompt)) {
+          if (isNumberFragment(title ?? cleaned ?? '', prompt)) {
+            titleTrace(
+              `discarded number fragment ${JSON.stringify(title ?? cleaned)}`,
+            );
+            return;
+          }
           report(
             `empty title (content ${response.message.content.length} chars)`,
           );

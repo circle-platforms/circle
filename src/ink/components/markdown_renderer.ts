@@ -97,10 +97,12 @@ function inline(tokens: Token[], style = ''): Span[] {
   }
   return result;
 }
+// Closing marks, including ” ’ 」 』, do not start a line. Opening marks do not end one.
 const NO_LINE_START = new Set(
-  Array.from(')）]】〕〉》」』、。．，,！？!?：；;:…·'),
+  Array.from(')）]】〕〉》」』、。．，,！？!?：；;:…·”’＂＇»›〞〟}｝'),
 );
-const NO_LINE_END = new Set(Array.from('(（[【〔〈《「『'));
+const NO_LINE_END = new Set(Array.from('(（[【〔〈《「『“‘«‹{｛'));
+const isDigitGlyph = (text: string): boolean => /^\d$/.test(text);
 function rowsFor(
   spans: Span[],
   width = 80,
@@ -128,6 +130,23 @@ function rowsFor(
     line = [];
     used = 0;
   };
+  // An opening mark that would end the previous line stays with this one, when it fits.
+  const pullOpening = (incoming = 0): void => {
+    const prev = rows.at(-1);
+    const ending = prev?.at(-1);
+    if (
+      prev &&
+      prev.length > 1 &&
+      ending &&
+      NO_LINE_END.has(ending.text) &&
+      used + ending.width + incoming <= width
+    ) {
+      prev.pop();
+      line.unshift(ending);
+      used += ending.width;
+      if (!prev.length) rows.pop();
+    }
+  };
   for (const glyph of glyphs) {
     if (glyph.width > width) {
       glyph.text = '�';
@@ -138,32 +157,47 @@ function rowsFor(
       continue;
     }
     if (used + glyph.width > width && line.length) {
-      const space = wordWrap
-        ? line.map((item) => item.text).lastIndexOf(' ')
-        : -1;
-      if (space > 0) {
-        const tail = line.slice(space + 1);
-        line = line.slice(0, space);
-        flush();
-        line = tail;
-        used = tail.reduce((sum, item) => sum + item.width, 0);
-      } else flush();
-      // The overflowing space is the wrap. When an earlier space already broke
-      // the line and this space still fits, keep it: an em dash often lands the
-      // previous word on the boundary, and dropping the space glues the next word.
-      if (
-        glyph.text === ' ' &&
-        wordWrap &&
-        (used === 0 || used + glyph.width > width)
-      )
-        continue;
-      // Opening punctuation stays with what follows it, so a line does not end on （.
-      const prev = rows.at(-1);
-      const ending = prev?.at(-1);
-      if (prev && prev.length > 1 && ending && NO_LINE_END.has(ending.text)) {
-        prev.pop();
-        line.unshift(ending);
-        used += ending.width;
+      // `395` stays on one line when the whole run fits the next line.
+      let movedDigits = false;
+      if (isDigitGlyph(glyph.text) && isDigitGlyph(line.at(-1)?.text ?? '')) {
+        let start = line.length - 1;
+        while (start > 0 && isDigitGlyph(line[start - 1]!.text)) start--;
+        const run = line.slice(start);
+        const runWidth =
+          run.reduce((sum, item) => sum + item.width, 0) + glyph.width;
+        if (start > 0 && runWidth <= width) {
+          line = line.slice(0, start);
+          if (line.at(-1)?.text === ' ') line.pop();
+          if (line.length) flush();
+          else used = 0;
+          line = [...run];
+          used = runWidth - glyph.width;
+          pullOpening(glyph.width);
+          movedDigits = true;
+        }
+      }
+      if (!movedDigits) {
+        const space = wordWrap
+          ? line.map((item) => item.text).lastIndexOf(' ')
+          : -1;
+        if (space > 0) {
+          const tail = line.slice(space + 1);
+          line = line.slice(0, space);
+          flush();
+          line = tail;
+          used = tail.reduce((sum, item) => sum + item.width, 0);
+        } else flush();
+        // The overflowing space is the wrap. When an earlier space already broke
+        // the line and this space still fits, keep it: an em dash often lands the
+        // previous word on the boundary, and dropping the space glues the next word.
+        if (
+          glyph.text === ' ' &&
+          wordWrap &&
+          (used === 0 || used + glyph.width > width)
+        )
+          continue;
+        // Opening punctuation stays with what follows it, so a line does not end on （.
+        pullOpening(glyph.width);
       }
     }
     // Closing punctuation stays with the word before it, so a line does not start on ）.

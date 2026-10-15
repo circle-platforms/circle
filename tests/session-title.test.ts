@@ -8,7 +8,11 @@ import { CheckpointStore } from '../src/checkpoint_store.js';
 import { ExtensionHost } from '../src/extensions.js';
 import { Harness } from '../src/harness.js';
 import { AgentRuntime } from '../src/runtime.js';
-import { fallbackTitle, sanitizeGeneratedTitle } from '../src/session_title.js';
+import {
+  fallbackTitle,
+  isNumberFragment,
+  sanitizeGeneratedTitle,
+} from '../src/session_title.js';
 import { defaultSettings, saveCredentials } from '../src/settings.js';
 import { SessionApp } from '../src/tui/session_app.js';
 import type { ChatModel, ModelRequest, ModelResponse } from '../src/types.js';
@@ -68,7 +72,22 @@ test('generated titles keep one line and drop a refusal', () => {
   assert.equal(sanitizeGeneratedTitle('  "Login bug"\nextra'), 'Login bug');
   assert.equal(sanitizeGeneratedTitle('会话标题。'), '会话标题');
   assert.equal(sanitizeGeneratedTitle('Sorry, I cannot do that'), undefined);
+  assert.equal(sanitizeGeneratedTitle('150'), undefined);
+  assert.equal(sanitizeGeneratedTitle('1500.'), undefined);
   assert.equal(sanitizeGeneratedTitle('   '), undefined);
+  const essay =
+    'Write a 1500 word essay about the history of roman citizenship and the legal meaning of that status across the empire';
+  const fallback = fallbackTitle(essay);
+  assert.match(fallback, /1500/);
+  assert.notEqual(fallback, '150');
+  assert.equal(isNumberFragment('150', essay), true);
+  assert.equal(isNumberFragment('about 150', essay), true);
+  assert.equal(isNumberFragment('Roman citizenship', essay), false);
+  const cjkNumber = fallbackTitle(
+    '一二三四五六七八九十一二三四五六七八1500' + '九'.repeat(30),
+  );
+  assert.match(cjkNumber, /1500/);
+  assert.equal(/150(?!0)/.test(cjkNumber), false);
   const long = sanitizeGeneratedTitle(
     'Refactor the session title generator so the sidebar shows a short summary of the first prompt',
   );
@@ -239,6 +258,27 @@ test('the runtime wrapper keeps side requests and can name the session', async (
     model.requests.filter((request) => request.maxTokens === 128).length,
     1,
   );
+});
+
+test('a numeric fragment is discarded and the fallback keeps the whole number', async (t) => {
+  const root = scratch(t);
+  const prompt =
+    'Write a 1500 word essay about the history of roman citizenship and why it mattered';
+  const model = new TitleModel('partial essay', '150');
+  const { harness: run, store, session } = harness(root, model);
+  cleanup(t, () => store.close());
+  const notes: string[] = [];
+  run.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as { event?: string } | undefined;
+    if (notice?.event === 'title_failed') notes.push('failed');
+  });
+  await run.run(prompt);
+  model.releaseTitle();
+  await new Promise((resolve) => setImmediate(resolve));
+  const title = store.get(session.id)!.title;
+  assert.match(title, /1500/);
+  assert.notEqual(title, '150');
+  assert.deepEqual(notes, []);
 });
 
 test('a refusal leaves the fallback title', async (t) => {

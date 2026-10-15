@@ -161,10 +161,18 @@ function meterParts(meters: Meters): {
   lines: string[];
 } {
   const usage = meters.usage;
-  const cached = Math.min(usage.cache_read_tokens, usage.input_tokens);
-  const rate = usage.input_tokens ? (cached / usage.input_tokens) * 100 : 0;
+  // A stopped turn stores cache reads as 0 because the endpoint never reported
+  // them. That is not a measured 0.0% hit rate.
+  const estimatedIn = usage.estimated_input_tokens ?? 0;
+  const measuredIn = Math.max(0, usage.input_tokens - estimatedIn);
+  const cacheUnknown = estimatedIn > 0 && measuredIn === 0;
+  const cached = Math.min(
+    usage.cache_read_tokens,
+    measuredIn || usage.input_tokens,
+  );
+  const rate = measuredIn ? (cached / measuredIn) * 100 : 0;
   const tokens = `↑ ${formatTokens(usage.input_tokens)} · ↓ ${formatTokens(usage.output_tokens)}`;
-  const cache = `cache ${rate.toFixed(1)}%`;
+  const cache = cacheUnknown ? 'cache N/A' : `cache ${rate.toFixed(1)}%`;
   const cost = meters.costText ?? '';
   const head = [tokens, ...(cost ? [cost] : []), cache].join(' · ');
   let context = '';
@@ -188,6 +196,25 @@ function meterParts(meters: Meters): {
     lines,
   };
 }
+// Shorten on a separator, then on a space, and only then mid-token with an ellipsis.
+function fitSegment(text: string, width: number): string {
+  const source = text.trimEnd();
+  if (width <= 0) return '';
+  if (stringWidth(source) <= width) return source;
+  let rest = source;
+  while (stringWidth(rest) > width) {
+    const at = rest.lastIndexOf(' · ');
+    if (at <= 0) break;
+    rest = rest.slice(0, at);
+  }
+  if (stringWidth(rest) <= width) return rest;
+  const space = rest.lastIndexOf(' ');
+  if (space > 0) {
+    const word = rest.slice(0, space).trimEnd();
+    if (word && stringWidth(word) <= width) return fitSegment(word, width);
+  }
+  return truncate(rest, width).trimEnd();
+}
 // The footer: the meters, and a flash at the right for a second or two. While a flash shows,
 // the meters' tail gives way and they are not coloured. Without a flash, extensions' status
 // lines sit at the right; when they do not all fit beside the meters, none is shown.
@@ -207,12 +234,12 @@ export function footerRow(
   const plain = stringWidth(fitted) <= room ? fitted : truncate(fitted, room);
   const showsContext = Boolean(context) && plain.includes(context);
   if (flash) {
-    const shown = truncate(flash, Math.max(1, width - 2));
+    // The flash is its own segment. Meters give way on a ` · ` boundary, so a
+    // narrow row does not become `cach  cleared`.
+    const shown = fitSegment(flash, Math.max(1, width - 2));
     const room = width - 1 - stringWidth(shown) - 3;
     if (room < 12) return p.faint + ' ' + shown + p.reset;
-    let left = plain;
-    while (stringWidth(left) > room)
-      left = Array.from(left).slice(0, -1).join('');
+    const left = fitSegment(fitted, room);
     const gap = Math.max(
       1,
       width - 1 - stringWidth(left) - stringWidth(shown) - 1,

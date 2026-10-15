@@ -156,5 +156,10 @@ for (const scopedRun of [false, true])
     await app.command('models', 'nosuch-model-x');
     assert.match(app.state.flash, /model set to nosuch-model-x/);
     assert.match(app.state.flash, /not listed by this endpoint/);
+    assert.equal(app.state.flash.includes('  '), false, app.state.flash);
+    const transcript = app.state.notices.at(-1) ?? '';
+    assert.match(transcript, /model set to nosuch-model-x/);
+    assert.match(transcript, /not listed by this endpoint/);
+    assert.equal(transcript.includes('  '), false, transcript);
     assert.equal(runtime.harness.model.model, 'nosuch-model-x');
   });

@@ -11,6 +11,13 @@ export interface Usage {
   cache_read_tokens: number;
   cache_write_tokens?: number;
   cache_write_1h_tokens?: number;
+  /**
+   * Input tokens included above that a stopped turn estimated. Not stored on a
+   * message: `stats` fills it when it adds an interrupted reply.
+   */
+  estimated_input_tokens?: number;
+  /** Output tokens included above that a stopped turn estimated. */
+  estimated_output_tokens?: number;
 }
 export interface Message {
   id: string;

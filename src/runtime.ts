@@ -1157,8 +1157,21 @@ export class AgentRuntime {
   } {
     const messages = this.harness.messages;
     const usage = emptyUsage();
+    let estimatedIn = 0;
+    let estimatedOut = 0;
+    const countEstimate = (message: {
+      interrupted?: boolean;
+      usage?: import('./types.js').Usage;
+    }): void => {
+      if (!message.interrupted || !message.usage) return;
+      estimatedIn += message.usage.input_tokens;
+      estimatedOut += message.usage.output_tokens;
+    };
     for (const message of messages)
-      if (message.usage) addUsage(usage, message.usage);
+      if (message.usage) {
+        addUsage(usage, message.usage);
+        countEstimate(message);
+      }
     const costs = messageCosts(messages);
     const compactions = new UsageCostTotals();
     const state = this.store.contextState(this.session.id);
@@ -1168,7 +1181,8 @@ export class AgentRuntime {
       for (const message of messages)
         if (message.usage) {
           addUsage(usage, message.usage);
-          compactions.add(message.cost);
+          countEstimate(message);
+          compactions.add(message.cost, message.interrupted === true);
         }
       const childState = this.store.contextState(id);
       const calls =
@@ -1200,6 +1214,18 @@ export class AgentRuntime {
       costs.amounts[currency] = (costs.amounts[currency] ?? 0) + amount;
     costs.calls += summary.calls;
     costs.unpriced_calls += summary.unpriced_calls;
+    if (summary.estimated_amounts) {
+      costs.estimated_amounts ??= {};
+      for (const [currency, amount] of Object.entries(
+        summary.estimated_amounts,
+      ))
+        costs.estimated_amounts[currency] =
+          (costs.estimated_amounts[currency] ?? 0) + amount;
+    }
+    if (estimatedIn || estimatedOut) {
+      usage.estimated_input_tokens = estimatedIn;
+      usage.estimated_output_tokens = estimatedOut;
+    }
     return {
       messages: messages.length,
       toolCalls: messages.reduce(

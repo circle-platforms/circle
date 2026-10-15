@@ -304,6 +304,15 @@ test('footer meters colour the context yellow from 70% and red from 90%, and a f
     assert.equal(stringWidth(flashed), 60);
     assert.match(stripAnsi(flashed), /^ ↑ 36\.6k.* Copied $/);
     assert.ok(!flashed.includes(p.red));
+    const cramped = stripAnsi(
+      footerRow(
+        { usage, contextInput: 91_000, contextWindow: 100_000 },
+        'cleared',
+        24,
+      ),
+    );
+    assert.equal(cramped.includes('cach'), false, cramped);
+    assert.match(cramped, /cleared/);
   }
   // Before the session is connected there are no meters.
   const state = screen();

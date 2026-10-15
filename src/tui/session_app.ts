@@ -2697,10 +2697,14 @@ export class SessionApp {
       const choose = (model: string, extra = ''): void => {
         if (runtime.harness.busy) throw new Error('a turn is running');
         runtime.setModel(model);
-        this.flash(
-          `model set to ${model}${extra} · this session (alt+d in /models saves it)`,
-          4000,
+        // One space around each separator. The footer flash goes away; the
+        // transcript line stays, including `not listed by this endpoint`.
+        const line = `model set to ${model}${extra} · this session`.replace(
+          / {2,}/g,
+          ' ',
         );
+        this.notice(line);
+        this.flash(`${line} (alt+d in /models saves it)`, 4000);
       };
       if (args.trim()) {
         const model = args.trim();
