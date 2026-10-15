@@ -1,3 +1,7 @@
+import { spawn as spawnPty } from 'node-pty';
+import { createWorkspaceCyclePorts } from './workspace/cycle-ports.js';
+import { GitWorkspaceService } from './workspace/git.js';
+import { DeliveryService } from './workspace/delivery.js';
 import {
   connectionModels,
   connectionSummary,
@@ -691,6 +695,42 @@ export class RuntimeController {
                 this.options.credentialStore!.put('github.com', token),
             }
           : undefined,
+        cyclePorts: async (sessionId) => {
+          const git = new GitWorkspaceService(root);
+          const [name, email] = await Promise.all([
+            git.git(['config', '--get', 'user.name']),
+            git.git(['config', '--get', 'user.email']),
+          ]);
+          return createWorkspaceCyclePorts({
+            workspace: root,
+            sessionId,
+            dataDir: join(
+              this.options.dataFolder ?? this.home,
+              'cycle-adapters',
+              identity(root),
+            ),
+            identity: { name: name.trim(), email: email.trim() },
+            getTaskService: () => this.collaboration(root, sessionId),
+            verify: (task, context) =>
+              this.taskVerifier(root, task.spec.baseline)(task, context),
+            withResource: (resource, run) =>
+              this.taskResources.withResource(resource, run),
+            createDelivery: (ownedPath) =>
+              new DeliveryService(ownedPath, tools.ghPath, {
+                spawn: (file, args, options) => spawnPty(file, args, options),
+                credentialStore: this.options.credentialStore
+                  ? {
+                      get: () =>
+                        this.options.credentialStore!.get('github.com'),
+                      put: (token) =>
+                        this.options.credentialStore!.put('github.com', token),
+                    }
+                  : undefined,
+              }),
+            redact: (value) =>
+              this.runtimes.get(sessionId)?.redact(value) ?? value,
+          });
+        },
         workspaceId: identity(root),
         credentialFiles: loadSettings(this.home).credential_files,
         emit: (event) => this.options.emitWorkspaceEvent?.(event),

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { WorkspaceService } from '../../../desktop/src/workspace-protocol';
 import { workspaceCall } from '../model/workspace-client';
 import { Button } from '../components/common';
+import { operationLabel } from '../model/operation-label';
 import { t } from '../i18n';
 
 /** Safe metadata only: request parameters and fingerprints never enter this view. */
@@ -94,13 +95,15 @@ export function PendingOperations({ sessionId }: { sessionId: string }) {
       {loaded && !rows.length && <p>{t('no operations awaiting review')}</p>}
       {rows.map((row) => (
         <article key={row.id}>
-          <strong>
-            {row.service} · {row.method}
-          </strong>
+          <strong>{operationLabel(row.service, row.method)}</strong>
           <p>{new Date(row.createdAt).toLocaleString()}</p>
           <details>
             <summary>{t('operation details')}</summary>
             <dl>
+              <dt>{t('technical operation')}</dt>
+              <dd>
+                {row.service} · {row.method}
+              </dd>
               <dt>{t('session')}</dt>
               <dd>{row.sessionId}</dd>
               <dt>{t('operation')}</dt>

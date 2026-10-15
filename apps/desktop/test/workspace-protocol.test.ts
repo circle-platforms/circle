@@ -24,6 +24,7 @@ test('workspace service dispatch admits explicit capabilities only', () => {
 
 test('native workflow capabilities and recovery use explicit service routes', () => {
   for (const [service, operations] of Object.entries({
+    inputs: ['list', 'resolve'],
     events: ['replay'],
     debug: [
       'launch',
@@ -43,7 +44,7 @@ test('native workflow capabilities and recovery use explicit service routes', ()
         method,
       );
   }
-  for (const service of ['events', 'debug', 'git', 'tasks', 'delivery'])
+  for (const service of ['inputs', 'events', 'debug', 'git', 'tasks', 'delivery'])
     assert.throws(() =>
       validateWorkspaceRequest({ service, method: 'executeRaw' }),
     );

@@ -42,6 +42,7 @@ async function setup(
   t: TestContext,
   replies: ConstructorParameters<typeof ScriptedModel>[0] = [],
   trusted = true,
+  extra: Partial<ConstructorParameters<typeof RuntimeController>[0]> = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), 'circle-controller-services-'));
   const home = join(root, 'home');
@@ -63,6 +64,7 @@ async function setup(
     model,
     emit: (u) => updates.push(u),
     emitWorkspaceEvent: (e) => events.push(e),
+    ...extra,
   });
   const call = (
     name: string,
@@ -874,4 +876,182 @@ test('controller task verification executes a pinned project oracle in an isolat
   assert.equal(task?.state, 'succeeded', JSON.stringify(task));
   assert.equal(await readFile(join(f.workspace, 'answer.txt'), 'utf8'), '0');
   assert.equal(await readFile(join(task.worktree, 'answer.txt'), 'utf8'), '42');
+});
+
+test('controller isolates same-named cycles by session and repairs real PR checks before human merge', async (t) => {
+  const tools = await mkdtemp(join(tmpdir(), 'circle-cycle-gh-'));
+  t.after(() => rm(tools, { recursive: true, force: true }));
+  const gh = join(tools, 'gh');
+  await writeFile(
+    gh,
+    `#!${process.execPath}
+const fs=require('node:fs'),cp=require('node:child_process'),path=require('node:path'),crypto=require('node:crypto');
+const args=process.argv.slice(2), key=crypto.createHash('sha256').update(process.cwd()).digest('hex'), state=path.join(${JSON.stringify(tools)},key+'.json');
+const git=(...args)=>cp.execFileSync('git',args,{encoding:'utf8'}).trim();
+fs.appendFileSync(${JSON.stringify(join(tools, 'calls'))},JSON.stringify(args)+'\\n');
+const pr=()=>({number:1,url:'https://example.invalid/pull/1',isDraft:!fs.existsSync(state+'.ready'),headRefOid:git('rev-parse','HEAD'),headRefName:git('branch','--show-current'),state:'OPEN'});
+if(args[0]==='pr'&&args[1]==='create'){fs.writeFileSync(state,'{}'); console.log('created')}
+else if(args[0]==='pr'&&args[1]==='view'){if(!fs.existsSync(state))process.exit(1);console.log(JSON.stringify(pr()))}
+else if(args[0]==='pr'&&args[1]==='list')console.log('[]');
+else if(args[0]==='pr'&&args[1]==='checks'){const pass=fs.readFileSync('app.cjs','utf8').includes('readyForCI=true');console.log(JSON.stringify([{name:'integration',bucket:pass?'pass':'fail',state:pass?'SUCCESS':'FAILURE',link:'https://example.invalid/actions/runs/19'}]))}
+else if(args[0]==='pr'&&args[1]==='ready'){fs.writeFileSync(state+'.ready','yes');console.log('ready')}
+else if(args[0]==='run'&&args[1]==='view')console.log('CI requires readyForCI=true; repair app.cjs');
+else if(args[0]==='auth')console.log('authenticated');
+else if(args[0]==='--version')console.log('gh version 2.83.2');
+else process.exit(2);
+`,
+    { mode: 0o700 },
+  );
+  const handler = async (request: any) => ({
+    message: request.messages.some((m: any) => m.role === 'tool')
+      ? assistant('candidate ready')
+      : assistant('', [
+          {
+            id: randomUUID(),
+            name: 'write_file',
+            args: {
+              file_path: 'app.cjs',
+              content: `exports.answer=42;exports.readyForCI=${request.messages.some((m: any) => typeof m.content === 'string' && m.content.includes('Repair the failed CI'))};`,
+            },
+          },
+        ]),
+    usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+    },
+  });
+  const f = await setup(t, Array(80).fill(handler), true, {
+    workspaceTools: {
+      nodeExecutable: process.execPath,
+      runtimeExecutable: process.execPath,
+      adapterPath: 'unused',
+      ghPath: gh,
+    },
+  });
+  execFileSync('git', ['-C', f.workspace, 'config', 'user.name', 'Fixture']);
+  execFileSync('git', [
+    '-C',
+    f.workspace,
+    'config',
+    'user.email',
+    'fixture@example.invalid',
+  ]);
+  await mkdir(join(f.workspace, '.circle'));
+  await writeFile(
+    join(f.workspace, 'app.cjs'),
+    'exports.answer=0;exports.readyForCI=false;',
+  );
+  await writeFile(
+    join(f.workspace, 'package.json'),
+    JSON.stringify({ scripts: { test: 'node oracle.cjs' } }),
+  );
+  await writeFile(
+    join(f.workspace, 'oracle.cjs'),
+    "require('node:assert/strict').equal(require('./app.cjs').answer,42)",
+  );
+  await writeFile(
+    join(f.workspace, '.circle/verification.json'),
+    JSON.stringify({
+      version: 1,
+      checks: [
+        {
+          criterion: 'answer equals 42',
+          script: 'test',
+          oraclePaths: ['oracle.cjs'],
+        },
+      ],
+    }),
+  );
+  execFileSync('git', [
+    '-C',
+    f.workspace,
+    'add',
+    'app.cjs',
+    'package.json',
+    'oracle.cjs',
+    '.circle/verification.json',
+  ]);
+  execFileSync('git', ['-C', f.workspace, 'commit', '-qm', 'Baseline']);
+  const remote = join(f.root, 'remote.git');
+  execFileSync('git', ['init', '--bare', '-q', remote]);
+  execFileSync('git', ['-C', f.workspace, 'remote', 'add', 'origin', remote]);
+  execFileSync('git', [
+    '-C',
+    f.workspace,
+    'push',
+    '-q',
+    '-u',
+    'origin',
+    'HEAD',
+  ]);
+  const ownerA = f.controller.snapshot().activeSessionId;
+  await f.call('new-session');
+  const ownerB = f.controller.snapshot().activeSessionId;
+  for (const owner of [ownerA, ownerB]) {
+    const created = await f.service(
+      'cycles',
+      'create',
+      {
+        id: 'same-cycle',
+        operationId: 'create-' + owner,
+        title: 'Implement answer',
+        body: 'Set app answer to42',
+        acceptanceCriteria: ['answer equals 42'],
+      },
+      owner,
+    );
+    assert.equal(created.ok, true, created.error);
+  }
+  const end = Date.now() + 30000;
+  const final = new Map<string, any>();
+  while (Date.now() < end) {
+    for (const interaction of f.controller
+      .snapshot()
+      .interactions.filter((i) => i.status === 'pending'))
+      await f.call(
+        'answer',
+        {
+          id: interaction.id,
+          revision: interaction.revision,
+          answer: 'approve',
+        },
+        interaction.sessionId,
+      );
+    for (const owner of [ownerA, ownerB]) {
+      const advanced = await f.service(
+        'cycles',
+        'advance',
+        { id: 'same-cycle' },
+        owner,
+      );
+      assert.equal(advanced.ok, true, advanced.error);
+      final.set(owner, advanced.data);
+    }
+    if ([...final.values()].every((c) => c.state === 'pending_human_merge'))
+      break;
+    await delay(30);
+  }
+  assert.deepEqual(
+    [...final.values()].map((c) => c.state),
+    ['pending_human_merge', 'pending_human_merge'],
+    JSON.stringify([...final.values()]),
+  );
+  const tasks = await f.service('tasks', 'list', {}, ownerA);
+  const owners = new Set(
+    (tasks.data as any[]).map((task) => task.spec.sessionId),
+  );
+  assert.ok(owners.has(ownerA) && owners.has(ownerB));
+  assert.ok(
+    (tasks.data as any[]).length >= 4,
+    'both cycles spawned independent repair tasks',
+  );
+  assert.equal(
+    await readFile(join(f.workspace, 'app.cjs'), 'utf8'),
+    'exports.answer=0;exports.readyForCI=false;',
+  );
+  const calls = await readFile(join(tools, 'calls'), 'utf8');
+  assert.ok(calls.includes('"ready"'));
+  assert.equal(calls.includes('"merge"'), false);
 });

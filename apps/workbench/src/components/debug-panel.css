@@ -89,3 +89,27 @@
   background: var(--surface);
   padding: 8px;
 }
+
+.debug-launch-options {
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.debug-launch-options summary {
+  cursor: pointer;
+}
+.debug-launch-options p {
+  color: var(--muted);
+}
+.debug-argument,
+.debug-entry-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+.debug-entry-option input {
+  flex: 0;
+  min-width: auto;
+}

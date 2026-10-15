@@ -1,5 +1,6 @@
 /** Native workspace services have their own streams, independent of chat snapshots. */
 export type WorkspaceService =
+  | 'inputs'
   | 'operations'
   | 'cycles'
   | 'events'
@@ -32,6 +33,7 @@ export interface WorkspaceServiceEvent {
 }
 
 const methods: Record<WorkspaceService, ReadonlySet<string>> = {
+  inputs: new Set(['list', 'resolve']),
   operations: new Set(['list', 'review']),
   cycles: new Set(['list', 'snapshot', 'create', 'advance', 'retryCI']),
   events: new Set(['replay']),

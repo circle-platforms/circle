@@ -1,3 +1,4 @@
+import type { BrowserDiagnosticEvent } from './browser-diagnostics-contracts';
 import { BrowserDiagnostics } from './browser-diagnostics';
 import { validateBrowserDiagnosticRequest } from './browser-diagnostics-contracts';
 import {
@@ -20,6 +21,7 @@ import {
   WebContentsView,
   dialog as systemDialog,
   nativeTheme,
+  nativeImage,
   type Certificate,
   type Rectangle,
   type Session,
@@ -175,6 +177,7 @@ interface Warning {
 }
 interface Tab {
   id: string;
+  emulatedViewport?: { width: number; height: number };
   view: WebContentsView;
   contents: WebContents;
   ready: Promise<void>;
@@ -324,6 +327,7 @@ export class BrowserSessions {
     private downloadsDir = downloadsFolder(),
     // The conversation's mode (manual, accept-edits, plan or auto), as the runtime has it
     private modeOf: (id: string) => string | undefined = () => undefined,
+    private emitDiagnostics: (event: BrowserDiagnosticEvent) => void = () => {},
   ) {
     this.trusted = new TrustedCertificates(trustFile);
   }
@@ -594,9 +598,16 @@ export class BrowserSessions {
     this.prepareSession(conversation, contents.session);
     this.handle(conversation, tab);
     contents.debugger.attach('1.3');
-    tab.diagnostics = new BrowserDiagnostics((method, params) =>
-      contents.debugger.sendCommand(method, params),
+    tab.diagnostics = new BrowserDiagnostics(
+      (method, params) => contents.debugger.sendCommand(method, params),
+      (event) =>
+        this.emitDiagnostics({
+          ...event,
+          sessionId: conversation.id,
+          tab: tab.id,
+        }),
     );
+    contents.once('destroyed', () => tab.diagnostics?.dispose());
     const enableDiagnostics = () => tab.diagnostics!.enable();
     contents.on('devtools-closed', () => {
       void (async () => {
@@ -622,6 +633,7 @@ export class BrowserSessions {
           breakpoint.verified = !!restored.locations?.length;
         }
         tab.diagnostics!.state.owner = 'circle';
+        tab.diagnostics!.resetEpoch();
         tab.screenshot = undefined;
         conversation.events.push(
           'devtools closed; browser observations must be refreshed',
@@ -1522,12 +1534,27 @@ export class BrowserSessions {
     this.visibility(conversation);
     return this.state(id);
   }
+  clearDiagnosticSubscriptions() {
+    for (const conversation of this.conversations.values())
+      for (const tab of conversation.tabs.values())
+        tab.diagnostics?.clearWatches();
+  }
   async diagnostics(idValue: unknown, request: unknown) {
     const id = this.validId(idValue);
     const input = validateBrowserDiagnosticRequest(request);
     const conversation = this.conversation(id);
-    const tab = this.activeTab(conversation);
+    const tab =
+      input.action === 'watch'
+        ? conversation.tabs.get(input.tab)
+        : this.activeTab(conversation);
+    if (!tab) throw Error('browser tab no longer exists');
     await tab.ready;
+    if (input.action === 'watch')
+      return tab.diagnostics!.watch(
+        input.subscription,
+        input.domains,
+        input.enabled,
+      );
     if (
       input.action !== 'read' &&
       (conversation.operating ||
@@ -1539,12 +1566,17 @@ export class BrowserSessions {
       this.control(id, 'take');
       // Human-only API: no model tool can invoke this explicit ownership handoff.
       tab.diagnostics!.state.owner = 'devtools';
+      tab.diagnostics!.resetEpoch();
       tab.screenshot = undefined;
       tab.contents.openDevTools({ mode: 'detach', activate: true });
       return { state: tab.diagnostics!.state };
     }
     const result = await tab.diagnostics!.request(input, tab.contents.getURL());
     if (input.action === 'viewport') {
+      tab.emulatedViewport =
+        input.width === undefined
+          ? undefined
+          : { width: input.width, height: input.height! };
       tab.screenshot = undefined;
       conversation.events.push(
         'browser viewport changed; take a new snapshot and screenshot before using coordinates',
@@ -2167,12 +2199,31 @@ export class BrowserSessions {
         signal,
       );
       const { image, attempts, retryErrors } = await this.limit(
-        captureFrame(() =>
-          tab.contents.capturePage(undefined, {
+        captureFrame(async () => {
+          if (tab.emulatedViewport) {
+            // Native capturePage clips to the panel bounds. CDP captures the
+            // emulated CSS viewport even when the panel itself is narrower.
+            const { data } = await tab.contents.debugger.sendCommand(
+              'Page.captureScreenshot',
+              {
+                format: 'png',
+                captureBeyondViewport: true,
+                fromSurface: true,
+                clip: {
+                  x: capturedState.scrollX ?? 0,
+                  y: capturedState.scrollY ?? 0,
+                  ...tab.emulatedViewport,
+                  scale: 1,
+                },
+              },
+            );
+            return nativeImage.createFromBuffer(Buffer.from(data, 'base64'));
+          }
+          return tab.contents.capturePage(undefined, {
             stayAwake: true,
             stayHidden: !tab.view.getVisible(),
-          }),
-        ),
+          });
+        }),
         signal,
         10000,
       );

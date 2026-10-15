@@ -94,6 +94,7 @@ export async function runNativeEditorIsolation({ page, workspace, output }) {
   assert.doesNotMatch(await disk(b), /DOCUMENT_A_ONLY|DOCUMENT_A_UNSAVED/);
   assert.equal(await disk(a), files[a], 'saving B cannot save A');
   await open(a, 'DOCUMENT_A_UNSAVED');
+  await page.locator('.file-view .view-lines').first().click();
   await page.keyboard.press(`${modifier}+z`);
   await until(
     async () => !(await visibleText()).includes('DOCUMENT_A_UNSAVED'),
@@ -106,6 +107,7 @@ export async function runNativeEditorIsolation({ page, workspace, output }) {
   );
   assert.match(await disk(b), /DOCUMENT_B_SAVED/, 'A Undo cannot undo B');
   await open(b, 'DOCUMENT_B_SAVED');
+  await page.locator('.file-view .view-lines').first().click();
   await page.keyboard.press(`${modifier}+z`);
   await until(
     async () => !(await visibleText()).includes('DOCUMENT_B_SAVED'),

@@ -59,6 +59,13 @@ const bridge: DesktopBridge = {
   windowControl: (action) =>
     ipcRenderer.invoke('circle:window-control', action),
   openExternal: (url) => ipcRenderer.invoke('circle:open-external', url),
+  onBrowserDiagnosticEvent: (listener) => {
+    const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
+      listener(value);
+    ipcRenderer.on('circle:browser-diagnostic-event', handler);
+    return () =>
+      ipcRenderer.removeListener('circle:browser-diagnostic-event', handler);
+  },
   browserDiagnostics: (id, request) =>
     ipcRenderer
       .invoke('circle:browser-diagnostics', id, request)

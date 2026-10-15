@@ -80,7 +80,7 @@ test('trusted cycle ports advance automatically without renderer advance calls',
     runtimeExecutable: process.execPath,
     adapterPath: 'unused',
     ghPath: 'unused',
-    cyclePorts: ports,
+    cyclePorts: () => ports,
     cycleIntervalMs: 10,
     emit: () => {},
   });
@@ -149,6 +149,168 @@ test('cycles without trusted execution ports fail clearly instead of reporting s
   });
   try {
     await assert.rejects(service.call('s', 'cycles', 'list'), /unavailable/);
+  } finally {
+    await service.dispose();
+    await rm(root, { recursive: true, force: true });
+    await rm(data, { recursive: true, force: true });
+  }
+});
+test('session factories isolate matching cycle ids and stop only the released owner', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-cycle-owner-'));
+  const data = await mkdtemp(path.join(tmpdir(), 'circle-cycle-owner-data-'));
+  const progressed = new Set<string>();
+  const actions: string[] = [];
+  const created: string[] = [];
+  const factory = (owner: string): CyclePorts => {
+    created.push(owner);
+    return {
+      tasks: {
+        create: async () => {
+          actions.push(owner + ':create');
+          return ['task-' + owner];
+        },
+        status: async () => (progressed.has(owner) ? 'passed' : 'pending'),
+        merge: async () => {
+          actions.push(owner + ':merge');
+          return { status: 'merged', workspace: root };
+        },
+      },
+      verify: async () => ({
+        passed: true,
+        head: 'head-' + owner,
+        paths: [],
+        evidence: [
+          {
+            criterion: 'works',
+            status: 'passed',
+            source: 'independent-review',
+            detail: 'owner-bound fixture',
+          },
+        ],
+      }),
+      git: {
+        snapshot: async () => ({
+          head: 'head-' + owner,
+          revision: 'revision-' + owner,
+          branch: 'codex/' + owner,
+          dirty: false,
+        }),
+        commit: async () => {
+          throw Error('not needed');
+        },
+        push: async () => {
+          actions.push(owner + ':push');
+        },
+      },
+      delivery: {
+        publish: async () => {
+          actions.push(owner + ':publish');
+          return {
+            url: 'https://github.com/example/project/pull/1',
+            head: 'head-' + owner,
+          };
+        },
+        checks: async () => ({
+          head: 'head-' + owner,
+          checks: [{ name: 'tests', bucket: 'pass' }],
+        }),
+        logs: async () => 'owner logs',
+        retry: async () => {},
+        ready: async () => {
+          actions.push(owner + ':ready');
+        },
+      },
+    };
+  };
+  const service = new WorkspaceServices({
+    workspaceRoot: root,
+    dataDir: data,
+    nodeExecutable: process.execPath,
+    runtimeExecutable: process.execPath,
+    adapterPath: 'unused',
+    ghPath: 'unused',
+    cyclePorts: async (owner) => factory(owner),
+    cycleIntervalMs: 10,
+    emit: () => {},
+  });
+  try {
+    for (const owner of ['a', 'b'])
+      await service.call(owner, 'cycles', 'create', {
+        id: 'same-cycle-id',
+        operationId: 'same-operation-id',
+        title: owner,
+        body: '',
+        acceptanceCriteria: ['works'],
+      });
+    assert.deepEqual(created, ['a', 'b']);
+    for (let i = 0; i < 100; i++) {
+      const allA = (await service.call('a', 'cycles', 'list')) as CycleRecord[];
+      const allB = (await service.call('b', 'cycles', 'list')) as CycleRecord[];
+      assert.equal(allA.length, 1);
+      assert.equal(allB.length, 1);
+      assert.equal(allA[0].title, 'a');
+      assert.equal(allB[0].title, 'b');
+      if (allA[0].state === 'working' && allB[0].state === 'working') break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.equal(await service.hasActiveSession('a'), true);
+    assert.equal(await service.hasActiveSession('b'), true);
+    await service.releaseSession('a');
+    assert.equal(await service.hasActiveSession('a'), false);
+    await assert.rejects(service.call('a', 'cycles', 'list'), /closed/);
+    progressed.add('a');
+    progressed.add('b');
+    for (let i = 0; i < 200; i++) {
+      const allB = (await service.call('b', 'cycles', 'list')) as CycleRecord[];
+      if (allB[0].state === 'pending_human_merge') break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.ok(actions.includes('b:ready'));
+    assert.ok(!actions.includes('a:merge'));
+    assert.ok(!actions.includes('a:push'));
+    const events = (await service.replay()).events.filter(
+      (event) => event.service === 'cycles',
+    );
+    assert.ok(events.some((event) => event.sessionId === 'a'));
+    assert.ok(events.some((event) => event.sessionId === 'b'));
+    assert.equal(await service.hasActiveSession('b'), false);
+  } finally {
+    await service.dispose();
+    await rm(root, { recursive: true, force: true });
+    await rm(data, { recursive: true, force: true });
+  }
+});
+test('a failed cycle factory does not trap session cleanup and can be retried', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-cycle-factory-fail-'));
+  const data = await mkdtemp(
+    path.join(tmpdir(), 'circle-cycle-factory-fail-data-'),
+  );
+  let calls = 0;
+  const service = new WorkspaceServices({
+    workspaceRoot: root,
+    dataDir: data,
+    nodeExecutable: process.execPath,
+    runtimeExecutable: process.execPath,
+    adapterPath: 'unused',
+    ghPath: 'unused',
+    cyclePorts: async () => {
+      calls++;
+      throw Error('configuration unavailable');
+    },
+    emit: () => {},
+  });
+  try {
+    await assert.rejects(
+      service.call('a', 'cycles', 'list'),
+      /configuration unavailable/,
+    );
+    assert.equal(await service.hasActiveSession('a'), false);
+    await assert.rejects(
+      service.call('a', 'cycles', 'list'),
+      /configuration unavailable/,
+    );
+    assert.equal(calls, 2);
+    await assert.doesNotReject(service.releaseSession('a'));
   } finally {
     await service.dispose();
     await rm(root, { recursive: true, force: true });

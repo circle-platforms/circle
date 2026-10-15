@@ -1,3 +1,4 @@
+import { runNativeBrowserStream } from './helpers/native-browser-stream.mjs';
 import {
   createNativeEditorIsolationFixture,
   runNativeEditorIsolation,
@@ -47,7 +48,7 @@ const baseline = '# native journey\n\noriginal content\n';
 const program =
   "function fixture() {\n  const count = 3;\n  const next = count + 1;\n  console.log('DEBUG_RESULT', next);\n  return next;\n}\nfixture();\n";
 const browserSource =
-  "function browserFixture(){\n  console.error('JOURNEY_CONSOLE_SOURCE');\n}\nbrowserFixture();\nfetch('/api/data').then(r=>r.text()).then(v=>console.log(v));\nlocalStorage.setItem('journey','before');\n";
+  "function browserFixture(){\n  console.error('JOURNEY_CONSOLE_SOURCE');\n}\nbrowserFixture();\nfetch('/api/data').then(r=>r.text()).then(v=>console.log(v));\nlocalStorage.setItem('journey','before');\nnew EventSource('/events').onmessage = event => console.log(event.data);\n";
 await Promise.all([
   writeFile(
     join(repo, 'AGENTS.md'),
@@ -56,6 +57,10 @@ await Promise.all([
   writeFile(join(repo, 'git-probe.txt'), 'baseline\n'),
   writeFile(join(repo, 'README.md'), baseline),
   writeFile(join(repo, 'debug.cjs'), program),
+  writeFile(
+    join(repo, 'debug-args.cjs'),
+    "const args = process.argv.slice(2);\nconsole.log('JOURNEY_LITERAL_ARGS', JSON.stringify(args));\n",
+  ),
   writeFile(join(repo, 'browser-source.js'), browserSource),
   writeFile(
     join(repo, 'package.json'),
@@ -78,6 +83,7 @@ await git(
   'git-probe.txt',
   'README.md',
   'debug.cjs',
+  'debug-args.cjs',
   'browser-source.js',
   'package.json',
 );
@@ -167,7 +173,18 @@ await writeFile(
     ],
   }),
 );
+const browserStreams = new Set();
 const server = createServer((request, response) => {
+  if (request.url === '/events') {
+    response.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+    });
+    response.write(': ready\n\n');
+    browserStreams.add(response);
+    request.on('close', () => browserStreams.delete(response));
+    return;
+  }
   if (request.url === '/source.js') {
     response.setHeader('Content-Type', 'text/javascript');
     response.end(
@@ -563,7 +580,8 @@ try {
       .click();
     const editor = page.locator('.file-view .monaco-editor').last();
     await editor.locator('.view-lines').click({ position: { x: 120, y: 10 } });
-    await page.keyboard.press('ControlOrMeta+End');
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.keyboard.press('ArrowRight');
     await page.keyboard.press('Enter');
     await page.keyboard.type('JOURNEY_MANUAL_SAVE');
     await until(
@@ -667,16 +685,15 @@ try {
     await page.locator('#dock-tab-debug').click();
     const panel = page.locator('.debug-panel');
     await panel.getByLabel('program path', { exact: true }).fill('debug.cjs');
-    await panel.getByRole('button', { name: 'launch', exact: true }).click();
-    await until(
-      async () => (await query('debug', 'snapshot')).status === 'paused',
-      'Node paused on entry',
-    );
     await panel.getByLabel('breakpoint line', { exact: true }).fill('3');
     await panel
       .getByRole('button', { name: 'set breakpoint', exact: true })
       .click();
-    await panel.getByRole('button', { name: 'continue', exact: true }).click();
+    await panel.getByRole('button', { name: 'launch', exact: true }).click();
+    await until(
+      async () => (await query('debug', 'snapshot')).status === 'paused',
+      'Node hits the breakpoint configured before launch',
+    );
     await until(async () => {
       const r = await query('debug', 'stackTrace');
       return r.stackFrames?.[0]?.line === 3;
@@ -707,6 +724,65 @@ try {
         (await query('debug', 'snapshot')).output.includes('DEBUG_RESULT 4'),
       'Node continued real output',
     );
+  });
+  await check('explicit entry pause and literal launch arguments', async () => {
+    await page.locator('#dock-tab-debug').click();
+    const panel = page.locator('.debug-panel');
+    await until(
+      async () =>
+        ['idle', 'stopped', 'failed'].includes(
+          (await query('debug', 'snapshot')).status,
+        ),
+      'prior debug process completed',
+    );
+    await panel
+      .getByLabel('program path', { exact: true })
+      .fill('debug-args.cjs');
+    await panel.locator('.debug-launch-options summary').click();
+    await panel
+      .getByRole('checkbox', { name: 'pause at entry', exact: true })
+      .check();
+    const args = ['two words', '"quoted"', ''];
+    for (let index = 0; index < args.length; index++) {
+      await panel
+        .getByRole('button', { name: 'add argument', exact: true })
+        .click();
+      await panel
+        .getByLabel('program argument ' + (index + 1), { exact: true })
+        .fill(args[index]);
+    }
+    await panel.getByRole('button', { name: 'launch', exact: true }).click();
+    await until(
+      async () => (await query('debug', 'snapshot')).status === 'paused',
+      'explicit entry pause takes effect',
+    );
+    const frames = await query('debug', 'stackTrace');
+    assert(
+      frames.stackFrames.some((frame) =>
+        frame.source?.path?.endsWith('debug-args.cjs'),
+      ),
+      'entry pause belongs to actual args fixture',
+    );
+    await screenshot('05-debug-explicit-entry-arguments');
+    await panel.getByRole('button', { name: 'continue', exact: true }).click();
+    await until(
+      async () =>
+        (await query('debug', 'snapshot')).output.includes(
+          'JOURNEY_LITERAL_ARGS ' + JSON.stringify(args),
+        ),
+      'actual process argv preserves spaces quotes and empty argument',
+    );
+    await writeFile(
+      join(output, 'debug-literal-arguments.json'),
+      JSON.stringify(
+        { args, output: (await query('debug', 'snapshot')).output },
+        null,
+        2,
+      ),
+    );
+    await panel
+      .getByRole('checkbox', { name: 'pause at entry', exact: true })
+      .uncheck();
   });
   await check('browser diagnostics actual source navigation', async () => {
     await page
@@ -789,6 +865,21 @@ try {
     assert.equal(png.readUInt32BE(20), 812);
     await writeFile(join(output, '07-actual-browser-capture-375x812.png'), png);
     await screenshot('07-browser-storage-viewport');
+    if (process.env.CIRCLE_NATIVE_JOURNEY_PUSH === '1') {
+      await until(
+        async () => browserStreams.size > 0,
+        'synthetic browser event stream connected',
+      );
+      await runNativeBrowserStream({
+        page,
+        sessionId,
+        output,
+        emit(marker) {
+          for (const stream of browserStreams)
+            stream.write('data: ' + marker + '\n\n');
+        },
+      });
+    }
   });
   await check('draft survives layout switches', async () => {
     const message = page.getByRole('textbox', { name: 'message', exact: true });

@@ -1,4 +1,7 @@
 export const browserDiagnostics: Record<string, string> = {
+  'live diagnostic updates unavailable': '实时诊断更新不可用',
+  'page paused': '页面已暂停',
+  'page running': '页面运行中',
   'open source location': '打开源码位置',
   'browser source': '浏览器源码',
   'remove breakpoint': '移除断点',

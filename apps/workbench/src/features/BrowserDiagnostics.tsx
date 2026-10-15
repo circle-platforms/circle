@@ -1,14 +1,18 @@
 import { useSources, sourceLocation } from '../components/SourceNavigation';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { desktopHost } from '../host';
 import { t } from '../i18n';
 import type {
+  BrowserDiagnosticEvent,
   BrowserDiagnosticRequest,
   BrowserDiagnosticResult,
 } from '../../../desktop/src/browser-diagnostics-contracts';
 import './browser-diagnostics.css';
 
 type Host = {
+  onBrowserDiagnosticEvent?: (
+    listener: (event: BrowserDiagnosticEvent) => void,
+  ) => () => void;
   browserDiagnostics?: (
     id: string,
     request: BrowserDiagnosticRequest,
@@ -37,8 +41,50 @@ export function BrowserDiagnostics({
   const [height, setHeight] = useState('812');
   const [source, setSource] = useState('');
   const [line, setLine] = useState('1');
+  const results = useRef<HTMLDivElement>(null);
+  const followConsole = useRef(true);
+  useLayoutEffect(() => {
+    if (
+      open &&
+      section === 'console' &&
+      followConsole.current &&
+      results.current
+    )
+      results.current.scrollTop = results.current.scrollHeight;
+  }, [open, section, result?.state.console.at(-1)?.id]);
   const identity = useRef('');
   identity.current = sessionId + ':' + tab + ':' + url;
+  const kindRef = useRef(kind);
+  kindRef.current = kind;
+  const apply = (
+    response: BrowserDiagnosticResult,
+    r: BrowserDiagnosticRequest,
+  ) => {
+    if (r.action === 'storage' && r.kind !== kindRef.current) return;
+    setResult((previous) => ({
+      ...previous,
+      ...response,
+      state: {
+        ...response.state,
+        console:
+          response.domains && !response.domains.includes('console')
+            ? (previous?.state.console ?? [])
+            : response.state.console,
+        network:
+          response.domains && !response.domains.includes('network')
+            ? (previous?.state.network ?? [])
+            : response.state.network,
+        debugger:
+          response.domains && !response.domains.includes('debug')
+            ? (previous?.state.debugger ?? response.state.debugger)
+            : response.state.debugger,
+      },
+      variables: response.state.debugger.paused
+        ? (response.variables ?? previous?.variables)
+        : undefined,
+      ...(r.action === 'clearNetwork' ? { response: undefined } : {}),
+    }));
+  };
   const request = async (r: BrowserDiagnosticRequest) => {
     const ownIdentity = identity.current;
     try {
@@ -46,9 +92,7 @@ export function BrowserDiagnostics({
       if (!host?.browserDiagnostics) throw Error(t('diagnostics unavailable'));
       const response = await host.browserDiagnostics(sessionId, r);
       if (ownIdentity !== identity.current) return;
-      setResult((previous) =>
-        r.action === 'read' ? { ...previous, state: response.state } : response,
-      );
+      apply(response, r);
       if (r.action !== 'read') setError('');
     } catch (e) {
       if (ownIdentity !== identity.current) return;
@@ -60,22 +104,135 @@ export function BrowserDiagnostics({
     setError('');
   }, [sessionId, tab, url]);
   useEffect(() => {
-    if (!open) return;
-    let stopped = false;
-    let pending = false;
+    if (!open || !tab) return;
+    const host = desktopHost() as unknown as Host;
+    if (!host?.browserDiagnostics) return;
+    const ownIdentity = identity.current;
+    let stopped = false,
+      pending = false,
+      dirty = false,
+      timer: ReturnType<typeof setTimeout> | undefined;
+    let fullRead = true;
+    let cursor: { epoch: string; sequence: number } | undefined;
+    const subscription = crypto.randomUUID();
+    const current = () => !stopped && identity.current === ownIdentity;
     const read = async () => {
-      if (pending || stopped) return;
+      if (!current()) return;
+      if (pending) {
+        dirty = true;
+        return;
+      }
       pending = true;
-      await request({ action: 'read' });
-      pending = false;
+      dirty = false;
+      const readingFull = fullRead;
+      try {
+        const response = await host.browserDiagnostics!(sessionId, {
+          action: 'read',
+          domains: fullRead ? undefined : [section, 'debug'],
+        });
+        if (!current()) return;
+        if (
+          cursor &&
+          response.stream &&
+          (response.stream.epoch !== cursor.epoch ||
+            response.stream.sequence < cursor.sequence)
+        ) {
+          dirty = true;
+          return;
+        }
+        apply(response, { action: 'read' });
+        if (fullRead && !readingFull) dirty = true;
+        else fullRead = false;
+        if (section === 'storage' && response.state.owner === 'circle') {
+          const origin = new URL(url).origin;
+          const storageRequest = {
+            action: 'storage' as const,
+            operation: 'read' as const,
+            kind,
+            origin,
+          };
+          const storageResponse = await host.browserDiagnostics!(
+            sessionId,
+            storageRequest,
+          );
+          if (current()) apply(storageResponse, storageRequest);
+        }
+      } catch (error) {
+        if (current())
+          setError(error instanceof Error ? error.message : String(error));
+      } finally {
+        pending = false;
+        if (dirty && current()) schedule();
+      }
     };
-    void read();
-    const timer = setInterval(() => void read(), 1000);
+    const schedule = () => {
+      dirty = true;
+      if (!pending && !timer)
+        timer = setTimeout(() => {
+          timer = undefined;
+          void read();
+        }, 16);
+    };
+    const unsubscribe = host.onBrowserDiagnosticEvent?.((event) => {
+      if (!current() || event.sessionId !== sessionId || event.tab !== tab)
+        return;
+      if (
+        cursor &&
+        event.epoch === cursor.epoch &&
+        event.sequence <= cursor.sequence
+      )
+        return;
+      // Epoch changes or sequence gaps invalidate cached observations: read the full current domain.
+      const gap =
+        !!cursor &&
+        (event.epoch !== cursor.epoch || event.sequence > cursor.sequence + 1);
+      if (gap) fullRead = true;
+      cursor = { epoch: event.epoch, sequence: event.sequence };
+      if (
+        gap ||
+        event.domains.some(
+          (domain) =>
+            domain === 'lifecycle' || domain === 'debug' || domain === section,
+        )
+      )
+        schedule();
+    });
+    void host
+      .browserDiagnostics(sessionId, {
+        action: 'watch',
+        tab,
+        subscription,
+        domains: [section, 'debug', 'lifecycle'],
+        enabled: true,
+      })
+      .then(
+        (response) => {
+          if (current()) {
+            if (!cursor) cursor = response.stream;
+            schedule();
+          }
+        },
+        (error) => {
+          if (current()) setError(String(error));
+        },
+      );
+    if (!host.onBrowserDiagnosticEvent) {
+      void read();
+      setError(t('live diagnostic updates unavailable'));
+    }
     return () => {
       stopped = true;
-      clearInterval(timer);
+      clearTimeout(timer);
+      unsubscribe?.();
+      void host.browserDiagnostics!(sessionId, {
+        action: 'watch',
+        tab,
+        subscription,
+        domains: [],
+        enabled: false,
+      }).catch(() => {});
     };
-  }, [open, sessionId, tab, url]);
+  }, [open, sessionId, tab, url, section, kind]);
   const openSource = (url: string, line: number, column?: number) => {
     const location = sourceLocation(url);
     if (location && sources) sources.openFile(location.path, line, column);
@@ -175,6 +332,11 @@ export function BrowserDiagnostics({
             </button>
           </div>
           {error && <p role="alert">{error}</p>}
+          <p role="status">
+            {result?.state.debugger.paused
+              ? t('page paused')
+              : t('page running')}
+          </p>
           {result?.state.owner === 'devtools' && (
             <p>{t('devtools owns this page; close it to reconnect')}</p>
           )}
@@ -186,7 +348,17 @@ export function BrowserDiagnostics({
               <pre>{result.source.content}</pre>
             </details>
           )}
-          <div className="browser-diagnostic-results" role="tabpanel">
+          <div
+            className="browser-diagnostic-results"
+            role="tabpanel"
+            ref={results}
+            onScroll={() => {
+              const node = results.current;
+              if (node)
+                followConsole.current =
+                  node.scrollHeight - node.scrollTop - node.clientHeight < 24;
+            }}
+          >
             {section === 'console' && (
               <>
                 <button
@@ -195,7 +367,7 @@ export function BrowserDiagnostics({
                   {t('clear console')}
                 </button>
                 {result?.state.console.map((entry) => (
-                  <details key={entry.id}>
+                  <details key={entry.id} data-console-id={entry.id}>
                     <summary>
                       {entry.level} · {entry.text}
                     </summary>
