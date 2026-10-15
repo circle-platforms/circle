@@ -1,8 +1,10 @@
+import {
+  preserveNativeClipboard,
+  restoreNativeClipboard,
+} from './native-clipboard.mjs';
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-const png =
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO1kAAAAASUVORK5CYII=';
 export async function runNativeInputRecovery({
   getApp,
   getPage,
@@ -39,29 +41,30 @@ export async function runNativeInputRecovery({
     page.getByRole('textbox', { name: 'message', exact: true });
   const pasteImage = async () => {
     const app = getApp();
-    await app.evaluate(async ({ clipboard, ClipboardItem }, png) => {
-      globalThis.__journeyClipboard = await clipboard.read();
-      await clipboard.write([
-        new ClipboardItem({
-          'image/png': new Blob([Buffer.from(png, 'base64')], {
-            type: 'image/png',
-          }),
-        }),
-      ]);
-    }, png);
+    const clipboardKey = await preserveNativeClipboard(app);
     try {
       const before = (await current()).attachments.length;
+      await app.evaluate(async ({ clipboard, ClipboardItem, nativeImage }) => {
+        const png = nativeImage
+          .createFromBitmap(Buffer.from([10, 20, 30, 255]), {
+            width: 1,
+            height: 1,
+          })
+          .toPNG();
+        await clipboard.write([
+          new ClipboardItem({
+            'image/png': new Blob([png], { type: 'image/png' }),
+          }),
+        ]);
+      });
       await composer().focus();
       await page.keyboard.press('ControlOrMeta+v');
       await until(
         async () => (await current()).attachments.length > before,
-        'real native image paste received',
+        'real native valid PNG paste received',
       );
     } finally {
-      await app.evaluate(async ({ clipboard }) => {
-        await clipboard.write(globalThis.__journeyClipboard ?? []);
-        delete globalThis.__journeyClipboard;
-      });
+      await restoreNativeClipboard(app, clipboardKey);
     }
   };
   await page
