@@ -1,7 +1,7 @@
 // Serialized native-driver regression, synthetic loopback page and isolated profile.
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -11,10 +11,20 @@ import { _electron as electron } from 'playwright';
 const require = createRequire(import.meta.url);
 const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = await mkdtemp(join(tmpdir(), 'circle-diagnostics-'));
+const output = process.env.CIRCLE_BROWSER_DIAGNOSTICS_EVIDENCE;
+if (output) await mkdir(output, { recursive: true });
 const server = createServer((req, res) => {
+  if (req.url === '/fixture.js') {
+    res.setHeader('Content-Type', 'text/javascript');
+    res.end(
+      'window.breakpointFixture=function fixture(){\n  const count=3;\n  const next=count+1;\n  return next;\n};',
+    );
+    return;
+  }
+
   res.setHeader('Content-Type', 'text/html');
   res.end(
-    `<!doctype html><meta name="viewport" content="width=device-width"><script>localStorage.setItem('fixture','before');console.error('fixture console');fetch('/request');function breakpointFixture(){const count=3;return count+1;}window.breakpointFixture=breakpointFixture;</script><button>local fixture</button>`,
+    `<!doctype html><meta name="viewport" content="width=device-width"><script>localStorage.setItem('fixture','before');console.error('fixture console');fetch('/request');function breakpointFixture(){const count=3;return count+1;}window.breakpointFixture=breakpointFixture;</script><script src="/fixture.js"></script><button>local fixture</button>`,
   );
 });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -91,6 +101,93 @@ try {
     ),
   );
   assert.deepEqual(dimensions, [375, 812]);
+  if (output) {
+    const png = await app.evaluate(async () =>
+      (
+        await globalThis.fixture.window.contentView.children[0].webContents.capturePage()
+      )
+        .toPNG()
+        .toString('base64'),
+    );
+    await writeFile(
+      join(output, 'native-375x812.png'),
+      Buffer.from(png, 'base64'),
+    );
+  }
+  await app.evaluate(
+    (_, origin) =>
+      globalThis.fixture.browser.diagnostics('test', {
+        action: 'debug',
+        command: 'breakpoints',
+        url: origin + '/fixture.js',
+        line: 3,
+      }),
+    origin,
+  );
+  await app.evaluate(() => {
+    globalThis.fixture.evaluation =
+      globalThis.fixture.window.contentView.children[0].webContents.executeJavaScript(
+        'breakpointFixture()',
+      );
+  });
+  for (let i = 0; i < 50; i++) {
+    result = await app.evaluate(() =>
+      globalThis.fixture.browser.diagnostics('test', { action: 'read' }),
+    );
+    if (result.state.debugger.paused) break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  assert.equal(result.state.debugger.paused, true);
+  assert.equal(result.state.debugger.stackFrames[0].line, 3);
+  const reference = result.state.debugger.stackFrames[0].scopes.find(
+    (s) => s.name === 'local',
+  ).variablesReference;
+  const variables = await app.evaluate(
+    (_, reference) =>
+      globalThis.fixture.browser.diagnostics('test', {
+        action: 'debug',
+        command: 'variables',
+        reference,
+      }),
+    reference,
+  );
+  assert(
+    variables.variables.some((v) => v.name === 'count' && v.value === '3'),
+  );
+  await app.evaluate(() =>
+    globalThis.fixture.browser.diagnostics('test', {
+      action: 'debug',
+      command: 'stepOver',
+    }),
+  );
+  for (let i = 0; i < 50; i++) {
+    result = await app.evaluate(() =>
+      globalThis.fixture.browser.diagnostics('test', { action: 'read' }),
+    );
+    if (
+      result.state.debugger.paused &&
+      result.state.debugger.stackFrames[0]?.line === 4
+    )
+      break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  assert.equal(result.state.debugger.stackFrames[0].line, 4);
+  await app.evaluate(() =>
+    globalThis.fixture.browser.diagnostics('test', {
+      action: 'debug',
+      command: 'resume',
+    }),
+  );
+  assert.equal(await app.evaluate(() => globalThis.fixture.evaluation), 4);
+  await app.evaluate(
+    (_, reference) =>
+      globalThis.fixture.browser.diagnostics('test', {
+        action: 'debug',
+        command: 'removeBreakpoint',
+        reference,
+      }),
+    result.state.debugger.breakpoints[0].id,
+  );
   await app.evaluate(() =>
     globalThis.fixture.browser.diagnostics('test', { action: 'viewport' }),
   );
@@ -121,8 +218,13 @@ try {
     globalThis.fixture.browser.diagnostics('test', { action: 'read' }),
   );
   assert(result.state.console.some((e) => e.text === 'after reconnect'));
+  if (output)
+    await writeFile(
+      join(output, 'native-final-state.json'),
+      JSON.stringify(result, null, 2),
+    );
   console.log(
-    'PASS native diagnostics: actual console/network, storage mutation,375×812 viewport,DevTools handoff and reconnect',
+    'PASS native diagnostics: actual console/network, storage mutation,375×812 viewport,actual breakpoint/variables/step/resume,DevTools handoff and reconnect',
   );
 } finally {
   if (app) await app.close();

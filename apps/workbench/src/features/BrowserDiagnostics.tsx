@@ -36,7 +36,7 @@ export function BrowserDiagnostics({
   const [source, setSource] = useState('');
   const [line, setLine] = useState('1');
   const identity = useRef('');
-  identity.current = sessionId + ':' + tab;
+  identity.current = sessionId + ':' + tab + ':' + url;
   const request = async (r: BrowserDiagnosticRequest) => {
     const ownIdentity = identity.current;
     try {
@@ -56,7 +56,7 @@ export function BrowserDiagnostics({
   useEffect(() => {
     setResult(undefined);
     setError('');
-  }, [sessionId, tab]);
+  }, [sessionId, tab, url]);
   useEffect(() => {
     if (!open) return;
     let stopped = false;
@@ -73,7 +73,7 @@ export function BrowserDiagnostics({
       stopped = true;
       clearInterval(timer);
     };
-  }, [open, sessionId, tab]);
+  }, [open, sessionId, tab, url]);
   const storage = (operation: 'read' | 'set' | 'remove', entry = key) => {
     let origin: string;
     try {
