@@ -42,8 +42,11 @@ export function toolSummary(rows: Message[]): {
       added: 0,
       removed: 0,
     };
+  const completed = tools.filter((tool) => tool.status === 'success');
+  if (tools.length && !completed.length)
+    return { text: t('tool results'), added: 0, removed: 0 };
   const count = (names: string[]) =>
-    tools.filter((tool) => names.includes(tool.name));
+    completed.filter((tool) => names.includes(tool.name));
   const parts: string[] = [];
   const commands = count(['execute']).length;
   if (commands) parts.push(tn(commands, 'ran a command', 'ran {n} commands'));
@@ -70,7 +73,7 @@ export function toolSummary(rows: Message[]): {
   if (web) parts.push(tn(web, 'used the web once', 'used the web {n} times'));
   const known = ['execute', 'task', ...READS, ...SEARCHES, ...EDITS, ...WEB];
   // Other tools by name while there are few of them: `used plan_exit`.
-  const other = tools.filter((tool) => !known.includes(tool.name));
+  const other = completed.filter((tool) => !known.includes(tool.name));
   const names = [...new Set(other.map((tool) => tool.name))];
   if (names.length && names.length <= 2)
     parts.push(t('used {tools}', { tools: names.join(', ') }));
