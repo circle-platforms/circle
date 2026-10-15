@@ -253,6 +253,13 @@ async function arm(kind, selector, condition) {
         const ready = () => {
           const target = document.querySelector(condition.selector);
           if (!target) return false;
+          if (condition.feedback) {
+            const feedback = document.querySelector(
+              condition.feedback.selector,
+            );
+            if (!feedback || feedback.disabled !== condition.feedback.disabled)
+              return false;
+          }
           if (condition.attribute)
             return (
               target.getAttribute(condition.attribute) === condition.equals
@@ -414,12 +421,23 @@ try {
     window.__circleNativePerfObserver = observer;
   });
   const input = page.getByRole('textbox', { name: 'message', exact: true });
+  // Alternating blank/nonblank requires a React-derived Send state change;
+  // checking textarea.value alone would only measure the browser's native fill.
+  await input.fill('');
+  await page
+    .getByRole('button', { name: 'send message', exact: true })
+    .waitFor();
   for (let index = 0; index < 40; index++) {
+    const value = index % 2 ? '' : `input performance ${index}`;
     await arm('input', 'textarea[aria-label="message"]', {
       selector: 'textarea[aria-label="message"]',
-      value: `input performance ${index}`,
+      value,
+      feedback: {
+        selector: 'button[aria-label="send message"]',
+        disabled: !value,
+      },
     });
-    await input.fill(`input performance ${index}`);
+    await input.fill(value);
     await finish('input');
   }
   for (let index = 0; index < 40; index++) {
@@ -606,7 +624,7 @@ try {
     };
   }
   report.measurement =
-    'renderer input/click to two animation frames after actual visible state; PTY producer Date.now to accessibility rows plus two animation frames, a paint-opportunity approximation rather than a compositor pixel timestamp';
+    'renderer input requires textarea value plus React-derived Send disabled state (40 alternating empty/nonempty values); input/click to two animation frames after actual visible state; PTY producer Date.now to accessibility rows plus two animation frames, a paint-opportunity approximation rather than a compositor pixel timestamp';
   report.complete = true;
   report.passed =
     Object.values(report.metrics).every((metric) => metric.passed) &&

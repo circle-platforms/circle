@@ -654,6 +654,7 @@ export function App() {
               path={file}
               line={sourceLine}
               column={sourceColumn}
+              onNavigate={onFile}
               onClose={() => {
                 sourceOpener.current.cancel();
                 setFile(null);

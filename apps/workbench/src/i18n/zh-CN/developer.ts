@@ -128,7 +128,7 @@ export const developer: Record<string, string> = {
   'copy shown content': '复制已显示内容',
   'copy complete artifact': '复制完整产物',
   '{name} unavailable': '{name}不可用',
-  '{name} could not be displayed': '{name}暂时无法显示',
+  '{name} could not be displayed': '无法显示 {name}',
   'your other views and running work are preserved':
     '其他视图和正在执行的工作不受影响',
   'retry this view': '重试此视图',
