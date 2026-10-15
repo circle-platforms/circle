@@ -421,10 +421,7 @@ test('the full-screen interface shows @path while the model gets the file text',
     'review\n\n<file path="notes.txt">\nremember this\n</file>',
   );
   assert.equal(model.requests[0]!.messages.at(-1)!.content, user.content);
-  assert.equal(
-    runtime.store.get(runtime.session.id)!.title,
-    'review notes.txt',
-  );
+  assert.equal(runtime.store.get(runtime.session.id)!.title, 'review');
 });
 
 test('the folder is the first word without spaces or the last word, and -p takes a folder as a flag', async (t) => {

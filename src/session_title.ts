@@ -24,10 +24,9 @@ function cutChars(text: string, max: number): string {
 /** A title for the sidebar when the model has not named the session yet. */
 export function fallbackTitle(text: string): string {
   const line = text.replace(/\s+/g, ' ').trim();
-  // The sidebar shows this before the model answers. Drop the @ sigil and
-  // keep the filename, so the placeholder does not flash as @README.md.
+  // `@README.md` points at a file. It is not the subject, short titles included.
   const bare = line
-    .replace(/(^|\s)@+(?=\S)/g, '$1')
+    .replace(/(^|\s)@[^\s]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   let stripped = bare;
