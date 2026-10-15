@@ -64,7 +64,10 @@ export async function runNativeGitJourney({
         maxBuffer: 8 * 1024 * 1024,
       })
     ).stdout;
-  assert.equal((await git('rev-parse', '--show-toplevel')).trim(), root);
+  assert.equal(
+    await realpath((await git('rev-parse', '--show-toplevel')).trim()),
+    root,
+  );
   assert.equal(
     (await git('diff', '--cached', '--name-only')).trim(),
     '',
@@ -132,9 +135,19 @@ export async function runNativeGitJourney({
     page.screenshot({ path: path.join(output, name + '.png') });
   const select = async (name) => {
     await refresh();
+    for (const checkbox of await panel.getByRole('checkbox').all())
+      await checkbox.uncheck();
     await panel.getByRole('checkbox', { name, exact: true }).check();
   };
   const commit = async (message, files) => {
+    assert.deepEqual(
+      (await git('diff', '--cached', '--name-only', '-z'))
+        .split('\0')
+        .filter(Boolean)
+        .sort(),
+      [...files].sort(),
+      'only explicitly selected paths may reach the commit',
+    );
     await panel.getByLabel('commit message', { exact: true }).fill(message);
     await panel
       .getByRole('button', {
