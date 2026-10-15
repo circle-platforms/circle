@@ -178,6 +178,8 @@ interface Tab {
   title: string;
   /** The main frame's own address: an error page's is chrome-error://. */
   frameUrl: string;
+  /** Main-frame documents committed during the current explicit navigation. */
+  navigation?: Set<string>;
   /** The main frame's last document request, and why it failed if it did. */
   document?: { id: string; url: string };
   documentResponse?: { status: number; statusText: string };
@@ -838,6 +840,7 @@ export class ChromeBrowser implements BrowserPort {
       case 'Page.frameNavigated':
         if (!params.frame.parentId) {
           tab.frameUrl = params.frame.url;
+          if (params.frame.loaderId) tab.navigation?.add(params.frame.loaderId);
           tab.world = undefined;
           // Past the warning to its site, wherever on that host it went on to (a site that
           // sends / to /login): by whom, for the model's next result
@@ -1107,13 +1110,26 @@ export class ChromeBrowser implements BrowserPort {
     return { opened, stop: () => tab.wake.delete(wake) };
   }
   /** Until the page has loaded and its network has been quiet for a moment. */
-  private async idle(tab: Tab, signal?: AbortSignal, ms = 15000) {
+  private async idle(
+    tab: Tab,
+    signal?: AbortSignal,
+    committed?: () => boolean,
+    ms = 15000,
+  ) {
     const end = Date.now() + ms;
     await delay(60, undefined, { signal });
     while (Date.now() < end) {
       signal?.throwIfAborted();
-      if (tab.closed || tab.dialogs.length) return;
+      if (tab.closed) {
+        if (committed && !committed())
+          throw Error(
+            'the tab closed before its navigation document committed',
+          );
+        return;
+      }
+      if (tab.dialogs.length) return;
       if (
+        (!committed || committed()) &&
         !tab.loading &&
         !tab.network.size &&
         Date.now() - tab.lastNetwork >= 400
@@ -1121,6 +1137,10 @@ export class ChromeBrowser implements BrowserPort {
         return;
       await delay(50, undefined, { signal });
     }
+    if (committed && !committed())
+      throw Error(
+        'the navigation document did not commit before the browser action timed out',
+      );
   }
   // ---- reaching into the page
   private async world(tab: Tab): Promise<number> {
@@ -1351,34 +1371,51 @@ export class ChromeBrowser implements BrowserPort {
     const dialog = this.dialogOpens(tab);
     let error = '';
     let downloaded = false;
+    let committed: (() => boolean) | undefined;
+    const loaders = new Set<string>();
+    tab.navigation = loaders;
     try {
-      const result = await this.limit(
-        Promise.race([
-          this.send<{ errorText?: string; isDownload?: boolean }>(
-            'Page.navigate',
-            { url },
-            tab.session,
-          ),
-          dialog.opened.then(
-            () => ({}) as { errorText?: string; isDownload?: boolean },
-          ),
-        ]),
-        signal,
-        30000,
-      );
-      error = result.errorText ?? '';
-      downloaded = result.isDownload === true;
-    } catch (cause) {
-      signal?.throwIfAborted();
-      if (!tab.dialogs.length) {
-        error = 'ERR_TIMED_OUT';
-        await this.send('Page.stopLoading', {}, tab.session).catch(() => {});
+      try {
+        const result = await this.limit(
+          Promise.race([
+            this.send<{
+              errorText?: string;
+              isDownload?: boolean;
+              loaderId?: string;
+            }>('Page.navigate', { url }, tab.session),
+            dialog.opened.then(
+              () =>
+                ({}) as {
+                  errorText?: string;
+                  isDownload?: boolean;
+                  loaderId?: string;
+                },
+            ),
+          ]),
+          signal,
+          30000,
+        );
+        error = result.errorText ?? '';
+        downloaded = result.isDownload === true;
+        // A response (including a certificate error) can precede the new document.
+        // Remember a commit even if that document immediately redirects again.
+        const loaderId = result.loaderId;
+        if (!downloaded && !error.includes('ERR_ABORTED') && loaderId)
+          committed = () => loaders.has(loaderId);
+      } catch (cause) {
+        signal?.throwIfAborted();
+        if (!tab.dialogs.length) {
+          error = 'ERR_TIMED_OUT';
+          await this.send('Page.stopLoading', {}, tab.session).catch(() => {});
+        }
+      } finally {
+        dialog.stop();
       }
+      tab.lastNetwork = Date.now();
+      await this.idle(tab, signal, committed);
     } finally {
-      dialog.stop();
+      if (tab.navigation === loaders) tab.navigation = undefined;
     }
-    tab.lastNetwork = Date.now();
-    await this.idle(tab, signal);
     await this.notice(tab, signal);
     // A load that failed without the browser's own error page, as one that timed out; one
     // that went on (a certificate trusted for good) has failed no more
