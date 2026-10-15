@@ -375,6 +375,8 @@ test('command echoes and incomplete marker fragments do not establish script exe
     (metric: string) => `${metric} 1.5\r\n`,
     (metric: string) => `${metric} 9007199254740992\r\n`,
     (metric: string) => `${metric} invalid\r\n`,
+    (metric: string) => `${metric} 5\r\r\n`,
+    (metric: string) => `${metric} 5\u2028\n`,
     (metric: string) => `${metric} 5`,
     () => '',
   ]) {
@@ -469,4 +471,128 @@ test('a failed reporter cannot replace the original query result or thrown error
     () => throws(command, args, options),
     (actual) => actual === error,
   );
+});
+
+test('UTC phase markers split only consistent same-host observations and preserve the query outcome', (t) => {
+  const wall = [1_000, 2_000];
+  const mono = [0, 1_000];
+  t.mock.method(Date, 'now', () => wall.shift()!);
+  t.mock.method(performance, 'now', () => mono.shift()!);
+  let entry: ProcessQueryProbeReport | undefined;
+  let calls = 0;
+  const originalOptions = Object.freeze({ ...options });
+  const run = instrumentSpawnSync(
+    runner((actualCommand, actualArgs, actualOptions) => {
+      calls++;
+      assert.equal(actualCommand, command);
+      assert.equal(actualOptions, originalOptions);
+      const script = (actualArgs as string[])[3]!;
+      const { entered, completed, metric } = markers(script);
+      const firstUtc = `${entered}_UTC_MS`;
+      const lastUtc = `${completed}_UTC_MS`;
+      assert.ok(script.indexOf(firstUtc) < script.indexOf(entered + "');"));
+      assert.ok(script.indexOf(lastUtc) > script.indexOf(completed + "');"));
+      assert.equal(script.split(pipeline).length, 2);
+      assert.match(script, /\n\$circleQueryProbeSuccess_[a-z0-9_]+ = \$\?;\n/);
+      return result(
+        `${firstUtc} 1100\r\n${entered}\r\n${metric} 600\r\n${completed}\r\n${lastUtc} 1800\r\n`,
+      );
+    }),
+    (report) => {
+      entry = report;
+    },
+  );
+  const actual = run(command, args, originalOptions);
+  assert.equal(calls, 1);
+  assert.equal(actual.status, 0);
+  assert.equal(actual.signal, null);
+  assert.equal(actual.stderr, '');
+  assert.equal(entry!.elapsedMs, 1_000);
+  assert.equal(entry!.parentStartedUtcMs, 1_000);
+  assert.equal(entry!.parentCompletedUtcMs, 2_000);
+  assert.equal(entry!.scriptEnteredUtcMs, 1_100);
+  assert.equal(entry!.scriptCompletedUtcMs, 1_800);
+  assert.equal(entry!.pipelineElapsedMs, 600);
+  assert.equal(entry!.beforeFirstScriptTimestampMs, 100);
+  assert.equal(entry!.afterLastScriptTimestampMs, 200);
+  assert.equal(entry!.phaseClockCheck, 'passed');
+  assert.equal(entry!.originalQuerySha256, hash(pipeline));
+  assert.equal(entry!.effectiveQuerySha256, hash(pipeline));
+  assert.equal(entry!.queryTransformed, false);
+});
+
+test('missing duplicate malformed or inconsistent clocks leave phase durations unknown without changing failures', (t) => {
+  let wall: number[] = [];
+  let mono: number[] = [];
+  t.mock.method(Date, 'now', () => wall.shift()!);
+  t.mock.method(performance, 'now', () => mono.shift()!);
+  const variants = [
+    { name: 'missing entry', entry: '' },
+    { name: 'missing completion', completion: '' },
+    { name: 'duplicate entry', entry: '{E} 1100\n{E} 1100\n' },
+    { name: 'duplicate completion', completion: '{C} 1800\n{C} 1800\n' },
+    { name: 'malformed entry', entry: '{E} invalid\n' },
+    { name: 'double CR entry', entry: '{E} 1100\r\r\n', retain: true },
+    {
+      name: 'Unicode line terminator entry',
+      entry: '{E} 1100\u2028\n',
+      retain: true,
+    },
+    { name: 'negative entry', entry: '{E} -1\n' },
+    { name: 'fractional entry', entry: '{E} 1100.5\n' },
+    { name: 'unsafe entry', entry: '{E} 9007199254740992\n' },
+    { name: 'half completion', completion: '{C} 1800' },
+    { name: 'complete plus half completion', completion: '{C} 1800\n{C} 1800' },
+    {
+      name: 'reversed script clocks',
+      entry: '{E} 1900\n',
+      completion: '{C} 1800\n',
+    },
+    { name: 'outside parent', entry: '{E} 999\n' },
+    { name: 'parent clock reversed', parentEnd: 900 },
+    { name: 'wall monotonic jump', parentEnd: 2_101 },
+    { name: 'invalid parent clock', parentEnd: NaN },
+    { name: 'backward monotonic clock', monoEnd: -1 },
+    { name: 'pipeline contradicts UTC', pipelineMs: 801 },
+  ];
+  for (const variant of variants) {
+    wall = [1_000, variant.parentEnd ?? 2_000];
+    mono = [0, variant.monoEnd ?? 1_000];
+    let entry: ProcessQueryProbeReport | undefined;
+    let calls = 0;
+    let retained = '';
+    const error = Object.assign(Error('synthetic original error'), {
+      code: 'ETIMEDOUT',
+    });
+    const run = instrumentSpawnSync(
+      runner((_command, actualArgs, actualOptions) => {
+        calls++;
+        assert.equal(actualOptions, options);
+        const script = (actualArgs as string[])[3]!;
+        const { entered, completed, metric } = markers(script);
+        if (variant.retain)
+          retained = variant.entry!.replaceAll('{E}', `${entered}_UTC_MS`);
+        const text =
+          `${variant.entry ?? '{E} 1100\n'}${entered}\n${metric} ${variant.pipelineMs ?? 600}\n${completed}\n${variant.completion ?? '{C} 1800\n'}`
+            .replaceAll('{E}', `${entered}_UTC_MS`)
+            .replaceAll('{C}', `${completed}_UTC_MS`);
+        return { ...result(text), status: null, signal: 'SIGTERM', error };
+      }),
+      (report) => {
+        entry = report;
+      },
+    );
+    const actual = run(command, args, options);
+    assert.equal(calls, 1, variant.name);
+    assert.equal(actual.error, error, variant.name);
+    assert.equal(actual.status, null, variant.name);
+    assert.equal(actual.signal, 'SIGTERM', variant.name);
+    if (variant.retain)
+      assert.ok(actual.stderr!.includes(retained), variant.name);
+    assert.equal(entry!.phaseClockCheck, 'unknown', variant.name);
+    assert.equal(entry!.beforeFirstScriptTimestampMs, 'unknown', variant.name);
+    assert.equal(entry!.afterLastScriptTimestampMs, 'unknown', variant.name);
+    assert.equal(entry!.originalQuerySha256, hash(pipeline), variant.name);
+    assert.equal(entry!.effectiveQuerySha256, hash(pipeline), variant.name);
+  }
 });

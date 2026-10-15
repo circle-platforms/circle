@@ -21,6 +21,13 @@ export type ProcessQueryProbeReport = Readonly<{
   errorCode: string | 'unknown';
   elapsedMs: number;
   pipelineElapsedMs: number | 'unknown';
+  parentStartedUtcMs: number | 'unknown';
+  parentCompletedUtcMs: number | 'unknown';
+  scriptEnteredUtcMs: number | 'unknown';
+  scriptCompletedUtcMs: number | 'unknown';
+  beforeFirstScriptTimestampMs: number | 'unknown';
+  afterLastScriptTimestampMs: number | 'unknown';
+  phaseClockCheck: 'passed' | 'unknown';
   stdoutCodeUnits: number;
   stderrCodeUnits: number;
   scriptEnteredObserved: boolean;
@@ -40,6 +47,8 @@ function cleanMarkers(
   entered: string,
   completed: string,
   metric: string,
+  enteredUtc: string,
+  completedUtc: string,
 ) {
   let start = 0;
   let cleaned = '';
@@ -47,21 +56,41 @@ function cleanMarkers(
   let pipelineCompletedObserved = false;
   let pipelineElapsedMs: number | 'unknown' = 'unknown';
   let metricCount = 0;
+  const utc = new Map<string, { count: number; value: number | 'unknown' }>([
+    [enteredUtc, { count: 0, value: 'unknown' }],
+    [completedUtc, { count: 0, value: 'unknown' }],
+  ]);
   while (start < stderr.length) {
     const end = stderr.indexOf('\n', start);
     if (end === -1) {
-      cleaned += stderr.slice(start);
+      const tail = stderr.slice(start);
+      for (const [name, entry] of utc)
+        if (tail === name || tail.startsWith(`${name} `)) entry.count++;
+      cleaned += tail;
       break;
     }
     const raw = stderr.slice(start, end + 1);
     const line = raw.slice(0, raw.endsWith('\r\n') ? -2 : -1);
-    if (line === entered) scriptEnteredObserved = true;
+    const utcName = [...utc.keys()].find(
+      (name) => line === name || line.startsWith(`${name} `),
+    );
+    if (utcName) {
+      const entry = utc.get(utcName)!;
+      entry.count++;
+      const value = line.slice(utcName.length + 1);
+      const parsed = /^\d+(?![\s\S])/.test(value) ? Number(value) : NaN;
+      if (Number.isSafeInteger(parsed) && parsed >= 0) entry.value = parsed;
+      else {
+        entry.value = 'unknown';
+        cleaned += raw;
+      }
+    } else if (line === entered) scriptEnteredObserved = true;
     else if (line === completed) pipelineCompletedObserved = true;
     else {
       const value = line.startsWith(`${metric} `)
         ? line.slice(metric.length + 1)
         : '';
-      const elapsed = /^\d+$/.test(value) ? Number(value) : NaN;
+      const elapsed = /^\d+(?![\s\S])/.test(value) ? Number(value) : NaN;
       if (Number.isSafeInteger(elapsed) && elapsed >= 0) {
         metricCount++;
         pipelineElapsedMs = metricCount === 1 ? elapsed : 'unknown';
@@ -74,6 +103,12 @@ function cleanMarkers(
     scriptEnteredObserved,
     pipelineCompletedObserved,
     pipelineElapsedMs,
+    scriptEnteredUtcMs:
+      utc.get(enteredUtc)!.count === 1 ? utc.get(enteredUtc)!.value : 'unknown',
+    scriptCompletedUtcMs:
+      utc.get(completedUtc)!.count === 1
+        ? utc.get(completedUtc)!.value
+        : 'unknown',
   };
 }
 
@@ -131,30 +166,64 @@ export function instrumentSpawnSync(
     const entered = `CIRCLE_QUERY_PROBE_${nonce}_${current}_ENTERED`;
     const completed = `CIRCLE_QUERY_PROBE_${nonce}_${current}_COMPLETED`;
     const metric = `CIRCLE_QUERY_PROBE_${nonce}_${current}_PIPELINE_MS`;
+    const enteredUtc = `${entered}_UTC_MS`;
+    const completedUtc = `${completed}_UTC_MS`;
     const success = `$circleQueryProbeSuccess_${nonce}_${current}`;
     const clock = `$circleQueryProbeClock_${nonce}_${current}`;
     const mark = (marker: string) =>
       `try { [Console]::Error.WriteLine('${marker}'); [Console]::Error.Flush() } catch {}`;
+    const markUtc = (marker: string) =>
+      `try { [Console]::Error.WriteLine('${marker} ' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString([Globalization.CultureInfo]::InvariantCulture)); [Console]::Error.Flush() } catch {}`;
     const instrumentedArgs = [...args];
     const executedScript =
-      `${mark(entered)};\n` +
+      `${markUtc(enteredUtc)};\n${mark(entered)};\n` +
       `try { ${clock} = $null; ${clock} = [Diagnostics.Stopwatch]::StartNew() } catch {};\n` +
       `${effectiveScript}\n${success} = $?;\n` +
       `try { if ($null -ne ${clock}) { ${clock}.Stop(); ` +
       `[Console]::Error.WriteLine('${metric} ' + ${clock}.ElapsedMilliseconds.ToString([Globalization.CultureInfo]::InvariantCulture)); ` +
       `[Console]::Error.Flush() } } catch {};\n` +
-      `${mark(completed)};\n` +
+      `${mark(completed)};\n${markUtc(completedUtc)};\n` +
       `if (${success}) { exit 0 } else { exit 1 }`;
     instrumentedArgs[commandIndex + 1] = executedScript;
+    const parentStarted = Date.now();
     const started = performance.now();
     const result = Reflect.apply(original, childProcess, [
       command,
       instrumentedArgs,
       effectiveOptions,
     ]) as ReturnType<typeof childProcess.spawnSync>;
+    const monotonicElapsedMs = performance.now() - started;
+    const elapsedMs = Math.max(0, Math.round(monotonicElapsedMs));
+    const parentCompleted = Date.now();
     const stdout = typeof result.stdout === 'string' ? result.stdout : '';
     const stderr = typeof result.stderr === 'string' ? result.stderr : '';
-    const markers = cleanMarkers(stderr, entered, completed, metric);
+    const markers = cleanMarkers(
+      stderr,
+      entered,
+      completed,
+      metric,
+      enteredUtc,
+      completedUtc,
+    );
+    const { scriptEnteredUtcMs, scriptCompletedUtcMs } = markers;
+    const safeUtc = (value: number) =>
+      Number.isSafeInteger(value) && value >= 0;
+    // These intervals include timestamp evaluation/marker work and scheduling.
+    // The 100ms check rejects obvious clock inconsistency, not every clock adjustment.
+    const phaseConsistent =
+      Number.isFinite(monotonicElapsedMs) &&
+      monotonicElapsedMs >= 0 &&
+      safeUtc(parentStarted) &&
+      safeUtc(parentCompleted) &&
+      typeof scriptEnteredUtcMs === 'number' &&
+      typeof scriptCompletedUtcMs === 'number' &&
+      parentStarted <= scriptEnteredUtcMs &&
+      scriptEnteredUtcMs <= scriptCompletedUtcMs &&
+      scriptCompletedUtcMs <= parentCompleted &&
+      Math.abs(parentCompleted - parentStarted - elapsedMs) <= 100 &&
+      (typeof markers.pipelineElapsedMs !== 'number' ||
+        markers.pipelineElapsedMs <=
+          scriptCompletedUtcMs - scriptEnteredUtcMs + 100);
     const errorCode = (result.error as NodeJS.ErrnoException | undefined)?.code;
     try {
       report(
@@ -179,7 +248,22 @@ export function instrumentSpawnSync(
             typeof errorCode === 'string' && /^[A-Z0-9_]{1,64}$/.test(errorCode)
               ? errorCode
               : 'unknown',
-          elapsedMs: Math.max(0, Math.round(performance.now() - started)),
+          elapsedMs,
+          parentStartedUtcMs: safeUtc(parentStarted)
+            ? parentStarted
+            : 'unknown',
+          parentCompletedUtcMs: safeUtc(parentCompleted)
+            ? parentCompleted
+            : 'unknown',
+          scriptEnteredUtcMs,
+          scriptCompletedUtcMs,
+          beforeFirstScriptTimestampMs: phaseConsistent
+            ? scriptEnteredUtcMs - parentStarted
+            : 'unknown',
+          afterLastScriptTimestampMs: phaseConsistent
+            ? parentCompleted - scriptCompletedUtcMs
+            : 'unknown',
+          phaseClockCheck: phaseConsistent ? 'passed' : 'unknown',
           pipelineElapsedMs: markers.pipelineElapsedMs,
           stdoutCodeUnits: stdout.length,
           stderrCodeUnits: stderr.length,
@@ -209,7 +293,14 @@ export function instrumentSpawnSync(
       return result;
     const output = [...result.output];
     if (typeof output[2] === 'string')
-      output[2] = cleanMarkers(output[2], entered, completed, metric).cleaned;
+      output[2] = cleanMarkers(
+        output[2],
+        entered,
+        completed,
+        metric,
+        enteredUtc,
+        completedUtc,
+      ).cleaned;
     return { ...result, output, stderr: markers.cleaned };
   }) as typeof childProcess.spawnSync;
 }
