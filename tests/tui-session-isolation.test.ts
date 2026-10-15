@@ -614,9 +614,9 @@ test('TUI sign in updates every idle runtime and sign out prevents cached SDK re
       a.options.settings.auth.model === 'new-model' &&
       b.options.settings.auth.model === 'new-model',
   );
-  await app.submit('A new connection');
+  await app.submit('connect A');
   await ui.changeSession(b.session.id);
-  await app.submit('B new connection');
+  await app.submit('connect B');
   assert.deepEqual(old.requests, [
     { model: 'old-model', key: 'Bearer old-key' },
   ]);
@@ -838,9 +838,9 @@ for (const outcome of ['success', 'failure', 'deleted'] as const)
         ),
       );
       if (outcome === 'success') {
-        await app.submit('source after reload');
+        await app.submit('reloaded source');
         await ui.changeSession(b.session.id);
-        await app.submit('other remains unchanged');
+        await app.submit('other unchanged');
         assert.deepEqual(gateway.requests, [
           { model: 'reloaded-model', key: 'Bearer old-key' },
           { model: 'old-model', key: 'Bearer old-key' },

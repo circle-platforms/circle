@@ -7,6 +7,24 @@ export const TITLE_MAX_CHARS = 60;
 
 const CJK_CHAR = /[\u3400-\u9fff]/g;
 
+/**
+ * The whole prompt is a greeting or an acknowledgement, not a question.
+ * "what is TCP" is not one of these. Trailing punctuation is ignored.
+ */
+const ACK =
+  /^(?:hi|hello|hey|yo|hiya|howdy|ok|okay|k|thanks|thank you|thx|ty|thanks a lot|thank you so much|thanks so much|thank you very much|thanks very much|cheers|bye|goodbye|good morning|good afternoon|good evening|good night|you'?re welcome|no problem|got it|noted|你好|您好|嗨|谢谢|感谢|多谢|谢谢你|好的|嗯|哦|收到)$/i;
+
+function counted(text: string): { line: string; cjk: number; words: number } {
+  const line = text.replace(/\s+/g, ' ').trim();
+  const cjk = line.match(CJK_CHAR)?.length ?? 0;
+  const rest = line.replace(CJK_CHAR, ' ').replace(/\s+/g, ' ').trim();
+  return { line, cjk, words: rest ? rest.split(' ').length : 0 };
+}
+
+function isAck(line: string): boolean {
+  return ACK.test(line.replace(/[.!?。！？~…]+$/u, '').trim());
+}
+
 const LATIN =
   /^(?:please|pls|plz|can you|could you|would you|i need you to|i want you to|i(?:'|’)d like you to|help me(?: to)?)\s*/i;
 const CJK_LEAD = /^(?:帮我|请你|请|麻烦你|麻烦)\s*/;
@@ -54,23 +72,22 @@ export function fallbackTitle(text: string): string {
  * sees one word and used to skip the title request.
  */
 export function titleUnits(text: string): number {
-  const line = text.replace(/\s+/g, ' ').trim();
+  const { line, cjk, words } = counted(text);
   if (!line) return 0;
-  const cjk = line.match(CJK_CHAR)?.length ?? 0;
-  const rest = line.replace(CJK_CHAR, ' ').replace(/\s+/g, ' ').trim();
-  return cjk + (rest ? rest.split(' ').length : 0);
+  return cjk + words;
 }
 
 /**
- * A side request is worth it once the prompt is a sentence. Four words covers
- * a short question such as "README.md what is this". CJK counts by characters,
- * so a spaceless sentence qualifies too. A greeting such as "hi" stays on the
- * fallback.
+ * A side request is worth it for a real question. Three words covers "what is
+ * TCP". Two or fewer stay as typed, and so does a greeting or acknowledgement
+ * such as "hi", "ok", or "thanks". CJK still counts by characters: four
+ * characters ask, and "你好" does not. A long line of 24 characters or more
+ * still asks.
  */
 export function titleWorthy(text: string): boolean {
-  const line = text.replace(/\s+/g, ' ').trim();
-  if (!line) return false;
-  if (titleUnits(line) >= 4) return true;
+  const { line, cjk, words } = counted(text);
+  if (!line || isAck(line)) return false;
+  if (cjk >= 4 || words >= 3) return true;
   return line.length >= 24;
 }
 

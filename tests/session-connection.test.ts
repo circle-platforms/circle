@@ -78,15 +78,15 @@ test('refreshing a connection replaces every local session SDK; logout cannot re
     b = sessions.create(workspace);
   a.setModel('old-model');
   b.setModel('old-model');
-  await a.harness.run('A before login');
-  await b.harness.run('B before login');
+  await a.harness.run('before A');
+  await b.harness.run('before B');
   const changed = structuredClone(settings);
   changed.auth.base_url = next.base;
   changed.auth.model = 'new-model';
   saveCredentials({ api_key: 'synthetic-next' }, home);
   for (const runtime of sessions.values()) runtime.refreshConnection(changed);
-  await a.harness.run('A after login');
-  await b.harness.run('B after login');
+  await a.harness.run('after A');
+  await b.harness.run('after B');
   assert.deepEqual(old.requests, [
     { model: 'old-model', authorization: 'Bearer synthetic-old' },
     { model: 'old-model', authorization: 'Bearer synthetic-old' },

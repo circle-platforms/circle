@@ -2855,7 +2855,7 @@ test('desktop file pagination past EOF is successful and survives restarting the
 test('desktop archive is durable presentation state and leaves core history and workspace bytes intact (#56)', async (t) => {
   const f = await setup(t, [{ message: assistant('saved conversation') }]);
   await writeFile(join(f.workspace, 'keep.txt'), 'project bytes');
-  await f.call('prompt', { text: 'keep this conversation' });
+  await f.call('prompt', { text: 'keep conversation' });
   await wait(
     () =>
       f.controller.snapshot().sessions[0]!.state === 'idle' &&

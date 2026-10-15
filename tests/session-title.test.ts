@@ -123,6 +123,12 @@ test('generated titles keep one short phrase and drop a reply', () => {
   assert.equal(sanitizeGeneratedTitle('你可以粘贴一下'), undefined);
   assert.equal(titleWorthy('hi'), false);
   assert.equal(titleWorthy('hello there'), false);
+  assert.equal(titleWorthy('ok'), false);
+  assert.equal(titleWorthy('thanks'), false);
+  assert.equal(titleWorthy('Thanks!'), false);
+  assert.equal(titleWorthy('thanks a lot'), false);
+  assert.equal(titleWorthy('what is TCP'), true);
+  assert.equal(titleWorthy('what is TCP?'), true);
   assert.equal(titleWorthy('请'), false);
   assert.equal(titleWorthy('请用大约200字介绍一下罗马帝国的兴衰'), true);
   assert.equal(titleWorthy('帮我写一个你好世界的Go程序'), true);
@@ -265,9 +271,15 @@ test('a rename made while the title is pending wins', async (t) => {
   assert.equal(store.get(session.id)!.title, 'Custom');
 });
 
-test('a model title is asked for four words, and a greeting stays local', () => {
+test('a model title is asked for three words, and a greeting stays local', () => {
   assert.equal(titleWorthy('hi'), false);
+  assert.equal(titleWorthy('ok'), false);
+  assert.equal(titleWorthy('thanks'), false);
+  assert.equal(titleWorthy('Thanks!'), false);
+  assert.equal(titleWorthy('thanks a lot'), false);
   assert.equal(titleWorthy('hello there'), false);
+  assert.equal(titleWorthy('what is TCP'), true);
+  assert.equal(titleWorthy('what is TCP?'), true);
   assert.equal(titleWorthy('README.md what is this'), true);
   assert.equal(titleWorthy('@README.md what is this'), true);
   assert.equal(titleWorthy('fix the login bug now!!'), true);
@@ -390,6 +402,38 @@ test('four words ask for a title even when the prompt is short', async (t) => {
   model.releaseTitle();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(session.id)!.title, 'Readme heading');
+});
+
+test('a three-word question asks for a summary title', async (t) => {
+  const root = scratch(t);
+  const model = new TitleModel('done', 'TCP overview');
+  const { harness: run, store, session } = harness(root, model);
+  cleanup(t, () => store.close());
+  const notes: string[] = [];
+  run.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as
+      { event?: string; message?: string } | undefined;
+    if (notice?.event === 'title_failed') notes.push(String(notice.message));
+  });
+  const prompt = 'what is TCP';
+  assert.equal(prompt.split(' ').length, 3);
+  assert.equal(titleWorthy(prompt), true);
+  await run.run(prompt);
+  assert.equal(store.get(session.id)!.title, '');
+  assert.equal(
+    model.requests.filter((request) => request.maxTokens === TITLE_MAX_TOKENS)
+      .length,
+    1,
+  );
+  assert.equal(
+    model.requests.find((request) => request.maxTokens === TITLE_MAX_TOKENS)!
+      .messages[0]!.content,
+    titleConversation(prompt),
+  );
+  model.releaseTitle();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(store.get(session.id)!.title, 'TCP overview');
+  assert.deepEqual(notes, []);
 });
 
 test('a refusal leaves the fallback title', async (t) => {
