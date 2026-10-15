@@ -525,16 +525,15 @@ test('a trial records which server tools the model used, and /server skill push 
     bundledRoot: bundledExtensionsRoot(),
     settings: { 'circle-server': { enabled: true } },
   }).load();
-  await assert.rejects(
-    reloaded
+  await assert.rejects(async () => {
+    await reloaded
       .commands()
       .get('server')!
       .handler(
         'skill push skills/mindmap-compile --outputs cases.xlsx',
         context,
-      ),
-    /SKILLPACK_CHECK_FAILED: Undeclared trial tools: env\.inventory/,
-  );
+      );
+  }, /SKILLPACK_CHECK_FAILED: Undeclared trial tools: env\.inventory/);
   assert.equal(server.packs.length, 0, 'a refused push registers nothing');
   assert.ok(
     lines.some((line) =>
