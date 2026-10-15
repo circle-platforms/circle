@@ -11,6 +11,7 @@ import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
 import { readModelRequests } from './helpers/model-requests.mjs';
+import { readViewport, setViewport } from './helpers/viewport.mjs';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
 const temp = await mkdtemp(join(tmpdir(), 'circle-parallel-sessions-'));
@@ -22,9 +23,12 @@ const output = resolve(
 );
 await mkdir(output, { recursive: true });
 await Promise.all(
-  ['receipt.json', 'failure.json', 'failure.png'].map((name) =>
-    rm(join(output, name), { force: true }),
-  ),
+  [
+    'receipt.json',
+    'failure.json',
+    'failure.png',
+    'tool-hover-hit-target.json',
+  ].map((name) => rm(join(output, name), { force: true })),
 );
 const requestsPath = join(temp, 'requests.jsonl');
 const fixturePath = join(temp, 'model.json');
@@ -379,6 +383,75 @@ try {
   checks.push(
     'background approval remains reachable and produces B-only file effect and next model request',
   );
+  const toolViewport = await readViewport(page);
+  await setViewport(app, page, { width: 1024, height: 700 });
+  await page.locator('.tool-summary').scrollIntoViewIfNeeded();
+  await page
+    .locator(`.sidebar .session-link[href="#/session/${b}"]`)
+    .first()
+    .hover();
+  await page.waitForFunction(() => {
+    const button = document.querySelector('.tool-summary');
+    const tooltip = document.querySelector('.session-hover');
+    const wrapper = tooltip?.closest('[data-radix-popper-content-wrapper]');
+    if (!button || !wrapper) return false;
+    const tool = button.getBoundingClientRect();
+    const card = wrapper.getBoundingClientRect();
+    return (
+      Math.min(tool.right, card.right) - Math.max(tool.left, card.left) > 2 &&
+      Math.min(tool.bottom, card.bottom) - Math.max(tool.top, card.top) > 2
+    );
+  });
+  const toolHoverHitTarget = await page
+    .locator('.tool-summary')
+    .evaluate((button) => {
+      const rect = button.getBoundingClientRect();
+      const tooltip = document.querySelector('.session-hover');
+      const wrapper = tooltip.closest('[data-radix-popper-content-wrapper]');
+      const card = wrapper.getBoundingClientRect();
+      const left = Math.max(rect.left, card.left);
+      const right = Math.min(rect.right, card.right);
+      const top = Math.max(rect.top, card.top);
+      const bottom = Math.min(rect.bottom, card.bottom);
+      const x = (left + right) / 2;
+      const y = (top + bottom) / 2;
+      const hit = document.elementFromPoint(x, y);
+      return {
+        point: { x, y },
+        position: { x: x - rect.x, y: y - rect.y },
+        intersection: { left, right, top, bottom },
+        tooltipBounds: {
+          x: card.x,
+          y: card.y,
+          width: card.width,
+          height: card.height,
+        },
+        overlaps: right - left > 2 && bottom - top > 2,
+        tooltipPointerEvents: getComputedStyle(tooltip).pointerEvents,
+        wrapperPointerEvents: getComputedStyle(wrapper).pointerEvents,
+        hitClass: hit?.className,
+        hitWrapper: hit === wrapper,
+        hitButton: hit === button || button.contains(hit),
+      };
+    });
+  await writeFile(
+    join(output, 'tool-hover-hit-target.json'),
+    JSON.stringify(toolHoverHitTarget, null, 2) + '\n',
+  );
+  assert.equal(toolHoverHitTarget.overlaps, true);
+  await page
+    .locator('.tool-summary')
+    .click({ position: toolHoverHitTarget.position });
+  assert.equal(toolHoverHitTarget.hitButton, true);
+  assert.equal(
+    await page.locator('.tool-summary').getAttribute('aria-expanded'),
+    'true',
+  );
+  await page.locator('.tool-summary').click();
+  assert.equal(
+    await page.locator('.tool-summary').getAttribute('aria-expanded'),
+    'false',
+  );
   await page.locator('.tool-summary').click();
   await page.locator('.tool-head').click();
   await page
@@ -400,6 +473,10 @@ try {
     'input',
   );
   checks.push('individual tool folds and tool input tabs are per session');
+  await setViewport(app, page, {
+    width: toolViewport.width,
+    height: toolViewport.height,
+  });
   const c = await newSession('parallel C');
   await page.evaluate(
     ({ id, url }) => window.circleDesktop.browserNavigate(id, url),

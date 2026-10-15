@@ -2448,6 +2448,10 @@ pre {
   background: var(--active);
   color: var(--fg);
 }
+/* Read-only tips must not block the control beneath Radix's positioning box. */
+[data-radix-popper-content-wrapper]:has(> .tooltip) {
+  pointer-events: none;
+}
 .tooltip {
   z-index: 110;
   background: var(--fg);
