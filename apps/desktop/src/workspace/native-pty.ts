@@ -2,6 +2,7 @@ import { createRequire as createPtyRequire } from 'node:module';
 import type * as NodePty from 'node-pty';
 import {
   assertSupportedWindowsPtyVersion,
+  hasExitedWindowsPtyProcess,
   installWindowsPtyExitCleanup,
 } from './pty-exit-cleanup.mjs';
 
@@ -23,3 +24,7 @@ export const spawnPty: typeof NodePty.spawn = (...args) => {
   installWindowsPtyExitCleanup(terminal, { version });
   return terminal;
 };
+
+export function hasNativePtyProcessExited(terminal: NodePty.IPty): boolean {
+  return hasExitedWindowsPtyProcess(terminal, { version });
+}

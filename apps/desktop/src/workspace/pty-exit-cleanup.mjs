@@ -12,6 +12,19 @@ export function assertSupportedWindowsPtyVersion(
       `unsupported Windows PTY lifecycle adapter for node-pty ${String(version)}; expected ${supportedVersion}`,
     );
 }
+export function hasExitedWindowsPtyProcess(
+  terminal,
+  { version, platform = process.platform },
+) {
+  assertSupportedWindowsPtyVersion(version, platform);
+  if (platform !== 'win32') return false;
+  const agent = terminal?._agent;
+  if (!agent || typeof agent._useConpty !== 'boolean')
+    throw Error('unsupported node-pty 1.1.0 Windows process ownership shape');
+  // Native ConPTY reports this before its delayed public output-close/onExit.
+  // Never look up or signal the old numeric PID during that flush interval.
+  return agent._useConpty && Number.isInteger(agent._exitCode);
+}
 export function installWindowsPtyExitCleanup(
   terminal,
   { version, platform = process.platform },

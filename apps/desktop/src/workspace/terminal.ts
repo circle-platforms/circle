@@ -1,5 +1,5 @@
 import type { IPty } from 'node-pty';
-import { spawnPty } from './native-pty.ts';
+import { hasNativePtyProcessExited, spawnPty } from './native-pty.ts';
 import { ptyEnvironment } from './pty-environment.ts';
 import { randomUUID } from 'node:crypto';
 import {
@@ -988,11 +988,21 @@ async function terminateOwnedTree(
   const terminal = entry.pty;
   if (process.platform === 'win32') {
     if (!terminal) return;
+    if (hasNativePtyProcessExited(terminal)) {
+      if (!(await untilStopped(entry, 3000)))
+        throw Error(
+          'native terminal exited but its final output closure is unconfirmed',
+        );
+      return;
+    }
     // ConPTY's owning process is the only PID supplied; never accept arbitrary PIDs.
     await exec('taskkill', ['/pid', String(terminal.pid), '/T', '/F'], {
       windowsHide: true,
-    }).catch((error: NodeJS.ErrnoException) => {
-      if (entry.pty) throw error;
+    }).catch(async (error: NodeJS.ErrnoException) => {
+      // The debugger may have ended it between the native-exit check and
+      // taskkill. Success still requires its actual onExit and flushed logs.
+      if (entry.pty === terminal && !(await untilStopped(entry, 3000)))
+        throw error;
     });
     return;
   }

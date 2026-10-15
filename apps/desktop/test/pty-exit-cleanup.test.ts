@@ -12,6 +12,7 @@ import { scratch } from '../../../tests/helpers.ts';
 import {
   assertSupportedWindowsPtyVersion,
   installWindowsPtyExitCleanup,
+  hasExitedWindowsPtyProcess,
 } from '../src/workspace/pty-exit-cleanup.mjs';
 const exec = promisify(execFile),
   require = createRequire(import.meta.url);
@@ -76,6 +77,49 @@ test('Windows compatibility guard releases only the exited instance worker and i
     observed,
     2,
     'cleanup listener must preserve subsequent runtime exit observers',
+  );
+});
+
+test('native ConPTY exit detection distinguishes the output-flush interval without consulting a numeric PID', () => {
+  const agent = {
+    _useConpty: true,
+    _exitCode: undefined as number | undefined,
+  };
+  const terminal = {
+    _agent: agent,
+    kill() {
+      throw Error('must not inspect or kill a PID');
+    },
+  } as unknown as IPty;
+  assert.equal(
+    hasExitedWindowsPtyProcess(terminal, {
+      version: '1.1.0',
+      platform: 'win32',
+    }),
+    false,
+  );
+  agent._exitCode = 0;
+  assert.equal(
+    hasExitedWindowsPtyProcess(terminal, {
+      version: '1.1.0',
+      platform: 'win32',
+    }),
+    true,
+  );
+  assert.equal(
+    hasExitedWindowsPtyProcess(terminal, {
+      version: '1.1.0',
+      platform: 'darwin',
+    }),
+    false,
+  );
+  assert.throws(
+    () =>
+      hasExitedWindowsPtyProcess(terminal, {
+        version: 'future',
+        platform: 'win32',
+      }),
+    /unsupported Windows PTY lifecycle/,
   );
 });
 
@@ -286,6 +330,77 @@ start();process.once('beforeExit',()=>{progress('node-beforeExit-no-conpty-worke
     t.diagnostic(
       JSON.stringify({
         kind: 'actual Windows ConPTY three natural exits and full final output',
+        progress,
+      }),
+    );
+  },
+);
+
+test(
+  'Windows terminal close waits for the native-exit output-flush window and preserves the complete final log',
+  {
+    skip: process.platform !== 'win32' ? 'requires real Windows ConPTY' : false,
+  },
+  async (t) => {
+    const root = scratch(t, 'circle-conpty-flush-close-'),
+      evidence = process.env.CIRCLE_NATIVE_TEST_PROGRESS_DIR ?? root;
+    await mkdir(evidence, { recursive: true });
+    const progress = join(evidence, `conpty-flush-close-${randomUUID()}.jsonl`),
+      fixture = join(root, 'flush-close.mjs');
+    const manager = fileURLToPath(
+      new URL('../src/workspace/terminal.ts', import.meta.url),
+    );
+    const program =
+      "setTimeout(()=>{process.stdout.write('CONPTY_TAIL_'+ 'x'.repeat(32768)+'_END\\n');process.exitCode=0},25);";
+    await writeFile(
+      fixture,
+      `import assert from 'node:assert/strict';import fs from 'node:fs';import path from 'node:path';import {createHash} from 'node:crypto';import {createRequire} from 'node:module';import {TerminalManager} from ${JSON.stringify(pathToFileURL(manager).href)};import {hasNativePtyProcessExited} from ${JSON.stringify(pathToFileURL(native).href)};import {renderTerminalOutput} from ${JSON.stringify(pathToFileURL(vt).href)};\n` +
+        String.raw`
+const progress=(step,detail={})=>{fs.appendFileSync(PROGRESS,JSON.stringify({step,at:Date.now(),resources:process.getActiveResourcesInfo(),...detail})+'\n');console.log(step)};
+const workspace=path.join(ROOT,'workspace');fs.mkdirSync(workspace);
+const load=createRequire(PACKAGE_ROOT+'/package.json'),ptyModule=load('node-pty'),originalSpawn=ptyModule.spawn;
+let captured;ptyModule.spawn=(...args)=>(captured=originalSpawn(...args));
+const manager=new TerminalManager({workspaceRoot:workspace,logRoot:path.join(ROOT,'logs')},()=>{});
+let closed=false;
+try{
+ const terminal=await manager.create({owner:'flush-owner',sessionId:'flush-session',command:{file:process.execPath,args:['-e',PROGRAM]}});
+ ptyModule.spawn=originalSpawn;
+ const deadline=Date.now()+5000;
+ while(!hasNativePtyProcessExited(captured)){assert(Date.now()<deadline,'real native process exit was not observed');await new Promise(done=>setTimeout(done,2))}
+ const before=(await manager.list('flush-owner')).find(item=>item.id===terminal.id);
+ assert.equal(before.status,'running','test must observe native exit before delayed public output close');
+ progress('native-exit-known-before-close',{pid:terminal.pid,status:before.status});
+ const result=await manager.close('flush-owner',terminal.id);
+ assert.equal(result.status,'exited');assert.equal(result.exitCode,0);
+ const raw=fs.readFileSync(terminal.logPath,'utf8'),rendered=await renderTerminalOutput(raw);
+ const continuous=rendered.lines.map(line=>line.text).join(''),start=continuous.indexOf('CONPTY_TAIL_'),end=continuous.indexOf('_END',start+12),payload=continuous.slice(start+12,end);
+ assert(start>=0&&end>start,'full tail framing after confirmed public onExit');assert.equal(payload,'x'.repeat(32768));
+ const rawFile=PROGRESS+'.raw.log',normalizedFile=PROGRESS+'.normalized.json';fs.writeFileSync(rawFile,raw);fs.writeFileSync(normalizedFile,JSON.stringify(rendered));
+ progress('close-confirmed-with-complete-tail',{exitCode:result.exitCode,rawFile,normalizedFile,payloadBytes:Buffer.byteLength(payload),payloadSha256:createHash('sha256').update(payload).digest('hex')});closed=true;
+}finally{ptyModule.spawn=originalSpawn;await manager.dispose()}
+process.once('beforeExit',()=>{progress('node-beforeExit-after-close',{closed});if(!closed)process.exitCode=1});
+`
+          .replaceAll('PROGRESS', JSON.stringify(progress))
+          .replaceAll('PACKAGE_ROOT', JSON.stringify(packageRoot))
+          .replaceAll('PROGRAM', JSON.stringify(program))
+          .replaceAll('ROOT', JSON.stringify(root)),
+    );
+    const result = await exec(process.execPath, [fixture], {
+      cwd: root,
+      timeout: 12000,
+      killSignal: 'SIGKILL',
+      env: {
+        ...process.env,
+        CIRCLE_HOME: join(root, 'home'),
+        CIRCLE_WORKBENCH_DATA_DIR: join(root, 'data'),
+      },
+    });
+    assert.match(result.stdout, /native-exit-known-before-close/);
+    assert.match(result.stdout, /close-confirmed-with-complete-tail/);
+    assert.match(result.stdout, /node-beforeExit-after-close/);
+    t.diagnostic(
+      JSON.stringify({
+        kind: 'actual Windows native-exit to public-onExit flush window closes without a stale PID kill',
         progress,
       }),
     );
