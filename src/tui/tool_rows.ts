@@ -525,7 +525,14 @@ export function thinkingRows(
     ['', ' '],
     [style, truncate(header, Math.max(1, options.width - 10))],
   ];
-  if (body && !options.expanded) head.push(['', '  '], [p.faint, 'ctrl+t']);
+  if (body && !options.expanded)
+    head.push(
+      [
+        '',
+        options.done && options.seconds === undefined && !title ? ' ' : '  ',
+      ],
+      [p.faint, 'ctrl+t'],
+    );
   const rows = [tintedRow(head, '', options.width)];
   if (options.expanded && body)
     for (const line of markdownRows(body, Math.max(20, options.width - 3), {

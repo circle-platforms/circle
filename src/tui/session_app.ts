@@ -115,7 +115,7 @@ import {
 } from '../update.js';
 import { PlanPanel } from '../ink/components/plan_panel.js';
 import { stripAnsi, truncate } from '../ink/string_width.js';
-import { modelScope } from '../model_scope.js';
+import { modelScope, sameModel } from '../model_scope.js';
 import { resumeHint, runningJobs, stoppedJobsLine } from './exit_lines.js';
 import { ChromeBrowser, findBrowser } from '../browser/chrome.js';
 import { browserTools, runtimeBrowserOptions } from '../browser/tools.js';
@@ -965,22 +965,22 @@ export class SessionApp {
     runtime = new AgentRuntime({
       ...options,
       deferSession: true,
-      extraTools: [
-        ...(options.extraTools ?? []),
-        ...(browser
-          ? browserTools(browser, {
-              confirm: (_session, approval, signal) =>
-                view.interactions.run(
-                  () =>
-                    this.inView(view, () =>
-                      this.confirmBrowser(approval, signal),
-                    ),
-                  signal,
-                ),
-              ...runtimeBrowserOptions(() => runtime),
-            })
-          : []),
-      ],
+      extraTools: [...(options.extraTools ?? [])],
+      // Browser manuals are thousands of tokens. A greeting does not send them;
+      // the turn that asks for a page, or one that already used the browser, does.
+      deferredTools: browser
+        ? browserTools(browser, {
+            confirm: (_session, approval, signal) =>
+              view.interactions.run(
+                () =>
+                  this.inView(view, () =>
+                    this.confirmBrowser(approval, signal),
+                  ),
+                signal,
+              ),
+            ...runtimeBrowserOptions(() => runtime),
+          })
+        : [],
       settings: structuredClone(this.settings),
       beforeDelete: async () => {
         await browser?.close();
@@ -1123,11 +1123,11 @@ export class SessionApp {
               this.flash(
                 `Retry ${notice.attempt}/${notice.max} in ${(Number(notice.wait_ms) / 1000).toFixed(1)}s`,
               );
-            } else if (notice.event === 'title_failed')
-              this.notice(
-                `title failed · ${String(notice.message).replace(/\s+/g, ' ').slice(0, 120)}`,
-              );
-            else if (notice.event === 'param_dropped')
+            } else if (notice.event === 'title_failed') {
+              const text = `title failed · ${String(notice.message).replace(/\s+/g, ' ').slice(0, 120)}`;
+              this.notice(text);
+              this.flash(text, 5000);
+            } else if (notice.event === 'param_dropped')
               this.notice(
                 `Endpoint does not support ${notice.param}; continuing without it`,
               );
@@ -2694,16 +2694,34 @@ export class SessionApp {
     const view = this.view;
     if (!runtime) return;
     if (name === 'models') {
-      const choose = (model: string): void => {
+      const choose = (model: string, extra = ''): void => {
         if (runtime.harness.busy) throw new Error('a turn is running');
         runtime.setModel(model);
         this.flash(
-          `Model → ${model} · this session (alt+d in /models saves it)`,
+          `model set to ${model}${extra} · this session (alt+d in /models saves it)`,
           4000,
         );
       };
-      if (args.trim()) choose(args.trim());
-      else {
+      if (args.trim()) {
+        const model = args.trim();
+        let extra = '';
+        try {
+          const endpoint =
+            runtime.options.settings.auth.protocol +
+            ':' +
+            runtime.options.settings.auth.base_url;
+          // alt+m calls this with an id from the list just loaded. Ask the
+          // endpoint again only when that list is missing.
+          if (!this.knownModels || this.knownModelsEndpoint !== endpoint)
+            await this.loadModels(runtime);
+          if (runtime.isClosing) return;
+          if (!(this.knownModels ?? []).some((item) => sameModel(item, model)))
+            extra = ' · not listed by this endpoint';
+        } catch {
+          extra = '';
+        }
+        choose(model, extra);
+      } else {
         const models = await this.loadModels(runtime);
         if (runtime.isClosing) return;
         this.inView(view, () => {
@@ -2712,7 +2730,7 @@ export class SessionApp {
             models.map((model) => ({
               key: model,
               label: model,
-              current: model === runtime.harness.model.model,
+              current: sameModel(model, runtime.harness.model.model),
               meta: [
                 model === this.settings.auth.model ? 'default' : '',
                 (this.runScopeOnly
@@ -2731,7 +2749,10 @@ export class SessionApp {
               'tab adds it to alt+m or takes it out',
             empty:
               'No model matches · /models <id> uses an id the endpoint does not list',
-            focusKey: runtime.harness.model.model,
+            focusKey:
+              models.find((model) =>
+                sameModel(model, runtime.harness.model.model),
+              ) ?? runtime.harness.model.model,
             keys: {
               'alt+d': (item) => {
                 if (!item) return;

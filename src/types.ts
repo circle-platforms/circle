@@ -31,6 +31,10 @@ export interface Message {
   provider_content?: unknown[];
   usage?: Usage;
   cost?: import('./pricing.js').PriceReceipt;
+  /** Seconds the model spent thinking before the answer text, kept across a restart. */
+  thinking_seconds?: number;
+  /** This assistant message is the partial reply saved when the turn was stopped. */
+  interrupted?: boolean;
   internal?: string;
   truncated?: boolean;
   recoverable?: boolean;

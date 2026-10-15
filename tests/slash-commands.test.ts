@@ -616,8 +616,8 @@ test('/copy copies the last answer, or writes it to a file when there is no clip
   await app.submit('/copy');
   const path = join(home, 'exports', 'last-copy.txt');
   assert.equal(readFileSync(path, 'utf8'), 'copy me\n');
-  assert.equal(app.state.flash, 'Copied');
-  assert.equal(app.state.notices.at(-1), `No clipboard tool · wrote ${path}`);
+  assert.equal(app.state.flash, 'Saved to file');
+  assert.equal(app.state.notices.at(-1), `Saved to file · ${path}`);
 });
 
 test('/import of a text file starts a session that gives the model its start', async (t) => {

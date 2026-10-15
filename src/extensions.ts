@@ -675,6 +675,9 @@ export class ExtensionHost {
     const middleware = this.loaded().flatMap((ext) => ext.middleware);
     return {
       model: base.model,
+      // A session title is a second complete() beside the turn. Dropping this made every
+      // terminal session keep the fallback: the wrapper was what the harness called.
+      sideRequests: base.sideRequests,
       get contextWindow() {
         return base.contextWindow;
       },

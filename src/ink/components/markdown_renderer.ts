@@ -97,6 +97,10 @@ function inline(tokens: Token[], style = ''): Span[] {
   }
   return result;
 }
+const NO_LINE_START = new Set(
+  Array.from(')）]】〕〉》」』、。．，,！？!?：；;:…·'),
+);
+const NO_LINE_END = new Set(Array.from('(（[【〔〈《「『'));
 function rowsFor(
   spans: Span[],
   width = 80,
@@ -153,6 +157,40 @@ function rowsFor(
         (used === 0 || used + glyph.width > width)
       )
         continue;
+      // Opening punctuation stays with what follows it, so a line does not end on （.
+      const prev = rows.at(-1);
+      const ending = prev?.at(-1);
+      if (prev && prev.length > 1 && ending && NO_LINE_END.has(ending.text)) {
+        prev.pop();
+        line.unshift(ending);
+        used += ending.width;
+      }
+    }
+    // Closing punctuation stays with the word before it, so a line does not start on ）.
+    // If that leaves an opening mark at the end of the previous line, take it too.
+    if (
+      used === 0 &&
+      line.length === 0 &&
+      rows.length > 0 &&
+      NO_LINE_START.has(glyph.text)
+    ) {
+      const prev = rows[rows.length - 1]!;
+      if (prev.length > 1) {
+        const moved = prev.pop()!;
+        line.push(moved);
+        used += moved.width;
+        const ending = prev.at(-1);
+        if (
+          ending &&
+          NO_LINE_END.has(ending.text) &&
+          used + ending.width + glyph.width <= width
+        ) {
+          prev.pop();
+          line.unshift(ending);
+          used += ending.width;
+          if (!prev.length) rows.pop();
+        }
+      }
     }
     line.push(glyph);
     used += glyph.width;

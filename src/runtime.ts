@@ -11,6 +11,7 @@ import {
 } from './approvals.js';
 import { Sandbox } from './sandbox.js';
 import { buildTools, type Todo } from './tools.js';
+import { browserToolsWanted } from './browser/tools.js';
 import {
   loadSecrets,
   MAX_SECRET,
@@ -123,6 +124,11 @@ export interface RuntimeOptions {
   model?: ChatModel;
   catalog?: ModelCatalog;
   extraTools?: Tool[];
+  /**
+   * Tools left out of a short turn and added on the turn that needs them.
+   * The terminal keeps browser tool schemas here until a page is requested.
+   */
+  deferredTools?: Tool[];
   /** Where the extensions that ship with Circle are; false for none (tests). */
   bundledExtensions?: string | false;
   /** An extension's status line changed. */
@@ -699,7 +705,10 @@ export class AgentRuntime {
         if (this.activeCompaction) throw new Error('a compaction is running');
         await this.initialize(signal);
       },
-      beforeTurn: () => this.requireTurnConnection(),
+      beforeTurn: (prompt) => {
+        this.requireTurnConnection();
+        this.promoteDeferredTools(prompt);
+      },
       beforeStep: () => {
         this.userShells.flush();
         const messages = this.jobs.takeNotices(this.harness.sessionId);
@@ -835,6 +844,27 @@ export class AgentRuntime {
   }
   private refreshSystemPrompt(): void {
     this.harness.system = this.systemPrompt(this.harness.model.model);
+  }
+  /** Move deferred tools onto the harness once this turn's text asks for them. */
+  private promoteDeferredTools(prompt: string | undefined): void {
+    const extra = this.options.deferredTools;
+    if (!extra?.length) return;
+    if (
+      extra.every((tool) =>
+        this.coreTools.some((have) => have.name === tool.name),
+      )
+    )
+      return;
+    if (!browserToolsWanted(this.harness.messages, prompt ?? '')) return;
+    this.coreTools.push(
+      ...extra.filter(
+        (tool) => !this.coreTools.some((have) => have.name === tool.name),
+      ),
+    );
+    this.harness.tools = this.withIntegrationTools(
+      this.coreTools.filter((tool) => tool.name !== 'wait_jobs'),
+    );
+    this.describeSubagents(this.harness.tools);
   }
   private describeSubagents(tools: Tool[]): void {
     const task = tools.find((tool) => tool.name === 'task');

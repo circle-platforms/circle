@@ -581,6 +581,13 @@ test('thinking rows have no background on a dark theme and on a light one', () =
       stripAnsi(folded[0]!),
       /^ ∴ Thought 1\.2s · Check the notes {2}ctrl\+t +$/,
     );
+    const resumed = thinkingRows('The file has three lines.', {
+      done: true,
+      expanded: false,
+      width: 80,
+    });
+    assert.match(stripAnsi(resumed[0]!), /^ ∴ Thought ctrl\+t +$/);
+    assert.equal(stripAnsi(resumed[0]!).includes('Thought  ctrl'), false);
     assert.equal(stringWidth(folded[0]!), 80);
     assert.ok(folded[0]!.includes(p.reason.slice(2, -1)));
     assert.ok(folded[0]!.includes(p.faint.slice(2, -1)));

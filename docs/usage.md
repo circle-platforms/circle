@@ -53,7 +53,7 @@ What each approval option does is explained in [Security](security.md#approvals)
 
 ## Interrupt
 
-Press `esc` to stop a turn. Circle marks it `✖ Interrupted`, in a dim line, until the next turn starts, and the footer counts text that was already streaming. A shell command that is running is ended, with everything it started, within about a second (on Windows with `taskkill`, not yet tried on a real machine). [Background jobs](background-jobs.md) keep running; a job that ends after you stopped the turn waits for your next message instead of starting a turn. `ctrl+c` also stops a turn. `ctrl+b` moves the command being waited on to the background instead of stopping it. When Circle is idle, `esc` again clears what you typed (`ctrl+y` puts it back) and `ctrl+c` clears it at once (`ctrl+c` keeps it in the history). `ctrl+d` on an empty box leaves.
+Press `esc` to stop a turn. Circle marks it `✖ Interrupted`, in a dim line, until the next turn starts. The footer counts text that was already streaming, and estimates the input of that step when the endpoint has not reported it. A stopped step is priced from that estimate when the model has rates; a `$` total that ends in `+` still means some other call had usage and no price. A shell command that is running is ended, with everything it started, within about a second (on Windows with `taskkill`, not yet tried on a real machine). [Background jobs](background-jobs.md) keep running; a job that ends after you stopped the turn waits for your next message instead of starting a turn. `ctrl+c` also stops a turn. `ctrl+b` moves the command being waited on to the background instead of stopping it. When Circle is idle, `esc` again clears what you typed (`ctrl+y` puts it back) and `ctrl+c` clears it at once (`ctrl+c` keeps it in the history). `ctrl+d` on an empty box leaves.
 
 A fenced code block names its language and colours keywords, strings, numbers and comments. Copying still falls back to a file when the terminal has no clipboard tool.
 
@@ -109,7 +109,7 @@ While `task` subagents run, a strip below the footer lists them. Press `↓` in 
 ## Get text out
 
 - **Select with the mouse.** Dragging selects and copies at once. Double-click selects a word, triple-click a line. Dragging past the top or bottom edge scrolls.
-- `/copy` (or `alt+c`) copies the last answer. It uses `pbcopy`, `wl-copy` or `xclip` (`clip` on Windows). If none works it writes the text to `exports/last-copy.txt` in the data folder.
+- `/copy` (or `alt+c`) copies the last answer. It uses `pbcopy`, `wl-copy` or `xclip` (`clip` on Windows). The footer says `Copied N chars`. If none works it writes the text to `exports/last-copy.txt` in the data folder and the footer says `Saved to file`.
 - `/export` writes the whole conversation as Markdown. `/share` writes a copy under `shares/` and copies its path. Nothing is uploaded.
 - `/editor` (or `ctrl+g`) opens the draft in `$VISUAL` or `$EDITOR`, else the first of `nvim`, `vim` and `nano` that is installed (then `notepad` on Windows). The variable may carry arguments, such as `code --wait`. What you save comes back into the input box. It is not sent until you press `enter`.
 

@@ -14,9 +14,13 @@ import {
 import { defaultRunOptions } from '../src/run_options.js';
 import { Sandbox } from '../src/sandbox.js';
 import { buildTools } from '../src/tools.js';
-import { browserTools } from '../src/browser/tools.js';
+import { browserTools, browserToolsWanted } from '../src/browser/tools.js';
 import { tokenLen } from '../src/middleware/tool_result_prune.js';
-import { scratch } from './helpers.js';
+import { AgentRuntime } from '../src/runtime.js';
+import { defaultSettings } from '../src/settings.js';
+import { ScriptedModel } from '../src/testing.js';
+import { emptyUsage } from '../src/types.js';
+import { cleanup, scratch } from './helpers.js';
 
 test('an unset Anthropic effort is medium, and a saved or env value wins', () => {
   assert.equal(defaultEffort('anthropic', ''), 'medium');
@@ -94,14 +98,94 @@ test('a greeting request stays within the trimmed tool budget', () => {
         parameters,
       })),
     );
-  const tokens =
+  const greeting =
     tokenLen(system) +
     tokenLen(payload(core)) +
-    tokenLen(payload(browser)) +
     tokenLen(loadToolPrompt('lsp'));
-  // Tool manuals are most of a short turn. This locks the trim (question, lsp,
-  // read/edit, paths, todo examples) so a greeting does not grow back past it.
-  assert.ok(tokens < 11_500, String(tokens));
+  const browserTokens = tokenLen(payload(browser));
+  // Live "hi" was about 12.3k with the browser manuals in the request. Those
+  // stay off a greeting. 7000 here is about 7.6k at the provider, under 8k
+  // with room for a few skill blurbs. The browser payload stays large so it
+  // cannot slip back into this total unnoticed.
+  assert.ok(greeting < 7_000, String(greeting));
+  assert.ok(browserTokens > 3_000, String(browserTokens));
+});
+
+test('browser tool schemas are sent only when a page is asked for or already used', () => {
+  assert.equal(browserToolsWanted([], 'hi'), false);
+  assert.equal(browserToolsWanted([], 'https://example.com'), true);
+  assert.equal(browserToolsWanted([], 'open the browser'), true);
+  assert.equal(browserToolsWanted([], '请用浏览器打开'), true);
+  assert.equal(
+    browserToolsWanted(
+      [
+        {
+          id: 'a',
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: 'c', name: 'browser_navigate', args: {} }],
+        },
+      ],
+      'hi',
+    ),
+    true,
+  );
+  assert.equal(
+    browserToolsWanted(
+      [
+        {
+          id: 't',
+          role: 'tool',
+          name: 'browser_snapshot',
+          tool_call_id: 'c',
+          content: 'page',
+        },
+      ],
+      'thanks',
+    ),
+    true,
+  );
+});
+
+test('a greeting does not send browser tools, and a url does', async (t) => {
+  const root = scratch(t);
+  const browser = browserTools(
+    { request: async () => ({ text: '' }) },
+    { history: () => [] },
+  );
+  const reply = {
+    message: { id: 'a', role: 'assistant' as const, content: 'ok' },
+    usage: emptyUsage(),
+  };
+  const model = new ScriptedModel([
+    reply,
+    {
+      message: { id: 'b', role: 'assistant', content: 'ok' },
+      usage: emptyUsage(),
+    },
+  ]);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: defaultSettings(),
+    model,
+    headless: true,
+    localContext: false,
+    bundledExtensions: false,
+    screenshot: false,
+    deferredTools: browser,
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.harness.run('hi');
+  assert.equal(
+    model.requests[0]!.tools.some((tool) => tool.name.startsWith('browser_')),
+    false,
+  );
+  await runtime.harness.run('open https://example.com');
+  assert.equal(
+    model.requests[1]!.tools.some((tool) => tool.name === 'browser_navigate'),
+    true,
+  );
 });
 
 test('instruction files stop at the context cap', (t) => {

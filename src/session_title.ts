@@ -5,15 +5,11 @@ const CJK_LEAD = /^(?:帮我|请你|请|麻烦你|麻烦)\s*/;
 /** A title for the sidebar when the model has not named the session yet. */
 export function fallbackTitle(text: string): string {
   const line = text.replace(/\s+/g, ' ').trim();
-  // A short prompt keeps an @mention: that is the name the person typed.
-  // A long one drops it before the cut, so the sidebar does not start with @README.md.
-  const bare =
-    line.length <= 42
-      ? line
-      : line
-          .replace(/(^|\s)@[^\s]+/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim();
+  // `@README.md` points at a file. It is not the subject, short titles included.
+  const bare = line
+    .replace(/(^|\s)@[^\s]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   let stripped = bare;
   for (let pass = 0; pass < 3; pass++) {
     const next = stripped.replace(LATIN, '').trim();

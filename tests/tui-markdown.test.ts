@@ -32,6 +32,23 @@ test('an em dash on the wrap boundary does not drop the following space', () => 
     assert.match(rows.join(' '), /Roman citizenship/);
   }
 });
+test('CJK wrap does not start a line with closing punctuation', () => {
+  const text =
+    '罗马公民权（civitas Romana）是一种法律地位，它把个人和国家连在一起，并且持续了很多个世纪。';
+  for (const width of [20, 24, 40, 60]) {
+    const rows = markdownRows(text, width).map((row) => stripAnsi(row).trim());
+    for (const row of rows) {
+      assert.equal(
+        /^[\）\]】」』。，、！？]/.test(row),
+        false,
+        `${width}: ${row}`,
+      );
+      assert.equal(/[（【「『]$/.test(row), false, `${width}: ${row}`);
+    }
+    assert.equal(rows.join('').includes('）'), true);
+    assert.equal(rows.join('').replaceAll(' ', ''), text.replaceAll(' ', ''));
+  }
+});
 test('CommonMark emphasis, inline code, links and literal underscore URLs remain distinct in nested formatting', () => {
   const rows = markdownRows(
     '**outer *inner* tail** and ~~old~~; `a_b *literal*` https://example.com/a_b_c',

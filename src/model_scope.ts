@@ -27,6 +27,19 @@ export function matchesModel(pattern: string, model: string): boolean {
     return false;
   }
 }
+/** The same id, ignoring case and a vendor prefix (`zhipu/glm-5.3` is `glm-5.3`). */
+export function sameModel(listed: string, current: string): boolean {
+  const left = listed.trim().toLowerCase();
+  const right = current.trim().toLowerCase();
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const tail = (value: string): string => value.split('/').at(-1) ?? value;
+  return (
+    tail(left) === tail(right) ||
+    left.endsWith('/' + right) ||
+    right.endsWith('/' + left)
+  );
+}
 export function modelScope(
   known: string[],
   patterns: string[],

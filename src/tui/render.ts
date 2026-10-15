@@ -363,7 +363,11 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
       user(message.display ?? message.content);
     else if (message.role === 'assistant') {
       if (message.thinking)
-        thinking(message.thinking, true, state.thinkingSeconds?.[message.id]);
+        thinking(
+          message.thinking,
+          true,
+          message.thinking_seconds ?? state.thinkingSeconds?.[message.id],
+        );
       if (message.content.trim())
         block('●', message.content, '', p.text, true, 'text');
       // Calls run one after another: the first without a result is the one running (or

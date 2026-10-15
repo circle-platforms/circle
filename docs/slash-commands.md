@@ -39,7 +39,7 @@ What these do and do not do is on [Sessions](sessions.md). Several have limits i
 
 | Command | What it does |
 |---|---|
-| `/copy` | Copy the last answer to the clipboard. Without a clipboard tool, it is written to `exports/last-copy.txt` in the data folder. |
+| `/copy` | Copy the last answer to the clipboard. The footer says `Copied N chars`. Without a clipboard tool, it is written to `exports/last-copy.txt` in the data folder and the footer says `Saved to file`. |
 | `/export [html\|jsonl\|path]` | Write the conversation as Markdown (the default, as the screen shows it), HTML or JSONL; a file name's ending picks the format. Without a path the file goes to `exports/` in the data folder. |
 | `/import <path>` | Start a new session from an exported file. A JSONL export comes back exactly; any other text file is shown, and its first 8,000 characters are given to the model. |
 | `/share` | Write a Markdown copy under `shares/` in the data folder and copy its path. Nothing is uploaded. |
@@ -65,7 +65,7 @@ See [Security](security.md).
 
 | Command | Aliases | What it does |
 |---|---|---|
-| `/models [name]` | `/model` | Choose a model from what the endpoint offers, or use one by its id, for this session. `alt+d` in the list also saves it as the default. `alt+l` opens the list; `alt+m` switches to the next model. |
+| `/models [name]` | `/model` | Choose a model from what the endpoint offers, or use one by its id, for this session. The footer says `model set to …`, and `not listed by this endpoint` when the list can be read and does not contain that id. The list marks the session's model with `●` and `current`. `alt+d` in the list also saves it as the default. `alt+l` opens the list; `alt+m` switches to the next model. |
 | `/login` | `/connect` | Change the endpoint, key and model. It asks on its list's own line for the base URL, filled in with the saved one, then the key, shown as dots (an empty `enter` keeps the saved key while the URL stays on the saved host; another host needs its key); `esc` on the key goes back to the URL, and `esc` on the URL leaves. Then it lists the endpoint's models to search; `enter` on a search nothing matches uses what you typed. The session switches to them and they are saved, with the URL that answered; nothing is saved before a model is chosen. |
 | `/logout` | | Clear the saved credentials and mark Circle as not set up. |
 | `/settings` | | A list of the settings: theme, whether thinking is shown, what `esc` `esc` opens, and the model, thinking depth, default mode, endpoint, trusted folders, MCP servers and data folder. `enter` changes the marked one and saves it at once; the model, depth and MCP rows open `/models`, `/effort` and `/mcp`, the default mode row opens the mode list (`enter` for this session, `alt+d` also saves `default_mode`), and the endpoint row opens `/login`. |

@@ -250,7 +250,7 @@ export class Picker {
         sgrJoin(marked ? p.sel_bg : p.panel_bg, p.text) +
           pad(
             truncate(
-              ` ${marked ? '>' : ' '} ${item.label}${item.current ? ' · current' : ''}  ${item.meta || ''}`,
+              ` ${marked ? '>' : ' '} ${item.current ? '● ' : ''}${item.label}${item.current ? ' · current' : ''}  ${item.meta || ''}`,
               width,
             ),
             width,

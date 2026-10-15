@@ -332,7 +332,10 @@ test('@file is read from the current folder, then the workspace, and inlined aft
   });
   assert.equal(binary.code, 2);
   assert.match(binary.stderr, /blob\.bin is not a text file/);
-  assert.equal(endpoint.bodies.length, 1);
+  // The first prompt is long enough for a title side request (max_tokens 128).
+  // That request is not a turn.
+  const turns = () => endpoint.bodies.filter((body) => body.max_tokens !== 128);
+  assert.equal(turns().length, 1);
   // An image in the workspace goes as an attachment, which text cannot carry.
   const png = Buffer.from('89504e470d0a1a0a30303030', 'hex');
   writeFileSync(join(workspace, 'shot.png'), png);
@@ -342,7 +345,7 @@ test('@file is read from the current folder, then the workspace, and inlined aft
   });
   assert.equal(image.code, 0, image.stderr);
   const content = (
-    endpoint.bodies[1]!.messages as { role: string; content: unknown }[]
+    turns()[1]!.messages as { role: string; content: unknown }[]
   ).at(-1)!.content as { type: string; image_url?: { url: string } }[];
   assert.equal(
     content.find((part) => part.type === 'image_url')?.image_url?.url,
@@ -354,7 +357,7 @@ test('@file is read from the current folder, then the workspace, and inlined aft
   });
   assert.equal(far.code, 0, far.stderr);
   const farContent = (
-    endpoint.bodies.at(-1)!.messages as { role: string; content: unknown }[]
+    turns().at(-1)!.messages as { role: string; content: unknown }[]
   ).at(-1)!.content as {
     type: string;
     text?: string;
@@ -412,10 +415,7 @@ test('the full-screen interface shows @path while the model gets the file text',
     'review\n\n<file path="notes.txt">\nremember this\n</file>',
   );
   assert.equal(model.requests[0]!.messages.at(-1)!.content, user.content);
-  assert.equal(
-    runtime.store.get(runtime.session.id)!.title,
-    'review @notes.txt',
-  );
+  assert.equal(runtime.store.get(runtime.session.id)!.title, 'review');
 });
 
 test('the folder is the first word without spaces or the last word, and -p takes a folder as a flag', async (t) => {

@@ -23,7 +23,7 @@ Session ids look like `circle-3f9a1c2e`. `circle --session-id <id>` opens or sta
 
 ## Pick a session
 
-`/resume` and `circle -r` open a list of this folder's sessions, newest first, with how long ago each was used. A session that was never sent a message, or whose only turn failed before any reply, is not listed. Type to narrow the list: the search matches titles and the text of your messages and the model's replies. When nothing matches, the list says `No matches`. When the folder has no sessions, it says so. The marked row starts with `>`.
+`/resume` and `circle -r` open a list of this folder's sessions, newest activity first, with how long ago each was used. Renaming a session does not move it in that list. A session that was never sent a message, or whose only turn failed before any reply, is not listed. Type to narrow the list: the search matches titles and the text of your messages and the model's replies. When nothing matches, the list says `No matches`. When the folder has no sessions, it says so. The marked row starts with `>`.
 
 | Key | What it does |
 |---|---|
@@ -57,7 +57,7 @@ circle --fork 3f9a1c2e         # a copy of it, as a new session here
 circle -p -c "and now the tests"   # go on with it in print mode
 ```
 
-A reopened session is drawn again from its saved messages: your messages, the answers, thinking and tool calls, folded as they were, and `ctrl+o` and `ctrl+t` work on them. Tools are never run again. A tool call that was cut off before its result was saved (Circle was killed, or the terminal closed) gets the result `Interrupted before a tool result was saved`, so the model knows it did not finish. Sessions from `circle -p`, line mode and RPC mode are in the list too, so `circle -c` can pick up a scripted run in the full-screen interface.
+A reopened session is drawn again from its saved messages: your messages, the answers, thinking and tool calls, folded as they were, and `ctrl+o` and `ctrl+t` work on them. A thought line keeps the seconds it took. Tools are never run again. A turn cut off while the assistant was still writing, or that ended on your message with no reply, is marked `✖ Interrupted` when the session is opened again. A tool call that was cut off before its result was saved (Circle was killed, or the terminal closed) gets the result `Interrupted before a tool result was saved`, so the model knows it did not finish. Sessions from `circle -p`, line mode and RPC mode are in the list too, so `circle -c` can pick up a scripted run in the full-screen interface.
 
 ## Undo and redo
 

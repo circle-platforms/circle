@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
+import { stripAnsi } from '../src/ink/string_width.js';
 import { matchesModel, modelScope } from '../src/model_scope.js';
 import { Picker } from '../src/ink/components/picker.js';
 import { AgentRuntime } from '../src/runtime.js';
@@ -119,6 +120,10 @@ for (const scopedRun of [false, true])
       await delay(10);
     };
     await app.command('models', '');
+    assert.match(
+      app.state.picker!.rows(100).map(stripAnsi).join('\n'),
+      /● a · current/,
+    );
     app.state.picker!.query = 'b';
     await key('tab');
     assert.deepEqual(
@@ -148,4 +153,8 @@ for (const scopedRun of [false, true])
     assert.equal(loadSettings(root).default_thinking, 'medium');
     assert.equal(loadSettings(root).theme, 'dark');
     assert.equal(runtime.thinkingLevel, 'medium');
+    await app.command('models', 'nosuch-model-x');
+    assert.match(app.state.flash, /model set to nosuch-model-x/);
+    assert.match(app.state.flash, /not listed by this endpoint/);
+    assert.equal(runtime.harness.model.model, 'nosuch-model-x');
   });

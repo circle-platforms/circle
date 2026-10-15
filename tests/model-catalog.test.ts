@@ -483,6 +483,7 @@ test('real Anthropic requests fit legacy thinking and output budgets and include
   endpoint.models = { 'claude-sonnet-4-5': { context_window: 40_000 } };
   assert.equal(wrapper.contextWindow, 40_000);
   assert.equal(wrapper.outputBudget, 10_000);
+  assert.equal(wrapper.sideRequests, true);
   const modern = new GatewayModel(
     endpoint,
     root,

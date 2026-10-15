@@ -10,7 +10,9 @@ import { defaultEffort } from '../src/model.js';
 import { wrap, stripAnsi } from '../src/ink/string_width.js';
 import { highlightTokens } from '../src/ink/highlight.js';
 import { markdownRows } from '../src/ink/components/markdown_renderer.js';
+import { messageCosts, formatCosts } from '../src/pricing.js';
 import { contextInputOf, footerRow } from '../src/tui/status_rows.js';
+import { thinkingRows } from '../src/tui/tool_rows.js';
 import { variableCopy, hotkeysText } from '../src/tui/slash_commands.js';
 import { Picker } from '../src/ink/components/picker.js';
 import { DEFAULT_DARK, buildPalette, setPalette } from '../src/ink/theme.js';
@@ -33,6 +35,41 @@ test('an unanswered prompt is marked interrupted once', (t) => {
     .filter((message) => message.internal === 'interrupted');
   assert.equal(marks.length, 1);
   assert.equal(marks[0]!.display, 'Interrupted');
+  const streamed = store.create(home, 'model');
+  store.append(streamed.id, [
+    { id: 'u2', role: 'user', content: 'go on' },
+    {
+      id: 'a2',
+      role: 'assistant',
+      content: 'partial',
+      thinking: 'still going',
+      interrupted: true,
+      usage: { input_tokens: 10, output_tokens: 4, cache_read_tokens: 0 },
+    },
+  ]);
+  store.repairInterrupted(streamed.id);
+  store.repairInterrupted(streamed.id);
+  const after = store
+    .messages(streamed.id)
+    .filter((message) => message.internal === 'interrupted');
+  assert.equal(after.length, 1);
+  const finished = store.create(home, 'model');
+  store.append(finished.id, [
+    { id: 'u3', role: 'user', content: 'done' },
+    {
+      id: 'a3',
+      role: 'assistant',
+      content: 'all of it',
+      request_model: 'model',
+    },
+  ]);
+  store.repairInterrupted(finished.id);
+  assert.equal(
+    store
+      .messages(finished.id)
+      .some((message) => message.internal === 'interrupted'),
+    false,
+  );
 });
 
 test('a partial reply reports the same output on the turn line and in the footer', async (t) => {
@@ -69,7 +106,21 @@ test('a partial reply reports the same output on the turn line and in the footer
       new ApprovalStore(join(home, 'approvals')),
       home,
     ),
-    system: 'test',
+    system: 'test system prompt',
+    priceUsage: () => ({
+      model: 'glm-5.3',
+      currency: 'USD',
+      amount: 0.0035,
+      tokens: {
+        input_miss: 100,
+        input_hit: 0,
+        input_write: 0,
+        input_write_1h: 0,
+        output: 236,
+      },
+      rates: { input: 1, output: 2 },
+      provider: 'test',
+    }),
   });
   const events: import('../src/events.js').CircleEvent[] = [];
   run.bus.subscribe((event) => events.push(event));
@@ -83,6 +134,8 @@ test('a partial reply reports the same output on the turn line and in the footer
     .messages(session.id)
     .find((message) => message.role === 'assistant');
   assert.equal(answer?.usage?.output_tokens, 236);
+  assert.ok((answer?.usage?.input_tokens ?? 0) > 0);
+  assert.equal(answer?.interrupted, true);
   assert.deepEqual(
     events
       .map((event) => event.kind)
@@ -92,12 +145,103 @@ test('a partial reply reports the same output on the turn line and in the footer
   const status = new TurnStatus();
   for (const event of events) status.apply(event, () => answer?.id);
   assert.equal(status.usage[answer!.id]!.output, 236);
-  assert.equal(contextInputOf({ usage: answer?.usage }, 'scripted'), undefined);
-  const footer = stripAnsi(
-    footerRow({ usage: answer!.usage!, contextInput: undefined }, '', 80),
+  assert.equal(status.usage[answer!.id]!.input, answer!.usage!.input_tokens);
+  assert.equal(
+    contextInputOf({ usage: answer?.usage }, 'scripted'),
+    answer!.usage!.input_tokens,
   );
+  const footer = stripAnsi(footerRow({ usage: answer!.usage! }, '', 80));
   assert.match(footer, /↓ 236/);
+  assert.equal(footer.includes('↑ 0'), false);
   assert.equal(footer.includes('N/A'), false);
+  assert.equal(answer?.cost?.amount, 0.0035);
+  assert.equal(formatCosts([messageCosts([answer!])]), '$0.0035');
+  const unpriced = messageCosts([
+    answer!,
+    {
+      id: 'other',
+      role: 'assistant',
+      content: '',
+      usage: answer!.usage,
+      cost: { ...answer!.cost!, amount: null, currency: '' },
+    },
+  ]);
+  assert.equal(formatCosts([unpriced]), '$0.0035+');
+});
+
+test('renaming a session does not move it above a newer one', async (t) => {
+  const home = scratch(t);
+  const store = new CheckpointStore(home);
+  cleanup(t, () => store.close());
+  const older = store.create(home, 'model', 'older');
+  await delay(5);
+  const newer = store.create(home, 'model', 'newer');
+  assert.deepEqual(
+    store.list().map((session) => session.id),
+    [newer.id, older.id],
+  );
+  const updated = store.get(older.id)!.updated;
+  store.rename(older.id, 'renamed');
+  assert.equal(store.get(older.id)!.title, 'renamed');
+  assert.equal(store.get(older.id)!.updated, updated);
+  assert.deepEqual(
+    store.list().map((session) => session.id),
+    [newer.id, older.id],
+  );
+});
+
+test('a saved thought keeps its duration after the turn', async (t) => {
+  const { Harness } = await import('../src/harness.js');
+  const { ApprovalPolicy, ApprovalStore } = await import('../src/approvals.js');
+  const { join } = await import('node:path');
+  const home = scratch(t);
+  const store = new CheckpointStore(home);
+  cleanup(t, () => store.close());
+  const session = store.create(home, 'model');
+  const model: ChatModel = {
+    model: 'scripted',
+    async complete(request: ModelRequest) {
+      request.token('**Check the notes**\n\nThe file has three lines.', true);
+      await delay(20);
+      request.token('done');
+      return {
+        message: {
+          id: 'a',
+          role: 'assistant',
+          content: 'done',
+          thinking: '**Check the notes**\n\nThe file has three lines.',
+        },
+        usage: emptyUsage(),
+      };
+    },
+  };
+  const run = new Harness({
+    model,
+    tools: [],
+    store,
+    session,
+    policy: new ApprovalPolicy(
+      new ApprovalStore(join(home, 'approvals')),
+      home,
+    ),
+    system: 'test',
+  });
+  await run.run('hello there');
+  const saved = store
+    .messages(session.id)
+    .find((message) => message.role === 'assistant');
+  assert.equal(typeof saved?.thinking_seconds, 'number');
+  assert.ok((saved?.thinking_seconds ?? -1) >= 0);
+  const row = stripAnsi(
+    thinkingRows(saved!.thinking!, {
+      done: true,
+      seconds: saved!.thinking_seconds,
+      expanded: false,
+      width: 80,
+    })[0]!,
+  );
+  assert.match(row, /∴ Thought \d+\.\ds · Check the notes {2}ctrl\+t/);
+  assert.equal(row.includes('Thought  ctrl'), false);
 });
 
 test('every POSIX absolute path stays absolute, including outside the old top-level whitelist', () => {

@@ -14,6 +14,7 @@ export function loadToolPrompt(name: string): string {
   if (!existsSync(path)) return name;
   return readFileSync(path, 'utf8')
     .replace(/\n## Examples\b[\s\S]*$/i, '')
+    .replaceAll('{{year}}', String(new Date().getFullYear()))
     .trim();
 }
 export function selectSessionPromptName(model: string): string {

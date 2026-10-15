@@ -24,6 +24,11 @@ import { httpStatus } from './model_guard.js';
 import { validateAttachments } from './media.js';
 import { readPrompt } from './system_prompt.js';
 import { fallbackTitle, sanitizeGeneratedTitle } from './session_title.js';
+import { tokenLen } from './middleware/tool_result_prune.js';
+function titleTrace(message: string): void {
+  if (!process.env.CIRCLE_DEBUG) return;
+  console.error(`[circle] title: ${message}`);
+}
 export type ApprovalDecision =
   | 'approve'
   | 'reject'
@@ -53,7 +58,7 @@ export interface HarnessOptions {
   headless?: boolean;
   beforeRun?: (signal: AbortSignal) => Promise<void>;
   /** Called for each turn, including queued follow-ups, before consuming its message. */
-  beforeTurn?: () => void;
+  beforeTurn?: (prompt: string | undefined) => void;
   beforeStep?: () => void;
   priceUsage?: (
     model: string,
@@ -106,6 +111,9 @@ export class Harness {
   /** Text of the model call in flight, kept when the user stops it before the reply is stored. */
   private streamed = '';
   private streamedThinking = '';
+  /** When this step's thinking started, and how long it ran before the answer text. */
+  private thinkingAt?: number;
+  private thinkingSeconds?: number;
   /** Secrets' values hidden as %NAME% in text the model reads. */
   readonly redact: Redactor;
   constructor(readonly options: HarnessOptions) {
@@ -314,11 +322,12 @@ export class Harness {
     let answer = '';
     let first = true;
     do {
-      this.options.beforeTurn?.();
       signal.throwIfAborted();
       const next = first
         ? (prompt ?? this.steering.shift() ?? this.followUps.shift())
         : this.followUps.shift();
+      this.options.beforeTurn?.(next);
+      signal.throwIfAborted();
       const result = await this.runTurn(next, signal);
       answer = result.answer;
       addUsage(total, result.usage);
@@ -336,14 +345,24 @@ export class Harness {
    * swallowed.
    */
   private generateTitle(display: string, fallback: string): void {
-    const model = this.options.model;
+    // `this.model`, not the model passed at construction: /model and a reload replace it.
+    const model = this.model;
     const prompt = display.trim();
-    if (!model.sideRequests || prompt.length < 24) return;
+    if (!model.sideRequests || prompt.length < 24) {
+      titleTrace(
+        `skipped (${!model.sideRequests ? 'model has no sideRequests' : `prompt length ${prompt.length} < 24`})`,
+      );
+      return;
+    }
     const report = (message: string): void => {
+      titleTrace(`failed: ${message}`);
       this.bus.emit('info', {
         payload: { model_notice: { event: 'title_failed', message } },
       });
     };
+    titleTrace(
+      `request model=${model.model} chars=${prompt.length} maxTokens=128 effort=`,
+    );
     void model
       .complete({
         system: readPrompt('agent', 'title.md'),
@@ -363,22 +382,50 @@ export class Harness {
         token: () => {},
       })
       .then((response) => {
-        const title = sanitizeGeneratedTitle(
-          response.message.content || response.message.thinking || '',
-        );
+        const raw = response.message.content || response.message.thinking || '';
+        const title = sanitizeGeneratedTitle(raw);
         if (!title) {
-          report('empty title');
+          report(
+            `empty title (content ${response.message.content.length} chars)`,
+          );
           return;
         }
         const current = this.options.store.get(this.sessionId);
-        if (!current || current.title !== fallback) return;
+        if (!current || current.title !== fallback) {
+          titleTrace(
+            `discarded ${JSON.stringify(title)} (session title is ${JSON.stringify(current?.title ?? '')})`,
+          );
+          return;
+        }
         this.options.store.rename(this.sessionId, title);
+        titleTrace(`renamed to ${JSON.stringify(title)}`);
         this.bus.emit('info', { payload: { title } });
       })
       .catch((error: unknown) => {
         // The fallback title stays. A side request must not fail the turn.
         report(error instanceof Error ? error.message : String(error));
       });
+  }
+  private thoughtClock(): { thinking_seconds?: number } {
+    const seconds =
+      this.thinkingSeconds ??
+      (this.thinkingAt !== undefined
+        ? (Date.now() - this.thinkingAt) / 1000
+        : undefined);
+    this.thinkingAt = undefined;
+    this.thinkingSeconds = undefined;
+    return seconds === undefined ? {} : { thinking_seconds: seconds };
+  }
+  /** What this step was about to send, when the endpoint never reported input tokens. */
+  private estimateInputTokens(): number {
+    const parts = [this.system];
+    for (const message of this.messages) {
+      parts.push(message.content);
+      if (message.thinking) parts.push(message.thinking);
+    }
+    for (const tool of this.tools)
+      parts.push(tool.name, tool.description, JSON.stringify(tool.parameters));
+    return Math.max(1, tokenLen(parts.join('\n')));
   }
   private flushTitle(): void {
     const pending = this.pendingTitle;
@@ -449,6 +496,8 @@ export class Harness {
           stepSignal.throwIfAborted();
           this.streamed = '';
           this.streamedThinking = '';
+          this.thinkingAt = undefined;
+          this.thinkingSeconds = undefined;
           this.bus.emit('llm_start');
           const response = await this.model.complete({
             system:
@@ -466,8 +515,17 @@ export class Harness {
             notice: (event) =>
               this.bus.emit('info', { payload: { model_notice: event } }),
             token: (text, thinking) => {
-              if (thinking) this.streamedThinking += text;
-              else this.streamed += text;
+              if (thinking) {
+                this.streamedThinking += text;
+                this.thinkingAt ??= Date.now();
+              } else {
+                if (
+                  this.thinkingAt !== undefined &&
+                  this.thinkingSeconds === undefined
+                )
+                  this.thinkingSeconds = (Date.now() - this.thinkingAt) / 1000;
+                this.streamed += text;
+              }
               this.bus.emit('llm_token', {
                 payload: { text, thinking: Boolean(thinking) },
               });
@@ -477,6 +535,7 @@ export class Harness {
           const message = {
             ...response.message,
             request_model: this.model.model,
+            ...this.thoughtClock(),
             usage: response.usage,
             cost:
               response.message.cost ??
@@ -540,7 +599,7 @@ export class Harness {
       if (this.streamed.trim() || this.streamedThinking.trim()) {
         try {
           const estimated = {
-            input_tokens: 0,
+            input_tokens: this.estimateInputTokens(),
             output_tokens: Math.max(
               1,
               Math.ceil(
@@ -549,6 +608,12 @@ export class Harness {
             ),
             cache_read_tokens: 0,
           };
+          let cost: Message['cost'];
+          try {
+            cost = this.options.priceUsage?.(this.model.model, estimated);
+          } catch {
+            cost = undefined;
+          }
           const message: Message = {
             id: randomUUID(),
             role: 'assistant',
@@ -556,7 +621,10 @@ export class Harness {
             ...(this.streamedThinking
               ? { thinking: this.streamedThinking }
               : {}),
+            ...this.thoughtClock(),
+            interrupted: true,
             usage: estimated,
+            ...(cost ? { cost } : {}),
           };
           this.save(message);
           // The footer sums this usage. The turn line only hears it from llm_end.

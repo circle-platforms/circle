@@ -1041,8 +1041,8 @@ async function copy(host: CommandHost): Promise<void> {
   }
   const path = join(host.home, 'exports', 'last-copy.txt');
   if (write(host, path, text + '\n')) {
-    host.flash('Copied');
-    host.notice(`No clipboard tool · wrote ${path}`);
+    host.flash('Saved to file');
+    host.notice(`Saved to file · ${path}`);
   }
 }
 

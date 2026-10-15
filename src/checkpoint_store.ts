@@ -352,12 +352,13 @@ export class CheckpointStore {
     const pending = this.deferred.get(id);
     if (pending && !this.row(id)) {
       pending.title = title;
-      pending.updated = Date.now();
       return;
     }
+    // Leave `updated` alone. The session list is newest-activity first, and a
+    // rename is not activity: bumping it jumped the row to the top.
     this.db
-      .prepare('UPDATE sessions SET title = ?, updated = ? WHERE id = ?')
-      .run(title, Date.now(), id);
+      .prepare('UPDATE sessions SET title = ? WHERE id = ?')
+      .run(title, id);
     this.writeVersion++;
   }
   private decode(row: Record<string, unknown>): Checkpoint {
@@ -929,7 +930,12 @@ export class CheckpointStore {
     }
     if (messages.some((message) => message.internal === 'interrupted')) return;
     const last = messages.filter((message) => !message.internal).at(-1);
-    if (last?.role !== 'user') return;
+    // A turn stopped while the assistant was still streaming saves that partial
+    // reply. The last message is then the assistant, and the marker was skipped.
+    const stopped =
+      last?.role === 'user' ||
+      (last?.role === 'assistant' && last.interrupted === true);
+    if (!stopped) return;
     this.append(sessionId, [
       {
         id: randomUUID(),
