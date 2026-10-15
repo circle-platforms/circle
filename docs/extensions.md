@@ -84,16 +84,16 @@ Connects Circle to a [circle-server](https://github.com/qingshanfeihu/circle-ser
 |---|---|
 | `/server` | Where you are signed in, and the commands. |
 | `/server login <url> <user>` | Sign in. The password is asked on a masked card and is not kept; the token the server issues is kept with [`api.secrets`](#secrets). |
-| `/server logout` | Forget the token. |
+| `/server logout` | Revoke the whole token family at the server, then forget the token locally. |
 | `/server packs` | What the server can do, as capability packs. |
-| `/server submit <pack> <file>…` | Upload the files, hand the server the work, and follow it: each event is a line in the conversation, and what it delivers is saved in the workspace once its SHA-256 matches the server's. Sending the same pack and files again finds the same task; add `--again` for a new one. |
-| `/server task <id>` | Show a task and follow it until it ends. Closing Circle does not stop a task; this picks it up again. |
+| `/server submit <pack> <file>…` | Upload the files, hand the server the work, and follow it: each event is a line in the conversation, and what it delivers is saved under `tasks/<taskId>/` in the workspace once its SHA-256 matches the server's. Sending the same pack and files again finds the same task; add `--again` for a new one. For the hub's generic execution flow, hand over the flow itself: `/server submit module-execute <input-json>` with the flow input (`flowId`, `methodPin`, `resources`, `sources`, `value`, `controlledBytes`) and no file. |
+| `/server task <id>` | Show a task and follow it until it ends. Closing Circle does not stop a task; this picks it up again. An event cursor that fell out of the server's retained window restarts at the window. |
 | `/server tasks` | Your tasks. |
-| `/server respond <id> <answer>` | Answer the question a task is waiting on. |
-| `/server get <id>` | Save a delivered task's results again. A file never overwrites one already there: `cases.xlsx` becomes `cases-1.xlsx`. |
+| `/server respond <id> <answer>` | Answer the question a task is waiting on. An input the server marks `repair` is answered with a replacement of the bound input, anything else with a response. |
+| `/server get <id>` | Save a delivered task's results again under `tasks/<taskId>/`. A file never overwrites one already there: `cases.xlsx` becomes `cases-1.xlsx`. |
 | `/server refresh` | Read work, execution, knowledge and methods from the server for the pages above. |
 | `/server approve <id> <approval>` | Approve an action a task waits on, bound to the input revision, target identity and action digest the server states. `/server reject` declines it. |
-| `/server reconcile <id>` | Ask the server to check an operation whose outcome is unknown. It does not turn an unknown outcome into success. |
+| `/server reconcile <id> [op]` | Ask the server to check an operation whose outcome is unknown; only naming the operation reconciles, without it the server explains what is missing. It does not turn an unknown outcome into success. |
 | `/server tools` | The server's tools the model can use, read again from the server. |
 | `/server trial start` | Start recording which server tools the model calls, for the trial record a skill pack is sent with. Only the tool names, whether each call worked, and a SHA-256 of its arguments are kept. |
 | `/server skill push <folder> [--outputs a,b]` | Send a skill pack: the folder's `skillpack.json` (`id`, `version`, `tools`, …), its `SKILL.md` and other files (not hidden ones, not `node_modules`), with the trial record and the SHA-256 of the named output files. The server checks the record against the tools the pack declares and keeps the pack for approval. |
@@ -106,7 +106,9 @@ The address can also be set in `settings.json` as `"extensions": { "circle-serve
 
 **The server's own tools.** A server that publishes a tool catalog (`GET /v1/tools`) has its tools offered to the model once you sign in, each as `srv_<name>`, for example `srv_docs_list` for the server's `docs.list`. The server decides which tools you get. A tool that only reads runs without asking; one that changes something asks first; one the server runs as a task is waited for in the background. The list is read again on `/server refresh`, `/server tools` and when a session starts, and the model sees changes from its next turn. Signing out removes them. A server without a catalog offers none.
 
-It also gives the model three tools, so you can ask in words: `circle_server_packs` and `circle_server_task` only read, and `circle_server_submit` (a pack and a file in the workspace) asks first, since it sends the file and writes the results. `circle_server_submit` returns at once and waits as a [background job](background-jobs.md); when the task is delivered, the results are saved in the workspace after their SHA-256 is checked, as `/server submit` does. Sign in with `/server login` first: the tools never ask for a password themselves, except when the server has signed you out.
+It also gives the model tools of its own, so you can ask in words: `circle_server_packs`, `circle_server_task`, `circle_server_evidence` and `circle_server_source_artifact_status` only read, while `circle_server_submit` (a pack and a file in the workspace, or the flow input for `module-execute`), `circle_server_skill_push` and `circle_server_source_artifact` ask first, since they send files and write results. `circle_server_submit` returns at once and waits as a [background job](background-jobs.md); when the task is delivered, the results are saved under `tasks/<taskId>/` in the workspace after their SHA-256 is checked, as `/server submit` does. Sign in with `/server login` first: the tools never ask for a password themselves, except when the server has signed you out.
+
+Not wired yet: installing modules, registering providers, approving assets and the notification stream are hub-side capabilities the extension does not surface today; they arrive with a later change.
 
 ## Coming from 0.5.0
 
