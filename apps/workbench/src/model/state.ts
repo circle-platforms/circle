@@ -243,9 +243,20 @@ export class PreviewRuntime implements RuntimePort {
   beginConversation = (input: {
     workspaceId?: string | null;
     text: string;
+    model?: string;
+    effort?: Effort;
+    mode?: SessionMode;
   }): BeginResult => {
     const text = input.text.trim();
     if (!text) throw Error('prompt is empty');
+    if (
+      input.effort !== undefined &&
+      input.effort !== 'default' &&
+      !EFFORTS.includes(input.effort)
+    )
+      throw Error('unknown thinking depth');
+    if (input.mode !== undefined && !MODES.includes(input.mode))
+      throw Error('invalid mode');
     let workspace = input.workspaceId
       ? this.snapshot.workspaces.find((item) => item.id === input.workspaceId)
       : this.snapshot.workspaces.find((item) => item.kind === 'scratch');
@@ -280,6 +291,13 @@ export class PreviewRuntime implements RuntimePort {
     session.leafId = message.id;
     session.title = text.split('\n')[0]!.slice(0, 60);
     session.state = 'waiting';
+    if (input.model) session.model = input.model;
+    if (input.effort) session.effort = input.effort;
+    if (input.mode) {
+      session.mode = input.mode;
+      session.readOnly = input.mode === 'plan';
+      session.auto = input.mode === 'auto';
+    }
     this.change((state) => {
       if (created && !state.workspaces.some((item) => item.id === created.id))
         state.workspaces.push(created);

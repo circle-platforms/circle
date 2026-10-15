@@ -382,6 +382,28 @@ test('the first home message begins one session and does not call new-session', 
   assert.equal(host.commands[1]!.payload.workspaceId, undefined);
 });
 
+test('a home message sends the chosen model, effort and mode', async () => {
+  const { runtime, host } = live();
+  host.runtimeCommand = async (command) => {
+    host.commands.push(command);
+    return { id: command.id, ok: true, data: { sessionId: 'session-home' } };
+  };
+  assert.deepEqual(
+    await runtime.beginConversation({
+      workspaceId: 'workspace1',
+      text: 'think harder',
+      model: 'sample-fast-model',
+      effort: 'xhigh',
+      mode: 'plan',
+    }),
+    { sessionId: 'session-home' },
+  );
+  assert.equal(host.commands[0]!.name, 'begin-session');
+  assert.equal(host.commands[0]!.payload.modelId, 'sample-fast-model');
+  assert.equal(host.commands[0]!.payload.effort, 'xhigh');
+  assert.equal(host.commands[0]!.payload.mode, 'plan');
+});
+
 test('an untrusted project is not given a session from home', async () => {
   const { runtime, host } = live();
   assert.deepEqual(

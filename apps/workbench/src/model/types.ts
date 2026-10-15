@@ -372,6 +372,10 @@ export interface BeginConversation {
   /** A known project. Omit it, or pass null, to work without a project. */
   workspaceId?: string | null;
   text: string;
+  /** Choices from the home composer, applied to the session this message starts. */
+  model?: string;
+  effort?: Effort;
+  mode?: SessionMode;
 }
 export type BeginResult = { sessionId: string } | { dialog: 'trust' };
 export interface RuntimePort {

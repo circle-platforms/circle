@@ -6,7 +6,9 @@ import type {
 import type {
   BeginResult,
   CommandResult,
+  Effort,
   RuntimePort,
+  SessionMode,
   WorkbenchSnapshot,
   Session,
 } from './types';
@@ -419,6 +421,9 @@ export class LiveRuntime implements RuntimePort {
   beginConversation = async (input: {
     workspaceId?: string | null;
     text: string;
+    model?: string;
+    effort?: Effort;
+    mode?: SessionMode;
   }): Promise<BeginResult> => {
     const text = input.text.trim();
     if (!text) throw Error(t('prompt is empty'));
@@ -436,6 +441,9 @@ export class LiveRuntime implements RuntimePort {
       ...(workspaceId ? { workspaceId } : {}),
       text,
       display: text,
+      ...(input.model ? { modelId: input.model } : {}),
+      ...(input.effort ? { effort: input.effort } : {}),
+      ...(input.mode ? { mode: input.mode } : {}),
     })) as { sessionId: string };
     return { sessionId: result.sessionId };
   };

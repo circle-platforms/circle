@@ -4400,3 +4400,30 @@ test('the default circle workspace stays a project, and no project is a differen
   assert.equal(looseWorkspace?.kind, 'scratch');
   assert.notEqual(looseWorkspace?.path, f.scratch);
 });
+
+test('the first message keeps the thinking depth and mode chosen on home', async (t) => {
+  const f = await setup(t, [{ message: assistant('started') }]);
+  const begun = await f.call('begin-session', {
+    text: 'think hard about the parser',
+    display: 'think hard about the parser',
+    effort: 'xhigh',
+    mode: 'plan',
+  });
+  assert.equal(begun.ok, true, begun.error);
+  const session = () =>
+    f.controller
+      .snapshot()
+      .sessions.find((row) =>
+        row.messages.some((message) =>
+          message.text.includes('think hard about the parser'),
+        ),
+      );
+  await wait(() => Boolean(session()), 'home choices stored');
+  assert.equal(session()!.effort, 'xhigh');
+  assert.equal(session()!.mode, 'plan');
+  assert.equal(session()!.readOnly, true);
+  await wait(
+    () => session()!.messages.some((message) => message.role === 'assistant'),
+    'home turn finished',
+  );
+});

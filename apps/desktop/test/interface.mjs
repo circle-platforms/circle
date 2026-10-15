@@ -366,6 +366,55 @@ try {
     beforeNew?.activeSessionId ?? 'session1',
   );
   checks.push('new session opens home without creating an empty session');
+  const thinking = page.getByRole('button', {
+    name: 'thinking depth',
+    exact: true,
+  });
+  await thinking.waitFor();
+  await page
+    .getByRole('button', { name: 'approval mode', exact: true })
+    .waitFor();
+  await page.getByRole('button', { name: 'model', exact: true }).waitFor();
+  assert.match(await thinking.innerText(), /^high\b/);
+  await thinking.click();
+  await page.getByRole('menuitem', { name: 'extra high', exact: true }).click();
+  assert.match(await thinking.innerText(), /extra high/);
+  checks.push('home composer has the session controls');
+  await page
+    .getByRole('button', { name: 'choose a project', exact: true })
+    .click();
+  await page
+    .getByRole('menuitem', { name: 'work without a project', exact: true })
+    .click();
+  const message = page.getByRole('textbox', { name: 'message', exact: true });
+  await message.click();
+  assert.equal(
+    await page.evaluate(
+      () => document.activeElement?.getAttribute('aria-label') ?? '',
+    ),
+    'message',
+  );
+  await page.keyboard.type('focused');
+  assert.equal(await message.inputValue(), 'focused');
+  assert.equal(
+    await page
+      .getByRole('textbox', { name: 'search projects', exact: true })
+      .count(),
+    0,
+  );
+  checks.push('choosing no project returns focus to the composer');
+  await page.getByRole('button', { name: 'send message', exact: true }).click();
+  await page.getByRole('heading', { name: 'focused', exact: true }).waitFor();
+  const started = await state();
+  const created = started.sessions.find((session) =>
+    session.messages.some((item) => item.text === 'focused'),
+  );
+  assert.equal(created.effort, 'xhigh');
+  const workspace = started.workspaces.find(
+    (item) => item.id === created.workspaceId,
+  );
+  assert.equal(workspace.kind, 'scratch');
+  checks.push('the first message keeps the thinking depth chosen on home');
   await route('/session/session1');
   const resetDraft = 'preview reset regression draft';
   await page

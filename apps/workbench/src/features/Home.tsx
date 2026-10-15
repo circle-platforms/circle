@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Check,
@@ -12,8 +12,10 @@ import {
 import { DropdownMenu } from 'radix-ui';
 import { desktopHost, openNativeWorkspace } from '../host';
 import { useRuntime } from '../app/context';
-import type { DialogId } from '../model/types';
+import type { DialogId, Effort, Session, SessionMode } from '../model/types';
+import { sessionMode } from '../model/state';
 import { t } from '../i18n';
+import { EffortMenu, ModeMenu, ModelMenu } from './Composer';
 import { homePath, homeProjects, selectedHomeProject } from './home-selection';
 
 export { homePath };
@@ -30,8 +32,41 @@ export function Home({
 }) {
   const { snapshot, runtime, perform, notify } = useRuntime();
   const navigate = useNavigate();
+  const message = useRef<HTMLTextAreaElement>(null);
+  const search = useRef<HTMLInputElement>(null);
+  const active =
+    snapshot.sessions.find((item) => item.id === snapshot.activeSessionId) ??
+    snapshot.sessions[0];
   const [draft, setDraft] = useState('');
   const [query, setQuery] = useState('');
+  const [projectsOpen, setProjectsOpen] = useState(false);
+  const [model, setModelId] = useState(
+    () => active?.model || snapshot.settings.defaultModel,
+  );
+  const [effort, setEffort] = useState<Effort>(
+    () => active?.effort || snapshot.settings.defaultEffort || 'default',
+  );
+  const [mode, setMode] = useState<SessionMode>(() =>
+    active ? sessionMode(active) : 'manual',
+  );
+  const controls: Session | undefined = active
+    ? {
+        ...active,
+        model,
+        effort,
+        mode,
+        readOnly: mode === 'plan',
+        auto: mode === 'auto',
+      }
+    : undefined;
+  const focusMessage = () => {
+    requestAnimationFrame(() => message.current?.focus());
+  };
+  useEffect(() => {
+    if (!projectsOpen) return;
+    const frame = requestAnimationFrame(() => search.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [projectsOpen]);
   const project = selectedHomeProject(
     snapshot.workspaces,
     snapshot.sessions,
@@ -43,13 +78,11 @@ export function Home({
       .toLowerCase()
       .includes(query.trim().toLowerCase()),
   );
-  const model =
-    snapshot.settings.defaultModel ||
-    snapshot.sessions.find((item) => item.id === snapshot.activeSessionId)
-      ?.model;
   const choose = (id: string | null) => {
     setQuery('');
+    setProjectsOpen(false);
     navigate(homePath(id));
+    focusMessage();
   };
   const openProject = () =>
     perform(async () => {
@@ -82,6 +115,9 @@ export function Home({
       const result = await runtime.beginConversation({
         workspaceId: project?.id ?? null,
         text,
+        model,
+        effort,
+        mode,
       });
       if ('dialog' in result) {
         onDialog(result.dialog, project?.id);
@@ -117,6 +153,7 @@ export function Home({
       <div className="home-composer">
         <div className="composer">
           <textarea
+            ref={message}
             autoFocus
             rows={3}
             aria-label={t('message')}
@@ -143,70 +180,102 @@ export function Home({
           </div>
         </div>
         <div className="composer-footbar">
-          <DropdownMenu.Root
-            onOpenChange={(open) => {
-              if (!open) setQuery('');
-            }}
-          >
-            <DropdownMenu.Trigger asChild>
-              <button
-                className="footbar-button"
-                aria-label={t('choose a project')}
-              >
-                <Folder size={13} />
-                <span>
-                  {project ? project.name : t('work without a project')}
-                </span>
-                <ChevronDown size={11} />
-              </button>
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                className="dropdown project-menu"
-                side="top"
-                align="start"
-                sideOffset={7}
-              >
-                <div
-                  className="project-picker-search"
-                  onKeyDown={(event) => event.stopPropagation()}
+          <div>
+            <DropdownMenu.Root
+              open={projectsOpen}
+              modal={false}
+              onOpenChange={(open) => {
+                setProjectsOpen(open);
+                if (!open) setQuery('');
+              }}
+            >
+              <DropdownMenu.Trigger asChild>
+                <button
+                  className="footbar-button"
+                  aria-label={t('choose a project')}
                 >
-                  <Search size={14} />
-                  <input
-                    autoFocus
-                    aria-label={t('search projects')}
-                    placeholder={t('search projects')}
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                  />
-                </div>
-                {projects.map((item) => (
-                  <DropdownMenu.Item
-                    key={item.id}
-                    onSelect={() => choose(item.id)}
+                  <Folder size={13} />
+                  <span>
+                    {project ? project.name : t('work without a project')}
+                  </span>
+                  <ChevronDown size={11} />
+                </button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  className="dropdown project-menu"
+                  side="top"
+                  align="start"
+                  sideOffset={7}
+                  onCloseAutoFocus={(event) => {
+                    // The trigger would take the click that dismissed the menu,
+                    // and the search box would keep what was typed next.
+                    event.preventDefault();
+                    message.current?.focus();
+                  }}
+                >
+                  <div
+                    className="project-picker-search"
+                    onKeyDown={(event) => event.stopPropagation()}
                   >
-                    <Folder size={14} />
-                    <span>{item.name}</span>
-                    {item.id === project?.id && <Check size={14} />}
+                    <Search size={14} />
+                    <input
+                      ref={search}
+                      aria-label={t('search projects')}
+                      placeholder={t('search projects')}
+                      value={query}
+                      onChange={(event) => setQuery(event.target.value)}
+                    />
+                  </div>
+                  {projects.map((item) => (
+                    <DropdownMenu.Item
+                      key={item.id}
+                      onSelect={() => choose(item.id)}
+                    >
+                      <Folder size={14} />
+                      <span>{item.name}</span>
+                      {item.id === project?.id && <Check size={14} />}
+                    </DropdownMenu.Item>
+                  ))}
+                  <DropdownMenu.Separator className="dropdown-separator" />
+                  <DropdownMenu.Item
+                    disabled={!desktopHost()}
+                    onSelect={openProject}
+                  >
+                    <Plus size={14} />
+                    <span>{t('new project')}</span>
                   </DropdownMenu.Item>
-                ))}
-                <DropdownMenu.Separator className="dropdown-separator" />
-                <DropdownMenu.Item
-                  disabled={!desktopHost()}
-                  onSelect={openProject}
-                >
-                  <Plus size={14} />
-                  <span>{t('new project')}</span>
-                </DropdownMenu.Item>
-                <DropdownMenu.Item onSelect={() => choose(null)}>
-                  <X size={14} />
-                  <span>{t('work without a project')}</span>
-                  {!project && <Check size={14} />}
-                </DropdownMenu.Item>
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
-          {model ? <span className="footbar-model">{model}</span> : <span />}
+                  <DropdownMenu.Item onSelect={() => choose(null)}>
+                    <X size={14} />
+                    <span>{t('work without a project')}</span>
+                    {!project && <Check size={14} />}
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+            {controls && <ModeMenu session={controls} onMode={setMode} />}
+          </div>
+          <div>
+            {runtime.mode === 'live' && !snapshot.runtime?.configured ? (
+              <button
+                className="footbar-button attention"
+                onClick={() => onDialog('connect')}
+              >
+                {t('connect a model')}
+              </button>
+            ) : (
+              controls && (
+                <ModelMenu
+                  session={controls}
+                  models={snapshot.models}
+                  enabled={snapshot.settings.enabledModels}
+                  onModel={setModelId}
+                  onManage={() => navigate('/page/models')}
+                />
+              )
+            )}
+            {controls && <EffortMenu session={controls} onEffort={setEffort} />}
+          </div>
         </div>
       </div>
     </section>

@@ -448,6 +448,36 @@ function folder(
   };
 }
 
+test('the first message keeps the home composer model, effort and mode', () => {
+  const runtime = new PreviewRuntime();
+  assert.throws(
+    () =>
+      runtime.beginConversation({
+        workspaceId: 'workspace1',
+        text: 'bad depth',
+        effort: 'ludicrous' as 'high',
+      }),
+    /unknown thinking depth/,
+  );
+  const started = runtime.beginConversation({
+    workspaceId: 'workspace1',
+    text: 'think harder',
+    model: 'sample-fast-model',
+    effort: 'xhigh',
+    mode: 'plan',
+  });
+  assert.ok('sessionId' in started);
+  const created = runtime
+    .getSnapshot()
+    .sessions.find((session) => session.id === started.sessionId)!;
+  assert.equal(created.model, 'sample-fast-model');
+  assert.equal(created.effort, 'xhigh');
+  assert.equal(created.mode, 'plan');
+  assert.equal(created.readOnly, true);
+  assert.equal(created.auto, false);
+  assert.equal(created.messages[0]!.text, 'think harder');
+});
+
 test('the home picker lists known projects and the sidebar choice wins', () => {
   const circle = folder('circle', 'circle');
   const docs = folder('docs', 'docs-site');

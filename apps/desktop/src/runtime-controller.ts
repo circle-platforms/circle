@@ -1763,6 +1763,26 @@ export class RuntimeController {
     }
     throw Error('workspace not found');
   }
+  // The home composer chooses these before a session exists. Apply them to the
+  // runtime that will run the first message, so the turn uses that choice.
+  private applyHomeChoices(
+    runtime: AgentRuntime,
+    p: Record<string, unknown>,
+  ): void {
+    if (
+      typeof p.modelId === 'string' &&
+      p.modelId !== runtime.harness.model.model
+    )
+      runtime.setModel(text(p.modelId, 'model', 500));
+    if (p.effort !== undefined) {
+      const effort = text(p.effort, 'effort', 20);
+      if (effort !== 'default') runtime.setThinkingLevel(effort);
+    }
+    if (p.mode !== undefined) {
+      if (!isSessionMode(p.mode)) throw Error('invalid mode');
+      runtime.setMode(p.mode);
+    }
+  }
   // Reuse an untitled session with no messages so opening a folder, or the
   // first launch, does not leave a second empty session beside the real one.
   private conversationRuntime(workspace: string): AgentRuntime {
@@ -1943,6 +1963,7 @@ export class RuntimeController {
           throw Error('trust the workspace before running Circle');
         const owner = this.conversationRuntime(workspace);
         this.selectRuntime(owner);
+        this.applyHomeChoices(owner, p);
         const started = await this.submitPrompt(owner, p, true);
         return { sessionId: started.sessionId ?? owner.session.id };
       }
