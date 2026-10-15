@@ -1,8 +1,11 @@
 // Opt-in preload for one Windows process-query observation. It does not retry the query.
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { win32 } from 'node:path';
+
+type RequestedLookupKind =
+  'cim-all' | 'native-names' | 'native-all' | 'unknown';
 
 export type ProcessQueryProbeReport = Readonly<{
   parentPid: number;
@@ -17,7 +20,12 @@ export type ProcessQueryProbeReport = Readonly<{
   stderrCodeUnits: number;
   scriptEnteredObserved: boolean;
   pipelineCompletedObserved: boolean;
-  lookupKind: 'cim-all' | 'native-names' | 'native-all' | 'unknown';
+  requestedLookupKind: RequestedLookupKind;
+  lookupKind: RequestedLookupKind | 'win32-image';
+  queryTransformed: boolean;
+  originalQuerySha256: string;
+  effectiveQuerySha256: string;
+  executedScriptSha256: string;
 }>;
 
 function cleanMarkers(
@@ -65,6 +73,7 @@ function cleanMarkers(
 export function instrumentSpawnSync(
   original: typeof childProcess.spawnSync,
   report: (evidence: ProcessQueryProbeReport) => void,
+  probeOptions: Readonly<{ queryScript?: string; forbidCim?: boolean }> = {},
 ): typeof childProcess.spawnSync {
   const nonce = randomUUID().replaceAll('-', '');
   let sequence = 0;
@@ -86,18 +95,23 @@ export function instrumentSpawnSync(
     const script = args[commandIndex + 1];
     if (commandIndex === -1 || typeof script !== 'string')
       return Reflect.apply(original, childProcess, parameters);
-    const lookupKind = /Get-CimInstance\s+-ClassName\s+Win32_Process\b/i.test(
-      script,
-    )
-      ? 'cim-all'
-      : /\[Diagnostics\.Process\]::GetProcessesByName\(/i.test(script)
-        ? 'native-names'
-        : /\[Diagnostics\.Process\]::GetProcesses\(\)/i.test(script)
-          ? 'native-all'
-          : 'unknown';
-    if (lookupKind === 'unknown')
+    const requestedLookupKind =
+      /Get-CimInstance\s+-ClassName\s+Win32_Process\b/i.test(script)
+        ? 'cim-all'
+        : /\[Diagnostics\.Process\]::GetProcessesByName\(/i.test(script)
+          ? 'native-names'
+          : /\[Diagnostics\.Process\]::GetProcesses\(\)/i.test(script)
+            ? 'native-all'
+            : 'unknown';
+    if (requestedLookupKind === 'unknown')
       return Reflect.apply(original, childProcess, parameters);
 
+    const candidateSelected = probeOptions.queryScript !== undefined;
+    const effectiveScript = candidateSelected
+      ? (probeOptions.forbidCim
+          ? "function Get-CimInstance { throw 'CIM is unavailable in this synthetic probe' };\n"
+          : '') + probeOptions.queryScript
+      : script;
     const current = ++sequence;
     const entered = `CIRCLE_QUERY_PROBE_${nonce}_${current}_ENTERED`;
     const completed = `CIRCLE_QUERY_PROBE_${nonce}_${current}_COMPLETED`;
@@ -107,15 +121,16 @@ export function instrumentSpawnSync(
     const mark = (marker: string) =>
       `try { [Console]::Error.WriteLine('${marker}'); [Console]::Error.Flush() } catch {}`;
     const instrumentedArgs = [...args];
-    instrumentedArgs[commandIndex + 1] =
+    const executedScript =
       `${mark(entered)};\n` +
       `try { ${clock} = $null; ${clock} = [Diagnostics.Stopwatch]::StartNew() } catch {};\n` +
-      `${script}\n${success} = $?;\n` +
+      `${effectiveScript}\n${success} = $?;\n` +
       `try { if ($null -ne ${clock}) { ${clock}.Stop(); ` +
       `[Console]::Error.WriteLine('${metric} ' + ${clock}.ElapsedMilliseconds.ToString([Globalization.CultureInfo]::InvariantCulture)); ` +
       `[Console]::Error.Flush() } } catch {};\n` +
       `${mark(completed)};\n` +
       `if (${success}) { exit 0 } else { exit 1 }`;
+    instrumentedArgs[commandIndex + 1] = executedScript;
     const started = performance.now();
     const result = Reflect.apply(original, childProcess, [
       command,
@@ -155,7 +170,18 @@ export function instrumentSpawnSync(
           stderrCodeUnits: stderr.length,
           scriptEnteredObserved: markers.scriptEnteredObserved,
           pipelineCompletedObserved: markers.pipelineCompletedObserved,
-          lookupKind,
+          requestedLookupKind,
+          lookupKind: candidateSelected ? 'win32-image' : requestedLookupKind,
+          queryTransformed: effectiveScript !== script,
+          originalQuerySha256: createHash('sha256')
+            .update(script)
+            .digest('hex'),
+          effectiveQuerySha256: createHash('sha256')
+            .update(effectiveScript)
+            .digest('hex'),
+          executedScriptSha256: createHash('sha256')
+            .update(executedScript)
+            .digest('hex'),
         }),
       );
     } catch {
@@ -176,11 +202,27 @@ if (
   process.env.CIRCLE_QUERY_PROBE === '1' &&
   !Reflect.get(childProcess.spawnSync, installed)
 ) {
+  let probeOptions: Readonly<{ queryScript?: string; forbidCim?: boolean }> =
+    {};
+  if (process.env.CIRCLE_QUERY_PROBE_NATIVE === '1') {
+    const candidate = await import(
+      new URL('../src/windows_native_process_query.ts', import.meta.url).href
+    );
+    if (typeof candidate.WINDOWS_NATIVE_PROCESS_QUERY !== 'string')
+      throw new TypeError(
+        'The native process query probe script must be a string',
+      );
+    probeOptions = {
+      queryScript: candidate.WINDOWS_NATIVE_PROCESS_QUERY,
+      forbidCim: true,
+    };
+  }
   childProcess.spawnSync = instrumentSpawnSync(
     childProcess.spawnSync,
     (entry) => {
       process.stderr.write(`CIRCLE_QUERY_PROBE ${JSON.stringify(entry)}\n`);
     },
+    probeOptions,
   );
   Reflect.set(childProcess.spawnSync, installed, true);
   syncBuiltinESMExports();

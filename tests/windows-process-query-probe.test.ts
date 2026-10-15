@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type childProcess from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   instrumentSpawnSync,
   type ProcessQueryProbeReport,
@@ -14,6 +15,7 @@ const pipeline =
   '$([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($_.ExecutablePath)))" }';
 const args = ['-NoProfile', '-NonInteractive', '-Command', pipeline];
 const options = { encoding: 'utf8' as const, timeout: 30_000 };
+const hash = (text: string) => createHash('sha256').update(text).digest('hex');
 
 function markers(script: string) {
   const matches = [
@@ -47,6 +49,7 @@ function runner(
 
 test('the opt-in probe preserves one query call, its original pipeline and its deadline', () => {
   let calls = 0;
+  let executedScript = '';
   const reports: ProcessQueryProbeReport[] = [];
   const originalArgs = [...args];
   const run = instrumentSpawnSync(
@@ -58,6 +61,7 @@ test('the opt-in probe preserves one query call, its original pipeline and its d
       const actual = actualArgs as string[];
       assert.deepEqual(actual.slice(0, 3), args.slice(0, 3));
       const script = actual[3]!;
+      executedScript = script;
       const { entered, completed, metric } = markers(script);
       assert.equal(script.split(pipeline).length, 2);
       assert.match(script, /\n\$circleQueryProbeSuccess_[a-z0-9_]+ = \$\?;\n/);
@@ -101,12 +105,125 @@ test('the opt-in probe preserves one query call, its original pipeline and its d
   assert.equal(actual.stderr, '');
   assert.equal(reports.length, 1);
   assert.equal(reports[0]!.lookupKind, 'cim-all');
+  assert.equal(reports[0]!.requestedLookupKind, 'cim-all');
+  assert.equal(reports[0]!.queryTransformed, false);
+  assert.equal(reports[0]!.originalQuerySha256, hash(pipeline));
+  assert.equal(reports[0]!.effectiveQuerySha256, hash(pipeline));
+  assert.equal(reports[0]!.executedScriptSha256, hash(executedScript));
   assert.equal(reports[0]!.scriptEnteredObserved, true);
   assert.equal(reports[0]!.pipelineCompletedObserved, true);
   assert.equal(reports[0]!.pipelineElapsedMs, 0);
   assert.equal(reports[0]!.parentPid, process.pid);
   assert.equal(reports[0]!.helperReportedPid, 12345);
   assert.ok(Object.isFrozen(reports[0]));
+});
+
+test('a candidate replaces one recognized query without changing its call, arguments or deadline', () => {
+  const query = '[SyntheticWindowsImageQuery]::WriteProcesses()';
+  const forbidden =
+    "function Get-CimInstance { throw 'CIM is unavailable in this synthetic probe' };\n";
+  const effective = forbidden + query;
+  const queryArgs = Object.freeze([...args]);
+  const queryOptions = Object.freeze({ ...options });
+  const reports: ProcessQueryProbeReport[] = [];
+  let calls = 0;
+  let executed = '';
+  const output = {
+    ...result('original error\r\n'),
+    status: 1,
+    error: Object.assign(new Error('original query failure'), {
+      code: 'EQUERY',
+    }),
+  };
+  const run = instrumentSpawnSync(
+    runner((actualCommand, actualArgs, actualOptions) => {
+      calls++;
+      assert.equal(actualCommand, command);
+      assert.equal(actualOptions, queryOptions);
+      assert.equal(queryOptions.timeout, 30_000);
+      const actual = actualArgs as string[];
+      assert.notEqual(actual, queryArgs);
+      assert.deepEqual(actual.slice(0, 3), args.slice(0, 3));
+      executed = actual[3]!;
+      assert.equal(executed.includes(pipeline), false);
+      assert.equal(executed.split(query).length, 2);
+      assert.equal(executed.split(forbidden).length, 2);
+      assert.ok(
+        executed.indexOf('[Diagnostics.Stopwatch]::StartNew()') <
+          executed.indexOf(effective),
+      );
+      assert.match(
+        executed,
+        /\[SyntheticWindowsImageQuery\]::WriteProcesses\(\)\n\$circleQueryProbeSuccess_[a-z0-9_]+ = \$\?;\n/,
+      );
+      const saved = executed.indexOf(' = $?;');
+      assert.ok(saved < executed.indexOf('.Stop()'));
+      assert.match(
+        executed,
+        /if \(\$circleQueryProbeSuccess_[a-z0-9_]+\) \{ exit 0 \} else \{ exit 1 \}$/,
+      );
+      return output;
+    }),
+    (entry) => reports.push(entry),
+    { queryScript: query, forbidCim: true },
+  );
+  assert.equal(run(command, queryArgs, queryOptions), output);
+  assert.equal(calls, 1);
+  assert.deepEqual(queryArgs, args);
+  assert.deepEqual(queryOptions, options);
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0]!.requestedLookupKind, 'cim-all');
+  assert.equal(reports[0]!.lookupKind, 'win32-image');
+  assert.equal(reports[0]!.queryTransformed, true);
+  assert.equal(reports[0]!.originalQuerySha256, hash(pipeline));
+  assert.equal(reports[0]!.effectiveQuerySha256, hash(effective));
+  assert.equal(reports[0]!.executedScriptSha256, hash(executed));
+  assert.equal(reports[0]!.status, 1);
+  assert.equal(reports[0]!.errorCode, 'EQUERY');
+  assert.equal(JSON.stringify(reports).includes(query), false);
+  assert.equal(JSON.stringify(reports).includes(pipeline), false);
+  assert.equal(JSON.stringify(reports).includes('original error'), false);
+});
+
+test('CIM blocking is candidate-only and an unknown command is never replaced', () => {
+  for (const probeOptions of [
+    { forbidCim: true },
+    { queryScript: '[SyntheticWindowsImageQuery]::WriteProcesses()' },
+  ]) {
+    let calls = 0;
+    let expectedArgs: string[] = args;
+    let entry: ProcessQueryProbeReport | undefined;
+    const output = result();
+    const run = instrumentSpawnSync(
+      runner((_command, actualArgs, actualOptions) => {
+        calls++;
+        assert.equal(actualOptions, options);
+        const actual = actualArgs as string[];
+        if (expectedArgs === args) {
+          assert.equal(actual[3]!.includes('function Get-CimInstance'), false);
+          assert.equal(
+            actual[3]!.includes(probeOptions.queryScript ?? pipeline),
+            true,
+          );
+        } else assert.equal(actualArgs, expectedArgs);
+        return output;
+      }),
+      (report) => {
+        entry = report;
+      },
+      probeOptions,
+    );
+    assert.equal(run(command, args, options), output);
+    assert.equal(
+      entry!.queryTransformed,
+      probeOptions.queryScript !== undefined,
+    );
+    entry = undefined;
+    expectedArgs = ['-Command', 'Write-Output "unrelated command"'];
+    assert.equal(run(command, expectedArgs, options), output);
+    assert.equal(entry, undefined);
+    assert.equal(calls, 2);
+  }
 });
 
 test('only complete own marker lines are stripped without altering errors, CRLF or result fields', () => {
