@@ -157,13 +157,13 @@ try {
       exact: true,
     })
     .click();
-  await page
-    .getByRole('menuitem', { name: 'rename session', exact: true })
-    .click();
-  await page
-    .getByRole('textbox', { name: 'session name', exact: true })
-    .fill('managed fixture A');
-  await page.getByRole('button', { name: 'save', exact: true }).click();
+  await page.getByRole('menuitem', { name: /^rename session\b/ }).click();
+  const rename = page.getByRole('textbox', {
+    name: 'rename session',
+    exact: true,
+  });
+  await rename.fill('managed fixture A');
+  await rename.press('Enter');
   await until(
     async () =>
       (await state()).sessions.find((session) => session.id === a).title ===

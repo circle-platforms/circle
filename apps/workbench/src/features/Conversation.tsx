@@ -363,9 +363,20 @@ export function Conversation({
     }
   }, [find, findIndex]);
   useEffect(() => {
+    // Capture runs before a menu can close and unmount. Escape then still dismisses
+    // the menu, and the later handler does not treat it as stopping the turn.
+    const markMenu = (event: KeyboardEvent) => {
+      if (
+        event.key === 'Escape' &&
+        document.querySelector('[role="dialog"], [role="menu"]')
+      )
+        (event as KeyboardEvent & { menuOpen?: boolean }).menuOpen = true;
+    };
     const handler = (event: KeyboardEvent) => {
+      if ((event as KeyboardEvent & { menuOpen?: boolean }).menuOpen) return;
       if (document.documentElement.dataset.keyCapture) return;
-      if (document.querySelector('[role="dialog"]')) return;
+      // A menu or dialog takes Escape itself. It must not also stop the turn.
+      if (document.querySelector('[role="dialog"], [role="menu"]')) return;
       const current = latestView.current.session;
       const mapped = matchingAction(
         event,
@@ -459,8 +470,12 @@ export function Conversation({
         return;
       }
     };
+    addEventListener('keydown', markMenu, true);
     addEventListener('keydown', handler);
-    return () => removeEventListener('keydown', handler);
+    return () => {
+      removeEventListener('keydown', markMenu, true);
+      removeEventListener('keydown', handler);
+    };
   }, [
     runtime,
     snapshot.models,

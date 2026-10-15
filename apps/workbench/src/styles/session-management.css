@@ -36,10 +36,12 @@
 }
 /* The opening click's pointerup must not land on an item and rename the row. */
 .session-menu[data-state='open'] {
-  pointer-events: none;
-  animation: session-menu-ready 160ms step-end forwards;
+  animation: session-menu-ready 160ms step-end;
 }
 @keyframes session-menu-ready {
+  from {
+    pointer-events: none;
+  }
   to {
     pointer-events: auto;
   }
