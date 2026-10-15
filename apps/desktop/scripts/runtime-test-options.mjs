@@ -13,6 +13,7 @@ export function runtimeTestArguments(tsxPath, tests, { ci = false } = {}) {
 
 export const WINDOWS_NATIVE_TEST_PRIORITY = Object.freeze([
   'pty-exit-cleanup.test.ts',
+  'pty-close-order.test.ts',
   'workspace-terminal-windows.test.ts',
   'workspace-terminal-drain.test.ts',
   'workspace-bundled-terminal.test.ts',
