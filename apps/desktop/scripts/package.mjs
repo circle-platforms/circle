@@ -1,7 +1,15 @@
 import { createHash } from 'node:crypto';
 import { prepareDeveloperTools } from './developer-toolchain.mjs';
 import { packager } from '@electron/packager';
-import { cp, mkdir, rm, readFile, writeFile, symlink } from 'node:fs/promises';
+import {
+  cp,
+  mkdir,
+  rm,
+  readFile,
+  readdir,
+  writeFile,
+  symlink,
+} from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join, relative } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -78,6 +86,18 @@ const artifactPaths = paths.map((path) =>
     ? join(path, `${channel.name}.app/Contents/Resources/app.asar`)
     : join(path, 'resources/app.asar'),
 );
+// Unpacked native modules and executables are part of the deliverable identity too.
+async function collectFiles(directory) {
+  const result = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) result.push(...(await collectFiles(path)));
+    else if (entry.isFile()) result.push(path);
+  }
+  return result;
+}
+for (const archive of [...artifactPaths])
+  artifactPaths.push(...(await collectFiles(`${archive}.unpacked`)));
 const archives = [];
 if (platform === 'darwin' && process.platform === 'darwin') {
   // Packaging changes the bundle Electron's own ad-hoc signature covered; a copy with a broken

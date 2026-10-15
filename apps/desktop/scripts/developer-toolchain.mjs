@@ -134,6 +134,7 @@ export async function prepareDeveloperTools(
         if (
           cached.sha256 === spec.sha256 &&
           cached.target === target &&
+          cached.format === 1 &&
           JSON.stringify(cached.files) ===
             JSON.stringify(await fileHashes(destination))
         )
@@ -169,12 +170,17 @@ export async function prepareDeveloperTools(
         entries.length === 1 ? join(extracted, entries[0]) : extracted;
       await rm(destination, { recursive: true, force: true });
       await cp(source, destination, { recursive: true });
+      if (spec.name === 'js-debug')
+        await writeFile(
+          join(destination, 'package.json'),
+          JSON.stringify({ type: 'commonjs' }) + '\n',
+        );
       if (spec.name === 'gh' && platform !== 'win32')
         await chmod(join(destination, 'bin/gh'), 0o755);
       await writeFile(
         join(destination, 'circle-tool.json'),
         JSON.stringify(
-          { ...spec, target, files: await fileHashes(destination) },
+          { ...spec, format: 1, target, files: await fileHashes(destination) },
           null,
           2,
         ) + '\n',

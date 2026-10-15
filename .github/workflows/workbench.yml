@@ -81,8 +81,12 @@ jobs:
       - run: npm --prefix apps/desktop run format:check
       - run: npm --prefix apps/workbench test
       - run: npm --prefix apps/desktop test
+      - name: Verify native developer tool resources
+        run: node --test apps/desktop/test/developer-toolchain.test.mjs
       - run: npm --prefix apps/desktop run test:runtime
       - run: npm --prefix apps/desktop run build
+      - run: node apps/desktop/scripts/developer-toolchain.mjs
+      - run: node apps/desktop/test/developer-toolchain-smoke.mjs
       - run: npm --prefix apps/desktop run test:desktop
       - run: npm --prefix apps/desktop run test:live
       - run: CIRCLE_DESKTOP_TEST_WIDTH=1024 npm --prefix apps/desktop run test:live
@@ -99,6 +103,7 @@ jobs:
             sudo chown root:root "$helper"
             sudo chmod 4755 "$helper"
           fi
+          node apps/desktop/test/developer-toolchain-smoke.mjs
           npm --prefix apps/desktop run test:desktop
           cp apps/desktop/artifacts/desktop/receipt.json apps/desktop/artifacts/desktop/packaged-receipt.json
           npm --prefix apps/desktop run test:live
@@ -140,8 +145,11 @@ jobs:
           dotnet tool install --global wix --version 5.0.2
           Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.dotnet\tools"
           & "$env:USERPROFILE\.dotnet\tools\wix.exe" extension add --global WixToolset.UI.wixext/5.0.2
+      - name: Verify native developer tool resources
+        run: node --test apps/desktop/test/developer-toolchain.test.mjs
       - run: npm --prefix apps/desktop run test:runtime
       - run: npm --prefix apps/desktop run package
+      - run: node apps/desktop/test/developer-toolchain-smoke.mjs
       - name: Check invalid browser addresses on Windows
         if: runner.os == 'Windows'
         shell: pwsh
@@ -150,6 +158,7 @@ jobs:
           node apps/desktop/test/browser-address.mjs
           $env:CIRCLE_DESKTOP_APP_PATH = Join-Path $env:GITHUB_WORKSPACE 'apps/desktop/out/Circle-win32-x64'
           $env:CIRCLE_DESKTOP_EXECUTABLE = Join-Path $env:CIRCLE_DESKTOP_APP_PATH 'Circle.exe'
+          node apps/desktop/test/developer-toolchain-smoke.mjs
           node apps/desktop/test/browser-address.mjs
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         if: runner.os == 'Windows' && always()
