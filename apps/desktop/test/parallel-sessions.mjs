@@ -228,9 +228,11 @@ try {
     packaged,
   );
   const a = (await state()).activeSessionId;
-  await okay('rename-session', { id: a, title: 'parallel A' });
+  // The home composer reuses this untitled session for the first message.
+  // Naming it first would make that message start a different session.
   await send('A saved baseline');
   await page.getByText('fixture line 80', { exact: true }).waitFor();
+  await okay('rename-session', { id: a, title: 'parallel A' });
   await until(async () => (await session(a)).state === 'idle', 'A saved');
   await send('A hold open');
   await until(
