@@ -479,7 +479,6 @@ try {
   await page
     .getByRole('button', { name: 'trust in preview', exact: true })
     .click();
-  await page.getByRole('button', { name: 'send message', exact: true }).click();
   await page
     .getByRole('heading', { name: 'look at hello', exact: true })
     .waitFor();
