@@ -2,6 +2,7 @@
 export type BrowserDiagnosticRequest =
   | { action: 'read' | 'clearConsole' | 'clearNetwork' | 'devtools' }
   | { action: 'response'; requestId: string }
+  | { action: 'source'; url: string }
   | {
       action: 'storage';
       kind: 'local' | 'session';
@@ -67,6 +68,7 @@ export interface BrowserDiagnosticState {
 }
 export interface BrowserDiagnosticResult {
   state: BrowserDiagnosticState;
+  source?: { url: string; content: string };
   response?: { body: string; base64Encoded: boolean };
   storage?: [string, string][];
   variables?: {
@@ -89,6 +91,7 @@ export function validateBrowserDiagnosticRequest(
     clearNetwork: [],
     devtools: [],
     response: ['requestId'],
+    source: ['url'],
     storage: ['kind', 'origin', 'operation', 'key', 'value'],
     viewport: ['width', 'height', 'mobile'],
     debug: ['command', 'url', 'line', 'reference'],

@@ -1,4 +1,6 @@
 export const browserDiagnostics: Record<string, string> = {
+  'open source location': '打开源码位置',
+  'browser source': '浏览器源码',
   'remove breakpoint': '移除断点',
   'diagnostics unavailable': '诊断不可用',
   'open a page first': '请先打开页面',

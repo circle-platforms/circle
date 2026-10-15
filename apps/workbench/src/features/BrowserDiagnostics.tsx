@@ -1,3 +1,4 @@
+import { useSources, sourceLocation } from '../components/SourceNavigation';
 import { useEffect, useRef, useState } from 'react';
 import { desktopHost } from '../host';
 import { t } from '../i18n';
@@ -22,6 +23,7 @@ export function BrowserDiagnostics({
   tab?: string;
   url: string;
 }) {
+  const sources = useSources();
   const [open, setOpen] = useState(false);
   const [section, setSection] = useState<
     'console' | 'network' | 'storage' | 'debug'
@@ -47,7 +49,7 @@ export function BrowserDiagnostics({
       setResult((previous) =>
         r.action === 'read' ? { ...previous, state: response.state } : response,
       );
-      setError('');
+      if (r.action !== 'read') setError('');
     } catch (e) {
       if (ownIdentity !== identity.current) return;
       setError(e instanceof Error ? e.message : String(e));
@@ -74,6 +76,11 @@ export function BrowserDiagnostics({
       clearInterval(timer);
     };
   }, [open, sessionId, tab, url]);
+  const openSource = (url: string, line: number, column?: number) => {
+    const location = sourceLocation(url);
+    if (location && sources) sources.openFile(location.path, line, column);
+    else void request({ action: 'source', url });
+  };
   const storage = (operation: 'read' | 'set' | 'remove', entry = key) => {
     let origin: string;
     try {
@@ -171,6 +178,14 @@ export function BrowserDiagnostics({
           {result?.state.owner === 'devtools' && (
             <p>{t('devtools owns this page; close it to reconnect')}</p>
           )}
+          {result?.source && (
+            <details open className="browser-source-preview">
+              <summary>
+                {t('browser source')} · {result.source.url}
+              </summary>
+              <pre>{result.source.content}</pre>
+            </details>
+          )}
           <div className="browser-diagnostic-results" role="tabpanel">
             {section === 'console' && (
               <>
@@ -186,9 +201,11 @@ export function BrowserDiagnostics({
                     </summary>
                     {entry.stack.map((f, i) => (
                       <div key={i}>
-                        <code>
+                        <button
+                          onClick={() => openSource(f.url, f.line, f.column)}
+                        >
                           {f.name} {f.url}:{f.line}:{f.column}
-                        </code>
+                        </button>
                       </div>
                     ))}
                   </details>
@@ -343,6 +360,13 @@ export function BrowserDiagnostics({
                     <summary>
                       {f.name} {f.source.path}:{f.line}
                     </summary>
+                    <button
+                      onClick={() =>
+                        openSource(f.source.path, f.line, f.column)
+                      }
+                    >
+                      {t('open source location')}
+                    </button>
                     {f.scopes.map((s) => (
                       <button
                         key={s.variablesReference}

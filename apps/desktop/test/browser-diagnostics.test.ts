@@ -224,3 +224,31 @@ test('breakpoints can be removed and script ids retain source URLs', async () =>
     'Debugger.removeBreakpoint',
   ]);
 });
+
+test('browser source inspection only reads an actually observed script', async () => {
+  const calls: { method: string; params: unknown }[] = [];
+  const d = new BrowserDiagnostics(async (method, params) => {
+    calls.push({ method, params });
+    return { scriptSource: 'console.log("fixture");' };
+  });
+  await assert.rejects(
+    d.request(
+      { action: 'source', url: 'https://unseen.invalid/a.js' },
+      'http://localhost',
+    ),
+    /no longer available/,
+  );
+  assert.equal(calls.length, 0);
+  d.event('Debugger.scriptParsed', {
+    scriptId: 'script-1',
+    url: 'http://localhost/app.js',
+  });
+  const result = await d.request(
+    { action: 'source', url: 'http://localhost/app.js' },
+    'http://localhost',
+  );
+  assert.equal(result.source?.content, 'console.log("fixture");');
+  assert.deepEqual(calls, [
+    { method: 'Debugger.getScriptSource', params: { scriptId: 'script-1' } },
+  ]);
+});

@@ -133,6 +133,16 @@ export class BrowserDiagnostics {
     const result: BrowserDiagnosticResult = { state: this.state };
     if (r.action === 'clearConsole') this.state.console = [];
     if (r.action === 'clearNetwork') this.state.network = [];
+    if (r.action === 'source') {
+      const script = [...this.scriptUrls]
+        .reverse()
+        .find(([, url]) => url === r.url);
+      if (!script) throw Error('browser source is no longer available');
+      const source = await this.send('Debugger.getScriptSource', {
+        scriptId: script[0],
+      });
+      result.source = { url: r.url, content: source.scriptSource };
+    }
     if (r.action === 'response') {
       if (!this.state.network.some((n) => n.id === r.requestId))
         throw Error('unknown browser request');
