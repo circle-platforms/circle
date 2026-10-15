@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.7.0 - 2026-10-15
+
 ### Changed
 
 - The bundled hub extension is named `hub`, uses `/hub` commands, `hub_*` model tools and `CIRCLE_HUB_*` injected run variables. The former `circle-server`, `/server` and tool/protocol names are no longer supported; enable `hub` and sign in again. Generic module flows, result artifacts, expired cursors and token rotation use the current hub contract.
