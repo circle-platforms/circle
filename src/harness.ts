@@ -27,6 +27,7 @@ import {
   fallbackTitle,
   sanitizeGeneratedTitle,
   TITLE_MAX_TOKENS,
+  titleConversation,
   titleWorthy,
 } from './session_title.js';
 export type ApprovalDecision =
@@ -333,8 +334,8 @@ export class Harness {
   /**
    * Ask the model for a short title after the fallback is already saved. A scripted model
    * never sees this call. A rename that landed first is left alone. Thinking is disabled
-   * and the cap is short. Reasoning text is not a title: glm-5.3 otherwise returns a
-   * fragment of its thinking and the sidebar shows that.
+   * and the cap is short. Reasoning text is not a title. The prompt is wrapped as data,
+   * and a reply that answers the user is discarded.
    */
   private generateTitle(display: string, fallback: string): void {
     const model = this.options.model;
@@ -352,7 +353,7 @@ export class Harness {
           {
             id: 'title',
             role: 'user',
-            content: prompt.slice(0, 2000),
+            content: titleConversation(prompt),
           },
         ],
         tools: [],
@@ -364,9 +365,10 @@ export class Harness {
         token: () => {},
       })
       .then((response) => {
-        const title = sanitizeGeneratedTitle(response.message.content);
+        const content = response.message.content;
+        const title = sanitizeGeneratedTitle(content);
         if (!title) {
-          report('empty title');
+          report(content.trim() ? 'not a title' : 'empty title');
           return;
         }
         const current = this.options.store.get(this.sessionId);

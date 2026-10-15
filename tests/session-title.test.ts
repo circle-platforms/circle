@@ -15,7 +15,10 @@ import { defaultSettings, saveCredentials } from '../src/settings.js';
 import {
   fallbackTitle,
   sanitizeGeneratedTitle,
+  TITLE_MAX_CHARS,
   TITLE_MAX_TOKENS,
+  TITLE_MAX_WORDS,
+  titleConversation,
   titleWorthy,
 } from '../src/session_title.js';
 import type { ChatModel, ModelRequest, ModelResponse } from '../src/types.js';
@@ -75,16 +78,46 @@ test('fallback titles stay short and drop a leading please', () => {
   assert.equal([...cjk].length, 22);
 });
 
-test('generated titles keep one line and drop a refusal', () => {
+test('generated titles keep one short phrase and drop a reply', () => {
   assert.equal(sanitizeGeneratedTitle('  "Login bug"\nextra'), 'Login bug');
   assert.equal(sanitizeGeneratedTitle('会话标题。'), '会话标题');
   assert.equal(sanitizeGeneratedTitle('Sorry, I cannot do that'), undefined);
   assert.equal(sanitizeGeneratedTitle('   '), undefined);
-  const long = sanitizeGeneratedTitle(
-    'Refactor the session title generator so the sidebar shows a short summary of the first prompt',
+  assert.equal(
+    sanitizeGeneratedTitle('First heading in README.md'),
+    'First heading in README.md',
   );
-  assert.ok(long && long.length <= 50, long);
-  assert.ok(!long!.endsWith(' '), long);
+  assert.equal(
+    sanitizeGeneratedTitle('Fix your login page'),
+    'Fix your login page',
+  );
+  assert.equal(sanitizeGeneratedTitle('登录故障修复'), '登录故障修复');
+  const words = Array.from({ length: TITLE_MAX_WORDS }, (_, i) => `w${i}`).join(
+    ' ',
+  );
+  assert.equal(sanitizeGeneratedTitle(words), words);
+  assert.equal(sanitizeGeneratedTitle(`${words} extra`), undefined);
+  const chars = 'a'.repeat(TITLE_MAX_CHARS);
+  assert.equal(sanitizeGeneratedTitle(chars), chars);
+  assert.equal(sanitizeGeneratedTitle(`${chars}b`), undefined);
+  assert.equal(sanitizeGeneratedTitle('What is README.md?'), undefined);
+  assert.equal(sanitizeGeneratedTitle('这是什么？'), undefined);
+  assert.equal(sanitizeGeneratedTitle('Login bug. Write tests'), undefined);
+  assert.equal(sanitizeGeneratedTitle('登录故障。请再看一眼'), undefined);
+  assert.equal(sanitizeGeneratedTitle("I don't see the file"), undefined);
+  assert.equal(sanitizeGeneratedTitle('Could you paste it'), undefined);
+  assert.equal(sanitizeGeneratedTitle('You left out the file'), undefined);
+  assert.equal(sanitizeGeneratedTitle('我看不到附件内容'), undefined);
+  assert.equal(
+    sanitizeGeneratedTitle(
+      "I don't see any README.md content attached to your message. Could you paste…",
+    ),
+    undefined,
+  );
+  assert.equal(
+    sanitizeGeneratedTitle('<conversation>\nLogin bug\n</conversation>'),
+    undefined,
+  );
 });
 
 class TitleModel implements ChatModel {
@@ -158,7 +191,8 @@ test('a side request names the session and does not take the answer', async (t) 
   assert.equal(titleCalls.length, 1);
   assert.equal(titleCalls[0]!.effort, '');
   assert.equal(titleCalls[0]!.tools.length, 0);
-  assert.equal(titleCalls[0]!.messages[0]!.content, LONG);
+  assert.equal(titleCalls[0]!.messages[0]!.content, titleConversation(LONG));
+  assert.match(String(titleCalls[0]!.system), /Do not answer it/);
   assert.equal(
     model.requests.filter((request) => !request.maxTokens).length,
     1,
@@ -245,7 +279,7 @@ test('a refusal leaves the fallback title', async (t) => {
   model.releaseTitle();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
-  assert.equal(notes[0], 'empty title');
+  assert.equal(notes[0], 'not a title');
 });
 
 test('a failed side request keeps the fallback and is reported', async (t) => {
@@ -264,6 +298,32 @@ test('a failed side request keeps the fallback and is reported', async (t) => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
   assert.match(notes[0] ?? '', /title exploded/);
+});
+
+test('an answer instead of a title keeps the fallback', async (t) => {
+  const root = scratch(t);
+  const model = new TitleModel(
+    'done',
+    "I don't see any README.md content attached to your message. Could you paste…",
+  );
+  const { harness: run, store, session } = harness(root, model);
+  cleanup(t, () => store.close());
+  const notes: string[] = [];
+  run.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as
+      { event?: string; message?: string } | undefined;
+    if (notice?.event === 'title_failed') notes.push(String(notice.message));
+  });
+  await run.run(LONG);
+  model.releaseTitle();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
+  assert.equal(notes[0], 'not a title');
+  assert.match(
+    model.requests.find((request) => request.maxTokens === TITLE_MAX_TOKENS)!
+      .messages[0]!.content,
+    /^<conversation>\n/,
+  );
 });
 
 test('thinking text is not used as the title', async (t) => {
@@ -388,6 +448,12 @@ test('an anthropic title call waits out the turn and disables thinking', async (
   assert.equal(title!.output_config, undefined);
   assert.deepEqual(title!.thinking, { type: 'disabled' });
   assert.equal(title!.model, 'glm-5.3');
+  assert.match(String(title!.system), /Do not answer it/);
+  assert.match(JSON.stringify(title!.messages), /<conversation>\\nPlease list/);
+  assert.match(
+    JSON.stringify(title!.messages),
+    /explain each\\n<\/conversation>/,
+  );
   assert.equal(bodies[0]!.max_tokens === TITLE_MAX_TOKENS, false);
 });
 
