@@ -1,3 +1,4 @@
+import { runNativeKeyboardJourney } from '../../desktop/test/helpers/native-keyboard-journey.mjs';
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import assert from 'node:assert/strict';
@@ -26,6 +27,9 @@ try {
   await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
   page.setDefaultTimeout(8000);
 
+  await page
+    .getByRole('button', { name: 'developer layout', exact: true })
+    .click();
   const message = page.getByRole('textbox', { name: 'message', exact: true });
   await message.fill('keyboard developer draft');
   await message.evaluate((node) => node.setSelectionRange(3, 10));
@@ -82,6 +86,13 @@ try {
     await message.evaluate((node) => [node.selectionStart, node.selectionEnd]),
     [3, 10],
   );
+  await page.getByRole('button', { name: 'task layout', exact: true }).click();
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  );
   const transcript = page.locator('.transcript');
   await transcript.evaluate((node) => (node.scrollTop = 120));
   const scrollBefore = await transcript.evaluate((node) => node.scrollTop);
@@ -101,6 +112,12 @@ try {
     ) <= 2,
     'layout preserves transcript reading position',
   );
+  await page
+    .getByRole('button', { name: 'developer layout', exact: true })
+    .click();
+  const nativeHelperChecks = [];
+  await runNativeKeyboardJourney({ page, checks: nativeHelperChecks });
+  assert.equal(nativeHelperChecks.length, 1);
   console.log(
     'quick-open keyboard, palette Escape focus, layout draft/selection passed',
   );
