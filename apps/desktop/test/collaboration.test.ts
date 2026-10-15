@@ -422,7 +422,8 @@ test('operation IDs coalesce side effects; mismatches and unknown outcomes canno
   await scheduler.enqueue([spec('task', repo)], { operationId: 'effects' });
   scheduler.start();
   await scheduler.waitForIdle();
-  assert.equal(scheduler.get('task')!.state, 'succeeded');
+  // Catching a lost receipt cannot verify the side effect or release successors.
+  assert.equal(scheduler.get('task')!.state, 'needs_review');
   assert.equal(effects, 2);
 });
 
