@@ -1,5 +1,6 @@
 import type { IPty } from 'node-pty';
 import { spawnPty } from './native-pty.ts';
+import { ptyEnvironment } from './pty-environment.ts';
 import { randomUUID } from 'node:crypto';
 import {
   createReadStream,
@@ -244,14 +245,12 @@ export class TerminalManager {
         throw Error('readiness checks need a service command');
       const readiness = validateReadiness(options.readiness);
       const environment = validateEnvironment(options.env);
-      const effectiveEnvironment: NodeJS.ProcessEnv = {
-        ...process.env,
-        ...this.#options.env,
-      };
-      for (const [name, value] of Object.entries(environment ?? {})) {
-        if (value === null) delete effectiveEnvironment[name];
-        else effectiveEnvironment[name] = value;
-      }
+      const effectiveEnvironment = ptyEnvironment(
+        process.platform,
+        process.env,
+        this.#options.env,
+        environment,
+      );
       effectiveEnvironment.TERM = 'xterm-256color';
       if (readiness?.port && (await portOpen(readiness.port)))
         throw Error(`port ${readiness.port} is already in use`);
