@@ -15,7 +15,10 @@ import type { WorkbenchPlugin } from '../src/plugins/types.ts';
 import {
   canArchiveSession,
   historyMessages,
+  projectTag,
+  recentSessions,
   sessionHasContent,
+  sidebarProjects,
   visibleSessions,
   workspaceListed,
   workspaceSessions,
@@ -657,6 +660,17 @@ test('working without a project creates one scratch session, and an empty projec
   assert.equal(workspace.kind, 'scratch');
   assert.equal(created.messages[0]!.text, 'a loose question');
   assert.equal(workspaceListed(workspace, snapshot.sessions), true);
+  assert.equal(
+    sidebarProjects(snapshot.workspaces, snapshot.sessions).some(
+      (item) => item.id === workspace.id,
+    ),
+    false,
+  );
+  assert.ok(
+    recentSessions(snapshot.sessions).some(
+      (session) => session.id === created.id,
+    ),
+  );
   const placeholder = {
     ...created,
     title: 'new session',
@@ -682,4 +696,92 @@ test('working without a project creates one scratch session, and an empty projec
     .sessions.filter((session) => session.workspaceId === workspace.id);
   assert.equal(scratch.length, 2);
   assert.ok(scratch.every((session) => session.messages.length === 1));
+});
+
+test('recent lists every context newest first and tags only a project', () => {
+  const runtime = new PreviewRuntime();
+  const sample = runtime
+    .getSnapshot()
+    .sessions.find((session) => sessionHasContent(session))!;
+  const project: Workspace = {
+    id: 'proj',
+    name: 'docs-site',
+    path: '/docs',
+    branch: '',
+    trusted: true,
+    kind: 'project',
+    instructions: [],
+  };
+  const scratch: Workspace = {
+    id: 'loose',
+    name: 'unscoped',
+    path: 'unscoped',
+    branch: '',
+    trusted: true,
+    kind: 'scratch',
+    instructions: [],
+  };
+  const older = {
+    ...sample,
+    id: 'older',
+    title: 'older work',
+    workspaceId: project.id,
+    updatedAt: '2020-01-01T00:00:00.000Z',
+    archivedAt: undefined,
+    pinned: true,
+  };
+  const newer = {
+    ...sample,
+    id: 'newer',
+    title: 'newer question',
+    workspaceId: scratch.id,
+    updatedAt: '2024-06-01T00:00:00.000Z',
+    archivedAt: undefined,
+    pinned: false,
+  };
+  const archived = {
+    ...sample,
+    id: 'archived',
+    workspaceId: project.id,
+    updatedAt: '2025-01-01T00:00:00.000Z',
+    archivedAt: '2025-01-02T00:00:00.000Z',
+  };
+  const placeholder = {
+    ...sample,
+    id: 'placeholder',
+    title: 'new session',
+    workspaceId: project.id,
+    messages: [],
+    queue: [],
+    state: 'idle' as const,
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    archivedAt: undefined,
+  };
+  const sessions = [older, newer, archived, placeholder];
+  const workspaces = [project, scratch];
+  assert.deepEqual(
+    recentSessions(sessions).map((session) => session.id),
+    ['newer', 'older'],
+  );
+  assert.equal(projectTag(newer, workspaces), undefined);
+  assert.equal(projectTag(older, workspaces), 'docs-site');
+  assert.equal(
+    projectTag({ ...older, workspaceId: 'missing' }, workspaces),
+    undefined,
+  );
+  assert.deepEqual(
+    sidebarProjects(workspaces, sessions).map((item) => item.id),
+    ['proj'],
+  );
+  const inRecent = recentSessions(sessions).some(
+    (session) => session.id === older.id,
+  );
+  const inProject = sessions.some(
+    (session) =>
+      session.id === older.id &&
+      session.workspaceId === project.id &&
+      sessionHasContent(session),
+  );
+  assert.equal(inRecent, true);
+  assert.equal(inProject, true);
 });

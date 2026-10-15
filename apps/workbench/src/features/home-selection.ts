@@ -19,8 +19,8 @@ export function homeProjects(workspaces: readonly Workspace[]): Workspace[] {
 /**
  * Which project the home composer is aimed at.
  * `null` means the route did not name one, so the current conversation's
- * project is used. `''` means the person chose to work without a project.
- * A scratch id is that same choice: the sidebar's + on that group.
+ * project is used. `''` means the person chose no project.
+ * A scratch id is that same choice.
  */
 export function selectedHomeProject(
   workspaces: readonly Workspace[],

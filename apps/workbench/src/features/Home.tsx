@@ -325,9 +325,7 @@ export function Home({
                   aria-label={t('choose a project')}
                 >
                   <Folder size={13} />
-                  <span>
-                    {project ? project.name : t('work without a project')}
-                  </span>
+                  <span>{project ? project.name : t('no project')}</span>
                   <ChevronDown size={11} />
                 </button>
               </DropdownMenu.Trigger>
@@ -385,7 +383,7 @@ export function Home({
                   </DropdownMenu.Item>
                   <DropdownMenu.Item onSelect={() => choose(null)}>
                     <X size={14} />
-                    <span>{t('work without a project')}</span>
+                    <span>{t('no project')}</span>
                     {!project && <Check size={14} />}
                   </DropdownMenu.Item>
                 </DropdownMenu.Content>

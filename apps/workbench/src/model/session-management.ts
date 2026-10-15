@@ -28,10 +28,9 @@ export function visibleSessions(sessions: readonly Session[]): Session[] {
 }
 
 /**
- * Folders in the sidebar. A group appears only when a session in it has
- * something to show. Opening a folder does not create a session, so the group
- * appears with the first message. The home project menu is separate and still
- * lists the folder.
+ * A workspace that has a session worth showing. Opening a folder does not
+ * create a session, so this becomes true with the first message. The home
+ * project menu is separate and still lists every project folder.
  */
 export function workspaceListed(
   workspace: Workspace,
@@ -43,6 +42,39 @@ export function workspaceListed(
       !session.archivedAt &&
       sessionHasContent(session),
   );
+}
+
+/**
+ * Project groups under the recent list. A scratch workspace is not a group:
+ * its sessions stay in recent and in search.
+ */
+export function sidebarProjects(
+  workspaces: readonly Workspace[],
+  sessions: readonly Session[],
+): Workspace[] {
+  return workspaces.filter(
+    (workspace) =>
+      workspace.kind !== 'scratch' && workspaceListed(workspace, sessions),
+  );
+}
+
+/** Newest sessions from every project and from no project. Archived and empty rows stay out. */
+export function recentSessions(sessions: readonly Session[]): Session[] {
+  return visibleSessions(sessions)
+    .filter((session) => !session.archivedAt)
+    .sort(
+      (a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0),
+    );
+}
+
+/** The folder name on a recent row. A session that is not in a project has none. */
+export function projectTag(
+  session: Session,
+  workspaces: readonly Workspace[],
+): string | undefined {
+  const workspace = workspaces.find((item) => item.id === session.workspaceId);
+  if (!workspace || workspace.kind === 'scratch') return undefined;
+  return workspace.name;
 }
 
 export function canArchiveSession(

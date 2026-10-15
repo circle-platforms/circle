@@ -80,3 +80,5 @@ Each English text has its Chinese in one of the files under `apps/workbench/src/
 | runtime | 运行时 |
 
 The home composer calls a folder a project (项目). Its trust prompt uses the same word: 项目信任, 信任项目, 项目已信任. Opening a folder on disk says 文件夹. Other workspace words stay 工作区.
+
+The sidebar's recent list is 最近. A row in a folder shows that folder's name; a session with no project does not. Choosing no project on the home composer is 不选择项目.

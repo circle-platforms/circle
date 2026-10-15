@@ -50,6 +50,7 @@ export const components: Record<string, string> = {
   key: '按键',
   'accept dialog': '接受对话框',
   // the sidebar
+  recent: '最近',
   'new session': '新会话',
   'search Circle': '搜索 Circle',
   sessions: '会话',

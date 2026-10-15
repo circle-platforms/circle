@@ -3785,6 +3785,16 @@ pre {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.session-project-tag {
+  flex: 0 1 auto;
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  font-weight: 400;
+}
 .session-link.active {
   background: var(--active);
   color: var(--fg);

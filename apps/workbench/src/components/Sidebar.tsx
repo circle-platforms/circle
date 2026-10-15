@@ -19,8 +19,13 @@ import {
 import { useRuntime } from '../app/context';
 import { usePlugins } from '../plugins/context';
 import { currentSession, sessionTitle } from '../model/state';
-import { visibleSessions, workspaceListed } from '../model/session-management';
-import type { DialogId } from '../model/types';
+import {
+  projectTag,
+  recentSessions,
+  sidebarProjects,
+  visibleSessions,
+} from '../model/session-management';
+import type { DialogId, Session } from '../model/types';
 import { IconButton } from './common';
 import { t } from '../i18n';
 import { UpdateChip } from '../features/Update';
@@ -46,6 +51,8 @@ export const CUSTOMIZE = [
   'approvals',
 ] as const;
 const SHOWN = 8;
+/** Collapse state for the recent list. It is not a workspace id. */
+const RECENT = 'recent';
 
 export function Sidebar({
   onSearch,
@@ -82,20 +89,38 @@ export function Sidebar({
         (value, session) => Math.max(value, Date.parse(session.updatedAt) || 0),
         0,
       );
-  const projects = snapshot.workspaces
-    .filter((workspace) => workspaceListed(workspace, snapshot.sessions))
-    .sort((a, b) =>
+  const projects = sidebarProjects(snapshot.workspaces, snapshot.sessions).sort(
+    (a, b) =>
       a.id === current.workspaceId
         ? -1
         : b.id === current.workspaceId
           ? 1
           : latest(b.id) - latest(a.id),
-    );
+  );
+  const recent = recentSessions(snapshot.sessions);
   const waiting = new Set(
     snapshot.interactions
       .filter((item) => item.status === 'pending')
       .map((item) => item.sessionId),
   );
+  const toggle = (id: string, list: string[], set: (ids: string[]) => void) =>
+    set(list.includes(id) ? list.filter((item) => item !== id) : [...list, id]);
+  const sessionRows = (sessions: Session[], tagged: boolean) =>
+    sessions.map((session) => (
+      <SessionRow
+        key={session.id}
+        session={session}
+        tag={tagged ? projectTag(session, snapshot.workspaces) : undefined}
+        attention={waiting.has(session.id)}
+        running={session.state === 'waiting'}
+        onOpen={(id) => {
+          perform(async () => {
+            await goSession(id);
+          });
+        }}
+        onDialog={onDialog}
+      />
+    ));
   const customizing = CUSTOMIZE.some(
     (id) => location.pathname === '/page/' + id,
   );
@@ -162,6 +187,37 @@ export function Sidebar({
         </nav>
       )}
       <div className="project-list">
+        {recent.length > 0 && (
+          <section className="project">
+            <div className="project-header">
+              <button
+                className="project-name"
+                aria-expanded={!collapsed.includes(RECENT)}
+                onClick={() => toggle(RECENT, collapsed, setCollapsed)}
+              >
+                {t('recent')}
+              </button>
+            </div>
+            {sessionRows(
+              collapsed.includes(RECENT)
+                ? []
+                : all.includes(RECENT)
+                  ? recent
+                  : recent.slice(0, SHOWN),
+              true,
+            )}
+            {!collapsed.includes(RECENT) && recent.length > SHOWN && (
+              <button
+                className="text-button show-more"
+                onClick={() => toggle(RECENT, all, setAll)}
+              >
+                {all.includes(RECENT)
+                  ? t('show less')
+                  : t('show {n} more', { n: recent.length - SHOWN })}
+              </button>
+            )}
+          </section>
+        )}
         {projects.map((workspace) => {
           const sessions = visibleSessions(snapshot.sessions)
             .filter(
@@ -174,29 +230,19 @@ export function Sidebar({
                 (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0),
             );
           const open = all.includes(workspace.id);
-          const name =
-            workspace.kind === 'scratch'
-              ? t('work without a project')
-              : workspace.name;
           return (
             <section className="project" key={workspace.id}>
               <div className="project-header" title={workspace.path}>
                 <button
                   className="project-name"
                   aria-expanded={!collapsed.includes(workspace.id)}
-                  onClick={() =>
-                    setCollapsed((ids) =>
-                      ids.includes(workspace.id)
-                        ? ids.filter((id) => id !== workspace.id)
-                        : [...ids, workspace.id],
-                    )
-                  }
+                  onClick={() => toggle(workspace.id, collapsed, setCollapsed)}
                 >
-                  {name}
+                  {workspace.name}
                 </button>
                 <div className="project-actions">
                   <IconButton
-                    label={t('new session in {name}', { name })}
+                    label={t('new session in {name}', { name: workspace.name })}
                     onClick={() => newSession(workspace.id)}
                   >
                     <Plus size={13} />
@@ -205,55 +251,26 @@ export function Sidebar({
                     workspace={workspace}
                     onNew={() => newSession(workspace.id)}
                     onCollapseAll={() =>
-                      setCollapsed(projects.map((item) => item.id))
+                      setCollapsed([
+                        ...(recent.length > 0 ? [RECENT] : []),
+                        ...projects.map((item) => item.id),
+                      ])
                     }
                   />
                 </div>
               </div>
-              {(collapsed.includes(workspace.id)
-                ? []
-                : open
-                  ? sessions
-                  : sessions.slice(0, SHOWN)
-              ).map((session) => (
-                <div className="session-row" key={session.id}>
-                  <NavLink
-                    className={({ isActive }) =>
-                      isActive ? 'session-link active' : 'session-link'
-                    }
-                    to={`/session/${session.id}`}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      perform(async () => {
-                        await goSession(session.id);
-                      });
-                    }}
-                  >
-                    <span>{sessionTitle(session.title)}</span>
-                    {waiting.has(session.id) ? (
-                      <i className="attention-dot" />
-                    ) : session.state === 'waiting' ? (
-                      <i className="running-dot" />
-                    ) : null}
-                  </NavLink>
-                  <SessionMenu
-                    session={session}
-                    onDialog={(dialog, selection) =>
-                      onDialog?.(dialog, selection)
-                    }
-                  />
-                </div>
-              ))}
+              {sessionRows(
+                collapsed.includes(workspace.id)
+                  ? []
+                  : open
+                    ? sessions
+                    : sessions.slice(0, SHOWN),
+                false,
+              )}
               {!collapsed.includes(workspace.id) && sessions.length > SHOWN && (
                 <button
                   className="text-button show-more"
-                  onClick={() =>
-                    setAll(
-                      open
-                        ? all.filter((id) => id !== workspace.id)
-                        : [...all, workspace.id],
-                    )
-                  }
+                  onClick={() => toggle(workspace.id, all, setAll)}
                 >
                   {open
                     ? t('show less')
@@ -336,5 +353,49 @@ export function Sidebar({
         </IconButton>
       </footer>
     </aside>
+  );
+}
+
+function SessionRow({
+  session,
+  tag,
+  attention,
+  running,
+  onOpen,
+  onDialog,
+}: {
+  session: Session;
+  tag?: string;
+  attention: boolean;
+  running: boolean;
+  onOpen: (id: string) => void;
+  onDialog?: (dialog: DialogId, selection?: string) => void;
+}) {
+  return (
+    <div className="session-row">
+      <NavLink
+        className={({ isActive }) =>
+          isActive ? 'session-link active' : 'session-link'
+        }
+        end
+        to={`/session/${session.id}`}
+        onClick={(event) => {
+          event.preventDefault();
+          onOpen(session.id);
+        }}
+      >
+        <span>{sessionTitle(session.title)}</span>
+        {tag ? <span className="session-project-tag">{tag}</span> : null}
+        {attention ? (
+          <i className="attention-dot" />
+        ) : running ? (
+          <i className="running-dot" />
+        ) : null}
+      </NavLink>
+      <SessionMenu
+        session={session}
+        onDialog={(dialog, selection) => onDialog?.(dialog, selection)}
+      />
+    </div>
   );
 }

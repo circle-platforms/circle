@@ -111,6 +111,35 @@ try {
   clipboard = await application.evaluate(({ clipboard }) =>
     clipboard.readText(),
   );
+  const sections = page.locator('.project-list > .project');
+  await sections
+    .nth(0)
+    .getByRole('button', { name: 'recent', exact: true })
+    .waitFor();
+  const activeLinks = page.locator('.sidebar a.session-link.active');
+  const hrefs = await activeLinks.evaluateAll((nodes) =>
+    nodes.map((node) => node.getAttribute('href')),
+  );
+  assert.ok(hrefs.length >= 2);
+  assert.equal(new Set(hrefs).size, 1);
+  const projectName = await sections
+    .nth(1)
+    .locator('.project-name')
+    .innerText();
+  assert.match(
+    await sections.nth(0).locator('a.session-link.active').innerText(),
+    new RegExp(projectName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+  );
+  assert.equal(
+    await page
+      .locator('.sidebar')
+      .getByRole('button', { name: 'work without a project', exact: true })
+      .count(),
+    0,
+  );
+  checks.push(
+    'the open session stays highlighted in recent and in its project',
+  );
   for (const command of sourceCommands) {
     await reset();
     await page
@@ -430,14 +459,14 @@ try {
     .getByRole('menuitem', { name: 'open folder', exact: true })
     .waitFor();
   await projectMenu
-    .getByRole('menuitem', { name: 'work without a project', exact: true })
+    .getByRole('menuitem', { name: 'no project', exact: true })
     .waitFor();
   await page.keyboard.press('Escape');
   await page.waitForFunction(
     () => document.activeElement?.getAttribute('aria-label') === 'message',
   );
   checks.push(
-    'a project search with no matches keeps open folder and work without a project',
+    'a project search with no matches keeps open folder and no project',
   );
   const heldDraft = page.getByRole('textbox', { name: 'message', exact: true });
   await heldDraft.fill('hold this');
@@ -493,9 +522,7 @@ try {
   await page
     .getByRole('button', { name: 'choose a project', exact: true })
     .click();
-  await page
-    .getByRole('menuitem', { name: 'work without a project', exact: true })
-    .click();
+  await page.getByRole('menuitem', { name: 'no project', exact: true }).click();
   const homeMessage = page.getByRole('textbox', {
     name: 'message',
     exact: true,
