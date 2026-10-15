@@ -11,7 +11,8 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { RuntimeController } from '../src/runtime-controller.ts';
@@ -595,5 +596,79 @@ test('streaming token IPC sends deltas while final snapshots remain authoritativ
       .snapshot.sessions.some((session: any) =>
         session.messages.some((message: any) => message.text === content),
       ),
+  );
+});
+
+test('workspace journal failure cancels its producers and remains visible after state polling', async (t) => {
+  let aborted = false;
+  const f = await setup(t, [
+    async (request) =>
+      new Promise((_resolve, reject) => {
+        request.signal.addEventListener(
+          'abort',
+          () => {
+            aborted = true;
+            reject(request.signal.reason);
+          },
+          { once: true },
+        );
+      }),
+  ]);
+  await f.call('prompt', { text: 'stay running while native journal fails' });
+  await wait(() => f.model.requests.length === 1);
+  const hash = createHash('sha256')
+    .update(realpathSync(f.workspace))
+    .digest('hex');
+  await mkdir(
+    join(f.home, 'workspace-services', 'workspaces', hash, 'events.jsonl'),
+    { recursive: true },
+  );
+  const failed = await f.service('documents', 'read', { path: 'README.md' });
+  assert.equal(failed.ok, false);
+  await wait(() => aborted);
+  assert.match(
+    f.controller.snapshot().runtime?.error ?? '',
+    /persistence failed/,
+  );
+  await f.call('state');
+  assert.match(
+    f.controller.snapshot().runtime?.error ?? '',
+    /persistence failed/,
+  );
+});
+
+test('parent conversations share the configured app model pool without holding leases for whole turns', async (t) => {
+  const f = await setup(t, [
+    async (request) =>
+      new Promise((_resolve, reject) => {
+        request.signal.addEventListener(
+          'abort',
+          () => reject(request.signal.reason),
+          { once: true },
+        );
+      }),
+    { message: assistant('second parent completed') },
+  ]);
+  const configured = await f.service('tasks', 'settings', {
+    limits: { agents: 1 },
+  });
+  assert.equal(configured.ok, true, configured.error);
+  const first = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'first parent blocked' });
+  await wait(() => f.model.requests.length === 1);
+  await f.call('new-session');
+  const second = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'second parent queued' });
+  await delay(50);
+  assert.equal(f.model.requests.length, 1);
+  await f.call('select-session', { id: first });
+  await f.call('abort');
+  await wait(() => f.model.requests.length === 2);
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .sessions.find((s) => s.id === second)
+        ?.messages.some((m) => m.text === 'second parent completed') === true,
   );
 });

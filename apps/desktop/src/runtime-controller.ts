@@ -92,6 +92,7 @@ import { CollaborationResources } from './workspace/collaboration';
 import { createCollaborationTools } from './workspace/collaboration-tools';
 import type { TaskRecord } from './workspace/task-store';
 import type { FileMutations } from '../../../src/file_mutations.js';
+import { wrapModelCompletion } from '../../../src/model_wrapper.js';
 import type { RuntimeCredentialStore } from './runtime-private-channel';
 import {
   validateWorkspaceRequest,
@@ -313,7 +314,7 @@ export class RuntimeController {
   >();
   private taskRuntimes = new Map<string, AgentRuntime>();
   private workspaceEventPending = new Set<Promise<unknown>>();
-  private workspaceStreamFailures = new Set<string>();
+  private workspaceStreamFailures = new Map<string, string>();
   private workspaceEpoch = randomUUID();
   private workspaceSeq = 0;
   private stoppedJobs = new Set<string>();
@@ -559,27 +560,7 @@ export class RuntimeController {
     event: WorkspaceServiceEvent,
   ): void {
     if (this.workspaceStreamFailures.has(workspace)) return;
-    const failure = (error: unknown) => {
-      if (this.workspaceStreamFailures.has(workspace)) return;
-      this.workspaceStreamFailures.add(workspace);
-      this.error = `workspace event persistence failed: ${String(error)}`;
-      const origin = this.taskWorkspaces.get(workspace) ?? workspace;
-      void this.taskServices
-        .get(origin)
-        ?.close()
-        .catch(() => {});
-      for (const runtime of [
-        ...this.runtimes.values(),
-        ...this.taskRuntimes.values(),
-      ]) {
-        if (
-          (this.taskWorkspaces.get(runtime.options.workspace) ??
-            runtime.options.workspace) === origin
-        )
-          void runtime.cancel({ keepQueue: false }).catch(() => {});
-      }
-      if (!this.closing) this.publish();
-    };
+    const failure = (error: unknown) => this.workspaceFailure(workspace, error);
     try {
       const pending = this.services(workspace).publishSource(event);
       this.workspaceEventPending.add(pending);
@@ -591,6 +572,27 @@ export class RuntimeController {
     }
   }
 
+  private workspaceFailure(workspace: string, error: unknown): void {
+    if (this.workspaceStreamFailures.has(workspace)) return;
+    const message = `workspace event persistence failed: ${String(error)}`;
+    this.workspaceStreamFailures.set(workspace, message);
+    this.error = message;
+    const origin = this.taskWorkspaces.get(workspace) ?? workspace;
+    void this.taskServices
+      .get(origin)
+      ?.close()
+      .catch(() => {});
+    for (const runtime of [
+      ...this.runtimes.values(),
+      ...this.taskRuntimes.values(),
+    ])
+      if (
+        (this.taskWorkspaces.get(runtime.options.workspace) ??
+          runtime.options.workspace) === origin
+      )
+        void runtime.cancel({ keepQueue: false }).catch(() => {});
+    if (!this.closing) this.publish();
+  }
   private bindWorkspace(workspace: string): void {
     const canonical = realpathSync(workspace);
     const directory = statSync(canonical);
@@ -673,6 +675,7 @@ export class RuntimeController {
         workspaceId: identity(root),
         credentialFiles: loadSettings(this.home).credential_files,
         emit: (event) => this.options.emitWorkspaceEvent?.(event),
+        onPersistenceError: (error) => this.workspaceFailure(root, error),
       });
       this.workspaceServices.set(root, services);
     }
@@ -784,7 +787,9 @@ export class RuntimeController {
       (request.service === 'terminal' &&
         ['signal', 'close'].includes(request.method)) ||
       (request.service === 'debug' && request.method === 'stop') ||
-      (request.service === 'delivery' && request.method === 'login.cancel');
+      (request.service === 'delivery' &&
+        request.method === 'login' &&
+        request.params?.action === 'cancel');
     if (emergency) {
       const existing = this.workspaceServices.get(row.workspace);
       if (!existing)
@@ -828,6 +833,14 @@ export class RuntimeController {
       new AgentRuntime({
         workspace,
         fileMutations: this.fileMutations(workspace),
+        wrapModel: (model) =>
+          wrapModelCompletion(model, (request, invoke) =>
+            this.taskResources.withResource(
+              'agent',
+              () => invoke(request),
+              request.signal,
+            ),
+          ),
         home: this.home,
         beforeDelete: async () => {
           await this.releaseSessionResources(runtime.session.id, workspace);
@@ -927,7 +940,11 @@ export class RuntimeController {
     }
     runtime.bus.subscribe((event) => {
       if (task) {
-        this.event(runtime, event, false);
+        this.event(
+          runtime,
+          event,
+          this.selectedSessionId === runtime.session.id,
+        );
         const eventRoot =
           this.taskWorkspaces.get(realpathSync(workspace)) ?? workspace;
         this.workspaceEvent(eventRoot, {
@@ -1237,7 +1254,7 @@ export class RuntimeController {
         observedAt: new Date().toISOString(),
         configured: !!this.options.model || isReady(settings),
         hasKey: (this.keySaved ??= Boolean(this.savedKey())),
-        error: this.error,
+        error: this.error ?? this.workspaceStreamFailures.values().next().value,
       },
       workspaces: paths.map((path) => ({
         id: identity(path),
