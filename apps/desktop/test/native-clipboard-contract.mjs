@@ -79,7 +79,7 @@ try {
         ),
       }),
     ]);
-  }, png);
+  });
   const expected = await fingerprint();
   assert.deepEqual(Object.keys(expected).sort(), [
     'image/png',
