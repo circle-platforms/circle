@@ -4,6 +4,7 @@ import {
   renameSync,
   writeFileSync,
   chmodSync,
+  realpathSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -234,6 +235,23 @@ export function withPrivateJsonLock<T>(path: string, operation: () => T): T {
   } finally {
     release();
   }
+}
+// Settings and credentials describe one connection. Hold this across login/logout
+// writes and SDK construction so another process cannot observe half of the pair.
+const connectionSections = new Set<string>();
+export function withConnectionLock<T>(home: string, operation: () => T): T {
+  const path = join(realpathSync(ensureHome(home)), 'connection-state');
+  // All callers are synchronous; nested fingerprint/client reads belong to the same
+  // critical section, while another process still contends on the filesystem lock.
+  if (connectionSections.has(path)) return operation();
+  return withPrivateJsonLock(path, () => {
+    connectionSections.add(path);
+    try {
+      return operation();
+    } finally {
+      connectionSections.delete(path);
+    }
+  });
 }
 export function loadCredentials(home = circleHome()): Record<string, string> {
   const path = credentialsPath(home);

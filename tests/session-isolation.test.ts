@@ -2,7 +2,16 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { readdirSync, statSync, utimesSync, rmSync } from 'node:fs';
+import {
+  readdirSync,
+  statSync,
+  utimesSync,
+  rmSync,
+  existsSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { AgentRuntime } from '../src/runtime.js';
@@ -188,6 +197,8 @@ test('deletion blocks new work, cancels only the target and keeps its lease unti
   await assert.rejects(first.harness.run('late prompt'), /closing/);
   await assert.rejects(first.userShells.run('echo late'), /Busy/);
   await assert.rejects(first.compact(), /closing/);
+  await assert.rejects(first.initialize(), /closing/);
+  await assert.rejects(first.reloadIntegrations(), /closing/);
   b.finish();
   await runningB;
   assert.equal(reader.messages(second.session.id).at(-1)?.content, 'done');
@@ -316,50 +327,122 @@ test('deleting a session removes only its own and its descendants approval recor
   assert.equal(second.policy.store.rules(second.session.id).length, 1);
 });
 
-test('a compromised heartbeat cancels execution and never allows another model or shell request', async (t) => {
-  const home = scratch(t),
-    workspace = scratch(t),
-    pending = gate();
-  const model = new ScriptedModel([pending.reply]);
-  const runtime = new AgentRuntime({
-    workspace,
-    home,
-    settings: defaultSettings(),
-    model,
-    headless: true,
+for (const leaseOwner of ['root', 'child'] as const) {
+  test(`a compromised ${leaseOwner} heartbeat stops owned processes and extensions without affecting other sessions or readable history`, async (t) => {
+    const home = scratch(t),
+      workspace = scratch(t),
+      pending = gate();
+    const model = new ScriptedModel([pending.reply]);
+    const runtime = new AgentRuntime({
+      workspace,
+      home,
+      settings: defaultSettings(),
+      model,
+      headless: true,
+    });
+    cleanup(t, () => runtime.close());
+    const leaseId =
+      leaseOwner === 'root'
+        ? runtime.session.id
+        : runtime.store.create(
+            workspace,
+            'scripted',
+            '',
+            undefined,
+            runtime.session.id,
+          ).id;
+    const otherPending = gate();
+    const other = new AgentRuntime({
+      workspace,
+      home,
+      settings: defaultSettings(),
+      model: new ScriptedModel([otherPending.reply]),
+      headless: true,
+    });
+    cleanup(t, () => other.close());
+    const otherRunning = other.harness.run('other session stays in flight');
+    await otherPending.ready;
+    const script = join(workspace, 'background.cjs');
+    writeFileSync(
+      script,
+      `const fs = require('node:fs');
+    fs.writeFileSync('background.pid', String(process.pid));
+    setInterval(() => { if (fs.existsSync('trigger')) fs.writeFileSync('forbidden', 'late write'); }, 10);`,
+    );
+    const job = runtime.jobs.startShell(
+      `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`,
+      { sessionId: runtime.session.id, startedBy: 'model' },
+    );
+    const readyDeadline = Date.now() + 5000;
+    while (!existsSync(join(workspace, 'background.pid'))) {
+      assert.ok(Date.now() < readyDeadline, 'background process started');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const pid = Number(readFileSync(join(workspace, 'background.pid'), 'utf8'));
+    let extensionsAborted = false;
+    const originalExtensionClose = runtime.extensions.close.bind(
+      runtime.extensions,
+    );
+    runtime.extensions.close = async (...args) => {
+      extensionsAborted = true;
+      await originalExtensionClose(...args);
+    };
+    const lost = new Promise<void>((resolve) =>
+      runtime.bus.subscribe((event) => {
+        if (event.payload.session_ownership_lost) resolve();
+      }),
+    );
+    const running = runtime.harness
+      .run('blocked until cancellation')
+      .catch(() => {});
+    await pending.ready;
+    const lock = join(
+      home,
+      'session-locks',
+      createHash('sha256').update(leaseId).digest('hex') + '.lock',
+    );
+    rmSync(lock, { recursive: true });
+    await Promise.race([
+      lost,
+      new Promise<never>((_, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error('ownership compromise was not detected')),
+          10000,
+        );
+        timer.unref();
+      }),
+    ]);
+    await running;
+    const stoppedDeadline = Date.now() + 5000;
+    while (
+      runtime.jobs.get(job.id)?.status === 'running' ||
+      !extensionsAborted
+    ) {
+      assert.ok(Date.now() < stoppedDeadline, 'ownership cleanup finished');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.throws(() => process.kill(pid, 0));
+    writeFileSync(join(workspace, 'trigger'), '');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(existsSync(join(workspace, 'forbidden')), false);
+    assert.equal(other.busy, true);
+    assert.ok(runtime.store.get(runtime.session.id));
+    assert.ok(runtime.store.messages(runtime.session.id).length > 0);
+    assert.throws(
+      () =>
+        runtime.jobs.startShell('echo late', { sessionId: runtime.session.id }),
+      /closed/,
+    );
+    await assert.rejects(runtime.harness.run('must not send another request'));
+    await assert.rejects(runtime.compact());
+    await assert.rejects(runtime.initialize());
+    await assert.rejects(runtime.reloadIntegrations());
+    await assert.rejects(runtime.userShells.run('echo must-not-run'), /Busy/);
+    assert.equal(model.requests.length, 1);
+    otherPending.finish();
+    await otherRunning;
   });
-  cleanup(t, () => runtime.close());
-  const lost = new Promise<void>((resolve) =>
-    runtime.bus.subscribe((event) => {
-      if (event.payload.session_ownership_lost) resolve();
-    }),
-  );
-  const running = runtime.harness
-    .run('blocked until cancellation')
-    .catch(() => {});
-  await pending.ready;
-  const lock = join(
-    home,
-    'session-locks',
-    readdirSync(join(home, 'session-locks'))[0]!,
-  );
-  rmSync(lock, { recursive: true });
-  await Promise.race([
-    lost,
-    new Promise<never>((_, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error('ownership compromise was not detected')),
-        10000,
-      );
-      timer.unref();
-    }),
-  ]);
-  await running;
-  await assert.rejects(runtime.harness.run('must not send another request'));
-  await assert.rejects(runtime.compact());
-  await assert.rejects(runtime.userShells.run('echo must-not-run'), /Busy/);
-  assert.equal(model.requests.length, 1);
-});
+}
 
 test('deletion holds the parent lease while collecting and deleting descendants', (t) => {
   const home = scratch(t),

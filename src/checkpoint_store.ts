@@ -60,6 +60,10 @@ export class CheckpointStore {
   private db: DatabaseSync;
   private readonly home?: string;
   private readonly ownership = new Map<string, SessionLease>();
+  private readonly ownershipHandlers = new Map<
+    string,
+    (error: Error) => void
+  >();
   private closed = false;
   // The messages of each session's current head, so a repaint does not walk the checkpoint
   // chain (one query per message) again. The array and its messages are shared: callers
@@ -129,15 +133,20 @@ export class CheckpointStore {
     sessionId: string,
     onCompromised?: (error: Error) => void,
   ): void {
-    if (!this.home || this.ownership.has(sessionId)) return;
-    this.ownership.set(
-      sessionId,
-      acquireSessionLease(this.home, sessionId, onCompromised),
-    );
+    if (!this.home) return;
+    if (!this.ownership.has(sessionId))
+      this.ownership.set(
+        sessionId,
+        acquireSessionLease(this.home, sessionId, (error) =>
+          this.ownershipHandlers.get(sessionId)?.(error),
+        ),
+      );
+    if (onCompromised) this.ownershipHandlers.set(sessionId, onCompromised);
   }
   releaseSession(sessionId: string): void {
     this.ownership.get(sessionId)?.release();
     this.ownership.delete(sessionId);
+    this.ownershipHandlers.delete(sessionId);
   }
   private writing<T>(sessionIds: string[], operation: () => T): T {
     const temporary: SessionLease[] = [];
@@ -159,7 +168,8 @@ export class CheckpointStore {
     id = 'circle-' + randomUUID().slice(0, 8),
     parentId: string | null = null,
   ): Session {
-    if (parentId && this.ownership.has(parentId)) this.claimSession(id);
+    if (parentId && this.ownership.has(parentId))
+      this.claimSession(id, this.ownershipHandlers.get(parentId));
     return this.writing(parentId ? [parentId, id] : [id], () =>
       this.createOwned(workspace, model, title, id, parentId),
     );

@@ -34,6 +34,7 @@ import {
   isReady,
   loadSettings,
   loadCredentials,
+  withConnectionLock,
   saveSettingsChange,
   settingsForRun,
   VARIABLE_NAME,
@@ -165,6 +166,7 @@ export class AgentRuntime {
   private childJobOwners = new Map<string, import('./jobs.js').JobOwner>();
   private closing = false;
   private ownershipError?: Error;
+  private ownershipCleanup?: Promise<void>;
   private deleting = false;
   get isDeleting(): boolean {
     return this.deleting;
@@ -426,6 +428,7 @@ export class AgentRuntime {
       compact: async (hint, context) => this.compact(hint, context.signal),
       task: async (args, context) => {
         context.signal.throwIfAborted();
+        if (this.ownershipError) throw this.ownershipError;
         if (this.closing || this.deleting)
           throw new Error('session is closing');
         const parentHarness = this.harness;
@@ -885,6 +888,8 @@ export class AgentRuntime {
     );
   }
   async initialize(signal?: AbortSignal): Promise<void> {
+    if (this.ownershipError) throw this.ownershipError;
+    if (this.closing || this.deleting) throw new Error('session is closing');
     if (this.options.headless && !this.options.integrations) return;
     if (!this.integrationsReady) {
       this.integrationsReady = (async () => {
@@ -941,6 +946,8 @@ export class AgentRuntime {
     this.toolsCheck.unref?.();
   }
   async reloadIntegrations(): Promise<void> {
+    if (this.ownershipError) throw this.ownershipError;
+    if (this.closing || this.deleting) throw new Error('session is closing');
     if (this.busy) throw new Error('reload after the current turn');
     this.options.settings = settingsForRun(
       this.options.home,
@@ -1017,20 +1024,22 @@ export class AgentRuntime {
     this.refreshSystemPrompt();
   }
   private savedConnectionFingerprint(): string {
-    const saved = loadSettings(this.options.home);
-    // The default model can change while each session keeps its selected model.
-    const { protocol, base_url, api_key_ref } = saved.auth;
-    return createHash('sha256')
-      .update(
-        JSON.stringify({
-          initialized: saved.initialized,
-          auth: { protocol, base_url, api_key_ref },
-          credentials: Object.entries(loadCredentials(this.options.home)).sort(
-            ([a], [b]) => a.localeCompare(b),
-          ),
-        }),
-      )
-      .digest('hex');
+    return withConnectionLock(this.options.home, () => {
+      const saved = loadSettings(this.options.home);
+      // The default model can change while each session keeps its selected model.
+      const { protocol, base_url, api_key_ref } = saved.auth;
+      return createHash('sha256')
+        .update(
+          JSON.stringify({
+            initialized: saved.initialized,
+            auth: { protocol, base_url, api_key_ref },
+            credentials: Object.entries(
+              loadCredentials(this.options.home),
+            ).sort(([a], [b]) => a.localeCompare(b)),
+          }),
+        )
+        .digest('hex');
+    });
   }
   private requireCurrentConnection(): void {
     // Scripted/injected models have no saved credentials or network client to invalidate.
@@ -1058,33 +1067,35 @@ export class AgentRuntime {
     model?: string,
     explicit = false,
   ): GatewayModel {
-    if (!explicit) this.requireCurrentConnection();
-    const saved = loadSettings(this.options.home);
-    if (saved.initialized && isReady(settings)) {
-      const endpoint = (value: string) => value.trim().replace(/\/+$/, '');
-      if (
-        saved.auth.protocol !== settings.auth.protocol ||
-        endpoint(saved.auth.base_url) !== endpoint(settings.auth.base_url) ||
-        saved.auth.api_key_ref !== settings.auth.api_key_ref
-      )
+    return withConnectionLock(this.options.home, () => {
+      if (!explicit) this.requireCurrentConnection();
+      const saved = loadSettings(this.options.home);
+      if (saved.initialized && isReady(settings)) {
+        const endpoint = (value: string) => value.trim().replace(/\/+$/, '');
+        if (
+          saved.auth.protocol !== settings.auth.protocol ||
+          endpoint(saved.auth.base_url) !== endpoint(settings.auth.base_url) ||
+          saved.auth.api_key_ref !== settings.auth.api_key_ref
+        )
+          throw new Error(
+            'saved connection changed in another Circle runtime; reconnect before continuing',
+          );
+      }
+      const fingerprint = this.savedConnectionFingerprint();
+      const gateway = new GatewayModel(
+        settings,
+        this.options.home,
+        model,
+        {},
+        this.catalog,
+      );
+      if (fingerprint !== this.savedConnectionFingerprint())
         throw new Error(
           'saved connection changed in another Circle runtime; reconnect before continuing',
         );
-    }
-    const fingerprint = this.savedConnectionFingerprint();
-    const gateway = new GatewayModel(
-      settings,
-      this.options.home,
-      model,
-      {},
-      this.catalog,
-    );
-    if (fingerprint !== this.savedConnectionFingerprint())
-      throw new Error(
-        'saved connection changed in another Circle runtime; reconnect before continuing',
-      );
-    this.authFingerprint = fingerprint;
-    return gateway;
+      this.authFingerprint = fingerprint;
+      return gateway;
+    });
   }
   get thinkingLevel(): string {
     return this.baseModel instanceof GatewayModel
@@ -1301,7 +1312,32 @@ export class AgentRuntime {
     this.bus.emit('error', {
       payload: { message: error.message, session_ownership_lost: true },
     });
-    void this.cancel();
+    // Turn cancellation deliberately leaves background jobs alive for an ordinary
+    // stop. Losing execution ownership must instead stop every owned writer, while
+    // retaining the readable store so the UI can still show this session's history.
+    this.ownershipCleanup ??= this.stopUnownedWork();
+  }
+  private async stopUnownedWork(): Promise<void> {
+    const results = await Promise.allSettled([
+      this.cancel(),
+      this.jobs.close(),
+    ]);
+    await this.integrationsReady?.catch(() => {});
+    results.push(
+      ...(await Promise.allSettled([
+        this.extensions.close(2000, { requireSettled: true }),
+        this.mcp.close(),
+        this.lsp.close(),
+      ])),
+    );
+    for (const result of results)
+      if (result.status === 'rejected')
+        this.bus.emit('error', {
+          payload: {
+            message: `session ownership cleanup failed: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`,
+            session_ownership_lost: true,
+          },
+        });
   }
   /** Delete only after all writers and owned processes have finished, while still leased. */
   async deleteSession(): Promise<void> {
@@ -1323,6 +1359,7 @@ export class AgentRuntime {
     saveJobNotes: boolean,
     deleteSession = false,
   ): Promise<void> {
+    await this.ownershipCleanup;
     if (this.toolsCheck) clearTimeout(this.toolsCheck);
     await this.catalog.close();
     this.compactionController?.abort(new Error('Interrupted'));
@@ -1339,7 +1376,7 @@ export class AgentRuntime {
         this.store.append(sessionId, notices);
     }
     await this.integrationsReady?.catch(() => {});
-    await this.extensions.close(2000);
+    await this.extensions.close(2000, { requireSettled: deleteSession });
     await this.mcp.close();
     await this.lsp.close();
     if (deleteSession) await this.options.beforeDelete?.();

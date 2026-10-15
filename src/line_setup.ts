@@ -14,6 +14,7 @@ import {
   loadCredentials,
   loadSettings,
   saveCredentials,
+  withConnectionLock,
   saveSettingsChange,
   trustFolder,
   withConnection,
@@ -220,15 +221,17 @@ export async function runLineInit(
       },
       home,
     );
-    saveCredentials({ api_key: key }, home);
-    const settings = saveSettingsChange(home, (saved) => {
-      if (
-        saved.auth.base_url.replace(/\/+$/, '') !==
-        connection.auth.base_url.replace(/\/+$/, '')
-      )
-        saved.enabled_models = [];
-      saved.auth = connection.auth;
-      saved.initialized = true;
+    const settings = withConnectionLock(home, () => {
+      saveCredentials({ api_key: key }, home);
+      return saveSettingsChange(home, (saved) => {
+        if (
+          saved.auth.base_url.replace(/\/+$/, '') !==
+          connection.auth.base_url.replace(/\/+$/, '')
+        )
+          saved.enabled_models = [];
+        saved.auth = connection.auth;
+        saved.initialized = true;
+      });
     });
     io.say('Saved settings.json and credentials.json in the data folder.');
     return settings;

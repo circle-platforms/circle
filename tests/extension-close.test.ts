@@ -9,6 +9,8 @@ import { listPending } from '../src/secret_prompt.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { defaultSettings, trustFolder } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
+import { CheckpointStore } from '../src/checkpoint_store.js';
+import { sessionOccupied } from '../src/session_lock.js';
 
 const schema = '{type:"object",properties:{}}';
 const context = () =>
@@ -121,6 +123,88 @@ test('closing a host gives up on work that does not end once the bound is reache
   const started = Date.now();
   await host.close(50);
   assert.ok(Date.now() - started < 2000);
+});
+
+test('strict extension close rejects unfinished cleanup and a retry drains work after an earlier bounded close', async (t) => {
+  const root = scratch(t),
+    workspace = scratch(t);
+  extension(
+    join(root, 'extensions'),
+    'slow',
+    `import {writeFileSync} from 'node:fs';
+    import {join} from 'node:path';
+    import {setTimeout as delay} from 'node:timers/promises';
+    export function register(api) {
+      api.background((async () => {
+        await new Promise(resolve => api.signal.addEventListener('abort', resolve, {once:true}));
+        await delay(200);
+        writeFileSync(join(api.workspace, 'cleanup'), 'finished');
+      })());
+    }`,
+  );
+  const host = await new ExtensionHost({
+    home: root,
+    workspace,
+    trusted: true,
+    bundledRoot: false,
+  }).load();
+  await host.close(10);
+  await assert.rejects(
+    host.close(10, { requireSettled: true }),
+    /cleanup is still running/,
+  );
+  assert.equal(existsSync(join(workspace, 'cleanup')), false);
+  await host.close(2000, { requireSettled: true });
+  assert.equal(existsSync(join(workspace, 'cleanup')), true);
+});
+
+test('deletion retains history and its lease until slow extension cleanup finishes on retry', async (t) => {
+  const home = scratch(t),
+    workspace = scratch(t);
+  extension(
+    join(home, 'extensions'),
+    'slow-delete',
+    `import {writeFileSync} from 'node:fs';
+    import {join} from 'node:path';
+    import {setTimeout as delay} from 'node:timers/promises';
+    export function register(api) {
+      api.background((async () => {
+        await new Promise(resolve => api.signal.addEventListener('abort', resolve, {once:true}));
+        await delay(2600);
+        writeFileSync(join(api.workspace, 'cleanup'), 'finished');
+      })());
+    }`,
+  );
+  let externalCleanup = false;
+  const runtime = new AgentRuntime({
+    home,
+    workspace,
+    settings: defaultSettings(),
+    model: new ScriptedModel(),
+    headless: true,
+    integrations: true,
+    bundledExtensions: false,
+    localContext: false,
+    beforeDelete: async () => {
+      assert.equal(existsSync(join(workspace, 'cleanup')), true);
+      externalCleanup = true;
+    },
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.initialize();
+  const id = runtime.session.id;
+  await assert.rejects(runtime.deleteSession(), /cleanup is still running/);
+  assert.ok(runtime.store.get(id));
+  assert.equal(sessionOccupied(home, id), true);
+  assert.equal(existsSync(join(workspace, 'cleanup')), false);
+  assert.equal(externalCleanup, false);
+  const reader = new CheckpointStore(home);
+  cleanup(t, () => reader.close());
+  assert.ok(reader.get(id));
+  await runtime.deleteSession();
+  assert.equal(externalCleanup, true);
+  assert.equal(reader.get(id), undefined);
+  assert.equal(sessionOccupied(home, id), false);
 });
 
 test('a secret card that is up when the host closes goes down and leaves no request behind', async (t) => {
