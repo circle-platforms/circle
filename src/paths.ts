@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { lstatSync, mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 export function expandUser(path: string): string {
   return path === '~'
@@ -10,9 +10,32 @@ export function expandUser(path: string): string {
       ? join(homedir(), path.slice(2))
       : path;
 }
-export function normalizeWorkspace(path: string): string {
+/** Match fs/promises.realpath, including Windows short-name expansion, for missing file tails too. */
+export function canonicalPath(path: string): string {
   const absolute = resolve(expandUser(path));
-  return existsSync(absolute) ? realpathSync(absolute) : absolute;
+  try {
+    return realpathSync.native(absolute);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    // A dangling link cannot become a granted lexical file just because its
+    // target is missing. Nested missing paths encounter this check at the link.
+    try {
+      if (lstatSync(absolute).isSymbolicLink()) throw error;
+    } catch (entryError) {
+      if (
+        entryError === error ||
+        (entryError as NodeJS.ErrnoException).code !== 'ENOENT'
+      )
+        throw entryError;
+    }
+    const parent = dirname(absolute);
+    return parent === absolute
+      ? absolute
+      : join(canonicalPath(parent), basename(absolute));
+  }
+}
+export function normalizeWorkspace(path: string): string {
+  return canonicalPath(path);
 }
 export function circleHome(override?: string): string {
   return normalizeWorkspace(
