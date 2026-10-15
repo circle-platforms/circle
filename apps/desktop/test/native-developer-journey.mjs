@@ -934,7 +934,9 @@ try {
           .getByLabel('acceptance criteria', { exact: true })
           .fill('Inspect actual file and git effects');
         await panel
-          .getByLabel('workspace access', { exact: true })
+          .locator('label')
+          .filter({ hasText: 'workspace access' })
+          .locator('select')
           .selectOption(access);
         await panel
           .getByRole('button', { name: 'queue task', exact: true })

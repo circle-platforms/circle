@@ -68,7 +68,7 @@ export async function runNativeInputRecovery({
     .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
     .click();
   assert.equal(
-    (await current()).status,
+    (await current()).state,
     'waiting',
     'recovery setup requires the actual held parent turn',
   );
