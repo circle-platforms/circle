@@ -45,7 +45,7 @@ test('accept-edits writes an existing file through a real workspace alias while 
   );
   policy.setMode(session.id, 'accept-edits');
   if (process.platform === 'win32') {
-    const otherDrive = alias[0].toUpperCase() === 'Z' ? 'Y' : 'Z';
+    const otherDrive = alias[0]!.toUpperCase() === 'Z' ? 'Y' : 'Z';
     assert.equal(
       policy.needsApproval(
         'write_file',
@@ -109,7 +109,7 @@ test('accept-edits writes an existing file through a real workspace alias while 
     },
   });
   await harness.run('fix this file through the granted alias');
-  const results = model.requests[2].messages.filter(
+  const results = model.requests[2]!.messages.filter(
     (message) => message.role === 'tool',
   );
   assert.equal(

@@ -107,23 +107,33 @@ test('runtime catalog changes only when prompt is rebuilt and matches the next s
   writeFileSync(leaf, 'CHANGED AFTER BUILD');
   const newFile = join(workspace, 'CLAUDE.md');
   writeFileSync(newFile, 'NEW AFTER BUILD');
+  // Keep the caller's alias spelling for actual input and writes. Runtime
+  // catalogs identify the same sources with its native canonical workspace.
+  const expectedLeaf = realpathSync.native(leaf);
+  const expectedNewFile = realpathSync.native(newFile);
+  assert.equal(runtime.options.workspace, realpathSync.native(workspace));
   assert.deepEqual(runtime.loadedInstructions, initial);
   initial[0]!.content = 'MUTATED GETTER';
   assert.notEqual(runtime.loadedInstructions[0]!.content, 'MUTATED GETTER');
   runtime.refreshPrompt();
   assert.equal(
-    runtime.loadedInstructions.find((file) => file.path === leaf)?.content,
+    runtime.loadedInstructions.find((file) => file.path === expectedLeaf)
+      ?.content,
     'CHANGED AFTER BUILD',
   );
-  assert.ok(runtime.loadedInstructions.some((file) => file.path === newFile));
+  assert.ok(
+    runtime.loadedInstructions.some((file) => file.path === expectedNewFile),
+  );
   await runtime.harness.run('verify instructions');
   for (const file of runtime.loadedInstructions)
     assert.ok(model.requests[0]!.system.includes(file.content));
   unlinkSync(newFile);
   assert.ok(
-    runtime.loadedInstructions.some((file) => file.path === newFile),
+    runtime.loadedInstructions.some((file) => file.path === expectedNewFile),
     'deletion does not rewrite the already-loaded prompt',
   );
   runtime.refreshPrompt();
-  assert.ok(!runtime.loadedInstructions.some((file) => file.path === newFile));
+  assert.ok(
+    !runtime.loadedInstructions.some((file) => file.path === expectedNewFile),
+  );
 });
