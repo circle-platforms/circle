@@ -87,8 +87,11 @@ export function ModeMenu({
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
-          className="dropdown mode-menu"
+          className={`dropdown mode-menu${side === 'bottom' ? ' home-menu' : ''}`}
           side={side}
+          {...(side === 'bottom'
+            ? { avoidCollisions: false, collisionPadding: 8 }
+            : {})}
           align="start"
           sideOffset={7}
           onCloseAutoFocus={closeMenu(onCloseFocus)}
@@ -160,8 +163,11 @@ export function ModelMenu({
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
-          className="dropdown footbar-menu"
+          className={`dropdown footbar-menu${side === 'bottom' ? ' home-menu' : ''}`}
           side={side}
+          {...(side === 'bottom'
+            ? { avoidCollisions: false, collisionPadding: 8 }
+            : {})}
           align="end"
           sideOffset={7}
           onCloseAutoFocus={closeMenu(onCloseFocus)}
@@ -205,8 +211,11 @@ export function EffortMenu({
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
-          className="dropdown footbar-menu"
+          className={`dropdown footbar-menu${side === 'bottom' ? ' home-menu' : ''}`}
           side={side}
+          {...(side === 'bottom'
+            ? { avoidCollisions: false, collisionPadding: 8 }
+            : {})}
           align="end"
           sideOffset={7}
           onCloseAutoFocus={closeMenu(onCloseFocus)}
