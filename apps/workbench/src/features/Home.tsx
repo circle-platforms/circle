@@ -23,7 +23,15 @@ import { sessionMode } from '../model/state';
 import { t } from '../i18n';
 import { FileChip, IconButton } from '../components/common';
 import { EffortMenu, ModeMenu, ModelMenu } from './Composer';
-import { homeProjects, openHome, selectedHomeProject } from './home-selection';
+import {
+  forgetHomeComposer,
+  homeComposerMemory,
+  homeProjectRequest,
+  homeProjects,
+  openHome,
+  rememberHomeComposer,
+  selectedHomeProject,
+} from './home-selection';
 
 export function Home({
   requestedId,
@@ -45,18 +53,37 @@ export function Home({
   const active =
     snapshot.sessions.find((item) => item.id === snapshot.activeSessionId) ??
     snapshot.sessions[0];
-  const [draft, setDraft] = useState('');
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const remembered = useRef(homeComposerMemory());
+  const released = useRef(false);
+  const baseline = useRef({
+    model: active?.model || snapshot.settings.defaultModel,
+    effort: (active?.effort ||
+      snapshot.settings.defaultEffort ||
+      'default') as Effort,
+    mode: (active ? sessionMode(active) : 'manual') as SessionMode,
+    requestedId,
+  });
+  const [draft, setDraft] = useState(remembered.current?.text ?? '');
+  const [attachments, setAttachments] = useState<Attachment[]>(
+    remembered.current?.attachments ?? [],
+  );
   const [query, setQuery] = useState('');
   const [projectsOpen, setProjectsOpen] = useState(false);
   const [model, setModelId] = useState(
-    () => active?.model || snapshot.settings.defaultModel,
+    () =>
+      remembered.current?.model ||
+      active?.model ||
+      snapshot.settings.defaultModel,
   );
   const [effort, setEffort] = useState<Effort>(
-    () => active?.effort || snapshot.settings.defaultEffort || 'default',
+    () =>
+      remembered.current?.effort ||
+      active?.effort ||
+      snapshot.settings.defaultEffort ||
+      'default',
   );
-  const [mode, setMode] = useState<SessionMode>(() =>
-    active ? sessionMode(active) : 'manual',
+  const [mode, setMode] = useState<SessionMode>(
+    () => remembered.current?.mode || (active ? sessionMode(active) : 'manual'),
   );
   const controls: Session = {
     ...(active ?? {
@@ -100,8 +127,38 @@ export function Home({
     snapshot.workspaces,
     snapshot.sessions,
     snapshot.activeSessionId,
-    requestedId,
+    homeProjectRequest(requestedId, remembered.current),
   );
+  const draftRef = useRef(draft);
+  const attachmentsRef = useRef(attachments);
+  const pendingSend = useRef(false);
+  draftRef.current = draft;
+  attachmentsRef.current = attachments;
+  const focusComposer = () => message.current?.focus();
+  useEffect(() => {
+    if (released.current) return;
+    const controlsChanged =
+      model !== baseline.current.model ||
+      effort !== baseline.current.effort ||
+      mode !== baseline.current.mode ||
+      requestedId !== baseline.current.requestedId;
+    if (
+      remembered.current === null &&
+      draft === '' &&
+      attachments.length === 0 &&
+      !controlsChanged
+    )
+      return;
+    remembered.current = {
+      text: draft,
+      attachments,
+      model,
+      effort,
+      mode,
+      projectId: project?.id ?? null,
+    };
+    rememberHomeComposer(remembered.current);
+  }, [draft, attachments, model, effort, mode, project?.id, requestedId]);
   const projects = homeProjects(snapshot.workspaces).filter((item) =>
     (item.name + ' ' + item.path)
       .toLowerCase()
@@ -121,12 +178,14 @@ export function Home({
         notify(folderOpenMessage(error));
       }
     });
-  const send = () => {
-    const text = draft.trim();
+  const deliverRef = useRef(() => {});
+  deliverRef.current = () => {
+    const text = draftRef.current.trim();
     if (!text) return;
-    const files = attachments;
+    const files = attachmentsRef.current;
     perform(async () => {
       if (project && !project.trusted) {
+        pendingSend.current = true;
         const anchor = snapshot.sessions.find(
           (session) =>
             session.workspaceId === project.id &&
@@ -137,6 +196,7 @@ export function Home({
         onDialog('trust', project.id);
         return;
       }
+      pendingSend.current = false;
       const result = await runtime.beginConversation({
         workspaceId: project?.id ?? null,
         text,
@@ -146,14 +206,24 @@ export function Home({
         ...(files.length ? { attachments: files } : {}),
       });
       if ('dialog' in result) {
+        pendingSend.current = true;
         onDialog(result.dialog, project?.id);
         return;
       }
+      released.current = true;
+      remembered.current = null;
+      forgetHomeComposer();
       setDraft('');
       setAttachments([]);
       onStarted(result.sessionId);
     });
   };
+  useEffect(() => {
+    if (!pendingSend.current) return;
+    if (project && !project.trusted) return;
+    deliverRef.current();
+  }, [project?.id, project?.trusted]);
+  const send = () => deliverRef.current();
   const sentence = project
     ? t('what should we build in {name}?', { name: project.name })
     : '';
@@ -235,7 +305,12 @@ export function Home({
             >
               <Plus size={16} />
             </IconButton>
-            <ModeMenu session={controls} onMode={setMode} />
+            <ModeMenu
+              session={controls}
+              onMode={setMode}
+              side="bottom"
+              onCloseFocus={focusComposer}
+            />
             <DropdownMenu.Root
               open={projectsOpen}
               modal={false}
@@ -266,12 +341,15 @@ export function Home({
                     // The trigger would take the click that dismissed the menu,
                     // and the search box would keep what was typed next.
                     event.preventDefault();
-                    message.current?.focus();
+                    focusComposer();
                   }}
                 >
                   <div
                     className="project-picker-search"
-                    onKeyDown={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') return;
+                      event.stopPropagation();
+                    }}
                   >
                     <Search size={14} />
                     <input
@@ -282,6 +360,11 @@ export function Home({
                       onChange={(event) => setQuery(event.target.value)}
                     />
                   </div>
+                  {query.trim() && projects.length === 0 && (
+                    <p className="project-picker-empty" role="status">
+                      {t('no matching projects')}
+                    </p>
+                  )}
                   {projects.map((item) => (
                     <DropdownMenu.Item
                       key={item.id}
@@ -324,9 +407,16 @@ export function Home({
                 enabled={snapshot.settings.enabledModels}
                 onModel={setModelId}
                 onManage={() => navigate('/page/models')}
+                side="bottom"
+                onCloseFocus={focusComposer}
               />
             )}
-            <EffortMenu session={controls} onEffort={setEffort} />
+            <EffortMenu
+              session={controls}
+              onEffort={setEffort}
+              side="bottom"
+              onCloseFocus={focusComposer}
+            />
           </div>
         </div>
       </div>

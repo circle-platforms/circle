@@ -44,14 +44,31 @@ export const MODE_TEXT: Record<
   },
 };
 
+type MenuPlacement = {
+  /** Home opens downward; a session composer at the bottom of the window opens upward. */
+  side?: 'top' | 'bottom';
+  onCloseFocus?: () => void;
+};
+
+function closeMenu(
+  onCloseFocus?: () => void,
+): (event: { preventDefault(): void }) => void {
+  return (event) => {
+    event.preventDefault();
+    onCloseFocus?.();
+  };
+}
+
 /** How the session answers approvals: manual, accept edits, plan or auto. */
 export function ModeMenu({
   session,
   onMode,
+  side = 'top',
+  onCloseFocus,
 }: {
   session: Session;
   onMode: (mode: SessionMode) => void;
-}) {
+} & MenuPlacement) {
   const mode = sessionMode(session);
   const Icon = MODE_TEXT[mode].icon;
   return (
@@ -71,10 +88,10 @@ export function ModeMenu({
       <DropdownMenu.Portal>
         <DropdownMenu.Content
           className="dropdown mode-menu"
-          side="top"
+          side={side}
           align="start"
           sideOffset={7}
-          onCloseAutoFocus={(event) => event.preventDefault()}
+          onCloseAutoFocus={closeMenu(onCloseFocus)}
         >
           {MODES.map((item) => {
             const ItemIcon = MODE_TEXT[item].icon;
@@ -117,13 +134,15 @@ export function ModelMenu({
   enabled,
   onModel,
   onManage,
+  side = 'top',
+  onCloseFocus,
 }: {
   session: Session;
   models: Model[];
   enabled: string[];
   onModel: (id: string) => void;
   onManage: () => void;
-}) {
+} & MenuPlacement) {
   const shown = models.filter(
     (model) =>
       model.id !== 'not connected' &&
@@ -142,10 +161,10 @@ export function ModelMenu({
       <DropdownMenu.Portal>
         <DropdownMenu.Content
           className="dropdown footbar-menu"
-          side="top"
+          side={side}
           align="end"
           sideOffset={7}
-          onCloseAutoFocus={(event) => event.preventDefault()}
+          onCloseAutoFocus={closeMenu(onCloseFocus)}
         >
           {shown.map((model) => (
             <DropdownMenu.Item
@@ -170,10 +189,12 @@ export function ModelMenu({
 export function EffortMenu({
   session,
   onEffort,
+  side = 'top',
+  onCloseFocus,
 }: {
   session: Session;
   onEffort: (effort: Effort) => void;
-}) {
+} & MenuPlacement) {
   return (
     <DropdownMenu.Root modal={false}>
       <DropdownMenu.Trigger asChild>
@@ -185,10 +206,10 @@ export function EffortMenu({
       <DropdownMenu.Portal>
         <DropdownMenu.Content
           className="dropdown footbar-menu"
-          side="top"
+          side={side}
           align="end"
           sideOffset={7}
-          onCloseAutoFocus={(event) => event.preventDefault()}
+          onCloseAutoFocus={closeMenu(onCloseFocus)}
         >
           {(['default', ...EFFORTS] as Effort[]).map((effort) => (
             <DropdownMenu.Item key={effort} onSelect={() => onEffort(effort)}>

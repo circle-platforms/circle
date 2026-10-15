@@ -40,6 +40,9 @@ export function IconButton({
     </Tooltip.Root>
   );
 }
+function placeFocus(node: HTMLElement) {
+  node.focus({ focusVisible: true });
+}
 function focusDialogField(content: HTMLElement) {
   const field = content.querySelector(
     'input:not([type="hidden"]), textarea, select',
@@ -48,10 +51,27 @@ function focusDialogField(content: HTMLElement) {
     field instanceof HTMLInputElement ||
     field instanceof HTMLTextAreaElement
   ) {
-    field.focus();
+    placeFocus(field);
     // A rename box should start with the current name selected.
     if (field instanceof HTMLInputElement) field.select();
-  } else if (field instanceof HTMLSelectElement) field.focus();
+    return;
+  }
+  if (field instanceof HTMLSelectElement) {
+    placeFocus(field);
+    return;
+  }
+  const primary = content.querySelector('button.primary');
+  if (primary instanceof HTMLButtonElement && !primary.disabled) {
+    placeFocus(primary);
+    return;
+  }
+  const button = [...content.querySelectorAll('button')].find(
+    (item) =>
+      item instanceof HTMLButtonElement &&
+      !item.disabled &&
+      item.getAttribute('aria-label') !== 'close dialog',
+  );
+  if (button instanceof HTMLButtonElement) placeFocus(button);
   else content.focus();
 }
 export function Modal({

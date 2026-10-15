@@ -2309,14 +2309,20 @@ export class RuntimeController {
       case 'trust': {
         if (p.enabled !== true)
           throw Error('explicit trust confirmation required');
+        // Home can ask to trust the project in the menu while another session
+        // is the one open. The id names that project; otherwise it is the open one.
+        const folder =
+          p.workspaceId === undefined
+            ? runtime.options.workspace
+            : this.workspaceById(text(p.workspaceId, 'workspace', 200));
         const settings = saveSettingsChange(this.home, (saved) => {
-          Object.assign(saved, trustFolder(saved, runtime.options.workspace));
+          Object.assign(saved, trustFolder(saved, folder));
         });
         this.synchronizeSharedSettings(settings);
         const reloads: Promise<void>[] = [];
         for (const owner of this.runtimes.values())
           if (
-            owner.options.workspace === runtime.options.workspace &&
+            owner.options.workspace === folder &&
             this.pendingTrustReloads.has(owner) &&
             !owner.isClosing
           ) {

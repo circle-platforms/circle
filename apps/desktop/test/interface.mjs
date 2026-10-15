@@ -387,16 +387,109 @@ try {
   await page
     .getByRole('button', { name: 'approval mode', exact: true })
     .click();
+  const modeMenu = page.locator('.mode-menu');
+  await modeMenu.waitFor();
+  assert.equal(await modeMenu.getAttribute('data-side'), 'bottom');
   await page.getByRole('menuitem', { name: /^manual/ }).waitFor();
   await page.keyboard.press('Escape');
+  await page.waitForFunction(
+    () => document.activeElement?.getAttribute('aria-label') === 'message',
+  );
   await thinking.click();
+  const effortMenu = page.locator('.dropdown.footbar-menu');
+  await effortMenu.waitFor();
+  assert.equal(await effortMenu.getAttribute('data-side'), 'bottom');
   await page.getByRole('menuitem', { name: 'minimal', exact: true }).waitFor();
   await page.keyboard.press('Escape');
-  checks.push('closing the mode menu does not swallow the next effort click');
+  await page.waitForFunction(
+    () => document.activeElement?.getAttribute('aria-label') === 'message',
+  );
+  checks.push(
+    'home menus open downward and escape returns focus to the composer',
+  );
   await thinking.click();
   await page.getByRole('menuitem', { name: 'extra high', exact: true }).click();
   assert.match(await thinking.innerText(), /extra high/);
   checks.push('home composer has the session controls');
+  const projectButton = page.getByRole('button', {
+    name: 'choose a project',
+    exact: true,
+  });
+  await projectButton.click();
+  const projectMenu = page.locator('.project-menu');
+  await projectMenu.waitFor();
+  assert.equal(await projectMenu.getAttribute('data-side'), 'bottom');
+  await page
+    .getByRole('textbox', { name: 'search projects', exact: true })
+    .fill('zzznomatch');
+  await projectMenu
+    .getByRole('status')
+    .getByText('no matching projects')
+    .waitFor();
+  await projectMenu
+    .getByRole('menuitem', { name: 'open folder', exact: true })
+    .waitFor();
+  await projectMenu
+    .getByRole('menuitem', { name: 'work without a project', exact: true })
+    .waitFor();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(
+    () => document.activeElement?.getAttribute('aria-label') === 'message',
+  );
+  checks.push(
+    'a project search with no matches keeps open folder and work without a project',
+  );
+  const heldDraft = page.getByRole('textbox', { name: 'message', exact: true });
+  await heldDraft.fill('hold this');
+  await projectButton.click();
+  await page.getByRole('menuitem', { name: 'docs-site', exact: true }).click();
+  await page
+    .getByRole('heading', {
+      name: 'what should we build in docs-site?',
+      exact: true,
+    })
+    .waitFor();
+  await route('/session/session1');
+  await page.getByRole('button', { name: 'new session', exact: true }).click();
+  await page
+    .getByRole('heading', {
+      name: 'what should we build in docs-site?',
+      exact: true,
+    })
+    .waitFor();
+  assert.equal(await heldDraft.inputValue(), 'hold this');
+  assert.match(await thinking.innerText(), /extra high/);
+  checks.push(
+    'leaving home and opening new session keeps the draft, project and thinking depth',
+  );
+  await page.getByRole('button', { name: 'send message', exact: true }).click();
+  const trustDialog = page.getByRole('dialog', {
+    name: 'workspace trust',
+    exact: true,
+  });
+  await trustDialog.waitFor();
+  await page.waitForFunction(
+    () =>
+      document.activeElement?.textContent?.includes('trust in preview') ??
+      false,
+  );
+  await trustDialog
+    .getByRole('button', { name: 'trust in preview', exact: true })
+    .click();
+  await page.getByRole('heading', { name: 'hold this', exact: true }).waitFor();
+  const trusted = await state();
+  const trustedSession = trusted.sessions.find((session) =>
+    session.messages.some((item) => item.text === 'hold this'),
+  );
+  const trustedWorkspace = trusted.workspaces.find(
+    (item) => item.id === trustedSession.workspaceId,
+  );
+  assert.equal(trustedWorkspace.name, 'docs-site');
+  assert.equal(trustedWorkspace.trusted, true);
+  checks.push(
+    'trusting a project focuses the confirm button and sends the waiting message',
+  );
+  await page.getByRole('button', { name: 'new session', exact: true }).click();
   await page
     .getByRole('button', { name: 'choose a project', exact: true })
     .click();

@@ -20,8 +20,12 @@ import {
   workspaceSessions,
 } from '../src/model/session-management.ts';
 import {
+  forgetHomeComposer,
+  homeComposerMemory,
   homePath,
+  homeProjectRequest,
   homeProjects,
+  rememberHomeComposer,
   selectedHomeProject,
 } from '../src/features/home-selection.ts';
 import type { Workspace } from '../src/model/types.ts';
@@ -512,6 +516,29 @@ test('the home picker lists known projects and the sidebar choice wins', () => {
   assert.equal(homePath(), '/home');
   assert.equal(homePath('circle'), '/home?workspace=circle');
   assert.equal(homePath(null), '/home?workspace=');
+});
+
+test('a home draft is kept until the message is sent, and the route wins over it', () => {
+  forgetHomeComposer();
+  assert.equal(homeComposerMemory(), null);
+  assert.equal(homeProjectRequest(null, null), null);
+  assert.equal(homeProjectRequest('docs', null), 'docs');
+  assert.equal(homeProjectRequest('', null), '');
+  rememberHomeComposer({
+    text: 'hold this',
+    attachments: [],
+    model: 'sample-fast-model',
+    effort: 'xhigh',
+    mode: 'plan',
+    projectId: 'docs',
+  });
+  assert.equal(homeComposerMemory()?.text, 'hold this');
+  assert.equal(homeComposerMemory()?.effort, 'xhigh');
+  assert.equal(homeProjectRequest(null, homeComposerMemory()), 'docs');
+  assert.equal(homeProjectRequest(null, { projectId: null }), '');
+  assert.equal(homeProjectRequest('circle', homeComposerMemory()), 'circle');
+  forgetHomeComposer();
+  assert.equal(homeComposerMemory(), null);
 });
 
 test('the picker choice decides where the first message is stored', () => {

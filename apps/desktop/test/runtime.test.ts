@@ -1272,6 +1272,40 @@ test('checkpoint branches, import and restart preserve native identities and mod
   await restart.close();
 });
 
+test('trust confirms the named project while another session stays open', async (t) => {
+  const f = await setup(t, [], true);
+  const before = f.controller.snapshot();
+  const active = before.activeSessionId;
+  const homeId = before.workspaces.find((row) => row.trusted)!.id;
+  const other = join(f.root, 'other-project');
+  await mkdir(other);
+  const opened = await f.call('open-workspace', { path: other });
+  assert.equal(opened.ok, true, JSON.stringify(opened));
+  const otherId = (opened.data as { workspaceId: string }).workspaceId;
+  assert.notEqual(otherId, homeId);
+  assert.equal((await f.call('select-session', { id: active })).ok, true);
+  assert.equal(f.controller.snapshot().activeSessionId, active);
+  assert.equal(
+    f.controller.snapshot().workspaces.find((row) => row.id === otherId)
+      ?.trusted,
+    false,
+  );
+  assert.equal(
+    (await f.call('trust', { enabled: true, workspaceId: otherId })).ok,
+    true,
+  );
+  const after = f.controller.snapshot();
+  assert.equal(after.activeSessionId, active);
+  assert.equal(
+    after.workspaces.find((row) => row.id === otherId)?.trusted,
+    true,
+  );
+  assert.equal(
+    after.workspaces.find((row) => row.id === homeId)?.trusted,
+    true,
+  );
+});
+
 test('untrusted workspaces cannot load project context, extensions or execute prompts', async (t) => {
   const f = await setup(t, [{ message: assistant('trusted now') }], false);
   await writeFile(join(f.workspace, 'AGENTS.md'), 'private instruction marker');

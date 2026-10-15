@@ -1,4 +1,9 @@
-import type { Workspace } from '../model/types';
+import type {
+  Attachment,
+  Effort,
+  SessionMode,
+  Workspace,
+} from '../model/types';
 
 /**
  * Projects the home menu can choose. The default circle workspace is one of
@@ -41,6 +46,45 @@ export function homePath(workspaceId?: string | null) {
   if (workspaceId === null) return '/home?workspace=';
   if (workspaceId) return `/home?workspace=${encodeURIComponent(workspaceId)}`;
   return '/home';
+}
+
+/** What the home composer was holding when the person left it. */
+export type HomeComposerMemory = {
+  text: string;
+  attachments: Attachment[];
+  model: string;
+  effort: Effort;
+  mode: SessionMode;
+  /** `null` is working without a project. */
+  projectId: string | null;
+};
+
+let composerMemory: HomeComposerMemory | null = null;
+
+export function homeComposerMemory(): HomeComposerMemory | null {
+  return composerMemory ? structuredClone(composerMemory) : null;
+}
+
+/** Keep the home composer until its message is sent. */
+export function rememberHomeComposer(next: HomeComposerMemory) {
+  composerMemory = structuredClone(next);
+}
+
+export function forgetHomeComposer() {
+  composerMemory = null;
+}
+
+/**
+ * Which project id the home route should resolve.
+ * An explicit route wins. Otherwise a remembered choice, including none.
+ */
+export function homeProjectRequest(
+  requestedId: string | null,
+  remembered: { projectId: string | null } | null,
+): string | null {
+  if (requestedId !== null) return requestedId;
+  if (!remembered) return null;
+  return remembered.projectId ?? '';
 }
 
 /**
