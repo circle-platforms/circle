@@ -4,6 +4,12 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Fixed
+
+- Trusted desktop integrations initialize before the first turn, so Hub records appear on a fresh start without Reload or an unrelated trust interaction.
+- Large Hub histories use a bounded UTF-8 view with visible omitted-record and shortened-text counts instead of clearing the platform pages. Connection identities and action inputs retain their original values.
+- This release includes the hub commands, module execution, source binding and result downloads from the 1.7.0 and 1.7.1 tags, which were not published as releases.
+
 ## 1.7.1 - 2026-10-15
 
 ### Fixed
