@@ -67,7 +67,11 @@ export class GatewayModel implements ChatModel {
   private readonly timeout: number;
   effort: string;
   private readonly dropped = new Set<string>();
-  private sentParameters = new Set<string>();
+  /** Parameters each in-flight request actually sent. A parallel title request must not
+   * replace the turn's set, or a 400 would drop the wrong field. */
+  private readonly sentNow = new Set<Set<string>>();
+  /** Finished bodies, newest last. Drop runs after the request returns. */
+  private readonly sentRecent: Set<string>[] = [];
   private readonly guard: ModelGuard;
   readonly catalog: ModelCatalog;
   constructor(
@@ -199,16 +203,26 @@ export class GatewayModel implements ChatModel {
         'parallel_tool_calls',
         'betas',
       ].includes(root) ||
-      !this.sentParameters.has(root) ||
+      ![...this.sentNow, ...this.sentRecent].some((sent) => sent.has(root)) ||
       this.dropped.has(root)
     )
       return false;
     this.dropped.add(root);
     return true;
   }
-  private configureBody(body: Record<string, unknown>): void {
+  private configureBody(body: Record<string, unknown>): Set<string> {
     for (const field of this.dropped) delete body[field];
-    this.sentParameters = new Set(Object.keys(body));
+    const sent = new Set(Object.keys(body));
+    this.sentNow.add(sent);
+    return sent;
+  }
+  private releaseBody(sent: Set<string>): void {
+    this.sentNow.delete(sent);
+    // The guard drops a rejected field after this request has already returned.
+    // Keep a few finished bodies so that drop still sees what was sent, including
+    // when a title request is in flight beside the turn.
+    this.sentRecent.push(sent);
+    if (this.sentRecent.length > 8) this.sentRecent.shift();
   }
   private async completeOpenAI(request: ModelRequest): Promise<ModelResponse> {
     const messages: ChatCompletionMessageParam[] = [
@@ -284,117 +298,132 @@ export class GatewayModel implements ChatModel {
     if (effort)
       body.reasoning_effort =
         effort as ChatCompletionCreateParamsStreaming['reasoning_effort'];
-    this.configureBody(body as unknown as Record<string, unknown>);
-    const stream = await this.openai!.chat.completions.create(body, {
-      signal: request.signal,
-      timeout: this.requestTimeout(request),
-    });
-    request.progress?.('connected');
-    let content = '';
-    let thinking = '';
-    let finish = '';
-    let servedModel = this.model;
-    const calls = new Map<number, { id: string; name: string; args: string }>();
-    const usage = emptyUsage();
-    let guardedStop = false;
+    if (request.maxTokens) body.max_tokens = request.maxTokens;
+    const sent = this.configureBody(body as unknown as Record<string, unknown>);
     try {
-      for await (const chunk of stream) {
-        if (chunk.model) servedModel = chunk.model;
-        if (chunk.usage) {
-          usage.input_tokens = Math.max(
-            usage.input_tokens,
-            chunk.usage.prompt_tokens || 0,
-          );
-          usage.output_tokens = Math.max(
-            usage.output_tokens,
-            chunk.usage.completion_tokens || 0,
-          );
-          usage.cache_read_tokens = Math.max(
-            usage.cache_read_tokens,
-            chunk.usage.prompt_tokens_details?.cached_tokens ?? 0,
-          );
-          request.progress?.('usage');
-        }
-        const choice = chunk.choices[0];
-        if (!choice) continue;
-        if (choice.finish_reason) finish = choice.finish_reason;
-        const delta = choice.delta;
-        request.progress?.(
-          delta.content
-            ? 'text'
-            : delta.tool_calls?.length
-              ? 'tool'
-              : 'keepalive',
-        );
-        if (delta.content) {
-          content += delta.content;
-          request.token(delta.content);
-        }
-        const extra = delta as unknown as Record<string, unknown>;
-        const reasoning = extra.reasoning_content ?? extra.reasoning;
-        if (typeof reasoning === 'string') {
-          thinking += reasoning;
-          request.token(reasoning, true);
-        }
-        for (const part of delta.tool_calls ?? []) {
-          const call = calls.get(part.index) ?? { id: '', name: '', args: '' };
-          if (part.id) call.id = part.id;
-          if (part.function?.name) call.name += part.function.name;
-          if (part.function?.arguments) call.args += part.function.arguments;
-          calls.set(part.index, call);
-        }
-      }
-    } catch (error) {
-      if (error instanceof TextRepetitionLoop && error.answered) {
-        guardedStop = true;
-        request.notice?.({ event: 'repetition_stopped', period: error.period });
-      } else throw error;
-    } finally {
-      stream.controller.abort();
-    }
-    request.signal.throwIfAborted();
-    const tool_calls: ToolCall[] = [...calls.values()].map((call) => {
-      if (!call.id || !call.name) throw new Error('incomplete tool call');
-      let args = parseToolInput(call.args || '{}');
-      if (typeof args === 'string') args = parseToolInput(args);
-      return {
-        id: call.id,
-        name: call.name,
-        args: isRecord(args) ? args : {},
-        ...(!isRecord(args)
-          ? {
-              raw_args: call.args,
-              argument_error:
-                'tool arguments must be a JSON object; repair the call before retrying',
-            }
-          : {}),
-      };
-    });
-    const response: ModelResponse = {
-      message: {
-        id: randomUUID(),
-        role: 'assistant',
-        model: servedModel,
-        content,
-        thinking,
-        tool_calls,
-        ...(guardedStop || !finish || finish === 'length'
-          ? { truncated: true }
-          : {}),
-      },
-      usage,
-    };
-    if (!finish && !guardedStop)
-      throw new MissingFinish(
-        response,
-        Boolean(content || thinking || calls.size),
-      );
-    if (finish === 'length' && !content && !calls.size)
-      request.notice?.({
-        event: 'output_budget_exhausted',
-        finish_reason: finish,
+      const stream = await this.openai!.chat.completions.create(body, {
+        signal: request.signal,
+        timeout: this.requestTimeout(request),
       });
-    return response;
+      request.progress?.('connected');
+      let content = '';
+      let thinking = '';
+      let finish = '';
+      let servedModel = this.model;
+      const calls = new Map<
+        number,
+        { id: string; name: string; args: string }
+      >();
+      const usage = emptyUsage();
+      let guardedStop = false;
+      try {
+        for await (const chunk of stream) {
+          if (chunk.model) servedModel = chunk.model;
+          if (chunk.usage) {
+            usage.input_tokens = Math.max(
+              usage.input_tokens,
+              chunk.usage.prompt_tokens || 0,
+            );
+            usage.output_tokens = Math.max(
+              usage.output_tokens,
+              chunk.usage.completion_tokens || 0,
+            );
+            usage.cache_read_tokens = Math.max(
+              usage.cache_read_tokens,
+              chunk.usage.prompt_tokens_details?.cached_tokens ?? 0,
+            );
+            request.progress?.('usage');
+          }
+          const choice = chunk.choices[0];
+          if (!choice) continue;
+          if (choice.finish_reason) finish = choice.finish_reason;
+          const delta = choice.delta;
+          request.progress?.(
+            delta.content
+              ? 'text'
+              : delta.tool_calls?.length
+                ? 'tool'
+                : 'keepalive',
+          );
+          if (delta.content) {
+            content += delta.content;
+            request.token(delta.content);
+          }
+          const extra = delta as unknown as Record<string, unknown>;
+          const reasoning = extra.reasoning_content ?? extra.reasoning;
+          if (typeof reasoning === 'string') {
+            thinking += reasoning;
+            request.token(reasoning, true);
+          }
+          for (const part of delta.tool_calls ?? []) {
+            const call = calls.get(part.index) ?? {
+              id: '',
+              name: '',
+              args: '',
+            };
+            if (part.id) call.id = part.id;
+            if (part.function?.name) call.name += part.function.name;
+            if (part.function?.arguments) call.args += part.function.arguments;
+            calls.set(part.index, call);
+          }
+        }
+      } catch (error) {
+        if (error instanceof TextRepetitionLoop && error.answered) {
+          guardedStop = true;
+          request.notice?.({
+            event: 'repetition_stopped',
+            period: error.period,
+          });
+        } else throw error;
+      } finally {
+        stream.controller.abort();
+      }
+      request.signal.throwIfAborted();
+      const tool_calls: ToolCall[] = [...calls.values()].map((call) => {
+        if (!call.id || !call.name) throw new Error('incomplete tool call');
+        let args = parseToolInput(call.args || '{}');
+        if (typeof args === 'string') args = parseToolInput(args);
+        return {
+          id: call.id,
+          name: call.name,
+          args: isRecord(args) ? args : {},
+          ...(!isRecord(args)
+            ? {
+                raw_args: call.args,
+                argument_error:
+                  'tool arguments must be a JSON object; repair the call before retrying',
+              }
+            : {}),
+        };
+      });
+      const response: ModelResponse = {
+        message: {
+          id: randomUUID(),
+          role: 'assistant',
+          model: servedModel,
+          content,
+          thinking,
+          tool_calls,
+          ...(guardedStop || !finish || finish === 'length'
+            ? { truncated: true }
+            : {}),
+        },
+        usage,
+      };
+      if (!finish && !guardedStop)
+        throw new MissingFinish(
+          response,
+          Boolean(content || thinking || calls.size),
+        );
+      if (finish === 'length' && !content && !calls.size)
+        request.notice?.({
+          event: 'output_budget_exhausted',
+          finish_reason: finish,
+        });
+      return response;
+    } finally {
+      this.releaseBody(sent);
+    }
   }
   private async completeAnthropic(
     request: ModelRequest,
@@ -452,7 +481,7 @@ export class GatewayModel implements ChatModel {
       model: this.model,
       system,
       messages,
-      max_tokens: this.outputBudget ?? 32000,
+      max_tokens: request.maxTokens ?? this.outputBudget ?? 32000,
     };
     if (request.tools.length)
       body.tools = request.tools.map((tool) => ({
@@ -487,109 +516,117 @@ export class GatewayModel implements ChatModel {
         };
       }
     }
-    this.configureBody(body as unknown as Record<string, unknown>);
-    const stream = this.anthropic!.messages.stream(body, {
-      signal: request.signal,
-      timeout: this.requestTimeout(request),
-    });
-    stream.on('connect', () => request.progress?.('connected'));
-    let snapshot: Anthropic.Message | undefined;
-    let guardedStop = false;
+    const sent = this.configureBody(body as unknown as Record<string, unknown>);
     try {
-      for await (const event of stream) {
-        snapshot = stream.currentMessage ?? snapshot;
-        if (
-          event.type === 'content_block_delta' &&
-          event.delta.type === 'text_delta'
-        )
-          request.token(event.delta.text);
-        else if (
-          event.type === 'content_block_delta' &&
-          event.delta.type === 'thinking_delta'
-        )
-          request.token(event.delta.thinking, true);
-        else
-          // A tool call's arguments are content as they stream, and keep the stream alive
-          request.progress?.(
-            (event.type === 'content_block_start' &&
-              event.content_block.type === 'tool_use') ||
-              (event.type === 'content_block_delta' &&
-                event.delta.type === 'input_json_delta')
-              ? 'tool'
-              : event.type === 'message_start' || event.type === 'message_delta'
-                ? 'usage'
-                : 'keepalive',
-          );
-      }
-    } catch (error) {
-      if (error instanceof TextRepetitionLoop && error.answered && snapshot) {
-        guardedStop = true;
-        request.notice?.({ event: 'repetition_stopped', period: error.period });
-      } else throw error;
-    } finally {
-      if (guardedStop) {
-        stream.abort();
-        await stream.finalMessage().catch(() => {});
-      }
-    }
-    const final = guardedStop ? snapshot! : await stream.finalMessage();
-    request.signal.throwIfAborted();
-    const tool_calls: ToolCall[] = [];
-    let content = '';
-    let thinking = '';
-    for (const block of final.content) {
-      if (block.type === 'text') content += block.text;
-      else if (block.type === 'thinking') thinking += block.thinking;
-      else if (block.type === 'tool_use')
-        tool_calls.push({
-          id: block.id,
-          name: block.name,
-          args: block.input as Record<string, unknown>,
-        });
-    }
-    const response: ModelResponse = {
-      message: {
-        id: randomUUID(),
-        role: 'assistant',
-        model: final.model,
-        content,
-        thinking,
-        tool_calls,
-        provider_content: final.content,
-        ...(guardedStop ||
-        !final.stop_reason ||
-        final.stop_reason === 'max_tokens'
-          ? { truncated: true }
-          : {}),
-      },
-      usage: {
-        input_tokens:
-          final.usage.input_tokens +
-          (final.usage.cache_read_input_tokens ?? 0) +
-          (final.usage.cache_creation_input_tokens ?? 0),
-        output_tokens: final.usage.output_tokens,
-        cache_read_tokens: final.usage.cache_read_input_tokens ?? 0,
-        ...(final.usage.cache_creation_input_tokens
-          ? { cache_write_tokens: final.usage.cache_creation_input_tokens }
-          : {}),
-        ...(final.usage.cache_creation?.ephemeral_1h_input_tokens
-          ? {
-              cache_write_1h_tokens:
-                final.usage.cache_creation.ephemeral_1h_input_tokens,
-            }
-          : {}),
-      },
-    };
-    if (!final.stop_reason && !guardedStop)
-      throw new MissingFinish(
-        response,
-        Boolean(content || thinking || tool_calls.length),
-      );
-    if (final.stop_reason === 'max_tokens' && !content && !tool_calls.length)
-      request.notice?.({
-        event: 'output_budget_exhausted',
-        finish_reason: final.stop_reason,
+      const stream = this.anthropic!.messages.stream(body, {
+        signal: request.signal,
+        timeout: this.requestTimeout(request),
       });
-    return response;
+      stream.on('connect', () => request.progress?.('connected'));
+      let snapshot: Anthropic.Message | undefined;
+      let guardedStop = false;
+      try {
+        for await (const event of stream) {
+          snapshot = stream.currentMessage ?? snapshot;
+          if (
+            event.type === 'content_block_delta' &&
+            event.delta.type === 'text_delta'
+          )
+            request.token(event.delta.text);
+          else if (
+            event.type === 'content_block_delta' &&
+            event.delta.type === 'thinking_delta'
+          )
+            request.token(event.delta.thinking, true);
+          else
+            // A tool call's arguments are content as they stream, and keep the stream alive
+            request.progress?.(
+              (event.type === 'content_block_start' &&
+                event.content_block.type === 'tool_use') ||
+                (event.type === 'content_block_delta' &&
+                  event.delta.type === 'input_json_delta')
+                ? 'tool'
+                : event.type === 'message_start' ||
+                    event.type === 'message_delta'
+                  ? 'usage'
+                  : 'keepalive',
+            );
+        }
+      } catch (error) {
+        if (error instanceof TextRepetitionLoop && error.answered && snapshot) {
+          guardedStop = true;
+          request.notice?.({
+            event: 'repetition_stopped',
+            period: error.period,
+          });
+        } else throw error;
+      } finally {
+        if (guardedStop) {
+          stream.abort();
+          await stream.finalMessage().catch(() => {});
+        }
+      }
+      const final = guardedStop ? snapshot! : await stream.finalMessage();
+      request.signal.throwIfAborted();
+      const tool_calls: ToolCall[] = [];
+      let content = '';
+      let thinking = '';
+      for (const block of final.content) {
+        if (block.type === 'text') content += block.text;
+        else if (block.type === 'thinking') thinking += block.thinking;
+        else if (block.type === 'tool_use')
+          tool_calls.push({
+            id: block.id,
+            name: block.name,
+            args: block.input as Record<string, unknown>,
+          });
+      }
+      const response: ModelResponse = {
+        message: {
+          id: randomUUID(),
+          role: 'assistant',
+          model: final.model,
+          content,
+          thinking,
+          tool_calls,
+          provider_content: final.content,
+          ...(guardedStop ||
+          !final.stop_reason ||
+          final.stop_reason === 'max_tokens'
+            ? { truncated: true }
+            : {}),
+        },
+        usage: {
+          input_tokens:
+            final.usage.input_tokens +
+            (final.usage.cache_read_input_tokens ?? 0) +
+            (final.usage.cache_creation_input_tokens ?? 0),
+          output_tokens: final.usage.output_tokens,
+          cache_read_tokens: final.usage.cache_read_input_tokens ?? 0,
+          ...(final.usage.cache_creation_input_tokens
+            ? { cache_write_tokens: final.usage.cache_creation_input_tokens }
+            : {}),
+          ...(final.usage.cache_creation?.ephemeral_1h_input_tokens
+            ? {
+                cache_write_1h_tokens:
+                  final.usage.cache_creation.ephemeral_1h_input_tokens,
+              }
+            : {}),
+        },
+      };
+      if (!final.stop_reason && !guardedStop)
+        throw new MissingFinish(
+          response,
+          Boolean(content || thinking || tool_calls.length),
+        );
+      if (final.stop_reason === 'max_tokens' && !content && !tool_calls.length)
+        request.notice?.({
+          event: 'output_budget_exhausted',
+          finish_reason: final.stop_reason,
+        });
+      return response;
+    } finally {
+      this.releaseBody(sent);
+    }
   }
 }

@@ -1,13 +1,28 @@
+const LATIN =
+  /^(?:please|pls|plz|can you|could you|would you|i need you to|i want you to|i(?:'|’)d like you to|help me(?: to)?)\s*/i;
+const CJK_LEAD = /^(?:帮我|请你|请|麻烦你|麻烦)\s*/;
+
 /** A title for the sidebar when the model has not named the session yet. */
 export function fallbackTitle(text: string): string {
   const line = text.replace(/\s+/g, ' ').trim();
-  const stripped = line
-    .replace(
-      /^(?:please|pls|plz|can you|could you|would you|帮我|请你|请|麻烦你|麻烦)\s*/i,
-      '',
-    )
-    .trim();
-  const title = stripped || line;
+  // A short prompt keeps an @mention: that is the name the person typed.
+  // A long one drops it before the cut, so the sidebar does not start with @README.md.
+  const bare =
+    line.length <= 42
+      ? line
+      : line
+          .replace(/(^|\s)@[^\s]+/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+  let stripped = bare;
+  for (let pass = 0; pass < 3; pass++) {
+    const next = stripped.replace(LATIN, '').trim();
+    if (next === stripped) break;
+    stripped = next;
+  }
+  // One CJK prefix only: 请帮我看一下 stays 帮我看一下.
+  stripped = stripped.replace(CJK_LEAD, '').trim();
+  const title = stripped || bare || line;
   if (title.length <= 42) return title;
   const sentence = title.split(/[。！？.!?]/)[0]!.trim();
   if (sentence.length >= 8 && sentence.length <= 42) return sentence;

@@ -11,7 +11,10 @@ export function readPrompt(...parts: string[]): string {
 }
 export function loadToolPrompt(name: string): string {
   const path = join(prompts, 'tools', name + '.md');
-  return existsSync(path) ? readFileSync(path, 'utf8').trim() : name;
+  if (!existsSync(path)) return name;
+  return readFileSync(path, 'utf8')
+    .replace(/\n## Examples\b[\s\S]*$/i, '')
+    .trim();
 }
 export function selectSessionPromptName(model: string): string {
   const name = model.toLowerCase();
@@ -136,6 +139,14 @@ export interface PromptCatalog {
   /** Names of the saved secrets: the model never sees a value. */
   secrets?: string[];
 }
+function skillLine(skill: { name: string; description: string }): string {
+  const description = skill.description.replace(/\s+/g, ' ').trim();
+  const brief =
+    description.length > 160
+      ? `${description.slice(0, 159).trimEnd()}…`
+      : description;
+  return `- ${skill.name}: ${brief}`;
+}
 export function buildSystemPrompt(
   workspace: string,
   model: string,
@@ -190,9 +201,7 @@ export function buildSystemPrompt(
   if (catalog.skills?.length)
     sections.push(
       'Available skills:\n' +
-        catalog.skills
-          .map((skill) => `- ${skill.name}: ${skill.description}`)
-          .join('\n'),
+        catalog.skills.map((skill) => skillLine(skill)).join('\n'),
     );
   const variables = Object.entries(catalog.variables ?? {});
   if (variables.length || catalog.secrets?.length)

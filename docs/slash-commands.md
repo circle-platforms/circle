@@ -22,7 +22,7 @@ Going back with `/tree` while a turn runs stops the turn first. A [custom comman
 |---|---|---|
 | `/new` | `/clear` | Start a new session. |
 | `/resume [n\|id]` | `/sessions` | Choose a session from a list, or open one by its number in that list or the end of its id. The list can show every folder's sessions, rename and delete; it asks for the new name, and before deleting, on its own line. |
-| `/continue` | | Switch back to the previous session. |
+| `/continue` | | Switch back to the previous session. With none remembered and this session still empty, open the latest saved session in this folder. |
 | `/name [title]` | | Set the session title, or show it. |
 | `/session` | | Show the session id and title, the folder, the model, where it is kept, how many messages, and the tokens used in this run. |
 | `/tree [words]` | | List every message of the session, all branches, and go back to one. The next message starts a branch from there. `L` labels a message, asking for the label in the list; `esc` there leaves the label as it was. `esc` twice on an empty input box does the same as `/tree`. |

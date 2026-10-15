@@ -1,35 +1,7 @@
-Use this tool when you need to ask the user questions during execution. This allows you to:
-1. Gather user preferences or requirements
-2. Clarify ambiguous instructions
-3. Get decisions on implementation choices as you work
-4. Offer choices to the user about what direction to take.
+Ask the user when you need a choice, a preference, or a value only they know. The run pauses until they answer. Do not guess if they close the panel.
 
-Usage notes:
-- Each question takes `question`, optional `header` (a short tag), `options` (strings, or objects with `label` and `description`), `multiple` and `custom`
-- When `custom` is enabled (default), a "Type your own answer" option is added automatically; don't include "Other" or catch-all options
-- The run pauses while the user answers in a panel. The result lists each question with its `answer`: an array of the chosen labels, plus the user's own text if they typed one; an empty array means they left it unanswered. Set `multiple: true` to allow selecting more than one
-- If the user closes the panel, the result says so; don't guess the answer
-- If you recommend a specific option, make that the first option in the list and add "(Recommended)" to the end of the label
-- Where no panel is available (line mode), the questions come back as text instead: ask them in your reply and wait for the user
+Each question takes `question`, optional `header`, `options` (strings, or objects with `label` and `description`), `multiple` and `custom`. `custom` (default) adds "Type your own answer"; do not add an "Other" option. Put a recommended option first and end its label with "(Recommended)". The result lists each question's `answer` (chosen labels, plus their own text). An empty array means they left it unanswered. Set `multiple: true` to allow more than one. In line mode the questions come back as text: ask them in your reply and wait.
 
-Values to keep (paths, addresses, user names):
-- When a task needs a value only the user knows and later steps will use it again, such as a
-  folder path, a device address or a user name, ask for it at once with a `key` (ENV-style
-  name, e.g. `BACKUP_DIR`) and no `secret`. The user's answer is kept as a Circle variable:
-  afterwards write `%KEY%` in any tool's arguments. Check the variables already listed in
-  your instructions before asking.
+A value later steps will reuse (a path, an address, a user name): ask once with `key` (ENV-style, such as `BACKUP_DIR`) and no `secret`. It is kept as a Circle variable. Afterwards write `%KEY%` in a tool's arguments. Check the variables already listed before asking.
 
-Secrets (passwords, tokens, credentials):
-- When a task needs a password or token the user has not saved, ask for it at once this way
-  rather than stopping or asking in chat.
-- For any secret, add `secret: true` plus `key` (ENV-style name, e.g. `JUMPHOST_PASS`).
-- Without `target_file`, the value is kept as a Circle secret: afterwards write `%KEY%` in any
-  tool's arguments (a command, a browser field, an MCP tool's input) and Circle puts the value in
-  when the tool runs. Check the secrets already listed in your instructions before asking.
-- With `target_file` (the env file the value should land in, e.g. `~/.config/compile-excel/env`),
-  the harness writes `KEY=value` there (file mode 600) instead.
-- The user types the value in a masked input (Ctrl+S when prompted); the tool result only
-  confirms collection — the value NEVER enters this conversation. Do not ask for secrets in
-  plain questions.
-- If secret collection reports unavailable/failed, tell the user to write the credential
-  into the target file themselves; never fall back to collecting it in chat.
+A password or token: add `secret: true` and `key` (such as `JUMPHOST_PASS`). Without `target_file` it is kept as a Circle secret; write `%KEY%` the same way. With `target_file` (an env file, such as `~/.config/compile-excel/env`) Circle writes `KEY=value` there (mode 600). The user types it in a masked input. The result only confirms collection. The value never enters this conversation. Do not ask for secrets in plain questions. If collection fails, tell them to write the credential into the target file. Do not collect it in chat.

@@ -162,7 +162,7 @@ export function shortPath(path: string): string {
     ? '~' + path.slice(home.length)
     : path;
 }
-// `…/code/app`: the end of a path, which is what tells folders apart.
+// The folder name. The session row is already dim, so the full path is not repeated.
 // `https://gateway.example/v1` as `gateway.example/v1`: short enough for a list.
 export function endpointName(url: string): string {
   return url
@@ -172,7 +172,7 @@ export function endpointName(url: string): string {
 }
 export function pathTail(path: string): string {
   const parts = path.split(/[\\/]+/).filter(Boolean);
-  return parts.length <= 2 ? path : '…/' + parts.slice(-2).join('/');
+  return parts.at(-1) || path;
 }
 // `3m`, `5h`, `2d`: how long ago, for lists.
 export function sessionAge(updated: number, now = Date.now()): string {
@@ -1040,8 +1040,10 @@ async function copy(host: CommandHost): Promise<void> {
     return;
   }
   const path = join(host.home, 'exports', 'last-copy.txt');
-  if (write(host, path, text + '\n'))
+  if (write(host, path, text + '\n')) {
+    host.flash('Copied');
     host.notice(`No clipboard tool · wrote ${path}`);
+  }
 }
 
 // A list of the settings, as pi's /settings: enter changes the marked one, and the change is
@@ -1384,16 +1386,30 @@ async function newSession(host: CommandHost): Promise<void> {
 async function continueSession(host: CommandHost): Promise<void> {
   const runtime = host.runtime;
   const previous = host.previousSession;
-  if (!previous || previous === runtime.session.id) {
+  const current = runtime.session.id;
+  const empty = !runtime.harness.messages.some(
+    (message) => !message.internal || message.internal === 'job_notice',
+  );
+  // After a restart nothing is remembered in this process. An empty home opens
+  // the latest saved session in this folder instead of flashing and staying put.
+  const resumed = !previous || previous === current;
+  const target = !resumed
+    ? previous
+    : empty
+      ? runtime.store
+          .list(host.workspace)
+          .find((session) => session.id !== current)?.id
+      : undefined;
+  if (!target) {
     host.flash('No previous session');
     return;
   }
-  const current = runtime.session.id;
-  if (host.openSession) await host.openSession(previous);
-  else await runtime.switchSession(previous);
+  if (host.openSession) await host.openSession(target);
+  else await runtime.switchSession(target);
   host.previousSession = current;
+  const title = (host.runtime.store.get(target)?.title || target).slice(0, 40);
   host.notice(
-    `Continued ${previous} · ${(host.runtime.store.get(previous)?.title || previous).slice(0, 40)}`,
+    resumed ? `Resumed ${target} · ${title}` : `Continued ${target} · ${title}`,
   );
 }
 // Open a saved session. One from another folder is copied into this one; the original stays.
@@ -1443,10 +1459,15 @@ async function resume(host: CommandHost, args: string): Promise<void> {
 }
 // Type to search titles and message text; tab shows every folder's sessions, ctrl+r renames
 // one (the old name is selected), ctrl+k deletes one. ctrl+d stays the exit key.
-function sessionList(host: CommandHost, everywhere: boolean, query = ''): void {
+function sessionList(
+  host: CommandHost,
+  everywhere: boolean,
+  query = '',
+  focusKey?: string,
+): void {
   const runtime = host.runtime;
-  const again = (): void =>
-    sessionList(host, everywhere, host.state.picker?.query ?? query);
+  const again = (focus?: string): void =>
+    sessionList(host, everywhere, host.state.picker?.query ?? query, focus);
   const here = runtime.store.get(runtime.session.id)?.workspace;
   const sessions = everywhere
     ? runtime.store.list()
@@ -1480,7 +1501,7 @@ function sessionList(host: CommandHost, everywhere: boolean, query = ''): void {
             ? 'No sessions saved'
             : 'No sessions in this folder'
           : 'No matches',
-      focusKey: runtime.session.id,
+      focusKey: focusKey ?? runtime.session.id,
       keys: {
         tab: () => sessionList(host, !everywhere, host.state.picker?.query),
         // Both ask in the list; esc there leaves the session as it was.
@@ -1493,7 +1514,7 @@ function sessionList(host: CommandHost, everywhere: boolean, query = ''): void {
               const title = text.trim().replace(/\s+/g, ' ').slice(0, 80);
               if (!title) return;
               runtime.store.rename(item.key, title);
-              again();
+              again(item.key);
             },
             {
               replace: true,

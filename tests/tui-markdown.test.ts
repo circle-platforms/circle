@@ -21,6 +21,17 @@ import {
 import { scratch } from './helpers.js';
 const plain = (text: string, width = 80): string =>
   markdownRows(text, width).map(stripAnsi).join('\n');
+test('an em dash on the wrap boundary does not drop the following space', () => {
+  const text =
+    'Nero — Roman citizenship was a legal status of the ancient world.';
+  for (const width of [24, 40, 57, 60]) {
+    const rows = markdownRows(text, width).map(stripAnsi);
+    const shown = rows.join('\n');
+    assert.equal(shown.includes('Romanc'), false, shown);
+    assert.equal(shown.includes('citizenshipwas'), false, shown);
+    assert.match(rows.join(' '), /Roman citizenship/);
+  }
+});
 test('CommonMark emphasis, inline code, links and literal underscore URLs remain distinct in nested formatting', () => {
   const rows = markdownRows(
     '**outer *inner* tail** and ~~old~~; `a_b *literal*` https://example.com/a_b_c',

@@ -144,7 +144,15 @@ function rowsFor(
         line = tail;
         used = tail.reduce((sum, item) => sum + item.width, 0);
       } else flush();
-      if (glyph.text === ' ' && wordWrap) continue;
+      // The overflowing space is the wrap. When an earlier space already broke
+      // the line and this space still fits, keep it: an em dash often lands the
+      // previous word on the boundary, and dropping the space glues the next word.
+      if (
+        glyph.text === ' ' &&
+        wordWrap &&
+        (used === 0 || used + glyph.width > width)
+      )
+        continue;
     }
     line.push(glyph);
     used += glyph.width;

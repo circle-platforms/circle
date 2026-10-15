@@ -501,6 +501,21 @@ test('real Anthropic requests fit legacy thinking and output budgets and include
   assert.equal(bodies[1]!.max_tokens, 32000);
   assert.deepEqual(bodies[1]!.thinking, { type: 'adaptive' });
   assert.deepEqual(bodies[1]!.output_config, { effort: 'low' });
+  const title = new GatewayModel(endpoint, root, 'glm-5.3', {}, catalog);
+  title.effort = 'medium';
+  await title.complete({
+    system: 'name this session',
+    messages: [{ id: 'user', role: 'user', content: 'question' }],
+    tools: [],
+    effort: '',
+    maxTokens: 128,
+    signal: new AbortController().signal,
+    token: () => {},
+  });
+  assert.equal(bodies[2]!.model, 'glm-5.3');
+  assert.equal(bodies[2]!.max_tokens, 128);
+  assert.equal(bodies[2]!.output_config, undefined);
+  assert.equal(bodies[2]!.thinking, undefined);
 });
 test('saved prices and model identity survive catalog changes and restart instead of repricing previous calls', async (t) => {
   const root = scratch(t);

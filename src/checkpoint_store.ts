@@ -912,19 +912,34 @@ export class CheckpointStore {
         pending.set(call.id, call.name);
       if (message.role === 'tool') pending.delete(message.tool_call_id!);
     }
-    if (!pending.size) return;
-    this.append(
-      sessionId,
-      [...pending].map(([id, name]) => ({
+    if (pending.size) {
+      this.append(
+        sessionId,
+        [...pending].map(([id, name]) => ({
+          id: randomUUID(),
+          role: 'tool',
+          tool_call_id: id,
+          name,
+          status: 'error',
+          content:
+            'Interrupted before a tool result was saved. The tool is not replayed.',
+        })),
+      );
+      return;
+    }
+    if (messages.some((message) => message.internal === 'interrupted')) return;
+    const last = messages.filter((message) => !message.internal).at(-1);
+    if (last?.role !== 'user') return;
+    this.append(sessionId, [
+      {
         id: randomUUID(),
-        role: 'tool',
-        tool_call_id: id,
-        name,
-        status: 'error',
+        role: 'user',
         content:
-          'Interrupted before a tool result was saved. The tool is not replayed.',
-      })),
-    );
+          'The previous turn was interrupted before a reply was saved. Continue from the last user message if they ask again.',
+        display: 'Interrupted',
+        internal: 'interrupted',
+      },
+    ]);
   }
   setSummary(sessionId: string, at: string, summary: string): void {
     const checkpoint = this.checkpoint(at);

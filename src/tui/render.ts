@@ -176,7 +176,10 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
     lastKind = kind;
   };
   let messages = state.messages.filter(
-    (message) => !message.internal || message.internal === 'job_notice',
+    (message) =>
+      !message.internal ||
+      message.internal === 'job_notice' ||
+      message.internal === 'interrupted',
   );
   let hide = state.hiddenTurns;
   while (hide-- > 0) {
@@ -347,6 +350,10 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
         (shell) => shell.anchor === message.id,
       ))
         shellRows(shell);
+      return;
+    }
+    if (message.internal === 'interrupted') {
+      noticeBlock('✖ Interrupted');
       return;
     }
     if (message.internal === 'job_notice') {

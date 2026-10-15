@@ -326,14 +326,24 @@ export class Harness {
     } while (this.followUps.length);
     return { answer, usage: total };
   }
+  /** Set once the fallback is saved. Sent after the turn so it does not share that request. */
+  private pendingTitle?: { display: string; fallback: string };
   /**
    * Ask the model for a short title after the fallback is already saved. A scripted model
-   * never sees this call. A rename that landed first is left alone.
+   * never sees this call. A rename that landed first is left alone. The request asks for
+   * no thinking and a short cap: an Anthropic-compatible model such as glm-5.3 otherwise
+   * spends the turn's effort and output budget and the fallback stays, with the error
+   * swallowed.
    */
   private generateTitle(display: string, fallback: string): void {
     const model = this.options.model;
     const prompt = display.trim();
-    if (!model.sideRequests || prompt.length <= 40) return;
+    if (!model.sideRequests || prompt.length < 24) return;
+    const report = (message: string): void => {
+      this.bus.emit('info', {
+        payload: { model_notice: { event: 'title_failed', message } },
+      });
+    };
     void model
       .complete({
         system: readPrompt('agent', 'title.md'),
@@ -346,20 +356,35 @@ export class Harness {
         ],
         tools: [],
         signal: AbortSignal.timeout(20_000),
-        effort: 'minimal',
+        // `''` skips thinking. `minimal` is sent as output_config.effort and glm rejects
+        // it, or thinks until this times out, and the catch used to hide that.
+        effort: '',
+        maxTokens: 128,
         token: () => {},
       })
       .then((response) => {
-        const title = sanitizeGeneratedTitle(response.message.content);
-        if (!title) return;
+        const title = sanitizeGeneratedTitle(
+          response.message.content || response.message.thinking || '',
+        );
+        if (!title) {
+          report('empty title');
+          return;
+        }
         const current = this.options.store.get(this.sessionId);
         if (!current || current.title !== fallback) return;
         this.options.store.rename(this.sessionId, title);
         this.bus.emit('info', { payload: { title } });
       })
-      .catch(() => {
-        /* The fallback title stays. A side request must not fail the turn. */
+      .catch((error: unknown) => {
+        // The fallback title stays. A side request must not fail the turn.
+        report(error instanceof Error ? error.message : String(error));
       });
+  }
+  private flushTitle(): void {
+    const pending = this.pendingTitle;
+    if (!pending) return;
+    this.pendingTitle = undefined;
+    this.generateTitle(pending.display, pending.fallback);
   }
   private async runTurn(
     prompt: string | undefined,
@@ -388,7 +413,7 @@ export class Harness {
       const fallback = fallbackTitle(shown.display);
       this.options.store.rename(this.sessionId, fallback);
       this.bus.emit('info', { payload: { title: fallback } });
-      void this.generateTitle(shown.display, fallback);
+      this.pendingTitle = { display: shown.display, fallback };
     }
     this.bus.emit('run_start', { payload: { message: prompt } });
     try {
@@ -479,6 +504,7 @@ export class Harness {
               usage: { ...usage },
               elapsed_ms: Date.now() - start,
             });
+            this.flushTitle();
             return { answer, usage };
           }
           // As in 0.5.0, the subagents of task calls next to each other run at the same time;
@@ -513,36 +539,51 @@ export class Harness {
     } catch (error) {
       if (this.streamed.trim() || this.streamedThinking.trim()) {
         try {
-          this.save({
+          const estimated = {
+            input_tokens: 0,
+            output_tokens: Math.max(
+              1,
+              Math.ceil(
+                (this.streamed.length + this.streamedThinking.length) / 4,
+              ),
+            ),
+            cache_read_tokens: 0,
+          };
+          const message: Message = {
             id: randomUUID(),
             role: 'assistant',
             content: this.streamed,
             ...(this.streamedThinking
               ? { thinking: this.streamedThinking }
               : {}),
-            usage: {
-              input_tokens: 0,
-              output_tokens: Math.max(
-                1,
-                Math.ceil(
-                  (this.streamed.length + this.streamedThinking.length) / 4,
-                ),
-              ),
-              cache_read_tokens: 0,
-            },
+            usage: estimated,
+          };
+          this.save(message);
+          // The footer sums this usage. The turn line only hears it from llm_end.
+          // Without that event a stop mid-thought shows ↓ 0 under the turn and the
+          // estimate in the footer.
+          this.bus.emit('llm_end', {
+            payload: { message },
+            usage: { ...estimated },
           });
         } catch {
           /* The store may already be closing. The turn still reports the failure. */
         }
         this.streamed = '';
         this.streamedThinking = '';
-      } else if (!signal.aborted)
-        try {
-          // A bad model name, or any failure before a reply, must not leave a session.
-          this.options.store.abandonUnanswered(this.sessionId);
-        } catch {
-          /* Keep the original failure. */
-        }
+      } else if (!signal.aborted) {
+        const asked = this.messages.some(
+          (message) => message.role === 'user' && !message.internal,
+        );
+        // Keep the person's words on screen. Drop the row only when nothing was saved.
+        if (!asked)
+          try {
+            this.options.store.abandonUnanswered(this.sessionId);
+          } catch {
+            /* Keep the original failure. */
+          }
+      }
+      this.flushTitle();
       const failure = signal.aborted ? signal.reason : error;
       this.bus.emit('run_error', {
         payload: {

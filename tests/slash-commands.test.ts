@@ -616,6 +616,7 @@ test('/copy copies the last answer, or writes it to a file when there is no clip
   await app.submit('/copy');
   const path = join(home, 'exports', 'last-copy.txt');
   assert.equal(readFileSync(path, 'utf8'), 'copy me\n');
+  assert.equal(app.state.flash, 'Copied');
   assert.equal(app.state.notices.at(-1), `No clipboard tool · wrote ${path}`);
 });
 
@@ -958,6 +959,18 @@ test('/logout clears the key and the connection and keeps the session open', asy
   assert.equal(app.state.picker, undefined);
 });
 
+test('/continue after a restart opens the latest saved session', async (t) => {
+  const { app, runtime } = await session(t, [answer('saved answer')]);
+  await app.submit('remember this');
+  const saved = runtime.session.id;
+  await app.submit('/new');
+  assert.notEqual(app.runtime!.session.id, saved);
+  (app as unknown as { previousSession: string }).previousSession = '';
+  await app.submit('/continue');
+  assert.equal(app.runtime!.session.id, saved);
+  assert.match(app.state.notices.at(-1) ?? '', new RegExp(`^Resumed ${saved}`));
+});
+
 test('/tree, /fork, /clone, /new, /continue and /resume move between branches and sessions', async (t) => {
   const { app, runtime, model, key } = await session(t, [
     answer('answer one'),
@@ -1088,6 +1101,10 @@ test('/tree, /fork, /clone, /new, /continue and /resume move between branches an
   for (const char of '  the   clone ') await key(char, char);
   await key('enter');
   assert.equal(app.runtime!.store.get(cloned)!.title, 'the clone');
+  assert.equal(
+    app.state.picker!.matches()[app.state.picker!.focus]?.key,
+    cloned,
+  );
   focus(cloned);
   await key('ctrl+k');
   assert.equal(app.state.dialog, undefined);
@@ -1104,8 +1121,18 @@ test('/tree, /fork, /clone, /new, /continue and /resume move between branches an
       .join('\n'),
     /tab this folder/,
   );
+  const folder = app
+    .runtime!.session.workspace.split(/[\\/]/)
+    .filter(Boolean)
+    .at(-1)!;
   assert.ok(
-    app.state.picker!.items.some((item) => (item.meta ?? '').includes('/')),
+    app.state.picker!.items.some((item) => (item.meta ?? '').includes(folder)),
+  );
+  assert.equal(
+    app.state.picker!.items.some((item) =>
+      (item.meta ?? '').includes(app.runtime!.session.workspace),
+    ),
+    false,
   );
   app.state.picker!.query = 'answer one';
   assert.ok(app.state.picker!.matches().some((item) => item.key === first));

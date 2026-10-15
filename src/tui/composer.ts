@@ -423,7 +423,10 @@ export class Composer {
       this.cut(cursor, this.wordEnd(cursor));
     else if (key === 'ctrl+k') this.cut(cursor, length);
     else if (key === 'ctrl+y') {
-      if (this.killed) this.insert(this.killed);
+      if (this.killed) {
+        this.insert(this.killed);
+        this.host.flash('');
+      }
     } else if (
       char &&
       !key.startsWith('ctrl+') &&
@@ -583,11 +586,12 @@ export class Composer {
       return true;
     }
     const chars = this.chars;
+    const after = chars.slice(this.cursor).join('');
     const head =
       chars.slice(0, list.start).join('') +
       chosen +
-      (chosen.endsWith('/') ? '' : ' ');
-    this.set(head + chars.slice(this.cursor).join(''), Array.from(head).length);
+      (chosen.endsWith('/') || /^[\s\n]/.test(after) ? '' : ' ');
+    this.set(head + after, Array.from(head).length);
     this.update(); // a folder lists what is in it
     return true;
   }
@@ -630,7 +634,9 @@ export class Composer {
     }
     let chosen: string;
     if (matches.length === 1)
-      chosen = matches[0]! + (matches[0]!.endsWith('/') ? '' : ' ');
+      chosen =
+        matches[0]! +
+        (matches[0]!.endsWith('/') || /^[\s\n]/.test(after) ? '' : ' ');
     else {
       chosen = commonPrefix(matches);
       this.host.flash(

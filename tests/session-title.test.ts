@@ -15,6 +15,28 @@ test('fallback titles stay short and drop a leading please', () => {
   assert.equal(fallbackTitle('请帮我看一下'), '帮我看一下');
   assert.equal(fallbackTitle('请'), '请');
   assert.equal(
+    fallbackTitle('@README.md what is this'),
+    '@README.md what is this',
+  );
+  assert.equal(
+    fallbackTitle(
+      '@README.md what is the first heading in this file and why it is there',
+    ),
+    'what is the first heading in this',
+  );
+  assert.equal(
+    fallbackTitle(
+      'I need you to write me a poem about the sea tonight please now',
+    ),
+    'write me a poem about the sea',
+  );
+  assert.equal(
+    fallbackTitle(
+      'please explain to me briefly in two sentences how this works today',
+    ).startsWith('please'),
+    false,
+  );
+  assert.equal(
     fallbackTitle(
       'Fix the login bug in auth. Then write a long postmortem for the on-call notes.',
     ),
@@ -59,13 +81,22 @@ class TitleModel implements ChatModel {
     private readonly answer: string,
     private readonly title: string,
   ) {}
+  failTitle = false;
+  thinking = '';
   async complete(request: ModelRequest): Promise<ModelResponse> {
     this.requests.push(request);
-    if (request.effort === 'minimal') await this.gate;
-    const content = request.effort === 'minimal' ? this.title : this.answer;
-    if (content && request.effort !== 'minimal') request.token(content);
+    const titleCall = request.maxTokens === 128;
+    if (titleCall && this.failTitle) throw new Error('title exploded');
+    if (titleCall) await this.gate;
+    const content = titleCall ? this.title : this.answer;
+    if (content && !titleCall) request.token(content);
     return {
-      message: { id: 'reply', role: 'assistant', content },
+      message: {
+        id: 'reply',
+        role: 'assistant',
+        content,
+        ...(titleCall && this.thinking ? { thinking: this.thinking } : {}),
+      },
       usage: emptyUsage(),
     };
   }
@@ -103,11 +134,15 @@ test('a side request names the session and does not take the answer', async (t) 
   const result = await run.run(LONG);
   assert.equal(result.answer, 'done');
   assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
+  const titleCalls = model.requests.filter(
+    (request) => request.maxTokens === 128,
+  );
+  assert.equal(titleCalls.length, 1);
+  assert.equal(titleCalls[0]!.effort, '');
   assert.equal(
-    model.requests.filter((request) => request.effort === 'minimal').length,
+    model.requests.filter((request) => !request.maxTokens).length,
     1,
   );
-  assert.equal(model.requests.filter((request) => !request.effort).length, 1);
   model.releaseTitle();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(session.id)!.title, 'Login bug fix');
@@ -135,7 +170,7 @@ test('a short prompt keeps the fallback and skips the model', async (t) => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(session.id)!.title, 'hello there');
   assert.equal(
-    model.requests.filter((request) => request.effort === 'minimal').length,
+    model.requests.filter((request) => request.maxTokens === 128).length,
     0,
   );
 });
@@ -149,4 +184,34 @@ test('a refusal leaves the fallback title', async (t) => {
   model.releaseTitle();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
+});
+
+test('a failed side request keeps the fallback and is reported', async (t) => {
+  const root = scratch(t);
+  const model = new TitleModel('done', 'Login bug fix');
+  model.failTitle = true;
+  const { harness: run, store, session } = harness(root, model);
+  cleanup(t, () => store.close());
+  const notes: string[] = [];
+  run.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as
+      { event?: string; message?: string } | undefined;
+    if (notice?.event === 'title_failed') notes.push(String(notice.message));
+  });
+  await run.run(LONG);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
+  assert.match(notes[0] ?? '', /title exploded/);
+});
+
+test('a title that arrives as thinking still replaces the fallback', async (t) => {
+  const root = scratch(t);
+  const model = new TitleModel('done', '');
+  model.thinking = 'Sea poem';
+  const { harness: run, store, session } = harness(root, model);
+  cleanup(t, () => store.close());
+  await run.run(LONG);
+  model.releaseTitle();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(store.get(session.id)!.title, 'Sea poem');
 });

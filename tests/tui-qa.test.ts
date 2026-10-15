@@ -10,15 +10,95 @@ import { defaultEffort } from '../src/model.js';
 import { wrap, stripAnsi } from '../src/ink/string_width.js';
 import { highlightTokens } from '../src/ink/highlight.js';
 import { markdownRows } from '../src/ink/components/markdown_renderer.js';
-import { footerRow } from '../src/tui/status_rows.js';
+import { contextInputOf, footerRow } from '../src/tui/status_rows.js';
 import { variableCopy, hotkeysText } from '../src/tui/slash_commands.js';
 import { Picker } from '../src/ink/components/picker.js';
 import { DEFAULT_DARK, buildPalette, setPalette } from '../src/ink/theme.js';
 import { SessionApp } from '../src/tui/session_app.js';
 import { ScriptedModel } from '../src/testing.js';
 import { defaultSettings } from '../src/settings.js';
-import { emptyUsage } from '../src/types.js';
+import { emptyUsage, type ChatModel, type ModelRequest } from '../src/types.js';
 import { cleanup, scratch } from './helpers.js';
+
+test('an unanswered prompt is marked interrupted once', (t) => {
+  const home = scratch(t);
+  const store = new CheckpointStore(home);
+  cleanup(t, () => store.close());
+  const session = store.create(home, 'model');
+  store.append(session.id, [{ id: 'u', role: 'user', content: 'hello' }]);
+  store.repairInterrupted(session.id);
+  store.repairInterrupted(session.id);
+  const marks = store
+    .messages(session.id)
+    .filter((message) => message.internal === 'interrupted');
+  assert.equal(marks.length, 1);
+  assert.equal(marks[0]!.display, 'Interrupted');
+});
+
+test('a partial reply reports the same output on the turn line and in the footer', async (t) => {
+  const { Harness } = await import('../src/harness.js');
+  const { ApprovalPolicy, ApprovalStore } = await import('../src/approvals.js');
+  const { TurnStatus } = await import('../src/tui/turn_status.js');
+  const { join } = await import('node:path');
+  const home = scratch(t);
+  const store = new CheckpointStore(home);
+  cleanup(t, () => store.close());
+  const session = store.create(home, 'model');
+  const thought = 'x'.repeat(944);
+  const model: ChatModel = {
+    model: 'scripted',
+    async complete(request: ModelRequest) {
+      request.token(thought, true);
+      await new Promise((_resolve, reject) => {
+        request.signal.addEventListener('abort', () =>
+          reject(request.signal.reason),
+        );
+      });
+      return {
+        message: { id: 'unused', role: 'assistant', content: '' },
+        usage: emptyUsage(),
+      };
+    },
+  };
+  const run = new Harness({
+    model,
+    tools: [],
+    store,
+    session,
+    policy: new ApprovalPolicy(
+      new ApprovalStore(join(home, 'approvals')),
+      home,
+    ),
+    system: 'test',
+  });
+  const events: import('../src/events.js').CircleEvent[] = [];
+  run.bus.subscribe((event) => events.push(event));
+  const pending = run.run(
+    'please explain roman citizenship across the empire in detail',
+  );
+  await delay(20);
+  await run.cancel();
+  await pending.catch(() => {});
+  const answer = store
+    .messages(session.id)
+    .find((message) => message.role === 'assistant');
+  assert.equal(answer?.usage?.output_tokens, 236);
+  assert.deepEqual(
+    events
+      .map((event) => event.kind)
+      .filter((kind) => kind === 'llm_end' || kind === 'run_error'),
+    ['llm_end', 'run_error'],
+  );
+  const status = new TurnStatus();
+  for (const event of events) status.apply(event, () => answer?.id);
+  assert.equal(status.usage[answer!.id]!.output, 236);
+  assert.equal(contextInputOf({ usage: answer?.usage }, 'scripted'), undefined);
+  const footer = stripAnsi(
+    footerRow({ usage: answer!.usage!, contextInput: undefined }, '', 80),
+  );
+  assert.match(footer, /↓ 236/);
+  assert.equal(footer.includes('N/A'), false);
+});
 
 test('every POSIX absolute path stays absolute, including outside the old top-level whitelist', () => {
   for (const path of ['/workspace/tui-proj', '/srv/app', '/data/x', '/code/a'])
@@ -176,7 +256,7 @@ test('/variables and /secrets omit the Windows placeholder except on Windows', (
   assert.match(variableCopy('win32').saved('BASE'), /%BASE%/);
 });
 
-test('the terminal creates a session on the first message, hides a failed turn, and counts streamed text', async (t) => {
+test('the terminal creates a session on the first message, keeps the user text after a model error, and counts streamed text', async (t) => {
   const home = scratch(t);
   const workspace = scratch(t);
   let release: (() => void) | undefined;
@@ -216,6 +296,7 @@ test('the terminal creates a session on the first message, hides a failed turn, 
     browsers: Map<unknown, { close: () => Promise<void> }>;
     handle: (event: { type: string; key: string; char: string }) => void;
     repaint: () => void;
+    frameRows: string[];
   };
   ui.screen.render = () => {};
   await app.attach({
@@ -271,7 +352,13 @@ test('the terminal creates a session on the first message, hides a failed turn, 
   assert.equal((app.state.notices.at(-1) ?? '').includes('{'), false);
   assert.equal(
     app.runtime!.store.list().some((session) => session.id === failedId),
-    false,
+    true,
   );
-  assert.equal(app.runtime!.store.list().length, 1);
+  assert.match(
+    app.runtime!.harness.messages.find((message) => message.role === 'user')
+      ?.content ?? '',
+    /again/,
+  );
+  ui.repaint();
+  assert.match(ui.frameRows.map(stripAnsi).join('\n'), /again/);
 });

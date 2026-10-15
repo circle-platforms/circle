@@ -132,6 +132,19 @@ export function headerRows(info: HeaderInfo, width: number): string[] {
   ];
 }
 
+/** Input tokens for the context meter. A partial saved on interrupt has neither a
+ * request model nor a measured input; `0/N/A` would disagree with the turn line. */
+export function contextInputOf(
+  message: { request_model?: string; usage?: Usage } | undefined,
+  model: string,
+): number | undefined {
+  const usage = message?.usage;
+  if (!usage) return undefined;
+  if (message?.request_model && message.request_model !== model)
+    return undefined;
+  if (!message?.request_model && !usage.input_tokens) return undefined;
+  return usage.input_tokens;
+}
 export interface Meters {
   usage: Usage;
   costText?: string;

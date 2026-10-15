@@ -551,6 +551,7 @@ test('alt+c copies the last answer with a local tool, or writes it to a file whe
   await settle();
   const path = join(s.root, 'exports', 'last-copy.txt');
   assert.equal(readFileSync(path, 'utf8'), 'the answer\n');
+  assert.equal(s.app.state.flash, 'Copied');
   assert.equal(s.app.state.notices.at(-1), `No clipboard tool · wrote ${path}`);
 
   const empty = await session(t);

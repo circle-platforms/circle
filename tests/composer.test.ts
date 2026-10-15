@@ -372,6 +372,10 @@ test('typing / or @ lists completions above the box: arrows move, tab takes, ent
   key(ui, 'escape');
   key(ui, 'tab', '\t');
   assert.equal(app.state.draft, '@src/alpha.ts ');
+  // The cursor sits on the space tab just added. Another tab must not add a second.
+  key(ui, 'left');
+  key(ui, 'tab', '\t');
+  assert.equal(app.state.draft, '@src/alpha.ts ');
 });
 
 test('the completion list draws on the panel at full width on dark and light palettes', (t) => {
@@ -467,6 +471,7 @@ test('esc esc clears the box and ctrl+y puts it back; only esc esc on an empty b
   assert.match(app.state.flash ?? '', /ctrl\+y restores/);
   key(ui, 'ctrl+y');
   assert.equal(app.state.draft, 'draft one');
+  assert.equal(app.state.flash, '');
   key(ui, 'ctrl+u');
   assert.equal(app.state.draft, '');
   key(ui, 'escape'); // the first esc on an empty box: no tree yet

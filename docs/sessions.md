@@ -15,7 +15,7 @@ This page also lists what the current version does not do. Read [What does not c
 | `/new` (`/clear`) | Start a new session. The old one stays in the folder's list once it has a message. A session with no messages yet is kept only in this terminal, and it is written when the first message is sent. |
 | `/resume` (`/sessions`) | Pick a session from a list. See [Pick a session](#pick-a-session). |
 | `/resume <n or id>` | Open a session by its place in that list or by the end of its id. |
-| `/continue` | Switch back to the previous session. |
+| `/continue` | Switch back to the previous session. With none remembered and this session still empty, open the latest saved session in this folder. |
 | `/name <title>` | Give the session a title. Until you do, Circle uses a short title from the first message (a leading "please" is dropped, and a long line is cut). A model may replace that title when the message is long. |
 | `/session` | Show the session's id and title, its folder and model, where it is kept, how many messages and tool calls it holds, and the tokens this run has used. |
 

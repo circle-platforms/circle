@@ -80,7 +80,7 @@ import { nextAgentActivity } from '../session_activity.js';
 import { networkSummary } from '../net.js';
 import { terminalText } from '../ink/components/markdown_renderer.js';
 import { WelcomeState } from './welcome_state.js';
-import { windowTitle } from './status_rows.js';
+import { contextInputOf, windowTitle } from './status_rows.js';
 import { loadRemap } from '../keybindings.js';
 import { emptyUsage, type ToolCall } from '../types.js';
 import { ScreenRenderer } from '../ink/screen.js';
@@ -565,11 +565,10 @@ export class SessionApp {
       const lastAnswer = this.runtime.harness.messages
         .filter((message) => message.role === 'assistant' && message.usage)
         .at(-1);
-      this.state.contextInput =
-        !lastAnswer?.request_model ||
-        lastAnswer.request_model === this.runtime.harness.model.model
-          ? lastAnswer?.usage?.input_tokens
-          : undefined;
+      this.state.contextInput = contextInputOf(
+        lastAnswer,
+        this.runtime.harness.model.model,
+      );
       // After /undo or /redo the meter is unknown until the next answer, as in 0.5.0.
       if (this.meterCleared !== undefined) {
         if ((lastAnswer?.id ?? '') === this.meterCleared)
@@ -792,7 +791,9 @@ export class SessionApp {
             .visible(this.runtime.harness.messages)
             .filter(
               (message) =>
-                !message.internal || message.internal === 'job_notice',
+                !message.internal ||
+                message.internal === 'job_notice' ||
+                message.internal === 'interrupted',
             )
             .at(-1)?.id ?? '')
         : undefined,
@@ -1122,7 +1123,11 @@ export class SessionApp {
               this.flash(
                 `Retry ${notice.attempt}/${notice.max} in ${(Number(notice.wait_ms) / 1000).toFixed(1)}s`,
               );
-            } else if (notice.event === 'param_dropped')
+            } else if (notice.event === 'title_failed')
+              this.notice(
+                `title failed · ${String(notice.message).replace(/\s+/g, ' ').slice(0, 120)}`,
+              );
+            else if (notice.event === 'param_dropped')
               this.notice(
                 `Endpoint does not support ${notice.param}; continuing without it`,
               );
@@ -2536,7 +2541,13 @@ export class SessionApp {
         this.repaint();
       },
       trustWorkspace: () => this.trustWorkspace(),
-      clipboard: (text) => this.clipboard.copyNative(text),
+      clipboard: async (text) => {
+        if (await this.clipboard.copyNative(text)) return true;
+        // No local tool (a Linux terminal without wl-copy or xclip). OSC 52 still
+        // reaches the terminal; the file fallback remains when that is all we have.
+        await this.clipboard.copySelection(text);
+        return false;
+      },
       followJobs: (list, rows) => {
         owner.jobsList = { list, rows };
       },
