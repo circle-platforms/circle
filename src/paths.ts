@@ -35,7 +35,15 @@ export function canonicalPath(path: string): string {
   }
 }
 export function normalizeWorkspace(path: string): string {
-  return canonicalPath(path);
+  const absolute = resolve(expandUser(path));
+  try {
+    return realpathSync.native(absolute);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    // Workspace names may be recorded before their directory exists. Keep that
+    // stable lexical identity; file targets use canonicalPath's existing parent.
+    return absolute;
+  }
 }
 export function circleHome(override?: string): string {
   return normalizeWorkspace(

@@ -5,7 +5,7 @@ import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   canonicalPath,
   normalizeWorkspace,
@@ -70,7 +70,7 @@ test('workspace roots, existing files and missing file tails use the same native
   );
   assert.equal(
     normalizeWorkspace(join(workspace, 'nested')),
-    join(canonical, 'nested'),
+    resolve(workspace, 'nested'),
   );
   assert.equal(sandbox.isInside('existing.txt'), true);
   assert.equal(sandbox.isInside('nested/new.txt'), true);
