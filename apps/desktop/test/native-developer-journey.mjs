@@ -1,4 +1,8 @@
 import {
+  createNativeEditorIsolationFixture,
+  runNativeEditorIsolation,
+} from './helpers/native-editor-isolation.mjs';
+import {
   createNativeEditorFixture,
   runNativeEditorJourney,
 } from './helpers/native-editor-journey.mjs';
@@ -59,11 +63,14 @@ await Promise.all([
   ),
 ]);
 await createNativeEditorFixture(repo);
+const isolationFiles = await createNativeEditorIsolationFixture(repo);
 const git = async (...args) =>
   (await promisify(execFile)('git', ['-C', repo, ...args])).stdout;
 await git('init', '-b', 'main');
 await git(
   'add',
+  ...isolationFiles,
+  '.circle-editor-isolation-fixture.json',
   'editor-main.ts',
   'editor-lib.ts',
   '.circle-editor-journey.json',
@@ -437,6 +444,28 @@ try {
     );
     await screenshot('01-task-layout');
   });
+  await check(
+    'independent editor bodies buffers and undo histories',
+    async () => {
+      const result = await runNativeEditorIsolation({
+        page,
+        workspace: repo,
+        output,
+      });
+      await writeFile(
+        join(output, 'editor-isolation.json'),
+        JSON.stringify(result, null, 2),
+      );
+      if (
+        await page
+          .getByRole('button', { name: 'close inspector', exact: true })
+          .count()
+      )
+        await page
+          .getByRole('button', { name: 'close inspector', exact: true })
+          .click();
+    },
+  );
   await check(
     'native editor semantic navigation and conflict journey',
     async () => {
