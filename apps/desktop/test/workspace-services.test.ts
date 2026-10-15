@@ -205,3 +205,73 @@ test('releasing one session waits for its PTY exit and preserves another session
     await rm(data, { recursive: true, force: true });
   }
 });
+test('blocked durable writer bounds 100000 incoming events and exposes one failure', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-stream-bound-'));
+  const data = await mkdtemp(path.join(tmpdir(), 'circle-stream-bound-data-'));
+  let unblock!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    unblock = resolve;
+  });
+  const failures: Error[] = [];
+  const service = new WorkspaceServices({
+    workspaceRoot: root,
+    workspaceId: 'bounded',
+    terminalEnv: {
+      HOME: root,
+      ZDOTDIR: root,
+      HISTFILE: path.join(root, '.history'),
+      ENV: '',
+      BASH_ENV: '',
+    },
+    dataDir: data,
+    nodeExecutable: process.execPath,
+    runtimeExecutable: process.execPath,
+    adapterPath: 'unused',
+    ghPath: 'unused',
+    maxPendingEventBytes: 32768,
+    eventStreamOptions: { beforeWrite: () => gate },
+    emit: () => {},
+    onPersistenceError: (error) => failures.push(error),
+  });
+  try {
+    const terminal = (await service.call('session-a', 'terminal', 'create', {
+      shell: '/bin/sh',
+    })) as TerminalSnapshot;
+    const promises: Promise<unknown>[] = [];
+    for (let i = 0; i < 100000; i++)
+      promises.push(
+        service
+          .publishSource({
+            workspaceId: 'bounded',
+            terminalEnv: {
+              HOME: root,
+              ZDOTDIR: root,
+              HISTFILE: path.join(root, '.history'),
+              ENV: '',
+              BASH_ENV: '',
+            },
+            sessionId: 'session-a',
+            service: 'tasks',
+            resourceId: 'task-a',
+            epoch: 'test',
+            seq: i + 1,
+            at: new Date().toISOString(),
+            data: { text: 'x'.repeat(256) },
+          })
+          .catch(() => undefined),
+      );
+    assert.ok(service.eventHealth.pendingBytes <= 32768);
+    assert.equal(failures.length, 1);
+    assert.match(service.eventHealth.error!, /byte limit/);
+    unblock();
+    await Promise.all(promises);
+    assert.equal(service.eventHealth.pendingBytes, 0);
+    await service.releaseSession('session-a');
+    assert.throws(() => process.kill(terminal.pid!, 0));
+  } finally {
+    unblock();
+    await service.dispose();
+    await rm(root, { recursive: true, force: true });
+    await rm(data, { recursive: true, force: true });
+  }
+});

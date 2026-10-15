@@ -11,7 +11,11 @@ import { LanguageService } from './language.ts';
 import { WorkspaceDebugService } from './debug.ts';
 import { DeliveryService } from './delivery.ts';
 import type { CredentialStore } from './delivery-login.ts';
-import { WorkspaceEventStream, type StreamCursor } from './event-stream.ts';
+import {
+  WorkspaceEventStream,
+  type StreamCursor,
+  type EventStreamOptions,
+} from './event-stream.ts';
 import type {
   WorkspaceService,
   WorkspaceServiceEvent,
@@ -29,6 +33,9 @@ export interface WorkspaceServicesOptions {
   credentialFiles?: string[];
   terminalEnv?: NodeJS.ProcessEnv;
   emit: (event: WorkspaceServiceEvent) => void;
+  onPersistenceError?: (error: Error) => void;
+  maxPendingEventBytes?: number;
+  eventStreamOptions?: EventStreamOptions;
 }
 /** One host-owned service container per granted workspace; renderer identities never select owners. */
 export class WorkspaceServices {
@@ -46,6 +53,8 @@ export class WorkspaceServices {
   private workspaceId: string;
   private pending = Promise.resolve();
   private failure?: Error;
+  private pendingEventBytes = 0;
+  private failureCleanup?: Promise<void>;
   private closed = false;
   private releasing = new Set<string>();
   private loginOwners = new Map<string, string>();
@@ -60,9 +69,10 @@ export class WorkspaceServices {
     const directory = path.join(options.dataDir, 'workspaces', rootHash);
     this.ready = WorkspaceEventStream.open(
       path.join(directory, 'events.jsonl'),
+      options.eventStreamOptions,
     );
     this.ready.catch((e) => {
-      this.failure = e;
+      this.failPersistence(e);
     });
     this.documents = new WorkspaceDocuments(options.workspaceRoot, {
       credentialFiles: options.credentialFiles,
@@ -86,7 +96,7 @@ export class WorkspaceServices {
       },
     );
     this.watch.ready.catch((e) => {
-      this.failure = e;
+      this.failPersistence(e);
     });
     this.terminals = new TerminalManager(
       {
@@ -195,16 +205,59 @@ export class WorkspaceServices {
     if (this.failure) throw this.failure;
     return (await this.ready).replay(after, limit);
   }
+  get eventHealth() {
+    return {
+      pendingBytes: this.pendingEventBytes,
+      error: this.failure?.message,
+    };
+  }
+  private failPersistence(error: unknown) {
+    if (this.failure) return;
+    this.failure = error instanceof Error ? error : Error(String(error));
+    this.watch?.close();
+    try {
+      this.options.onPersistenceError?.(this.failure);
+    } catch {}
+    this.failureCleanup = (async () => {
+      await Promise.allSettled([
+        this.terminals.dispose(),
+        ...[...this.debuggers.values()].map((debug) => debug.dispose()),
+      ]);
+    })();
+  }
   private persist(event: WorkspaceServiceEvent): Promise<void> {
+    if (this.failure) return Promise.reject(this.failure);
+    let json: string;
+    try {
+      json = JSON.stringify(event);
+    } catch (error) {
+      this.failPersistence(error);
+      return Promise.reject(this.failure);
+    }
+    const bytes = Buffer.byteLength(json);
+    if (
+      this.pendingEventBytes + bytes >
+      (this.options.maxPendingEventBytes ?? 8 * 1024 * 1024)
+    ) {
+      this.failPersistence(
+        Error(
+          'workspace event queue exceeded its byte limit; owned processes are stopping',
+        ),
+      );
+      return Promise.reject(this.failure);
+    }
+    this.pendingEventBytes += bytes;
+    const snapshot = JSON.parse(json) as WorkspaceServiceEvent;
     const operation = this.pending.then(async () => {
       if (this.failure) throw this.failure;
-      const stream = await this.ready;
-      const persisted = await stream.appendSource(event);
+      const persisted = await (await this.ready).appendSource(snapshot);
       this.options.emit(persisted);
     });
-    this.pending = operation.catch((e) => {
-      this.failure = e instanceof Error ? e : Error(String(e));
-    });
+    this.pending = operation
+      .catch((error) => this.failPersistence(error))
+      .finally(() => {
+        this.pendingEventBytes -= bytes;
+      });
     return operation;
   }
   private publish(
@@ -434,6 +487,7 @@ export class WorkspaceServices {
         this.loginOwners.set(login.id, sessionId);
       }
       if (
+        !this.failure &&
         !['status', 'snapshot', 'diff', 'branches', 'checks', 'logs'].includes(
           method,
         )
@@ -457,6 +511,7 @@ export class WorkspaceServices {
       [...this.debuggers.values()].map((debug) => debug.dispose()),
     );
     await this.terminals.dispose();
+    await this.failureCleanup;
     await this.delivery.then(
       (service) => service.dispose(),
       () => {},
