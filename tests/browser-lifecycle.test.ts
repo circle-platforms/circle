@@ -282,6 +282,107 @@ for (const helperExitCode of [0, 7])
     },
   );
 
+for (const exitsAfterHelperError of [true, false])
+  test(
+    exitsAfterHelperError
+      ? 'a failed Windows force helper still waits for its owned root to exit after the callback'
+      : 'a failed Windows force helper retains its original error and live root after the exit wait',
+    async (t) => {
+      const timeout = exitsAfterHelperError ? 1000 : 40;
+      const fixture = ownedStartupBrowser(
+        t,
+        'unused',
+        false,
+        undefined,
+        timeout,
+      );
+      const state = fixture.browser as any;
+      await state.start();
+      const child = fixture.child();
+      const nativeStop = t.mock.method(child, 'kill', child.kill.bind(child));
+      const actualWait = state.waitForExit.bind(state);
+      const waits: number[] = [];
+      const stops: boolean[] = [];
+      const helpers: ChildProcess[] = [];
+      let forceError: unknown;
+      let forceCallbackDelivered = false;
+      t.mock.method(
+        state,
+        'waitForExit',
+        (owned: ChildProcess, budget: number) => {
+          assert.equal(owned, child);
+          waits.push(budget);
+          // Model the two already-expired earlier phases. The post-force phase
+          // below uses the real listener and its unchanged exit-observation budget.
+          if (waits.length < 3) return Promise.resolve(false);
+          assert.equal(forceCallbackDelivered, true);
+          assert.equal(child.exitCode, null);
+          assert.equal(child.signalCode, null);
+          const waiting = actualWait(owned, budget);
+          if (exitsAfterHelperError) child.send({ exit: true });
+          return waiting;
+        },
+      );
+      t.mock.method(
+        state,
+        'stopProcess',
+        (owned: ChildProcess, force: boolean) => {
+          assert.equal(owned, child);
+          stops.push(force);
+          return new Promise<void>((_resolve, reject) => {
+            const helper = childProcesses.execFile(
+              process.execPath,
+              ['-e', 'process.exit(7)'],
+              { timeout: 3000, windowsHide: true },
+              (error) => {
+                assert(error);
+                if (force) {
+                  assert.equal(child.exitCode, null);
+                  assert.equal(child.signalCode, null);
+                  forceError = error;
+                  forceCallbackDelivered = true;
+                }
+                reject(error);
+              },
+            );
+            helpers.push(helper);
+          });
+        },
+      );
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+      Object.defineProperty(process, 'platform', { value: 'win32' });
+      state.processGroups.clear();
+      try {
+        if (exitsAfterHelperError) {
+          await fixture.browser.close();
+          assert.equal(child.exitCode, 23);
+          assert.equal(child.signalCode, null);
+          assert.equal(state.ownedRoots.has(child), false);
+        } else {
+          await assert.rejects(
+            fixture.browser.close(),
+            (error) => error === forceError,
+          );
+          assert.equal(child.exitCode, null);
+          assert.equal(child.signalCode, null);
+          assert.equal(process.kill(child.pid!, 0), true);
+          assert.equal(state.ownedRoots.has(child), true);
+        }
+        assert.deepEqual(waits, [timeout, Math.min(timeout, 1000), timeout]);
+        assert.deepEqual(stops, [false, true]);
+        assert.equal(nativeStop.mock.callCount(), 0);
+        assert.equal(helpers.length, 2);
+        assert(helpers.every((helper) => helper.exitCode === 7));
+      } finally {
+        Object.defineProperty(process, 'platform', platform);
+        await stopOwned(child);
+        for (const helper of helpers) await stopOwned(helper);
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+      }
+    },
+  );
+
 test('closing after a broken protocol and a new launch stops both owned roots', async (t) => {
   const fixture = ownedStartupBrowser(t, 'unused', false, undefined, 40);
   const state = fixture.browser as any;
