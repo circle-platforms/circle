@@ -1,8 +1,19 @@
 import assert from 'node:assert/strict';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from 'playwright';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import {
+  mkdtempSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+  renameSync,
+  unlinkSync,
+  readdirSync,
+  existsSync,
+  statSync,
+  mkdirSync,
+} from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,8 +24,66 @@ const initial =
 writeFileSync(join(workspace, 'main.ts'), initial);
 writeFileSync(join(workspace, 'lib.ts'), 'export const amount = 1;\n');
 const language = new LanguageService(workspace);
+const documentsModule =
+  process.env.CIRCLE_EDITOR_DOCUMENT_SERVICE ??
+  fileURLToPath(
+    new URL('../../desktop/src/workspace/documents.ts', import.meta.url),
+  );
+if (process.env.CIRCLE_EDITOR_DOCUMENT_SERVICE && !existsSync(documentsModule))
+  throw Error('requested document service module does not exist');
+const documents = existsSync(documentsModule)
+  ? new (await import(pathToFileURL(documentsModule).href)).WorkspaceDocuments(
+      workspace,
+    )
+  : null;
+const streams = new Set();
+let seq = 0,
+  externalWrites = 0;
+const event = (data) => {
+  const payload = {
+    workspaceId: 'fixture',
+    sessionId: 'fixture',
+    service: 'documents',
+    resourceId: 'files',
+    epoch: 'editor-fixture',
+    seq: ++seq,
+    at: new Date().toISOString(),
+    data,
+  };
+  for (const stream of streams)
+    stream.write(`data: ${JSON.stringify(payload)}\n\n`);
+};
+const files = () =>
+  readdirSync(workspace)
+    .filter((name) => name.endsWith('.ts'))
+    .map((path) => ({
+      id: path,
+      path,
+      mtime: statSync(join(workspace, path)).mtimeMs,
+      size: statSync(join(workspace, path)).size,
+    }));
+const changed = async (changes) => {
+  if (documents) {
+    const snapshot = await documents.refresh();
+    event({ kind: 'files', snapshot });
+  } else
+    event({
+      kind: 'files',
+      snapshot: {
+        version: seq + 1,
+        files: files(),
+        changes: changes.map(([kind, path]) => ({
+          kind,
+          file: { id: path, path, mtime: 0, size: 0 },
+        })),
+        truncated: false,
+      },
+    });
+};
+if (documents) await documents.refresh();
 const readDocument = (path) => {
-  if (!['main.ts', 'lib.ts'].includes(path)) throw Error('outside fixture');
+  if (!['main.ts', 'lib.ts', 'moved.ts'].includes(path))
+    throw Error('outside fixture');
   const content = readFileSync(join(workspace, path), 'utf8');
   return {
     path,
@@ -28,6 +97,15 @@ const server = await createServer({
     {
       name: 'circle-editor-test-adapter',
       configureServer(server) {
+        server.middlewares.use('/__editor_events', (request, response) => {
+          response.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+          });
+          response.write(': ready\n\n');
+          streams.add(response);
+          request.on('close', () => streams.delete(response));
+        });
         server.middlewares.use(
           '/__editor_workspace',
           async (request, response) => {
@@ -35,8 +113,27 @@ const server = await createServer({
               if (request.url.includes('external=1')) {
                 writeFileSync(
                   join(workspace, 'main.ts'),
-                  initial + '// external write\n',
+                  initial + `// external write ${++externalWrites}\n`,
                 );
+                await changed([['changed', 'main.ts']]);
+                response.end('{}');
+                return;
+              }
+              if (request.url.includes('rename=1')) {
+                renameSync(
+                  join(workspace, 'main.ts'),
+                  join(workspace, 'moved.ts'),
+                );
+                await changed([
+                  ['removed', 'main.ts'],
+                  ['added', 'moved.ts'],
+                ]);
+                response.end('{}');
+                return;
+              }
+              if (request.url.includes('delete=1')) {
+                unlinkSync(join(workspace, 'moved.ts'));
+                await changed([['removed', 'moved.ts']]);
                 response.end('{}');
                 return;
               }
@@ -47,13 +144,26 @@ const server = await createServer({
               let data;
               if (service === 'language') data = language.call(method, params);
               else if (service === 'documents' && method === 'read')
-                data = readDocument(params.path);
+                data = documents
+                  ? await documents.read(params.path)
+                  : readDocument(params.path);
               else if (service === 'documents' && method === 'save') {
-                const current = readDocument(params.path);
-                if (current.revision !== params.expectedRevision)
-                  throw Error('file changed on disk');
-                writeFileSync(join(workspace, params.path), params.content);
-                data = readDocument(params.path);
+                if (documents)
+                  data = await documents.save(
+                    params.path,
+                    params.content,
+                    params.expectedRevision,
+                  );
+                else {
+                  const current = existsSync(join(workspace, params.path))
+                    ? readDocument(params.path)
+                    : null;
+                  if ((current?.revision ?? null) !== params.expectedRevision)
+                    throw Error('file changed on disk');
+                  writeFileSync(join(workspace, params.path), params.content);
+                  data = readDocument(params.path);
+                }
+                await changed([['changed', params.path]]);
               } else throw Error('unsupported fixture operation');
               response.setHeader('Content-Type', 'application/json');
               response.end(JSON.stringify({ ok: true, data }));
@@ -148,6 +258,28 @@ try {
       .querySelector('output[aria-label="content"]')
       ?.textContent.includes('// restored after reload'),
   );
+  await page.locator('.view-lines').first().click();
+  await page.keyboard.press(`${modifier}+End`);
+  await page.keyboard.type('// language undo');
+  await page
+    .getByRole('button', { name: 'toggle language', exact: true })
+    .click();
+  await page.locator('.view-lines').first().click({ button: 'right' });
+  await page.getByRole('menuitem', { name: /^复制/ }).waitFor();
+  await page.keyboard.press('Escape');
+  await page
+    .getByRole('button', { name: 'toggle language', exact: true })
+    .click();
+  await page.locator('.view-lines').first().click({ button: 'right' });
+  await page.getByRole('menuitem', { name: /^Copy/ }).waitFor();
+  await page.keyboard.press('Escape');
+  await page.keyboard.press(`${modifier}+z`);
+  await page.waitForFunction(
+    () =>
+      !document
+        .querySelector('output[aria-label="content"]')
+        .textContent.includes('// language undo'),
+  );
   const chinese = await browser.newPage();
   await chinese.goto(
     `${server.resolvedUrls.local[0]}test/editor-ui.html?lang=zh-CN`,
@@ -162,16 +294,25 @@ try {
     `${server.resolvedUrls.local[0]}test/editor-ui.html?viewer=1`,
   );
   await viewer.getByRole('button', { name: 'edit', exact: true }).click();
+  await viewer
+    .getByRole('button', { name: 'external write', exact: true })
+    .click();
+  await viewer.waitForFunction(() =>
+    document
+      .querySelector('.view-lines')
+      ?.textContent.replaceAll('\u00a0', ' ')
+      .includes('external write 1'),
+  );
+  await viewer.getByText('disk and buffer match', { exact: true }).waitFor();
   await viewer.locator('.view-lines').first().click();
   await viewer.keyboard.press(`${modifier}+End`);
   await viewer.keyboard.type('// human draft');
   await viewer
     .getByRole('button', { name: 'external write', exact: true })
     .click();
-  await viewer.waitForTimeout(100);
   await viewer
-    .getByRole('button', { name: 'save to disk', exact: true })
-    .click();
+    .getByText('file changed on disk; buffer kept', { exact: true })
+    .waitFor();
   await viewer
     .getByRole('button', { name: 'review disk changes', exact: true })
     .waitFor();
@@ -183,6 +324,12 @@ try {
     readFileSync(join(workspace, 'main.ts'), 'utf8'),
     /human draft/,
   );
+  if (process.env.CIRCLE_EDITOR_EVIDENCE_DIR) {
+    mkdirSync(process.env.CIRCLE_EDITOR_EVIDENCE_DIR, { recursive: true });
+    await viewer.screenshot({
+      path: join(process.env.CIRCLE_EDITOR_EVIDENCE_DIR, 'editor-conflict.png'),
+    });
+  }
   await viewer
     .getByRole('button', { name: 'review disk changes', exact: true })
     .click();
@@ -192,14 +339,56 @@ try {
     .click();
   await viewer.getByText('disk and buffer match', { exact: true }).waitFor();
   assert.match(readFileSync(join(workspace, 'main.ts'), 'utf8'), /human draft/);
+  await viewer
+    .getByRole('button', { name: 'external rename', exact: true })
+    .click();
+  await viewer
+    .getByRole('button', {
+      name: 'open possible moved file: moved.ts',
+      exact: true,
+    })
+    .click();
+  await viewer
+    .locator('.file-view-heading strong')
+    .getByText('moved.ts', { exact: true })
+    .waitFor();
+  await viewer.getByRole('button', { name: 'edit', exact: true }).click();
+  await viewer.locator('.view-lines').first().click();
+  await viewer.keyboard.press(`${modifier}+End`);
+  await viewer.keyboard.type('// recovered deleted draft');
+  await viewer
+    .getByRole('button', { name: 'external delete', exact: true })
+    .click();
+  await viewer
+    .getByText('file removed on disk; buffer kept', { exact: true })
+    .waitFor();
+  assert.equal(existsSync(join(workspace, 'moved.ts')), false);
+  await viewer
+    .getByRole('button', { name: 'restore file from buffer', exact: true })
+    .click();
+  await viewer.getByText('disk and buffer match', { exact: true }).waitFor();
+  assert.match(
+    readFileSync(join(workspace, 'moved.ts'), 'utf8'),
+    /recovered deleted draft/,
+  );
+  if (process.env.CIRCLE_EDITOR_EVIDENCE_DIR)
+    await viewer.screenshot({
+      path: join(
+        process.env.CIRCLE_EDITOR_EVIDENCE_DIR,
+        'editor-recovered.png',
+      ),
+    });
   await viewer.close();
   assert.deepEqual(errors, []);
   console.log(
-    'Monaco input, undo, redo, save key, diff, remount history live themes and persisted draft recovery passed',
+    'Monaco input/Undo/Redo/save/diff/remount/themes/draft recovery, live menu locale, clean/dirty watcher, move/delete recovery passed; document backend: ' +
+      (documents ? 'WorkspaceDocuments' : 'standalone fixture adapter'),
   );
 } finally {
   await browser?.close();
+  for (const stream of streams) stream.end();
   await server.close();
+  documents?.close();
   language.dispose();
   rmSync(workspace, { recursive: true, force: true });
 }

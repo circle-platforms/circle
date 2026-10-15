@@ -7,9 +7,10 @@ export class LanguageService {
   private overlays = new Map<string, { content: string; version: number }>();
   private service: ts.LanguageService;
   private root: string;
+  private libraryRoot: string;
   constructor(root: string) {
     this.root = fs.realpathSync(root);
-    const config = ts.findConfigFile(this.root, ts.sys.fileExists);
+
     let options: ts.CompilerOptions = {
       allowJs: true,
       checkJs: true,
@@ -18,13 +19,30 @@ export class LanguageService {
       module: ts.ModuleKind.ESNext,
       jsx: ts.JsxEmit.ReactJSX,
     };
+    this.libraryRoot = fs.realpathSync(
+      path.dirname(ts.getDefaultLibFilePath(options)),
+    );
+    const fileExists = (file: string) =>
+      this.overlays.has(path.normalize(file)) ||
+      (this.allowed(file) && ts.sys.fileExists(file));
+    const readFile = (file: string) =>
+      this.allowed(file) ? ts.sys.readFile(file) : undefined;
+    const readDirectory: typeof ts.sys.readDirectory = (...args) =>
+      ts.sys.readDirectory(...args).filter((file) => this.allowed(file));
+    const configPath = path.join(this.root, 'tsconfig.json');
+    const config = fileExists(configPath) ? configPath : undefined;
     let files: string[] = [];
     if (config) {
-      const read = ts.readConfigFile(config, ts.sys.readFile);
+      const read = ts.readConfigFile(config, readFile);
       if (!read.error) {
         const parsed = ts.parseJsonConfigFileContent(
           read.config,
-          ts.sys,
+          {
+            useCaseSensitiveFileNames: ts.sys.useCaseSensitiveFileNames,
+            fileExists,
+            readFile,
+            readDirectory,
+          },
           path.dirname(config),
         );
         options = { ...options, ...parsed.options };
@@ -32,23 +50,29 @@ export class LanguageService {
       }
     }
     if (!files.length)
-      files = ts.sys.readDirectory(
+      files = readDirectory(
         this.root,
         ['.ts', '.tsx', '.js', '.jsx', '.json'],
         ['**/node_modules/**', '**/.git/**', '**/dist/**'],
       );
     const host: ts.LanguageServiceHost = {
       getScriptFileNames: () => [
-        ...new Set([...files, ...this.overlays.keys()]),
+        ...new Set([
+          ...files.map((file) => path.normalize(file)),
+          ...this.overlays.keys(),
+        ]),
       ],
       getScriptVersion: (file) =>
         String(
-          this.overlays.get(file)?.version ??
-            fs.statSync(file, { throwIfNoEntry: false })?.mtimeMs ??
+          this.overlays.get(path.normalize(file))?.version ??
+            (this.allowed(file)
+              ? fs.statSync(file, { throwIfNoEntry: false })?.mtimeMs
+              : 0) ??
             0,
         ),
       getScriptSnapshot: (file) => {
-        const text = this.overlays.get(file)?.content ?? ts.sys.readFile(file);
+        const text =
+          this.overlays.get(path.normalize(file))?.content ?? readFile(file);
         return text === undefined
           ? undefined
           : ts.ScriptSnapshot.fromString(text);
@@ -56,11 +80,31 @@ export class LanguageService {
       getCurrentDirectory: () => this.root,
       getCompilationSettings: () => options,
       getDefaultLibFileName: ts.getDefaultLibFilePath,
-      fileExists: ts.sys.fileExists,
-      readFile: ts.sys.readFile,
-      readDirectory: ts.sys.readDirectory,
+      fileExists,
+      readFile,
+      readDirectory,
+      directoryExists: (directory) =>
+        this.allowed(directory) && !!ts.sys.directoryExists?.(directory),
+      realpath: (file) =>
+        this.allowed(file) ? (ts.sys.realpath?.(file) ?? file) : file,
     };
     this.service = ts.createLanguageService(host);
+  }
+  /** Resolution can read only granted project files and the bundled standard libs. */
+  private allowed(file: string): boolean {
+    try {
+      const real = fs.realpathSync(file);
+      return [this.root, this.libraryRoot].some((root) => {
+        const relative = path.relative(root, real);
+        return (
+          relative !== '..' &&
+          !relative.startsWith('..' + path.sep) &&
+          !path.isAbsolute(relative)
+        );
+      });
+    } catch {
+      return false;
+    }
   }
   private resolve(input: unknown): string {
     if (typeof input !== 'string') throw Error('file path required');
@@ -77,7 +121,9 @@ export class LanguageService {
   }
   private range(file: string, span: ts.TextSpan) {
     const text =
-      this.overlays.get(file)?.content ?? ts.sys.readFile(file) ?? '';
+      this.overlays.get(path.normalize(file))?.content ??
+      (this.allowed(file) ? ts.sys.readFile(file) : undefined) ??
+      '';
     const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest);
     const a = source.getLineAndCharacterOfPosition(span.start),
       b = source.getLineAndCharacterOfPosition(span.start + span.length);
@@ -128,7 +174,9 @@ export class LanguageService {
       return {};
     }
     const content =
-      this.overlays.get(file)?.content ?? ts.sys.readFile(file) ?? '';
+      this.overlays.get(path.normalize(file))?.content ??
+      (this.allowed(file) ? ts.sys.readFile(file) : undefined) ??
+      '';
     const source = ts.createSourceFile(file, content, ts.ScriptTarget.Latest);
     const line = Math.max(0, Number(params.line ?? 1) - 1),
       column = Math.max(0, Number(params.column ?? 1) - 1);
@@ -144,10 +192,19 @@ export class LanguageService {
           ]!,
       ),
     );
-    const inside = (item: ts.DocumentSpan) =>
-      item.fileName.startsWith(this.root + path.sep);
+    const inside = (item: ts.DocumentSpan) => {
+      const relative = path.relative(this.root, path.normalize(item.fileName));
+      return (
+        relative !== '..' &&
+        !relative.startsWith('..' + path.sep) &&
+        !path.isAbsolute(relative)
+      );
+    };
     const location = (item: ts.DocumentSpan) => ({
-      path: path.relative(this.root, item.fileName),
+      path: path
+        .relative(this.root, path.normalize(item.fileName))
+        .split(path.sep)
+        .join('/'),
       range: this.range(item.fileName, item.textSpan),
     });
     if (method === 'definition')
@@ -217,7 +274,7 @@ export class LanguageService {
         code: String(item.code),
       }));
     if (method === 'sync')
-      return { version: this.overlays.get(file)?.version ?? 0 };
+      return { version: this.overlays.get(path.normalize(file))?.version ?? 0 };
     throw Error(`unknown language method: ${method}`);
   }
   dispose() {

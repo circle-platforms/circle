@@ -1,4 +1,9 @@
 export const editor: Record<string, string> = {
+  'file removed on disk; buffer kept': '磁盘上的文件已删除，缓冲区已保留',
+  'file changed on disk; buffer kept': '磁盘内容已改变，缓冲区已保留',
+  'restore file from buffer': '从缓冲区恢复文件',
+  'open possible moved file: {path}': '打开可能移动的文件：{path}',
+
   'buffer could not be saved locally; keep this window open':
     '无法在本地保存缓冲区，请保持此窗口打开',
   'loading file': '正在加载文件',

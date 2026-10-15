@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   mkdtempSync,
+  mkdirSync,
   writeFileSync,
   readFileSync,
   rmSync,
@@ -145,4 +146,38 @@ test('language requests reject traversal, symlink escapes and invalid symbol nam
       }),
     /invalid symbol/,
   );
+});
+
+test('semantic import resolution cannot read through workspace symlink escapes', (t) => {
+  const { root, service } = fixture(t);
+  const outside = root + '-outside';
+  mkdirSync(outside);
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  writeFileSync(
+    join(outside, 'secret.ts'),
+    'export const secret = "outside-only-value";',
+  );
+  symlinkSync(outside, join(root, 'linked'));
+  const content =
+    'import { secret } from "./linked/secret"; console.log(secret);';
+  const diagnostics = service.call('request', {
+    method: 'diagnostics',
+    path: 'main.ts',
+    content,
+  }) as { message: string }[];
+  assert.ok(
+    diagnostics.some((item) => item.message.includes('Cannot find module')),
+  );
+  assert.ok(
+    diagnostics.every((item) => !item.message.includes('outside-only-value')),
+  );
+  const definitions = service.call('request', {
+    method: 'definition',
+    path: 'main.ts',
+    content,
+    line: 1,
+    column: 11,
+  }) as { path: string }[];
+  // TypeScript may return the unresolved import's own local alias declaration.
+  assert.ok(definitions.every((item) => item.path === 'main.ts'));
 });

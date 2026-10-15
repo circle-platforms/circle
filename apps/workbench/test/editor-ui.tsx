@@ -2,7 +2,7 @@ import '../src/styles/app.css';
 import { Tooltip } from 'radix-ui';
 import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { setLanguage } from '../src/i18n';
+import { setLanguage, locale } from '../src/i18n';
 import { RuntimeProvider } from '../src/app/context';
 import { PreviewRuntime, currentSession } from '../src/model/state';
 import type { DesktopBridge } from '../../desktop/src/contracts';
@@ -42,6 +42,9 @@ function Fixture() {
       >
         toggle theme
       </button>
+      <button onClick={() => setLanguage(locale() === 'en' ? 'zh-CN' : 'en')}>
+        toggle language
+      </button>
       <output aria-label="content">{value}</output>
       <output aria-label="saves">{saves}</output>
       <div style={{ height: 500, display: 'flex' }}>
@@ -68,6 +71,19 @@ function Fixture() {
 const nativeFixture = new URL(location.href).searchParams.has('viewer');
 if (nativeFixture) {
   window.circleDesktop = {
+    onWorkspaceEvent: (listener) => {
+      const source = new EventSource('/__editor_events');
+      source.onmessage = (message) => {
+        const event = JSON.parse(message.data);
+        const session = currentSession(runtime.getSnapshot());
+        listener({
+          ...event,
+          workspaceId: session.workspaceId,
+          sessionId: session.id,
+        });
+      };
+      return () => source.close();
+    },
     runtimeCommand: async (command) => {
       const response = await fetch('/__editor_workspace', {
         method: 'POST',
@@ -101,6 +117,20 @@ if (nativeFixture) {
           }
         >
           external write
+        </button>
+        <button
+          onClick={() =>
+            fetch('/__editor_workspace?rename=1', { method: 'POST' })
+          }
+        >
+          external rename
+        </button>
+        <button
+          onClick={() =>
+            fetch('/__editor_workspace?delete=1', { method: 'POST' })
+          }
+        >
+          external delete
         </button>
         <div style={{ height: 650, display: 'flex' }}>
           <FileViewer path="main.ts" onClose={() => {}} />

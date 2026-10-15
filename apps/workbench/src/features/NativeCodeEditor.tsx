@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import './monaco-locale';
+import { applyMonacoLocale } from './monaco-locale';
+import { useLocale } from '../i18n';
 import * as monaco from 'monaco-editor/editor/editor.api';
 import 'monaco-editor/editor/contrib/bracketMatching/browser/bracketMatching';
 import 'monaco-editor/editor/contrib/clipboard/browser/clipboard';
@@ -33,14 +34,35 @@ export function setEditorDocument(workspace: string, document: EditorDocument) {
   editorDocuments.set(uri, document);
   persistBuffer(workspace, document.path);
 }
+/** External writes update clean models only; dirty buffers retain their CAS baseline. */
+export function refreshEditorDocument(
+  workspace: string,
+  document: EditorDocument,
+): 'updated' | 'conflict' | 'unchanged' {
+  const uri = editorUri(workspace, document.path),
+    previous = editorDocuments.get(uri.toString());
+  const model = monaco.editor.getModel(uri);
+  if (!model || !previous || previous.revision === document.revision)
+    return 'unchanged';
+  if (model.getValue() !== previous.content) return 'conflict';
+  setEditorDocument(workspace, document);
+  model.pushStackElement();
+  model.pushEditOperations(
+    [],
+    [{ range: model.getFullModelRange(), text: document.content }],
+    () => null,
+  );
+  model.pushStackElement();
+  return 'updated';
+}
 function bufferKey(workspace: string, path: string) {
   return `circle.editor.buffer.v1:${workspace}:${path}`;
 }
-function persistBuffer(workspace: string, path: string) {
+export function persistBuffer(workspace: string, path: string): boolean {
   const uri = editorUri(workspace, path).toString();
   const document = editorDocuments.get(uri),
     model = monaco.editor.getModel(monaco.Uri.parse(uri));
-  if (!document || !model) return;
+  if (!document || !model) return false;
   try {
     if (model.getValue() === document.content)
       localStorage.removeItem(bufferKey(workspace, path));
@@ -49,8 +71,10 @@ function persistBuffer(workspace: string, path: string) {
         bufferKey(workspace, path),
         JSON.stringify({ document, content: model.getValue() }),
       );
+    return true;
   } catch {
     window.dispatchEvent(new CustomEvent('circle-editor-persistence-error'));
+    return false;
   }
 }
 export function pendingEditorDocuments(workspace: string) {
@@ -137,11 +161,13 @@ export function NativeCodeEditor({
   onSave: () => void;
   onNavigate: (path: string, range?: Range) => Promise<void>;
 }) {
+  const languageChoice = useLocale();
   const container = useRef<HTMLDivElement>(null);
   const callbacks = useRef({ onChange, onSave, onNavigate });
   callbacks.current = { onChange, onSave, onNavigate };
   useEffect(() => {
     if (!container.current) return;
+    applyMonacoLocale();
     const model = retainedModel(workspaceId, path, value, language);
     const uri = model.uri.toString();
     const applyTheme = () => {
@@ -373,6 +399,16 @@ export function NativeCodeEditor({
       view.dispose();
       themeWatcher.disconnect();
     };
-  }, [workspaceId, sessionId, path, language, readOnly, diff, live, selection]);
+  }, [
+    workspaceId,
+    sessionId,
+    path,
+    language,
+    readOnly,
+    diff,
+    live,
+    selection,
+    languageChoice,
+  ]);
   return <div className="native-code-editor" ref={container} />;
 }

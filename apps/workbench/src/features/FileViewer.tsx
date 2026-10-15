@@ -5,13 +5,15 @@ import { useRuntime } from '../app/context';
 import { currentSession } from '../model/state';
 import { Button, IconButton, Status } from '../components/common';
 import { t, tn } from '../i18n';
-import { workspaceCall } from '../model/workspace-client';
+import { workspaceCall, subscribeWorkspace } from '../model/workspace-client';
 import {
   NativeCodeEditor,
   editorDocuments,
   editorUri,
   pendingEditorDocuments,
+  persistBuffer,
   retainedModel,
+  refreshEditorDocument,
   setEditorDocument,
 } from './NativeCodeEditor';
 import type { EditorDocument } from './NativeCodeEditor';
@@ -54,6 +56,8 @@ export function FileViewer({
   const [conflict, setConflict] = useState<EditorDocument | null>(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [missing, setMissing] = useState(false);
+  const [moved, setMoved] = useState<EditorDocument | null>(null);
   const [bufferCount, setBufferCount] = useState(0);
   const live = runtime.mode === 'live';
   const language = /\.[cm]?tsx?$/.test(path)
@@ -72,13 +76,13 @@ export function FileViewer({
       language,
     );
     let retained = editorDocuments.get(uri);
-    if (
-      retained &&
-      retained.revision !== doc.revision &&
-      model.getValue() === retained.content
-    ) {
-      model.setValue(doc.content);
-      retained = undefined;
+    if (retained && retained.revision !== doc.revision) {
+      const result = refreshEditorDocument(workspaceId, doc);
+      if (result === 'conflict') {
+        setConflict(doc);
+        setError(t('file changed on disk; buffer kept'));
+      }
+      retained = editorDocuments.get(uri);
     }
     if (!retained) setEditorDocument(workspaceId, doc);
     setDocument(retained ?? doc);
@@ -109,6 +113,8 @@ export function FileViewer({
     let active = true;
     setError('');
     setConflict(null);
+    setMissing(false);
+    setMoved(null);
     setDocument(null);
     setLoading(true);
     if (live) {
@@ -119,8 +125,20 @@ export function FileViewer({
           if (active) showDocument(doc);
         })
         .catch((cause) => {
-          if (active)
-            setError(String(cause instanceof Error ? cause.message : cause));
+          if (!active) return;
+          retainedModel(workspaceId, path, '', language);
+          const prior = editorDocuments.get(
+            editorUri(workspaceId, path).toString(),
+          );
+          if (prior) showDocument(prior);
+          const message = String(
+            cause instanceof Error ? cause.message : cause,
+          );
+          const deleted = /ENOENT|no such file|does not exist/i.test(message);
+          setMissing(deleted);
+          setError(
+            deleted && prior ? t('file removed on disk; buffer kept') : message,
+          );
         })
         .finally(() => {
           if (active) setLoading(false);
@@ -147,6 +165,108 @@ export function FileViewer({
       window.removeEventListener('circle-editor-persistence-error', failure);
     };
   }, [workspaceId]);
+  useEffect(() => {
+    if (!live) return;
+    let alive = true;
+    let generation = 0;
+    const sequences = new Map<string, number>();
+    const reads = new Map<string, number>();
+    return (() => {
+      const unsubscribe = subscribeWorkspace((event) => {
+        if (
+          event.service !== 'documents' ||
+          event.workspaceId !== workspaceId ||
+          event.sessionId !== session.id
+        )
+          return;
+        if (event.seq <= (sequences.get(event.epoch) ?? -1)) return;
+        sequences.set(event.epoch, event.seq);
+        const snapshot = (event.data.snapshot ?? event.data) as {
+          files?: { path: string }[];
+          changes?: { kind: string; file: { path: string } }[];
+        };
+        const paths = Array.isArray(event.data.paths)
+          ? event.data.paths.filter(
+              (item): item is string => typeof item === 'string',
+            )
+          : (snapshot.changes ?? []).map((change) => change.file.path);
+        const currentGeneration = ++generation;
+        for (const target of new Set(paths)) {
+          const uri = editorUri(workspaceId, target).toString();
+          if (!editorDocuments.has(uri)) continue;
+          const readVersion = (reads.get(target) ?? 0) + 1;
+          reads.set(target, readVersion);
+          const removed =
+            snapshot.changes?.some(
+              (change) =>
+                change.kind === 'removed' && change.file.path === target,
+            ) && !snapshot.files?.some((file) => file.path === target);
+          if (removed) {
+            if (target !== path) continue;
+            setMissing(true);
+            setConflict(null);
+            setError(t('file removed on disk; buffer kept'));
+            const added =
+              snapshot.changes
+                ?.filter((change) => change.kind === 'added')
+                .map((change) => change.file.path) ?? [];
+            void Promise.all(
+              added.map((candidate) =>
+                workspaceCall<EditorDocument>(session.id, 'documents', 'read', {
+                  path: candidate,
+                }).catch(() => null),
+              ),
+            ).then((documents) => {
+              if (!alive || currentGeneration !== generation) return;
+              const previous = editorDocuments.get(uri);
+              const matches = documents.filter(
+                (document): document is EditorDocument =>
+                  !!document && document.content === previous?.content,
+              );
+              setMoved(matches.length === 1 ? matches[0]! : null);
+            });
+            continue;
+          }
+          void workspaceCall<EditorDocument>(session.id, 'documents', 'read', {
+            path: target,
+          })
+            .then((document) => {
+              if (!alive || reads.get(target) !== readVersion) return;
+              const result = refreshEditorDocument(workspaceId, document);
+              if (target !== path) return;
+              setMissing(false);
+              setMoved(null);
+              if (result === 'conflict') {
+                setConflict(document);
+                setError(t('file changed on disk; buffer kept'));
+              } else if (result === 'updated') {
+                setDocument(document);
+                setValue(
+                  retainedModel(
+                    workspaceId,
+                    path,
+                    document.content,
+                    language,
+                  ).getValue(),
+                );
+                setConflict(null);
+                setError('');
+              }
+            })
+            .catch((cause) => {
+              if (alive && target === path)
+                setError(
+                  String(cause instanceof Error ? cause.message : cause),
+                );
+            });
+        }
+      });
+      return () => {
+        alive = false;
+        unsubscribe();
+      };
+    })();
+  }, [workspaceId, session.id, path, live, language]);
   const changed = (text: string) => {
     valueRef.current = text;
     setValue(text);
@@ -157,7 +277,7 @@ export function FileViewer({
     setMode('edit');
     setPath(target);
   };
-  const save = async (all = false) => {
+  const save = async (all = false, restore = false) => {
     if (!document || saving || readOnly) return;
     setSaving(true);
     setError('');
@@ -204,12 +324,14 @@ export function FileViewer({
           {
             path,
             content: valueRef.current,
-            expectedRevision: document.revision,
+            expectedRevision: restore ? null : document.revision,
           },
         );
         setEditorDocument(workspaceId, doc);
         setDocument(doc);
         setConflict(null);
+        setMissing(false);
+        setMoved(null);
         if (projected)
           runtime.change((state) => {
             const item = state.files.find((file) => file.id === projected.id);
@@ -290,7 +412,12 @@ export function FileViewer({
             : t('unsaved buffer')}
         </span>
         {mode === 'edit' && (
-          <Button onClick={() => notify(t('buffer saved locally'))}>
+          <Button
+            onClick={() => {
+              if (persistBuffer(workspaceId, path))
+                notify(t('buffer saved locally'));
+            }}
+          >
             <Save size={13} />
             {t('save buffer')}
           </Button>
@@ -299,6 +426,25 @@ export function FileViewer({
       {error && (
         <div className="editor-notice" role="alert">
           <span>{error}</span>
+          {missing && (
+            <Button
+              disabled={readOnly || saving}
+              onClick={() => perform(() => save(false, true))}
+            >
+              {t('restore file from buffer')}
+            </Button>
+          )}
+          {moved && (
+            <Button
+              onClick={() => {
+                setSelection(undefined);
+                setMode('edit');
+                setPath(moved.path);
+              }}
+            >
+              {t('open possible moved file: {path}', { path: moved.path })}
+            </Button>
+          )}
           {conflict && (
             <Button
               onClick={() => {
@@ -345,7 +491,7 @@ export function FileViewer({
           </Button>
         )}
         <Button
-          disabled={readOnly || saving || !!conflict}
+          disabled={readOnly || saving || !!conflict || missing}
           onClick={() => perform(() => save())}
         >
           {saving
