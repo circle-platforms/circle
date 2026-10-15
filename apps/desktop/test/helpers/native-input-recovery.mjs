@@ -5,6 +5,31 @@ import {
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+
+/** Native execution state and renderer-owned persisted drafts have different owners. */
+export async function readNativeRecoverySession(state, page, sessionId) {
+  const session = (await state()).sessions.find(
+    (item) => item.id === sessionId,
+  );
+  assert(session, 'recovery conversation is unavailable');
+  const view = await page.evaluate((id) => {
+    const saved = JSON.parse(
+      localStorage.getItem('circle.workbench.live.views.v1') ?? '{}',
+    );
+    const entry = saved.views?.find(([sessionId]) => sessionId === id)?.[1];
+    if (!entry) return {};
+    if ('draft' in entry && typeof entry.draft !== 'string')
+      throw Error('persisted recovery draft is invalid');
+    if ('attachments' in entry && !Array.isArray(entry.attachments))
+      throw Error('persisted recovery attachments are invalid');
+    return {
+      ...('draft' in entry ? { draft: entry.draft } : {}),
+      ...('attachments' in entry ? { attachments: entry.attachments } : {}),
+    };
+  }, sessionId);
+  return { ...session, ...view };
+}
+
 export async function runNativeInputRecovery({
   getApp,
   getPage,
@@ -35,8 +60,7 @@ export async function runNativeInputRecovery({
       throw error;
     }
   };
-  const current = async () =>
-    (await state()).sessions.find((s) => s.id === sessionId);
+  const current = () => readNativeRecoverySession(state, page, sessionId);
   const composer = () =>
     page.getByRole('textbox', { name: 'message', exact: true });
   let pasteAttempt = 0;
@@ -46,7 +70,9 @@ export async function runNativeInputRecovery({
     const app = getApp();
     const clipboardKey = await preserveNativeClipboard(app);
     try {
-      const before = (await current()).attachments.length;
+      const previous = (await current()).attachments;
+      const before = previous.length;
+      const previousIds = new Set(previous.map((item) => item.id));
       observations.native = await app.evaluate(
         async ({ clipboard, ClipboardItem, nativeImage }) => {
           const png = nativeImage
@@ -65,6 +91,11 @@ export async function runNativeInputRecovery({
             pngPresent: await clipboard.has('image/png'),
           };
         },
+      );
+      assert.equal(
+        observations.native.pngPresent,
+        true,
+        'native PNG is available',
       );
       await page.evaluate(() => {
         const events = [];
@@ -105,6 +136,40 @@ export async function runNativeInputRecovery({
         async () => (await current()).attachments.length > before,
         'real native valid PNG paste received',
       );
+      const session = await current();
+      const pasted = session.attachments.find(
+        (item) => item.kind === 'image' && !previousIds.has(item.id),
+      );
+      assert.match(pasted?.content ?? '', /^data:image\/png;base64,/);
+      const bytes = Buffer.from(pasted.content.split(',')[1], 'base64');
+      assert.deepEqual(
+        [...bytes.subarray(0, 8)],
+        [137, 80, 78, 71, 13, 10, 26, 10],
+      );
+      await page
+        .locator('.composer .attachment-strip')
+        .getByText(pasted.name, { exact: true })
+        .waitFor();
+      assert.equal(
+        await page.evaluate(() =>
+          window.__circlePasteObservation.events.some(
+            (event) =>
+              event.trusted &&
+              event.target === 'message' &&
+              event.files.some((file) => file.type === 'image/png'),
+          ),
+        ),
+        true,
+        'the visible PNG came from an actual trusted native paste',
+      );
+      observations.received = {
+        persistedAttachments: session.attachments.length,
+        backendAttachments: (await state()).sessions.find(
+          (item) => item.id === sessionId,
+        )?.attachments.length,
+        pngBytes: bytes.length,
+        visibleChip: true,
+      };
     } finally {
       observations.events = await page
         .evaluate(() => {
