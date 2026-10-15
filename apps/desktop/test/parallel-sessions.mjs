@@ -10,6 +10,7 @@ import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
+import { readModelRequests } from './helpers/model-requests.mjs';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
 const temp = await mkdtemp(join(tmpdir(), 'circle-parallel-sessions-'));
@@ -102,12 +103,7 @@ let page;
 const checks = [];
 const errors = [];
 let lastState;
-const modelRequests = async () =>
-  (await readFile(requestsPath, 'utf8'))
-    .trim()
-    .split('\n')
-    .filter(Boolean)
-    .map(JSON.parse);
+const modelRequests = (options) => readModelRequests(requestsPath, options);
 try {
   app = await electron.launch({
     chromiumSandbox: true,
@@ -497,7 +493,7 @@ try {
   assert.deepEqual(errors, []);
   await writeFile(
     join(output, 'requests.jsonl'),
-    (await modelRequests())
+    (await modelRequests({ requireComplete: true }))
       .map((request) => JSON.stringify(request))
       .join('\n') + '\n',
   );
