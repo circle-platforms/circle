@@ -1,0 +1,48 @@
+name: Windows process query probe
+
+on:
+  push:
+    branches: [diagnose/windows-process-query]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-process-query-probe-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: windows-2025
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CIRCLE_HOME: ${{ runner.temp }}/circle-query-probe-${{ github.run_id }}-${{ github.run_attempt }}
+      CIRCLE_NO_UPDATE_CHECK: '1'
+      CIRCLE_NO_MODELS_REFRESH: '1'
+      CIRCLE_QUERY_PROBE: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.21.0'
+          cache: npm
+      - name: Install locked dependencies
+        run: |
+          New-Item -ItemType Directory -Path $env:CIRCLE_HOME -Force | Out-Null
+          npm.cmd ci
+          exit $LASTEXITCODE
+      - name: Check with the query probe
+        run: |
+          $probePath = Join-Path $env:GITHUB_WORKSPACE 'scripts/windows-process-query-probe.ts'
+          if (!(Test-Path -LiteralPath $probePath -PathType Leaf)) {
+            throw 'The process query probe script is missing'
+          }
+          $probeUri = & node --input-type=module -e "import { pathToFileURL } from 'node:url'; process.stdout.write(pathToFileURL(process.argv[1]).href);" $probePath
+          $probeExit = $LASTEXITCODE
+          if ($probeExit -ne 0) { exit $probeExit }
+          $env:NODE_OPTIONS = "--import=$probeUri"
+          npm.cmd run check
+          exit $LASTEXITCODE
