@@ -21,6 +21,11 @@ import {
   trustFolder,
 } from '../../../src/settings.ts';
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
+import {
+  journeyBundledNodeFromApp,
+  assertBundledJourneyNode,
+  journeyNodeCommand,
+} from './helpers/native-journey-platform.mjs';
 const exec = promisify(execFile);
 const desktopRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
@@ -360,10 +365,16 @@ try {
   await page.locator('.xterm').first().waitFor();
   const terminals = await service('terminal', 'list');
   terminalId = terminals[0].id;
-  const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
+  const appIdentity = await app.evaluate(({ app }) => ({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+  }));
+  const bundledNode = journeyBundledNodeFromApp(appIdentity);
+  report.producerRuntime = await assertBundledJourneyNode(bundledNode);
   await service('terminal', 'write', {
     id: terminalId,
-    data: `${quote(process.execPath)} ${quote(join(workspace, 'pty-log.cjs'))}\r`,
+    data: journeyNodeCommand(bundledNode, join(workspace, 'pty-log.cjs')),
   });
   await page.evaluate(() => {
     window.__circleNativePerfEvents = [];
