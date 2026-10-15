@@ -204,6 +204,8 @@ if (packaged) env.PATH = await isolatedJourneyPath();
 let app, page;
 const checks = [];
 const errors = [];
+const recoveries = [];
+let rendererUnavailable = false;
 let phase = 'launch';
 let sessionId;
 let receipt;
@@ -229,6 +231,7 @@ const check = async (name, action) => {
     (dependency) =>
       checks.find((c) => c.name === dependency)?.status !== 'passed',
   );
+  if (rendererUnavailable) blocked.push('renderer recovery');
   if (blocked.length) {
     checks.push({
       name,
@@ -273,10 +276,43 @@ const check = async (name, action) => {
       screenshot: image,
     });
     if (!diagnostic) throw error;
+    if (
+      page &&
+      !(await page.locator('.developer-workbench').count()) &&
+      !(await page.locator('body').innerText()).trim()
+    ) {
+      const recovery = {
+        phase,
+        action: 'native reload window shortcut',
+        status: 'failed',
+      };
+      try {
+        await page.keyboard.press('ControlOrMeta+Shift+r');
+        await page.locator('.developer-workbench').waitFor({ timeout: 15000 });
+        const after = await page.evaluate(() =>
+          window.circleDesktop.runtimeState(),
+        );
+        assert(after.snapshot.sessions.some((s) => s.id === sessionId));
+        Object.assign(recovery, {
+          status: 'passed',
+          connected: after.connected,
+          parentSession: after.snapshot.sessions.find((s) => s.id === sessionId)
+            ?.state,
+        });
+      } catch (failure) {
+        rendererUnavailable = true;
+        recovery.error = String(failure);
+      }
+      recoveries.push(recovery);
+    }
   } finally {
     await writeFile(
       join(output, 'progress.json'),
-      JSON.stringify({ phase, diagnostic, checks, buildIdentity }, null, 2),
+      JSON.stringify(
+        { phase, diagnostic, checks, errors, recoveries, buildIdentity },
+        null,
+        2,
+      ),
     );
   }
 };
@@ -346,7 +382,9 @@ try {
   );
   page = await app.firstWindow();
   page.setDefaultTimeout(15000);
-  page.on('pageerror', (e) => errors.push(String(e)));
+  page.on('pageerror', (e) =>
+    errors.push({ phase, error: String(e), stack: e.stack }),
+  );
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   const state = async () =>
     (await page.evaluate(() => window.circleDesktop.runtimeState())).snapshot;
@@ -514,6 +552,15 @@ try {
         ),
       'actual disk save during active agent',
     );
+    const savedReadme = await readFile(join(repo, 'README.md'), 'utf8');
+    assert(
+      savedReadme.startsWith(baseline),
+      'saving README must preserve its own baseline, not another editor model',
+    );
+    assert(
+      !savedReadme.includes('import { amount }'),
+      'no cross-file model content',
+    );
     assert.equal(
       (await state()).sessions.find((s) => s.id === sessionId)?.state,
       'waiting',
@@ -609,7 +656,14 @@ try {
       .first()
       .click();
     await panel.getByRole('button', { name: 'count', exact: true }).waitFor();
-    assert((await panel.innerText()).includes('3'));
+    assert.equal(
+      await panel
+        .getByRole('button', { name: 'count', exact: true })
+        .locator('..')
+        .locator('code')
+        .innerText(),
+      '3',
+    );
     await screenshot('05-node-breakpoint');
     await panel.getByRole('button', { name: 'step over', exact: true }).click();
     await until(
@@ -909,6 +963,7 @@ try {
     await screenshot('09-zh-light-narrow');
   });
   assert.deepEqual(errors, []);
+  phase = 'final verification';
   assert.equal(
     checks.filter((c) => c.status !== 'passed').length,
     0,
@@ -953,6 +1008,7 @@ try {
       {
         ...receipt,
         diagnostic,
+        recoveries,
         buildIdentity,
         cleanup: {
           applicationClosed: !cleanupError,
