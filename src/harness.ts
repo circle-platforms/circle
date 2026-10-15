@@ -365,7 +365,9 @@ export class Harness {
    * failure. A scripted model never sees this call. A rename that landed
    * first is left alone. The request disables thinking: glm-5.3 still reasons
    * when the field is omitted. Reasoning text is not a title. The prompt is
-   * wrapped as data, and a reply that answers the user is discarded.
+   * wrapped as data, and a reply that answers the user is discarded. A title
+   * that only repeats the question is asked once more; a second echo leaves
+   * the session untitled and is not `title failed`.
    */
   private generateTitle(display: string, fallback: string): void {
     // `this.model`, not the model passed at construction: /model and a reload replace it.
@@ -404,15 +406,14 @@ export class Harness {
       this.bus.emit('info', { payload: { title } });
       return true;
     };
-    let task!: Promise<void>;
-    task = model
-      .complete({
+    const ask = (stricter: boolean) =>
+      model.complete({
         system: readPrompt('agent', 'title.md'),
         messages: [
           {
             id: 'title',
             role: 'user',
-            content: titleConversation(prompt),
+            content: titleConversation(prompt, stricter),
           },
         ],
         tools: [],
@@ -422,36 +423,70 @@ export class Harness {
         effort: '',
         maxTokens: Harness.titleOutputTokens,
         token: () => {},
-      })
-      .then((response) => {
-        // Reasoning is never a title, even when the answer is empty.
-        const decision = acceptGeneratedTitle(response.message.content, prompt);
-        const current = this.storedSession();
-        if (!current) return;
-        // A rename that landed first wins. An empty title is still the
-        // placeholder, so the summary can replace it.
-        if (current.title && current.title !== fallback) {
-          titleTrace(
-            `discarded ${JSON.stringify(decision.title ?? '')} (session title is ${JSON.stringify(current.title)})`,
-          );
-          return;
-        }
-        if (!decision.title) {
-          titleTrace(`discarded (${decision.reason})`);
-          if (!current.title) remember(fallback);
-          report(decision.reason);
-          return;
-        }
-        const title = decision.title;
-        if (!remember(title)) return;
-        titleTrace(`renamed to ${JSON.stringify(title)}`);
-      })
-      .catch((error: unknown) => {
-        // The fallback title stays. A side request must not fail the turn.
-        const current = this.storedSession();
-        if (current && !current.title) remember(fallback);
-        report(error instanceof Error ? error.message : String(error));
       });
+    const fail = (error: unknown): void => {
+      // The fallback title stays. A side request must not fail the turn.
+      const current = this.storedSession();
+      if (current && !current.title) remember(fallback);
+      report(error instanceof Error ? error.message : String(error));
+    };
+    // `keep` is an echo: do not store it and do not say title failed.
+    // `done` stored a real title, or a rename already won.
+    // `fail` stored the short title and reported a real rejection.
+    const apply = (
+      decision: ReturnType<typeof acceptGeneratedTitle>,
+    ): 'keep' | 'done' | 'fail' => {
+      const current = this.storedSession();
+      if (!current) return 'done';
+      // A rename that landed first wins. An empty title is still the
+      // placeholder, so the summary can replace it.
+      if (current.title && current.title !== fallback) {
+        titleTrace(
+          `discarded ${JSON.stringify(decision.title ?? '')} (session title is ${JSON.stringify(current.title)})`,
+        );
+        return 'done';
+      }
+      if (decision.reason === 'echoes prompt') {
+        titleTrace('discarded (echoes prompt)');
+        return 'keep';
+      }
+      if (!decision.title) {
+        titleTrace(`discarded (${decision.reason})`);
+        if (!current.title) remember(fallback);
+        report(decision.reason);
+        return 'fail';
+      }
+      const title = decision.title;
+      if (!remember(title)) return 'done';
+      titleTrace(`renamed to ${JSON.stringify(title)}`);
+      return 'done';
+    };
+    let task!: Promise<void>;
+    task = (async () => {
+      let response;
+      try {
+        response = await ask(false);
+      } catch (error) {
+        fail(error);
+        return;
+      }
+      // Reasoning is never a title, even when the answer is empty.
+      if (
+        apply(acceptGeneratedTitle(response.message.content, prompt)) !== 'keep'
+      )
+        return;
+      titleTrace('retry: title echoed the prompt');
+      try {
+        response = await ask(true);
+      } catch (error) {
+        fail(error);
+        return;
+      }
+      if (
+        apply(acceptGeneratedTitle(response.message.content, prompt)) === 'keep'
+      )
+        titleTrace('left untitled (title echoed the prompt)');
+    })();
     this.titleTask = task;
     void task.finally(() => {
       if (this.titleTask === task) this.titleTask = undefined;

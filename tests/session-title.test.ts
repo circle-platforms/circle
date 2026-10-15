@@ -14,6 +14,8 @@ import { GatewayModel } from '../src/model.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { defaultSettings, saveCredentials } from '../src/settings.js';
 import {
+  acceptGeneratedTitle,
+  echoesPrompt,
   fallbackTitle,
   firstUserSource,
   isNumberFragment,
@@ -197,13 +199,25 @@ class TitleModel implements ChatModel {
     private readonly title: string,
   ) {}
   failTitle = false;
+  /** Throw on this title call (1-based) and later, after the earlier ones return. */
+  failTitleAfter = 0;
+  /** Successive title replies. When empty, every title call returns `title`. */
+  titles: string[] = [];
+  private titleCalls = 0;
   thinking = '';
   async complete(request: ModelRequest): Promise<ModelResponse> {
     this.requests.push(request);
     const titleCall = request.maxTokens === TITLE_MAX_TOKENS;
-    if (titleCall && this.failTitle) throw new Error('title exploded');
-    if (titleCall) await this.gate;
-    const content = titleCall ? this.title : this.answer;
+    if (titleCall) {
+      this.titleCalls++;
+      if (this.failTitle) throw new Error('title exploded');
+      if (this.failTitleAfter && this.titleCalls >= this.failTitleAfter)
+        throw new Error('title exploded');
+      await this.gate;
+    }
+    const content = titleCall
+      ? (this.titles.shift() ?? this.title)
+      : this.answer;
     if (content && !titleCall) request.token(content);
     return {
       message: {
@@ -456,6 +470,158 @@ test('a three-word question asks for a summary title', async (t) => {
   assert.deepEqual(notes, []);
 });
 
+test('a recased question is not a title, and a noun phrase is', () => {
+  const tcp = 'what is TCP';
+  assert.equal(echoesPrompt('What is TCP', tcp), true);
+  assert.equal(echoesPrompt('what is TCP?', tcp), true);
+  assert.equal(echoesPrompt('TCP what is', tcp), true);
+  assert.equal(echoesPrompt('  What   is\u3000TCP ', tcp), true);
+  assert.equal(
+    acceptGeneratedTitle('What is TCP', tcp).reason,
+    'echoes prompt',
+  );
+  assert.equal(acceptGeneratedTitle('What is TCP', tcp).title, undefined);
+  assert.equal(
+    acceptGeneratedTitle('what is TCP?', tcp).reason,
+    'echoes prompt',
+  );
+  assert.equal(
+    acceptGeneratedTitle('TCP what is', tcp).reason,
+    'echoes prompt',
+  );
+  assert.equal(acceptGeneratedTitle('TCP overview', tcp).title, 'TCP overview');
+  assert.equal(acceptGeneratedTitle('TCP basics', tcp).title, 'TCP basics');
+  const rust = 'what is Rust';
+  assert.equal(
+    acceptGeneratedTitle('What is Rust', rust).reason,
+    'echoes prompt',
+  );
+  assert.equal(
+    acceptGeneratedTitle('what is Rust?', rust).reason,
+    'echoes prompt',
+  );
+  assert.equal(
+    acceptGeneratedTitle('Rust what is', rust).reason,
+    'echoes prompt',
+  );
+  assert.equal(acceptGeneratedTitle('Rust intro', rust).title, 'Rust intro');
+  assert.equal(
+    acceptGeneratedTitle('React hooks 解释', '解释 React hooks').title,
+    'React hooks 解释',
+  );
+  assert.equal(
+    acceptGeneratedTitle('Rust 语言简介', '什么是 Rust').title,
+    'Rust 语言简介',
+  );
+  assert.equal(
+    acceptGeneratedTitle('什么是 Rust', '什么是 Rust').reason,
+    'echoes prompt',
+  );
+  assert.equal(
+    acceptGeneratedTitle('什么是\u3000Rust', '什么是 Rust').reason,
+    'echoes prompt',
+  );
+  assert.match(titleConversation(tcp, true), /TCP overview/);
+  assert.equal(
+    titleConversation(tcp, true).startsWith(titleConversation(tcp)),
+    true,
+  );
+  assert.doesNotMatch(titleConversation(tcp), /TCP overview/);
+});
+
+test('an echoed question is asked once more, then left untitled', async (t) => {
+  const prompt = 'what is TCP';
+  const root = scratch(t);
+  const model = new TitleModel('done', 'unused');
+  model.titles = ['What is TCP', 'TCP overview'];
+  const { harness: run, store, session } = harness(root, model);
+  cleanup(t, () => store.close());
+  const notes: string[] = [];
+  run.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as
+      { event?: string; message?: string } | undefined;
+    if (notice?.event === 'title_failed') notes.push(String(notice.message));
+  });
+  await run.run(prompt);
+  assert.equal(store.get(session.id)!.title, '');
+  model.releaseTitle();
+  await run.finishTitle();
+  const calls = model.requests.filter(
+    (request) => request.maxTokens === TITLE_MAX_TOKENS,
+  );
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0]!.messages[0]!.content, titleConversation(prompt));
+  assert.equal(calls[1]!.messages[0]!.content, titleConversation(prompt, true));
+  assert.equal(calls[1]!.effort, '');
+  assert.equal(calls[1]!.tools.length, 0);
+  assert.match(String(calls[1]!.system), /Never return the question itself/);
+  assert.equal(store.get(session.id)!.title, 'TCP overview');
+  assert.deepEqual(notes, []);
+
+  const again = scratch(t);
+  const echo = new TitleModel('done', 'unused');
+  echo.titles = ['What is TCP', 'what is TCP?'];
+  const second = harness(again, echo);
+  cleanup(t, () => second.store.close());
+  const quiet: string[] = [];
+  second.harness.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as
+      { event?: string; message?: string } | undefined;
+    if (notice?.event === 'title_failed') quiet.push(String(notice.message));
+  });
+  await second.harness.run(prompt);
+  echo.releaseTitle();
+  await second.harness.finishTitle();
+  assert.equal(second.store.get(second.session.id)!.title, '');
+  assert.deepEqual(quiet, []);
+
+  const bad = scratch(t);
+  const answered = new TitleModel('done', 'unused');
+  answered.titles = [
+    'What is TCP',
+    "I don't see any README.md content attached to your message. Could you paste the file?",
+  ];
+  const third = harness(bad, answered);
+  cleanup(t, () => third.store.close());
+  const failed: string[] = [];
+  third.harness.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as
+      { event?: string; message?: string } | undefined;
+    if (notice?.event === 'title_failed') failed.push(String(notice.message));
+  });
+  await third.harness.run(prompt);
+  answered.releaseTitle();
+  await third.harness.finishTitle();
+  assert.equal(third.store.get(third.session.id)!.title, fallbackTitle(prompt));
+  assert.deepEqual(failed, ['not a title']);
+  assert.equal(
+    answered.requests.filter(
+      (request) => request.maxTokens === TITLE_MAX_TOKENS,
+    ).length,
+    2,
+  );
+
+  const thrown = scratch(t);
+  const boom = new TitleModel('done', 'What is Rust');
+  boom.failTitleAfter = 2;
+  const fourth = harness(thrown, boom);
+  cleanup(t, () => fourth.store.close());
+  const errors: string[] = [];
+  fourth.harness.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as
+      { event?: string; message?: string } | undefined;
+    if (notice?.event === 'title_failed') errors.push(String(notice.message));
+  });
+  await fourth.harness.run('what is Rust');
+  boom.releaseTitle();
+  await fourth.harness.finishTitle();
+  assert.equal(
+    fourth.store.get(fourth.session.id)!.title,
+    fallbackTitle('what is Rust'),
+  );
+  assert.match(errors[0] ?? '', /title exploded/);
+});
+
 test('a mixed Chinese and English prompt asks for a title', async (t) => {
   const cases = [
     ['解释 React hooks', 'React hooks'],
@@ -523,6 +689,11 @@ test('a refusal leaves the fallback title', async (t) => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
   assert.equal(notes[0], 'not a title');
+  assert.equal(
+    model.requests.filter((request) => request.maxTokens === TITLE_MAX_TOKENS)
+      .length,
+    1,
+  );
 });
 
 test('a failed side request keeps the fallback and is reported', async (t) => {
@@ -541,6 +712,11 @@ test('a failed side request keeps the fallback and is reported', async (t) => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
   assert.match(notes[0] ?? '', /title exploded/);
+  assert.equal(
+    model.requests.filter((request) => request.maxTokens === TITLE_MAX_TOKENS)
+      .length,
+    1,
+  );
 });
 
 test('an answer instead of a title keeps the fallback', async (t) => {
@@ -566,6 +742,11 @@ test('an answer instead of a title keeps the fallback', async (t) => {
     model.requests.find((request) => request.maxTokens === TITLE_MAX_TOKENS)!
       .messages[0]!.content,
     /^<conversation>\n/,
+  );
+  assert.equal(
+    model.requests.filter((request) => request.maxTokens === TITLE_MAX_TOKENS)
+      .length,
+    1,
   );
 });
 

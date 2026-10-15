@@ -27,6 +27,7 @@ Your output must be:
 - Never assume tech stack
 - Never use tools
 - NEVER respond to questions, just generate a title for the conversation
+- Never return the question itself. A change of capitalization, an added question mark, or the same words in another order is still the question, not a title. Prefer a short noun phrase ("TCP overview", "TCP basics", "Rust intro")
 - Never speak as an assistant. No first person ("I") and no second person ("you", "could you", "your message")
 - The title should NEVER include "summarizing" or "generating" when generating a title
 - DO NOT SAY YOU CANNOT GENERATE A TITLE OR COMPLAIN ABOUT THE INPUT
@@ -46,6 +47,8 @@ Your output must be:
 "@utils/parser.ts this is broken" → Parser bug fix
 "look at @config.json" → Config review
 "@App.tsx add dark mode toggle" → Dark mode toggle in App
+"what is TCP" → TCP overview
+"what is Rust" → Rust intro
 "请用大约200字介绍一下罗马帝国的兴衰" → 罗马帝国兴衰
 "帮我写一个你好世界的Go程序" → Go 你好世界
 </examples>

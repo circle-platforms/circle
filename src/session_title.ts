@@ -119,9 +119,13 @@ export function isNumberFragment(title: string, source: string): boolean {
 /**
  * The title call must not look like a user turn. glm-5.3 otherwise answers the
  * prompt ("I don't see any README.md… Could you paste") instead of naming it.
+ * `stricter` is the one retry after a title that only repeated the question.
+ * The reminder stays outside `<conversation>` so it is an instruction, not data.
  */
-export function titleConversation(text: string): string {
-  return `<conversation>\n${text.slice(0, 2000)}\n</conversation>`;
+export function titleConversation(text: string, stricter = false): string {
+  const body = `<conversation>\n${text.slice(0, 2000)}\n</conversation>`;
+  if (!stricter) return body;
+  return `${body}\nDo not return the question itself, even re-cased, with a question mark, or with the words reordered. Reply with a short noun phrase such as "TCP overview" or "Rust intro".`;
 }
 
 /**
@@ -161,6 +165,74 @@ function manySentences(title: string): boolean {
   return parts.length > 1;
 }
 
+const QUESTION_WORD = /^(?:what|how|why|when|where|who|which)\b/;
+const CJK_QUESTION = /什么|为何|为什么|怎么|如何|哪/;
+
+function stripPunct(text: string): string {
+  return text.replace(/[\p{P}\p{S}]/gu, '');
+}
+
+/** Case, spacing, and punctuation folded so "What is TCP?" matches "what is TCP". */
+function foldedTitle(text: string): string {
+  return text
+    .normalize('NFKC')
+    .replace(/[\u3000\u00a0]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function compactTitle(text: string): string {
+  return stripPunct(foldedTitle(text)).replace(/\s+/g, '');
+}
+
+/** Latin words stay whole. Each Han character is its own token. */
+function titleTokens(text: string): string[] {
+  const plain = foldedTitle(text).replace(/[\p{P}\p{S}]/gu, ' ');
+  return [...plain.matchAll(/[a-z0-9]+|[\u3400-\u9fff]/g)].map(
+    (match) => match[0],
+  );
+}
+
+function sameTokens(left: string[], right: string[]): boolean {
+  if (left.length === 0 || left.length !== right.length) return false;
+  const count = new Map<string, number>();
+  for (const token of left) count.set(token, (count.get(token) ?? 0) + 1);
+  for (const token of right) {
+    const n = count.get(token);
+    if (!n) return false;
+    if (n === 1) count.delete(token);
+    else count.set(token, n - 1);
+  }
+  return count.size === 0;
+}
+
+/**
+ * A question, so a reordering of its words is still the question
+ * ("what is TCP" → "TCP what is"). "解释 React hooks" is not one: a reordered
+ * noun phrase such as "React hooks 解释" is a real title.
+ */
+function questionShaped(prompt: string): boolean {
+  const line = foldedTitle(prompt);
+  if (!line) return false;
+  if (/[?？]\s*$/.test(line)) return true;
+  if (QUESTION_WORD.test(line)) return true;
+  return CJK_QUESTION.test(line);
+}
+
+/**
+ * The candidate is the prompt again: only case, spacing, punctuation, or a
+ * reordering of a question. "TCP overview" is not an echo of "what is TCP".
+ */
+export function echoesPrompt(title: string, prompt: string): boolean {
+  const left = compactTitle(title);
+  const right = compactTitle(prompt);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  if (!questionShaped(prompt)) return false;
+  return sameTokens(titleTokens(title), titleTokens(prompt));
+}
+
 /** Keep a model title only when it is one short phrase and not a reply. */
 export function sanitizeGeneratedTitle(text: string): string | undefined {
   const line = text
@@ -193,14 +265,16 @@ export function acceptGeneratedTitle(
   content: string,
   prompt: string,
 ): { title?: string; reason: string } {
-  const title = sanitizeGeneratedTitle(content);
-  const cleaned = content
+  const line = content
     .split('\n')
     .map((row) => row.trim())
     .find(Boolean)
     ?.replace(/^["'“”‘’«»]+|["'“”‘’«»]+$/g, '')
-    .replace(/[。．.]+$/g, '')
     .trim();
+  // Before the trailing-"?" rule, so "what is TCP?" is an echo, not "not a title".
+  if (line && echoesPrompt(line, prompt)) return { reason: 'echoes prompt' };
+  const title = sanitizeGeneratedTitle(content);
+  const cleaned = line?.replace(/[。．.]+$/g, '').trim();
   const fragment = (title ?? cleaned ?? '').trim();
   if (
     fragment &&
