@@ -243,13 +243,6 @@ test('blocked durable writer bounds 100000 incoming events and exposes one failu
         service
           .publishSource({
             workspaceId: 'bounded',
-            terminalEnv: {
-              HOME: root,
-              ZDOTDIR: root,
-              HISTFILE: path.join(root, '.history'),
-              ENV: '',
-              BASH_ENV: '',
-            },
             sessionId: 'session-a',
             service: 'tasks',
             resourceId: 'task-a',
