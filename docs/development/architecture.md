@@ -157,7 +157,7 @@ handled as signature errors, and signature errors do not disable thinking.
 |---|---|
 | `install_layout.ts` | Release archives and the install folder: `versions/<version>/`, `current.ref`, `installation.json`, checksums and pruning. |
 | `install_manager.ts` | Installs a release folder; run by `install.sh` and `install.ps1`. |
-| `legacy_install.ts` | Finds and removes the Python circle (0.5.0 and older) before the first install. The data folder is left alone. |
+| `legacy_install.ts` | Finds and removes the Python circle (0.5.0 and older) before the first install. Held Windows programs are matched by native process name and canonical path; an unidentified busy executable blocks removal. The data folder is left alone. |
 | `update.ts` | The daily update reminder and `circle update`. |
 | `version.ts` | The version and version comparison. |
 
