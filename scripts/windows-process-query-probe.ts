@@ -12,6 +12,7 @@ export type ProcessQueryProbeReport = Readonly<{
   signal: string | null | 'unknown';
   errorCode: string | 'unknown';
   elapsedMs: number;
+  pipelineElapsedMs: number | 'unknown';
   stdoutCodeUnits: number;
   stderrCodeUnits: number;
   scriptEnteredObserved: boolean;
@@ -19,11 +20,18 @@ export type ProcessQueryProbeReport = Readonly<{
   lookupKind: 'cim-all' | 'native-names' | 'native-all' | 'unknown';
 }>;
 
-function cleanMarkers(stderr: string, entered: string, completed: string) {
+function cleanMarkers(
+  stderr: string,
+  entered: string,
+  completed: string,
+  metric: string,
+) {
   let start = 0;
   let cleaned = '';
   let scriptEnteredObserved = false;
   let pipelineCompletedObserved = false;
+  let pipelineElapsedMs: number | 'unknown' = 'unknown';
+  let metricCount = 0;
   while (start < stderr.length) {
     const end = stderr.indexOf('\n', start);
     if (end === -1) {
@@ -34,10 +42,24 @@ function cleanMarkers(stderr: string, entered: string, completed: string) {
     const line = raw.slice(0, raw.endsWith('\r\n') ? -2 : -1);
     if (line === entered) scriptEnteredObserved = true;
     else if (line === completed) pipelineCompletedObserved = true;
-    else cleaned += raw;
+    else {
+      const value = line.startsWith(`${metric} `)
+        ? line.slice(metric.length + 1)
+        : '';
+      const elapsed = /^\d+$/.test(value) ? Number(value) : NaN;
+      if (Number.isSafeInteger(elapsed) && elapsed >= 0) {
+        metricCount++;
+        pipelineElapsedMs = metricCount === 1 ? elapsed : 'unknown';
+      } else cleaned += raw;
+    }
     start = end + 1;
   }
-  return { cleaned, scriptEnteredObserved, pipelineCompletedObserved };
+  return {
+    cleaned,
+    scriptEnteredObserved,
+    pipelineCompletedObserved,
+    pipelineElapsedMs,
+  };
 }
 
 export function instrumentSpawnSync(
@@ -79,13 +101,20 @@ export function instrumentSpawnSync(
     const current = ++sequence;
     const entered = `CIRCLE_QUERY_PROBE_${nonce}_${current}_ENTERED`;
     const completed = `CIRCLE_QUERY_PROBE_${nonce}_${current}_COMPLETED`;
+    const metric = `CIRCLE_QUERY_PROBE_${nonce}_${current}_PIPELINE_MS`;
     const success = `$circleQueryProbeSuccess_${nonce}_${current}`;
+    const clock = `$circleQueryProbeClock_${nonce}_${current}`;
     const mark = (marker: string) =>
       `try { [Console]::Error.WriteLine('${marker}'); [Console]::Error.Flush() } catch {}`;
     const instrumentedArgs = [...args];
     instrumentedArgs[commandIndex + 1] =
-      `${mark(entered)};\n${script}\n` +
-      `${success} = $?;\n${mark(completed)};\n` +
+      `${mark(entered)};\n` +
+      `try { ${clock} = $null; ${clock} = [Diagnostics.Stopwatch]::StartNew() } catch {};\n` +
+      `${script}\n${success} = $?;\n` +
+      `try { if ($null -ne ${clock}) { ${clock}.Stop(); ` +
+      `[Console]::Error.WriteLine('${metric} ' + ${clock}.ElapsedMilliseconds.ToString([Globalization.CultureInfo]::InvariantCulture)); ` +
+      `[Console]::Error.Flush() } } catch {};\n` +
+      `${mark(completed)};\n` +
       `if (${success}) { exit 0 } else { exit 1 }`;
     const started = performance.now();
     const result = Reflect.apply(original, childProcess, [
@@ -95,7 +124,7 @@ export function instrumentSpawnSync(
     ]) as ReturnType<typeof childProcess.spawnSync>;
     const stdout = typeof result.stdout === 'string' ? result.stdout : '';
     const stderr = typeof result.stderr === 'string' ? result.stderr : '';
-    const markers = cleanMarkers(stderr, entered, completed);
+    const markers = cleanMarkers(stderr, entered, completed, metric);
     const errorCode = (result.error as NodeJS.ErrnoException | undefined)?.code;
     try {
       report(
@@ -121,6 +150,7 @@ export function instrumentSpawnSync(
               ? errorCode
               : 'unknown',
           elapsedMs: Math.max(0, Math.round(performance.now() - started)),
+          pipelineElapsedMs: markers.pipelineElapsedMs,
           stdoutCodeUnits: stdout.length,
           stderrCodeUnits: stderr.length,
           scriptEnteredObserved: markers.scriptEnteredObserved,
@@ -135,7 +165,7 @@ export function instrumentSpawnSync(
       return result;
     const output = [...result.output];
     if (typeof output[2] === 'string')
-      output[2] = cleanMarkers(output[2], entered, completed).cleaned;
+      output[2] = cleanMarkers(output[2], entered, completed, metric).cleaned;
     return { ...result, output, stderr: markers.cleaned };
   }) as typeof childProcess.spawnSync;
 }
