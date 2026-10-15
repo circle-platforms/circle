@@ -9,8 +9,10 @@
 //   pip        a console script `circle` on PATH that runs `from circle.cli import main`
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import {
+  closeSync,
   existsSync,
   lstatSync,
+  openSync,
   readdirSync,
   readFileSync,
   readlinkSync,
@@ -53,10 +55,11 @@ export interface Surroundings {
 type Run = (
   command: string,
   args: string[],
+  timeout?: number,
 ) => Pick<SpawnSyncReturns<string>, 'status' | 'stdout' | 'stderr' | 'error'>;
 
-const runCommand: Run = (command, args) =>
-  spawnSync(command, args, { encoding: 'utf8', timeout: 120_000 });
+const runCommand: Run = (command, args, timeout = 120_000) =>
+  spawnSync(command, args, { encoding: 'utf8', timeout });
 
 export function surroundings(
   env: NodeJS.ProcessEnv = process.env,
@@ -285,11 +288,25 @@ export function pipPython(
   return undefined;
 }
 
+// Why a program cannot be opened for writing, or undefined when it can. Windows answers EBUSY
+// for a program that is running.
+const openError = (path: string): string | undefined => {
+  try {
+    closeSync(openSync(path, 'r+'));
+    return undefined;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code ?? 'EIO';
+  }
+};
+const LIST_TIMEOUT = 30_000;
+
 // Processes still running a copy: removing it would break them (Windows refuses outright).
+// Throws on Windows when a program of a copy is in use and no process could be named for it.
 export function runningCopies(
   copies: PythonCopy[],
   where: Surroundings,
   run: Run = runCommand,
+  opened: (path: string) => string | undefined = openError,
 ): number[] {
   const pids = new Set<number>();
   const folders = copies.flatMap((copy) =>
@@ -321,8 +338,26 @@ export function runningCopies(
         pids.add(Number(name));
     }
   } else if (where.platform === 'win32') {
-    const targets = [...folders, ...scripts];
-    if (targets.length) {
+    // Windows will not open a running program for writing. Listing processes starts PowerShell,
+    // which took 15 to 20 s on a loaded machine, so it runs only when a program of a copy is held.
+    const programs = [...scripts];
+    let unread = false;
+    for (const folder of folders)
+      try {
+        for (const name of readdirSync(folder, {
+          encoding: 'utf8',
+          recursive: true,
+        }))
+          if (name.toLowerCase().endsWith('.exe'))
+            programs.push(join(folder, name));
+      } catch {
+        unread = true;
+      }
+    const held = programs.flatMap((path) => {
+      const code = opened(path);
+      return code ? [{ path, code }] : [];
+    });
+    if (held.length || unread) {
       const result = run(
         join(
           process.env.SystemRoot || 'C:\\Windows',
@@ -335,20 +370,48 @@ export function runningCopies(
           '-NoProfile',
           '-NonInteractive',
           '-Command',
-          'Get-Process | Where-Object { $_.Path } | ForEach-Object { "$($_.Id)`t$($_.Path)" }',
+          // Paths in Base64, so letters outside the console code page come back as they are
+          'Get-CimInstance -ClassName Win32_Process -Property ProcessId,ExecutablePath | ' +
+            'Where-Object { $_.ExecutablePath } | ForEach-Object { "$($_.ProcessId) ' +
+            '$([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($_.ExecutablePath)))" }',
         ],
+        LIST_TIMEOUT,
       );
       for (const line of (result.stdout || '').split(/\r?\n/)) {
-        const [pid, path] = line.split('\t');
-        if (!path) continue;
-        const lower = path.toLowerCase();
+        const [pid = '', encoded] = line.trim().split(' ');
+        if (!/^\d+$/.test(pid) || !encoded) continue;
+        const path = Buffer.from(encoded, 'base64').toString('utf8');
         if (
-          folders.some((folder) =>
-            lower.startsWith(resolve(folder).toLowerCase() + '\\'),
-          ) ||
-          scripts.some((script) => lower === resolve(script).toLowerCase())
+          folders.some((folder) => inside(path, folder)) ||
+          scripts.some(
+            (script) =>
+              resolve(path).toLowerCase() === resolve(script).toLowerCase(),
+          )
         )
           pids.add(Number(pid));
+      }
+      // A program in use that no listed process runs: removing it would fail halfway, after
+      // the new release is staged.
+      const busy = held
+        .filter((entry) => entry.code === 'EBUSY')
+        .map((entry) => entry.path);
+      if (!pids.size && busy.length) {
+        const timedOut =
+          (result.error as NodeJS.ErrnoException | undefined)?.code ===
+          'ETIMEDOUT';
+        const reason = timedOut
+          ? `no answer in ${LIST_TIMEOUT / 1000} s`
+          : result.error
+            ? result.error.message
+            : result.status !== 0
+              ? result.stderr?.trim() || `exit status ${result.status}`
+              : undefined;
+        const files = `${busy.join(', ')} ${busy.length > 1 ? 'are' : 'is'} in use`;
+        throw new Error(
+          reason
+            ? `${files}, and the running programs could not be listed (${reason})`
+            : `${files} by another program`,
+        );
       }
     }
   } else {
