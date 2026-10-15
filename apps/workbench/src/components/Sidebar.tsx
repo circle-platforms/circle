@@ -1,7 +1,7 @@
 import { desktopHost, folderOpenMessage, openNativeWorkspace } from '../host';
 import { openHome } from '../features/home-selection';
-import { useState } from 'react';
-import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { useEffect, useState, type ReactNode } from 'react';
+import { NavLink, useLocation, useMatch, useNavigate } from 'react-router-dom';
 import {
   Plus,
   Search,
@@ -16,11 +16,12 @@ import {
   FolderPlus,
   SlidersHorizontal,
 } from 'lucide-react';
+import { Tooltip } from 'radix-ui';
 import { useRuntime } from '../app/context';
 import { usePlugins } from '../plugins/context';
 import { currentSession, sessionTitle } from '../model/state';
 import {
-  projectTag,
+  recentDetails,
   recentSessions,
   sidebarProjects,
   visibleSessions,
@@ -58,10 +59,13 @@ export function Sidebar({
   onSearch,
   onNavigate,
   onDialog,
+  renaming = false,
 }: {
   onSearch: () => void;
   onNavigate?: () => void;
   onDialog?: (dialog: DialogId, selection?: string) => void;
+  /** The rename dialog is open, so a recent hover must not stay up over it. */
+  renaming?: boolean;
 }) {
   const { snapshot, runtime, perform, notify } = useRuntime();
   // The pages of the extensions that are on, such as hub's
@@ -105,12 +109,15 @@ export function Sidebar({
   );
   const toggle = (id: string, list: string[], set: (ids: string[]) => void) =>
     set(list.includes(id) ? list.filter((item) => item !== id) : [...list, id]);
-  const sessionRows = (sessions: Session[], tagged: boolean) =>
+  const sessionRows = (sessions: Session[], hover: boolean) =>
     sessions.map((session) => (
       <SessionRow
         key={session.id}
         session={session}
-        tag={tagged ? projectTag(session, snapshot.workspaces) : undefined}
+        details={
+          hover ? recentDetails(session, snapshot.workspaces) : undefined
+        }
+        renaming={renaming}
         attention={waiting.has(session.id)}
         running={session.state === 'waiting'}
         onOpen={(id) => {
@@ -358,44 +365,93 @@ export function Sidebar({
 
 function SessionRow({
   session,
-  tag,
+  details,
+  renaming,
   attention,
   running,
   onOpen,
   onDialog,
 }: {
   session: Session;
-  tag?: string;
+  details?: { project?: string; relative: string; absolute?: string };
+  renaming: boolean;
   attention: boolean;
   running: boolean;
   onOpen: (id: string) => void;
   onDialog?: (dialog: DialogId, selection?: string) => void;
 }) {
+  // A function class would be stringified by the tooltip trigger, so the
+  // active row would lose its highlight. The same path is used in a project
+  // group, and both rows highlight together.
+  const active = useMatch({ path: `/session/${session.id}`, end: true });
+  const link = (
+    <NavLink
+      className={active ? 'session-link active' : 'session-link'}
+      end
+      to={`/session/${session.id}`}
+      onClick={(event) => {
+        event.preventDefault();
+        onOpen(session.id);
+      }}
+    >
+      <span>{sessionTitle(session.title)}</span>
+      {attention ? (
+        <i className="attention-dot" />
+      ) : running ? (
+        <i className="running-dot" />
+      ) : null}
+    </NavLink>
+  );
   return (
     <div className="session-row">
-      <NavLink
-        className={({ isActive }) =>
-          isActive ? 'session-link active' : 'session-link'
-        }
-        end
-        to={`/session/${session.id}`}
-        onClick={(event) => {
-          event.preventDefault();
-          onOpen(session.id);
-        }}
-      >
-        <span>{sessionTitle(session.title)}</span>
-        {tag ? <span className="session-project-tag">{tag}</span> : null}
-        {attention ? (
-          <i className="attention-dot" />
-        ) : running ? (
-          <i className="running-dot" />
-        ) : null}
-      </NavLink>
+      {details ? (
+        <RecentHover details={details} suppressed={renaming}>
+          {link}
+        </RecentHover>
+      ) : (
+        link
+      )}
       <SessionMenu
         session={session}
         onDialog={(dialog, selection) => onDialog?.(dialog, selection)}
       />
     </div>
+  );
+}
+
+function RecentHover({
+  details,
+  suppressed,
+  children,
+}: {
+  details: { project?: string; relative: string; absolute?: string };
+  suppressed: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (suppressed) setOpen(false);
+  }, [suppressed]);
+  return (
+    <Tooltip.Root
+      open={suppressed ? false : open}
+      onOpenChange={(next) => {
+        if (!suppressed) setOpen(next);
+      }}
+      disableHoverableContent
+    >
+      <Tooltip.Trigger asChild>{children}</Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content
+          className="tooltip session-hover"
+          side="right"
+          sideOffset={8}
+        >
+          {details.project ? <span>{details.project}</span> : null}
+          <span>{t('updated {time}', { time: details.relative })}</span>
+          {details.absolute ? <span>{details.absolute}</span> : null}
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
   );
 }

@@ -16,6 +16,7 @@ import {
   canArchiveSession,
   historyMessages,
   projectTag,
+  recentDetails,
   recentSessions,
   sessionHasContent,
   sidebarProjects,
@@ -698,7 +699,7 @@ test('working without a project creates one scratch session, and an empty projec
   assert.ok(scratch.every((session) => session.messages.length === 1));
 });
 
-test('recent lists every context newest first and tags only a project', () => {
+test('recent lists every context newest first, and its hover names only a project', () => {
   const runtime = new PreviewRuntime();
   const sample = runtime
     .getSnapshot()
@@ -763,12 +764,27 @@ test('recent lists every context newest first and tags only a project', () => {
     recentSessions(sessions).map((session) => session.id),
     ['newer', 'older'],
   );
-  assert.equal(projectTag(newer, workspaces), undefined);
-  assert.equal(projectTag(older, workspaces), 'docs-site');
+  const now = new Date(2026, 9, 15, 12, 0, 0);
+  const filed = recentDetails(older, workspaces, now);
+  const loose = recentDetails(newer, workspaces, now);
+  assert.equal(filed.project, 'docs-site');
+  assert.equal(filed.relative, shownTime(older.updatedAt, now));
+  assert.ok(filed.absolute);
+  assert.notEqual(filed.absolute, filed.relative);
+  assert.equal(loose.project, undefined);
+  assert.equal(loose.relative, shownTime(newer.updatedAt, now));
+  assert.ok(loose.absolute);
   assert.equal(
     projectTag({ ...older, workspaceId: 'missing' }, workspaces),
     undefined,
   );
+  const preview = recentDetails(
+    { ...older, updatedAt: 'today' },
+    workspaces,
+    now,
+  );
+  assert.equal(preview.relative, 'today');
+  assert.equal(preview.absolute, undefined);
   assert.deepEqual(
     sidebarProjects(workspaces, sessions).map((item) => item.id),
     ['proj'],

@@ -1,4 +1,5 @@
 import type { Message, Session, WorkbenchSnapshot, Workspace } from './types';
+import { fullTime, shownTime } from './time';
 
 /** User and assistant text the global search indexes. Tools and notices are not history. */
 export function historyMessages(session: Session): Message[] {
@@ -67,7 +68,7 @@ export function recentSessions(sessions: readonly Session[]): Session[] {
     );
 }
 
-/** The folder name on a recent row. A session that is not in a project has none. */
+/** The folder name for a recent row's hover. A session that is not in a project has none. */
 export function projectTag(
   session: Session,
   workspaces: readonly Workspace[],
@@ -75,6 +76,24 @@ export function projectTag(
   const workspace = workspaces.find((item) => item.id === session.workspaceId);
   if (!workspace || workspace.kind === 'scratch') return undefined;
   return workspace.name;
+}
+
+/**
+ * What a recent row says on hover or focus: the folder, when there is one,
+ * and when the session was last updated. The row itself shows only the title.
+ */
+export function recentDetails(
+  session: Session,
+  workspaces: readonly Workspace[],
+  now = new Date(),
+): { project?: string; relative: string; absolute?: string } {
+  const relative = shownTime(session.updatedAt, now);
+  const absolute = fullTime(session.updatedAt);
+  return {
+    project: projectTag(session, workspaces),
+    relative,
+    absolute: absolute && absolute !== relative ? absolute : undefined,
+  };
 }
 
 export function canArchiveSession(

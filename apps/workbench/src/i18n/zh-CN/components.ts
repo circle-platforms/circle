@@ -51,6 +51,7 @@ export const components: Record<string, string> = {
   'accept dialog': '接受对话框',
   // the sidebar
   recent: '最近',
+  'updated {time}': '更新于 {time}',
   'new session': '新会话',
   'search Circle': '搜索 Circle',
   sessions: '会话',

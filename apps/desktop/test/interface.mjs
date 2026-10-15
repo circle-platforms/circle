@@ -126,10 +126,40 @@ try {
     .nth(1)
     .locator('.project-name')
     .innerText();
-  assert.match(
-    await sections.nth(0).locator('a.session-link.active').innerText(),
-    new RegExp(projectName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
-  );
+  const recentActive = sections.nth(0).locator('a.session-link.active');
+  assert.equal((await recentActive.innerText()).includes(projectName), false);
+  await recentActive.hover();
+  const hover = page.locator('.session-hover');
+  await hover.waitFor();
+  assert.match(await hover.innerText(), new RegExp(projectName));
+  assert.match(await hover.innerText(), /updated /);
+  const flickered = await page.evaluate(async () => {
+    const start = performance.now();
+    while (performance.now() - start < 350) {
+      if (!document.querySelector('.session-hover')) return true;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    return false;
+  });
+  assert.equal(flickered, false);
+  const renameCommand = page.getByRole('textbox', {
+    name: 'message',
+    exact: true,
+  });
+  await renameCommand.fill('/name ');
+  await hover.waitFor();
+  await renameCommand.press('Enter');
+  await page
+    .getByRole('dialog', { name: 'rename session', exact: true })
+    .waitFor();
+  assert.equal(await hover.count(), 0);
+  await page.keyboard.press('Escape');
+  await page
+    .getByRole('heading', { name: 'Fix the reconnect race', exact: true })
+    .hover();
+  assert.equal(await hover.count(), 0);
+  await recentActive.focus();
+  await hover.waitFor();
   assert.equal(
     await page
       .locator('.sidebar')
@@ -139,6 +169,9 @@ try {
   );
   checks.push(
     'the open session stays highlighted in recent and in its project',
+  );
+  checks.push(
+    'a recent row shows only its title, and hover or focus shows the project and time',
   );
   for (const command of sourceCommands) {
     await reset();

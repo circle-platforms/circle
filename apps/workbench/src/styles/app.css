@@ -2449,6 +2449,14 @@ pre {
 .tooltip svg {
   fill: var(--fg);
 }
+.tooltip.session-hover {
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  line-height: 1.35;
+}
 .toast {
   position: fixed;
   bottom: 25px;
@@ -3784,16 +3792,6 @@ pre {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.session-project-tag {
-  flex: 0 1 auto;
-  max-width: 42%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--muted);
-  font-size: var(--ui-tiny);
-  font-weight: 400;
 }
 .session-link.active {
   background: var(--active);
