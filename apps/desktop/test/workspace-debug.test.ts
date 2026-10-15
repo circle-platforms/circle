@@ -356,3 +356,29 @@ test(
     }
   },
 );
+
+test('adapter launch rejection cleans up and leaves a recoverable failed state', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-debug-rejected-'));
+  const adapter = path.join(root, 'adapter.cjs');
+  await writeFile(path.join(root, 'fixture.cjs'), '');
+  await writeFile(
+    adapter,
+    `const net=require('net');const server=net.createServer(s=>{let buffer=Buffer.alloc(0);let seq=0;const send=m=>{const b=JSON.stringify({seq:++seq,...m});s.write('Content-Length: '+Buffer.byteLength(b)+'\\r\\n\\r\\n'+b)};s.on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);while(true){let end=buffer.indexOf('\\r\\n\\r\\n');if(end<0)return;let len=+buffer.subarray(0,end).toString().match(/Content-Length: (\\d+)/i)[1];if(buffer.length<end+4+len)return;let m=JSON.parse(buffer.subarray(end+4,end+4+len));buffer=buffer.subarray(end+4+len);send({type:'response',request_seq:m.seq,command:m.command,success:m.command!=='launch',message:m.command==='launch'?'fixture launch rejected':undefined,body:{}});if(m.command==='initialize')send({type:'event',event:'initialized',body:{}});}})}).listen(0,'127.0.0.1',()=>console.log('Debug server listening at 127.0.0.1:'+server.address().port));`,
+  );
+  const service = new WorkspaceDebugService({
+    workspaceRoot: root,
+    nodeExecutable: process.execPath,
+    adapterPath: adapter,
+  });
+  try {
+    await assert.rejects(
+      service.handle('launch', { program: 'fixture.cjs' }),
+      /fixture launch rejected/,
+    );
+    assert.equal(service.snapshot().status, 'failed');
+    assert.equal(service.snapshot().adapterPid, undefined);
+  } finally {
+    await service.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});

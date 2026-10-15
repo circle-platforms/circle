@@ -262,7 +262,7 @@ export class WorkspaceDebugService {
               args.configuration.request ?? 'attach',
               args.configuration,
             );
-            await initialized;
+            await Promise.race([initialized, launched]);
             for (const [source, breakpoints] of Object.entries(
               this.state.breakpoints,
             ))
@@ -400,43 +400,53 @@ export class WorkspaceDebugService {
       this.resumeEntry = method === 'launch' && params.stopOnEntry !== true;
       this.options.workspaceRoot = await realpath(this.options.workspaceRoot);
       const dap = await this.start();
-      const initialized = new Promise<void>((resolve) =>
-        dap.once('initialized', () => resolve()),
-      );
-      const launch = dap.request(method, {
-        type: 'pwa-node',
-        request: method,
-        name: 'circle project',
-        cwd: this.options.workspaceRoot,
-        program,
-        args: Array.isArray(params.args) ? params.args : [],
-        runtimeExecutable:
-          this.options.runtimeExecutable ?? this.options.nodeExecutable,
-        env: { ELECTRON_RUN_AS_NODE: '1' },
-        console: this.options.runInTerminal
-          ? 'integratedTerminal'
-          : 'internalConsole',
-        sourceMaps: true,
-        pauseForSourceMap: true,
-        __workspaceFolder: this.options.workspaceRoot,
-        autoAttachChildProcesses: false,
-        outFiles: [path.join(this.options.workspaceRoot, '**/*.js')],
-        ...(method === 'attach'
-          ? { port: params.port, address: '127.0.0.1' }
-          : { stopOnEntry: true }),
-      });
-      await Promise.race([initialized, launch]);
-      for (const [source, breakpoints] of Object.entries(
-        this.state.breakpoints,
-      ))
-        await dap.request('setBreakpoints', {
-          source: { path: source },
-          breakpoints: breakpoints.map((b) => ({ line: b.line })),
+      const generation = this.generation;
+      try {
+        const initialized = new Promise<void>((resolve) =>
+          dap.once('initialized', () => resolve()),
+        );
+        const launch = dap.request(method, {
+          type: 'pwa-node',
+          request: method,
+          name: 'circle project',
+          cwd: this.options.workspaceRoot,
+          program,
+          args: Array.isArray(params.args) ? params.args : [],
+          runtimeExecutable:
+            this.options.runtimeExecutable ?? this.options.nodeExecutable,
+          env: { ELECTRON_RUN_AS_NODE: '1' },
+          console: this.options.runInTerminal
+            ? 'integratedTerminal'
+            : 'internalConsole',
+          sourceMaps: true,
+          pauseForSourceMap: true,
+          __workspaceFolder: this.options.workspaceRoot,
+          autoAttachChildProcesses: false,
+          outFiles: [path.join(this.options.workspaceRoot, '**/*.js')],
+          ...(method === 'attach'
+            ? { port: params.port, address: '127.0.0.1' }
+            : { stopOnEntry: true }),
         });
-      await dap.request('configurationDone');
-      await launch;
-      if (this.state.status === 'starting') this.publish({ status: 'running' });
-      return this.snapshot();
+        await Promise.race([initialized, launch]);
+        for (const [source, breakpoints] of Object.entries(
+          this.state.breakpoints,
+        ))
+          await dap.request('setBreakpoints', {
+            source: { path: source },
+            breakpoints: breakpoints.map((b) => ({ line: b.line })),
+          });
+        await dap.request('configurationDone');
+        await launch;
+        if (this.state.status === 'starting')
+          this.publish({ status: 'running' });
+        return this.snapshot();
+      } catch (e) {
+        if (generation === this.generation) {
+          await this.stop();
+          this.publish({ status: 'failed', reason: String(e) });
+        }
+        throw e;
+      }
     }
     if (method === 'setBreakpoints') {
       const source = await this.file(params.path);
