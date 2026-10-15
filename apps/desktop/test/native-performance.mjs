@@ -288,6 +288,14 @@ try {
   page.setDefaultTimeout(15000);
   page.on('pageerror', (error) => errors.push(String(error)));
   await page.bringToFront();
+  report.driverHead = (
+    await exec('git', ['-C', desktopRoot, 'rev-parse', 'HEAD'])
+  ).stdout.trim();
+  report.sourceBuildHead =
+    process.env.CIRCLE_NATIVE_PERF_SOURCE_BUILD_HEAD ?? null;
+  report.source = await sourceEvidence();
+  report.renderer = await rendererEvidence(desktopRoot);
+  report.appInfo = await page.evaluate(() => window.circleDesktop.info());
   await waitFor(
     async () => {
       const snapshot = await state();
@@ -306,12 +314,6 @@ try {
     .getByText('PERF_HISTORY_READY', { exact: false })
     .waitFor();
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
-  report.sourceBuildHead = (
-    await exec('git', ['-C', desktopRoot, 'rev-parse', 'HEAD'])
-  ).stdout.trim();
-  report.source = await sourceEvidence();
-  report.renderer = await rendererEvidence(desktopRoot);
-  report.appInfo = await page.evaluate(() => window.circleDesktop.info());
   clipboardBefore = await preserveNativeClipboard(app);
   taskIds = Array.from(
     { length: 8 },
