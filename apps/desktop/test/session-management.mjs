@@ -175,6 +175,7 @@ try {
       name: `session actions for ${current.title}`,
       exact: true,
     })
+    .first()
     .click();
   await page
     .getByRole('menuitem', { name: 'rename session', exact: true })
@@ -197,10 +198,12 @@ try {
     'sidebar rename targets its selected session while another session is open',
   );
   const menu = () =>
-    page.getByRole('button', {
-      name: 'session actions for managed fixture A',
-      exact: true,
-    });
+    page
+      .getByRole('button', {
+        name: 'session actions for managed fixture A',
+        exact: true,
+      })
+      .first();
   await menu().click();
   await page
     .getByRole('menuitem', { name: 'pin session', exact: true })
@@ -283,6 +286,7 @@ try {
       hasText: (await state()).sessions.find((session) => session.id === b)
         .title,
     })
+    .first()
     .click();
   await until(
     async () => (await state()).activeSessionId === b,
@@ -291,6 +295,7 @@ try {
   await page
     .locator('.sidebar .session-link')
     .filter({ hasText: 'managed fixture A' })
+    .first()
     .click();
   await until(
     async () => (await state()).activeSessionId === a,

@@ -158,6 +158,7 @@ try {
   const select = async (id) => {
     await page
       .locator(`.sidebar .session-link[href="#/session/${id}"]`)
+      .first()
       .click();
     await until(
       async () => (await state()).activeSessionId === id,
@@ -187,6 +188,7 @@ try {
         name: `session actions for ${label}`,
         exact: true,
       })
+      .first()
       .click();
     await page
       .getByRole('menuitem', { name: 'delete session', exact: true })
@@ -339,6 +341,7 @@ try {
   assert(pending);
   await page
     .locator(`.sidebar .session-link[href="#/session/${b}"] .attention-dot`)
+    .first()
     .waitFor();
   assert.equal(
     await page.locator('.inline-request').count(),
