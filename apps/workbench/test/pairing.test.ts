@@ -23,19 +23,19 @@ const plain: WorkbenchPlugin = {
   icon,
 };
 const paired: WorkbenchPlugin = {
-  id: 'circle-server',
+  id: 'hub',
   apiVersion: 1,
   version: '0.1.0',
-  title: 'circle-server',
+  title: 'hub',
   description: '',
   icon,
-  runtimeExtension: 'circle-server',
+  runtimeExtension: 'hub',
   pages: [page('server')],
 };
 const row = (
   change: Partial<{ version: string; enabled: boolean; error: string }> = {},
 ) => ({
-  name: 'circle-server',
+  name: 'hub',
   version: '0.1.0',
   enabled: true,
   ...change,
@@ -60,17 +60,17 @@ test('the shown plugins are the chosen plain ones and the live paired ones, what
   const plugins = [plain, paired];
   assert.deepEqual(effectivePlugins(plugins, ['files'], [row()]), [
     'files',
-    'circle-server',
+    'hub',
   ]);
   assert.deepEqual(
     effectivePlugins(
       plugins,
-      ['files', 'circle-server'],
+      ['files', 'hub'],
       [row({ enabled: false })],
     ),
     ['files'],
   );
-  assert.deepEqual(effectivePlugins(plugins, [], [row()]), ['circle-server']);
+  assert.deepEqual(effectivePlugins(plugins, [], [row()]), ['hub']);
   const registry = new PluginRegistry(plugins);
   const shown = effectivePlugins(registry.plugins, ['files'], [row()]);
   assert.deepEqual(

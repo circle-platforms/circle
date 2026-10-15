@@ -55,7 +55,7 @@ export function Sidebar({
   onDialog?: (dialog: DialogId, selection?: string) => void;
 }) {
   const { snapshot, runtime, perform, notify } = useRuntime();
-  // The pages of the extensions that are on, such as circle-server's
+  // The pages of the extensions that are on, such as hub's
   const { registry, enabled } = usePlugins();
   const pluginPages = registry.pages(enabled);
   const navigate = useNavigate();

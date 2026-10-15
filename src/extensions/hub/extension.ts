@@ -1,7 +1,7 @@
-// The circle-server connector. It ships with Circle and is off until `/extensions enable
-// circle-server`. It signs in to a server, hands it work with your files, follows the work
+// The hub connector. It ships with Circle and is off until `/extensions enable
+// hub`. It signs in to a server, hands it work with your files, follows the work
 // while it runs and saves what the server delivers. The task lives on the server: closing
-// Circle does not stop it, and `/server task <id>` picks it up where this window left off.
+// Circle does not stop it, and `/hub task <id>` picks it up where this window left off.
 //
 // This file is loaded as written (Node strips the types), so it uses only syntax that
 // type stripping accepts and imports nothing from Circle at run time.
@@ -117,29 +117,29 @@ const EXTENSIONS: Record<string, string> = {
   'application/xml': 'xml',
 };
 const USAGE = [
-  '/server                          where you are signed in',
-  '/server login <url> <user>       sign in; the password is asked on a masked card',
-  '/server logout                   forget the token',
-  '/server packs                    what the server can do',
-  '/server submit <pack> <file>     hand it work with this file, follow it, save the results (module-execute takes the flow input JSON instead of a file)',
-  '/server tasks                    the tasks you handed over from here',
-  '/server task <id>                show a task and follow it until it ends',
-  '/server respond <id> <answer>    answer what a task is waiting on (text, key=value or JSON)',
-  '/server get <id>                 save a delivered task’s results again',
-  '/server refresh                  read work, execution, knowledge and methods from the server',
-  '/server approve <id> <approval>  approve an action a task waits on (reject: /server reject …)',
-  '/server reconcile <id> [op]     check an unknown operation; without op the server only explains',
-  '/server tools                    the server’s tools the model can use, read again',
-  '/server trial start              record the server tool calls of a trial run from now',
-  '/server skill push <folder>      submit a skill pack with the trial record (--outputs a,b)',
-  '/server skill list               the skill packs on the server',
-  '/server skill run <id> [json]    run a skill pack on the server and follow it (--file <path> attaches)',
-  '/server bot list                 the bots you can see; yours with their runs and new results',
-  '/server bot every <pack> <1h>    a bot that runs a skill pack on a schedule (--from, --inputs, --file, --name)',
-  '/server bot on <pack> <source> <event>  a bot that runs a skill pack when a connector reports the event',
-  '/server bot approve <bot>        approve someone else’s bot and its trigger',
-  '/server bot start|stop <bot>     turn your approved bot on or off',
-  '/server bot runs <bot>           its runs and what each delivered to Circle',
+  '/hub                          where you are signed in',
+  '/hub login <url> <user>       sign in; the password is asked on a masked card',
+  '/hub logout                   forget the token',
+  '/hub packs                    what the server can do',
+  '/hub submit <pack> <file>     hand it work with this file, follow it, save the results (module-execute takes the flow input JSON instead of a file)',
+  '/hub tasks                    the tasks you handed over from here',
+  '/hub task <id>                show a task and follow it until it ends',
+  '/hub respond <id> <answer>    answer what a task is waiting on (text, key=value or JSON)',
+  '/hub get <id>                 save a delivered task’s results again',
+  '/hub refresh                  read work, execution, knowledge and methods from the server',
+  '/hub approve <id> <approval>  approve an action a task waits on (reject: /hub reject …)',
+  '/hub reconcile <id> [op]     check an unknown operation; without op the server only explains',
+  '/hub tools                    the server’s tools the model can use, read again',
+  '/hub trial start              record the server tool calls of a trial run from now',
+  '/hub skill push <folder>      submit a skill pack with the trial record (--outputs a,b)',
+  '/hub skill list               the skill packs on the server',
+  '/hub skill run <id> [json]    run a skill pack on the server and follow it (--file <path> attaches)',
+  '/hub bot list                 the bots you can see; yours with their runs and new results',
+  '/hub bot every <pack> <1h>    a bot that runs a skill pack on a schedule (--from, --inputs, --file, --name)',
+  '/hub bot on <pack> <source> <event>  a bot that runs a skill pack when a connector reports the event',
+  '/hub bot approve <bot>        approve someone else’s bot and its trigger',
+  '/hub bot start|stop <bot>     turn your approved bot on or off',
+  '/hub bot runs <bot>           its runs and what each delivered to Circle',
 ].join('\n');
 
 const sha256 = (bytes: Buffer): string =>
@@ -208,11 +208,11 @@ export async function register(api: ExtensionAPI): Promise<void> {
       mode: 0o600,
     });
   }
-  // A program that runs Circle on a server's behalf (circle-server's own runner) hands over
+  // A program that runs Circle on a server's behalf (hub's own runner) hands over
   // the address and a short-lived token in the environment. Nothing is written to disk then,
   // and a token the server turns down is not asked for again.
-  const runUrl = process.env.CIRCLE_SERVER_URL?.trim() ?? '';
-  const runToken = process.env.CIRCLE_SERVER_TOKEN?.trim() ?? '';
+  const runUrl = process.env.CIRCLE_HUB_URL?.trim() ?? '';
+  const runToken = process.env.CIRCLE_HUB_TOKEN?.trim() ?? '';
   const fromRun = Boolean(runUrl && runToken);
   async function currentToken(): Promise<string | null | undefined> {
     return fromRun ? runToken : api.secrets.get('token');
@@ -221,8 +221,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
     if (fromRun)
       return {
         url: runUrl,
-        username: process.env.CIRCLE_SERVER_USER?.trim() ?? '',
-        scopeId: process.env.CIRCLE_SERVER_SCOPE?.trim() || undefined,
+        username: process.env.CIRCLE_HUB_USER?.trim() ?? '',
+        scopeId: process.env.CIRCLE_HUB_SCOPE?.trim() || undefined,
       };
     const value = readJson('config.json');
     if (
@@ -239,7 +239,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         expiresAt:
           typeof value.expiresAt === 'string' ? value.expiresAt : undefined,
       };
-    // An address given in settings.json under extensions.circle-server.url.
+    // An address given in settings.json under extensions.hub.url.
     const url = api.settings.url;
     return typeof url === 'string' && url ? { url, username: '' } : undefined;
   }
@@ -260,7 +260,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // window has not shown yet; and whether the last look found the token expired.
   let botNews: { bot: Asset; run: BotRun }[] = [];
   let expired = false;
-  // The four platform objects as the server last reported them (/server refresh).
+  // The four platform objects as the server last reported them (/hub refresh).
   let objects: Record<string, unknown> | undefined;
   function publishView(signedIn: boolean): void {
     const config = readConfig();
@@ -538,10 +538,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
     if (run !== statusRun) return;
     publishView(signedIn);
     if (!config || !signedIn) {
-      api.setStatus(config ? 'circle-server · signed out' : null);
+      api.setStatus(config ? 'hub · signed out' : null);
       return;
     }
-    const where = `circle-server · ${config.username ? config.username + '@' : ''}${new URL(config.url).host}`;
+    const where = `hub · ${config.username ? config.username + '@' : ''}${new URL(config.url).host}`;
     if (failure) api.setStatus(`${where} · ${failure}`, 'error');
     else if (following.size)
       api.setStatus(`${where} · ${following.size} running`, 'running');
@@ -579,12 +579,12 @@ export async function register(api: ExtensionAPI): Promise<void> {
   ): Promise<{ data: unknown; bytes: Buffer; headers: Headers }> {
     const config = readConfig();
     if (!config)
-      throw new ServerError('not signed in: /server login <url> <user>');
+      throw new ServerError('not signed in: /hub login <url> <user>');
     const headers: Record<string, string> = { ...options.headers };
     if (!options.anonymous) {
       const token = await currentToken();
       if (!token)
-        throw new ServerError('not signed in: /server login <url> <user>');
+        throw new ServerError('not signed in: /hub login <url> <user>');
       headers.authorization = `Bearer ${token}`;
     }
     let body: string | Uint8Array<ArrayBuffer> | undefined;
@@ -715,7 +715,12 @@ export async function register(api: ExtensionAPI): Promise<void> {
   }
   function refresh(): Promise<boolean> {
     refreshing ??= (async () => {
-      if (api.signal.aborted || fromRun || refreshUnsupported || !(await currentToken()))
+      if (
+        api.signal.aborted ||
+        fromRun ||
+        refreshUnsupported ||
+        !(await currentToken())
+      )
         return false;
       try {
         const { data } = await send('POST', '/v1/auth/refresh', { json: {} });
@@ -745,7 +750,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
 
   // A token the server turns down is never followed by a password card: a model's tool call
   // or a task being followed must not stop for one. The footer says the sign-in expired, and
-  // the person signs in again with /server login when they choose.
+  // the person signs in again with /hub login when they choose.
   async function request(
     method: string,
     path: string,
@@ -769,8 +774,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         error.status !== 401
       )
         throw error;
-      if (fromRun)
-        throw new ServerError('circle-server turned down the run token');
+      if (fromRun) throw new ServerError('hub turned down the run token');
       const current = await currentToken();
       if (used && current && current !== used)
         try {
@@ -784,7 +788,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       api.background(showStatus());
       const config = readConfig();
       throw new ServerError(
-        `signed out: the sign-in has expired · /server login ${config?.url ?? '<url>'} ${config?.username || '<user>'}`,
+        `signed out: the sign-in has expired · /hub login ${config?.url ?? '<url>'} ${config?.username || '<user>'}`,
       );
     }
   }
@@ -1013,12 +1017,12 @@ export async function register(api: ExtensionAPI): Promise<void> {
           if (phase === 'delivered') {
             if (followed()[taskId]?.saved)
               context.append(
-                `  ${taskId} was delivered and its results are saved here · /server get ${taskId} saves them again`,
+                `  ${taskId} was delivered and its results are saved here · /hub get ${taskId} saves them again`,
               );
             else await deliver(taskId, context);
           } else if (phase === 'unknown')
             context.append(
-              `✖ ${taskId}: the outcome is unknown and the server does not guess it · /server task ${taskId} later`,
+              `✖ ${taskId}: the outcome is unknown and the server does not guess it · /hub task ${taskId} later`,
             );
           else context.append(await failureNote(taskId, phase));
           ended = true;
@@ -1035,16 +1039,16 @@ export async function register(api: ExtensionAPI): Promise<void> {
         for (const item of open)
           if (isRecord(item))
             context.append(
-              `  ${taskId} asks: ${String(item.question)} · /server respond ${taskId} <answer>`,
+              `  ${taskId} asks: ${String(item.question)} · /hub respond ${taskId} <answer>`,
             );
         if (open.length) return;
       }
     } catch (error) {
-      // Closed under it: the task goes on on the server, and /server task picks it up.
+      // Closed under it: the task goes on on the server, and /hub task picks it up.
       if (api.signal.aborted) return;
       failure = `${taskId} stopped following`;
       context.append(
-        `✖ ${taskId}: ${reason(error)} · /server task ${taskId} picks it up again`,
+        `✖ ${taskId}: ${reason(error)} · /hub task ${taskId} picks it up again`,
       );
     } finally {
       following.delete(taskId);
@@ -1097,7 +1101,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     const config = readConfig();
     if (!config?.scopeId)
       throw new ServerError(
-        'no project: sign in again with /server login <url> <user>',
+        'no project: sign in again with /hub login <url> <user>',
       );
     // module-execute is the hub's generic execution flow: its input is the frozen
     // FlowSubmission itself (flowId, methodPin, resources, sources, value,
@@ -1106,7 +1110,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     const moduleExecute = pack === 'module-execute';
     if (moduleExecute && file)
       throw new ServerError(
-        'module-execute takes the flow input, not a file: /server submit module-execute <input-json>',
+        'module-execute takes the flow input, not a file: /hub submit module-execute <input-json>',
       );
     if (
       moduleExecute &&
@@ -1190,8 +1194,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
     };
   }
 
-  // The server's tools, offered to the model as srv_<name>: read after signing in, on
-  // /server refresh and /server tools, and when a session starts (an ETag keeps that cheap).
+  // The server's tools, offered to the model as hub_tool_<name>: read after signing in, on
+  // /hub refresh and /hub tools, and when a session starts (an ETag keeps that cheap).
   // Signing out removes them. Read tools run at once; the others ask first.
   const serverTools = new Map<
     string,
@@ -1199,12 +1203,12 @@ export async function register(api: ExtensionAPI): Promise<void> {
   >();
   let catalogTag = '';
   let syncing: Promise<boolean> | undefined;
-  // srv_<name> with dots as underscores. Names that would come out the same (docs.list and
+  // hub_tool_<name> with dots as underscores. Names that would come out the same (docs.list and
   // docs_list) or be cut at 64 characters get a suffix from their full name instead, so the
   // same catalog always gives the same names, whatever order it lists them in.
   function toolNames(remotes: string[]): Map<string, string> {
     const plain = (remote: string): string =>
-      'srv_' + remote.replace(/[^A-Za-z0-9_]/g, '_');
+      'hub_tool_' + remote.replace(/[^A-Za-z0-9_]/g, '_');
     const counts = new Map<string, number>();
     for (const remote of remotes)
       counts.set(plain(remote), (counts.get(plain(remote)) ?? 0) + 1);
@@ -1232,7 +1236,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
   ): string | undefined {
     if (!api.workspace) return undefined;
     try {
-      const folder = join(api.workspace, '.circle', 'server-returns');
+      const folder = join(api.workspace, '.circle', 'hub-returns');
       mkdirSync(folder, { recursive: true });
       const name = `${new Date().toISOString().replace(/[:.]/g, '')}-${String(++returned).padStart(4, '0')}-${remote}.json`;
       writeFileSync(
@@ -1243,7 +1247,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
           2,
         ) + '\n',
       );
-      return `.circle/server-returns/${name}`;
+      return `.circle/hub-returns/${name}`;
     } catch {
       return undefined;
     }
@@ -1261,9 +1265,9 @@ export async function register(api: ExtensionAPI): Promise<void> {
     try {
       api.registerTool(
         name,
-        `circle-server tool ${remote}${tool.title ? ` (${String(tool.title)})` : ''}: ${String(tool.description ?? '')}${
+        `hub tool ${remote}${tool.title ? ` (${String(tool.title)})` : ''}: ${String(tool.description ?? '')}${
           write ? ' It changes something, so it asks first.' : ''
-        }${tool.mode === 'task' ? ' It runs as a server task and is waited for in the background.' : ' Its response is also saved as it came under .circle/server-returns/ in the workspace (savedAs), to cite or check against instead of retyping it.'}`,
+        }${tool.mode === 'task' ? ' It runs as a hub task and is waited for in the background.' : ' Its response is also saved as it came under .circle/hub-returns/ in the workspace (savedAs), to cite or check against instead of retyping it.'}`,
         schema,
         async (args) => {
           let data: unknown;
@@ -1290,7 +1294,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
           }
           const taskId = reply.taskId;
           return new api.Watch(
-            `circle-server ${remote} ${taskId}`,
+            `hub ${remote} ${taskId}`,
             async () => {
               const current = await status(taskId);
               const phase = String(current.phase ?? '');
@@ -1400,7 +1404,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // Run for a server: its tools are there before the first prompt, or not at all.
   if (fromRun) await syncTools().catch(() => {});
 
-  // What the model did with the server's tools since /server trial start: the trial record a
+  // What the model did with the server's tools since /hub trial start: the trial record a
   // skill pack is pushed with. Arguments are kept only as SHA-256.
   // Kept in the extension's data folder too, so a reload or a restart does not lose it.
   const savedTrial = readJson('trial.json');
@@ -1486,9 +1490,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       (_, index) => index !== flag && index !== flag + 1,
     )[0];
     if (!folder)
-      throw new ServerError(
-        'usage: /server skill push <folder> [--outputs a,b]',
-      );
+      throw new ServerError('usage: /hub skill push <folder> [--outputs a,b]');
     const workspace = api.workspace ?? context.workspace;
     const root = resolve(workspace, folder);
     if (!existsSync(root) || !statSync(root).isDirectory())
@@ -1584,7 +1586,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         ? open
             .map(
               (item) =>
-                `  waiting for approval ${String(item.approvalId)} in ${approvalTask} · someone else approves: /server approve ${approvalTask} ${String(item.approvalId)}`,
+                `  waiting for approval ${String(item.approvalId)} in ${approvalTask} · someone else approves: /hub approve ${approvalTask} ${String(item.approvalId)}`,
             )
             .join('\n')
         : `  approval task ${approvalTask} · no open approval yet`,
@@ -1761,12 +1763,13 @@ export async function register(api: ExtensionAPI): Promise<void> {
   }
   // Look for new results of your bots in the background. Like every request it never asks
   // for a password: a token the server turns down only puts "sign-in expired" in the
-  // footer, and /server login looks once more.
+  // footer, and /hub login looks once more.
   let lookingForBots: Promise<void> | undefined;
   function lookForBots(): Promise<void> {
     lookingForBots ??= (async () => {
       const me = readConfig()?.principalId;
-      if (api.signal.aborted || fromRun || !me || !(await currentToken())) return;
+      if (api.signal.aborted || fromRun || !me || !(await currentToken()))
+        return;
       const quiet: typeof request = (method, path, options = {}) =>
         send(method, path, options);
       const seen = seenRuns();
@@ -1795,10 +1798,14 @@ export async function register(api: ExtensionAPI): Promise<void> {
   if (!fromRun) {
     const botTimer = setInterval(() => api.background(lookForBots()), 60_000);
     botTimer.unref();
-    api.signal.addEventListener('abort', () => {
-      clearInterval(botTimer);
-      if (refreshTimer) clearTimeout(refreshTimer);
-    }, {once:true});
+    api.signal.addEventListener(
+      'abort',
+      () => {
+        clearInterval(botTimer);
+        if (refreshTimer) clearTimeout(refreshTimer);
+      },
+      { once: true },
+    );
   }
 
   async function bot(
@@ -1810,19 +1817,19 @@ export async function register(api: ExtensionAPI): Promise<void> {
       const { args, values } = options(rest);
       if (!config?.scopeId)
         throw new ServerError(
-          'no project: sign in again with /server login <url> <user>',
+          'no project: sign in again with /hub login <url> <user>',
         );
       if (!config.principalId)
         throw new ServerError(
-          'the server has not said who you are here; sign in again with /server login <url> <user>',
+          'the server has not said who you are here; sign in again with /hub login <url> <user>',
         );
       const [pack] = args;
       const schedule = verb === 'every';
       if (!pack || args.length !== (schedule ? 2 : 3))
         throw new ServerError(
           schedule
-            ? 'usage: /server bot every <skill pack> <interval> [--from <time>] [--inputs <json>] [--file <path>] [--name <name>]'
-            : 'usage: /server bot on <skill pack> <connector asset> <event> [--inputs <json>] [--file <path>] [--name <name>]',
+            ? 'usage: /hub bot every <skill pack> <interval> [--from <time>] [--inputs <json>] [--file <path>] [--name <name>]'
+            : 'usage: /hub bot on <skill pack> <connector asset> <event> [--inputs <json>] [--file <path>] [--name <name>]',
         );
       const trigger = schedule
         ? (() => {
@@ -1876,7 +1883,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         `✓ bot ${created.assetId} · ${name} · runs ${pack} ${triggerLabel(made)} as you · output to Circle · ${created.lifecycle}`,
       );
       context.append(
-        `  someone else approves it: /server bot approve ${created.assetId} · then you turn it on: /server bot start ${created.assetId}`,
+        `  someone else approves it: /hub bot approve ${created.assetId} · then you turn it on: /hub bot start ${created.assetId}`,
       );
       return;
     }
@@ -1902,7 +1909,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
           const fresh = list.filter(
             (run) => news(run) && !seen.has(runKey(item.assetId, run)),
           ).length;
-          runs = ` · ${list.length} run(s)${fresh ? `, ${fresh} new: /server bot runs ${item.assetId}` : ''}`;
+          runs = ` · ${list.length} run(s)${fresh ? `, ${fresh} new: /hub bot runs ${item.assetId}` : ''}`;
         } else runs = ` · owner ${item.ownerPrincipalId}`;
         rows.push(
           `  ${item.assetId} · ${item.name} · ${item.lifecycle} · ${triggerLabel(trigger)}${trigger ? ` (trigger ${trigger.lifecycle})` : ''}${runs}`,
@@ -1914,7 +1921,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     const [id] = rest;
     if (!id || !['approve', 'start', 'stop', 'runs'].includes(verb ?? ''))
       throw new ServerError(
-        'usage: /server bot list | every <pack> <interval> | on <pack> <source> <event> | approve <bot> | start <bot> | stop <bot> | runs <bot>',
+        'usage: /hub bot list | every <pack> <interval> | on <pack> <source> <event> | approve <bot> | start <bot> | stop <bot> | runs <bot>',
       );
     const item = await asset(id);
     if (item.kind !== 'bot') throw new ServerError(`${id} is not a bot`);
@@ -1935,7 +1942,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         }
         if (verb === 'start' && part.lifecycle !== 'approved')
           throw new ServerError(
-            `${what} ${part.assetId} is ${part.lifecycle}; someone else approves it first: /server bot approve ${id}`,
+            `${what} ${part.assetId} is ${part.lifecycle}; someone else approves it first: /hub bot approve ${id}`,
           );
         const moved = await move(part, target);
         context.append(
@@ -1944,7 +1951,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       }
       if (verb === 'start')
         context.append(
-          `  ${id} runs ${triggerLabel(await asset(triggerId))}; its results come to Circle: /server bot runs ${id}`,
+          `  ${id} runs ${triggerLabel(await asset(triggerId))}; its results come to Circle: /hub bot runs ${id}`,
         );
       return;
     }
@@ -1993,7 +2000,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         ? output.unknowns.map(String)
         : [];
       context.append(
-        `  ${run.taskId} · ${run.occurrenceKey} · ${String(output.status)} · ${artifacts.length} file(s)${unknowns.length ? ` · unknown: ${unknowns.join('; ')}` : ''}${folded} · /server get ${run.taskId} saves them`,
+        `  ${run.taskId} · ${run.occurrenceKey} · ${String(output.status)} · ${artifacts.length} file(s)${unknowns.length ? ` · unknown: ${unknowns.join('; ')}` : ''}${folded} · /hub get ${run.taskId} saves them`,
       );
       for (const artifact of artifacts.filter(isRecord).slice(0, 5))
         context.append(
@@ -2014,10 +2021,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
     async login([address, username], context) {
       if (fromRun)
         throw new ServerError(
-          'Circle runs with a token from circle-server here; there is no sign-in',
+          'Circle runs with a token from hub here; there is no sign-in',
         );
       if (!address || !username)
-        throw new ServerError('usage: /server login <url> <user>');
+        throw new ServerError('usage: /hub login <url> <user>');
       const url = serverUrl(address);
       const password = await api.askSecret(
         `Password for ${username} on ${url}`,
@@ -2042,7 +2049,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     async logout(_rest, context) {
       if (fromRun)
         throw new ServerError(
-          'Circle runs with a token from circle-server here; there is no sign-out',
+          'Circle runs with a token from hub here; there is no sign-out',
         );
       // Revoke the whole token family at the server first; a server without the
       // route, or one that already forgot the token, does not trap the local sign-out.
@@ -2079,7 +2086,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       if (pack === 'module-execute') {
         if (files.length !== 1)
           throw new ServerError(
-            'usage: /server submit module-execute <input-json> [--again]',
+            'usage: /hub submit module-execute <input-json> [--again]',
           );
         let flow: unknown;
         try {
@@ -2101,7 +2108,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         return;
       }
       if (!pack || files.length !== 1)
-        throw new ServerError('usage: /server submit <pack> <file> [--again]');
+        throw new ServerError('usage: /hub submit <pack> <file> [--again]');
       const task = await handOver(pack, files[0]!, again, context);
       context.append(
         `✓ accepted ${task.taskId} · ${task.phase} · input ${task.inputRevisionId}${task.deduplicated ? ' · the same request as before, no new task' : ''} · following it; closing Circle does not stop it`,
@@ -2129,7 +2136,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       context.append(rows.join('\n'));
     },
     async task([taskId], context) {
-      if (!taskId) throw new ServerError('usage: /server task <id>');
+      if (!taskId) throw new ServerError('usage: /hub task <id>');
       const current = await status(taskId);
       if (!followed()[taskId])
         remember(taskId, { title: String(current.title ?? ''), seq: 0 });
@@ -2140,7 +2147,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     },
     async respond([taskId, ...answer], context) {
       if (!taskId || !answer.length)
-        throw new ServerError('usage: /server respond <id> <answer>');
+        throw new ServerError('usage: /hub respond <id> <answer>');
       const current = await status(taskId);
       const open = (
         Array.isArray(current.pendingInputs) ? current.pendingInputs : []
@@ -2171,7 +2178,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       api.background(follow(taskId, context));
     },
     async get([taskId], context) {
-      if (!taskId) throw new ServerError('usage: /server get <id>');
+      if (!taskId) throw new ServerError('usage: /hub get <id>');
       await deliver(taskId, context);
     },
     async refresh(_rest, context) {
@@ -2182,12 +2189,12 @@ export async function register(api: ExtensionAPI): Promise<void> {
       await announceTools(context);
     },
     async trial([verb], context) {
-      if (verb !== 'start') throw new ServerError('usage: /server trial start');
+      if (verb !== 'start') throw new ServerError('usage: /hub trial start');
       trial.calls = [];
       trial.startedAt = new Date().toISOString();
       keepTrial();
       context.append(
-        '  recording the server tool calls of this trial; /server skill push <folder> sends them with the pack',
+        '  recording the server tool calls of this trial; /hub skill push <folder> sends them with the pack',
       );
     },
     async skill([verb, ...rest], context) {
@@ -2217,7 +2224,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         const [id, ...json] = words;
         if (!id)
           throw new ServerError(
-            'usage: /server skill run <id> [json inputs] [--file <path>]…',
+            'usage: /hub skill run <id> [json inputs] [--file <path>]…',
           );
         const inputs = json.length ? jsonObject(json.join(' '), 'inputs') : {};
         if (attached.length) inputs.files = attach(attached, context);
@@ -2236,7 +2243,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         return;
       }
       throw new ServerError(
-        'usage: /server skill push <folder> | list | run <id> [json]',
+        'usage: /hub skill push <folder> | list | run <id> [json]',
       );
     },
     async tools(_rest, context) {
@@ -2252,7 +2259,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     },
     async reconcile([taskId, operationId], context) {
       if (!taskId)
-        throw new ServerError('usage: /server reconcile <id> [operationId]');
+        throw new ServerError('usage: /hub reconcile <id> [operationId]');
       // Only a request naming the operation is a real reconciliation; without one
       // the server answers with an explanation of what is missing.
       const { data } = await request(
@@ -2275,7 +2282,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
   ): Promise<void> {
     if (!taskId || !approvalId)
       throw new ServerError(
-        `usage: /server ${approve ? 'approve' : 'reject'} <id> <approval>`,
+        `usage: /hub ${approve ? 'approve' : 'reject'} <id> <approval>`,
       );
     const path = `/v1/tasks/${encodeURIComponent(taskId)}/approvals`;
     const { data } = await request('GET', path);
@@ -2300,15 +2307,15 @@ export async function register(api: ExtensionAPI): Promise<void> {
 
   // The same work as tools, for a model that is told to hand work to the server.
   api.registerTool(
-    'circle_server_packs',
-    'List what the connected circle-server can do: its capability packs, their input formats, the input each one takes (inputSchema) and versions. Read-only.',
+    'hub_packs',
+    'List what the connected hub can do: its capability packs, their input formats, the input each one takes (inputSchema) and versions. Read-only.',
     { type: 'object', properties: {} },
     async () => (await request('GET', '/v1/packs')).data,
     { readOnly: true },
   );
   api.registerTool(
-    'circle_server_task',
-    'Look up a circle-server task by id: its phase and, once it has ended, its result (status, artifacts with their SHA-256, the independent check, unmapped items). Read-only; saves nothing.',
+    'hub_task',
+    'Look up a hub task by id: its phase and, once it has ended, its result (status, artifacts with their SHA-256, the independent check, unmapped items). Read-only; saves nothing.',
     {
       type: 'object',
       properties: { task_id: { type: 'string' } },
@@ -2334,8 +2341,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
     { readOnly: true },
   );
   api.registerTool(
-    'circle_server_submit',
-    'Hand circle-server a task with a capability pack: for a file pack (for example mindmap-compile) give the workspace file; for module-execute give the flow input object instead (flowId, methodPin, resources, sources, value, controlledBytes — the hub validates it strictly). The server keeps the task; this waits in the background and, once it is delivered, saves the results in the workspace after checking their SHA-256. It sends the file to the server and writes files, so it asks first.',
+    'hub_submit',
+    'Hand hub a task with a capability pack: for a file pack (for example mindmap-compile) give the workspace file; for module-execute give the flow input object instead (flowId, methodPin, resources, sources, value, controlledBytes — the hub validates it strictly). The server keeps the task; this waits in the background and, once it is delivered, saves the results in the workspace after checking their SHA-256. It sends the file to the server and writes files, so it asks first.',
     {
       type: 'object',
       properties: {
@@ -2377,7 +2384,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       }
       const taskId = task.taskId;
       return new api.Watch(
-        `circle-server ${taskId}`,
+        `hub ${taskId}`,
         async () => {
           const current = await status(taskId);
           const phase = String(current.phase ?? '');
@@ -2397,8 +2404,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // A model that fixes a skill pack records its trial and sends the new version itself.
   // Sending is not registering: someone else still approves the new digest on the server.
   api.registerTool(
-    'circle_server_trial_start',
-    'Start recording which circle-server tools the model calls: the trial record a skill pack is pushed with, as /server trial start does. Clears the previous record. Start it before the trial run of a new or changed skill pack.',
+    'hub_trial_start',
+    'Start recording which hub tools the model calls: the trial record a skill pack is pushed with, as /hub trial start does. Clears the previous record. Start it before the trial run of a new or changed skill pack.',
     { type: 'object', properties: {} },
     async () => {
       trial.calls = [];
@@ -2408,8 +2415,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
     },
   );
   api.registerTool(
-    'circle_server_skill_push',
-    'Submit a skill pack folder of the workspace (skillpack.json, SKILL.md and its files) to circle-server with the current trial record and the SHA-256 of the files the trial produced, as /server skill push does. The server checks the tools the trial used against the pack; someone else must approve the new digest before it runs there. It sends the folder, so it asks first.',
+    'hub_skill_push',
+    'Submit a skill pack folder of the workspace (skillpack.json, SKILL.md and its files) to hub with the current trial record and the SHA-256 of the files the trial produced, as /hub skill push does. The server checks the tools the trial used against the pack; someone else must approve the new digest before it runs there. It sends the folder, so it asks first.',
     {
       type: 'object',
       properties: {
@@ -2447,8 +2454,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // tree, a contract, any original a tool should read instead of the network. Registering is
   // not approving: someone else approves the asset before its sar_ id can be used.
   api.registerTool(
-    'circle_server_source_artifact',
-    'Register files of the workspace on circle-server as one versioned source artifact (a knowledge-source asset): each file is uploaded as an original with its SHA-256 and listed with its role. The server keeps it as a draft until someone else approves it; circle_server_source_artifact_status then gives its sourceArtifactId (sar_…), which server tools take as sourceArtifactId. A new version of an artifact you registered before takes its asset_id. It sends the files to the server, so it asks first.',
+    'hub_source_artifact',
+    'Register files of the workspace on hub as one versioned source artifact (a knowledge-source asset): each file is uploaded as an original with its SHA-256 and listed with its role. The server keeps it as a draft until someone else approves it; hub_source_artifact_status then gives its sourceArtifactId (sar_…), which server tools take as sourceArtifactId. A new version of an artifact you registered before takes its asset_id. It sends the files to the server, so it asks first.',
     {
       type: 'object',
       properties: {
@@ -2496,7 +2503,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       const config = readConfig();
       if (!config?.scopeId)
         throw new api.ToolError(
-          'no project: sign in again with /server login <url> <user>',
+          'no project: sign in again with /hub login <url> <user>',
         );
       const name = String(args.name ?? '');
       const version = String(args.version ?? '');
@@ -2566,7 +2573,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         return {
           registered: data,
           files: listed,
-          next: 'someone else approves the asset; then circle_server_source_artifact_status gives the sourceArtifactId',
+          next: 'someone else approves the asset; then hub_source_artifact_status gives the sourceArtifactId',
         };
       } catch (error) {
         throw new api.ToolError(reason(error));
@@ -2574,8 +2581,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
     },
   );
   api.registerTool(
-    'circle_server_source_artifact_status',
-    'Look up a source artifact on circle-server by its asset id: its version, lifecycle, files with their SHA-256 and, once someone else has approved it, its sourceArtifactId (sar_…). Read-only.',
+    'hub_source_artifact_status',
+    'Look up a source artifact on hub by its asset id: its version, lifecycle, files with their SHA-256 and, once someone else has approved it, its sourceArtifactId (sar_…). Read-only.',
     {
       type: 'object',
       properties: { asset_id: { type: 'string' } },
@@ -2598,8 +2605,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // the bytes are checked against the SHA-256 the server sends; the reply names the path,
   // never the content.
   api.registerTool(
-    'circle_server_evidence',
-    'Read the content of a circle-server record by id: knr_… a knowledge record, evd_… an evidence record, art_… an artifact. The bytes are checked against the SHA-256 the server sends (x-content-sha256) and saved under evidence/ in the workspace (or at save_as), never overwriting; the reply names the saved path, its SHA-256 and size, never the content. Read-only on the server.',
+    'hub_evidence',
+    'Read the content of a hub record by id: knr_… a knowledge record, evd_… an evidence record, art_… an artifact. The bytes are checked against the SHA-256 the server sends (x-content-sha256) and saved under evidence/ in the workspace (or at save_as), never overwriting; the reply names the saved path, its SHA-256 and size, never the content. Read-only on the server.',
     {
       type: 'object',
       properties: {
@@ -2681,8 +2688,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
   scheduleRefresh();
   api.background(lookForBots());
   api.registerCommand(
-    'server',
-    'Work with a circle-server: /server [login | logout | packs | submit | tasks | task | respond | get | refresh | tools | skill | bot]',
+    'hub',
+    'Work with a hub: /hub [login | logout | packs | submit | tasks | task | respond | get | refresh | tools | skill | bot]',
     async (args, context) => {
       const [verb, ...rest] = words(args);
       if (!verb) {
@@ -2696,7 +2703,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         return;
       }
       const command = commands[verb];
-      if (!command) throw new ServerError(`unknown: /server ${verb}\n${USAGE}`);
+      if (!command) throw new ServerError(`unknown: /hub ${verb}\n${USAGE}`);
       await command(rest, recording(context));
     },
   );

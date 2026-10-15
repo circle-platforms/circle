@@ -52,7 +52,7 @@ async function model(listen: Listen, requests: string[][]): Promise<string> {
         (tool: { function: { name: string } }) => tool.function.name,
       ),
     );
-    const offered = requests.at(-1)!.includes('srv_docs_list');
+    const offered = requests.at(-1)!.includes('hub_tool_docs_list');
     const answered = (body.messages ?? []).some(
       (message: { role: string }) => message.role === 'tool',
     );
@@ -65,7 +65,7 @@ async function model(listen: Listen, requests: string[][]): Promise<string> {
                 id: 'call-1',
                 type: 'function',
                 function: {
-                  name: 'srv_docs_list',
+                  name: 'hub_tool_docs_list',
                   arguments: JSON.stringify({ folder: 'manuals' }),
                 },
               },
@@ -89,7 +89,7 @@ async function model(listen: Listen, requests: string[][]): Promise<string> {
     );
   });
 }
-// A circle-server with one read tool, answering only the run token.
+// A hub with one read tool, answering only the run token.
 async function server(listen: Listen, seen: string[]): Promise<string> {
   return listen(async (request, response) => {
     for await (const _ of request);
@@ -163,7 +163,7 @@ function run(
   });
 }
 
-test('with --extensions a headless run loads the circle-server extension, which takes its address and token from the environment and offers the server tools from the first turn', async (t) => {
+test('with --extensions a headless run loads the hub extension, which takes its address and token from the environment and offers the server tools from the first turn', async (t) => {
   const listen = listener(t);
   const requests: string[][] = [];
   const seen: string[] = [];
@@ -175,10 +175,10 @@ test('with --extensions a headless run loads the circle-server extension, which 
   settings.initialized = true;
   settings.auth.base_url = modelUrl + '/v1';
   settings.auth.model = 'scripted';
-  settings.extensions = { 'circle-server': { enabled: true } };
+  settings.extensions = { hub: { enabled: true } };
   saveSettings(settings, home);
   saveCredentials({ api_key: 'model-key' }, home);
-  const env = { CIRCLE_SERVER_URL: serverUrl, CIRCLE_SERVER_TOKEN: RUN_TOKEN };
+  const env = { CIRCLE_HUB_URL: serverUrl, CIRCLE_HUB_TOKEN: RUN_TOKEN };
 
   const plain = await run(
     home,
@@ -187,7 +187,7 @@ test('with --extensions a headless run loads the circle-server extension, which 
   );
   assert.equal(plain.code, 0, plain.stderr);
   assert.ok(
-    !requests[0]!.includes('srv_docs_list'),
+    !requests[0]!.includes('hub_tool_docs_list'),
     'without --extensions no extension loads',
   );
   assert.equal(seen.length, 0);
@@ -200,7 +200,7 @@ test('with --extensions a headless run loads the circle-server extension, which 
   );
   assert.equal(loaded.code, 0, loaded.stderr);
   assert.ok(
-    requests[0]!.includes('srv_docs_list'),
+    requests[0]!.includes('hub_tool_docs_list'),
     'offered from the first turn',
   );
   const events = loaded.stdout
@@ -208,7 +208,8 @@ test('with --extensions a headless run loads the circle-server extension, which 
     .split('\n')
     .map((line) => JSON.parse(line));
   const result = events.find(
-    (event) => event.type === 'tool_result' && event.name === 'srv_docs_list',
+    (event) =>
+      event.type === 'tool_result' && event.name === 'hub_tool_docs_list',
   );
   assert.ok(result, loaded.stdout);
   assert.match(JSON.stringify(result), /manual-cli\.md/);
@@ -221,11 +222,7 @@ test('with --extensions a headless run loads the circle-server extension, which 
     seen.some((line) => line.startsWith('POST /v1/tools/docs.list/call')),
   );
   // Nothing about the run's server is written to the Circle home.
-  assert.ok(
-    !existsSync(join(home, 'extension_secrets', 'circle-server.secrets.json')),
-  );
-  assert.ok(
-    !existsSync(join(home, 'extension_data', 'circle-server', 'config.json')),
-  );
+  assert.ok(!existsSync(join(home, 'extension_secrets', 'hub.secrets.json')));
+  assert.ok(!existsSync(join(home, 'extension_data', 'hub', 'config.json')));
   mkdirSync(join(home, 'unused'), { recursive: true });
 });

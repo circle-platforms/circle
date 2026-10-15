@@ -235,7 +235,7 @@ async function person(
     workspace,
     trusted: true,
     bundledRoot: bundledExtensionsRoot(),
-    settings: { 'circle-server': { enabled: true } },
+    settings: { hub: { enabled: true } },
     secret: async (request) => {
       await submitAnswer(home, request.id, PASSWORD);
     },
@@ -247,7 +247,7 @@ async function person(
     append: (text: string) => lines.push(text),
     sendUserMessage: () => {},
   };
-  const command = host.commands().get('server')!;
+  const command = host.commands().get('hub')!;
   return {
     host,
     run: async (args) => command.handler(args, context),
@@ -302,7 +302,7 @@ test('a bot is made from Circle as a schedule and a skill pack, approved by some
   // Its owner cannot turn it on before someone else approved it.
   await assert.rejects(
     dev.run('bot start ast_bot'),
-    /trigger ast_trigger is draft; someone else approves it first: \/server bot approve ast_bot/,
+    /trigger ast_trigger is draft; someone else approves it first: \/hub bot approve ast_bot/,
   );
   const approver = await person(root, 'approver-home', workspace);
   await approver.run(`login ${server.url} approver`);
@@ -325,7 +325,7 @@ test('a bot is made from Circle as a schedule and a skill pack, approved by some
   assert.equal(server.assets.get('ast_bot')!.lifecycle, 'running');
   assert.ok(
     dev.lines.some((line) =>
-      /ast_bot runs every 1h from 2026-10-12T00:00:00\.000Z; its results come to Circle: \/server bot runs ast_bot/.test(
+      /ast_bot runs every 1h from 2026-10-12T00:00:00\.000Z; its results come to Circle: \/hub bot runs ast_bot/.test(
         line,
       ),
     ),
@@ -334,12 +334,11 @@ test('a bot is made from Circle as a schedule and a skill pack, approved by some
   await dev.run('bot list');
   assert.match(
     dev.lines.at(-1)!,
-    /ast_bot · nightly-compile every 1h · running · every 1h from 2026-10-12T00:00:00\.000Z \(trigger running\) · 3 run\(s\), 2 new: \/server bot runs ast_bot/,
+    /ast_bot · nightly-compile every 1h · running · every 1h from 2026-10-12T00:00:00\.000Z \(trigger running\) · 3 run\(s\), 2 new: \/hub bot runs ast_bot/,
   );
   // The desktop's methods page reads the same bots from the extension's view.
   await dev.run('refresh');
-  const objects = (dev.host.view('circle-server') as Record<string, any>)
-    .objects;
+  const objects = (dev.host.view('hub') as Record<string, any>).objects;
   assert.deepEqual(objects.work, [], 'tool calls and indexing are not work');
   assert.deepEqual([...new Set(server.taskQueries)].sort(), [
     '?kind=index&limit=100',
@@ -377,11 +376,11 @@ test('a bot is made from Circle as a schedule and a skill pack, approved by some
   assert.deepEqual(
     later.host
       .statuses()
-      .filter((item) => item.extension === 'circle-server')
+      .filter((item) => item.extension === 'hub')
       .map((item) => [item.text, item.lamp]),
     [
       [
-        'circle-server · developer@127.0.0.1:' +
+        'hub · developer@127.0.0.1:' +
           new URL(server.url).port +
           ' · 2 bot result(s)',
         'wait',
@@ -390,39 +389,37 @@ test('a bot is made from Circle as a schedule and a skill pack, approved by some
   );
   await later.run('bot runs ast_bot');
   assert.deepEqual(later.lines.slice(-4), [
-    '  task_b1 · schedule:2026-10-12T00:00:00.000Z · succeeded · 1 file(s) · 2 missed occurrence(s) since 2026-10-11T22:00:00.000Z folded into this run · /server get task_b1 saves them',
+    '  task_b1 · schedule:2026-10-12T00:00:00.000Z · succeeded · 1 file(s) · 2 missed occurrence(s) since 2026-10-11T22:00:00.000Z folded into this run · /hub get task_b1 saves them',
     `    out/case.xlsx · sha256 ${'c'.repeat(12)}…`,
     '  — · schedule:2026-10-12T01:00:00.000Z · not started: APPROVAL_STALE: Package asset revision is no longer approved',
     '  task_b2 · schedule:2026-10-12T02:00:00.000Z · running',
   ]);
   assert.equal(
-    later.host.statuses().find((item) => item.extension === 'circle-server')
-      ?.lamp,
+    later.host.statuses().find((item) => item.extension === 'hub')?.lamp,
     'ok',
     'shown once, the result is no longer new',
   );
 
   // A token that runs out: the background look says so in the footer and asks nothing; a
-  // command says to sign in again, and /server login looks once more.
+  // command says to sign in again, and /hub login looks once more.
   server.expire();
   const stale = await person(root, 'dev-home', workspace);
   await delay(300);
   assert.deepEqual(
     stale.host
       .statuses()
-      .filter((item) => item.extension === 'circle-server')
+      .filter((item) => item.extension === 'hub')
       .map((item) => [item.text.replace(/^.* · /, ''), item.lamp]),
     [['sign-in expired', 'wait']],
   );
   await assert.rejects(
     stale.run('bot list'),
-    /signed out: the sign-in has expired · \/server login http:\/\/127\.0\.0\.1:\d+ developer/,
+    /signed out: the sign-in has expired · \/hub login http:\/\/127\.0\.0\.1:\d+ developer/,
   );
   await stale.run(`login ${server.url} developer`);
   await delay(300);
   assert.equal(
-    stale.host.statuses().find((item) => item.extension === 'circle-server')
-      ?.lamp,
+    stale.host.statuses().find((item) => item.extension === 'hub')?.lamp,
     'ok',
   );
 

@@ -184,7 +184,7 @@ async function connect(t: Parameters<typeof scratch>[0]) {
     workspace,
     trusted: true,
     bundledRoot: bundledExtensionsRoot(),
-    settings: { 'circle-server': { enabled: true } },
+    settings: { hub: { enabled: true } },
     secret: async (request) => {
       prompts.push(request.question);
       await submitAnswer(home, request.id, PASSWORD);
@@ -197,13 +197,10 @@ async function connect(t: Parameters<typeof scratch>[0]) {
     append: (text: string) => lines.push(text),
     sendUserMessage: () => {},
   };
-  const command = host.commands().get('server')!;
+  const command = host.commands().get('hub')!;
   const config = () =>
     JSON.parse(
-      readFileSync(
-        join(home, 'extension_data', 'circle-server', 'config.json'),
-        'utf8',
-      ),
+      readFileSync(join(home, 'extension_data', 'hub', 'config.json'), 'utf8'),
     );
   return {
     host,
@@ -253,7 +250,7 @@ test('a model tool call and a followed task that meet an expired sign-in say so 
 
   const tool = session.host
     .tools()
-    .find((item) => item.name === 'srv_docs_list')!;
+    .find((item) => item.name === 'hub_tool_docs_list')!;
   const run = { signal: new AbortController().signal, sessionId: 's' } as never;
   const answer = await session.host
     .toolBoundary({ tool, args: {}, context: run }, (request) =>
@@ -265,12 +262,12 @@ test('a model tool call and a followed task that meet an expired sign-in say so 
     );
   assert.match(
     answer,
-    /signed out: the sign-in has expired · \/server login http:\/\/127\.0\.0\.1:\d+ tester/,
+    /signed out: the sign-in has expired · \/hub login http:\/\/127\.0\.0\.1:\d+ tester/,
   );
   await until(() => session.lines.some((line) => /✖ task_f:/.test(line)));
   assert.match(
     session.lines.find((line) => /✖ task_f:/.test(line))!,
-    /✖ task_f: signed out: the sign-in has expired · \/server login .* · \/server task task_f picks it up again/,
+    /✖ task_f: signed out: the sign-in has expired · \/hub login .* · \/hub task task_f picks it up again/,
   );
   assert.equal(
     session.prompts.length,
@@ -287,7 +284,7 @@ test('a refusal reaches the model with what the server named besides its message
   await session.run(`login ${server.url} tester`);
   const tool = session.host
     .tools()
-    .find((item) => item.name === 'srv_docs_list')!;
+    .find((item) => item.name === 'hub_tool_docs_list')!;
   const run = { signal: new AbortController().signal, sessionId: 's' } as never;
   const answer = await session.host
     .toolBoundary({ tool, args: {}, context: run }, (request) =>
@@ -305,9 +302,7 @@ test('a task that ended failed is shown with its own error, not as a failed requ
   const server = await sessionServer(t);
   const session = await connect(t);
   await session.run(`login ${server.url} tester`);
-  const tool = session.host
-    .tools()
-    .find((item) => item.name === 'circle_server_task')!;
+  const tool = session.host.tools().find((item) => item.name === 'hub_task')!;
   const run = { signal: new AbortController().signal, sessionId: 's' } as never;
   const answer = JSON.stringify(await tool.run({ task_id: 'task_x' }, run));
   assert.match(answer, /SOURCE_FORBIDDEN/);
@@ -324,7 +319,7 @@ test('a long poll that meets a 401 after the token rotated retries once on the c
   await until(() => server.counts.events >= 1, 5000); // the poll is open on the old token
   // The next request notices the session is due and refreshes: the hub rotates the token.
   writeFileSync(
-    join(session.home, 'extension_data', 'circle-server', 'config.json'),
+    join(session.home, 'extension_data', 'hub', 'config.json'),
     JSON.stringify({
       ...session.config(),
       expiresAt: new Date(Date.now() - 1000).toISOString(),

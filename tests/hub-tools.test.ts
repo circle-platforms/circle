@@ -302,13 +302,13 @@ test('after signing in, the connector offers the server tools to the model, runs
     workspace,
     trusted: true,
     bundledRoot: bundledExtensionsRoot(),
-    settings: { 'circle-server': { enabled: true } },
+    settings: { hub: { enabled: true } },
     onTools: () => toolChanges++,
     secret: async (request) => {
       await submitAnswer(home, request.id, PASSWORD);
     },
   }).load();
-  const command = host.commands().get('server')!;
+  const command = host.commands().get('hub')!;
   const lines: string[] = [];
   const context = {
     workspace,
@@ -320,7 +320,7 @@ test('after signing in, the connector offers the server tools to the model, runs
     host
       .tools()
       .map((tool) => tool.name)
-      .filter((name) => name.startsWith('srv_'))
+      .filter((name) => name.startsWith('hub_tool_'))
       .sort();
   const tool = (name: string) =>
     host.tools().find((item) => item.name === name)!;
@@ -333,10 +333,10 @@ test('after signing in, the connector offers the server tools to the model, runs
     '  4 server tools available to the model from its next turn',
   );
   assert.deepEqual(names(), [
-    'srv_buildsite_command_tree',
-    'srv_docs_list',
-    'srv_env_inventory',
-    'srv_knowledge_claim_submit',
+    'hub_tool_buildsite_command_tree',
+    'hub_tool_docs_list',
+    'hub_tool_env_inventory',
+    'hub_tool_knowledge_claim_submit',
   ]);
   assert.ok(
     toolChanges >= 4,
@@ -345,19 +345,19 @@ test('after signing in, the connector offers the server tools to the model, runs
 
   // Kinds: read tools run without asking, the one that changes something asks first; the
   // server's schema and description reach the model.
-  assert.equal(tool('srv_docs_list').effect, 'read');
-  assert.equal(tool('srv_docs_list').approval, false);
-  assert.equal(tool('srv_knowledge_claim_submit').approval, true);
-  assert.deepEqual(tool('srv_docs_list').parameters.required, ['folder']);
+  assert.equal(tool('hub_tool_docs_list').effect, 'read');
+  assert.equal(tool('hub_tool_docs_list').approval, false);
+  assert.equal(tool('hub_tool_knowledge_claim_submit').approval, true);
+  assert.deepEqual(tool('hub_tool_docs_list').parameters.required, ['folder']);
   assert.match(
-    tool('srv_docs_list').description,
+    tool('hub_tool_docs_list').description,
     /docs\.list .*Documents in a folder/,
   );
-  assert.match(tool('srv_buildsite_command_tree').description, /server task/);
+  assert.match(tool('hub_tool_buildsite_command_tree').description, /hub task/);
 
   // A sync tool returns the result and its evidence; arguments go to the server as given.
   const listed = JSON.parse(
-    String(await tool('srv_docs_list').run({ folder: 'manuals' }, run)),
+    String(await tool('hub_tool_docs_list').run({ folder: 'manuals' }, run)),
   );
   assert.deepEqual(listed.result.entries, ['manual-cli.md', 'manual-app.md']);
   assert.equal(listed.evidence[0].evidenceId, 'evd_1');
@@ -365,7 +365,7 @@ test('after signing in, the connector offers the server tools to the model, runs
   assert.match(String(server.calls[0]!.body.idempotencyKey), /^[0-9a-f-]{36}$/);
 
   // A task tool hands back a watch that follows the task to its result.
-  const watched = await tool('srv_buildsite_command_tree').run(
+  const watched = await tool('hub_tool_buildsite_command_tree').run(
     { build: 'b1' },
     run,
   );
@@ -375,7 +375,7 @@ test('after signing in, the connector offers the server tools to the model, runs
 
   // A source that is down is a failed tool call with the server's reason.
   await assert.rejects(
-    async () => tool('srv_env_inventory').run({}, run),
+    async () => tool('hub_tool_env_inventory').run({}, run),
     /SOURCE_UNREACHABLE: the jump host did not answer/,
   );
 
@@ -387,11 +387,11 @@ test('after signing in, the connector offers the server tools to the model, runs
   // A changed catalog removes what the server no longer offers.
   server.changeCatalog();
   await command.handler('tools', context);
-  assert.ok(!names().includes('srv_docs_list'));
+  assert.ok(!names().includes('hub_tool_docs_list'));
   assert.equal(names().length, 3);
   assert.ok(
     lines.some((line) =>
-      /srv_knowledge_claim_submit ← knowledge\.claim_submit · asks first/.test(
+      /hub_tool_knowledge_claim_submit ← knowledge\.claim_submit · asks first/.test(
         line,
       ),
     ),
@@ -430,7 +430,7 @@ test('a server without a tool catalog offers no tools and says nothing about it 
     workspace,
     trusted: true,
     bundledRoot: bundledExtensionsRoot(),
-    settings: { 'circle-server': { enabled: true } },
+    settings: { hub: { enabled: true } },
     secret: async (request) => {
       await submitAnswer(home, request.id, PASSWORD);
     },
@@ -442,11 +442,11 @@ test('a server without a tool catalog offers no tools and says nothing about it 
     append: (text: string) => lines.push(text),
     sendUserMessage: () => {},
   };
-  const command = host.commands().get('server')!;
+  const command = host.commands().get('hub')!;
   await command.handler(`login ${server.url} tester`, context);
   assert.match(lines.at(-1)!, /● signed in to .* as tester/);
   assert.equal(
-    host.tools().filter((tool) => tool.name.startsWith('srv_')).length,
+    host.tools().filter((tool) => tool.name.startsWith('hub_tool_')).length,
     0,
   );
   await command.handler('tools', context);
@@ -454,7 +454,7 @@ test('a server without a tool catalog offers no tools and says nothing about it 
   await delay(200);
 });
 
-test('a trial records which server tools the model used, and /server skill push sends the pack with that record', async (t) => {
+test('a trial records which server tools the model used, and /hub skill push sends the pack with that record', async (t) => {
   const root = scratch(t);
   const home = join(root, 'home');
   const workspace = join(root, 'project');
@@ -484,7 +484,7 @@ test('a trial records which server tools the model used, and /server skill push 
     workspace,
     trusted: true,
     bundledRoot: bundledExtensionsRoot(),
-    settings: { 'circle-server': { enabled: true } },
+    settings: { hub: { enabled: true } },
     secret: async (request) => {
       await submitAnswer(home, request.id, PASSWORD);
     },
@@ -496,7 +496,7 @@ test('a trial records which server tools the model used, and /server skill push 
     append: (text: string) => lines.push(text),
     sendUserMessage: () => {},
   };
-  const command = host.commands().get('server')!;
+  const command = host.commands().get('hub')!;
   await command.handler(`login ${server.url} tester`, context);
   await command.handler('trial start', context);
   const run = { signal: new AbortController().signal, sessionId: 's' } as never;
@@ -508,10 +508,10 @@ test('a trial records which server tools the model used, and /server skill push 
       )
       .catch((error) => String(error));
   };
-  await call('srv_docs_list', { folder: 'manuals', depth: 1 });
-  await call('srv_env_inventory', {});
+  await call('hub_tool_docs_list', { folder: 'manuals', depth: 1 });
+  await call('hub_tool_env_inventory', {});
   // A tool that is not the server's is not part of the trial record.
-  const own = host.tools().find((item) => item.name === 'circle_server_packs')!;
+  const own = host.tools().find((item) => item.name === 'hub_packs')!;
   await host.toolBoundary({ tool: own, args: {}, context: run }, (request) =>
     own.run(request.args, request.context),
   );
@@ -523,12 +523,12 @@ test('a trial records which server tools the model used, and /server skill push 
     workspace,
     trusted: true,
     bundledRoot: bundledExtensionsRoot(),
-    settings: { 'circle-server': { enabled: true } },
+    settings: { hub: { enabled: true } },
   }).load();
   await assert.rejects(async () => {
     await reloaded
       .commands()
-      .get('server')!
+      .get('hub')!
       .handler(
         'skill push skills/mindmap-compile --outputs cases.xlsx',
         context,
@@ -545,7 +545,7 @@ test('a trial records which server tools the model used, and /server skill push 
 
   // A clean trial record (declared tools only) goes through: 201, candidate.
   await command.handler('trial start', context);
-  await call('srv_docs_list', { folder: 'manuals', depth: 1 });
+  await call('hub_tool_docs_list', { folder: 'manuals', depth: 1 });
   await command.handler(
     'skill push skills/mindmap-compile --outputs cases.xlsx',
     context,
@@ -603,7 +603,7 @@ test('a trial records which server tools the model used, and /server skill push 
 
   assert.ok(
     lines.some((line) =>
-      /waiting for approval apr_skill in task_approve · someone else approves: \/server approve task_approve apr_skill/.test(
+      /waiting for approval apr_skill in task_approve · someone else approves: \/hub approve task_approve apr_skill/.test(
         line,
       ),
     ),
@@ -668,7 +668,7 @@ test('server tool names that would collide or run past 64 characters get a stabl
     workspace,
     trusted: true,
     bundledRoot: bundledExtensionsRoot(),
-    settings: { 'circle-server': { enabled: true } },
+    settings: { hub: { enabled: true } },
     secret: async (request) => {
       await submitAnswer(home, request.id, PASSWORD);
     },
@@ -679,12 +679,12 @@ test('server tool names that would collide or run past 64 characters get a stabl
     append: () => {},
     sendUserMessage: () => {},
   };
-  const command = host.commands().get('server')!;
+  const command = host.commands().get('hub')!;
   const names = () =>
     host
       .tools()
       .map((tool) => tool.name)
-      .filter((name) => name.startsWith('srv_'))
+      .filter((name) => name.startsWith('hub_tool_'))
       .sort();
   await command.handler(`login ${server.url} tester`, context);
   const first = names();
@@ -694,11 +694,11 @@ test('server tool names that would collide or run past 64 characters get a stabl
     first.every((name) => name.length <= 64 && /^[A-Za-z0-9_-]+$/.test(name)),
   );
   assert.ok(
-    first.includes('srv_env_inventory'),
+    first.includes('hub_tool_env_inventory'),
     'a name with no clash stays plain',
   );
   assert.ok(
-    !first.includes('srv_docs_list'),
+    !first.includes('hub_tool_docs_list'),
     'neither of the clashing names takes the plain one',
   );
   // Another order of the same catalog gives the same names.
@@ -708,7 +708,7 @@ test('server tool names that would collide or run past 64 characters get a stabl
   await delay(200);
 });
 
-test('a model can start the trial record and push the skill pack it changed, without the /server command', async (t) => {
+test('a model can start the trial record and push the skill pack it changed, without the /hub command', async (t) => {
   const root = scratch(t);
   const home = join(root, 'home');
   const workspace = join(root, 'project');
@@ -736,7 +736,7 @@ test('a model can start the trial record and push the skill pack it changed, wit
     workspace,
     trusted: true,
     bundledRoot: bundledExtensionsRoot(),
-    settings: { 'circle-server': { enabled: true } },
+    settings: { hub: { enabled: true } },
     secret: async (request) => {
       await submitAnswer(home, request.id, PASSWORD);
     },
@@ -749,7 +749,7 @@ test('a model can start the trial record and push the skill pack it changed, wit
   };
   await host
     .commands()
-    .get('server')!
+    .get('hub')!
     .handler(`login ${server.url} tester`, context);
   const run = { signal: new AbortController().signal, sessionId: 's' } as never;
   const call = async (name: string, args: Record<string, unknown>) => {
@@ -759,8 +759,10 @@ test('a model can start the trial record and push the skill pack it changed, wit
       tool.run(request.args, request.context),
     );
   };
-  await call('circle_server_trial_start', {});
-  const listed: unknown = await call('srv_docs_list', { folder: 'manuals' });
+  await call('hub_trial_start', {});
+  const listed: unknown = await call('hub_tool_docs_list', {
+    folder: 'manuals',
+  });
   const answer = (typeof listed === 'string' ? JSON.parse(listed) : listed) as {
     savedAs: string;
     result: unknown;
@@ -775,7 +777,7 @@ test('a model can start the trial record and push the skill pack it changed, wit
   assert.deepEqual(kept.response.result, {
     entries: ['manual-cli.md', 'manual-app.md'],
   });
-  const raw: unknown = await call('circle_server_skill_push', {
+  const raw: unknown = await call('hub_skill_push', {
     folder: 'skills/mindmap-compile',
     outputs: ['cases.xlsx'],
   });
@@ -802,7 +804,7 @@ test('a model can start the trial record and push the skill pack it changed, wit
   );
   assert.ok(
     pushed.lines.some((line) =>
-      /someone else approves: \/server approve/.test(line),
+      /someone else approves: \/hub approve/.test(line),
     ),
   );
   await delay(200);
@@ -819,7 +821,7 @@ test('the evidence tool saves a record’s content after checking its SHA-256, a
     workspace,
     trusted: true,
     bundledRoot: bundledExtensionsRoot(),
-    settings: { 'circle-server': { enabled: true } },
+    settings: { hub: { enabled: true } },
     secret: async (request) => {
       await submitAnswer(home, request.id, PASSWORD);
     },
@@ -832,11 +834,9 @@ test('the evidence tool saves a record’s content after checking its SHA-256, a
   };
   await host
     .commands()
-    .get('server')!
+    .get('hub')!
     .handler(`login ${server.url} tester`, context);
-  const tool = host
-    .tools()
-    .find((item) => item.name === 'circle_server_evidence')!;
+  const tool = host.tools().find((item) => item.name === 'hub_evidence')!;
   assert.ok(tool, 'the evidence tool is offered to the model');
   assert.equal(tool.effect, 'read');
   assert.equal(tool.approval, false);

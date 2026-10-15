@@ -289,7 +289,7 @@ try {
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
-  // Three plain components, and the circle-server interface with the four platform
+  // Three plain components, and the hub interface with the four platform
   // objects, all paired with a runtime extension the preview does not have, so off.
   assert.equal(await page.getByRole('checkbox').count(), 8);
   for (const id of ['knowledge', 'work', 'execution', 'methods'])
@@ -302,7 +302,7 @@ try {
   assert.equal(
     await page
       .getByRole('checkbox', {
-        name: 'enable circle-server interface',
+        name: 'enable hub interface',
         exact: true,
       })
       .isChecked(),

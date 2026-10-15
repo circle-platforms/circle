@@ -9,11 +9,11 @@ import {
   Page,
   Status,
 } from '../../components/common';
-import { serverView } from '../server';
+import { hubView } from '../hub';
 import type { WorkbenchPlugin } from '../types';
 
-// The four platform objects as the paired circle-server extension last read them from the
-// server (/server refresh). The server decides what you may see; nothing here is local.
+// The four platform objects as the paired hub extension last read them from the
+// server (/hub refresh). The server decides what you may see; nothing here is local.
 interface Objects {
   refreshedAt: string;
   work: {
@@ -93,12 +93,12 @@ const short = (hash?: string) => (hash ? hash.slice(0, 12) + '…' : '');
 
 function useObjects() {
   const { snapshot, runtime, perform } = useRuntime();
-  const view = serverView(snapshot.extensions);
+  const view = hubView(snapshot.extensions);
   const objects = (view as { objects?: Objects } | undefined)?.objects;
-  // Every action is the extension's own /server command; its lines go to the conversation.
+  // Every action is the extension's own /hub command; its lines go to the conversation.
   const run = (args: string) =>
     perform(async () => {
-      await runtime.command('server', args);
+      await runtime.command('hub', args);
     });
   return { view, objects, run };
 }
@@ -120,8 +120,7 @@ function Frame({
     >
       {!view?.signedIn ? (
         <EmptyState title="not signed in">
-          Sign in on the circle-server page; the server decides what you may
-          see.
+          Sign in on the hub page; the server decides what you may see.
         </EmptyState>
       ) : !objects ? (
         <EmptyState title="nothing read yet">
@@ -468,7 +467,7 @@ function Background({ objects }: { objects: Objects }) {
 }
 
 // What else the server offers: the tools the model has from it, pushed skill packs, and
-// the bots that run them. A bot's buttons are its /server bot commands.
+// the bots that run them. A bot's buttons are its /hub bot commands.
 function ServerTools({
   objects,
   run,
@@ -571,16 +570,16 @@ function ServerTools({
 const paired = {
   apiVersion: 1 as const,
   version: '0.1.0',
-  runtimeExtension: 'circle-server',
+  runtimeExtension: 'hub',
 };
-/** B, C, D and E as the server holds them, paired with the circle-server extension. */
+/** B, C, D and E as the server holds them, paired with the hub extension. */
 export const livePlatformPlugins: WorkbenchPlugin[] = [
   {
     ...paired,
     id: 'knowledge',
     title: 'knowledge',
     description:
-      'B · sources, artifacts and evidence of your tasks on circle-server, by revision and SHA-256.',
+      'B · sources, artifacts and evidence of your tasks on hub, by revision and SHA-256.',
     icon: BookOpen,
     pages: [
       {
@@ -596,7 +595,7 @@ export const livePlatformPlugins: WorkbenchPlugin[] = [
     id: 'work',
     title: 'work',
     description:
-      'C · tasks on circle-server: phases, questions they wait on and approvals bound to a revision.',
+      'C · tasks on hub: phases, questions they wait on and approvals bound to a revision.',
     icon: Workflow,
     pages: [
       { id: 'work', title: 'work', icon: Workflow, component: WorkLivePage },
@@ -607,7 +606,7 @@ export const livePlatformPlugins: WorkbenchPlugin[] = [
     id: 'execution',
     title: 'execution',
     description:
-      'D · operations circle-server workers ran, with their leases and outcomes.',
+      'D · operations hub workers ran, with their leases and outcomes.',
     icon: Server,
     pages: [
       {
@@ -623,7 +622,7 @@ export const livePlatformPlugins: WorkbenchPlugin[] = [
     id: 'methods',
     title: 'methods',
     description:
-      'E · capability packs circle-server runs, at their versions; hand one a file.',
+      'E · capability packs hub runs, at their versions; hand one a file.',
     icon: Blocks,
     pages: [
       {
