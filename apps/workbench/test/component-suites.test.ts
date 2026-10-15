@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runComponentSuites } from './component-suites.mjs';
+import { runComponentSuites, COMPONENT_SUITES } from './component-suites.mjs';
 
 test('component gate runs real child processes serially and retains the first failure without running later suites', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'circle-component-gate-'));
@@ -42,4 +42,26 @@ test('component gate runs real child processes serially and retains the first fa
     await readFile(join(receipt.suites[1].directory, 'output.log'), 'utf8'),
     /synthetic diagnostic/,
   );
+});
+
+test('the component gate adds the task panel once and preserves all eight prior journeys', () => {
+  const original = [
+    'editor-ui.mjs',
+    'resource-boundary-ui.mjs',
+    'pending-operations-ui.mjs',
+    'recovered-input-ui.mjs',
+    'git-continuity-ui.mjs',
+    'debug-panel-ui.mjs',
+    'browser-diagnostics-ui.mjs',
+    'keyboard-navigation-ui.mjs',
+  ];
+  assert.deepEqual(
+    COMPONENT_SUITES.filter((name) => name !== 'tasks-panel-ui.mjs'),
+    original,
+  );
+  assert.equal(
+    COMPONENT_SUITES.filter((name) => name === 'tasks-panel-ui.mjs').length,
+    1,
+  );
+  assert.equal(new Set(COMPONENT_SUITES).size, 9);
 });
