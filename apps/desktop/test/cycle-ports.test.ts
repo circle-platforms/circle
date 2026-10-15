@@ -129,7 +129,7 @@ s.calls.push(a);
 const git=(...args)=>cp.execFileSync('git',args,{cwd:process.cwd(),encoding:'utf8'}).trim();
 const branch=git('branch','--show-current'),head=(()=>{try{return git('rev-parse','--verify','--quiet','refs/remotes/origin/'+branch)}catch{return ''}})();
 const save=()=>fs.writeFileSync(statePath,JSON.stringify(s));
-const pr=()=>{if(!s.pr){save();process.exit(1)};return {...s.pr,headRefOid:head,headRefName:branch,state:s.pr.state??'OPEN'}};
+const pr=()=>{if(!s.pr){save();process.exit(1)};return {...s.pr,headRefOid:s.overrideHead??head,headRefName:s.overrideBranch??branch,state:s.pr.state??'OPEN'}};
 let out;
 if(a[0]==='auth')out='logged in';
 else if(a[0]==='--version')out='gh version 2.83.2 (fixture)';
@@ -137,10 +137,14 @@ else if(a[0]==='pr'&&a[1]==='view')out=pr();
 else if(a[0]==='pr'&&a[1]==='list'){if(s.listFailure){save();process.exit(7)};out=s.pr&&s.pr.state!=='CLOSED'&&s.pr.state!=='MERGED'?[pr()]:[];}
 else if(a[0]==='pr'&&a[1]==='create'){if(!a.includes('--draft'))throw Error('must be draft');s.created++;s.pr={number:7,url:'https://github.invalid/fixture/repo/pull/7',isDraft:true};out=s.pr.url;}
 else if(a[0]==='pr'&&a[1]==='checks'){
+ if(s.changeDuringChecks==='head')s.overrideHead='unverified-head-during-checks';
+ if(s.changeDuringChecks==='branch')s.overrideBranch='codex/other';
+ if(s.changeDuringChecks==='number')s.pr.number=99;
+ if(s.changeDuringChecks==='local')fs.writeFileSync('README.md','concurrent local change');
  const content=git('show',head+':app.cjs');
- out=[{name:'remote acceptance',state:content.includes('readyForCI=true')?'SUCCESS':'FAILURE',bucket:s.holdCI?'pending':content.includes('readyForCI=true')?'pass':'fail',link:'https://github.invalid/fixture/repo/actions/runs/42/job/3'}];
+ out=[{name:'remote acceptance',state:content.includes('readyForCI=true')?'SUCCESS':'FAILURE',bucket:s.holdCI?'pending':s.forcePass||content.includes('readyForCI=true')?'pass':'fail',link:'https://github.invalid/fixture/repo/actions/runs/42/job/3'}];
 }
-else if(a[0]==='pr'&&a[1]==='ready'){pr();s.ready++;s.pr.isDraft=false;out='ready';}
+else if(a[0]==='pr'&&a[1]==='ready'){pr();if(a.includes('--undo')){s.undos=(s.undos??0)+1;s.pr.isDraft=true;out='draft'}else{s.ready++;s.pr.isDraft=false;if(s.changeDuringReady)s.overrideHead='unverified-head-during-ready';out='ready'}}
 else if(a[0]==='run'&&a[1]==='view'){s.logs++;out='CI_ACTUAL_LOG: remote acceptance requires readyForCI=true';}
 else if(a[0]==='run'&&a[1]==='rerun'){s.retries++;out='retry requested';}
 else throw Error('unsupported fake gh call '+a.join(' '));
@@ -735,4 +739,163 @@ test('trusted already-pushed publishing verifies the remote HEAD while renderer 
     await readFile(join(f.workspace, '.git', 'index')),
     f.originalIndex,
   );
+});
+
+test('requesting review rechecks the candidate after CI and restores draft if the final ready mutation races a push', async (t) => {
+  const f = await fixture(t),
+    owned = join(f.root, 'ready-owned');
+  await git(f.workspace, 'worktree', 'add', '--detach', owned, f.baseline);
+  await git(owned, 'switch', '-c', 'codex/ready-race');
+  await git(owned, 'push', '--set-upstream', 'origin', 'codex/ready-race');
+  const delivery = new DeliveryService(owned, f.ghPath);
+  const initial = {
+    created: 1,
+    ready: 0,
+    logs: 0,
+    retries: 0,
+    calls: [],
+    holdCI: false,
+    forcePass: true,
+    pr: {
+      number: 7,
+      url: 'https://github.invalid/fixture/repo/pull/7',
+      isDraft: true,
+    },
+  };
+  for (const changeDuringChecks of ['head', 'branch', 'number', 'local']) {
+    await writeFile(
+      f.ghState,
+      JSON.stringify({ ...initial, changeDuringChecks }),
+    );
+    const snapshot = await delivery.git.snapshot();
+    await assert.rejects(
+      delivery.call('ready', { revision: snapshot.revision }),
+      /changed while reading checks/,
+    );
+    const state = JSON.parse(await readFile(f.ghState, 'utf8'));
+    assert.equal(
+      state.ready,
+      0,
+      changeDuringChecks + ' must not mark an unchecked candidate ready',
+    );
+    assert.equal(state.pr.isDraft, true);
+    if (changeDuringChecks === 'local')
+      await writeFile(join(owned, 'README.md'), 'baseline README\n');
+  }
+  await writeFile(
+    f.ghState,
+    JSON.stringify({ ...initial, changeDuringReady: true }),
+  );
+  await assert.rejects(
+    delivery.call('ready', {
+      revision: (await delivery.git.snapshot()).revision,
+    }),
+    /draft status restored/,
+  );
+  let state = JSON.parse(await readFile(f.ghState, 'utf8'));
+  assert.equal(state.ready, 1);
+  assert.equal(state.undos, 1);
+  assert.equal(state.pr.isDraft, true);
+  assert.deepEqual(
+    state.calls.filter(
+      (args: string[]) => args[0] === 'pr' && args[1] === 'ready',
+    ),
+    [
+      ['pr', 'ready', '7'],
+      ['pr', 'ready', '7', '--undo'],
+    ],
+  );
+  await writeFile(f.ghState, JSON.stringify(initial));
+  await delivery.call('ready', {
+    revision: (await delivery.git.snapshot()).revision,
+  });
+  state = JSON.parse(await readFile(f.ghState, 'utf8'));
+  assert.equal(state.ready, 1);
+  assert.equal(state.pr.isDraft, false);
+  await delivery.call('ready', {
+    revision: (await delivery.git.snapshot()).revision,
+  });
+  state = JSON.parse(await readFile(f.ghState, 'utf8'));
+  assert.equal(
+    state.ready,
+    1,
+    'an already-ready verified candidate is idempotent',
+  );
+});
+
+test('cycle verification rejects empty evidence and contradictory command success claims', async (t) => {
+  const f = await fixture(t),
+    service = new TaskService({
+      workspace: f.workspace,
+      dataDir: join(f.dataDir, 'tasks'),
+      identity,
+      autoStart: false,
+      emit: () => {},
+      createRuntime: () => {
+        throw Error('must not run');
+      },
+    });
+  cleanup(t, () => service.close());
+  const base = {
+    workspace: f.workspace,
+    dataDir: join(f.dataDir, 'ports'),
+    sessionId: 'trusted-session',
+    getTaskService: () => service,
+    identity,
+    withResource: async <T>(
+      _resource: 'build' | 'ui' | 'browser',
+      run: () => Promise<T>,
+    ) => run(),
+  };
+  const cycle: CycleRecord = {
+    id: 'contradictory-evidence',
+    workspace: f.workspace,
+    title: 'Require real evidence',
+    body: 'Do not trust status alone',
+    acceptanceCriteria: [criterion],
+    state: 'working',
+    attempt: 0,
+    taskIds: [],
+    failureCounts: {},
+    updatedAt: new Date().toISOString(),
+  };
+  await createWorkspaceCyclePorts({
+    ...base,
+    verify: async () => [],
+  }).tasks.create(
+    cycle,
+    { kind: 'implementation', prompt: 'Implement' },
+    { operationId: 'create' },
+  );
+  for (const check of [
+    {
+      criterion,
+      status: 'passed' as const,
+      source: 'inspection' as const,
+      evidence: '   ',
+    },
+    {
+      criterion,
+      status: 'passed' as const,
+      source: 'command' as const,
+      evidence: 'actual command failed',
+      command: 'node oracle.cjs',
+      exitCode: 1,
+    },
+    {
+      criterion,
+      status: 'passed' as const,
+      source: 'command' as const,
+      evidence: 'command identity was not recorded',
+      exitCode: 0,
+    },
+  ]) {
+    const result = await createWorkspaceCyclePorts({
+      ...base,
+      verify: async () => [check],
+    }).verify(cycle);
+    assert.equal(result.passed, false);
+    assert.equal(result.evidence[0].status, 'needs_review');
+    assert.match(result.evidence[0].detail, /acceptance requires/);
+  }
 });

@@ -41,6 +41,7 @@ export function Modal({
   description,
   children,
   wide = false,
+  onCloseAutoFocus,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -48,6 +49,7 @@ export function Modal({
   description?: string;
   children: ReactNode;
   wide?: boolean;
+  onCloseAutoFocus?: (event: Event) => void;
 }) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -55,6 +57,7 @@ export function Modal({
         <Dialog.Overlay className="dialog-overlay" />
         <Dialog.Content
           className={`dialog-content ${wide ? 'wide' : ''}`}
+          onCloseAutoFocus={onCloseAutoFocus}
           aria-describedby={description ? 'dialog-description' : undefined}
         >
           <div className="dialog-heading">

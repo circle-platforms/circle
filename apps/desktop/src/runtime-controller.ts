@@ -946,6 +946,32 @@ export class RuntimeController {
     if (this.runtimes.lifecycle(id) !== 'open')
       throw Error('session is deleting or deleted');
     const request = validateWorkspaceRequest(command.payload);
+    if (
+      request.service === 'inputs' &&
+      (request.method === 'list' || request.params?.action !== 'resume')
+    ) {
+      const owner =
+        this.runtimes.get(id) ??
+        [...this.taskRuntimes.values()].find(
+          (runtime) => runtime.session.id === id,
+        );
+      if (!owner) this.store.inputs.recover(id, randomUUID());
+      if (request.method === 'list')
+        return (
+          owner?.harness.recoverableInputs ?? this.store.inputs.recoverable(id)
+        );
+      const result = owner
+        ? owner.harness.resolveInputs(
+            request.params as unknown as ResolveInputsRequest,
+          )
+        : this.store.inputs.resolve(
+            id,
+            randomUUID(),
+            request.params as unknown as ResolveInputsRequest,
+          );
+      this.publish();
+      return result;
+    }
     const emergency =
       (request.service === 'terminal' &&
         ['signal', 'close'].includes(request.method)) ||
@@ -993,16 +1019,6 @@ export class RuntimeController {
         request.params?.after as { offset: number; seq: number } | undefined,
         request.params?.limit as number | undefined,
       );
-    if (request.service === 'inputs' && request.method === 'list') {
-      const owner =
-        this.runtimes.get(id) ??
-        [...this.taskRuntimes.values()].find(
-          (runtime) => runtime.session.id === id,
-        );
-      if (owner) return owner.harness.recoverableInputs;
-      this.store.inputs.recover(id, randomUUID());
-      return this.store.inputs.recoverable(id);
-    }
     if (this.metadata.archivedAt(id))
       throw Error('restore this session before continuing');
     if (request.service === 'inputs') {

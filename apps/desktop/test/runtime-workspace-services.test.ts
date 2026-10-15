@@ -1257,3 +1257,71 @@ test('controller preserves queued input across restart and requires explicit ide
     await restarted.close();
   }
 });
+
+test('private input drafts remain recoverable after workspace trust is revoked', async (t) => {
+  const f = await setup(t, [
+    async (request) =>
+      new Promise((_resolve, reject) =>
+        request.signal.addEventListener(
+          'abort',
+          () => reject(request.signal.reason),
+          { once: true },
+        ),
+      ),
+  ]);
+  await f.call('prompt', { text: 'busy' });
+  await wait(() => f.model.requests.length === 1);
+  await f.call('prompt', { text: 'private durable draft' });
+  await f.controller.close();
+  const restarted = new RuntimeController({
+    home: f.home,
+    workspace: f.workspace,
+    userHome: f.home,
+    model: new ScriptedModel([]),
+    emit: () => {},
+  });
+  const sessionId = restarted.snapshot().activeSessionId;
+  saveSettings(defaultSettings(), f.home);
+  const call = (method: string, params: Record<string, unknown> = {}) =>
+    restarted.dispatch({
+      id: randomUUID(),
+      name: 'workspace-service',
+      sessionId,
+      payload: { service: 'inputs', method, params },
+    });
+  try {
+    const listing = await call('list');
+    assert.equal(listing.ok, true, listing.error);
+    const value = listing.data as any;
+    const request = {
+      ids: [value.items[0].id],
+      expectedVersion: value.version,
+      operationId: 'revoked-copy',
+      action: 'returnToDraft',
+    };
+    const copy = await call('resolve', request);
+    assert.equal(copy.ok, true, copy.error);
+    assert.equal(
+      (copy.data as any).items[0].payload.text,
+      'private durable draft',
+    );
+    const resume = await call('resolve', {
+      ...request,
+      operationId: 'revoked-resume',
+      action: 'resume',
+    });
+    assert.equal(resume.ok, false);
+    assert.match(resume.error!, /trust/);
+    const fresh = (await call('list')).data as any;
+    const discard = await call('resolve', {
+      ...request,
+      expectedVersion: fresh.version,
+      operationId: 'revoked-discard',
+      action: 'discard',
+    });
+    assert.equal(discard.ok, true, discard.error);
+    assert.equal(((await call('list')).data as any).items.length, 0);
+  } finally {
+    await restarted.close();
+  }
+});

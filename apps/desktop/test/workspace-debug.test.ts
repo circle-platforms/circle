@@ -206,8 +206,19 @@ test(
       } while (!threads.threads.length && Date.now() < until);
       assert.ok(threads.threads.length);
       await service.handle('pause');
-      await new Promise((r) => setTimeout(r, 100));
-      assert.equal(service.snapshot().status, 'paused');
+      // DAP acknowledges the request separately from the eventual stopped event.
+      // Assert the real debugger effect, without assuming a 100ms scheduling window.
+      const pausedDeadline = Date.now() + 5000;
+      while (
+        service.snapshot().status !== 'paused' &&
+        Date.now() < pausedDeadline
+      )
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(
+        service.snapshot().status,
+        'paused',
+        JSON.stringify(service.snapshot()),
+      );
       await service.stop();
       assert.doesNotThrow(() => process.kill(child.pid!, 0));
     } finally {

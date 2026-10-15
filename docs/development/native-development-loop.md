@@ -29,6 +29,8 @@ A batch checks all revisions before staging and again before replacement. It is 
 
 Language overlays provide unsaved content without writing it to disk. Definitions, references, semantic rename, formatting and diagnostics use the bundled TypeScript service. Opening Markdown or JSON does not add those buffers as extra TypeScript program roots. Project configuration errors remain distinct diagnostics.
 
+Node debugging uses DAP's `runInTerminal` request to create a real session-owned PTY through `WorkspaceServices`, including literal arguments and empty arguments. The terminal dock can send stdin and replay the debuggee's output. Launch environment changes come from the trusted debug adapter; their values stay in private in-memory terminal state rather than terminal snapshots or persisted history. A restored terminal with an unavailable launch environment must be relaunched from its debugger or task. Debug stop closes that session's tracked debug terminals; another session cannot write to or stop them through its own terminal identity.
+
 ## Tasks, evidence and delivery
 
 Write tasks get isolated Git worktrees. Read-only task runtimes cannot write a plan, launch commands or gain write tools through child agents. Runtime cleanup precedes candidate capture, and a changed candidate after verification requires another review. Integration checks the candidate patch hash and uses an owned integration worktree rather than staging the developer's source checkout.
@@ -41,7 +43,11 @@ Automatic delivery creates and maintains a draft PR using the configured reposit
 
 Workspace events carry workspace/session/resource identities, epoch, sequence and a durable recovery cursor. The renderer subscribes by resource and replays gaps instead of repeatedly replacing the full conversation snapshot. Complete terminal output stays in terminal logs; a bounded on-screen ring is not the archive. See [Workspace event streams](workspace-event-stream.md).
 
+Each workspace journal also holds an exclusive SQLite write lease in a separate `.owner.sqlite` file before opening or recovering its JSONL evidence. Another connection, including one in the same process, fails before changing the journal. The lease lasts until close, and the operating system releases it if the writer dies. Recovery therefore does not delete stale PID files or permit two writers to repair the same tail concurrently.
+
 Reloading the renderer reconnects to the running backend. A full application restart restores persisted task/operation records and terminal logs. Unconfirmed old processes are marked interrupted; stored commands are not automatically reexecuted or signalled by their old PID. Operations whose effects cannot be established become `needs_review` and require an explicit human reconciliation. Closing a panel, cancelling an agent and stopping an owned process remain separate actions.
+
+Pending steering and follow-up inputs are stored in `src/input_outbox.ts` in the session checkpoint database, including full text, original display, folded paste payloads and media bytes. A new Harness epoch moves old queued inputs to `recovery_pending` rather than sending them with a new prompt. The conversation's recovered-input panel offers explicit resume, copy to draft and discard choices. Copying appends the full text and media to the current draft without sending or removing the recovery copy; discarding requires the panel's separate confirmation. Resolution checks the session owner, input identities and recovery version, and repeated operation IDs do not start another run. Consuming an input and checkpointing its user message happen in the same transaction, so a consumed input is not automatically replayed after an interrupted model request. Application shutdown preserves unconsumed inputs for recovery; an explicit user cancellation discards the current live queue.
 
 ## Isolated verification
 

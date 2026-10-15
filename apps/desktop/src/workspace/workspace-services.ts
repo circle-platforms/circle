@@ -64,6 +64,8 @@ export class WorkspaceServices {
   private pendingEventBytes = 0;
   private failureCleanup?: Promise<void>;
   private closed = false;
+  private disposed = false;
+  private disposePromise?: Promise<void>;
   private ownerCycles = new Map<string, OwnedCycles>();
   private cycleDirectory: string;
   private releasing = new Set<string>();
@@ -353,6 +355,7 @@ export class WorkspaceServices {
     this.documents.setCredentialFiles(patterns);
   }
   async publishSource(event: WorkspaceServiceEvent): Promise<void> {
+    if (this.closed) throw new WorkspaceServicesClosedError();
     if (event.workspaceId !== this.workspaceId)
       throw Error('event does not belong to this workspace');
     return this.persist(event);
@@ -386,6 +389,8 @@ export class WorkspaceServices {
     })();
   }
   private persist(event: WorkspaceServiceEvent): Promise<void> {
+    if (this.disposed)
+      return Promise.reject(new WorkspaceServicesClosedError());
     if (this.failure) return Promise.reject(this.failure);
     let json: string;
     try {
@@ -409,12 +414,16 @@ export class WorkspaceServices {
     this.pendingEventBytes += bytes;
     const snapshot = JSON.parse(json) as WorkspaceServiceEvent;
     const operation = this.pending.then(async () => {
+      if (this.disposed) throw new WorkspaceServicesClosedError();
       if (this.failure) throw this.failure;
       const persisted = await (await this.ready).appendSource(snapshot);
       this.options.emit(persisted);
     });
     this.pending = operation
-      .catch((error) => this.failPersistence(error))
+      .catch((error) => {
+        if (!(error instanceof WorkspaceServicesClosedError))
+          this.failPersistence(error);
+      })
       .finally(() => {
         this.pendingEventBytes -= bytes;
       });
@@ -769,8 +778,11 @@ export class WorkspaceServices {
     }
     throw Error('workspace service is managed by the host scheduler');
   }
-  async dispose() {
-    if (this.closed) return;
+  dispose(): Promise<void> {
+    this.disposePromise ??= this.disposeOwned();
+    return this.disposePromise;
+  }
+  private async disposeOwned() {
     this.closed = true;
     await Promise.allSettled(
       [...this.ownerCycles.keys()].map((session) => this.closeCycles(session)),
@@ -788,6 +800,7 @@ export class WorkspaceServices {
       () => {},
     );
     await this.pending;
+    this.disposed = true;
     await this.ready.then(
       (stream) => stream.close(),
       () => undefined,
@@ -891,4 +904,11 @@ interface OwnedCycles {
   timer?: ReturnType<typeof setInterval>;
   tick?: Promise<void>;
   stopped: boolean;
+}
+
+export class WorkspaceServicesClosedError extends Error {
+  readonly code = 'WORKSPACE_SERVICES_CLOSED';
+  constructor() {
+    super('workspace services are closing or closed');
+  }
 }

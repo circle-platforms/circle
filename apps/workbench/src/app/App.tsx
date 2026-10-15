@@ -171,6 +171,8 @@ export function App() {
   const [dialogSelection, setDialogSelection] = useState('');
   const [interaction, setInteraction] = useState<Interaction | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  const searchReturnFocus = useRef<HTMLElement | null>(null);
+  const restoreSearchFocus = useRef(false);
   const [finding, setFinding] = useState(false);
   const [search, setSearch] = useState('');
   const [searchCursor, setSearchCursor] = useState(0);
@@ -564,6 +566,11 @@ export function App() {
         !document.querySelector('[role="dialog"]')
       ) {
         event.preventDefault();
+        searchReturnFocus.current =
+          document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+        restoreSearchFocus.current = true;
         setQuickOpen(false);
         setSearchOpen(true);
       } else if (
@@ -573,6 +580,11 @@ export function App() {
         !document.querySelector('[role="dialog"]')
       ) {
         event.preventDefault();
+        searchReturnFocus.current =
+          document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+        restoreSearchFocus.current = true;
         setQuickOpen(true);
         setSearch('');
         setSearchOpen(true);
@@ -992,6 +1004,15 @@ export function App() {
             open={searchOpen}
             onOpenChange={setSearchOpen}
             title={quickOpen ? t('quick open') : t('search')}
+            onCloseAutoFocus={(event) => {
+              const target = searchReturnFocus.current;
+              if (restoreSearchFocus.current && target?.isConnected) {
+                event.preventDefault();
+                target.focus({ preventScroll: true });
+              }
+              restoreSearchFocus.current = false;
+              searchReturnFocus.current = null;
+            }}
           >
             <SearchInput
               value={search}
@@ -1016,6 +1037,7 @@ export function App() {
                     searchItems[searchCursor]
                   ) {
                     event.preventDefault();
+                    restoreSearchFocus.current = false;
                     searchItems[searchCursor]!.run();
                     setSearchOpen(false);
                     setSearch('');
@@ -1035,6 +1057,7 @@ export function App() {
                   className={index === searchCursor ? 'selected' : undefined}
                   onMouseEnter={() => setSearchCursor(index)}
                   onClick={() => {
+                    restoreSearchFocus.current = false;
                     item.run();
                     setSearchOpen(false);
                     setSearch('');

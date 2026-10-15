@@ -1,3 +1,8 @@
+import {
+  createNativeEditorSemanticsFixture,
+  runNativeEditorSemantics,
+} from './helpers/native-editor-semantics.mjs';
+import { runNativeInputRecovery } from './helpers/native-input-recovery.mjs';
 import { runNativeBrowserStream } from './helpers/native-browser-stream.mjs';
 import {
   createNativeEditorIsolationFixture,
@@ -68,6 +73,7 @@ await Promise.all([
   ),
 ]);
 await createNativeEditorFixture(repo);
+await createNativeEditorSemanticsFixture(repo);
 const isolationFiles = await createNativeEditorIsolationFixture(repo);
 const git = async (...args) =>
   (await promisify(execFile)('git', ['-C', repo, ...args])).stdout;
@@ -76,6 +82,7 @@ await git(
   'add',
   ...isolationFiles,
   '.circle-editor-isolation-fixture.json',
+  'editor-supplement.ts',
   'editor-main.ts',
   'editor-lib.ts',
   '.circle-editor-journey.json',
@@ -512,6 +519,17 @@ try {
     },
   );
   await check(
+    'supplemental editor references completion formatting and replacement',
+    async () => {
+      await runNativeEditorSemantics({
+        page,
+        workspace: repo,
+        sessionId,
+        output,
+      });
+    },
+  );
+  await check(
     'loaded project instruction source opens actual file',
     async () => {
       await page
@@ -916,7 +934,9 @@ try {
           .getByLabel('acceptance criteria', { exact: true })
           .fill('Inspect actual file and git effects');
         await panel
-          .getByLabel('workspace access', { exact: true })
+          .locator('label')
+          .filter({ hasText: 'workspace access' })
+          .locator('select')
           .selectOption(access);
         await panel
           .getByRole('button', { name: 'queue task', exact: true })
@@ -1054,6 +1074,38 @@ try {
         JSON.stringify({ concurrent, complete, gitApprovalObserved }, null, 2),
       );
       await screenshot('08c-parallel-task-results');
+    },
+  );
+  await check(
+    'whole app restart preserves inputs without automatic sending',
+    async () => {
+      await runNativeInputRecovery({
+        getApp: () => app,
+        getPage: () => page,
+        state,
+        query,
+        sessionId,
+        fixture,
+        requestsPath,
+        output,
+        until,
+        relaunch: async () => {
+          await app.close();
+          app = await electron.launch({
+            chromiumSandbox: true,
+            executablePath:
+              process.env.CIRCLE_DESKTOP_EXECUTABLE ?? require('electron'),
+            args: [launchRoot],
+            cwd: root,
+            env,
+          });
+          page = await app.firstWindow();
+          page.setDefaultTimeout(15000);
+          page.on('pageerror', (error) =>
+            errors.push({ phase, error: String(error), stack: error.stack }),
+          );
+        },
+      });
     },
   );
   await check('English Chinese dark light and narrow UI', async () => {

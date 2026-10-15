@@ -170,7 +170,8 @@ export async function runNativeEditorJourney({
   checks.push('real watcher clean refresh and dirty conflict preservation');
   await page.getByRole('button', { name: 'edit', exact: true }).click();
   await page.locator('.native-code-editor .view-lines').first().click();
-  await page.keyboard.press(`${modifier}+Home`);
+  await page.keyboard.press(`${modifier}+a`);
+  await page.keyboard.press('ArrowLeft');
   for (let n = 0; n < 10; n++) await page.keyboard.press('ArrowRight');
   await page.keyboard.press('F12');
   await page

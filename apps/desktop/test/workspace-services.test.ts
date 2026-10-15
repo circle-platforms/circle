@@ -402,3 +402,110 @@ test('document saves invalidate semantic projects without discarding another uns
     await rm(data, { recursive: true, force: true });
   }
 });
+test('concurrent disposal shares completion and late sources are not reported as disk failures', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-service-close-'));
+  const data = await mkdtemp(path.join(tmpdir(), 'circle-service-close-data-'));
+  const failures: Error[] = [];
+  const service = new WorkspaceServices({
+    workspaceRoot: root,
+    workspaceId: 'owned-close',
+    dataDir: data,
+    nodeExecutable: process.execPath,
+    runtimeExecutable: process.execPath,
+    adapterPath: 'unused',
+    ghPath: 'unused',
+    terminalEnv: {
+      HOME: root,
+      ZDOTDIR: root,
+      HISTFILE: path.join(root, '.history'),
+      ENV: '',
+      BASH_ENV: '',
+    },
+    emit: () => {},
+    onPersistenceError: (error) => failures.push(error),
+  });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const original = service.terminals.dispose.bind(service.terminals);
+  service.terminals.dispose = async () => {
+    await gate;
+    await original();
+  };
+  try {
+    const terminal = (await service.call('s', 'terminal', 'create', {
+      shell: '/bin/sh',
+    })) as TerminalSnapshot;
+    await service.replay();
+    let done = false;
+    const first = service.dispose().then(() => {
+      done = true;
+    });
+    let secondDone = false;
+    const second = service.dispose().then(() => {
+      secondDone = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(done, false);
+    assert.equal(secondDone, false);
+    release();
+    await Promise.all([first, second]);
+    assert.equal(done, true);
+    assert.equal(secondDone, true);
+    assert.throws(() => process.kill(terminal.pid!, 0));
+    const journal = await readFile(
+      path.join(
+        data,
+        'workspaces',
+        createHash('sha256').update(path.resolve(root)).digest('hex'),
+        'events.jsonl',
+      ),
+      'utf8',
+    );
+    assert.ok(
+      journal
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+        .some(
+          (event) =>
+            event.service === 'terminal' &&
+            event.resourceId === terminal.id &&
+            event.data.kind === 'exit',
+        ),
+    );
+    await assert.rejects(
+      service.publishSource({
+        workspaceId: 'owned-close',
+        sessionId: 's',
+        service: 'tasks',
+        resourceId: 'late',
+        epoch: 'late',
+        seq: 1,
+        at: new Date().toISOString(),
+        data: { kind: 'late' },
+      }),
+      { code: 'WORKSPACE_SERVICES_CLOSED' },
+    );
+    assert.equal(failures.length, 0);
+    assert.equal(service.eventHealth.error, undefined);
+    const reopened = new WorkspaceServices({
+      workspaceRoot: root,
+      workspaceId: 'owned-close',
+      dataDir: data,
+      nodeExecutable: process.execPath,
+      runtimeExecutable: process.execPath,
+      adapterPath: 'unused',
+      ghPath: 'unused',
+      emit: () => {},
+    });
+    await reopened.replay();
+    await reopened.dispose();
+  } finally {
+    release();
+    await service.dispose();
+    await rm(root, { recursive: true, force: true });
+    await rm(data, { recursive: true, force: true });
+  }
+});

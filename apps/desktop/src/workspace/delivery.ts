@@ -146,11 +146,50 @@ export class DeliveryService {
       const pr = await this.pr();
       if (state.revision !== params.revision || state.head !== pr.headRefOid)
         throw Error('PR head changed; refresh checks');
+      if (
+        state.entries.length ||
+        pr.state !== 'OPEN' ||
+        pr.headRefName !== state.branch ||
+        !Number.isSafeInteger(pr.number) ||
+        pr.number <= 0
+      )
+        throw Error('a clean candidate on its open pull request is required');
+      const sameCandidate = (candidate: typeof pr) =>
+        candidate &&
+        candidate.number === pr.number &&
+        candidate.url === pr.url &&
+        candidate.state === 'OPEN' &&
+        candidate.headRefName === state.branch &&
+        candidate.headRefOid === state.head;
       const checks = (await this.call('checks')) as { bucket: string }[];
       if (!checks.length || checks.some((c) => c.bucket !== 'pass'))
         throw Error('all checks must pass before requesting review');
-      await this.gh(['pr', 'ready']);
-      return this.pr();
+      const [current, checkedPR] = await Promise.all([
+        this.git.snapshot(),
+        this.pr(),
+      ]);
+      if (current.revision !== state.revision || !sameCandidate(checkedPR))
+        throw Error(
+          'PR head or repository changed while reading checks; refresh before requesting review',
+        );
+      if (checkedPR.isDraft === false) return checkedPR;
+      await this.gh(['pr', 'ready', String(pr.number)]);
+      const result = await this.pr();
+      if (!sameCandidate(result)) {
+        // GitHub's ready mutation has no expected-head parameter. Restore our
+        // draft transition if another push raced the final server-side mutation.
+        await this.gh(['pr', 'ready', String(pr.number), '--undo']).catch(
+          (error) => {
+            throw Error(
+              `PR candidate changed; draft restoration is unconfirmed: ${String(error)}`,
+            );
+          },
+        );
+        throw Error(
+          'PR candidate changed while requesting review; draft status restored',
+        );
+      }
+      return result;
     }
     if (method === 'retry') {
       if (!Number.isSafeInteger(params.runId) || Number(params.runId) <= 0)

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { connect } from 'node:net';
 import { mkdtemp, writeFile, rm, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -53,7 +54,40 @@ test(
       await service.call('debug-owner', 'debug', 'launch', {
         program,
         args: argv,
+        stopOnEntry: true,
       });
+      for (let i = 0; i < 500; i++) {
+        const snapshot = (await service.call(
+          'debug-owner',
+          'debug',
+          'snapshot',
+        )) as { status: string };
+        if (snapshot.status === 'paused') break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      const stack = (await service.call(
+        'debug-owner',
+        'debug',
+        'stackTrace',
+      )) as { stackFrames: { id: number }[] };
+      assert.ok(stack.stackFrames.length);
+      const evaluated = (await service.call(
+        'debug-owner',
+        'debug',
+        'evaluate',
+        {
+          expression: 'process.debugPort',
+          frameId: stack.stackFrames[0].id,
+          context: 'watch',
+        },
+      )) as { result: string };
+      const inspectorPort = Number(evaluated.result);
+      assert.ok(
+        Number.isSafeInteger(inspectorPort) &&
+          inspectorPort > 0 &&
+          inspectorPort <= 65535,
+      );
+      await service.call('debug-owner', 'debug', 'continue');
       const terminals = (await service.call(
         'debug-owner',
         'terminal',
@@ -122,6 +156,41 @@ test(
       await service.call('debug-owner', 'debug', 'stop');
       assert.throws(() => process.kill(terminal.pid!, 0));
       assert.equal(await service.hasActiveSession('debug-owner'), false);
+      await new Promise<void>((resolve, reject) => {
+        const socket = connect({ host: '127.0.0.1', port: inspectorPort });
+        socket.setTimeout(2000);
+        socket.once('connect', () => {
+          socket.destroy();
+          reject(Error('debug inspector port remained open after stop'));
+        });
+        socket.once('timeout', () => {
+          socket.destroy();
+          reject(Error('inspector port probe timed out'));
+        });
+        socket.once('error', (error: NodeJS.ErrnoException) => {
+          socket.destroy();
+          error.code === 'ECONNREFUSED' ? resolve() : reject(error);
+        });
+      });
+      if (process.env.CIRCLE_TEST_DEBUG_TERMINAL_RECEIPT)
+        await writeFile(
+          process.env.CIRCLE_TEST_DEBUG_TERMINAL_RECEIPT,
+          JSON.stringify(
+            {
+              status: 'passed',
+              realDAP: true,
+              ownedPTY: true,
+              literalEmptyArg: true,
+              stdinReadByProgram: true,
+              terminalPid: terminal.pid,
+              terminalPidGone: true,
+              inspectorPort,
+              afterStopConnect: 'ECONNREFUSED',
+            },
+            null,
+            2,
+          ) + '\n',
+        );
     } finally {
       await service.dispose();
       await rm(root, { recursive: true, force: true });

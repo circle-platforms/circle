@@ -72,13 +72,41 @@ test('staged native runtime includes target addons, executable helper and TypeSc
   );
   const pty = require('node-pty');
   assert.equal(typeof pty.spawn, 'function');
-  if (process.platform !== 'win32') {
+  // Linux uses forkpty directly and has no spawn-helper executable. Exercise
+  // the copied addon instead of asserting a macOS-only implementation detail.
+  const terminal = pty.spawn(
+    process.execPath,
+    [
+      '-e',
+      "console.log('STAGED_TTY:'+process.stdin.isTTY+':'+process.stdout.isTTY)",
+    ],
+    { cwd: dist, cols: 80, rows: 24 },
+  );
+  let output = '';
+  terminal.onData((chunk) => {
+    output += chunk;
+  });
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      terminal.kill();
+      reject(Error('staged PTY did not exit'));
+    }, 8000);
+    terminal.onExit(({ exitCode }) => {
+      clearTimeout(timer);
+      try {
+        assert.equal(exitCode, 0);
+        assert.match(output, /STAGED_TTY:true:true/);
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+  if (process.platform === 'darwin') {
     const helper = await stat(
       join(
         dist,
-        process.platform === 'linux'
-          ? 'node_modules/node-pty/build/Release/spawn-helper'
-          : `node_modules/node-pty/prebuilds/${process.platform}-${process.arch}/spawn-helper`,
+        `node_modules/node-pty/prebuilds/${process.platform}-${process.arch}/spawn-helper`,
       ),
     );
     assert.ok(helper.mode & 0o111);

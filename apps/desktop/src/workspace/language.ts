@@ -164,7 +164,9 @@ export class LanguageService {
         this.configErrors = parsed.errors;
       }
     } else {
-      this.options = defaults;
+      // Inferred editor projects analyze sources without emitting over JS inputs.
+      // Configured projects retain their actual emit settings and diagnostics.
+      this.options = { ...defaults, noEmit: true };
       this.files = readDirectory(
         this.root,
         ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'],
