@@ -21,6 +21,7 @@ import {
 } from 'node:fs';
 import { basename, join, relative, isAbsolute, sep } from 'node:path';
 import { AgentRuntime, type InteractionContext } from '../../../src/runtime.js';
+import { defaultRunOptions } from '../../../src/run_options.js';
 import { SessionRuntimeManager } from '../../../src/session_manager.js';
 import {
   sessionOccupied,
@@ -1073,6 +1074,16 @@ export class RuntimeController {
   ): AgentRuntime {
     this.bindWorkspace(workspace);
     const settings = settingsForRun(this.home, workspace).settings;
+    const taskTitle = task
+      ? Array.from(
+          task.spec.prompt
+            .trim()
+            .split(/\r\n|\r|\n/u)[0]!
+            .replace(/\s+/gu, ' '),
+        )
+          .slice(0, task.attempt > 1 ? 90 : 100)
+          .join('') + (task.attempt > 1 ? ` · #${task.attempt}` : '')
+      : undefined;
     const create = (session?: string) =>
       new AgentRuntime({
         workspace,
@@ -1098,6 +1109,11 @@ export class RuntimeController {
           (isReady(settings) ? undefined : new DisconnectedModel()),
         catalog: this.options.catalog?.(this.home),
         session,
+        // Initialize only new persisted sessions. Restoring one or a later human
+        // rename must never be overwritten by the internal Task <id> prompt.
+        run: taskTitle
+          ? { ...defaultRunOptions(), session_name: taskTitle }
+          : undefined,
         extraTools: [
           ...(!task
             ? createCollaborationTools({
