@@ -1,5 +1,13 @@
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+/** Called only inside the desktop utility process, never by the CLI or host. */
+export function workspaceRuntimePath(runtimeExecutable: string, previous = '') {
+  const directory = dirname(runtimeExecutable);
+  return previous.split(delimiter)[0] === directory
+    ? previous
+    : directory + (previous ? delimiter + previous : '');
+}
 
 /** Executables cannot run inside asar. Never substitute PATH or a system Node. */
 export function workspaceToolsForWorker(
