@@ -1,6 +1,7 @@
 import type { WorkbenchSnapshot } from '../../workbench/src/model/types';
 
 export type RuntimeCommandName =
+  | 'workspace-service'
   | 'state'
   | 'prompt'
   | 'abort'
@@ -79,6 +80,7 @@ export interface RuntimeUpdate {
   error?: string;
 }
 export const runtimeCommands = new Set<RuntimeCommandName>([
+  'workspace-service',
   'state',
   'prompt',
   'abort',

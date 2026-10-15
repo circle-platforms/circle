@@ -1,3 +1,5 @@
+import type { WorkspaceServiceEvent } from './workspace-protocol';
+
 export interface NativeFile {
   id: string;
   name: string;
@@ -48,6 +50,9 @@ export interface DesktopBridge {
   runtimeState: () => Promise<RuntimeUpdate>;
   runtimeCommand: (command: RuntimeCommand) => Promise<RuntimeReply>;
   onRuntime: (listener: (update: RuntimeUpdate) => void) => () => void;
+  onWorkspaceEvent?: (
+    listener: (event: WorkspaceServiceEvent) => void,
+  ) => () => void;
   chooseFiles: (
     purpose: 'attach' | 'import' | 'source',
   ) => Promise<NativeFile[]>;

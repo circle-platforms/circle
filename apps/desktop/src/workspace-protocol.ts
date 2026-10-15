@@ -1,0 +1,101 @@
+/** Native workspace services have their own streams, independent of chat snapshots. */
+export type WorkspaceService =
+  | 'documents'
+  | 'terminal'
+  | 'git'
+  | 'language'
+  | 'debug'
+  | 'tasks'
+  | 'delivery';
+
+export interface WorkspaceServiceRequest {
+  service: WorkspaceService;
+  method: string;
+  params?: Record<string, unknown>;
+}
+
+export interface WorkspaceServiceEvent {
+  workspaceId: string;
+  sessionId: string;
+  service: WorkspaceService;
+  resourceId: string;
+  epoch: string;
+  seq: number;
+  at: string;
+  data: Record<string, unknown>;
+}
+
+const methods: Record<WorkspaceService, ReadonlySet<string>> = {
+  documents: new Set(['read', 'save', 'applyEdits', 'refresh']),
+  terminal: new Set([
+    'create',
+    'write',
+    'resize',
+    'signal',
+    'close',
+    'list',
+    'replay',
+  ]),
+  git: new Set([
+    'status',
+    'diff',
+    'stage',
+    'unstage',
+    'applyHunk',
+    'discard',
+    'commit',
+    'push',
+    'branches',
+    'continueMerge',
+    'abortMerge',
+  ]),
+  language: new Set(['open', 'change', 'close', 'request']),
+  debug: new Set([
+    'start',
+    'breakpoints',
+    'threads',
+    'stack',
+    'scopes',
+    'variables',
+    'next',
+    'stepIn',
+    'stepOut',
+    'continue',
+    'pause',
+    'stop',
+    'list',
+    'evaluate',
+  ]),
+  tasks: new Set([
+    'enqueue',
+    'list',
+    'start',
+    'cancel',
+    'retry',
+    'events',
+    'settings',
+  ]),
+  delivery: new Set(['status', 'publish', 'checks', 'logs', 'retry', 'login']),
+};
+
+export function validateWorkspaceRequest(
+  value: unknown,
+): WorkspaceServiceRequest {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw Error('invalid workspace service request');
+  const request = value as WorkspaceServiceRequest;
+  if (
+    !Object.hasOwn(methods, request.service) ||
+    typeof request.method !== 'string' ||
+    !methods[request.service].has(request.method)
+  )
+    throw Error('unknown workspace service operation');
+  if (
+    request.params !== undefined &&
+    (!request.params ||
+      typeof request.params !== 'object' ||
+      Array.isArray(request.params))
+  )
+    throw Error('invalid workspace service parameters');
+  return request;
+}

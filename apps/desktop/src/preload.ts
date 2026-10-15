@@ -32,6 +32,12 @@ const bridge: DesktopBridge = {
     ipcRenderer.on('circle:runtime-update', handler);
     return () => ipcRenderer.removeListener('circle:runtime-update', handler);
   },
+  onWorkspaceEvent: (listener) => {
+    const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
+      listener(value);
+    ipcRenderer.on('circle:workspace-event', handler);
+    return () => ipcRenderer.removeListener('circle:workspace-event', handler);
+  },
   chooseFiles: (purpose) => ipcRenderer.invoke('circle:choose-files', purpose),
   chooseWorkspace: () => ipcRenderer.invoke('circle:choose-workspace'),
   revealWorkspace: (workspaceId) =>
