@@ -481,10 +481,7 @@ test('on Windows a held program is looked up, and the list names the processes r
   assert.deepEqual(probed.sort(), [frozen, script].sort());
   assert.equal(asked.length, 1);
   assert.match(asked[0]!.command, /powershell\.exe$/);
-  assert.match(
-    asked[0]!.args.at(-1)!,
-    /^Get-CimInstance -ClassName Win32_Process -Property ProcessId,ExecutablePath /,
-  );
+  assert.match(asked[0]!.args.at(-1)!, /^Get-Process \| Where-Object/);
   assert.equal(asked[0]!.timeout, 30_000);
 });
 
@@ -525,13 +522,13 @@ test('on Windows a program in use that no process can be named for stops the ins
         () => ({
           status: 1,
           stdout: '',
-          stderr: 'Get-CimInstance : Access denied\r\n',
+          stderr: 'Get-Process : Access denied\r\n',
           error: undefined,
         }),
         busy,
       ),
     says(
-      `${frozen} is in use, and the running programs could not be listed (Get-CimInstance : Access denied)`,
+      `${frozen} is in use, and the running programs could not be listed (Get-Process : Access denied)`,
     ),
   );
   assert.throws(
