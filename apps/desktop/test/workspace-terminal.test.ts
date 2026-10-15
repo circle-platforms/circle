@@ -715,3 +715,44 @@ test(
     await manager.close(owner, service.id);
   },
 );
+
+test(
+  'a slow service can recover to ready after a reported timeout without being restarted',
+  { skip: !unix },
+  async (t) => {
+    const { manager, events } = await setup(t);
+    const port = await freePort();
+    const service = await manager.create({
+      owner,
+      sessionId: 'late-service',
+      command: {
+        file: process.execPath,
+        args: [
+          '-e',
+          `setTimeout(()=>require('node:http').createServer((q,s)=>s.end('late ready')).listen(${port},'127.0.0.1',()=>console.log('LATE_READY')),400)`,
+        ],
+      },
+      readiness: { port, pattern: 'LATE_READY', timeoutMs: 100 },
+    });
+    await wait(
+      async () => (await manager.list(owner))[0]?.readiness?.state === 'failed',
+      'visible readiness timeout',
+    );
+    await wait(
+      async () => (await manager.list(owner))[0]?.readiness?.state === 'ready',
+      'late actual readiness',
+    );
+    const actual = (await manager.list(owner))[0]!;
+    assert.equal(actual.pid, service.pid);
+    assert.equal(actual.id, service.id);
+    assert.equal(actual.readiness?.error, undefined);
+    assert.equal(actual.serviceState, 'ready');
+    assert.equal(events.filter((event) => event.kind === 'created').length, 1);
+    assert.equal(
+      await (await fetch(`http://127.0.0.1:${port}`)).text(),
+      'late ready',
+    );
+    await manager.close(owner, service.id);
+    assert.equal(await portAvailable(port), true);
+  },
+);

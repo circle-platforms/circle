@@ -323,7 +323,8 @@ export class TerminalManager {
             this.#append(entry, 'data', part);
             if (
               snapshot.readiness?.pattern &&
-              snapshot.readiness.state === 'waiting'
+              (snapshot.readiness.state === 'waiting' ||
+                snapshot.readiness.state === 'failed')
             ) {
               const combined = entry.readinessTail + part;
               if (combined.includes(snapshot.readiness.pattern))
@@ -673,13 +674,13 @@ export class TerminalManager {
     const config = entry.snapshot.readiness!;
     const deadline = Date.now() + (config.timeoutMs ?? 30000);
     const poll = async () => {
-      if (!entry.pty || config.state !== 'waiting') return;
+      if (!entry.pty || !['waiting', 'failed'].includes(config.state)) return;
       const matchedPattern =
         !config.pattern ||
         config.matchedPattern === true ||
         entry.readinessTail.includes(config.pattern);
       const listening = !config.port || (await portOpen(config.port));
-      if (!entry.pty || config.state !== 'waiting') return;
+      if (!entry.pty || !['waiting', 'failed'].includes(config.state)) return;
       const changed =
         config.matchedPattern !== matchedPattern ||
         config.portOpen !== listening;
@@ -687,33 +688,37 @@ export class TerminalManager {
       config.portOpen = listening;
       if (matchedPattern && listening) {
         config.state = 'ready';
+        delete config.error;
         config.readyAt = new Date().toISOString();
         entry.snapshot.serviceState = 'ready';
         this.#append(entry, 'ready', undefined, true);
         await this.#persist(entry);
         return;
       }
-      if (Date.now() >= deadline) {
+      if (Date.now() >= deadline && config.state === 'waiting') {
         config.state = 'failed';
         config.error = `readiness checks did not finish within ${config.timeoutMs ?? 30000}ms`;
         entry.snapshot.serviceState = 'failed';
         this.#append(entry, 'readiness', undefined, true);
         await this.#persist(entry);
-        return;
-      }
-      if (changed) {
+      } else if (changed) {
         this.#append(entry, 'readiness', undefined, true);
         await this.#persist(entry);
       }
-      entry.readinessTimer = setTimeout(() => {
-        void poll().catch((error: unknown) => {
-          if (!entry.pty) return;
-          config.state = 'failed';
-          config.error = error instanceof Error ? error.message : String(error);
-          entry.snapshot.serviceState = 'failed';
-          this.#append(entry, 'readiness', undefined, true);
-        });
-      }, 100);
+      if (!entry.pty) return;
+      entry.readinessTimer = setTimeout(
+        () => {
+          void poll().catch((error: unknown) => {
+            if (!entry.pty) return;
+            config.state = 'failed';
+            config.error =
+              error instanceof Error ? error.message : String(error);
+            entry.snapshot.serviceState = 'failed';
+            this.#append(entry, 'readiness', undefined, true);
+          });
+        },
+        config.state === 'failed' ? 1000 : 100,
+      );
       entry.readinessTimer.unref();
     };
     void poll().catch((error: unknown) =>
