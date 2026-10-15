@@ -323,12 +323,39 @@ try {
         'session actions for Extra recent 0'
     );
   });
-  await recentRows.nth(3).hover();
-  await page.waitForFunction(() => {
-    const tips = [...document.querySelectorAll('.tooltip')];
-    return tips.length === 1 && tips[0].classList.contains('session-hover');
-  });
-  checks.push("hovering another row leaves only that row's card");
+  const away = page.getByRole('textbox', { name: 'message', exact: true });
+  const expectCard = async (row) => {
+    await away.hover();
+    await row.hover();
+    await page.waitForFunction(() => {
+      const tips = [...document.querySelectorAll('.tooltip')];
+      return tips.length === 1 && tips[0].classList.contains('session-hover');
+    });
+  };
+  for (const index of [1, 2, 3, 4]) await expectCard(recentRows.nth(index));
+  const projectRow = (project, title) =>
+    page
+      .locator('.project-list > .project')
+      .filter({ has: page.getByRole('button', { name: project, exact: true }) })
+      .locator('.session-row', { hasText: title });
+  await expectCard(projectRow('orbit-api', 'Review the request lifecycle'));
+  await expectCard(projectRow('docs-site', 'Tighten the setup guide'));
+  await page.keyboard.press('ArrowLeft');
+  for (const index of [0, 1, 2, 3, 4]) await expectCard(recentRows.nth(index));
+  await expectCard(projectRow('orbit-api', 'Review the request lifecycle'));
+  await expectCard(projectRow('docs-site', 'Tighten the setup guide'));
+  checks.push(
+    'every recent and project row shows its card, including after a dismissed tip',
+  );
+  await projectRow('orbit-api', 'Fix the reconnect race')
+    .locator('a.session-link')
+    .click();
+  await page.keyboard.press('Shift+F10');
+  await page
+    .getByRole('menuitem', { name: 'rename session', exact: true })
+    .waitFor();
+  await page.keyboard.press('Escape');
+  checks.push('shift+f10 opens the menu on the first press after a click');
   await application.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows()[0];
     if (window.isMaximized()) window.unmaximize();

@@ -1,7 +1,6 @@
 import { desktopHost, folderOpenMessage, openNativeWorkspace } from '../host';
 import { openHome } from '../features/home-selection';
 import {
-  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -91,28 +90,15 @@ export function Sidebar({
   const listRef = useRef<HTMLDivElement>(null);
   // The row at the top of the list, and how far it sits from that edge.
   const anchor = useRef<{ key: string; delta: number } | null>(null);
-  const [pointerKey, setPointerKey] = useState<string | null>(null);
-  const [popupsHeld, setPopupsHeld] = useState(false);
-  const scrolling = useRef(false);
-  const scrollTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
-  );
-  useEffect(() => () => clearTimeout(scrollTimer.current), []);
-  // A new message moves rows. Keep the row that was at the top of the view there.
-  useLayoutEffect(() => {
-    const list = listRef.current;
-    const saved = anchor.current;
-    if (!list || !saved) return;
-    const row = [...list.querySelectorAll<HTMLElement>('[data-row-key]')].find(
-      (item) => item.dataset.rowKey === saved.key,
-    );
-    if (!row) return;
-    const delta =
-      row.getBoundingClientRect().top - list.getBoundingClientRect().top;
-    const error = delta - saved.delta;
-    if (Math.abs(error) > 1) list.scrollTop += error;
-    anchor.current = listAnchor(list);
-  });
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  // A scroll closes popups. They stay closed until the pointer actually moves,
+  // so the scroll itself cannot pin a tip over the search box.
+  const [scrollClosed, setScrollClosed] = useState(false);
+  const scrollClosedRef = useRef(false);
+  const pointerAtScroll = useRef<{ x: number; y: number } | null>(null);
+  const lastPointer = useRef<{ x: number; y: number } | null>(null);
+  const ignoreScrollClose = useRef(false);
+  const seenOrder = useRef<string | null>(null);
   const goSession = async (id: string) => {
     await runtime.selectSession(id);
     navigate(`/session/${id}`);
@@ -156,6 +142,25 @@ export function Sidebar({
       group.shown.map((session) => `${group.workspace.id}:${session.id}`),
     ),
   ];
+  const orderKey = rowKeys.join('\n');
+  // A new message moves rows. Keep the row that was at the top of the view there.
+  // Hovering must not run this: a scroll event would close the card that just opened.
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const previous = seenOrder.current;
+    seenOrder.current = orderKey;
+    const saved = anchor.current;
+    if (previous === null || previous === orderKey || !list || !saved) return;
+    const row = [...list.querySelectorAll<HTMLElement>('[data-row-key]')].find(
+      (item) => item.dataset.rowKey === saved.key,
+    );
+    if (!row) return;
+    const delta =
+      row.getBoundingClientRect().top - list.getBoundingClientRect().top;
+    const error = delta - saved.delta;
+    if (Math.abs(error) > 1) list.scrollTop += error;
+    anchor.current = listAnchor(list);
+  });
   const tabKey =
     roving && rowKeys.includes(roving)
       ? roving
@@ -182,18 +187,27 @@ export function Sidebar({
     const row = link.closest('.session-row') ?? link;
     const rowBox = row.getBoundingClientRect();
     const listBox = list.getBoundingClientRect();
+    ignoreScrollClose.current = true;
     if (rowBox.top < listBox.top) list.scrollTop -= listBox.top - rowBox.top;
     else if (rowBox.bottom > listBox.bottom)
       list.scrollTop += rowBox.bottom - listBox.bottom;
+    ignoreScrollClose.current = false;
     anchor.current = listAnchor(list);
   };
-  const enterRow = (key: string) => {
-    if (scrolling.current) return;
-    setPointerKey(key);
-    setPopupsHeld(false);
+  const pointRow = (key: string, point: { x: number; y: number }) => {
+    lastPointer.current = point;
+    const origin = pointerAtScroll.current;
+    if (scrollClosedRef.current && origin) {
+      const moved = Math.hypot(point.x - origin.x, point.y - origin.y);
+      if (moved < 4) return;
+    }
+    pointerAtScroll.current = null;
+    scrollClosedRef.current = false;
+    setScrollClosed(false);
+    setHoveredKey(key);
   };
   const leaveRow = (key: string) => {
-    setPointerKey((current) => (current === key ? null : current));
+    setHoveredKey((current) => (current === key ? null : current));
   };
   const waiting = new Set(
     snapshot.interactions
@@ -202,7 +216,7 @@ export function Sidebar({
   );
   const toggle = (id: string, list: string[], set: (ids: string[]) => void) =>
     set(list.includes(id) ? list.filter((item) => item !== id) : [...list, id]);
-  const sessionRows = (sessions: Session[], hover: boolean, prefix: string) =>
+  const sessionRows = (sessions: Session[], prefix: string) =>
     sessions.map((session) => {
       const rowKey = `${prefix}:${session.id}`;
       return (
@@ -211,9 +225,7 @@ export function Sidebar({
           rowKey={rowKey}
           session={session}
           tabIndex={rowKey === tabKey ? 0 : -1}
-          details={
-            hover ? recentDetails(session, snapshot.workspaces) : undefined
-          }
+          details={recentDetails(session, snapshot.workspaces)}
           renaming={renaming}
           attention={waiting.has(session.id)}
           running={session.state === 'waiting'}
@@ -224,10 +236,11 @@ export function Sidebar({
           }}
           onKeyDown={(event) => onRowKeyDown(rowKey, event)}
           onFocusRow={() => setRoving(rowKey)}
-          pointerKey={pointerKey}
-          popupsHeld={popupsHeld}
+          hovered={hoveredKey === rowKey}
+          hoveredKey={hoveredKey}
+          scrollClosed={scrollClosed}
           listRef={listRef}
-          onPointerEnter={() => enterRow(rowKey)}
+          onPoint={(point) => pointRow(rowKey, point)}
           onPointerLeave={() => leaveRow(rowKey)}
           linkRef={(node) => {
             if (node) anchors.current.set(rowKey, node);
@@ -305,14 +318,16 @@ export function Sidebar({
       <div
         className="project-list"
         ref={listRef}
+        onPointerMove={(event) => {
+          lastPointer.current = { x: event.clientX, y: event.clientY };
+        }}
         onScroll={(event) => {
           anchor.current = listAnchor(event.currentTarget);
-          scrolling.current = true;
-          setPopupsHeld(true);
-          clearTimeout(scrollTimer.current);
-          scrollTimer.current = setTimeout(() => {
-            scrolling.current = false;
-          }, 150);
+          if (ignoreScrollClose.current || scrollClosedRef.current) return;
+          pointerAtScroll.current = lastPointer.current;
+          scrollClosedRef.current = true;
+          setScrollClosed(true);
+          setHoveredKey(null);
         }}
       >
         {recent.length > 0 && (
@@ -326,7 +341,7 @@ export function Sidebar({
                 {t('recent')}
               </button>
             </div>
-            {sessionRows(recentShown, true, RECENT)}
+            {sessionRows(recentShown, RECENT)}
             {!collapsed.includes(RECENT) && recent.length > RECENT_SHOWN && (
               <button
                 className="text-button show-more"
@@ -346,7 +361,9 @@ export function Sidebar({
               <div
                 className="project-header"
                 title={workspace.path}
-                onPointerEnter={() => enterRow('header')}
+                onPointerMove={(event) =>
+                  pointRow('header', { x: event.clientX, y: event.clientY })
+                }
                 onPointerLeave={() => leaveRow('header')}
               >
                 <button
@@ -359,14 +376,14 @@ export function Sidebar({
                 <div className="project-actions">
                   <IconButton
                     label={t('new session in {name}', { name: workspace.name })}
-                    tipOpen={popupsHeld ? false : undefined}
+                    tipOpen={scrollClosed ? false : undefined}
                     onClick={() => newSession(workspace.id)}
                   >
                     <Plus size={13} />
                   </IconButton>
                   <WorkspaceMenu
                     workspace={workspace}
-                    tipOpen={popupsHeld ? false : undefined}
+                    tipOpen={scrollClosed ? false : undefined}
                     onNew={() => newSession(workspace.id)}
                     onCollapseAll={() =>
                       setCollapsed([
@@ -377,7 +394,7 @@ export function Sidebar({
                   />
                 </div>
               </div>
-              {sessionRows(shown, false, workspace.id)}
+              {sessionRows(shown, workspace.id)}
               {!collapsed.includes(workspace.id) && sessions.length > SHOWN && (
                 <button
                   className="text-button show-more"
@@ -478,10 +495,11 @@ function SessionRow({
   onOpen,
   onKeyDown,
   onFocusRow,
-  pointerKey,
-  popupsHeld,
+  hovered,
+  hoveredKey,
+  scrollClosed,
   listRef,
-  onPointerEnter,
+  onPoint,
   onPointerLeave,
   linkRef,
   onDialog,
@@ -489,17 +507,18 @@ function SessionRow({
   rowKey: string;
   session: Session;
   tabIndex: number;
-  details?: { project?: string; age: ActivityAge; absolute?: string };
+  details: { project?: string; age: ActivityAge; absolute?: string };
   renaming: boolean;
   attention: boolean;
   running: boolean;
   onOpen: (id: string) => void;
   onKeyDown: (event: KeyboardEvent<HTMLAnchorElement>) => void;
   onFocusRow: () => void;
-  pointerKey: string | null;
-  popupsHeld: boolean;
+  hovered: boolean;
+  hoveredKey: string | null;
+  scrollClosed: boolean;
   listRef: { current: HTMLDivElement | null };
-  onPointerEnter: () => void;
+  onPoint: (point: { x: number; y: number }) => void;
   onPointerLeave: () => void;
   linkRef: (node: HTMLAnchorElement | null) => void;
   onDialog?: (dialog: DialogId, selection?: string) => void;
@@ -512,27 +531,40 @@ function SessionRow({
   const linkNode = useRef<HTMLAnchorElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [buttonFocused, setButtonFocused] = useState(false);
+  const [linkFocused, setLinkFocused] = useState(false);
   const [inView, setInView] = useState(true);
   useLayoutEffect(() => {
     const row = menuButton.current?.closest('.session-row') ?? null;
     const visible = rowInView(row, listRef.current);
     setInView((current) => (current === visible ? current : visible));
   });
-  const blocked =
-    menuOpen || popupsHeld || (pointerKey !== null && pointerKey !== rowKey);
-  // Project rows have no card, so a hover tip is their label. A recent row's
-  // tip shows only while its own button is focused and no other row is hovered.
-  const tipOpen = blocked
-    ? false
-    : details
-      ? buttonFocused && inView
-      : undefined;
+  const aim = (event: { clientX: number; clientY: number }) =>
+    onPoint({ x: event.clientX, y: event.clientY });
+  // The card follows the pointer. The tooltip library drops the hover that
+  // arrives just after another tip closes, so it cannot be the thing that opens it.
+  const cardOpen =
+    !renaming &&
+    !menuOpen &&
+    !buttonFocused &&
+    !scrollClosed &&
+    (hovered || (linkFocused && hoveredKey === null));
+  const tipOpen =
+    !menuOpen &&
+    !scrollClosed &&
+    buttonFocused &&
+    inView &&
+    (hoveredKey === null || hoveredKey === rowKey);
   const row = (
     <div
       className="session-row"
       data-row-key={rowKey}
-      onPointerEnter={onPointerEnter}
+      onPointerEnter={aim}
+      onPointerMove={aim}
       onPointerLeave={onPointerLeave}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        setMenuOpen(true);
+      }}
     >
       <NavLink
         ref={(node) => {
@@ -543,10 +575,22 @@ function SessionRow({
         className={active ? 'session-link active' : 'session-link'}
         end
         to={`/session/${session.id}`}
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          const target = event.target;
+          if (target instanceof Element && target.closest('button')) return;
+          linkNode.current?.focus({ preventScroll: true });
+        }}
         onClick={(event) => {
           event.preventDefault();
+          linkNode.current?.focus({ preventScroll: true });
           onOpen(session.id);
         }}
+        onFocus={() => {
+          setLinkFocused(true);
+          onFocusRow();
+        }}
+        onBlur={() => setLinkFocused(false)}
         onKeyDown={(event) => {
           if (
             event.key === 'ArrowRight' &&
@@ -562,7 +606,6 @@ function SessionRow({
             setMenuOpen(true);
           } else onKeyDown(event);
         }}
-        onFocus={onFocusRow}
       >
         <span>{sessionTitle(session.title)}</span>
         {attention ? (
@@ -598,21 +641,10 @@ function SessionRow({
       />
     </div>
   );
-  return details ? (
-    <RecentHover
-      details={details}
-      suppressed={
-        renaming ||
-        buttonFocused ||
-        menuOpen ||
-        popupsHeld ||
-        (pointerKey !== null && pointerKey !== rowKey)
-      }
-    >
+  return (
+    <RecentHover details={details} open={cardOpen}>
       {row}
     </RecentHover>
-  ) : (
-    row
   );
 }
 
@@ -657,25 +689,15 @@ function activityLabel(age: ActivityAge): string {
 
 function RecentHover({
   details,
-  suppressed,
+  open,
   children,
 }: {
   details: { project?: string; age: ActivityAge; absolute?: string };
-  suppressed: boolean;
+  open: boolean;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    if (suppressed) setOpen(false);
-  }, [suppressed]);
   return (
-    <Tooltip.Root
-      open={suppressed ? false : open}
-      onOpenChange={(next) => {
-        if (!suppressed) setOpen(next);
-      }}
-      disableHoverableContent
-    >
+    <Tooltip.Root open={open} onOpenChange={() => {}} disableHoverableContent>
       <Tooltip.Trigger asChild>{children}</Tooltip.Trigger>
       <Tooltip.Portal>
         <Tooltip.Content
