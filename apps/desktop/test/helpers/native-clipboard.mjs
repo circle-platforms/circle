@@ -1,3 +1,4 @@
+import { access, unlink } from 'node:fs/promises';
 /** ClipboardItem payloads remain exclusively in Electron's main process. */
 export async function preserveNativeClipboard(app) {
   const key = crypto.randomUUID();
@@ -39,4 +40,30 @@ export async function restoreNativeClipboard(app, key) {
     snapshots.delete(key);
     if (!snapshots.size) delete globalThis.__circleJourneyClipboard;
   }, key);
+}
+
+/** Never close the owner application while its only original backup is in main. */
+export async function restoreNativeClipboardWithRecovery(
+  app,
+  key,
+  { retryPath, onFailure },
+) {
+  for (;;) {
+    try {
+      await restoreNativeClipboard(app, key);
+      return;
+    } catch (error) {
+      await onFailure(error);
+      for (;;) {
+        try {
+          await access(retryPath);
+          await unlink(retryPath);
+          break;
+        } catch (markerError) {
+          if (markerError.code !== 'ENOENT') throw markerError;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+  }
 }

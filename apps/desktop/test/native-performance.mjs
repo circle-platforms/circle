@@ -16,7 +16,7 @@ import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import {
   preserveNativeClipboard,
-  restoreNativeClipboard,
+  restoreNativeClipboardWithRecovery,
 } from './helpers/native-clipboard.mjs';
 import {
   performanceMessages,
@@ -54,8 +54,10 @@ await mkdir(workspace);
 await mkdir(home, { recursive: true });
 const mainSession = 'perf-history';
 const otherSession = 'perf-alternate';
-const png =
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO1kAAAAASUVORK5CYII=';
+const pngBytes = await readFile(
+  new URL('./fixtures/performance-original.png', import.meta.url),
+);
+const png = pngBytes.toString('base64');
 const log = Array.from(
   { length: 600 },
   (_, index) =>
@@ -175,6 +177,11 @@ const report = {
     activeStreamingAgents: 8,
     agentChunkIntervalMs: 40,
     ptyIntervalMs: 50,
+  },
+  fixtureImage: {
+    sha256: createHash('sha256').update(pngBytes).digest('hex'),
+    bytes: pngBytes.length,
+    source: 'synthetic native browser capture, development-attempt12, 375x812',
   },
   samples,
   checks,
@@ -679,13 +686,34 @@ try {
     } catch {}
   }
   if (app) {
-    try {
-      if (clipboardBefore !== undefined)
-        await restoreNativeClipboard(app, clipboardBefore);
-    } catch (error) {
-      report.clipboardRestoreFailure = String(error);
-      report.passed = false;
-      process.exitCode = 1;
+    if (clipboardBefore !== undefined) {
+      await restoreNativeClipboardWithRecovery(app, clipboardBefore, {
+        retryPath: join(output, 'retry-clipboard'),
+        onFailure: async (error) => {
+          report.clipboardRestoreFailure = String(error);
+          report.clipboardRecovery = {
+            pending: true,
+            appKeptAlive: true,
+            retryPath: join(output, 'retry-clipboard'),
+          };
+          report.passed = false;
+          process.exitCode = 1;
+          await writeFile(
+            join(output, 'report.json'),
+            JSON.stringify(report, null, 2),
+          );
+          console.error(
+            'Clipboard restoration pending; app and original main-process checkpoint retained. Create retry-clipboard in the attempt directory to retry.',
+          );
+        },
+      });
+      if (report.clipboardRecovery)
+        report.clipboardRecovery = {
+          ...report.clipboardRecovery,
+          pending: false,
+          appKeptAlive: false,
+          restoredAt: new Date().toISOString(),
+        };
     }
     await app.close().catch(() => {});
   }

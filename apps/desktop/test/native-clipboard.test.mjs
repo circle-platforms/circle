@@ -145,3 +145,60 @@ for (const platform of ['darwin', 'win32', 'linux']) {
     );
   });
 }
+
+test('failed restoration keeps the original checkpoint and owner alive until explicit retry', async () => {
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { restoreNativeClipboardWithRecovery } =
+    await import('./helpers/native-clipboard.mjs');
+  const folder = await mkdtemp(join(tmpdir(), 'circle-clipboard-recovery-'));
+  let fail = true,
+    failures = 0,
+    writes = 0;
+  class ClipboardItem {
+    constructor(data) {
+      this.data = data;
+      this.types = Object.keys(data);
+    }
+    async getType(type) {
+      return this.data[type];
+    }
+  }
+  const original = new ClipboardItem({
+    'text/plain': new Blob(['private original']),
+  });
+  const clipboard = {
+    read: async () => [original],
+    write: async () => {
+      writes++;
+      if (fail) throw Error('controlled temporary clipboard failure');
+    },
+  };
+  const app = {
+    evaluate: async (callback, arg) =>
+      callback({ clipboard, ClipboardItem }, arg),
+  };
+  const key = await preserveNativeClipboard(app);
+  try {
+    await restoreNativeClipboardWithRecovery(app, key, {
+      retryPath: join(folder, 'retry-clipboard'),
+      onFailure: async (error) => {
+        failures++;
+        assert.match(String(error), /controlled/);
+        assert.ok(
+          globalThis.__circleJourneyClipboard.has(key),
+          'failure must retain the only original backup',
+        );
+        assert.equal(writes, 1);
+        fail = false;
+        await writeFile(join(folder, 'retry-clipboard'), 'explicit retry');
+      },
+    });
+    assert.equal(failures, 1);
+    assert.equal(writes, 2);
+    assert.equal(globalThis.__circleJourneyClipboard, undefined);
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
+});
