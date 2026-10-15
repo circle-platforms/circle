@@ -1,0 +1,38 @@
+name: Windows CI diagnostic
+on:
+  push:
+    branches: [codex/windows-ci-diagnostics]
+permissions:
+  contents: read
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      CIRCLE_HOME: ${{ runner.temp }}/circle-ci-diagnostic
+      CIRCLE_NO_MODELS_REFRESH: '1'
+      CIRCLE_NO_UPDATE_CHECK: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.21.0'
+          cache: npm
+      - run: npm ci
+      - run: node -p 'JSON.stringify({version:process.version,platform:process.platform,arch:process.arch})'
+      - name: Exercise actual process ownership and metadata concurrency
+        run: node --import tsx --test tests/legacy-install.test.ts tests/jobs.test.ts apps/desktop/test/session-metadata.test.ts
+      - name: Repeat concurrent metadata publication with stderr diagnostics
+        shell: pwsh
+        run: |
+          for ($circleIteration = 0; $circleIteration -lt 10; $circleIteration++) {
+            Write-Host "metadata iteration $circleIteration"
+            node --import tsx --test apps/desktop/test/session-metadata.test.ts
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }

@@ -53,6 +53,15 @@ test('independent processes preserve concurrent archive and restore updates', as
       },
     ),
   );
+  const stderr = new Map<(typeof workers)[number], string>();
+  const closed = new Map(
+    workers.map((worker) => {
+      worker.stderr?.on('data', (chunk) =>
+        stderr.set(worker, ((stderr.get(worker) ?? '') + chunk).slice(-12000)),
+      );
+      return [worker, once(worker, 'close')] as const;
+    }),
+  );
   cleanup(t, async () => {
     await Promise.all(
       workers.map(async (worker) => {
@@ -66,14 +75,20 @@ test('independent processes preserve concurrent archive and restore updates', as
   const reply = (worker: (typeof workers)[number]) =>
     Promise.race([
       once(worker, 'message'),
-      once(worker, 'exit').then(([code]) => {
-        throw new Error(`metadata child exited ${code} before replying`);
+      closed.get(worker)!.then(([code]) => {
+        throw new Error(
+          `metadata child exited ${code} before replying: ${stderr.get(worker) ?? ''}`,
+        );
       }),
     ]);
   await Promise.all(workers.map(reply));
   const completed = workers.map(reply);
   for (const worker of workers) worker.send('start');
   await Promise.all(completed);
+  for (const worker of workers) {
+    const [code] = await closed.get(worker)!;
+    assert.equal(code, 0, stderr.get(worker));
+  }
   initial.refresh();
   for (const name of ['A', 'B']) {
     assert.equal(initial.archivedAt('restore-' + name), undefined);

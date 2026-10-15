@@ -1,14 +1,5 @@
 name: Desktop workbench
 on:
-  push:
-    paths:
-      - 'apps/**'
-      - 'src/**'
-      - 'package*.json'
-      - 'src/tui/slash_commands.ts'
-      - 'src/ink/theme.ts'
-      - 'docs/workbench/**'
-      - '.github/workflows/workbench.yml'
   pull_request:
     paths:
       - 'apps/**'
