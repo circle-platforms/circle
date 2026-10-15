@@ -148,6 +148,7 @@ export function WorkspacePanelContents({
                   children
                 ) : item.id === 'terminal' ? (
                   <NativeTerminal
+                    embedded
                     sessionId={sessionId}
                     active={visible && tab === 'terminal'}
                   />
