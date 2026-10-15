@@ -422,3 +422,88 @@ test(
     }
   },
 );
+
+test(
+  'launch arguments stay literal and entry pause is explicitly opt-in',
+  {
+    timeout: 30000,
+    skip: !existsSync(adapterPath) && 'set CIRCLE_JS_DEBUG_ADAPTER',
+  },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'circle-debug-arguments-'));
+    const { spawn } = await import('node:child_process');
+    let child: ReturnType<typeof spawn> | undefined;
+    let output = '';
+    const service = new WorkspaceDebugService({
+      workspaceRoot: root,
+      nodeExecutable,
+      runtimeExecutable:
+        process.env.CIRCLE_JS_DEBUG_RUNTIME ?? process.execPath,
+      adapterPath,
+      runInTerminal: async (request) => {
+        const env = { ...process.env };
+        for (const [key, value] of Object.entries(request.env ?? {})) {
+          if (value === null) delete env[key];
+          else env[key] = value;
+        }
+        child = spawn(request.args[0], request.args.slice(1), {
+          cwd: request.cwd,
+          env,
+        });
+        child.stdout?.on('data', (chunk) => {
+          output += String(chunk);
+        });
+        return { processId: child.pid! };
+      },
+    });
+    try {
+      await writeFile(
+        path.join(root, 'args.cjs'),
+        'console.log(JSON.stringify(process.argv.slice(2)));setInterval(()=>{},1000);\n',
+      );
+      const args = ['two words', '"quoted"', '', '$(touch should-not-exist)'];
+      await service.handle('launch', {
+        program: 'args.cjs',
+        args,
+        stopOnEntry: true,
+      });
+      const until = Date.now() + 10000;
+      while (service.snapshot().status !== 'paused' && Date.now() < until)
+        await new Promise((r) => setTimeout(r, 20));
+      assert.equal(service.snapshot().status, 'paused');
+      assert.equal(output.includes(JSON.stringify(args)), false);
+      await service.handle('continue');
+      while (!output.includes(JSON.stringify(args)) && Date.now() < until)
+        await new Promise((r) => setTimeout(r, 20));
+      assert.ok(output.includes(JSON.stringify(args)), output);
+      assert.equal(existsSync(path.join(root, 'should-not-exist')), false);
+      await service.stop();
+      const fallback = new WorkspaceDebugService({
+        workspaceRoot: root,
+        nodeExecutable,
+        runtimeExecutable:
+          process.env.CIRCLE_JS_DEBUG_RUNTIME ?? process.execPath,
+        adapterPath,
+      });
+      try {
+        await fallback.handle('launch', { program: 'args.cjs', args });
+        const deadline = Date.now() + 10000;
+        while (
+          !fallback.snapshot().output.includes(JSON.stringify(args)) &&
+          Date.now() < deadline
+        )
+          await new Promise((r) => setTimeout(r, 20));
+        assert.ok(
+          fallback.snapshot().output.includes(JSON.stringify(args)),
+          fallback.snapshot().output,
+        );
+      } finally {
+        await fallback.dispose();
+      }
+    } finally {
+      await service.dispose();
+      child?.kill();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
