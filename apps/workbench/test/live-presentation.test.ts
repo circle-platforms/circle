@@ -5,6 +5,7 @@ import { createFixtures } from '../src/preview/fixtures.ts';
 import type { DesktopBridge } from '../../desktop/src/contracts.ts';
 import type { RuntimeUpdate } from '../../desktop/src/runtime-protocol.ts';
 import type { SessionViewPatch } from '../src/model/types.ts';
+import { branchMessages, visibleMessages } from '../src/model/state.ts';
 function fixture() {
   const snapshot = createFixtures();
   snapshot.runtime = { connected: true, configured: true };
@@ -127,6 +128,30 @@ test('session UI is isolated, survives full updates and rejects secret/core fiel
       runtime.getSnapshot().sessions.some((s) => s.id === 'removed-session'),
       false,
     );
+  } finally {
+    runtime.dispose();
+  }
+});
+
+test('ten thousand message branch projection keeps ordering, hidden rows and source references', () => {
+  const { runtime } = fixture();
+  try {
+    const session = runtime.getSnapshot().sessions[0];
+    session.messages = session.messages.map((message, n) => ({
+      ...message,
+      parentId: n ? session.messages[n - 1].id : null,
+    }));
+    session.leafId = session.messages.at(-1)!.id;
+    const branch = branchMessages(session);
+    assert.equal(branch.length, 10000);
+    assert.equal(branch[0], session.messages[0]);
+    assert.equal(branch.at(-1), session.messages.at(-1));
+    session.branchIds = session.messages.map((message) => message.id);
+    session.hiddenIds = ['history-0', 'history-9999'];
+    const visible = visibleMessages(session);
+    assert.equal(visible.length, 9998);
+    assert.equal(visible[0], session.messages[1]);
+    assert.equal(visible.at(-1), session.messages[9998]);
   } finally {
     runtime.dispose();
   }
