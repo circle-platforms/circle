@@ -50,7 +50,10 @@ import {
 import { nextMode, sessionMode } from '../model/state';
 import type { SessionMode } from '../model/types';
 import { t, tn } from '../i18n';
-import { useSessionPresentation } from '../model/presentation';
+import {
+  saveSessionScroll,
+  useSessionPresentation,
+} from '../model/presentation';
 interface Props {
   onDialog: (dialog: DialogId, selection?: string) => void;
   onPanel: (panel: PanelId, selection?: string) => void;
@@ -135,6 +138,7 @@ export function Conversation({
   const [dismissed, setDismissed] = useState(false);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const { view, update: updateView } = useSessionPresentation();
+  const presentationEpoch = runtime.presentationEpoch;
   const planCollapsed = view.planCollapsed ?? false;
   const setPlanCollapsed = (
     value: boolean | ((previous: boolean) => boolean),
@@ -332,13 +336,11 @@ export function Conversation({
       follow();
     }
     return () => {
-      const saved = { ...position.current };
-      runtime.change((state) => {
-        const target = state.sessions.find((item) => item.id === session.id);
-        if (target) (target.presentation ??= {}).scroll = saved;
+      saveSessionScroll(runtime, session.id, presentationEpoch, {
+        ...position.current,
       });
     };
-  }, [session.id, runtime]);
+  }, [session.id, runtime, presentationEpoch]);
   // A message you just sent brings the end back into view
   const count = useRef({ sessionId: session.id, length: messages.length });
   useLayoutEffect(() => {

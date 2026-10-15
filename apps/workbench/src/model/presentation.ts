@@ -1,9 +1,29 @@
 import { useEffect, useRef } from 'react';
 import { useRuntime } from '../app/context';
 import { currentSession } from './state';
-import type { Session } from './types';
+import type { RuntimePort, Session } from './types';
 
 type Presentation = NonNullable<Session['presentation']>;
+
+/** A departing view cannot save into a reset snapshot or a removed conversation. */
+export function saveSessionScroll(
+  runtime: RuntimePort,
+  sessionId: string,
+  epoch: number | undefined,
+  scroll: NonNullable<Presentation['scroll']>,
+): void {
+  if (runtime.presentationEpoch !== epoch) return;
+  const session = runtime
+    .getSnapshot()
+    .sessions.find((item) => item.id === sessionId);
+  if (!session) return;
+  const previous = session.presentation?.scroll;
+  if (previous?.top === scroll.top && previous.follow === scroll.follow) return;
+  runtime.change((state) => {
+    const target = state.sessions.find((item) => item.id === sessionId);
+    if (target) (target.presentation ??= {}).scroll = scroll;
+  });
+}
 
 /** Explicit session ownership keeps a late UI callback out of the newly selected view. */
 export function useSessionPresentation() {

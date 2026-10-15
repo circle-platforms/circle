@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { LiveRuntime } from '../src/model/live.ts';
+import { PreviewRuntime, STORAGE_KEY } from '../src/model/state.ts';
+import { saveSessionScroll } from '../src/model/presentation.ts';
 import { createFixtures } from '../src/preview/fixtures.ts';
 import type { DesktopBridge } from '../../desktop/src/contracts.ts';
 import type {
@@ -45,6 +47,46 @@ function live() {
   const host = bridge(update);
   return { runtime: new LiveRuntime(host, update), host };
 }
+
+for (const reusedFixtureId of [false, true])
+  test(`reset invalidates a departing scroll view when its session ID is ${reusedFixtureId ? 'reused' : 'removed'}`, () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    };
+    const runtime = new PreviewRuntime(storage);
+    const sessionId = reusedFixtureId
+      ? runtime.getSnapshot().activeSessionId
+      : runtime.newSession();
+    const epoch = runtime.presentationEpoch;
+    saveSessionScroll(runtime, sessionId, epoch, { top: 123, follow: false });
+    assert.notEqual(storage.getItem(STORAGE_KEY), null);
+    runtime.reset();
+    const resetSnapshot = runtime.getSnapshot();
+    assert.equal(storage.getItem(STORAGE_KEY), null);
+    // This is the actual Conversation layout-effect cleanup after reset.
+    saveSessionScroll(runtime, sessionId, epoch, { top: 456, follow: false });
+    assert.equal(runtime.getSnapshot(), resetSnapshot);
+    assert.equal(storage.getItem(STORAGE_KEY), null);
+    assert(
+      runtime
+        .getSnapshot()
+        .sessions.every((session) => !session.presentation?.scroll),
+    );
+    const current = runtime.getSnapshot().activeSessionId;
+    saveSessionScroll(runtime, current, runtime.presentationEpoch, {
+      top: 42,
+      follow: false,
+    });
+    assert.deepEqual(
+      JSON.parse(storage.getItem(STORAGE_KEY)!).sessions.find(
+        (session: { id: string }) => session.id === current,
+      ).presentation.scroll,
+      { top: 42, follow: false },
+    );
+  });
 
 test('settings changes never carry the default workspace folders', async () => {
   const { runtime, host } = live();

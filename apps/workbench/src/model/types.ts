@@ -364,6 +364,8 @@ export interface CommandResult {
 }
 export interface RuntimePort {
   readonly mode: 'preview' | 'live';
+  /** Changes when a reset replaces renderer session identities, even if IDs recur. */
+  readonly presentationEpoch?: number;
   getSnapshot: () => WorkbenchSnapshot;
   subscribe: (listener: () => void) => () => void;
   change: (update: (draft: WorkbenchSnapshot) => void) => void;
