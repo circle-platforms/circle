@@ -582,6 +582,7 @@ try {
       'actual disk save during active agent',
     );
     const savedReadme = await readFile(join(repo, 'README.md'), 'utf8');
+    await writeFile(join(output, '02-manual-readme-disk.txt'), savedReadme);
     assert(
       savedReadme.startsWith(baseline),
       'saving README must preserve its own baseline, not another editor model',
@@ -1028,6 +1029,28 @@ try {
   } catch (e) {
     cleanupError = String(e);
   }
+  const fixtureFinal = {};
+  for (const file of [
+    'README.md',
+    'AGENTS.md',
+    'editor-main.ts',
+    'editor-lib.ts',
+    'isolation-a.ts',
+    'isolation-b.md',
+    'git-probe.txt',
+    'debug.cjs',
+    'browser-source.js',
+  ]) {
+    try {
+      fixtureFinal[file] = await readFile(join(repo, file), 'utf8');
+    } catch (error) {
+      fixtureFinal[file] = { unavailable: String(error) };
+    }
+  }
+  await writeFile(
+    join(output, 'fixture-final.json'),
+    JSON.stringify(fixtureFinal, null, 2),
+  );
   server.closeAllConnections();
   await new Promise((done) => server.close(done));
   await rm(temp, { recursive: true, force: true });
