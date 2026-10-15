@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 
 /** Return the visible interval in a monotone cumulative-height table. */
@@ -56,7 +56,9 @@ export function WindowedList<T>({
       values.push(values.at(-1)! + (heights.current.get(key) ?? estimate));
     return values;
   }, [keys, estimate, revision]);
-  useLayoutEffect(() => {
+  // A parent's host ref attaches after child layout effects. Subscribe after
+  // the full commit, then read the parent's already-restored scroll position.
+  useEffect(() => {
     const scroller = scrollRef.current,
       element = root.current;
     if (!scroller || !element) return;
@@ -84,7 +86,7 @@ export function WindowedList<T>({
       scroller.removeEventListener('scroll', update);
     };
   }, [scrollRef]);
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (
       revealIndex === undefined ||
       !scrollRef.current ||
