@@ -10,6 +10,7 @@ import {
   realpath,
   mkdir,
   symlink,
+  stat,
 } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
@@ -325,9 +326,9 @@ test('initial event journal open failure still allows complete service disposal'
   const root = await mkdtemp(path.join(tmpdir(), 'circle-journal-open-'));
   const data = await mkdtemp(path.join(tmpdir(), 'circle-journal-open-data-'));
   const hash = createHash('sha256').update(path.resolve(root)).digest('hex');
-  await mkdir(path.join(data, 'workspaces', hash, 'events.jsonl'), {
-    recursive: true,
-  });
+  const blockedJournal = path.join(data, 'workspaces', hash, 'events.jsonl');
+  await mkdir(blockedJournal, { recursive: true });
+  assert.equal((await stat(blockedJournal)).isDirectory(), true);
   const errors: Error[] = [];
   const service = new WorkspaceServices({
     workspaceRoot: root,
@@ -347,10 +348,26 @@ test('initial event journal open failure still allows complete service disposal'
     onPersistenceError: (error) => errors.push(error),
   });
   try {
-    await assert.rejects(
-      service.call('session-a', 'documents', 'refresh'),
-      /EISDIR|directory/i,
+    const rejection = await service
+      .call('session-a', 'documents', 'refresh')
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    const actualFolders = await readdir(path.join(data, 'workspaces'));
+    assert.ok(
+      rejection,
+      JSON.stringify({
+        message: 'directory journal must reject opening',
+        root,
+        expectedHash: hash,
+        actualFolders,
+        blockedJournal,
+        stillDirectory: (await stat(blockedJournal)).isDirectory(),
+        eventHealth: service.eventHealth,
+      }),
     );
+    assert.match(String(rejection), /EISDIR|directory/i);
     assert.equal(errors.length, 1);
     await assert.doesNotReject(service.dispose());
   } finally {
