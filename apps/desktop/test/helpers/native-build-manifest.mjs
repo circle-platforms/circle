@@ -61,7 +61,7 @@ export async function executedNativeBuildEvidence(app, manifest) {
       'index.html',
     );
     const rendererRoot = path.dirname(rendererPath);
-    const workerPath = path.join(path.dirname(mainPath), 'runtime-worker.cjs');
+    const workerPath = path.join(path.dirname(mainPath), 'runtime-worker.mjs');
     const artifacts = [];
     for (const entry of requested.artifacts ?? []) {
       if (
