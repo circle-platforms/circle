@@ -663,6 +663,50 @@ test('the welcome lists a short title and an untitled session, including the new
   assert.equal(next.more, 1);
 });
 
+test('shared recent titles show the first reply, or the short id when the reply matches', async (t) => {
+  const root = scratch(t);
+  const store = new CheckpointStore(root);
+  cleanup(t, () => store.close());
+  const speak = async (title: string, reply: string): Promise<string> => {
+    await delay(5);
+    const session = store.create(root, 'm', title);
+    store.append(session.id, [
+      { id: session.id + 'u', role: 'user', content: 'hi' },
+      { id: session.id + 'a', role: 'assistant', content: reply },
+    ]);
+    return session.id;
+  };
+  const hello = await speak('hi', 'hello there');
+  const ready = await speak('hi', 'ready now');
+  const welcome = new WelcomeState(root);
+  const settings = defaultSettings();
+  const info = (id: string) =>
+    welcome.info({
+      version: '1',
+      settings,
+      runtime: {
+        session: { id },
+        store,
+        extensions: { extensions: [] },
+        harness: { model: { model: 'm' } },
+        thinkingLevel: '',
+      } as unknown as AgentRuntime,
+      connected: true,
+      trusted: true,
+    });
+  assert.deepEqual(
+    info('other').recent.map(([title]) => title),
+    ['hi · ready now', 'hi · hello there'],
+  );
+  const again = await speak('hi', 'ok');
+  const twin = await speak('hi', 'ok');
+  const rows = info('other').recent.map(([title]) => title);
+  assert.equal(rows[0], `hi · ${twin.slice('circle-'.length)}`);
+  assert.equal(rows[1], `hi · ${again.slice('circle-'.length)}`);
+  assert.equal(rows[2], 'hi · ready now');
+  assert.deepEqual(info(hello).recent[0], info('other').recent[0]);
+});
+
 test('thinking rows have no background on a dark theme and on a light one', () => {
   const text = '**Check the notes**\n\nThe file has three lines.';
   for (const [, p] of PALETTES) {

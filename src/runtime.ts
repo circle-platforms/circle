@@ -65,11 +65,7 @@ import { addUsage, emptyUsage } from './types.js';
 import { UserShells } from './user_shell.js';
 import { toolCallLine } from './headless.js';
 import { canScreenshot, type ScreenshotOptions } from './screenshot.js';
-import {
-  fallbackTitle,
-  firstUserSource,
-  titleWorthy,
-} from './session_title.js';
+import { firstUserSource, titleNeedsRefresh } from './session_title.js';
 const BUILTIN_TOOL_NAMES = new Set([
   'ls',
   'read_file',
@@ -333,7 +329,7 @@ export class AgentRuntime {
     });
     this.extensions = this.extensionHost(new Set());
     if (this.runOptions.session_name)
-      this.store.rename(this.session.id, this.runOptions.session_name);
+      this.store.rename(this.session.id, this.runOptions.session_name, true);
     try {
       this.harness = this.createHarness(options.model);
       this.todos = restoredTodos(this.harness.messages);
@@ -1389,13 +1385,13 @@ export class AgentRuntime {
     this.refreshFallbackTitle();
   }
   /**
-   * A title saved as the trimmed first message, after a turn was answered, is
-   * asked for once. A greeting such as "hi" is not worth a request, and a
-   * title the person chose is left alone.
+   * Ask again when a finished session still has the trimmed first message, a
+   * cut-off prompt, or a title that reads as work already done. A greeting is
+   * not worth a request. A name from /name stays.
    */
   private refreshFallbackTitle(): void {
     const session = this.store.get(this.session.id);
-    if (!session?.title || !session.head) return;
+    if (!session?.title || !session.head || session.title_locked) return;
     let messages;
     try {
       messages = this.store.messages(session.id);
@@ -1403,8 +1399,7 @@ export class AgentRuntime {
       return;
     }
     const source = firstUserSource(messages);
-    if (!source || session.title !== fallbackTitle(source)) return;
-    if (!titleWorthy(source)) return;
+    if (!source || !titleNeedsRefresh(session.title, source)) return;
     if (!messages.some((message) => message.role === 'assistant')) return;
     this.harness.retitle(source, session.title);
   }

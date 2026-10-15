@@ -64,17 +64,21 @@ export class WelcomeState {
     }
     // Short titles and untitled sessions with a message are listed. An empty
     // untitled row is already hidden by the store. The session you are in is
-    // left out; you are already looking at it.
-    const saved =
-      runtime?.store
-        .list(this.workspace)
-        .filter((session) => session.id !== runtime.session.id) ?? [];
-    this.recent = saved
-      .slice(0, 3)
-      .map((session) => [
-        session.title || '(untitled)',
-        age(session.updated, now),
-      ]);
+    // left out; you are already looking at it. Shared titles pick up the
+    // start of the first reply, or the short id when that reply is shared too.
+    if (!runtime) {
+      this.recent = [];
+      this.more = 0;
+      return;
+    }
+    const saved = runtime.store
+      .list(this.workspace)
+      .filter((session) => session.id !== runtime.session.id);
+    const shown = saved.slice(0, 3);
+    this.recent = shown.map((session) => [
+      recentLabel(session, shown, saved, runtime.store),
+      age(session.updated, now),
+    ]);
     this.more = Math.max(0, saved.length - 3);
   }
 
@@ -126,4 +130,70 @@ export class WelcomeState {
       more: this.more,
     };
   }
+}
+
+function shortSessionId(id: string): string {
+  return id.startsWith('circle-') ? id.slice('circle-'.length) : id.slice(-8);
+}
+
+function replySnippet(
+  store: {
+    messages(id: string): {
+      role: string;
+      content?: string;
+      display?: string;
+      internal?: string;
+    }[];
+  },
+  id: string,
+): string {
+  try {
+    const reply = store
+      .messages(id)
+      .find(
+        (message) =>
+          message.role === 'assistant' &&
+          !message.internal &&
+          (message.display || message.content),
+      );
+    const text = (reply?.display || reply?.content || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!text) return '';
+    return text.length <= 18 ? text : `${text.slice(0, 18).trimEnd()}…`;
+  } catch {
+    return '';
+  }
+}
+
+function recentLabel(
+  session: { id: string; title: string },
+  shown: { id: string; title: string }[],
+  saved: { id: string; title: string }[],
+  store: {
+    messages(id: string): {
+      role: string;
+      content?: string;
+      display?: string;
+      internal?: string;
+    }[];
+  },
+): string {
+  const title = session.title || '(untitled)';
+  const duplicates = saved.filter(
+    (item) => (item.title || '(untitled)') === title,
+  ).length;
+  if (duplicates < 2) return title;
+  const hint = (item: { id: string }): string => {
+    const snippet = replySnippet(store, item.id);
+    return snippet
+      ? `${title} · ${snippet}`
+      : `${title} · ${shortSessionId(item.id)}`;
+  };
+  const mine = hint(session);
+  const sharedHint = shown.filter(
+    (item) => (item.title || '(untitled)') === title && hint(item) === mine,
+  ).length;
+  if (sharedHint < 2) return mine;
+  return `${title} · ${shortSessionId(session.id)}`;
 }

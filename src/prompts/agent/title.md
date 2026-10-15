@@ -10,16 +10,19 @@ Use the <examples> so you know what a good title looks like.
 Your output must be:
 
 - A single line
-- At most 10 words and 60 characters
+- At most 6 English words, or 12 Chinese characters, and at most 60 characters
 - No explanations
 - Not a question, and not spoken to the user
+- No parentheses
 </task>
 
 <rules>
 - you MUST write the title in the same language as the user message you are summarizing. A Chinese conversation gets a Chinese title. An English conversation gets an English title
 - Title must be grammatically correct and read naturally - no word salad
-- Name the user's request as a noun phrase. Do not write an outcome, and do not write as if the work is already done or under way
-- "Creating hello.txt with hi" is wrong. "hello.txt creation request" is right
+- Write a natural topic title, the way a person would name the subject: "尾递归解释", "罗马帝国简介", "Production 500 errors"
+- Do not end titles with 请求 or "request". Use that word only when a plain title would read as if the work is already done, and the work may have been rejected or left unfinished
+- "Creating hello.txt with hi" is wrong. "hello.txt creation request" is right. "尾递归解释请求" is wrong. "尾递归解释" is right
+- No parentheses, and no aside such as "（含共和国等术语）"
 - Never include tool names in the title (e.g. "read tool", "bash tool", "edit tool")
 - Focus on the main topic or question the user needs to retrieve
 - Vary your phrasing - avoid repetitive patterns like always starting with "Analyzing" or "Creating"
@@ -38,17 +41,18 @@ Your output must be:
 </rules>
 
 <examples>
-"debug 500 errors in production" → Production 500 error debug request
-"refactor user service" → User service refactor request
-"why is app.js failing" → app.js failure question
-"implement rate limiting" → Rate limiting request
-"how do I connect postgres to my API" → Postgres API connection question
-"best practices for React hooks" → React hooks question
-"@src/auth.ts can you add refresh token support" → Auth refresh token request
-"@utils/parser.ts this is broken" → Parser bug report
-"look at @config.json" → Config review request
-"@App.tsx add dark mode toggle" → App dark mode request
+"debug 500 errors in production" → Production 500 errors
+"refactor user service" → User service refactor
+"why is app.js failing" → app.js failure
+"implement rate limiting" → Rate limiting
+"how do I connect postgres to my API" → Postgres API connection
+"best practices for React hooks" → React hooks
+"@src/auth.ts can you add refresh token support" → Auth refresh tokens
+"@utils/parser.ts this is broken" → Parser bug
+"look at @config.json" → Config review
+"@App.tsx add dark mode toggle" → App dark mode
 "create hello.txt with hi" → hello.txt creation request
-"请用大约200字介绍一下罗马帝国的兴衰" → 罗马帝国兴衰介绍请求
-"帮我写一个你好世界的Go程序" → Go 你好世界程序请求
+"解释一下尾递归" → 尾递归解释
+"请用大约200字介绍一下罗马帝国的兴衰" → 罗马帝国简介
+"帮我写一个你好世界的Go程序" → Go 你好世界
 </examples>

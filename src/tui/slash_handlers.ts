@@ -473,7 +473,7 @@ function name(host: CommandHost, args: string): void {
     host.flash('/name <title> renames it', 4000);
     return;
   }
-  runtime.store.rename(runtime.session.id, title);
+  runtime.store.rename(runtime.session.id, title, true);
   host.notice(`Session name → ${title}`);
 }
 
@@ -1513,7 +1513,7 @@ function sessionList(
             (text) => {
               const title = text.trim().replace(/\s+/g, ' ').slice(0, 80);
               if (!title) return;
-              runtime.store.rename(item.key, title);
+              runtime.store.rename(item.key, title, true);
               again(item.key);
             },
             {

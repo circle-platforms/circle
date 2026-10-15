@@ -1,9 +1,18 @@
 /** Room for a short title when a gateway still spends some of the cap thinking. */
 export const TITLE_MAX_TOKENS = 512;
 
-/** A title is one short phrase. Longer text is the model answering the user. */
-export const TITLE_MAX_WORDS = 10;
+/**
+ * A title is one short topic. Longer text is the model answering the user.
+ * English stops at six words. Chinese stops at twelve characters. Sixty
+ * characters is the hard ceiling either way.
+ */
+export const TITLE_MAX_WORDS = 6;
+export const TITLE_MAX_CJK = 12;
 export const TITLE_MAX_CHARS = 60;
+
+/** A fragment from an older build can be longer than a topic title. */
+const STALE_TITLE_WORDS = 10;
+const STALE_TITLE_CHARS = 60;
 
 const CJK_CHAR = /[\u3400-\u9fff]/g;
 
@@ -134,6 +143,48 @@ function assistantVoice(title: string): boolean {
   return /我无法|我不能|请提供|请你提供|你可以|您可以|对不起|抱歉/.test(title);
 }
 
+/**
+ * "Creating hello.txt" reads as work already under way. A rejected tool call
+ * must not be titled as if it finished.
+ */
+const READS_AS_DONE =
+  /^(?:creating|writing|debugging|refactoring|implementing|adding|fixing|building|generating|analyzing|analysing|making|updating|editing|deleting|removing|installing)\b|^(?:created|wrote|added|fixed|built|generated|implemented|refactored|updated|deleted|removed|installed)\b|^(?:setting up)\b|^(?:正在|已经|已完成|已创建|已写)/i;
+
+/**
+ * "hello.txt creation request" stays. A bare topic with "request" stuck on
+ * ("尾递归解释请求", "Rate limiting request") does not.
+ */
+const ACTION_REQUEST =
+  /\b(?:creation|create|write|edit|delete|fix|implement|add|update|refactor|remove)\s+request$/i;
+const ACTION_REQUEST_CJK =
+  /(?:创建|编写|写入|修改|删除|修复|实现|新增|添加)请求$/;
+
+function cjkCount(text: string): number {
+  return text.match(CJK_CHAR)?.length ?? 0;
+}
+
+function stripAsides(title: string): string {
+  return title
+    .replace(/\s*[（(][^）)]*[）)]\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function trimTemplatedRequest(title: string): string {
+  if (ACTION_REQUEST.test(title) || ACTION_REQUEST_CJK.test(title))
+    return title;
+  return title.replace(/(?:\s+request|请求)$/i, '').trim();
+}
+
+function overTitleCap(title: string): boolean {
+  if (cjkCount(title) > TITLE_MAX_CJK || title.length > TITLE_MAX_CHARS)
+    return true;
+  const words = title.split(/\s+/).filter(Boolean);
+  if (cjkCount(title) === 0) return words.length > TITLE_MAX_WORDS;
+  const latin = words.filter((word) => word.replace(CJK_CHAR, '').length > 0);
+  return latin.length > TITLE_MAX_WORDS;
+}
+
 /** `README.md` is one token. `Login bug. Write tests` is two sentences. */
 function manySentences(title: string): boolean {
   const masked = title
@@ -157,15 +208,18 @@ export function sanitizeGeneratedTitle(text: string): string | undefined {
   let title = line.replace(/^["'“”‘’«»]+|["'“”‘’«»]+$/g, '').trim();
   if (/[?？]\s*$/.test(title) || /<\/?conversation\b/i.test(title))
     return undefined;
-  title = title.replace(/[。．.]+$/g, '').trim();
+  title = trimTemplatedRequest(
+    stripAsides(title.replace(/[。．.]+$/g, '').trim()),
+  );
   if (
     !title ||
+    /[()（）]/.test(title) ||
     /^\d+$/.test(title) ||
     /^(?:i cannot|i can't|sorry|unable)\b/i.test(title) ||
     assistantVoice(title) ||
     manySentences(title) ||
-    title.split(/\s+/).length > TITLE_MAX_WORDS ||
-    title.length > TITLE_MAX_CHARS
+    READS_AS_DONE.test(title) ||
+    overTitleCap(title)
   )
     return undefined;
   return title;
@@ -208,8 +262,8 @@ export function mightBeStaleTitle(title: string): boolean {
   if (!line) return false;
   if (REASONING_TITLE.test(line) || /^\d+$/.test(line)) return true;
   return (
-    line.length <= TITLE_MAX_CHARS &&
-    line.split(/\s+/).length <= TITLE_MAX_WORDS &&
+    line.length <= STALE_TITLE_CHARS &&
+    line.split(/\s+/).length <= STALE_TITLE_WORDS &&
     /\d/.test(line)
   );
 }
@@ -224,8 +278,8 @@ export function staleGeneratedTitle(title: string, source: string): boolean {
   if (REASONING_TITLE.test(line) || /^\d+$/.test(line)) return true;
   return (
     isNumberFragment(line, source) &&
-    line.length <= TITLE_MAX_CHARS &&
-    line.split(/\s+/).length <= TITLE_MAX_WORDS
+    line.length <= STALE_TITLE_CHARS &&
+    line.split(/\s+/).length <= STALE_TITLE_WORDS
   );
 }
 
@@ -237,6 +291,37 @@ export function repairedTitle(
   if (!staleGeneratedTitle(title, source)) return undefined;
   const next = fallbackTitle(source);
   return next && next !== title.trim() ? next : undefined;
+}
+
+function opensPrompt(title: string, prompt: string): boolean {
+  if (!prompt.startsWith(title) || prompt.length === title.length) return false;
+  const next = prompt[title.length] ?? '';
+  if (next !== ' ' && next !== '\t') return false;
+  return title.split(/\s+/).length >= 2 || cjkCount(title) >= 4;
+}
+
+function templatedRequest(title: string): boolean {
+  if (ACTION_REQUEST.test(title) || ACTION_REQUEST_CJK.test(title))
+    return false;
+  return /(?:请求|\srequest)$/i.test(title);
+}
+
+/**
+ * Ask again for a title that is still the trimmed first message, a cut-off
+ * prompt, or a line that reads as work already done. A greeting is too short
+ * to ask. The caller leaves a name the person chose alone.
+ */
+export function titleNeedsRefresh(title: string, source: string): boolean {
+  const line = title.trim();
+  const prompt = source.replace(/\s+/g, ' ').trim();
+  if (!line || !prompt || !titleWorthy(prompt)) return false;
+  if (line === fallbackTitle(prompt)) return true;
+  if (/[()（）]/.test(line) || line.includes('@')) return true;
+  if (READS_AS_DONE.test(line) || /(?:…|\.\.\.)$/.test(line)) return true;
+  if (templatedRequest(line)) return true;
+  const words = prompt.split(' ');
+  if (words.length > 7 && words.slice(0, 7).join(' ') === line) return true;
+  return opensPrompt(line, prompt);
 }
 
 /** The first thing the person wrote, which a stale title is rebuilt from. */

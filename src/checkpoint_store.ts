@@ -30,6 +30,8 @@ export interface Session {
   created: number;
   updated: number;
   parent_id: string | null;
+  /** 1 after /name or /rename. Automatic titles stay unset and can be replaced. */
+  title_locked?: number;
 }
 export interface Checkpoint {
   id: string;
@@ -112,6 +114,10 @@ export class CheckpointStore {
       const columns = this.db.prepare('PRAGMA table_info(sessions)').all();
       if (!columns.some((row) => row.name === 'parent_id'))
         this.db.exec('ALTER TABLE sessions ADD COLUMN parent_id TEXT');
+      if (!columns.some((row) => row.name === 'title_locked'))
+        this.db.exec(
+          'ALTER TABLE sessions ADD COLUMN title_locked INTEGER NOT NULL DEFAULT 0',
+        );
       this.db.exec(
         'CREATE INDEX IF NOT EXISTS sessions_parent ON sessions(parent_id);',
       );
@@ -253,6 +259,7 @@ export class CheckpointStore {
         created: now,
         updated: now,
         parent_id: null,
+        title_locked: 0,
       };
       this.deferred.set(id, session);
       return { ...session };
@@ -275,7 +282,7 @@ export class CheckpointStore {
     }
     this.db
       .prepare(
-        'INSERT INTO sessions (id,workspace,title,model,head,created,updated,parent_id) VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        'INSERT INTO sessions (id,workspace,title,model,head,created,updated,parent_id,title_locked) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
       )
       .run(
         pending.id,
@@ -285,6 +292,7 @@ export class CheckpointStore {
         pending.created,
         Date.now(),
         pending.parent_id,
+        pending.title_locked ? 1 : 0,
       );
     this.deferred.delete(sessionId);
   }
@@ -360,23 +368,31 @@ export class CheckpointStore {
    */
   repairStaleTitles(): void {
     for (const session of this.list()) {
-      if (!session.head || !mightBeStaleTitle(session.title)) continue;
+      if (
+        !session.head ||
+        session.title_locked ||
+        !mightBeStaleTitle(session.title)
+      )
+        continue;
       const source = firstUserSource(this.messages(session.id));
       const next = source ? repairedTitle(session.title, source) : undefined;
       if (next) this.rename(session.id, next);
     }
   }
-  rename(id: string, title: string): void {
+  rename(id: string, title: string, locked = false): void {
     const pending = this.deferred.get(id);
     if (pending && !this.row(id)) {
       pending.title = title;
+      pending.title_locked = locked ? 1 : 0;
       return;
     }
     // Leave `updated` alone. The session list is newest-activity first, and a
     // rename is not activity: bumping it jumped the row to the top.
+    // `locked` is set when the person chose the name. A generated title stays
+    // unlocked so a later open can replace a bad one.
     this.db
-      .prepare('UPDATE sessions SET title = ? WHERE id = ?')
-      .run(title, id);
+      .prepare('UPDATE sessions SET title = ?, title_locked = ? WHERE id = ?')
+      .run(title, locked ? 1 : 0, id);
     this.writeVersion++;
   }
   private decode(row: Record<string, unknown>): Checkpoint {

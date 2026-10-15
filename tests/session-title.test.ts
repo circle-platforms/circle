@@ -15,8 +15,10 @@ import {
   repairedTitle,
   sanitizeGeneratedTitle,
   TITLE_MAX_CHARS,
+  TITLE_MAX_CJK,
   TITLE_MAX_WORDS,
   titleConversation,
+  titleNeedsRefresh,
   titleWorthy,
 } from '../src/session_title.js';
 import { defaultSettings, saveCredentials } from '../src/settings.js';
@@ -110,6 +112,69 @@ test('generated titles keep one short phrase and drop a reply', () => {
   assert.equal(sanitizeGeneratedTitle('你好世界 Go 程序'), '你好世界 Go 程序');
   assert.equal(sanitizeGeneratedTitle('我的 Go 程序'), '我的 Go 程序');
   assert.equal(sanitizeGeneratedTitle('我无法生成标题'), undefined);
+  assert.equal(sanitizeGeneratedTitle('尾递归解释请求'), '尾递归解释');
+  assert.equal(
+    sanitizeGeneratedTitle('罗马帝国介绍请求（含共和国等术语）'),
+    '罗马帝国介绍',
+  );
+  assert.equal(
+    sanitizeGeneratedTitle('hello.txt creation request'),
+    'hello.txt creation request',
+  );
+  assert.equal(
+    sanitizeGeneratedTitle('Rate limiting request'),
+    'Rate limiting',
+  );
+  assert.equal(sanitizeGeneratedTitle('Creating hello.txt with hi'), undefined);
+  assert.equal(
+    sanitizeGeneratedTitle('一'.repeat(TITLE_MAX_CJK)),
+    '一'.repeat(TITLE_MAX_CJK),
+  );
+  assert.equal(
+    sanitizeGeneratedTitle('一'.repeat(TITLE_MAX_CJK + 1)),
+    undefined,
+  );
+  assert.equal(
+    titleNeedsRefresh(
+      'Creating hello.txt with hi',
+      'create hello.txt with hi and then leave it',
+    ),
+    true,
+  );
+  assert.equal(
+    titleNeedsRefresh(
+      '@README.md what is the first heading in',
+      '@README.md what is the first heading in this file please',
+    ),
+    true,
+  );
+  assert.equal(
+    titleNeedsRefresh(
+      'hiFib demo',
+      'hiFib demo of tail recursion that prints a few numbers',
+    ),
+    true,
+  );
+  assert.equal(
+    titleNeedsRefresh('尾递归解释请求', '请解释一下什么是尾递归并给一个例子'),
+    true,
+  );
+  assert.equal(
+    titleNeedsRefresh('Custom name', '帮我写一个你好世界的Go程序'),
+    false,
+  );
+  assert.equal(
+    titleNeedsRefresh('罗马帝国简介', '请用大约200字介绍一下罗马帝国的兴衰'),
+    false,
+  );
+  assert.equal(
+    titleNeedsRefresh(
+      'hello.txt creation request',
+      'create hello.txt with hi and then leave it',
+    ),
+    false,
+  );
+  assert.equal(titleNeedsRefresh('hi', 'hi'), false);
   assert.equal(sanitizeGeneratedTitle('请提供文件内容'), undefined);
   assert.equal(sanitizeGeneratedTitle('你可以粘贴一下'), undefined);
   assert.equal(titleWorthy('hi'), false);
@@ -239,7 +304,7 @@ test('a side request names the session and does not take the answer', async (t) 
   assert.equal(titleCalls[0]!.effort, '');
   assert.equal(titleCalls[0]!.messages[0]!.content, titleConversation(LONG));
   assert.match(String(titleCalls[0]!.system), /Do not answer it/);
-  assert.match(String(titleCalls[0]!.system), /noun phrase/);
+  assert.match(String(titleCalls[0]!.system), /natural topic/);
   assert.match(String(titleCalls[0]!.system), /hello\.txt creation request/);
   assert.equal(
     model.requests.filter((request) => !request.maxTokens).length,
@@ -977,11 +1042,11 @@ test('opening a finished session re-requests a title that is only the trimmed pr
       (request) => request.maxTokens === Harness.titleOutputTokens,
     );
   assert.equal(titleCalls().length, 1);
-  assert.match(String(titleCalls()[0]!.system), /noun phrase/);
+  assert.match(String(titleCalls()[0]!.system), /natural topic/);
   assert.equal(runtime.store.get(finished.id)!.title, fallbackTitle(prompt));
   model.releaseTitle();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(runtime.store.get(finished.id)!.title, 'Go 你好世界程序请求');
+  assert.equal(runtime.store.get(finished.id)!.title, 'Go 你好世界程序');
   assert.equal(runtime.store.get(chosen.id)!.title, 'Custom name');
   assert.equal(runtime.store.get(hi.id)!.title, 'hi');
   const quiet = new TitleModel('done', 'should not be asked');
@@ -1014,4 +1079,95 @@ test('opening a finished session re-requests a title that is only the trimmed pr
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(held.requests.length, 0);
   assert.equal(pending.store.get(unanswered.id)!.title, fallbackTitle(prompt));
+});
+
+test('opening a finished session replaces a cut-off or done-sounding title', async (t) => {
+  const root = scratch(t);
+  const store = new CheckpointStore(root);
+  const createFile = 'create hello.txt with hi and then leave it';
+  const readme = '@README.md what is the first heading in this file please';
+  const fib = 'hiFib demo of tail recursion that prints a few numbers';
+  const making = store.create(root, 'scripted');
+  store.append(making.id, [
+    { id: 'u', role: 'user', content: createFile },
+    { id: 'a', role: 'assistant', content: 'done' },
+  ]);
+  store.rename(making.id, 'Creating hello.txt with hi');
+  const cut = store.create(root, 'scripted');
+  store.append(cut.id, [
+    { id: 'u2', role: 'user', content: readme },
+    { id: 'a2', role: 'assistant', content: 'The first heading is Circle.' },
+  ]);
+  store.rename(cut.id, '@README.md what is the first heading in');
+  const demo = store.create(root, 'scripted');
+  store.append(demo.id, [
+    { id: 'u3', role: 'user', content: fib },
+    { id: 'a3', role: 'assistant', content: 'Here is the demo.' },
+  ]);
+  store.rename(demo.id, 'hiFib demo');
+  const chosen = store.create(root, 'scripted');
+  store.append(chosen.id, [
+    { id: 'u4', role: 'user', content: createFile },
+    { id: 'a4', role: 'assistant', content: 'done' },
+  ]);
+  store.rename(chosen.id, 'Creating hello.txt with hi', true);
+  store.close();
+  const open = (id: string, title: string) => {
+    const model = new TitleModel('done', title);
+    const runtime = new AgentRuntime({
+      workspace: root,
+      home: root,
+      settings: defaultSettings(),
+      model,
+      session: id,
+      headless: true,
+      localContext: false,
+      bundledExtensions: false,
+    });
+    cleanup(t, () => runtime.close());
+    return { model, runtime };
+  };
+  const created = open(making.id, 'hello.txt creation request');
+  assert.equal(
+    created.model.requests.filter(
+      (request) => request.maxTokens === Harness.titleOutputTokens,
+    ).length,
+    1,
+  );
+  created.model.releaseTitle();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    created.runtime.store.get(making.id)!.title,
+    'hello.txt creation request',
+  );
+  const heading = open(cut.id, 'README first heading');
+  assert.equal(
+    heading.model.requests.filter(
+      (request) => request.maxTokens === Harness.titleOutputTokens,
+    ).length,
+    1,
+  );
+  heading.model.releaseTitle();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    heading.runtime.store.get(cut.id)!.title,
+    'README first heading',
+  );
+  const fibs = open(demo.id, 'Tail recursion demo');
+  assert.equal(
+    fibs.model.requests.filter(
+      (request) => request.maxTokens === Harness.titleOutputTokens,
+    ).length,
+    1,
+  );
+  fibs.model.releaseTitle();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(fibs.runtime.store.get(demo.id)!.title, 'Tail recursion demo');
+  const kept = open(chosen.id, 'should not be asked');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(kept.model.requests.length, 0);
+  assert.equal(
+    kept.runtime.store.get(chosen.id)!.title,
+    'Creating hello.txt with hi',
+  );
 });
