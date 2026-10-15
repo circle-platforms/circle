@@ -64,6 +64,7 @@ import {
   DeveloperWorkbench,
   type WorkbenchLayout,
 } from '../features/DeveloperWorkbench';
+import { connectWorkspaceStreams } from '../model/workspace-client';
 import { SourceNavigation } from '../components/SourceNavigation';
 import { Inspector, PanelButtons } from '../features/Panels';
 const FileViewer = lazy(() =>
@@ -107,6 +108,13 @@ export function App() {
   const pluginPages = registry.pages(enabled);
   const location = useLocation();
   const session = currentSession(snapshot);
+  useEffect(
+    () =>
+      runtime.mode === 'live' && snapshot.runtime?.connected
+        ? connectWorkspaceStreams(session.id, (error) => notify(String(error)))
+        : undefined,
+    [runtime, session.id, snapshot.runtime?.connected],
+  );
   const workspace = snapshot.workspaces.find(
     (item) => item.id === session.workspaceId,
   )!;
