@@ -234,7 +234,7 @@ test('a side request names the session and does not take the answer', async (t) 
   cleanup(t, () => store.close());
   const result = await run.run(LONG);
   assert.equal(result.answer, 'done');
-  assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
+  assert.equal(store.get(session.id)!.title, '');
   const titleCalls = model.requests.filter(
     (request) => request.maxTokens === TITLE_MAX_TOKENS,
   );
@@ -297,16 +297,16 @@ test('a short prompt keeps the fallback and skips the model', async (t) => {
       { event?: string; message?: string } | undefined;
     if (notice?.event === 'title_failed') notes.push(String(notice.message));
   });
-  await run.run('hello there');
+  await run.run('hi');
   model.releaseTitle();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(store.get(session.id)!.title, 'hello there');
+  assert.equal(store.get(session.id)!.title, 'hi');
   assert.equal(
     model.requests.filter((request) => request.maxTokens === TITLE_MAX_TOKENS)
       .length,
     0,
   );
-  assert.deepEqual(notes, ['prompt too short']);
+  assert.deepEqual(notes, []);
 });
 
 test('a short Chinese sentence asks for a title in that language', async (t) => {
@@ -317,7 +317,7 @@ test('a short Chinese sentence asks for a title in that language', async (t) => 
   const prompt = '请用大约200字介绍一下罗马帝国的兴衰';
   assert.equal(fallbackTitle(prompt), '用大约200字介绍一下罗马帝国的兴衰');
   await run.run(prompt);
-  assert.equal(store.get(session.id)!.title, fallbackTitle(prompt));
+  assert.equal(store.get(session.id)!.title, '');
   const title = model.requests.find(
     (request) => request.maxTokens === TITLE_MAX_TOKENS,
   );
@@ -381,7 +381,7 @@ test('four words ask for a title even when the prompt is short', async (t) => {
   assert.ok(prompt.length < 24);
   assert.equal(prompt.split(' ').length, 4);
   await run.run(prompt);
-  assert.equal(store.get(session.id)!.title, prompt);
+  assert.equal(store.get(session.id)!.title, '');
   assert.equal(
     model.requests.filter((request) => request.maxTokens === TITLE_MAX_TOKENS)
       .length,

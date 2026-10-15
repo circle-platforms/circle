@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { useRuntime } from '../app/context';
 import { usePlugins } from '../plugins/context';
-import { currentSession, sessionTitle } from '../model/state';
+import { currentSession, sessionListed, sessionTitle } from '../model/state';
 import { workspaceLabel } from '../model/workspace-label';
 import type { DialogId } from '../model/types';
 import { IconButton } from './common';
@@ -256,7 +256,9 @@ export function Sidebar({
           const sessions = snapshot.sessions
             .filter(
               (session) =>
-                session.workspaceId === workspace.id && !session.archivedAt,
+                session.workspaceId === workspace.id &&
+                !session.archivedAt &&
+                sessionListed(session),
             )
             .sort(
               (a, b) =>

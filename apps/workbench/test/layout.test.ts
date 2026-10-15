@@ -52,6 +52,12 @@ test('an empty variable or secret row does not highlight on hover', () => {
 });
 
 test('a session column keeps the composer inside the window', () => {
+  const workbench = css.match(/\.workbench \{[^}]*\}/)?.[0] ?? '';
+  assert.match(workbench, /grid-template-rows:\s*minmax\(0,\s*1fr\)/);
+  assert.match(workbench, /overflow:\s*hidden/);
+  const side = css.match(/\.desktop-sidebar \{[^}]*\}/)?.[0] ?? '';
+  assert.match(side, /min-height:\s*0/);
+  assert.match(side, /overflow:\s*hidden/);
   const workspace = css.match(/\.workspace \{[^}]*\}/)?.[0] ?? '';
   assert.match(workspace, /overflow:\s*hidden/);
   assert.match(workspace, /min-height:\s*0/);

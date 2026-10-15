@@ -4,6 +4,7 @@ import {
   PreviewRuntime,
   currentSession,
   branchMessages,
+  sessionListed,
   visibleMessages,
 } from '../src/model/state.ts';
 import { parsePreviewBundle } from '../src/model/transfer.ts';
@@ -427,4 +428,27 @@ test('core times show as local clock times, with the day when it is not today', 
   assert.equal(shownTime('10:24', now), '10:24');
   assert.equal(shownTime('yesterday', now), 'yesterday');
   assert.equal(shownTime('streaming', now), 'streaming');
+});
+
+test('an empty new session is not listed, and hi keeps that title', () => {
+  const runtime = new PreviewRuntime();
+  const before = runtime.getSnapshot().sessions.length;
+  const created = runtime.newSession();
+  assert.equal(runtime.getSnapshot().sessions.length, before + 1);
+  assert.equal(sessionListed(currentSession(runtime.getSnapshot())), false);
+  assert.equal(runtime.newSession(), created);
+  assert.equal(runtime.getSnapshot().sessions.length, before + 1);
+  runtime.change((state) => {
+    currentSession(state).draft = 'hi';
+  });
+  runtime.send();
+  assert.equal(currentSession(runtime.getSnapshot()).title, 'hi');
+  assert.equal(sessionListed(currentSession(runtime.getSnapshot())), true);
+  const again = runtime.newSession();
+  assert.notEqual(again, created);
+  runtime.selectSession(created);
+  assert.equal(
+    runtime.getSnapshot().sessions.some((session) => session.id === again),
+    false,
+  );
 });

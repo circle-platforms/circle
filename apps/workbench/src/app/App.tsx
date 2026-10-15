@@ -32,7 +32,12 @@ import {
   MoreHorizontal,
 } from 'lucide-react';
 import { useRuntime } from './context';
-import { currentSession, sessionText, sessionTitle } from '../model/state';
+import {
+  currentSession,
+  sessionListed,
+  sessionText,
+  sessionTitle,
+} from '../model/state';
 import { workspaceLabel } from '../model/workspace-label';
 import type {
   Attachment,
@@ -598,7 +603,7 @@ export function App() {
       detail: t('platform plugin'),
       run: () => navigate('/page/' + page.id),
     })),
-    ...snapshot.sessions.map((item) => ({
+    ...snapshot.sessions.filter(sessionListed).map((item) => ({
       id: item.id,
       label: sessionTitle(item.title),
       detail: t('session · {workspace}', {

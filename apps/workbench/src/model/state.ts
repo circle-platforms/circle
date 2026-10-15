@@ -15,10 +15,15 @@ import type {
 } from './types.ts';
 import { createFixtures } from '../preview/fixtures.ts';
 import { t } from '../i18n/index.ts';
-import { fallbackTitle } from '../../../../src/session_title.ts';
+import { fallbackTitle, titleWorthy } from '../../../../src/session_title.ts';
 /** A session's title; the core's placeholder for an untitled one reads in the interface language. */
 export const sessionTitle = (title: string) =>
   title === 'new session' ? t('new session') : title;
+/** An empty placeholder is not a saved conversation. It stays out of the lists. */
+export function sessionListed(session: Session): boolean {
+  if (session.messages.some((message) => message.role === 'user')) return true;
+  return session.title !== 'new session' && session.title !== '';
+}
 export const STORAGE_KEY = 'circle.workbench.preview.v1';
 export const EFFORTS: Effort[] = [
   'minimal',
@@ -231,10 +236,21 @@ export class PreviewRuntime implements RuntimePort {
       throw Error('local storage is full; changes are only kept in this tab');
   };
   newSession = (workspaceId = currentSession(this.snapshot).workspaceId) => {
+    const current = currentSession(this.snapshot);
+    if (
+      current.workspaceId === workspaceId &&
+      current.title === 'new session' &&
+      !current.messages.some((message) => message.role === 'user') &&
+      !current.archivedAt
+    )
+      return current.id;
     const session = freshSession(this.snapshot, workspaceId);
     this.change((state) => {
       state.previousSessionId = state.activeSessionId;
       state.activeSessionId = session.id;
+      state.sessions = state.sessions.filter(
+        (item) => item.id === session.id || sessionListed(item),
+      );
       state.sessions.unshift(session);
     });
     return session.id;
@@ -246,6 +262,9 @@ export class PreviewRuntime implements RuntimePort {
     this.change((state) => {
       state.previousSessionId = state.activeSessionId;
       state.activeSessionId = id;
+      state.sessions = state.sessions.filter(
+        (item) => item.id === id || sessionListed(item),
+      );
     });
   };
   deleteSession = (id: string) => {
@@ -329,7 +348,8 @@ export class PreviewRuntime implements RuntimePort {
         target.messages.push(message);
         target.leafId = message.id;
         target.hiddenIds = [];
-        if (target.title === 'new session') target.title = fallbackTitle(text);
+        if (target.title === 'new session' && !titleWorthy(text))
+          target.title = fallbackTitle(text);
         target.state = 'waiting';
       }
       target.draft = '';

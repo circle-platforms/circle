@@ -1752,6 +1752,24 @@ export class RuntimeController {
     tracker.reset(runtime.todos);
     this.planCompletions.set(runtime.session.id, tracker);
   }
+  /** An empty untitled session. It is not kept once the user leaves it. */
+  private unusedSession(id: string): boolean {
+    const row = this.store.get(id);
+    if (!row || row.parent_id || row.head || row.title) return false;
+    const owner = this.runtimes.get(id);
+    if (!owner || owner.busy) return false;
+    if (owner.jobs.list().some((job) => job.status === 'running')) return false;
+    if (
+      [...this.pending.values()].some((pending) => pending.row.sessionId === id)
+    )
+      return false;
+    return this.runtimes.lifecycle(id) === 'open';
+  }
+  private async dropUnused(id: string): Promise<void> {
+    if (!id || id === this.selectedSessionId || !this.unusedSession(id)) return;
+    await this.runtimes.delete(id, { confirmed: true });
+    this.publish();
+  }
   private async execute(command: RuntimeCommand): Promise<unknown> {
     this.metadata.refresh();
     this.synchronizeSharedSettings(loadSettings(this.home));
@@ -1897,8 +1915,12 @@ export class RuntimeController {
       case 'background':
         return runtime.jobs.backgroundForeground();
       case 'new-session': {
+        const previous = this.selectedSessionId;
+        if (this.unusedSession(previous) && !this.viewedSessionId)
+          return { sessionId: previous };
         const owner = this.runtimes.create(this.selectedWorkspace);
         this.selectRuntime(owner);
+        if (previous !== owner.session.id) await this.dropUnused(previous);
         return { sessionId: owner.session.id };
       }
       case 'select-session': {
@@ -1907,12 +1929,14 @@ export class RuntimeController {
         if (!row || row.parent_id) throw Error('session not found');
         if (id === this.selectedSessionId && !this.viewedSessionId)
           return { sessionId: id };
+        const previous = this.selectedSessionId;
         try {
           const owner = this.runtimes.open(row.workspace, id);
           await this.reloadTrustedRuntime(owner);
           if (owner.isClosing || this.closing)
             throw Error('session is closing');
           this.selectRuntime(owner);
+          if (previous !== id) await this.dropUnused(previous);
         } catch (error) {
           if (!(error instanceof SessionOccupiedError)) throw error;
           this.previous = this.selectedSessionId;

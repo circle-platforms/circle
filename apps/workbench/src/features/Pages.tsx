@@ -40,6 +40,7 @@ import {
   currentSession,
   EFFORTS,
   MODES,
+  sessionListed,
   sessionMode,
   sessionTitle,
 } from '../model/state';
@@ -142,6 +143,7 @@ function SessionsPage({ onSession, onDialog }: Props) {
   const current = currentSession(snapshot);
   const sessions = snapshot.sessions.filter(
     (session) =>
+      sessionListed(session) &&
       (all || session.workspaceId === current.workspaceId) &&
       Boolean(session.archivedAt) === archived &&
       (session.title + ' ' + session.id)

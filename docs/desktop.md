@@ -29,6 +29,8 @@ The app starts in a folder of its own, `workspace` inside its data folder, which
 
 ## Organizing sessions
 
+A new session is not kept until its first message. Ctrl+N while the open session is still empty stays on that session, and leaving an unused session does not leave a blank row. Search is Ctrl+K. Ctrl+R opens the same search; that is the history-search key, kept on purpose.
+
 The ⋯ beside a folder creates a session, reveals the folder in Finder or the system file manager, collapses the sidebar groups, or archives all its sessions. A session's ⋯ pins, renames, archives, restores or deletes it. Deleting still asks for confirmation and preserves the workspace folder.
 
 Archiving hides a session from the sidebar. All sessions → archived sessions shows it again; its history stays readable, and restore conversation enables the composer. Until restored, it cannot change the saved branch, labels or conversation mode. A fork or clone can start a separate conversation from it. Archive state is kept in desktop metadata, without deleting the folder or changing the terminal's checkpoint history.

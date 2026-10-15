@@ -115,8 +115,10 @@ export class Harness {
     }
   >();
   private active?: Promise<{ answer: string; usage: Usage }>;
-  /** Set once the fallback is saved. Sent after the turn so it does not share that request. */
+  /** Sent after the turn so it does not share that request. */
   private pendingTitle?: { display: string; fallback: string };
+  /** The title request, so close can let it land before the store goes. */
+  private titleTask?: Promise<void>;
   /** Secrets' values hidden as %NAME% in text the model reads. */
   readonly redact: Redactor;
   constructor(readonly options: HarnessOptions) {
@@ -240,6 +242,20 @@ export class Harness {
       /* run_error and persisted results record the stop. */
     }
   }
+  /** Let an in-flight title finish. Closing calls this before the store goes. */
+  finishTitle(): Promise<void> {
+    return this.titleTask ?? Promise.resolve();
+  }
+  private storedSession(): Session | undefined {
+    try {
+      return this.options.store.get(this.sessionId);
+    } catch (error) {
+      // The session can close while the title request is still in flight.
+      if (error instanceof Error && /not open/.test(error.message))
+        return undefined;
+      throw error;
+    }
+  }
   // A prompt with the files it mentions and the ones given with it (the desktop's). A model
   // known not to read images gets their paths only, and the screen says so. A file that
   // cannot go is left out: the model and the screen are told which and why.
@@ -344,11 +360,12 @@ export class Harness {
    */
   static readonly titleOutputTokens = TITLE_MAX_TOKENS;
   /**
-   * Ask the model for a short title after the fallback is already saved. A scripted model
-   * never sees this call. A rename that landed first is left alone. The request disables
-   * thinking: glm-5.3 still reasons when the field is omitted. Reasoning text is
-   * not a title. The prompt is wrapped as data, and a reply that answers the
-   * user is discarded.
+   * Ask the model for a short title. A sentence stays untitled until this
+   * returns; a short line such as "hi" already has its title and is not a
+   * failure. A scripted model never sees this call. A rename that landed
+   * first is left alone. The request disables thinking: glm-5.3 still reasons
+   * when the field is omitted. Reasoning text is not a title. The prompt is
+   * wrapped as data, and a reply that answers the user is discarded.
    */
   private generateTitle(display: string, fallback: string): void {
     // `this.model`, not the model passed at construction: /model and a reload replace it.
@@ -360,10 +377,14 @@ export class Harness {
         payload: { model_notice: { event: 'title_failed', message } },
       });
     };
-    // A short line keeps the fallback. A long line with no side request used
-    // to return here with no footer: the extension wrapper had dropped
-    // `sideRequests`. Either way the footer says why.
+    // A short line keeps the fallback and is not a failure. A long line with
+    // no side request used to return here with no footer: the extension
+    // wrapper had dropped `sideRequests`. That one still says why.
     const skip = titleSkipReason(prompt, model.sideRequests);
+    if (skip === 'prompt too short') {
+      titleTrace(`skipped (${skip})`);
+      return;
+    }
     if (skip) {
       titleTrace(`skipped (${skip})`);
       report(skip);
@@ -372,7 +393,19 @@ export class Harness {
     titleTrace(
       `request model=${model.model} chars=${prompt.length} maxTokens=${Harness.titleOutputTokens} thinking=disabled`,
     );
-    void model
+    const remember = (title: string): boolean => {
+      try {
+        this.options.store.rename(this.sessionId, title);
+      } catch (error) {
+        if (error instanceof Error && /not open/.test(error.message))
+          return false;
+        throw error;
+      }
+      this.bus.emit('info', { payload: { title } });
+      return true;
+    };
+    let task!: Promise<void>;
+    task = model
       .complete({
         system: readPrompt('agent', 'title.md'),
         messages: [
@@ -393,27 +426,36 @@ export class Harness {
       .then((response) => {
         // Reasoning is never a title, even when the answer is empty.
         const decision = acceptGeneratedTitle(response.message.content, prompt);
+        const current = this.storedSession();
+        if (!current) return;
+        // A rename that landed first wins. An empty title is still the
+        // placeholder, so the summary can replace it.
+        if (current.title && current.title !== fallback) {
+          titleTrace(
+            `discarded ${JSON.stringify(decision.title ?? '')} (session title is ${JSON.stringify(current.title)})`,
+          );
+          return;
+        }
         if (!decision.title) {
           titleTrace(`discarded (${decision.reason})`);
+          if (!current.title) remember(fallback);
           report(decision.reason);
           return;
         }
         const title = decision.title;
-        const current = this.options.store.get(this.sessionId);
-        if (!current || current.title !== fallback) {
-          titleTrace(
-            `discarded ${JSON.stringify(title)} (session title is ${JSON.stringify(current?.title ?? '')})`,
-          );
-          return;
-        }
-        this.options.store.rename(this.sessionId, title);
+        if (!remember(title)) return;
         titleTrace(`renamed to ${JSON.stringify(title)}`);
-        this.bus.emit('info', { payload: { title } });
       })
       .catch((error: unknown) => {
         // The fallback title stays. A side request must not fail the turn.
+        const current = this.storedSession();
+        if (current && !current.title) remember(fallback);
         report(error instanceof Error ? error.message : String(error));
       });
+    this.titleTask = task;
+    void task.finally(() => {
+      if (this.titleTask === task) this.titleTask = undefined;
+    });
   }
   private flushTitle(): void {
     const pending = this.pendingTitle;
@@ -446,8 +488,16 @@ export class Harness {
     const session = this.options.store.get(this.sessionId)!;
     if (!session.title && shown?.display !== undefined) {
       const fallback = fallbackTitle(shown.display);
-      this.options.store.rename(this.sessionId, fallback);
-      this.bus.emit('info', { payload: { title: fallback } });
+      const skip = titleSkipReason(
+        shown.display.trim(),
+        this.model.sideRequests,
+      );
+      // A sentence waits for the summary. The trimmed prompt is not the title
+      // while a tool approval is still open. A short line such as "hi" is.
+      if (skip) {
+        this.options.store.rename(this.sessionId, fallback);
+        this.bus.emit('info', { payload: { title: fallback } });
+      }
       this.pendingTitle = { display: shown.display, fallback };
     }
     this.bus.emit('run_start', { payload: { message: prompt } });

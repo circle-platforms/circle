@@ -1937,6 +1937,9 @@ test('an Anthropic endpoint without model discovery keeps the saved model availa
 
 test('a retried native command cannot create duplicate sessions or change its bound input', async (t) => {
   const f = await setup(t, []);
+  // The open session is empty, so a new session is a real second row only
+  // after this one is kept.
+  assert.equal((await f.call('rename-session', { title: 'kept' })).ok, true);
   const command = {
     id: randomUUID(),
     name: 'new-session',
@@ -1961,6 +1964,43 @@ test('a retried native command cannot create duplicate sessions or change its bo
     false,
   );
   assert.equal(f.controller.snapshot().sessions.length, 2);
+});
+
+test('an empty session is kept only until the first message', async (t) => {
+  const f = await setup(t, [{ message: assistant('noted') }]);
+  const first = f.controller.snapshot().activeSessionId;
+  const again = await f.call('new-session');
+  assert.equal(again.ok, true);
+  assert.equal((again.data as { sessionId: string }).sessionId, first);
+  assert.equal(f.controller.snapshot().sessions.length, 1);
+  assert.equal(f.controller.snapshot().sessions[0]!.title, 'new session');
+  assert.equal((await f.call('prompt', { text: 'hi' })).ok, true);
+  await wait(
+    () =>
+      f.controller.snapshot().sessions.find((row) => row.id === first)!
+        .state === 'idle',
+    'hi settles',
+  );
+  const titled = f.controller
+    .snapshot()
+    .sessions.find((row) => row.id === first)!;
+  assert.equal(titled.title, 'hi');
+  assert.equal(
+    titled.messages.some((message) => message.text.includes('title failed')),
+    false,
+  );
+  const created = await f.call('new-session');
+  assert.equal(created.ok, true);
+  const second = (created.data as { sessionId: string }).sessionId;
+  assert.notEqual(second, first);
+  assert.equal(f.controller.snapshot().activeSessionId, second);
+  assert.equal(f.controller.snapshot().sessions.length, 2);
+  assert.equal((await f.call('select-session', { id: first })).ok, true);
+  assert.equal(f.controller.snapshot().activeSessionId, first);
+  assert.equal(
+    f.controller.snapshot().sessions.some((row) => row.id === second),
+    false,
+  );
 });
 
 test('saved command templates expand real shell output into the next model request', async (t) => {
@@ -2909,8 +2949,10 @@ test('archive all rejects a busy workspace atomically and cannot strand a pendin
     { message: assistant('approved') },
   ]);
   const old = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('rename-session', { title: 'older' })).ok, true);
   await f.call('new-session');
   const id = f.controller.snapshot().activeSessionId;
+  assert.notEqual(id, old);
   const workspaceId = f.controller
     .snapshot()
     .sessions.find((session) => session.id === id)!.workspaceId;
@@ -3577,8 +3619,10 @@ test('background approval survives same-workspace switching and confirmed deleti
 test('deleting an active session selects a remaining session and preserves command identity', async (t) => {
   const f = await setup(t, []);
   const a = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('rename-session', { title: 'kept' })).ok, true);
   await f.call('new-session');
   const b = f.controller.snapshot().activeSessionId;
+  assert.notEqual(b, a);
   const command = {
     id: randomUUID(),
     name: 'delete-session',
@@ -4057,10 +4101,15 @@ test('a background session cleanup leaves selection and other model turns respon
     },
   );
   const a = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('rename-session', { title: 'A' })).ok, true);
   await f.call('new-session');
   const b = f.controller.snapshot().activeSessionId;
+  assert.notEqual(b, a);
+  assert.equal((await f.call('rename-session', { title: 'B' })).ok, true);
   await f.call('new-session');
   const c = f.controller.snapshot().activeSessionId;
+  assert.notEqual(c, b);
+  assert.equal((await f.call('rename-session', { title: 'C' })).ok, true);
   const command = {
     id: randomUUID(),
     name: 'delete-session' as const,
@@ -4204,8 +4253,11 @@ test('trusting a folder initializes every idle session with its own project cont
     'Independent trusted workspace instructions marker.\n',
   );
   const a = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('rename-session', { title: 'A' })).ok, true);
   await f.call('new-session');
   const b = f.controller.snapshot().activeSessionId;
+  assert.notEqual(b, a);
+  assert.equal((await f.call('rename-session', { title: 'B' })).ok, true);
   assert.equal((await f.call('trust', { enabled: true })).ok, true);
   await f.call('select-session', { id: a });
   assert.equal(
@@ -4318,7 +4370,8 @@ test('a desktop prompt asks for a title after the turn and shows a failure', asy
   );
   const row = () =>
     controller.snapshot().sessions.find((session) => session.id === sessionId)!;
-  assert.notEqual(row().title, 'Workspace file list');
+  // The summary has not arrived. The trimmed prompt is not the title.
+  assert.equal(row().title, 'new session');
   release();
   await wait(
     () => row().title === 'Workspace file list',

@@ -74,6 +74,19 @@ const MEDIA_TYPES = new Set([
   'application/pdf',
 ]);
 const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
+/** Scroll a transcript item inside the transcript. scrollIntoView also scrolls
+    every ancestor, which walks the composer off the window. */
+function revealIn(scroller: HTMLElement, target: Element): void {
+  const box = scroller.getBoundingClientRect();
+  const item = target.getBoundingClientRect();
+  if (item.top >= box.top && item.bottom <= box.bottom) return;
+  scroller.scrollTo({
+    top: Math.max(
+      0,
+      scroller.scrollTop + item.top - box.top - (box.height - item.height) / 2,
+    ),
+  });
+}
 const mediaFiles = (files: FileList): File[] =>
   Array.from(files).filter((file) => MEDIA_TYPES.has(file.type));
 // A transcript item: a message, or the tool calls between two messages, folded together.
@@ -202,7 +215,7 @@ export function Conversation({
         }),
       );
     }
-    input.current?.focus();
+    input.current?.focus({ preventScroll: true });
   };
   const lastEscape = useRef(0);
   const savedDraft = useRef('');
@@ -275,7 +288,7 @@ export function Conversation({
       if (send) act(() => runtime.send());
     }
     setDismissed(true);
-    input.current?.focus();
+    input.current?.focus({ preventScroll: true });
   };
   useEffect(() => {
     if (input.current) {
@@ -359,7 +372,7 @@ export function Conversation({
       const target = scroller.current?.querySelector(
         `[data-message-id="${matches[findIndex % matches.length]?.id}"]`,
       );
-      target?.scrollIntoView({ block: 'center' });
+      if (target && scroller.current) revealIn(scroller.current, target);
     }
   }, [find, findIndex]);
   useEffect(() => {
@@ -405,7 +418,9 @@ export function Conversation({
         else if (mapped === 'plan.focus') {
           setPlanCollapsed(false);
           requestAnimationFrame(() => planItems.current?.focus());
-        } else if (mapped === 'history.search') onCommand();
+        }
+        // history.search is ctrl+r. It opens the same search as ctrl+k.
+        else if (mapped === 'history.search') onCommand();
         else if (mapped === 'exit') onDialog('exit');
         else if (mapped === 'secret.enter') onDialog('secret');
         else if (mapped === 'suspend' || mapped === 'job.background') {
@@ -521,10 +536,11 @@ export function Conversation({
   const clockAt = items.findLastIndex(
     (item, index) => index > asked && item.kind === 'tools',
   );
-  const showRequest = () =>
-    scroller.current
-      ?.querySelector('.inline-request')
-      ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  const showRequest = () => {
+    const box = scroller.current;
+    const target = box?.querySelector('.inline-request');
+    if (box && target) revealIn(box, target);
+  };
   return (
     <section className="conversation">
       {finding && (
@@ -627,7 +643,9 @@ export function Conversation({
                           item={request}
                           onSecret={() => onDialog('secret')}
                           onSettled={() =>
-                            requestAnimationFrame(() => input.current?.focus())
+                            requestAnimationFrame(() =>
+                              input.current?.focus({ preventScroll: true }),
+                            )
                           }
                         />
                       ))}
@@ -677,7 +695,9 @@ export function Conversation({
               item={item}
               onSecret={() => onDialog('secret')}
               onSettled={() =>
-                requestAnimationFrame(() => input.current?.focus())
+                requestAnimationFrame(() =>
+                  input.current?.focus({ preventScroll: true }),
+                )
               }
             />
           ))}
@@ -807,7 +827,7 @@ export function Conversation({
                     } else if (event.key === 'Escape') {
                       event.preventDefault();
                       event.stopPropagation();
-                      input.current?.focus();
+                      input.current?.focus({ preventScroll: true });
                     } else if (
                       event.key.length === 1 &&
                       !event.ctrlKey &&
@@ -817,7 +837,7 @@ export function Conversation({
                       event.preventDefault();
                       event.stopPropagation();
                       setDraft(session.draft + event.key);
-                      input.current?.focus();
+                      input.current?.focus({ preventScroll: true });
                     }
                   }}
                 >

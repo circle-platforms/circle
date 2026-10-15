@@ -1393,6 +1393,7 @@ export class AgentRuntime {
     this.compactionController?.abort(new Error('Interrupted'));
     await this.activeCompaction?.catch(() => {});
     await this.harness.cancel();
+    await this.harness.finishTitle();
     await this.userShells.cancel();
     const stopped = await this.jobs.close();
     if (!this.ownershipError) this.userShells.flush();

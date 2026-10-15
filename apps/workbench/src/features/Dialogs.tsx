@@ -86,6 +86,8 @@ function desktopShortcuts(): [string, string][] {
     ['Alt+↑', t('take back queued messages')],
     ['?', t('this list, with an empty box')],
     [formatChord(DESKTOP_SEARCH_CHORD), t('search')],
+    // ctrl+r is history.search. It opens this same search on purpose.
+    [formatChord('ctrl+r'), t('search')],
     [mod + 'F', t('find in conversation')],
     [mod + 'N', t('new session')],
     [mod + 'O', t('open folder')],

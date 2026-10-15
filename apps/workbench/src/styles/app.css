@@ -64,8 +64,14 @@
 * {
   box-sizing: border-box;
 }
+html {
+  height: 100%;
+  overflow: hidden;
+}
 body {
   margin: 0;
+  height: 100%;
+  overflow: hidden;
 }
 button,
 input,
@@ -142,7 +148,19 @@ pre {
 .workbench {
   display: grid;
   grid-template-columns: 228px minmax(0, 1fr);
+  /* One row, and it cannot grow with the session list. A content-sized row
+     clips the composer at the bottom of the window, a little further each
+     time a session is added, and the page itself does not scroll. */
+  grid-template-rows: minmax(0, 1fr);
   height: 100dvh;
+  overflow: hidden;
+}
+.desktop-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
   overflow: hidden;
 }
 .workspace {
@@ -172,11 +190,13 @@ pre {
 .sidebar {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   height: 100%;
   background: var(--sidebar);
   border-right: 1px solid var(--border);
   padding: 0 12px;
   min-height: 0;
+  overflow: hidden;
 }
 .brand {
   display: flex;

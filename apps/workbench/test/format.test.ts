@@ -86,6 +86,7 @@ test('the footer and busy word write numbers as the terminal does', () => {
   assert.equal(formatChord('ctrl+shift+p'), 'Ctrl+Shift+P');
   assert.equal(DESKTOP_SEARCH_CHORD, 'ctrl+k');
   assert.equal(formatChord(DESKTOP_SEARCH_CHORD), 'Ctrl+K');
+  assert.equal(formatChord('ctrl+r'), 'Ctrl+R');
   const key = (
     name: string,
     mods: { ctrl?: boolean; meta?: boolean; shift?: boolean } = {},
@@ -164,6 +165,16 @@ test('search opens with focus in the field, not on the close button', () => {
     app.indexOf('<DialogHost'),
   );
   assert.match(search, /<SearchInput\s+autoFocus/);
+  const shortcuts = readFileSync(
+    fileURLToPath(new URL('../src/features/Dialogs.tsx', import.meta.url)),
+    'utf8',
+  );
+  assert.match(shortcuts, /formatChord\('ctrl\+r'\), t\('search'\)/);
+  const conversation = readFileSync(
+    fileURLToPath(new URL('../src/features/Conversation.tsx', import.meta.url)),
+    'utf8',
+  );
+  assert.match(conversation, /mapped === 'history\.search'\) onCommand\(\)/);
   const field = readFileSync(
     fileURLToPath(new URL('../src/components/common.tsx', import.meta.url)),
     'utf8',
