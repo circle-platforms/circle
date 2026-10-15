@@ -1,9 +1,26 @@
 /** ClipboardItem payloads remain exclusively in Electron's main process. */
 export async function preserveNativeClipboard(app) {
   const key = crypto.randomUUID();
-  await app.evaluate(async ({ clipboard }, key) => {
+  await app.evaluate(async ({ clipboard, ClipboardItem }, key) => {
     const snapshots = (globalThis.__circleJourneyClipboard ??= new Map());
-    snapshots.set(key, await clipboard.read());
+    // Electron 44 read() items are not writable instances. Materialize all
+    // formats before changing the system clipboard, then construct fresh items.
+    const items = await Promise.all(
+      (await clipboard.read()).map(
+        async (item) =>
+          new ClipboardItem(
+            Object.fromEntries(
+              await Promise.all(
+                item.types.map(async (type) => [
+                  type,
+                  await item.getType(type),
+                ]),
+              ),
+            ),
+          ),
+      ),
+    );
+    snapshots.set(key, items);
   }, key);
   return key;
 }

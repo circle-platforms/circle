@@ -3,7 +3,19 @@ import type * as Electron from 'electron';
 export async function clipboardApiContract(electron: typeof Electron) {
   const items: Electron.ClipboardItem[] = await electron.clipboard.read();
   const text: string = await electron.clipboard.readText();
-  await electron.clipboard.write(items);
+  const copies = await Promise.all(
+    items.map(
+      async (item) =>
+        new electron.ClipboardItem(
+          Object.fromEntries(
+            await Promise.all(
+              item.types.map(async (type) => [type, await item.getType(type)]),
+            ),
+          ),
+        ),
+    ),
+  );
+  await electron.clipboard.write(copies);
   await electron.clipboard.writeText(text);
   await electron.clipboard.clear();
   return new electron.ClipboardItem({

@@ -22,9 +22,22 @@ test('native clipboard checkpoints retain every opaque ClipboardItem in main and
   ];
   let current = original;
   let restored = false;
+  class ClipboardItem {
+    constructor(data) {
+      this.data = data;
+      this.types = Object.keys(data);
+    }
+    async getType(type) {
+      return this.data[type];
+    }
+  }
   const clipboard = {
     read: async () => current,
     write: async (items) => {
+      assert.ok(
+        items.every((item) => item instanceof ClipboardItem),
+        'read-only system items must be materialized before write',
+      );
       await new Promise((resolve) => setTimeout(resolve, 5));
       current = items;
       restored = true;
@@ -34,7 +47,8 @@ test('native clipboard checkpoints retain every opaque ClipboardItem in main and
     },
   };
   const app = {
-    evaluate: async (callback, arg) => callback({ clipboard }, arg),
+    evaluate: async (callback, arg) =>
+      callback({ clipboard, ClipboardItem }, arg),
   };
   const key = await preserveNativeClipboard(app);
   assert.equal(typeof key, 'string');
@@ -42,7 +56,11 @@ test('native clipboard checkpoints retain every opaque ClipboardItem in main and
   current = [{ types: ['text/plain'] }];
   await restoreNativeClipboard(app, key);
   assert.equal(restored, true);
-  assert.equal(current, original);
+  assert.notEqual(current, original);
+  assert.deepEqual(
+    current.map((item) => item.types),
+    original.map((item) => item.types),
+  );
   assert.deepEqual(
     [
       ...new Uint8Array(
