@@ -56,6 +56,7 @@ export async function runNativeBrowserStream({
     observer.observe(document.body, { subtree: true, childList: true });
     window.__journeyBrowserStream = {
       samples,
+      events,
       cleanup() {
         stop();
         observer.disconnect();
@@ -98,6 +99,27 @@ export async function runNativeBrowserStream({
     );
     return receipt;
   } finally {
+    const observations = await page.evaluate(() => ({
+      samples: window.__journeyBrowserStream.samples,
+      events: [...window.__journeyBrowserStream.events.values()],
+      window: { width: innerWidth, height: innerHeight },
+      rows: [
+        ...document.querySelectorAll('.browser-diagnostics [data-console-id]'),
+      ]
+        .filter((row) => row.textContent.includes('JOURNEY_PUSH_'))
+        .map((row) => ({
+          text: row.textContent,
+          bounds: row.getBoundingClientRect().toJSON(),
+          container: row
+            .closest('.browser-diagnostic-results')
+            ?.getBoundingClientRect()
+            .toJSON(),
+        })),
+    }));
+    await writeFile(
+      join(output, 'browser-event-to-paint-observations.json'),
+      JSON.stringify(observations, null, 2),
+    );
     await page.evaluate(() => {
       window.__journeyBrowserStream.cleanup();
       delete window.__journeyBrowserStream;

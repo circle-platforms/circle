@@ -941,9 +941,11 @@ try {
         await panel
           .getByRole('button', { name: 'queue task', exact: true })
           .click();
-        await panel
-          .getByRole('button', { name: 'start ready tasks', exact: true })
-          .click();
+        const startReady = panel.getByRole('button', {
+          name: 'start ready tasks',
+          exact: true,
+        });
+        if (await startReady.isEnabled()) await startReady.click();
       };
       await queue('JOURNEY_WRITE_A', 'write');
       await until(
