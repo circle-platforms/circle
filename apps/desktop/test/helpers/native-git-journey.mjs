@@ -154,6 +154,30 @@ export async function runNativeGitJourney({
       [...files].sort(),
     );
   };
+  const pushedHeads = [];
+  const push = async () => {
+    await refresh();
+    await panel
+      .getByRole('button', { name: 'push branch', exact: true })
+      .click();
+    await until(async () => {
+      const head = (await git('rev-parse', 'HEAD')).trim();
+      return (
+        (
+          await git(
+            '--git-dir=' + remote,
+            'rev-parse',
+            'refs/heads/' + branch,
+          ).catch(() => '')
+        ).trim() === head
+      );
+    }, 'local bare receives exact feature head');
+    pushedHeads.push(
+      (
+        await git('--git-dir=' + remote, 'rev-parse', 'refs/heads/' + branch)
+      ).trim(),
+    );
+  };
   const checks = [];
   let addedOrigin = false;
   try {
@@ -192,6 +216,7 @@ export async function runNativeGitJourney({
     );
     await snapshot('git-native-first-staged');
     await commit('Record first native manual change', [names.first]);
+    await push();
     checks.push(
       'native Git first commit contains only its explicit selected path',
     );
@@ -216,22 +241,8 @@ export async function runNativeGitJourney({
     checks.push(
       'second consecutive GUI commit clears hidden old selections and preserves unselected work',
     );
-    await refresh();
-    await panel
-      .getByRole('button', { name: 'push branch', exact: true })
-      .click();
-    await until(async () => {
-      const head = (await git('rev-parse', 'HEAD')).trim();
-      return (
-        (
-          await git(
-            '--git-dir=' + remote,
-            'rev-parse',
-            'refs/heads/' + branch,
-          ).catch(() => '')
-        ).trim() === head
-      );
-    }, 'local bare receives exact feature head');
+    await push();
+    assert.notEqual(pushedHeads[0], pushedHeads[1]);
     checks.push(
       'native GUI pushes the actual selected feature branch to owned local bare origin',
     );
@@ -329,6 +340,7 @@ export async function runNativeGitJourney({
     const result = {
       checks,
       featureBranch: branch,
+      pushedHeads,
       remote,
       remoteHead: (
         await git('--git-dir=' + remote, 'rev-parse', 'refs/heads/' + branch)
