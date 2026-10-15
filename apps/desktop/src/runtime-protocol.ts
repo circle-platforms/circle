@@ -47,6 +47,7 @@ export type RuntimeCommandName =
   | 'check-update'
   | 'discover-models'
   | 'shell'
+  | 'edit-queued'
   | 'remove-queued'
   | 'save-command'
   | 'save-secret'
@@ -126,6 +127,7 @@ export const runtimeCommands = new Set<RuntimeCommandName>([
   'check-update',
   'discover-models',
   'shell',
+  'edit-queued',
   'remove-queued',
   'save-command',
   'save-secret',

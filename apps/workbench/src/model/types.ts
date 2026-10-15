@@ -54,7 +54,15 @@ export interface ToolCall {
   name: string;
   input: Record<string, unknown>;
   output: string;
-  status: 'running' | 'success' | 'error' | 'waiting' | 'unknown';
+  status:
+    | 'running'
+    | 'success'
+    | 'error'
+    | 'waiting'
+    | 'unknown'
+    | 'cancelled'
+    | 'rejected';
+  attachments?: Attachment[];
   elapsed?: string;
   filePath?: string;
   before?: string;
@@ -187,7 +195,14 @@ export interface Job {
   sessionId: string;
   kind: 'command' | 'agent' | 'watch';
   title: string;
-  state: 'running' | 'waiting' | 'completed' | 'failed';
+  state:
+    | 'running'
+    | 'waiting'
+    | 'completed'
+    | 'failed'
+    | 'cancelled'
+    | 'stopping'
+    | 'interrupted';
   elapsed: string;
   output: string;
   outputPath: string;

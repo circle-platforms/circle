@@ -1,5 +1,6 @@
 /** Native workspace services have their own streams, independent of chat snapshots. */
 export type WorkspaceService =
+  | 'events'
   | 'documents'
   | 'terminal'
   | 'git'
@@ -22,10 +23,14 @@ export interface WorkspaceServiceEvent {
   epoch: string;
   seq: number;
   at: string;
+  cursor?: { offset: number; seq: number };
+  sourceSeq?: number;
+  sourceEpoch?: string;
   data: Record<string, unknown>;
 }
 
 const methods: Record<WorkspaceService, ReadonlySet<string>> = {
+  events: new Set(['replay']),
   documents: new Set(['read', 'save', 'applyEdits', 'refresh']),
   terminal: new Set([
     'create',
@@ -38,6 +43,10 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
   ]),
   git: new Set([
     'status',
+    'snapshot',
+    'applyPatch',
+    'conflictContinue',
+    'conflictAbort',
     'diff',
     'stage',
     'unstage',
@@ -52,6 +61,11 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
   language: new Set(['open', 'change', 'close', 'request']),
   debug: new Set([
     'start',
+    'snapshot',
+    'launch',
+    'attach',
+    'setBreakpoints',
+    'stackTrace',
     'breakpoints',
     'threads',
     'stack',
@@ -74,8 +88,18 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
     'retry',
     'events',
     'settings',
+    'createIntegration',
+    'mergeCandidates',
   ]),
-  delivery: new Set(['status', 'publish', 'checks', 'logs', 'retry', 'login']),
+  delivery: new Set([
+    'status',
+    'publish',
+    'checks',
+    'logs',
+    'retry',
+    'login',
+    'ready',
+  ]),
 };
 
 export function validateWorkspaceRequest(
