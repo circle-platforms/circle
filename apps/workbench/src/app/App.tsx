@@ -251,7 +251,7 @@ export function App() {
             : workspaceRelativePath(requested, workspace.path);
         if (runtime.mode !== 'live') await readNativeFile(runtime, relative);
         return {
-          path: relative,
+          path: relative.replaceAll('\\', '/'),
           line: line ?? target?.line,
           column: column ?? target?.column,
         };
@@ -262,7 +262,8 @@ export function App() {
       const error = result.error;
       notify(
         error instanceof Error
-          ? error.message === 'source is outside the workspace'
+          ? error.message === 'source is outside the workspace' ||
+            error.message === 'source is outside the granted workspace'
             ? t('source is outside the workspace')
             : error.message === 'unsupported source path'
               ? t('unsupported source path')
@@ -650,7 +651,10 @@ export function App() {
               path={file}
               line={sourceLine}
               column={sourceColumn}
-              onClose={() => setFile(null)}
+              onClose={() => {
+                sourceOpener.current.cancel();
+                setFile(null);
+              }}
             />
           </Suspense>
         ) : null

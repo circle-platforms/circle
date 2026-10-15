@@ -31,6 +31,16 @@ test('source links resolve the actual local file and requested line without open
     line: 4,
     column: 2,
   });
+  assert.deepEqual(sourceLocation('file:///work/a%23b.ts#L2'), {
+    path: '/work/a#b.ts',
+    line: 2,
+    column: undefined,
+  });
+  assert.deepEqual(sourceLocation('src/a%3Fb.ts'), {
+    path: 'src/a?b.ts',
+    line: undefined,
+    column: undefined,
+  });
   assert.deepEqual(sourceLocation('AGENTS.md#L1'), {
     path: 'AGENTS.md',
     line: 1,

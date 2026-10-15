@@ -24,24 +24,22 @@ export function sourceLocation(href: string): SourceLocation | null {
       return null;
     }
   }
-  try {
-    value = decodeURIComponent(value);
-  } catch {
-    return null;
-  }
   const anchor = value.match(
     /(?:#L(\d+)(?:[C:](\d+))?(?:-L?\d+)?|:(\d+)(?::(\d+))?)$/,
   );
-  const path = (anchor ? value.slice(0, anchor.index) : value).replace(
-    /^\.\//,
-    '',
-  );
-  if (!path || path.includes('\0') || path.includes('?') || path.includes('#'))
+  let path = anchor ? value.slice(0, anchor.index) : value;
+  // Reject URI fragments/queries before decoding: encoded # and ? can be real
+  // filename characters and must never be decoded twice or treated as anchors.
+  if (path.includes('?') || path.includes('#')) return null;
+  try {
+    path = decodeURIComponent(path);
+  } catch {
     return null;
-  // Plain relative links need a filename; URL routes are not source files.
+  }
+  path = path.replace(/^\.\//, '');
+  if (!path || path.includes('\0')) return null;
   if (
     !/^file:/i.test(href) &&
-    !/^[A-Za-z]:[\\/]/.test(href) &&
     !path.startsWith('/') &&
     !/(?:^|\/)[^/]+\.[^/]+$/.test(path) &&
     !/(?:^|\/)(?:AGENTS|README|LICENSE|Dockerfile|Makefile)$/.test(path)
