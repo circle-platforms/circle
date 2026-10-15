@@ -80,9 +80,22 @@ test('executed evidence reads bytes only from the actual app identity and preloa
       });
     }
     const app = {
+      firstWindow: async () => ({}),
+      context: () => ({
+        newCDPSession: async () => {
+          let parsed;
+          return {
+            on: (name, listener) => {
+              parsed = listener;
+            },
+            send: async () =>
+              parsed({ url: join(root, 'dist', 'preload.cjs') }),
+            detach: async () => {},
+          };
+        },
+      }),
       evaluate: async (callback, arg) =>
         runInNewContext('(' + callback.toString() + ')', {
-          require: createRequire(import.meta.url),
           process,
         })(
           {

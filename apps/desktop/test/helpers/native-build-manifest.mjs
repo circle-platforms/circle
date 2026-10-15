@@ -41,62 +41,82 @@ export function verifyNativeBuildManifest(manifest, executed) {
 
 /** Hash only paths belonging to the actual running main window, including asar files. */
 export async function executedNativeBuildEvidence(app, manifest) {
-  return app.evaluate(async ({ app, BrowserWindow }, requested) => {
-    const fs = process.getBuiltinModule('node:fs/promises');
-    const path = process.getBuiltinModule('node:path');
-    const crypto = process.getBuiltinModule('node:crypto');
-    const appPath = app.getAppPath();
-    const pkg = JSON.parse(
-      await fs.readFile(path.join(appPath, 'package.json'), 'utf8'),
-    );
-    const mainPath = path.resolve(appPath, pkg.main);
-    const window = BrowserWindow.getAllWindows().find((window) =>
-      window.webContents.getURL().startsWith('circle://workbench/'),
-    );
-    if (!window) throw Error('executed workbench window is unavailable');
-    const preloadPath = window.webContents.getLastWebPreferences().preload;
-    const rendererPath = path.join(
-      path.dirname(mainPath),
-      'renderer',
-      'index.html',
-    );
-    const rendererRoot = path.dirname(rendererPath);
-    const workerPath = path.join(path.dirname(mainPath), 'runtime-worker.mjs');
-    const artifacts = [];
-    for (const entry of requested.artifacts ?? []) {
-      if (
-        !path.isAbsolute(entry.path ?? '') ||
-        path.normalize(entry.path) !== entry.path
-      )
-        throw Error('manifest artifact requires an absolute normalized path');
-      const relative = path.relative(rendererRoot, entry.path);
-      const rendererAsset =
-        relative !== '' &&
-        relative !== '..' &&
-        !relative.startsWith('..' + path.sep) &&
-        !path.isAbsolute(relative);
-      if (
-        ![mainPath, preloadPath, workerPath].includes(entry.path) &&
-        !rendererAsset
-      )
-        throw Error('manifest artifact is outside the executed application');
-      artifacts.push({
-        path: entry.path,
-        sha256: crypto
-          .createHash('sha256')
-          .update(await fs.readFile(entry.path))
-          .digest('hex'),
-      });
-    }
-    return {
-      platform: process.platform,
-      isPackaged: app.isPackaged,
-      appPath,
-      mainPath,
-      preloadPath,
-      rendererPath,
-      rendererURL: window.webContents.getURL(),
-      artifacts,
-    };
-  }, manifest);
+  const page = await app.firstWindow();
+  const session = await app.context().newCDPSession(page);
+  const loadedScripts = [];
+  session.on('Debugger.scriptParsed', (script) =>
+    loadedScripts.push(script.url),
+  );
+  try {
+    await session.send('Debugger.enable');
+  } finally {
+    await session.detach();
+  }
+  return app.evaluate(
+    async ({ app, BrowserWindow }, { requested, loadedScripts }) => {
+      const fs = process.getBuiltinModule('node:fs/promises');
+      const path = process.getBuiltinModule('node:path');
+      const crypto = process.getBuiltinModule('node:crypto');
+      const appPath = app.getAppPath();
+      const pkg = JSON.parse(
+        await fs.readFile(path.join(appPath, 'package.json'), 'utf8'),
+      );
+      const mainPath = path.resolve(appPath, pkg.main);
+      const window = BrowserWindow.getAllWindows().find((window) =>
+        window.webContents.getURL().startsWith('circle://workbench/'),
+      );
+      if (!window) throw Error('executed workbench window is unavailable');
+      const expectedPreload = path.join(path.dirname(mainPath), 'preload.cjs');
+      const preloadPath = loadedScripts.find((url) => url === expectedPreload);
+      if (!preloadPath)
+        throw Error('executed preload script identity is unavailable');
+      const rendererPath = path.join(
+        path.dirname(mainPath),
+        'renderer',
+        'index.html',
+      );
+      const rendererRoot = path.dirname(rendererPath);
+      const workerPath = path.join(
+        path.dirname(mainPath),
+        'runtime-worker.mjs',
+      );
+      const artifacts = [];
+      for (const entry of requested.artifacts ?? []) {
+        if (
+          !path.isAbsolute(entry.path ?? '') ||
+          path.normalize(entry.path) !== entry.path
+        )
+          throw Error('manifest artifact requires an absolute normalized path');
+        const relative = path.relative(rendererRoot, entry.path);
+        const rendererAsset =
+          relative !== '' &&
+          relative !== '..' &&
+          !relative.startsWith('..' + path.sep) &&
+          !path.isAbsolute(relative);
+        if (
+          ![mainPath, preloadPath, workerPath].includes(entry.path) &&
+          !rendererAsset
+        )
+          throw Error('manifest artifact is outside the executed application');
+        artifacts.push({
+          path: entry.path,
+          sha256: crypto
+            .createHash('sha256')
+            .update(await fs.readFile(entry.path))
+            .digest('hex'),
+        });
+      }
+      return {
+        platform: process.platform,
+        isPackaged: app.isPackaged,
+        appPath,
+        mainPath,
+        preloadPath,
+        rendererPath,
+        rendererURL: window.webContents.getURL(),
+        artifacts,
+      };
+    },
+    { requested: manifest, loadedScripts },
+  );
 }
