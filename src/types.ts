@@ -12,6 +12,20 @@ export interface Usage {
   cache_write_tokens?: number;
   cache_write_1h_tokens?: number;
 }
+/** Provider completion evidence. Absent on older history and custom models. */
+export interface ModelCompletion {
+  reason:
+    | 'stop'
+    | 'tool_calls'
+    | 'length'
+    | 'filter'
+    | 'pause'
+    | 'missing'
+    | 'unknown';
+  provider_reason?: string;
+  output_limit?: number;
+  client_stop?: 'repetition';
+}
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'tool' | 'system';
@@ -33,6 +47,7 @@ export interface Message {
   cost?: import('./pricing.js').PriceReceipt;
   internal?: string;
   truncated?: boolean;
+  completion?: ModelCompletion;
   recoverable?: boolean;
   legacy_data?: { type: string; data: Record<string, unknown> };
 }

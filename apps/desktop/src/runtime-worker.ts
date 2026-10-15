@@ -31,7 +31,9 @@ if (fixturePath) {
         message?: ModelResponse['message'];
         delayMs?: number;
         waitForAbort?: boolean;
-        chunks?: string[];
+        chunks?: (string | { text: string; thinking?: boolean })[];
+        usage?: ModelResponse['usage'];
+        error?: string;
       }) =>
         async (request: Parameters<ScriptedModel['complete']>[0]) => {
           if (fixture.requestsPath)
@@ -46,6 +48,7 @@ if (fixturePath) {
               }) + '\n',
               { mode: 0o600 },
             );
+          if (entry.error) throw Error(entry.error);
           if (entry.waitForAbort)
             await new Promise<void>((_resolve, reject) => {
               const abort = () =>
@@ -54,7 +57,8 @@ if (fixturePath) {
               if (request.signal.aborted) abort();
             });
           for (const chunk of entry.chunks ?? []) {
-            request.token(chunk);
+            if (typeof chunk === 'string') request.token(chunk);
+            else request.token(chunk.text, chunk.thinking);
             await delay(entry.delayMs ?? 15, undefined, {
               signal: request.signal,
             });
@@ -64,10 +68,13 @@ if (fixturePath) {
           const message = entry.message ?? {
             id: randomUUID(),
             role: 'assistant',
-            content: (entry.chunks ?? []).join(''),
+            content: (entry.chunks ?? [])
+              .filter((chunk) => typeof chunk === 'string' || !chunk.thinking)
+              .map((chunk) => (typeof chunk === 'string' ? chunk : chunk.text))
+              .join(''),
           };
           if (message.content && !entry.chunks) request.token(message.content);
-          return { message, usage: emptyUsage() };
+          return { message, usage: entry.usage ?? emptyUsage() };
         },
     ),
   );

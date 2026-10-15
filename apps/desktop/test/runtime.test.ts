@@ -14,6 +14,7 @@ import {
   type BrowserResult,
 } from '../../../src/browser/protocol.ts';
 import { ScriptedModel } from '../../../src/testing.ts';
+import type { AgentRuntime } from '../../../src/runtime.ts';
 import { emptyUsage, type Message } from '../../../src/types.ts';
 import {
   saveSettings,
@@ -97,6 +98,381 @@ function fakeBrowser(result: BrowserResult = { text: 'page snapshot' }) {
   };
   return { port, requests };
 }
+
+test('the desktop keeps interleaved text and thinking, then exposes one typed incomplete response without tool effects', async (t) => {
+  const f = await setup(t, [
+    async (request) => {
+      request.token('first thought', true);
+      request.token('first text ');
+      request.token(' then more thought', true);
+      request.token('second text');
+      return {
+        message: {
+          id: 'interleaved',
+          role: 'assistant',
+          content: 'first text second text',
+          thinking: 'first thought then more thought',
+          completion: { reason: 'tool_calls', provider_reason: 'tool_use' },
+          tool_calls: [
+            {
+              id: 'read',
+              name: 'read_file',
+              args: { file_path: 'fixture.txt' },
+            },
+          ],
+        },
+        usage: { input_tokens: 11, output_tokens: 4, cache_read_tokens: 0 },
+      };
+    },
+    {
+      message: {
+        id: 'partial',
+        role: 'assistant',
+        content: 'partial final answer',
+        completion: {
+          reason: 'length',
+          provider_reason: 'max_tokens',
+          output_limit: 32000,
+        },
+        truncated: true,
+        tool_calls: [
+          {
+            id: 'blocked',
+            name: 'write_file',
+            args: { file_path: 'must-not-exist.txt', content: 'blocked' },
+          },
+        ],
+      },
+      usage: { input_tokens: 12, output_tokens: 32000, cache_read_tokens: 0 },
+    },
+  ]);
+  await writeFile(join(f.workspace, 'fixture.txt'), 'real fixture bytes');
+  await f.call('prompt', { text: 'show text and incomplete response' });
+  await wait(
+    () => f.updates.some((row) => row.event?.kind === 'run_error'),
+    'specific completion failure',
+  );
+  const snapshot = f.controller.snapshot();
+  assert.equal(
+    snapshot.runtime?.error,
+    undefined,
+    'typed completion failures already have a persistent transcript diagnostic',
+  );
+  const session = snapshot.sessions.find(
+    (row) => row.id === snapshot.activeSessionId,
+  )!;
+  const interleaved = session.messages.find(
+    (row) => row.text === 'first text second text',
+  )!;
+  assert.equal(interleaved.text, 'first text second text');
+  assert.equal(interleaved.thinking, 'first thought then more thought');
+  assert(
+    f.updates.some((row) =>
+      row.snapshot.sessions.some((session) =>
+        session.messages.some(
+          (message) =>
+            message.at === 'streaming' &&
+            message.thinking === 'first thought' &&
+            message.text === 'first text ',
+        ),
+      ),
+    ),
+  );
+  const notices = session.messages.filter((row) => row.role === 'notice');
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0]!.completionFailure, 'output_limit');
+  assert.equal(
+    notices[0]!.text,
+    '✖ model output limit reached; response incomplete',
+  );
+  assert.equal(existsSync(join(f.workspace, 'must-not-exist.txt')), false);
+  assert.equal(f.model.requests.length, 2);
+  assert.equal(
+    f.updates.filter((row) => row.event?.kind === 'run_end').length,
+    0,
+  );
+  assert.equal(
+    f.updates.filter((row) => row.event?.kind === 'llm_end').length,
+    2,
+  );
+  const reloadedModel = new ScriptedModel([]);
+  await f.controller.close();
+  const reloaded = new RuntimeController({
+    home: f.home,
+    workspace: f.workspace,
+    userHome: f.home,
+    model: reloadedModel,
+    emit: () => {},
+  });
+  try {
+    const restored = reloaded.snapshot();
+    const restoredSession = restored.sessions.find(
+      (row) => row.id === restored.activeSessionId,
+    )!;
+    const restoredNotices = visibleMessages(restoredSession).filter(
+      (row) => row.role === 'notice',
+    );
+    assert.deepEqual(
+      restoredNotices.map((row) => row.completionFailure),
+      ['output_limit'],
+    );
+    assert.equal(
+      restoredSession.messages.find(
+        (row) => row.text === 'partial final answer',
+      )?.text,
+      'partial final answer',
+    );
+    assert.equal(reloadedModel.requests.length, 0);
+    (
+      reloaded as unknown as {
+        active: { bus: { emit: (kind: string, options: unknown) => void } };
+      }
+    ).active.bus.emit('run_error', {
+      payload: {
+        message: 'model output limit reached; response incomplete',
+        completion_failure: 'output_limit',
+        completion_message_id: 'unsaved-compaction-response',
+      },
+    });
+    const later = reloaded.snapshot();
+    assert.equal(
+      visibleMessages(
+        later.sessions.find((row) => row.id === later.activeSessionId)!,
+      ).filter((row) => row.completionFailure === 'output_limit').length,
+      2,
+      'an unrelated current error must not be hidden by an older persisted failure',
+    );
+  } finally {
+    await reloaded.close();
+  }
+});
+
+test('untyped runtime failures retain their error notification', async (t) => {
+  const f = await setup(t, [
+    async () => {
+      throw Error('local fixture network failed');
+    },
+  ]);
+  await f.call('prompt', { text: 'show an untyped failure' });
+  await wait(
+    () =>
+      f.controller.snapshot().runtime?.error === 'local fixture network failed',
+    'untyped failure notification',
+  );
+});
+
+test('continuing after a legacy empty-answer error clears current failure state while keeping the error before the new turn', async (t) => {
+  let finish!: () => void;
+  const held = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const f = await setup(t, [
+    async () => {
+      throw Error('model ended without an answer');
+    },
+    async () => {
+      await held;
+      return {
+        message: assistant('continued successfully'),
+        usage: emptyUsage(),
+      };
+    },
+  ]);
+  try {
+    await f.call('prompt', { text: 'trigger legacy empty answer' });
+    await wait(
+      () =>
+        f.controller.snapshot().runtime?.error ===
+        'model ended without an answer',
+      'legacy runtime error',
+    );
+    await f.call('prompt', { text: 'continue after legacy error' });
+    await wait(
+      () => f.model.requests.length === 2,
+      'held continuation request',
+    );
+    const current = f.controller.snapshot();
+    const session = current.sessions.find(
+      (row) => row.id === current.activeSessionId,
+    )!;
+    const shown = visibleMessages(session);
+    assert.equal(current.runtime?.error, undefined);
+    assert(session.turn, 'the continuation is running');
+    const failure = shown.findIndex(
+      (row) => row.text === '✖ model ended without an answer',
+    );
+    const continued = shown.findIndex(
+      (row) =>
+        row.role === 'user' && row.text === 'continue after legacy error',
+    );
+    assert(
+      failure >= 0 && failure < continued,
+      'the historical failure stays at its original position',
+    );
+    finish();
+    await wait(
+      () => f.updates.some((row) => row.event?.kind === 'run_end'),
+      'continued success',
+    );
+    const final = f.controller.snapshot();
+    assert.equal(final.runtime?.error, undefined);
+    assert.equal(
+      final.sessions
+        .find((row) => row.id === final.activeSessionId)!
+        .messages.filter(
+          (row) => row.text === '✖ model ended without an answer',
+        ).length,
+      1,
+    );
+    assert.equal(f.model.requests.length, 2);
+  } finally {
+    finish();
+  }
+});
+
+test('an error anchored to an invisible empty assistant stays before the continued turn', async (t) => {
+  let finish!: () => void;
+  const held = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const f = await setup(t, [
+    {
+      message: {
+        id: 'empty-hidden-assistant',
+        role: 'assistant',
+        content: '',
+        provider_content: [
+          { type: 'thinking', thinking: '', signature: 'synthetic-signature' },
+        ],
+      },
+    },
+    async () => {
+      await held;
+      return {
+        message: assistant('continued after invisible response'),
+        usage: emptyUsage(),
+      };
+    },
+  ]);
+  try {
+    await f.call('prompt', { text: 'trigger invisible empty response' });
+    await wait(
+      () => f.updates.some((row) => row.event?.kind === 'run_error'),
+      'empty response error',
+    );
+    await f.call('prompt', { text: 'continue after invisible response' });
+    await wait(
+      () => f.model.requests.length === 2,
+      'held continuation request',
+    );
+    const current = f.controller.snapshot();
+    const shown = visibleMessages(
+      current.sessions.find((row) => row.id === current.activeSessionId)!,
+    );
+    const failure = shown.findIndex(
+      (row) => row.completionFailure === 'empty_response',
+    );
+    const continued = shown.findIndex(
+      (row) =>
+        row.role === 'user' && row.text === 'continue after invisible response',
+    );
+    assert(
+      failure >= 0 && failure < continued,
+      'an invisible historical anchor must not move the failure below the new turn',
+    );
+    finish();
+    await wait(
+      () => f.updates.some((row) => row.event?.kind === 'run_end'),
+      'continued success',
+    );
+    const final = f.controller.snapshot();
+    const finalShown = visibleMessages(
+      final.sessions.find((row) => row.id === final.activeSessionId)!,
+    );
+    assert(
+      finalShown.findIndex(
+        (row) => row.completionFailure === 'empty_response',
+      ) <
+        finalShown.findIndex(
+          (row) => row.text === 'continued after invisible response',
+        ),
+    );
+    assert.equal(f.model.requests.length, 2);
+  } finally {
+    finish();
+  }
+});
+
+test('consecutive invisible response failures keep their order and branch ownership at the same visible ancestor', async (t) => {
+  const f = await setup(t, []);
+  const active = (f.controller as unknown as { active: AgentRuntime }).active;
+  const id = active.session.id;
+  const visibleHead = active.store.append(id, [
+    {
+      id: 'visible-before-failures',
+      role: 'user',
+      content: 'shared visible ancestor',
+    },
+  ]);
+  const firstHead = active.store.append(id, [
+    { id: 'invisible-one', role: 'assistant', content: '' },
+  ]);
+  active.bus.emit('run_error', {
+    payload: { message: 'first hidden response failed' },
+  });
+  const secondHead = active.store.append(id, [
+    { id: 'invisible-two', role: 'assistant', content: '' },
+  ]);
+  active.bus.emit('run_error', {
+    payload: { message: 'second hidden response failed' },
+  });
+  const projected = () => {
+    const snapshot = f.controller.snapshot();
+    return visibleMessages(
+      snapshot.sessions.find((session) => session.id === id)!,
+    );
+  };
+  const failures = projected().filter((row) => row.role === 'notice');
+  assert.deepEqual(
+    failures.map((row) => row.text),
+    ['✖ first hidden response failed', '✖ second hidden response failed'],
+  );
+  assert.deepEqual(
+    failures.map((row) => row.parentId),
+    [firstHead, secondHead],
+  );
+  active.store.select(id, visibleHead);
+  active.store.append(id, [
+    { id: 'sibling-hidden', role: 'assistant', content: '' },
+  ]);
+  active.bus.emit('run_error', {
+    payload: { message: 'sibling hidden response failed' },
+  });
+  assert.deepEqual(
+    projected()
+      .filter((row) => row.role === 'notice')
+      .map((row) => row.text),
+    ['✖ sibling hidden response failed'],
+  );
+  active.store.select(id, secondHead);
+  active.store.append(id, [
+    {
+      id: 'continued-visible',
+      role: 'assistant',
+      content: 'visible continuation',
+    },
+  ]);
+  assert.deepEqual(
+    projected().map((row) => row.text),
+    [
+      'shared visible ancestor',
+      '✖ first hidden response failed',
+      '✖ second hidden response failed',
+      'visible continuation',
+    ],
+  );
+  assert.equal(f.model.requests.length, 0);
+});
 
 test('browser tools are available only when a browser port is connected', async (t) => {
   const absent = await setup(t, [{ message: assistant('no browser') }]);

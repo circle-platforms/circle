@@ -409,7 +409,7 @@ test('a request that times out waits longer the next time, so a slow endpoint an
     [['timeout', 1]],
   );
 });
-test('empty missing-finish stream is retried once; partial output is retained and marked truncated', async (t) => {
+test('missing-finish streams preserve empty or partial evidence without replaying the request', async (t) => {
   let calls = 0;
   const base = await gateway(t, (_request, response) => {
     calls++;
@@ -418,11 +418,11 @@ test('empty missing-finish stream is retried once; partial output is retained an
     else chunk(response, { content: 'done' }, 'stop');
     response.end('data: [DONE]\n\n');
   });
-  assert.equal(
-    (await model(t, base).complete(request())).message.content,
-    'done',
-  );
-  assert.equal(calls, 2);
+  const empty = await model(t, base).complete(request());
+  assert.equal(empty.message.content, '');
+  assert.equal(empty.message.completion?.reason, 'missing');
+  assert.equal(empty.message.truncated, true);
+  assert.equal(calls, 1);
   let partialCalls = 0;
   const partialBase = await gateway(t, (_request, response) => {
     partialCalls++;
@@ -433,6 +433,7 @@ test('empty missing-finish stream is retried once; partial output is retained an
   const result = await model(t, partialBase).complete(request());
   assert.equal(result.message.content, 'partial');
   assert.equal(result.message.truncated, true);
+  assert.equal(result.message.completion?.reason, 'missing');
   assert.equal(partialCalls, 1);
 });
 test('thinking repetition receives a bounded recovery reminder and varied text is left alone', async (t) => {

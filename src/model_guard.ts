@@ -312,7 +312,18 @@ export function rejectedParameters(error: unknown): string[] {
   const explicit = bodies(error)
     .map((item) => item.param)
     .find((value) => typeof value === 'string' && value.trim());
-  if (typeof explicit === 'string') return [explicit.toLowerCase()];
+  const parameter =
+    typeof explicit === 'string' ? explicit.trim().toLowerCase() : undefined;
+  const display = /\bthinking(?:\.(?:adaptive|enabled))?\.display\b/;
+  // A precise nested rejection can refine a coarse parent parameter, while an
+  // explicit rejection of another field remains authoritative.
+  if (
+    (parameter !== undefined && display.test(parameter)) ||
+    ((parameter === undefined || parameter === 'thinking') &&
+      display.test(text))
+  )
+    return ['thinking.display'];
+  if (parameter) return [parameter];
   const match = text.match(
     /\bthe\s+([a-z_][a-z0-9_.-]*)\s+(?:parameter|argument)\b/,
   );
@@ -357,7 +368,6 @@ export class ModelGuard {
     const budgets = this.options.budgets ?? BUDGETS;
     let drops = 0;
     let repeats = 0;
-    let resentFinish = false;
     let current = request;
     const notice = (event: ModelNotice): void => {
       try {
@@ -451,14 +461,10 @@ export class ModelGuard {
           continue;
         }
         if (error instanceof MissingFinish) {
-          if (!envFlag('CIRCLE_LLM_VERIFY_FINISH') || error.output) {
-            notice({ event: 'missing_finish', truncated: error.output });
-            return error.partial;
-          }
-          if (resentFinish) throw error;
-          resentFinish = true;
-          notice({ event: 'missing_finish_retry' });
-          continue;
+          // A completed transport with no provider finish is evidence for the
+          // harness to classify, not a network retry or a successful answer.
+          notice({ event: 'missing_finish', truncated: error.output });
+          return error.partial;
         }
         const kind = errorKind(error);
         // A timeout or a dropped connection is sent again even after part of the answer

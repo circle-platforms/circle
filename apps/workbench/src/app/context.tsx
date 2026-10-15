@@ -2,6 +2,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   useSyncExternalStore,
 } from 'react';
@@ -31,18 +32,29 @@ export function RuntimeProvider({
 }) {
   const snapshot = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot);
   const [notice, setNotice] = useState('');
+  const shownNotice = useRef<{ text: string; runtime: boolean } | undefined>(
+    undefined,
+  );
   const [router] = useState(() => ({
     handler: (_result: CommandResult) => {},
   }));
-  const notify = (message: string) => {
+  const showNotice = (message: string, runtime = false) => {
+    const shown = { text: message, runtime };
+    shownNotice.current = shown;
     setNotice(message);
-    setTimeout(
-      () => setNotice((current) => (current === message ? '' : current)),
-      4200,
-    );
+    setTimeout(() => {
+      if (shownNotice.current !== shown) return;
+      shownNotice.current = undefined;
+      setNotice('');
+    }, 4200);
   };
+  const notify = (message: string) => showNotice(message);
   useEffect(() => {
-    if (snapshot.runtime?.error) notify(snapshot.runtime.error);
+    if (snapshot.runtime?.error) showNotice(snapshot.runtime.error, true);
+    else if (shownNotice.current?.runtime) {
+      shownNotice.current = undefined;
+      setNotice('');
+    }
   }, [snapshot.runtime?.error]);
   const perform = (action: () => void | Promise<unknown>) => {
     try {

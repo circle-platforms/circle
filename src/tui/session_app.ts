@@ -1,4 +1,5 @@
 import { QuestionCard } from '../ink/components/question_card.js';
+import { completionFailure } from '../model_completion.js';
 import { ApprovalCard } from '../ink/components/approval_card.js';
 import { SecretCard } from '../ink/components/secret_card.js';
 import type { Card } from '../ink/components/dialog_card.js';
@@ -362,6 +363,7 @@ export class SessionApp {
     this.lastRenderAt = performance.now();
     if (this.runtime) {
       this.state.messages = this.undo.visible(this.runtime.harness.messages);
+      this.projectCompletionNotices();
       this.state.userShells = this.runtime.userShells.views.filter(
         (shell) => shell.sessionId === this.runtime!.session.id,
       );
@@ -599,6 +601,40 @@ export class SessionApp {
     this.addNotice(text);
     this.repaint();
   }
+  private persistedCompletionNotices = new Set<string>();
+  private projectCompletionNotices(): void {
+    const anchors = this.state.noticeAnchors ?? [];
+    const projected = new Set(this.persistedCompletionNotices);
+    const kept = this.state.notices
+      .map((text, index) => [text, anchors[index]] as const)
+      // Remove exactly the projected occurrence: a later, unsaved request may
+      // fail with the same text at the same history position.
+      .filter(([text, anchor]) => !projected.delete(`${anchor}\0${text}`));
+    this.state.notices = kept.map(([text]) => text);
+    this.state.noticeAnchors = kept.map(([, anchor]) => anchor);
+    this.persistedCompletionNotices.clear();
+    for (const [index, message] of this.state.messages.entries()) {
+      if (
+        message.role !== 'assistant' ||
+        (!message.completion && !message.truncated)
+      )
+        continue;
+      const failure = completionFailure(message);
+      if (!failure) continue;
+      let anchor = message.id;
+      // The failed tool results belong to this response and follow it in history.
+      for (
+        let next = index + 1;
+        this.state.messages[next]?.role === 'tool';
+        next++
+      )
+        anchor = this.state.messages[next]!.id;
+      const text = `✖ ${failure.message}`;
+      this.state.notices.push(text);
+      this.state.noticeAnchors.push(anchor);
+      this.persistedCompletionNotices.add(`${anchor}\0${text}`);
+    }
+  }
   // A notice goes after the message on screen when it came, not under everything that
   // arrives later: `''` before the first message, nothing when no session is open yet.
   private addNotice(text: string): void {
@@ -813,13 +849,28 @@ export class SessionApp {
         this.state.started = Date.now();
         // The stop mark belongs to the turn that was stopped. Snapshot it for /undo,
         // then drop it: a new turn has started, so it must not stay at the bottom.
-        this.undo.push(this.screenBefore(event.payload.message));
+        const before = this.screenBefore(event.payload.message);
+        this.undo.push(before);
         const anchors = this.state.noticeAnchors ?? [];
         const kept = this.state.notices
           .map((note, index) => [note, anchors[index]] as const)
           .filter(([note]) => note !== '✖ Interrupted');
         this.state.notices = kept.map(([note]) => note);
-        this.state.noticeAnchors = kept.map(([, anchor]) => anchor);
+        // Older snapshots may have no anchor, or name a message no longer in
+        // view. Freeze their fallback at the previous turn instead of letting
+        // them follow every new reply to the bottom of the transcript.
+        const visible = this.runtime!.harness.messages.filter(
+          (message) =>
+            before.shown.has(message.id) &&
+            (!message.internal || message.internal === 'job_notice'),
+        );
+        const visibleIds = new Set(visible.map((message) => message.id));
+        const previous = visible.at(-1)?.id ?? '';
+        this.state.noticeAnchors = kept.map(([, anchor]) =>
+          anchor === '' || (anchor !== undefined && visibleIds.has(anchor))
+            ? anchor
+            : previous,
+        );
         this.state.scroll = 0;
       } else if (event.kind === 'llm_start' || event.kind === 'steer') {
         // A step stopped to read a message drops the reply it was writing
@@ -837,16 +888,31 @@ export class SessionApp {
           this.state.usage,
         ) as (keyof typeof this.state.usage)[])
           this.state.usage[key] += event.usage?.[key] ?? 0;
-      } else if (event.kind === 'run_error')
+      } else if (event.kind === 'run_error') {
         // A key the endpoint turned down (401, 403) says where to change it, as in 0.5.0.
-        this.addNotice(
-          '✖ ' +
-            String(event.payload.message) +
-            ([401, 403].includes(Number(event.payload.status))
-              ? ' · /login to change the key'
-              : ''),
-        );
-      else if (event.kind === 'info' && event.payload.model_notice) {
+        const assistant = event.payload.completion_message_id
+          ? this.runtime?.harness.messages.find(
+              (message) =>
+                message.role === 'assistant' &&
+                message.id === event.payload.completion_message_id,
+            )
+          : undefined;
+        const persisted =
+          assistant && (assistant.completion || assistant.truncated)
+            ? completionFailure(assistant)
+            : undefined;
+        if (
+          !event.payload.completion_failure ||
+          persisted?.code !== event.payload.completion_failure
+        )
+          this.addNotice(
+            '✖ ' +
+              String(event.payload.message) +
+              ([401, 403].includes(Number(event.payload.status))
+                ? ' · /login to change the key'
+                : ''),
+          );
+      } else if (event.kind === 'info' && event.payload.model_notice) {
         const notice = event.payload.model_notice as {
           event: string;
           [key: string]: unknown;
@@ -876,12 +942,9 @@ export class SessionApp {
           this.state.streaming = '';
           this.state.thinking = '';
           this.flash('Retrying model request');
-        } else if (notice.event === 'output_budget_exhausted')
-          this.notice('✖ Model output budget exhausted before an answer');
-        else if (notice.event === 'missing_finish' && notice.truncated)
-          this.notice('Model response may be truncated');
-        else if (notice.event === 'repetition_stopped')
-          this.notice('Model output was repeating; stopped the stream');
+        }
+        // Completion failures are rendered once from run_error, after the partial
+        // response is saved. Guard notices retain evidence without competing errors.
       }
       if (coalesce) this.requestRender();
       else this.repaint();

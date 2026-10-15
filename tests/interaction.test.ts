@@ -90,6 +90,83 @@ async function session(
   return { app, ui, runtime, model, home, workspace, log, key, type, script };
 }
 
+test('completion failures leave one specific terminal error without duplicate guard notices in either palette', async (t) => {
+  const { app, runtime } = await session(t);
+  const before = palette();
+  cleanup(t, () => setPalette(before));
+  for (const colors of [DEFAULT_DARK, DEFAULT_LIGHT]) {
+    setPalette(buildPalette(...colors));
+    app.state.notices = [];
+    app.state.noticeAnchors = [];
+    for (const notice of [
+      { event: 'output_budget_exhausted' },
+      { event: 'missing_finish', truncated: true },
+      { event: 'repetition_stopped' },
+    ])
+      runtime.bus.emit('info', { payload: { model_notice: notice } });
+    runtime.bus.emit('run_error', {
+      payload: {
+        message: 'model output limit reached; response incomplete',
+        completion_failure: 'output_limit',
+      },
+    });
+    assert.deepEqual(app.state.notices, [
+      '✖ model output limit reached; response incomplete',
+    ]);
+  }
+});
+
+test('a terminal session restores an incomplete response marker from history without making a model request', async (t) => {
+  const failure = {
+    message: {
+      id: 'incomplete-persisted',
+      role: 'assistant' as const,
+      content: 'saved partial answer',
+      completion: {
+        reason: 'length' as const,
+        provider_reason: 'max_tokens',
+        output_limit: 32000,
+      },
+      truncated: true,
+    },
+  };
+  const first = await session(t, [failure]);
+  await first.app.submit('produce an incomplete answer');
+  assert.deepEqual(first.app.state.notices, [
+    '✖ model output limit reached; response incomplete',
+  ]);
+  const reopened = await session(t, [], {
+    home: first.home,
+    workspace: first.workspace,
+    session: first.runtime.session.id,
+  });
+  assert.deepEqual(reopened.app.state.notices, [
+    '✖ model output limit reached; response incomplete',
+  ]);
+  assert.equal(
+    reopened.app.state.messages.find((row) => row.id === failure.message.id)
+      ?.content,
+    'saved partial answer',
+  );
+  assert.equal(reopened.model.requests.length, 0);
+  reopened.ui.repaint();
+  assert.equal(reopened.app.state.notices.length, 1);
+  reopened.runtime.bus.emit('run_error', {
+    payload: {
+      message: 'model output limit reached; response incomplete',
+      completion_failure: 'output_limit',
+      completion_message_id: 'unsaved-compaction-response',
+    },
+  });
+  assert.equal(
+    reopened.app.state.notices.length,
+    2,
+    'an unrelated current error must not be hidden by an older persisted failure',
+  );
+  reopened.ui.repaint();
+  assert.equal(reopened.app.state.notices.length, 2);
+});
+
 test('ctrl+z gives the shell the terminal with SIGTSTP and takes it back with the whole screen drawn again', async (t) => {
   const home = scratch(t);
   writeFileSync(
@@ -764,4 +841,145 @@ test('/approvals: j k and tab move, a digit picks, other keys go to the input bo
   await app.submit('/approvals');
   key('escape');
   assert.equal(app.state.picker, undefined);
+});
+
+for (const failure of ['legacy', 'typed'] as const) {
+  test(`${failure} failure remains in its old terminal turn rather than following continue`, async (t) => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const initial: Reply =
+      failure === 'legacy'
+        ? async () => {
+            throw new Error('model ended without an answer');
+          }
+        : {
+            message: {
+              id: 'empty-response',
+              role: 'assistant',
+              content: '',
+              completion: { reason: 'stop' },
+            },
+          };
+    const { app, model, ui } = await session(t, [
+      initial,
+      async (request) => {
+        request.token('fresh turn progress');
+        await held;
+        return {
+          message: {
+            id: 'after-error',
+            role: 'assistant',
+            content: 'fresh turn completed',
+          },
+          usage: emptyUsage(),
+        };
+      },
+    ]);
+    cleanup(t, () => release());
+    await app.submit('first turn');
+    const errorText =
+      failure === 'legacy'
+        ? 'model ended without an answer'
+        : 'model returned an empty response';
+    const running = app.submit('continue');
+    await until(
+      () =>
+        model.requests.length === 2 &&
+        app.state.streaming.includes('fresh turn progress'),
+    );
+    ui.repaint();
+    const { transcriptRows } = await import('../src/tui/render.js');
+    const lines = transcriptRows(app.state, 100).map(stripAnsi).join('\n');
+    assert.equal(lines.split(errorText).length - 1, 1);
+    assert.ok(lines.indexOf(errorText) < lines.indexOf('continue'));
+    assert.ok(lines.indexOf('continue') < lines.indexOf('fresh turn progress'));
+    assert.equal(app.state.busy, true);
+    release();
+    await running;
+    const done = transcriptRows(app.state, 100).map(stripAnsi).join('\n');
+    assert.ok(done.indexOf(errorText) < done.indexOf('continue'));
+    assert.ok(done.indexOf('continue') < done.indexOf('fresh turn completed'));
+    assert.equal(model.requests.length, 2);
+  });
+}
+
+for (const anchor of [undefined, 'old-missing-message']) {
+  test(`continue freezes an old failure with ${anchor ?? 'no'} anchor before the new user turn`, async (t) => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const { app, model, ui } = await session(t, [
+      async () => {
+        throw Error('model ended without an answer');
+      },
+      async (request) => {
+        request.token('fresh progress');
+        await held;
+        return {
+          message: {
+            id: 'continued',
+            role: 'assistant',
+            content: 'fresh answer',
+          },
+          usage: emptyUsage(),
+        };
+      },
+    ]);
+    cleanup(t, () => release());
+    await app.submit('old turn');
+    const index = app.state.notices.findIndex((note) =>
+      note.includes('model ended without an answer'),
+    );
+    app.state.noticeAnchors![index] = anchor;
+    const running = app.submit('continue');
+    await until(
+      () =>
+        model.requests.length === 2 &&
+        app.state.streaming.includes('fresh progress'),
+    );
+    ui.repaint();
+    const { transcriptRows } = await import('../src/tui/render.js');
+    const text = transcriptRows(app.state, 100).map(stripAnsi).join('\n');
+    assert.ok(
+      text.indexOf('model ended without an answer') < text.indexOf('continue'),
+      'old error cannot trail the new user turn',
+    );
+    assert.ok(text.indexOf('continue') < text.indexOf('fresh progress'));
+    release();
+    await running;
+    const done = transcriptRows(app.state, 100).map(stripAnsi).join('\n');
+    assert.equal(done.split('model ended without an answer').length - 1, 1);
+    assert.ok(
+      done.indexOf('model ended without an answer') < done.indexOf('continue'),
+    );
+    assert.equal(model.requests.length, 2);
+  });
+}
+
+test('an internal reminder cannot become the fallback position of a prior failure', async (t) => {
+  const { app, runtime } = await session(t, [
+    async () => {
+      throw Error('model ended without an answer');
+    },
+    answer('continued answer'),
+  ]);
+  await app.submit('old turn');
+  const at = app.state.notices.findIndex((note) =>
+    note.includes('model ended without an answer'),
+  );
+  app.state.noticeAnchors![at] = undefined;
+  runtime.store.append(runtime.session.id, [
+    {
+      id: 'hidden-mode-boundary',
+      role: 'user',
+      content: 'hidden reminder',
+      internal: 'mode-boundary',
+    },
+  ]);
+  await app.submit('continue');
+  const { transcriptRows } = await import('../src/tui/render.js');
+  const text = transcriptRows(app.state, 100).map(stripAnsi).join('\n');
+  assert.ok(
+    text.indexOf('model ended without an answer') < text.indexOf('continue'),
+  );
+  assert.doesNotMatch(text, /hidden reminder/);
 });
