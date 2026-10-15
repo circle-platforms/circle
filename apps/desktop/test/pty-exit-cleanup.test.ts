@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { EventEmitter } from 'node:events';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -25,6 +26,9 @@ const native = fileURLToPath(
 );
 const packageRoot = dirname(require.resolve('node-pty/package.json'));
 const { EventEmitter2 } = require(join(packageRoot, 'lib', 'eventEmitter2.js'));
+const { WindowsPtyAgent } = require(
+  join(packageRoot, 'lib', 'windowsPtyAgent.js'),
+);
 
 test('Windows compatibility guard releases only the exited instance worker and input socket, never a PID', () => {
   assert.throws(
@@ -50,14 +54,24 @@ test('Windows compatibility guard releases only the exited instance worker and i
     _agent: {
       _conoutSocketWorker: {
         dispose() {
-          workers++;
+          throw Error('do not reopen a post-exit flush window');
         },
+        _worker: Object.assign(new EventEmitter(), {
+          terminate() {
+            workers++;
+            return Promise.resolve(0);
+          },
+        }),
       },
-      _inSocket: {
+      _inSocket: Object.assign(new EventEmitter(), {
         destroy() {
           inputs++;
         },
-      },
+      }),
+      _outSocket: Object.assign(new EventEmitter(), { destroy() {} }),
+      _useConpty: true,
+      _useConptyDll: false,
+      _cleanUpProcess() {},
     },
     onExit: exit.event,
     kill() {
@@ -146,10 +160,11 @@ const tail='ACTUAL_CONOUT_TAIL_'+String('z').repeat(16384)+'_END';
 const source=net.createServer(socket=>socket.end(tail));
 source.listen(PIPE,()=>{
  progress('source-listening');
- const connection=new ConoutConnection(PIPE,false),exit=new EventEmitter2(),input=new net.Socket();
- const terminal={_agent:{_conoutSocketWorker:connection,_inSocket:input},onExit:exit.event,kill(){throw Error('numeric PID kill is forbidden')}};
+ const connection=new ConoutConnection(PIPE,false),exit=new EventEmitter2(),input=new net.Socket(),output=new net.Socket();
+ const {WindowsPtyAgent}=load(PACKAGE_ROOT+'/lib/windowsPtyAgent.js');
+ const terminal={_agent:{_conoutSocketWorker:connection,_inSocket:input,_outSocket:output,_useConpty:true,_useConptyDll:false,_cleanUpProcess:WindowsPtyAgent.prototype._cleanUpProcess},onExit:exit.event,kill(){throw Error('numeric PID kill is forbidden')}};
  if(CLEANUP)installWindowsPtyExitCleanup(terminal,{version:'1.1.0',platform:'win32'});
- const output=new net.Socket();output.setEncoding('utf8');let received='';
+ output.setEncoding('utf8');let received='';
  output.on('data',chunk=>received+=chunk);
  output.on('close',()=>{assert.equal(received,tail);source.close();progress('output-closed-full-tail');exit.fire({exitCode:0});progress('natural-exit-emitted')});
  connection.onReady(()=>{progress('worker-listening');connection.connectSocket(output)});

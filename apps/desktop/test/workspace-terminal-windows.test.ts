@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, mkdir } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import type { IPty } from 'node-pty';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -97,6 +99,121 @@ test(
       );
       await manager.close(owner, restarted.id);
       await assert.rejects(fetch(`http://127.0.0.1:${port}`));
+    } finally {
+      await manager.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'a Windows owned worker transport fault remains a durable failure and stops the real program',
+  {
+    skip: process.platform !== 'win32' && 'requires real Windows ConPTY',
+    timeout: 15000,
+  },
+  async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'circle-pty-fault-'));
+    const native = createRequire(import.meta.url)(
+      'node-pty',
+    ) as typeof import('node-pty');
+    const spawn = native.spawn;
+    let captured: IPty | undefined;
+    t.mock.method(
+      native,
+      'spawn',
+      (...args: Parameters<typeof spawn>) => (captured = spawn(...args)),
+    );
+    const events: TerminalEvent[] = [];
+    const manager = new TerminalManager(
+      { workspaceRoot: root, logRoot: join(root, 'logs') },
+      (event) => {
+        events.push(event);
+      },
+    );
+    try {
+      const owner = 'worker-fault';
+      const terminal = await manager.create({
+        owner,
+        sessionId: owner,
+        command: {
+          file: process.env.CIRCLE_JS_DEBUG_RUNTIME ?? process.execPath,
+          args: [
+            '-e',
+            "console.log('FULL_ORIGINAL_PROGRAM_OUTPUT');setInterval(()=>{},1000)",
+          ],
+        },
+      });
+      const deadline = Date.now() + 8000;
+      while (
+        !events.some((event) =>
+          event.data?.includes('FULL_ORIGINAL_PROGRAM_OUTPUT'),
+        )
+      ) {
+        assert.ok(
+          Date.now() < deadline,
+          'real program must start before fault injection',
+        );
+        await delay(20);
+      }
+      assert.ok(captured);
+      // Fault injection targets the real owned transport and verifies the real
+      // program, files and observer events. It does not claim to reproduce the
+      // platform-dependent late-write race seen in the unmodified Windows CI.
+      const worker = (
+        captured as unknown as {
+          _agent: {
+            _conoutSocketWorker: {
+              _worker: { emit: (name: string, error: Error) => void };
+            };
+          };
+        }
+      )._agent._conoutSocketWorker._worker;
+      const fault = Object.assign(
+        new Error('deterministic owned transport failure'),
+        { code: 'EPIPE' },
+      );
+      worker.emit('error', fault);
+      const stopped = await manager.close(owner, terminal.id);
+      assert.equal(stopped.status, 'failed');
+      assert.match(
+        stopped.error ?? '',
+        /EPIPE.*deterministic owned transport failure/,
+      );
+      assert.throws(() => process.kill(terminal.pid!, 0));
+      const replay = await manager.replay(owner, terminal.id);
+      assert.ok(
+        replay.events.some(
+          (event) =>
+            event.kind === 'error' && event.data?.includes(fault.message),
+        ),
+      );
+      const metadata = JSON.parse(
+        await readFile(
+          join(root, 'logs', terminal.id, 'metadata.json'),
+          'utf8',
+        ),
+      );
+      assert.equal(metadata.error, stopped.error);
+      const raw = await readFile(terminal.logPath, 'utf8');
+      assert.ok(raw.includes('FULL_ORIGINAL_PROGRAM_OUTPUT'));
+      const evidence = process.env.CIRCLE_NATIVE_TEST_PROGRESS_DIR;
+      if (evidence) {
+        await mkdir(evidence, { recursive: true });
+        await writeFile(
+          join(evidence, 'worker-transport-fault-win32.json'),
+          JSON.stringify(
+            {
+              snapshot: stopped,
+              events: replay.events,
+              raw,
+              programPidGone: true,
+            },
+            null,
+            2,
+          ) + '\n',
+        );
+      }
     } finally {
       await manager.dispose();
       await rm(root, { recursive: true, force: true });

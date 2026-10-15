@@ -321,14 +321,19 @@ export class TerminalManager {
         stream.on('error', (error) => this.#logFailure(entry, error));
       }
       try {
-        entry.pty = spawnPty(shell, args, {
-          cwd,
-          cols,
-          rows,
-          name: 'xterm-256color',
-          env: effectiveEnvironment,
-          handleFlowControl: false,
-        });
+        entry.pty = spawnPty(
+          shell,
+          args,
+          {
+            cwd,
+            cols,
+            rows,
+            name: 'xterm-256color',
+            env: effectiveEnvironment,
+            handleFlowControl: false,
+          },
+          (error) => this.#transportFailure(entry, error),
+        );
         snapshot.pid = entry.pty.pid;
         this.#append(entry, 'created', undefined, true);
         entry.pty.onData((data) => {
@@ -838,6 +843,33 @@ export class TerminalManager {
     // Disk failure must be visible and must not leave an unobservable process running.
     this.#append(entry, 'error', entry.snapshot.error, true);
     void terminateOwnedTree(entry, 'SIGKILL').catch(() => undefined);
+  }
+
+  #transportFailure(entry: Entry, error: Error): void {
+    const code = (error as NodeJS.ErrnoException).code;
+    const reason = `terminal transport failed${code ? ` (${code})` : ''}: ${error.message}`;
+    if (entry.snapshot.error) return;
+    entry.snapshot.error = reason;
+    entry.snapshot.status = 'failed';
+    entry.snapshot.exitReason = reason;
+    if (entry.snapshot.kind === 'service')
+      entry.snapshot.serviceState = 'failed';
+    this.#append(entry, 'error', reason, true);
+    // Even during shutdown, retain the original failure. Actual onExit and
+    // output persistence remain the only confirmation that this process stopped.
+    void this.#persist(entry).catch((failure) =>
+      this.#logFailure(entry, failure),
+    );
+    if (entry.pty)
+      void terminateOwnedTree(entry, 'SIGKILL').catch((failure) => {
+        this.#append(
+          entry,
+          'error',
+          `terminal cleanup failed: ${String(failure)}`,
+          true,
+        );
+        void this.#persist(entry).catch(() => undefined);
+      });
   }
 
   #persist(entry: Entry): Promise<void> {

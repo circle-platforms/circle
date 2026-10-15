@@ -27,7 +27,7 @@ export function hasExitedWindowsPtyProcess(
 }
 export function installWindowsPtyExitCleanup(
   terminal,
-  { version, platform = process.platform },
+  { version, platform = process.platform, onError },
 ) {
   assertSupportedWindowsPtyVersion(version, platform);
   if (platform !== 'win32') return { dispose() {} };
@@ -36,24 +36,73 @@ export function installWindowsPtyExitCleanup(
   const agent = terminal?._agent;
   const connection = agent?._conoutSocketWorker;
   const input = agent?._inSocket;
+  const output = agent?._outSocket;
+  const worker = connection?._worker;
+  const closeOutput = agent?._cleanUpProcess;
   if (
     !connection ||
     typeof connection.dispose !== 'function' ||
     !input ||
-    typeof input.destroy !== 'function'
+    typeof input.destroy !== 'function' ||
+    typeof input.on !== 'function' ||
+    !output ||
+    typeof output.destroy !== 'function' ||
+    typeof output.on !== 'function' ||
+    !worker ||
+    typeof worker.terminate !== 'function' ||
+    typeof worker.on !== 'function' ||
+    typeof agent._useConpty !== 'boolean' ||
+    typeof agent._useConptyDll !== 'boolean' ||
+    typeof closeOutput !== 'function'
   )
     throw Error(
       'unsupported node-pty 1.1.0 Windows worker/socket ownership shape',
     );
   let handled = false;
+  // The pinned ConoutConnection creates a Worker with no error listener. A
+  // transport failure must be reported to its owner, rather than become an
+  // uncaught application exception. Leave raw probes unchanged without a sink.
+  if (onError) {
+    worker.on('error', onError);
+    input.on('error', onError);
+    output.on('error', onError);
+  }
+  const report = (error) => {
+    if (onError) onError(error);
+    else
+      queueMicrotask(() => {
+        throw error;
+      });
+  };
+  let release;
+  const releaseWorker = () => (release ??= worker.terminate());
+  let closing = false;
+  // node-pty invokes this only after native exit and its resettable 1000ms
+  // output-idle flush. Its original order destroys the receiving socket while
+  // ConoutWorker can still pipe data into it for another 1000ms. Terminate only
+  // our worker first, then close our already-drained receiving socket. Do not
+  // change the upstream native-exit detection or its output-idle timer.
+  if (agent._useConpty && !agent._useConptyDll) {
+    agent._cleanUpProcess = () => {
+      if (closing) return;
+      closing = true;
+      void releaseWorker().then(
+        () => closeOutput.call(agent),
+        (error) => {
+          report(error);
+          closeOutput.call(agent);
+        },
+      );
+    };
+  }
   const subscription = terminal.onExit(() => {
     if (handled) return;
     handled = true;
-    // onExit follows the drained output socket's close event. dispose() drains
-    // then terminates only this instance's worker; input.destroy closes our handle.
-    // Neither action enumerates processes, sends signals, or uses a numeric PID.
+    // An earlier natural EOF can bypass _cleanUpProcess. Its public onExit still
+    // means the receiving socket has closed, so there is no further output to
+    // drain to this consumer. Release exactly this worker and input handle.
     try {
-      connection.dispose();
+      void releaseWorker().catch(report);
     } finally {
       input.destroy();
       subscription.dispose();
