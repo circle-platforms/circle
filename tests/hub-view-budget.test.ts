@@ -236,3 +236,44 @@ test('reported hub view bytes reach the exact UTF-8 fixed point at decimal digit
     'both sides of a JSON byte-count digit boundary are exercised',
   );
 });
+
+test('hub projection preserves connection inputs and explicitly refuses oversized connection metadata', async () => {
+  const { projectHubView } = await import('../src/extensions/hub/extension.js');
+  // The paired login form initializes its action arguments from these fields.
+  const url = 'https://synthetic.invalid/' + 'route/'.repeat(300);
+  const username = 'synthetic-user-'.repeat(150);
+  const view = {
+    url,
+    username,
+    signedIn: true,
+    objects: {
+      work: [],
+      execution: [],
+      knowledge: [
+        {
+          taskId: 'task_1',
+          artifacts: Array.from({ length: 1000 }, (_, n) => ({
+            artifactId: `art_${n}`,
+            fileName: 'synthetic-file-'.repeat(20),
+            sha256: 'a'.repeat(64),
+          })),
+        },
+      ],
+      methods: [{ capabilityPackId: 'synthetic' }],
+    },
+  };
+  const projected = projectHubView(view);
+  assert.equal(projected.url, url);
+  assert.equal(projected.username, username);
+  assert.ok(Buffer.byteLength(JSON.stringify(projected)) <= 65536);
+  for (const field of ['url', 'username'])
+    assert.throws(
+      () =>
+        projectHubView({
+          ...view,
+          [field]: 'synthetic-connection-'.repeat(4000),
+        }),
+      /hub view metadata exceeds its byte budget/,
+      `${field} is refused explicitly rather than rewritten into a different login argument`,
+    );
+});

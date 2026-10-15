@@ -223,7 +223,7 @@ export function projectHubView(
   // Identity pins and actions are never rewritten to fit. An oversized action
   // is omitted whole; its omission is counted alongside its parent list.
   const identity =
-    /(?:Id|Sha256|Version)$|^(?:sha256|targetIdentity|action|version)$/;
+    /(?:Id|Sha256|Version)$|^(?:sha256|targetIdentity|action|version|url|username)$/;
   function build(
     value: unknown,
     path: string,
