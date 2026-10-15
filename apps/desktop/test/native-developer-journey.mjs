@@ -1,3 +1,7 @@
+import {
+  createNativeEditorSemanticsFixture,
+  runNativeEditorSemantics,
+} from './helpers/native-editor-semantics.mjs';
 import { runNativeInputRecovery } from './helpers/native-input-recovery.mjs';
 import { runNativeBrowserStream } from './helpers/native-browser-stream.mjs';
 import {
@@ -69,6 +73,7 @@ await Promise.all([
   ),
 ]);
 await createNativeEditorFixture(repo);
+await createNativeEditorSemanticsFixture(repo);
 const isolationFiles = await createNativeEditorIsolationFixture(repo);
 const git = async (...args) =>
   (await promisify(execFile)('git', ['-C', repo, ...args])).stdout;
@@ -77,6 +82,7 @@ await git(
   'add',
   ...isolationFiles,
   '.circle-editor-isolation-fixture.json',
+  'editor-supplement.ts',
   'editor-main.ts',
   'editor-lib.ts',
   '.circle-editor-journey.json',
@@ -510,6 +516,17 @@ try {
         await page
           .getByRole('button', { name: 'close inspector', exact: true })
           .click();
+    },
+  );
+  await check(
+    'supplemental editor references completion formatting and replacement',
+    async () => {
+      await runNativeEditorSemantics({
+        page,
+        workspace: repo,
+        sessionId,
+        output,
+      });
     },
   );
   await check(
