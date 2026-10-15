@@ -297,7 +297,13 @@ test('real scripted tasks integrate and repair failing CI on one draft PR withou
     ) => resources.withResource(resource, run),
     identity,
     createGit: (path: string) =>
-      trackPush(new GitWorkspaceService(path, { identity, signoff: true })),
+      trackPush(
+        new GitWorkspaceService(path, {
+          identity,
+          signoff: true,
+          setUpstream: false,
+        }),
+      ),
     createDelivery: (path: string) => {
       const service = fixtureDelivery(path, f.ghPath);
       trackPush(service.git);

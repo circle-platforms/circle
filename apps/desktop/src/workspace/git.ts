@@ -21,6 +21,7 @@ export type GitSnapshot = {
 export interface GitWorkspaceOptions {
   identity?: { name: string; email: string };
   signoff?: boolean;
+  setUpstream?: boolean;
 }
 export class GitWorkspaceService {
   readonly root: string;
@@ -95,6 +96,16 @@ export class GitWorkspaceService {
       'repository changed while reading its state; refresh and try again',
     );
   }
+  private async optionalGit(
+    args: string[],
+    missingCode: number,
+    fallback: string,
+  ) {
+    return this.git(args).catch((error: unknown) => {
+      if ((error as { code?: number }).code === missingCode) return fallback;
+      throw error;
+    });
+  }
   private async readSnapshot(): Promise<GitSnapshot> {
     // Read-only subprocesses can run together. Two matching complete reads in
     // snapshot() reject mixed baselines without caching or weakening write CAS.
@@ -108,22 +119,28 @@ export class GitWorkspaceService {
       merging,
     ] = await Promise.all([
       this.git(['rev-parse', '--show-toplevel']),
-      this.git(['rev-parse', '--verify', 'HEAD']).then(
-        (s) => s.trim(),
-        () => 'unborn',
-      ),
-      this.git(['symbolic-ref', '--short', '-q', 'HEAD']).catch(
-        () => 'detached',
+      this.optionalGit(
+        ['rev-parse', '--verify', '--quiet', 'HEAD'],
+        1,
+        'unborn',
+      ).then((s) => s.trim()),
+      this.optionalGit(
+        ['symbolic-ref', '--short', '-q', 'HEAD'],
+        1,
+        'detached',
       ),
       this.git(['status', '--porcelain=v1', '-z', '--untracked-files=all']),
-      this.git(['remote', 'get-url', '--push', '--all', 'origin']).catch(
-        () => '',
+      this.optionalGit(
+        ['remote', 'get-url', '--push', '--all', 'origin'],
+        2,
+        '',
       ),
       this.git(['rev-parse', '--git-path', 'index']),
-      this.git(['rev-parse', '-q', '--verify', 'MERGE_HEAD']).then(
-        () => true,
-        () => false,
-      ),
+      this.optionalGit(
+        ['rev-parse', '-q', '--verify', 'MERGE_HEAD'],
+        1,
+        '',
+      ).then((value) => Boolean(value.trim())),
     ]);
     const root = rootValue.trim(),
       branch = branchValue.trim(),
@@ -297,7 +314,12 @@ export class GitWorkspaceService {
         } else if (method === 'push') {
           if (state.branch === 'detached')
             throw Error('select a branch before pushing');
-          await this.git(['push', '--set-upstream', 'origin', state.branch]);
+          await this.git([
+            'push',
+            ...(this.options.setUpstream === false ? [] : ['--set-upstream']),
+            'origin',
+            state.branch,
+          ]);
         } else if (method === 'conflictContinue') {
           if (!state.merging) throw Error('no merge is active');
           if ((await this.git(['ls-files', '-u'])).trim())

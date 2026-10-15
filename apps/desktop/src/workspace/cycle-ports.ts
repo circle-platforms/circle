@@ -108,6 +108,7 @@ export function createWorkspaceCyclePorts(
       new GitWorkspaceService(path, {
         identity: options.identity,
         signoff: true,
+        setUpstream: false,
       }));
   const deliveryFor =
     options.createDelivery ?? ((path: string) => new DeliveryService(path));
@@ -207,7 +208,10 @@ export function createWorkspaceCyclePorts(
         await git(target)
       )
         .git(['symbolic-ref', '--short', '-q', 'HEAD'])
-        .catch(() => 'detached')
+        .catch((error: unknown) => {
+          if ((error as { code?: number }).code === 1) return 'detached';
+          throw error;
+        })
     ).trim();
     if (branch !== owner.branch || !owner.branch.startsWith('codex/'))
       throw Error(

@@ -458,3 +458,99 @@ test('parallel snapshots retry a changed baseline and reject continuous mutation
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('isolated delivery pushes leave shared configuration unchanged while manual pushes establish upstream', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-git-shared-config-'));
+  const source = path.join(root, 'source'),
+    remote = path.join(root, 'remote.git');
+  const { mkdir } = await import('node:fs/promises');
+  await mkdir(source);
+  const s = new ObservedGit(source);
+  try {
+    await s.git(['init', '-b', 'main']);
+    await s.git(['config', 'user.name', 'Fixture']);
+    await s.git(['config', 'user.email', 'fixture@example.invalid']);
+    await writeFile(path.join(source, 'value'), 'baseline');
+    await s.git(['add', 'value']);
+    await s.git(['commit', '-m', 'Create baseline']);
+    await s.git(['init', '--bare', remote]);
+    await s.git(['remote', 'add', 'origin', remote]);
+    const a = path.join(root, 'owner-a'),
+      b = path.join(root, 'owner-b');
+    await s.git(['worktree', 'add', '-b', 'codex/a', a]);
+    await s.git(['worktree', 'add', '-b', 'codex/b', b]);
+    const left = new ObservedGit(a, { setUpstream: false }),
+      right = new ObservedGit(b, { setUpstream: false });
+    const config = path.join(source, '.git', 'config'),
+      before = await readFile(config);
+    const [sa, sb] = await Promise.all([left.snapshot(), right.snapshot()]);
+    await Promise.all([
+      left.call('push', { revision: sa.revision }),
+      right.call('push', { revision: sb.revision }),
+      ...Array.from({ length: 4 }, () => s.snapshot()),
+    ]);
+    assert.deepEqual(
+      await readFile(config),
+      before,
+      'owned automatic pushes must not rename shared config',
+    );
+    assert.equal(
+      (
+        await s.git(['--git-dir=' + remote, 'rev-parse', 'refs/heads/codex/a'])
+      ).trim(),
+      sa.head,
+    );
+    assert.equal(
+      (
+        await s.git(['--git-dir=' + remote, 'rev-parse', 'refs/heads/codex/b'])
+      ).trim(),
+      sb.head,
+    );
+    await assert.rejects(
+      left.git(['config', '--get', 'branch.codex/a.remote']),
+    );
+    const manual = new ObservedGit(a);
+    await manual.call('push', {
+      revision: (await manual.snapshot()).revision,
+      setUpstream: false,
+    });
+    assert.equal(
+      (await manual.git(['config', '--get', 'branch.codex/a.remote'])).trim(),
+      'origin',
+      'renderer cannot override trusted constructor policy',
+    );
+    assert.equal(
+      (await manual.git(['config', '--get', 'branch.codex/a.merge'])).trim(),
+      'refs/heads/codex/a',
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('configuration permission errors are not interpreted as an absent remote or detached HEAD', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-git-read-denied-'));
+  const s = new ObservedGit(root);
+  try {
+    await s.git(['init', '-b', 'codex/safe']);
+    const empty = await s.snapshot();
+    assert.equal(empty.head, 'unborn');
+    assert.equal(empty.merging, false);
+    const run = s.git.bind(s);
+    for (const command of ['remote', 'symbolic-ref']) {
+      s.git = async (args, input) => {
+        if (args[0] === command)
+          throw Object.assign(
+            Error('Permission denied while reading configuration files'),
+            { code: 128 },
+          );
+        return run(args, input);
+      };
+      await assert.rejects(s.snapshot(), /Permission denied/);
+    }
+    s.git = run;
+    assert.equal((await s.snapshot()).branch, 'codex/safe');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
