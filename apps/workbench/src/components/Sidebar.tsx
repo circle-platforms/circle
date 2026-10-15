@@ -306,19 +306,22 @@ export function Sidebar({
               ).map((session) => (
                 <div className="session-row" key={session.id}>
                   {renaming === session.id ? (
-                    <RenameField
-                      label={t('rename session')}
-                      defaultValue={
-                        session.title === 'new session' ? '' : session.title
-                      }
-                      onCommit={(value) =>
-                        commitRename(session.id, value, session.title)
-                      }
-                      onCancel={() => {
-                        renameDone.current = true;
-                        setRenaming(null);
-                      }}
-                    />
+                    <>
+                      <RenameField
+                        label={t('rename session')}
+                        defaultValue={
+                          session.title === 'new session' ? '' : session.title
+                        }
+                        onCommit={(value) =>
+                          commitRename(session.id, value, session.title)
+                        }
+                        onCancel={() => {
+                          renameDone.current = true;
+                          setRenaming(null);
+                        }}
+                      />
+                      <span className="session-menu-gap" aria-hidden="true" />
+                    </>
                   ) : (
                     <NavLink
                       className={({ isActive }) =>

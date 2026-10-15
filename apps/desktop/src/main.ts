@@ -161,6 +161,11 @@ const role = (
     ? { role: name }
     : { role: name, label: text(english) };
 function configureMenu() {
+  const settingsItem = (): MenuItemConstructorOptions => ({
+    label: text('settings'),
+    accelerator: 'CmdOrCtrl+,',
+    click: () => sendAction('settings'),
+  });
   const menu: MenuItemConstructorOptions[] = [];
   if (process.platform === 'darwin')
     menu.push({
@@ -168,11 +173,7 @@ function configureMenu() {
       submenu: [
         role('about', 'About Circle'),
         { type: 'separator' },
-        {
-          label: text('settings'),
-          accelerator: 'CmdOrCtrl+,',
-          click: () => sendAction('settings'),
-        },
+        settingsItem(),
         { type: 'separator' },
         role('hide', 'Hide Circle'),
         role('hideOthers', 'Hide Others'),
@@ -199,6 +200,11 @@ function configureMenu() {
         { label: text('import session'), click: () => sendAction('import') },
         { label: text('export session'), click: () => sendAction('export') },
         { type: 'separator' },
+        // macOS already owns this accelerator on the app menu. One item per
+        // platform, or Electron drops the chord.
+        ...(process.platform === 'darwin'
+          ? []
+          : [settingsItem(), { type: 'separator' as const }]),
         process.platform === 'darwin'
           ? role('close', 'Close Window')
           : role('quit', 'Quit Circle'),

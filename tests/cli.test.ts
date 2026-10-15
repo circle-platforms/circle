@@ -420,7 +420,7 @@ test('the full-screen interface shows @path while the model gets the file text',
   assert.equal(model.requests[0]!.messages.at(-1)!.content, user.content);
   assert.equal(
     runtime.store.get(runtime.session.id)!.title,
-    'review @notes.txt',
+    'review notes.txt',
   );
 });
 

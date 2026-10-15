@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { agentActivityText } from '../src/model/activity.ts';
 import { setLanguage } from '../src/i18n/index.ts';
 import { planVisible } from '../../../src/plan_state.ts';
@@ -12,8 +14,10 @@ import {
 } from '../src/model/format.ts';
 import {
   DESKTOP_SEARCH_CHORD,
+  DESKTOP_SETTINGS_CHORD,
   formatChord,
   isDesktopSearch,
+  isDesktopSettings,
 } from '../src/model/shortcuts.ts';
 import {
   browserApprovalInput,
@@ -95,6 +99,56 @@ test('the footer and busy word write numbers as the terminal does', () => {
   assert.equal(key('k', { ctrl: true }), true);
   assert.equal(key('k', { meta: true }), true);
   assert.equal(key('p', { ctrl: true, shift: true }), false);
+  assert.equal(DESKTOP_SETTINGS_CHORD, 'ctrl+,');
+  assert.equal(formatChord(DESKTOP_SETTINGS_CHORD), 'Ctrl+,');
+  const comma = (
+    name: string,
+    mods: { ctrl?: boolean; meta?: boolean; shift?: boolean } = {},
+  ) =>
+    isDesktopSettings({
+      key: name,
+      ctrlKey: Boolean(mods.ctrl),
+      altKey: false,
+      shiftKey: Boolean(mods.shift),
+      metaKey: Boolean(mods.meta),
+    });
+  assert.equal(comma(',', { ctrl: true }), true);
+  assert.equal(comma(',', { meta: true }), true);
+  assert.equal(comma(',', { ctrl: true, shift: true }), false);
+  assert.equal(comma(','), false);
+});
+
+test('settings opens from the window, including a focused sidebar or composer', () => {
+  const app = readFileSync(
+    fileURLToPath(new URL('../src/app/App.tsx', import.meta.url)),
+    'utf8',
+  );
+  const start = app.indexOf("addEventListener('keydown', handle, true)");
+  assert.ok(start > 0);
+  const effect = app.slice(app.lastIndexOf('useEffect', start), start);
+  assert.match(effect, /isDesktopSettings\(event\)/);
+  assert.match(effect, /navigate\('\/page\/settings'\)/);
+  assert.doesNotMatch(effect, /tagName|INPUT|TEXTAREA|closest\(/);
+  const sidebar = readFileSync(
+    fileURLToPath(new URL('../src/components/Sidebar.tsx', import.meta.url)),
+    'utf8',
+  );
+  assert.match(sidebar, /session-menu-gap/);
+  assert.match(sidebar, /event\.stopPropagation\(\)/);
+  const menu = readFileSync(
+    fileURLToPath(new URL('../../desktop/src/main.ts', import.meta.url)),
+    'utf8',
+  );
+  const fileStart = menu.indexOf("label: text('file')");
+  const editStart = menu.indexOf("label: text('edit')");
+  const file = menu.slice(fileStart, editStart);
+  assert.match(file, /process\.platform === 'darwin'[\s\S]*\? \[\]/);
+  assert.match(file, /settingsItem\(\)/);
+  const shortcuts = readFileSync(
+    fileURLToPath(new URL('../src/features/Dialogs.tsx', import.meta.url)),
+    'utf8',
+  );
+  assert.match(shortcuts, /formatChord\(DESKTOP_SETTINGS_CHORD\)/);
 });
 
 test('a dialog shows over the tab that waits on it and names where it came from', () => {

@@ -24,13 +24,18 @@ test('fallback titles stay short and drop a leading please', () => {
   assert.equal(fallbackTitle('请'), '请');
   assert.equal(
     fallbackTitle('@README.md what is this'),
-    '@README.md what is this',
+    'README.md what is this',
+  );
+  assert.equal(fallbackTitle('@README.md'), 'README.md');
+  assert.equal(
+    fallbackTitle('ping me at a@b.com about the login'),
+    'ping me at a@b.com about the login',
   );
   assert.equal(
     fallbackTitle(
       '@README.md what is the first heading in this file and why it is there',
     ),
-    'what is the first heading in this',
+    'README.md what is the first heading in',
   );
   assert.equal(
     fallbackTitle(

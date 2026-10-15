@@ -66,6 +66,7 @@ import {
   DESKTOP_SEARCH_CHORD,
   formatChord,
   isDesktopSearch,
+  isDesktopSettings,
   matchingAction,
 } from '../model/shortcuts';
 // The names of the pages in the top bar; any other page shows its id.
@@ -462,6 +463,13 @@ export function App() {
         setSearchOpen(true);
         return;
       }
+      // Capture, and no check of the focused field: the rename box and the
+      // composer stop the bubble, and Linux has no menu accelerator for this.
+      if (isDesktopSettings(event)) {
+        event.preventDefault();
+        navigate('/page/settings');
+        return;
+      }
       if (
         matchingAction(
           event,
@@ -473,9 +481,9 @@ export function App() {
         else setSidebarCollapsed((closed) => !closed);
       }
     };
-    addEventListener('keydown', handle);
-    return () => removeEventListener('keydown', handle);
-  }, [narrow, snapshot.settings.keybindings]);
+    addEventListener('keydown', handle, true);
+    return () => removeEventListener('keydown', handle, true);
+  }, [narrow, navigate, snapshot.settings.keybindings]);
   const activeAgent = snapshot.agents.find((item) => item.id === agent);
   const pluginPage = pluginPages.find((item) => item.page.id === page);
   const installedPage = registry.plugins.find((plugin) =>

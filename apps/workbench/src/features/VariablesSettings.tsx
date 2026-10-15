@@ -270,7 +270,7 @@ function VariableTable({
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr>
+              <tr className="variable-empty-row">
                 <td className="variable-empty" colSpan={2}>
                   {empty}
                 </td>

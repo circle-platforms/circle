@@ -21,7 +21,11 @@ import {
 import { VERSION } from '../../../../src/version';
 import { useRuntime } from '../app/context';
 import { t, tn } from '../i18n';
-import { DESKTOP_SEARCH_CHORD, formatChord } from '../model/shortcuts';
+import {
+  DESKTOP_SEARCH_CHORD,
+  DESKTOP_SETTINGS_CHORD,
+  formatChord,
+} from '../model/shortcuts';
 import { DiffBlock } from '../components/DiffBlock';
 import { BrowserApproval, requestReason } from './InlineRequest';
 import { hasToolInput } from '../model/browser';
@@ -85,7 +89,7 @@ function desktopShortcuts(): [string, string][] {
     [mod + 'F', t('find in conversation')],
     [mod + 'N', t('new session')],
     [mod + 'O', t('open folder')],
-    [mod + ',', t('settings')],
+    [formatChord(DESKTOP_SETTINGS_CHORD), t('settings')],
     ['Alt+M', t('next model')],
     [mod + 'Shift+M', t('models')],
     [mod + 'B', t('show or hide the sidebar')],

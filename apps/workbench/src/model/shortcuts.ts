@@ -66,6 +66,17 @@ export function isDesktopSearch(event: {
 }): boolean {
   return chordFromEvent(event) === DESKTOP_SEARCH_CHORD;
 }
+/** Desktop settings. Not a terminal binding, so it stays out of KEY_ACTIONS. */
+export const DESKTOP_SETTINGS_CHORD = 'ctrl+,';
+export function isDesktopSettings(event: {
+  key: string;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+  metaKey: boolean;
+}): boolean {
+  return chordFromEvent(event) === DESKTOP_SETTINGS_CHORD;
+}
 export function formatChord(chord: string): string {
   const mac =
     typeof document !== 'undefined' &&

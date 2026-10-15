@@ -3504,6 +3504,8 @@ pre {
   color: var(--fg);
 }
 .session-row > .session-rename {
+  width: auto;
+  min-width: 0;
   flex: 1;
   height: 30px;
   margin: 2px 0;
@@ -4674,6 +4676,11 @@ pre {
 }
 .variable-table tbody tr:hover {
   background: var(--hover);
+}
+.variable-table tbody tr.variable-empty-row,
+.variable-table tbody tr.variable-empty-row:hover {
+  background: transparent;
+  cursor: default;
 }
 .variable-table tbody tr[aria-selected='true'] {
   background: color-mix(in srgb, var(--accent) 24%, transparent);
