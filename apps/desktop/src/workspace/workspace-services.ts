@@ -227,7 +227,10 @@ export class WorkspaceServices {
       entry = owned;
       owned.service
         .then(() => this.advanceCycles(sessionId, owned))
-        .catch(() => {});
+        .catch(() => {
+          if (!owned.stopped && this.ownerCycles.get(sessionId) === owned)
+            this.ownerCycles.delete(sessionId);
+        });
     }
     return entry.service;
   }
@@ -272,8 +275,9 @@ export class WorkspaceServices {
   async hasActiveSession(sessionId: string): Promise<boolean> {
     const owned = this.ownerCycles.get(sessionId);
     if (owned && !owned.stopped) {
-      const cycles = await owned.service;
+      const cycles = await owned.service.catch(() => undefined);
       if (
+        cycles &&
         cycles
           .list()
           .some(

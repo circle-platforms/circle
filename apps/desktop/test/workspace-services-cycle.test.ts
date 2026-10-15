@@ -280,3 +280,40 @@ test('session factories isolate matching cycle ids and stop only the released ow
     await rm(data, { recursive: true, force: true });
   }
 });
+test('a failed cycle factory does not trap session cleanup and can be retried', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-cycle-factory-fail-'));
+  const data = await mkdtemp(
+    path.join(tmpdir(), 'circle-cycle-factory-fail-data-'),
+  );
+  let calls = 0;
+  const service = new WorkspaceServices({
+    workspaceRoot: root,
+    dataDir: data,
+    nodeExecutable: process.execPath,
+    runtimeExecutable: process.execPath,
+    adapterPath: 'unused',
+    ghPath: 'unused',
+    cyclePorts: async () => {
+      calls++;
+      throw Error('configuration unavailable');
+    },
+    emit: () => {},
+  });
+  try {
+    await assert.rejects(
+      service.call('a', 'cycles', 'list'),
+      /configuration unavailable/,
+    );
+    assert.equal(await service.hasActiveSession('a'), false);
+    await assert.rejects(
+      service.call('a', 'cycles', 'list'),
+      /configuration unavailable/,
+    );
+    assert.equal(calls, 2);
+    await assert.doesNotReject(service.releaseSession('a'));
+  } finally {
+    await service.dispose();
+    await rm(root, { recursive: true, force: true });
+    await rm(data, { recursive: true, force: true });
+  }
+});
