@@ -23,7 +23,7 @@ import {
 import { httpStatus } from './model_guard.js';
 import { validateAttachments } from './media.js';
 import { readPrompt } from './system_prompt.js';
-import { fallbackTitle, titleFromModelReply } from './session_title.js';
+import { fallbackTitle, sanitizeGeneratedTitle } from './session_title.js';
 export type ApprovalDecision =
   | 'approve'
   | 'reject'
@@ -103,6 +103,8 @@ export class Harness {
     }
   >();
   private active?: Promise<{ answer: string; usage: Usage }>;
+  /** Set once the fallback is saved. Sent after the turn so it does not share that request. */
+  private pendingTitle?: { display: string; fallback: string };
   /** Secrets' values hidden as %NAME% in text the model reads. */
   readonly redact: Redactor;
   constructor(readonly options: HarnessOptions) {
@@ -325,89 +327,61 @@ export class Harness {
   }
   /**
    * Ask the model for a short title after the fallback is already saved. A scripted model
-   * never sees this call. A rename that landed first is left alone. The call is not part
-   * of the turn, so its tokens are not added to the reply footer.
+   * never sees this call. A rename that landed first is left alone. The request asks for
+   * no thinking and a short cap: an Anthropic-compatible model such as glm-5.3 otherwise
+   * spends the turn's effort and output budget and the fallback stays, with the error
+   * swallowed.
    */
   private generateTitle(display: string, fallback: string): void {
+    const model = this.options.model;
     const prompt = display.trim();
-    if (!this.options.model.sideRequests || prompt.length <= 16) return;
-    void this.requestTitle(prompt, fallback).then((applied) => {
-      if (applied) return;
-      // A gateway often refuses a second call while the turn is in flight. Try once more
-      // after that turn, still without making run() wait.
-      const pending = this.active;
-      const again = () => void this.requestTitle(prompt, fallback);
-      if (pending) void pending.finally(again);
-      else again();
-    });
-  }
-  /** True when the title is set or the user already renamed. False asks for one retry. */
-  private async requestTitle(
-    prompt: string,
-    fallback: string,
-  ): Promise<boolean> {
-    const han = prompt.match(/\p{Script=Han}/gu)?.length ?? 0;
-    const hint =
-      han >= 2
-        ? 'Write the title in Simplified Chinese.'
-        : 'Write the title in the same language as the user message.';
-    try {
-      const response = await this.options.model.complete({
+    if (!model.sideRequests || prompt.length < 24) return;
+    const report = (message: string): void => {
+      this.bus.emit('info', {
+        payload: { model_notice: { event: 'title_failed', message } },
+      });
+    };
+    void model
+      .complete({
         system: readPrompt('agent', 'title.md'),
         messages: [
           {
             id: 'title',
             role: 'user',
-            content: `${prompt.slice(0, 2000)}\n\n${hint}`,
+            content: prompt.slice(0, 2000),
           },
         ],
         tools: [],
-        // GLM-5.3 thinks by default at its deepest setting and may spend the whole
-        // call in a thinking block. `low` is a depth that endpoint accepts; a short
-        // budget and a minute keep the call from dying before the title is written.
-        signal: AbortSignal.timeout(60_000),
-        effort: 'low',
-        maxTokens: 4096,
+        signal: AbortSignal.timeout(20_000),
+        // `''` skips thinking. `minimal` is sent as output_config.effort and glm rejects
+        // it, or thinks until this times out, and the catch used to hide that.
+        effort: '',
+        maxTokens: 128,
         token: () => {},
-      });
-      const title = titleFromModelReply(
-        response.message.content,
-        response.message.thinking ?? '',
-      );
-      if (!title) {
-        const raw =
-          `${response.message.content}\n${response.message.thinking ?? ''}`.trim();
-        if (!/^(?:i cannot|i can't|sorry|unable)\b/i.test(raw)) {
-          const blocks = (response.message.provider_content ?? []).map(
-            (block) =>
-              block && typeof block === 'object' && 'type' in block
-                ? String(block.type)
-                : typeof block,
-          );
-          console.error(
-            'session title request returned no title:',
-            JSON.stringify({
-              model: response.message.model,
-              blocks,
-              content: response.message.content.slice(0, 200),
-              thinking: (response.message.thinking ?? '').slice(0, 200),
-            }),
-          );
+      })
+      .then((response) => {
+        const title = sanitizeGeneratedTitle(
+          response.message.content || response.message.thinking || '',
+        );
+        if (!title) {
+          report('empty title');
+          return;
         }
-        return false;
-      }
-      const current = this.options.store.get(this.sessionId);
-      if (!current || current.title !== fallback) return true;
-      this.options.store.rename(this.sessionId, title);
-      this.bus.emit('info', { payload: { title } });
-      return true;
-    } catch (error) {
-      console.error(
-        'session title request failed:',
-        error instanceof Error ? error.message : error,
-      );
-      return false;
-    }
+        const current = this.options.store.get(this.sessionId);
+        if (!current || current.title !== fallback) return;
+        this.options.store.rename(this.sessionId, title);
+        this.bus.emit('info', { payload: { title } });
+      })
+      .catch((error: unknown) => {
+        // The fallback title stays. A side request must not fail the turn.
+        report(error instanceof Error ? error.message : String(error));
+      });
+  }
+  private flushTitle(): void {
+    const pending = this.pendingTitle;
+    if (!pending) return;
+    this.pendingTitle = undefined;
+    this.generateTitle(pending.display, pending.fallback);
   }
   private async runTurn(
     prompt: string | undefined,
@@ -436,7 +410,7 @@ export class Harness {
       const fallback = fallbackTitle(shown.display);
       this.options.store.rename(this.sessionId, fallback);
       this.bus.emit('info', { payload: { title: fallback } });
-      void this.generateTitle(shown.display, fallback);
+      this.pendingTitle = { display: shown.display, fallback };
     }
     this.bus.emit('run_start', { payload: { message: prompt } });
     try {
@@ -520,6 +494,7 @@ export class Harness {
               usage: { ...usage },
               elapsed_ms: Date.now() - start,
             });
+            this.flushTitle();
             return { answer, usage };
           }
           // As in 0.5.0, the subagents of task calls next to each other run at the same time;
@@ -552,6 +527,7 @@ export class Harness {
       }
       throw new Error('maximum model steps reached');
     } catch (error) {
+      this.flushTitle();
       const failure = signal.aborted ? signal.reason : error;
       this.bus.emit('run_error', {
         payload: {

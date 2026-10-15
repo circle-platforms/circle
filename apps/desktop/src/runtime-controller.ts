@@ -1268,6 +1268,24 @@ export class RuntimeController {
     } catch {
       /* A diff is a view; failing to draw one never stops the turn. */
     }
+    if (
+      event.kind === 'info' &&
+      !event.tags?.subagent &&
+      (event.payload.model_notice as { event?: string } | undefined)?.event ===
+        'title_failed'
+    ) {
+      const notice = event.payload.model_notice as { message?: string };
+      const rows = this.notices.get(id) ?? [];
+      rows.push({
+        id: `title-failed-${randomUUID()}`,
+        after: runtime.store.get(id)?.head ?? null,
+        text: `title failed · ${String(notice.message ?? '')
+          .replace(/\s+/g, ' ')
+          .slice(0, 120)}`,
+        at: event.ts,
+      });
+      this.notices.set(id, rows);
+    }
     if (event.kind === 'run_error' && !event.payload.interrupted) {
       const rows = this.failures.get(id) ?? [];
       rows.push({

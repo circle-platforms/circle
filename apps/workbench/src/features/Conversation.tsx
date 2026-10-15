@@ -649,7 +649,13 @@ export function Conversation({
                       {item.message.planCompleted === undefined
                         ? item.message.text === '✖ the turn failed'
                           ? t('✖ the turn failed')
-                          : item.message.text
+                          : item.message.text.startsWith('title failed · ')
+                            ? t('title failed · {message}', {
+                                message: item.message.text.slice(
+                                  'title failed · '.length,
+                                ),
+                              })
+                            : item.message.text
                         : t('plan completed · {n} steps', {
                             n: item.message.planCompleted,
                           })}

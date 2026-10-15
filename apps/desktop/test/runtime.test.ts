@@ -15,7 +15,12 @@ import {
 } from '../../../src/browser/protocol.ts';
 import { ScriptedModel } from '../../../src/testing.ts';
 import { AgentRuntime } from '../../../src/runtime.ts';
-import { emptyUsage, type Message } from '../../../src/types.ts';
+import {
+  emptyUsage,
+  type ChatModel,
+  type Message,
+  type ModelRequest,
+} from '../../../src/types.ts';
 import {
   saveSettings,
   saveSettingsChange,
@@ -4234,5 +4239,128 @@ test('trusting a folder initializes every idle session with its own project cont
       .snapshot()
       .workspaces.find((row) => row.path === realpathSync(f.workspace))!
       .trusted,
+  );
+});
+
+test('a desktop prompt asks for a title after the turn and shows a failure', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-core-desktop-'));
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  await mkdir(home);
+  await mkdir(workspace);
+  await mkdir(join(workspace, '.git'));
+  saveSettings(trustFolder(defaultSettings(), workspace), home);
+  const requests: ModelRequest[] = [];
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let fail = false;
+  const model: ChatModel = {
+    model: 'title-model',
+    sideRequests: true,
+    async complete(request) {
+      requests.push(request);
+      const titleCall = request.maxTokens === 128;
+      if (titleCall && fail) throw new Error('title exploded');
+      if (titleCall) await gate;
+      const content = titleCall ? 'Workspace file list' : 'listed';
+      if (!titleCall && content) request.token(content);
+      return {
+        message: {
+          id: titleCall ? 'title' : 'answer',
+          role: 'assistant',
+          content,
+        },
+        usage: emptyUsage(),
+      };
+    },
+  };
+  const controller = new RuntimeController({
+    home,
+    workspace,
+    userHome: home,
+    model,
+    emit: () => {},
+  });
+  t.after(async () => {
+    release();
+    await controller.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const prompt = 'Please list all the files in the workspace and explain each';
+  const sessionId = controller.snapshot().activeSessionId;
+  assert.equal(
+    (
+      await controller.dispatch({
+        id: randomUUID(),
+        name: 'prompt',
+        payload: { text: prompt },
+        sessionId,
+      })
+    ).ok,
+    true,
+  );
+  await wait(
+    () => requests.some((request) => request.maxTokens === 128),
+    'title request after the turn',
+  );
+  assert.equal(requests[0]!.maxTokens, undefined);
+  const title = requests.find((request) => request.maxTokens === 128)!;
+  assert.equal(title.effort, '');
+  assert.equal(title.tools.length, 0);
+  assert.equal(
+    requests.filter((request) => request.maxTokens === 128).length,
+    1,
+  );
+  const row = () =>
+    controller.snapshot().sessions.find((session) => session.id === sessionId)!;
+  assert.notEqual(row().title, 'Workspace file list');
+  release();
+  await wait(
+    () => row().title === 'Workspace file list',
+    'generated title in the snapshot',
+  );
+  fail = true;
+  const second = await mkdtemp(join(tmpdir(), 'circle-core-desktop-'));
+  const secondHome = join(second, 'home');
+  const secondWorkspace = join(second, 'workspace');
+  await mkdir(secondHome);
+  await mkdir(secondWorkspace);
+  await mkdir(join(secondWorkspace, '.git'));
+  saveSettings(trustFolder(defaultSettings(), secondWorkspace), secondHome);
+  requests.length = 0;
+  const failed = new RuntimeController({
+    home: secondHome,
+    workspace: secondWorkspace,
+    userHome: secondHome,
+    model,
+    emit: () => {},
+  });
+  t.after(async () => {
+    await failed.close();
+    await rm(second, { recursive: true, force: true });
+  });
+  const failedId = failed.snapshot().activeSessionId;
+  assert.equal(
+    (
+      await failed.dispatch({
+        id: randomUUID(),
+        name: 'prompt',
+        payload: { text: prompt },
+        sessionId: failedId,
+      })
+    ).ok,
+    true,
+  );
+  await wait(
+    () =>
+      failed
+        .snapshot()
+        .sessions.find((session) => session.id === failedId)!
+        .messages.some((message) =>
+          message.text.includes('title failed · title exploded'),
+        ),
+    'title failure in the transcript',
   );
 });

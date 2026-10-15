@@ -332,7 +332,13 @@ test('@file is read from the current folder, then the workspace, and inlined aft
   });
   assert.equal(binary.code, 2);
   assert.match(binary.stderr, /blob\.bin is not a text file/);
-  assert.equal(endpoint.bodies.length, 1);
+  // The long prompt asks for a title after the turn. That call is not a user turn.
+  const turns = () => endpoint.bodies.filter((body) => body.max_tokens !== 128);
+  assert.equal(turns().length, 1);
+  assert.equal(
+    endpoint.bodies.filter((body) => body.max_tokens === 128).length,
+    1,
+  );
   // An image in the workspace goes as an attachment, which text cannot carry.
   const png = Buffer.from('89504e470d0a1a0a30303030', 'hex');
   writeFileSync(join(workspace, 'shot.png'), png);
@@ -342,7 +348,7 @@ test('@file is read from the current folder, then the workspace, and inlined aft
   });
   assert.equal(image.code, 0, image.stderr);
   const content = (
-    endpoint.bodies[1]!.messages as { role: string; content: unknown }[]
+    turns()[1]!.messages as { role: string; content: unknown }[]
   ).at(-1)!.content as { type: string; image_url?: { url: string } }[];
   assert.equal(
     content.find((part) => part.type === 'image_url')?.image_url?.url,
@@ -354,7 +360,7 @@ test('@file is read from the current folder, then the workspace, and inlined aft
   });
   assert.equal(far.code, 0, far.stderr);
   const farContent = (
-    endpoint.bodies.at(-1)!.messages as { role: string; content: unknown }[]
+    turns().at(-1)!.messages as { role: string; content: unknown }[]
   ).at(-1)!.content as {
     type: string;
     text?: string;

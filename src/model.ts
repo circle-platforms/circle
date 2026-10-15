@@ -284,6 +284,7 @@ export class GatewayModel implements ChatModel {
     if (effort)
       body.reasoning_effort =
         effort as ChatCompletionCreateParamsStreaming['reasoning_effort'];
+    if (request.maxTokens) body.max_tokens = request.maxTokens;
     this.configureBody(body as unknown as Record<string, unknown>);
     const stream = await this.openai!.chat.completions.create(body, {
       signal: request.signal,
@@ -448,12 +449,11 @@ export class GatewayModel implements ChatModel {
         previous.content.push(...content);
       else messages.push({ role, content });
     }
-    const budget = this.outputBudget ?? 32000;
     const body: MessageCreateParamsNonStreaming = {
       model: this.model,
       system,
       messages,
-      max_tokens: Math.min(request.maxTokens ?? budget, budget),
+      max_tokens: request.maxTokens ?? this.outputBudget ?? 32000,
     };
     if (request.tools.length)
       body.tools = request.tools.map((tool) => ({

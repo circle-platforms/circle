@@ -687,6 +687,9 @@ export class ExtensionHost {
       get imageInput() {
         return base.imageInput;
       },
+      // The harness asks for a session title only when this is set. Dropping it here
+      // leaves every desktop and terminal session on the fallback title.
+      sideRequests: base.sideRequests,
       complete: async (request) => {
         let next = (request: ModelRequest) => base.complete(request);
         for (const item of middleware
