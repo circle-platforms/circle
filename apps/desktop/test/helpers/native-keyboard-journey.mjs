@@ -27,6 +27,7 @@ export async function runNativeKeyboardJourney({
   );
   await search.fill(fileName);
   await search.press('Enter');
+  await search.waitFor({ state: 'hidden' });
   await page
     .locator('.file-view')
     .getByText(fileName, { exact: false })
