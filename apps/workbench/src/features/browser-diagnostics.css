@@ -1,0 +1,44 @@
+.browser-diagnostics {
+  border-top: 1px solid var(--border);
+  padding: 6px 10px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+.browser-diagnostic-tools,
+.browser-diagnostic-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-block: 5px;
+}
+.browser-diagnostics button,
+.browser-diagnostics input,
+.browser-diagnostics select {
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+.browser-diagnostic-tools input {
+  width: 62px;
+  margin-inline-start: 4px;
+}
+.browser-diagnostic-results {
+  max-height: 230px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.browser-diagnostic-results pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.browser-diagnostic-results > div {
+  padding-block: 4px;
+}
+.browser-diagnostic-tabs [aria-selected='true'] {
+  font-weight: 700;
+  text-decoration: underline;
+}

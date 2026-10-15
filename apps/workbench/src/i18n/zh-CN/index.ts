@@ -1,3 +1,4 @@
+import { browserDiagnostics } from './browser-diagnostics.ts';
 import { app } from './app.ts';
 import { common } from './common.ts';
 import { components } from './components.ts';
@@ -10,6 +11,7 @@ import { plugins } from './plugins.ts';
 
 /** Every interface text in Simplified Chinese, keyed by its English. */
 export const ZH_CN: Record<string, string> = {
+  ...browserDiagnostics,
   ...common,
   ...app,
   ...components,
