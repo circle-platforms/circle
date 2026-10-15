@@ -19,6 +19,7 @@ export interface WorkspaceStreamTransport {
  * ingestion: filtering first would turn unrelated events into permanent holes. */
 export class WorkspaceStreamConnection {
   private stopped = true;
+  private generation = 0;
   private unsubscribe: (() => void) | undefined;
   private replaying: Promise<void> | undefined;
   private buffered: WorkspaceStreamEvent[] = [];
@@ -40,9 +41,10 @@ export class WorkspaceStreamConnection {
   start(): Promise<void> {
     if (!this.stopped) return this.replaying ?? Promise.resolve();
     this.stopped = false;
+    const generation = ++this.generation;
     // Install the live listener before the first asynchronous replay request.
     this.unsubscribe = this.transport.listen((event) => {
-      if (this.stopped) return;
+      if (this.stopped || generation !== this.generation) return;
       if (this.replaying) {
         this.buffer(event);
         return;
@@ -57,6 +59,8 @@ export class WorkspaceStreamConnection {
   }
   stop() {
     this.stopped = true;
+    this.generation++;
+    this.replaying = undefined;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.buffered = [];
@@ -74,13 +78,14 @@ export class WorkspaceStreamConnection {
   }
   synchronize(): Promise<void> {
     if (this.replaying) return this.replaying;
+    const generation = this.generation;
     const run = async () => {
       do {
         let hasMore = true;
-        while (hasMore && !this.stopped) {
+        while (hasMore && !this.stopped && generation === this.generation) {
           const before = this.store.cursor;
           const page = await this.transport.replay(before, 256);
-          if (this.stopped) return;
+          if (this.stopped || generation !== this.generation) return;
           for (const event of page.events) {
             const result = this.apply(event);
             if (result === 'gap' || result === 'stale-epoch')
@@ -99,7 +104,7 @@ export class WorkspaceStreamConnection {
         this.buffered = [];
         let gap = false;
         for (const event of pending) {
-          if (this.stopped) return;
+          if (this.stopped || generation !== this.generation) return;
           const result = this.apply(event);
           if (result === 'gap') {
             this.buffer(event);
@@ -109,7 +114,7 @@ export class WorkspaceStreamConnection {
         if (gap) {
           const before = this.store.cursor;
           const page = await this.transport.replay(before, 256);
-          if (this.stopped) return;
+          if (this.stopped || generation !== this.generation) return;
           if (!page.events.length)
             throw Error(
               'workspace live event gap is not available in durable replay',
@@ -118,15 +123,20 @@ export class WorkspaceStreamConnection {
             if (this.apply(event) === 'gap')
               throw Error('workspace replay contains a journal gap');
         }
-      } while (this.buffered.length && !this.stopped);
+      } while (
+        this.buffered.length &&
+        !this.stopped &&
+        generation === this.generation
+      );
     };
     // Defer execution one microtask so synchronous live callbacks also buffer.
-    this.replaying = Promise.resolve()
+    const pending = Promise.resolve()
       .then(run)
       .finally(() => {
-        this.replaying = undefined;
+        if (this.replaying === pending) this.replaying = undefined;
       });
-    return this.replaying;
+    this.replaying = pending;
+    return pending;
   }
 }
 
@@ -189,12 +199,27 @@ export class WorkspaceStreamRegistry {
             };
           },
           replay: async (after, limit) => {
-            const page = await this.transport.replay(
-              workspaceId,
-              this.sessions.get(workspaceId)!,
-              after,
-              limit,
-            );
+            const authorization = this.sessions.get(workspaceId)!;
+            let page: WorkspaceReplayPage;
+            try {
+              page = await this.transport.replay(
+                workspaceId,
+                authorization,
+                after,
+                limit,
+              );
+            } catch (error) {
+              const current = this.sessions.get(workspaceId)!;
+              if (current === authorization) throw error;
+              // A session switch can retire an in-flight authorization. Retry
+              // once under the newly selected known session, never indefinitely.
+              page = await this.transport.replay(
+                workspaceId,
+                current,
+                after,
+                limit,
+              );
+            }
             if (page.events.some((event) => event.workspaceId !== workspaceId))
               throw Error('workspace replay returned a different journal');
             return page;

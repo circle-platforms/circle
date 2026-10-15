@@ -205,3 +205,53 @@ test('replay authorization cannot substitute another workspace journal', async (
   assert.equal(registry.store('different-workspace').cursor.seq, 0);
   registry.close();
 });
+
+test('switching away from a deleted replay authorization retries once using the new session', async () => {
+  const { WorkspaceStreamRegistry } =
+    await import('../src/model/workspace-stream-connection.ts');
+  let rejectOld!: (reason: Error) => void;
+  const used: string[] = [];
+  const registry = new WorkspaceStreamRegistry({
+    listen: () => () => {},
+    replay: async (_workspace, session, after) => {
+      used.push(session);
+      if (session === 'old')
+        return new Promise((_resolve, reject) => {
+          rejectOld = reject;
+        });
+      return { events: [event(1)], cursor: event(1).cursor, hasMore: false };
+    },
+  });
+  const old = registry.connect('w', 'old');
+  await Promise.resolve();
+  const current = registry.connect('w', 'new');
+  rejectOld(Error('session no longer exists'));
+  await Promise.all([old, current]);
+  assert.deepEqual(used, ['old', 'new']);
+  assert.equal(registry.store('w').cursor.seq, 1);
+  registry.close();
+});
+test('stop and restart cannot apply an old generation response or clear the new replay', async () => {
+  let first!: (page: any) => void;
+  let count = 0;
+  const store = new WorkspaceStreamStore();
+  const connection = new WorkspaceStreamConnection(store, {
+    listen: () => () => {},
+    replay: async () => {
+      if (++count === 1)
+        return new Promise((resolve) => {
+          first = resolve;
+        });
+      return { events: [event(1)], cursor: event(1).cursor, hasMore: false };
+    },
+  });
+  const old = connection.start();
+  await Promise.resolve();
+  connection.stop();
+  const current = connection.start();
+  await current;
+  first({ events: [event(9)], cursor: event(9).cursor, hasMore: false });
+  await old;
+  assert.equal(store.cursor.seq, 1);
+  connection.stop();
+});

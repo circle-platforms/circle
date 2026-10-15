@@ -96,4 +96,5 @@ export const developer: Record<string, string> = {
     '验收已通过，请审阅 PR 并在 GitHub 合并',
   passed: '已通过',
   skipped: '已跳过',
+  'command history': '命令历史',
 };

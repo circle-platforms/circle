@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { t } from '../i18n';
 import { desktopHost } from '../host';
 import { useRuntime } from '../app/context';
@@ -21,7 +21,8 @@ const DebugPanel = lazy(() =>
   })),
 );
 export type WorkbenchLayout = 'task' | 'developer';
-type Dock = 'terminal' | 'git' | 'debug' | 'tasks' | 'delivery';
+export type DeveloperDock = 'terminal' | 'git' | 'debug' | 'tasks' | 'delivery';
+type Dock = DeveloperDock;
 const dockLabels = {
   terminal: () => t('terminal'),
   git: () => t('git workspace'),
@@ -38,6 +39,7 @@ export function DeveloperWorkbench({
   editor,
   onFile,
   onSession,
+  openDock,
 }: {
   layout: WorkbenchLayout;
   sessionId: string;
@@ -45,6 +47,7 @@ export function DeveloperWorkbench({
   editor: ReactNode;
   onFile: (path: string, line?: number, column?: number) => void;
   onSession: (id: string) => void;
+  openDock?: { dock: DeveloperDock; id: number };
 }) {
   const { notify } = useRuntime();
   const openExternal = (url: string) => {
@@ -83,6 +86,9 @@ export function DeveloperWorkbench({
     setDock(next);
     setOpen(true);
   };
+  useEffect(() => {
+    if (openDock) select(openDock.dock);
+  }, [openDock?.id]);
   return (
     <section
       className="developer-workbench"

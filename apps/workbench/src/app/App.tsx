@@ -128,6 +128,10 @@ export function App() {
     if (narrow) setInspectorOpen(false);
   }, [narrow]);
   const [panel, setPanel] = useState<PanelId>('files');
+  const [dockRequest, setDockRequest] = useState<{
+    dock: 'terminal';
+    id: number;
+  }>();
   const [selection, setSelection] = useState('');
   const [file, setFile] = useState<string | null>(null);
   const [sourceLine, setSourceLine] = useState<number | undefined>();
@@ -178,6 +182,15 @@ export function App() {
     setDialog(kind);
   };
   const onPanel = (kind: PanelId, choice = '') => {
+    if (kind === 'terminal') {
+      setDockRequest((previous) => ({
+        dock: 'terminal',
+        id: (previous?.id ?? 0) + 1,
+      }));
+      setInspectorOpen(false);
+      navigate(`/session/${runtime.getSnapshot().activeSessionId}`);
+      return;
+    }
     setPanel(kind);
     setSelection(choice);
     setInspectorOpen(true);
@@ -580,6 +593,7 @@ export function App() {
   ) : (
     <DeveloperWorkbench
       layout={layout}
+      openDock={dockRequest}
       sessionId={session.id}
       editor={
         file ? (
