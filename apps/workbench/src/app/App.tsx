@@ -68,7 +68,11 @@ import {
   sourceLocation,
   workspaceRelativePath,
 } from '../model/source-navigation';
-import { connectWorkspaceStreams } from '../model/workspace-client';
+import { SourceOpenCoordinator } from '../model/source-open';
+import {
+  connectWorkspaceStreams,
+  workspaceCall,
+} from '../model/workspace-client';
 import { SourceNavigation } from '../components/SourceNavigation';
 import { Inspector, PanelButtons } from '../features/Panels';
 const FileViewer = lazy(() =>
@@ -138,6 +142,9 @@ export function App() {
   }>();
   const [selection, setSelection] = useState('');
   const [file, setFile] = useState<string | null>(null);
+  const sourceOpener = useRef(
+    new SourceOpenCoordinator(() => runtime.getSnapshot().activeSessionId),
+  );
   const [sourceLine, setSourceLine] = useState<number | undefined>();
   const [sourceColumn, setSourceColumn] = useState<number | undefined>();
   const [layout, setLayout] = useState<WorkbenchLayout>(() => {
@@ -172,6 +179,7 @@ export function App() {
     : null;
   const inspectorVisible = inspectorOpen && !page;
   const onSession = () => {
+    sourceOpener.current.cancel();
     setFile(null);
     setAgent(null);
     navigate(`/session/${runtime.getSnapshot().activeSessionId}`);
@@ -221,22 +229,37 @@ export function App() {
     return host.onBrowserEvent(show);
   }, [session.id, onPage, narrow]);
   const onFile = async (path: string, line?: number, column?: number) => {
-    try {
-      const target = /^file:/i.test(path) ? sourceLocation(path) : null;
-      const relative = workspaceRelativePath(
-        target?.path ?? path,
-        workspace.path,
-      );
-      line ??= target?.line;
-      column ??= target?.column;
-      if (runtime.mode !== 'live') await readNativeFile(runtime, relative);
-      setFile(relative);
-      setSourceLine(line);
-      setSourceColumn(column);
-      setAgent(null);
-      if (narrow) setInspectorOpen(false);
-      onSessionRoute();
-    } catch (error) {
+    const sourceSessionId = session.id;
+    const result = await sourceOpener.current.open(
+      sourceSessionId,
+      async () => {
+        const target = /^file:/i.test(path) ? sourceLocation(path) : null;
+        if (/^file:/i.test(path) && !target)
+          throw Error('unsupported source path');
+        let requested = target?.path ?? path;
+        if (/^\/[A-Za-z]:[\\/]/.test(requested)) requested = requested.slice(1);
+        const relative =
+          runtime.mode === 'live'
+            ? (
+                await workspaceCall<{ path: string }>(
+                  sourceSessionId,
+                  'documents',
+                  'resolveSource',
+                  { path: requested },
+                )
+              ).path
+            : workspaceRelativePath(requested, workspace.path);
+        if (runtime.mode !== 'live') await readNativeFile(runtime, relative);
+        return {
+          path: relative,
+          line: line ?? target?.line,
+          column: column ?? target?.column,
+        };
+      },
+    );
+    if (result.status === 'superseded') return;
+    if (result.status === 'failed') {
+      const error = result.error;
       notify(
         error instanceof Error
           ? error.message === 'source is outside the workspace'
@@ -246,7 +269,14 @@ export function App() {
               : error.message
           : t('file could not be opened'),
       );
+      return;
     }
+    setFile(result.source.path);
+    setSourceLine(result.source.line);
+    setSourceColumn(result.source.column);
+    setAgent(null);
+    if (narrow) setInspectorOpen(false);
+    navigate(`/session/${sourceSessionId}`);
   };
   const onSessionRoute = () =>
     navigate(`/session/${runtime.getSnapshot().activeSessionId}`);
@@ -283,6 +313,7 @@ export function App() {
     }
   }, [location.pathname]);
   useEffect(() => {
+    sourceOpener.current.cancel();
     setFile(null);
     setAgent(null);
     const id = location.pathname.startsWith('/session/')
