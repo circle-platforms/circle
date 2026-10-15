@@ -603,6 +603,9 @@ export function renderScreen(
         ? 'accept edits'
         : '';
   const modeSgr = state.planMode ? p.green : state.autoMode ? p.yellow : p.blue;
+  // The reason row is the composer, so its completion list sits above the card.
+  if (state.dialog?.input !== undefined && state.completion && !state.picker)
+    bottom.push(...completionRows(state.completion, width));
   if (state.dialog)
     bottom.push(
       ...dialogRows(

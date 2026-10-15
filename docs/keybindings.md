@@ -80,7 +80,7 @@ An approval:
 | `pageup`, `pagedown` | Scroll the conversation behind the card. |
 | `ctrl+c` | Stop the turn. It does not answer a background subagent's card (its title starts with the job, such as `j3 general-purpose`): the card stays. |
 
-In the row `Reject and explain`, type the reason and press `enter`; an empty reason is a plain rejection. `esc` returns to the options.
+In the row `Reject and explain`, type the reason and press `enter`; an empty reason is a plain rejection. The empty row says so. `esc` returns to the options and keeps what you typed. A `/command` runs, and the approval stays.
 
 Questions from the model:
 

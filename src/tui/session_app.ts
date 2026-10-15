@@ -1727,6 +1727,14 @@ export class SessionApp {
           query: this.history.query!,
           match: match !== undefined,
         };
+      } else if (
+        this.card instanceof ApprovalCard &&
+        this.card.explaining &&
+        this.state.dialog
+      ) {
+        this.composer.paste(event.text);
+        this.composer.update();
+        this.publishExplain(this.card);
       } else if (this.card && this.state.dialog) {
         this.card.paste(event.text);
         this.state.dialog = this.card.state();
@@ -1953,7 +1961,21 @@ export class SessionApp {
       }
       const dialog = this.state.dialog;
       if (this.card) {
+        // Reject and explain is the composer: esc returns to the options and keeps
+        // the draft, enter rejects (empty is plain), and a /command runs.
+        if (this.card instanceof ApprovalCard && this.card.explaining) {
+          this.explainKey(this.card, key, char);
+          this.repaint();
+          return;
+        }
         const result = this.card.handle(key, char);
+        if (this.card instanceof ApprovalCard && this.card.explaining) {
+          this.composer.set(this.card.draft);
+          this.composer.update();
+          this.publishExplain(this.card);
+          this.repaint();
+          return;
+        }
         if (result === 'pass') {
           // not the card's business: ctrl+c stops the turn, page keys scroll
           if (key === 'ctrl+c' && this.runtime?.busy) this.ctrlC();
@@ -2259,6 +2281,137 @@ export class SessionApp {
     if (this.state.picker === open.list) {
       if (!open.list.asking) open.list.setItems(open.rows());
     } else if (!this.state.dialog) this.jobsList = undefined;
+  }
+  /** The open reason row, drawn from the composer so the cursor and completions match. */
+  private publishExplain(card: ApprovalCard): void {
+    card.draft = this.state.draft;
+    const dialog = card.state();
+    if (dialog.input !== undefined) dialog.inputCursor = this.state.draftCursor;
+    this.state.dialog = dialog;
+  }
+  /**
+   * Keys for `Reject and explain`. The row is the composer: esc returns to the
+   * options and keeps the draft, an empty enter is a plain rejection, and a
+   * slash command runs without answering the card.
+   */
+  private explainKey(card: ApprovalCard, key: string, char: string): void {
+    if (key === 'escape') {
+      card.explaining = false;
+      card.draft = this.state.draft;
+      this.state.completion = undefined;
+      this.state.dialog = card.state();
+      return;
+    }
+    if (key === 'ctrl+c') {
+      if (this.runtime?.busy) this.ctrlC();
+      return;
+    }
+    if (key === 'pageup' || key === 'pagedown') {
+      const page = Math.max(1, (process.stdout.rows || 24) - 8);
+      this.scrollBy(key === 'pageup' ? page : -page);
+      return;
+    }
+    if (key === 'ctrl+d' && !this.state.draft) {
+      this.exit(0);
+      return;
+    }
+    if (key === 'enter') {
+      const list = this.state.completion;
+      if (
+        list?.kind === 'command' &&
+        list.value === this.state.draft &&
+        list.cursor === this.state.draftCursor
+      ) {
+        const chosen = list.items[list.focus]?.value;
+        if (chosen) {
+          this.state.completion = undefined;
+          this.composer.set(chosen);
+          void this.runExplainCommand(chosen);
+          return;
+        }
+      }
+      if (this.composer.completionKey(key)) {
+        this.publishExplain(card);
+        return;
+      }
+      const message = this.state.draft.trim();
+      if (!message) {
+        this.pending?.complete('reject');
+        return;
+      }
+      if (
+        message === '?' ||
+        (message.startsWith('/') && commandWord(this.state.draft))
+      ) {
+        void this.runExplainCommand(this.state.draft);
+        return;
+      }
+      this.pending?.complete({ decision: 'reject', message });
+      return;
+    }
+    if (this.composer.completionKey(key)) {
+      this.publishExplain(card);
+      return;
+    }
+    this.composer.key(key, char);
+    this.publishExplain(card);
+  }
+  /**
+   * A slash command typed in the reason row. The card stays; a command that
+   * opens a list takes the keys until that list closes.
+   */
+  private async runExplainCommand(raw: string): Promise<void> {
+    const view = this.view;
+    const card = this.card;
+    if (!(card instanceof ApprovalCard) || !card.explaining) return;
+    const shown = raw.trim();
+    view.suspendedDialog = card.state();
+    view.state.dialog = undefined;
+    view.state.completion = undefined;
+    try {
+      if (shown === '?') {
+        await this.command('hotkeys', '');
+        this.composer.set('');
+      } else if (shown.startsWith('/')) {
+        const extra = new Set([
+          ...discoverCustomCommands(this.workspace, this.home).map(
+            (command) => command.name,
+          ),
+          ...(this.runtime?.extensions.commands().keys() ?? []),
+        ]);
+        const slash = parseSlash(shown, extra);
+        if (slash) {
+          this.composer.set('');
+          await this.command(slash.name, slash.args);
+        } else {
+          const word = commandWord(raw);
+          const close = word
+            ? closeMatch(word, [...knownSlashNames(), ...extra])
+            : '';
+          this.composer.set(raw);
+          this.flash(
+            `Unknown command /${word}` +
+              (close ? ` · did you mean /${close}?` : ' · /help lists them'),
+            4000,
+          );
+        }
+      }
+    } catch (error) {
+      this.inView(view, () => this.fail(error));
+    }
+    if (this.view !== view || view.card !== card) return;
+    card.draft = view.state.draft;
+    if (view.state.picker) {
+      view.suspendedDialog = card.state();
+      this.repaint();
+      return;
+    }
+    view.suspendedDialog = undefined;
+    if (card.explaining) {
+      this.composer.update();
+      this.publishExplain(card);
+    }
+    this.repaint();
   }
   /** Send the draft: the model reads the long pastes, the screen and the history keep it as shown. */
   private send(kind: 'steer' | 'followUp'): void {

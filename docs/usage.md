@@ -44,7 +44,7 @@ When Circle needs a decision, a card takes over the input box and the frame turn
 
 - Press the number of the option. For an approval, `y`, `a` and `n` also work, though they are not shown.
 - `↑` `↓` move, `enter` confirms, `esc` gives the most cautious answer: reject, or cancel.
-- `Reject and explain` turns the last row into an input. Type what Circle should do instead and press `enter`. An empty `enter` is a plain rejection.
+- `Reject and explain` turns the last row into an input. Type what Circle should do instead and press `enter`. An empty `enter` is a plain rejection. `esc` returns to the options and keeps what you typed. A `/command` runs, and the card stays.
 - Keys you type while a card is up do not go to the input box, so a stray letter cannot answer for you. If you were typing a message, the card waits until you have paused for a second, and it puts your draft back when you are done.
 
 A question from the model can have several questions. `←` and `→` move between them, `space` ticks an answer when several are allowed, and `o` lets you type your own answer.

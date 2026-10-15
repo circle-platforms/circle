@@ -158,13 +158,19 @@ test('an approval card shows the change as a diff instead of JSON, swallows stra
   s.type('xqz');
   assert.ok(s.app.state.dialog);
   assert.equal(s.app.state.dialog.input, undefined);
-  // the reason row, then esc back to the options: what was typed there goes
+  // the reason row. esc returns to the options and keeps the draft.
   s.key('3');
   assert.equal(s.app.state.dialog!.input, '');
+  assert.match(s.card(), /empty enter rejects · esc returns/);
+  s.type('y');
+  assert.equal(s.app.state.dialog!.input, 'y');
+  assert.ok(s.app.state.dialog, 'y in the reason row does not approve');
+  s.key('backspace');
   s.type('wrong');
   s.key('escape');
   assert.ok(s.app.state.dialog);
   assert.equal(s.app.state.dialog.input, undefined);
+  assert.equal(s.app.state.draft, 'wrong');
   assert.equal(s.app.state.dialog!.focus, 2);
   s.key('down');
   assert.equal(s.app.state.dialog!.focus, 0);
@@ -174,6 +180,8 @@ test('an approval card shows the change as a diff instead of JSON, swallows stra
   s.key('up');
   assert.equal(s.app.state.dialog!.focus, 2);
   s.key('enter');
+  assert.equal(s.app.state.dialog!.input, 'wrong');
+  for (let i = 0; i < 'wrong'.length; i++) s.key('backspace');
   assert.equal(s.app.state.dialog!.input, '');
   s.type('use sedd');
   s.key('backspace');
@@ -191,6 +199,50 @@ test('an approval card shows the change as a diff instead of JSON, swallows stra
   assert.equal(
     result.content,
     'The user rejected this tool call. The user said: use sed instead',
+  );
+});
+
+test('reject and explain runs a slash command, keeps the draft on esc, and an empty enter rejects', async (t) => {
+  const s = session(t, [
+    calls('a1', {
+      id: 'w1',
+      name: 'write_file',
+      args: { file_path: 'kept.txt', content: 'no\n' },
+    }),
+    answer('a2', 'left it'),
+  ]);
+  const run = s.runtime.harness.run('write it');
+  await until(() => Boolean(s.app.state.dialog));
+  s.key('3');
+  assert.equal(s.app.state.dialog!.input, '');
+  s.type('/hel');
+  assert.match(s.screen(), /\/help/);
+  assert.equal(s.app.state.dialog!.focus, 2);
+  s.key('down');
+  assert.equal(s.app.state.dialog!.focus, 2, 'arrows edit the row');
+  s.key('escape');
+  assert.equal(s.app.state.dialog!.input, undefined);
+  assert.match(s.card(), /1 Allow once/);
+  assert.equal(s.app.state.draft, '/hel');
+  assert.equal(s.model.requests.length, 1);
+  s.key('enter');
+  assert.equal(s.app.state.dialog!.input, '/hel');
+  s.type('p');
+  s.key('enter');
+  await until(
+    () =>
+      s.app.state.notices.some((line) =>
+        line.includes('Available commands:'),
+      ) && Boolean(s.app.state.dialog),
+  );
+  assert.equal(existsSync(join(s.root, 'kept.txt')), false);
+  assert.equal(s.model.requests.length, 1);
+  assert.equal(s.app.state.dialog!.input, '');
+  s.key('enter');
+  await run;
+  assert.equal(
+    s.toolResult(1, 'w1').content,
+    'The user rejected this tool call.',
   );
 });
 
