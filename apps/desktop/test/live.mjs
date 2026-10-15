@@ -355,16 +355,23 @@ try {
     'cancel',
   );
   checks.push('native stop awaits the actual model abort');
+  const countBeforeNew = (await state()).sessions.length;
   await page
     .getByRole('button', { name: 'new session', exact: true })
     .first()
     .click();
-  await waitFor(
-    async () => (await state()).activeSessionId !== sessionId,
-    'new session',
-  );
+  await page
+    .getByRole('heading', { name: 'what are we working on?', exact: true })
+    .waitFor();
+  assert.equal((await state()).sessions.length, countBeforeNew);
+  assert.equal((await state()).activeSessionId, sessionId);
+  checks.push('new session opens home without creating an empty session');
+  assert.equal((await command('new-session')).ok, true);
   const created = (await state()).activeSessionId;
   assert.notEqual(created, sessionId);
+  await page.evaluate((id) => {
+    location.hash = '/session/' + id;
+  }, sessionId);
   assert.equal((await command('select-session', { id: sessionId })).ok, true);
   await page.getByText('native answer completed', { exact: true }).waitFor();
   const exported = await command('export');

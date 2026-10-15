@@ -1,4 +1,5 @@
 import { desktopHost, openNativeWorkspace } from '../host';
+import { homePath } from '../features/Home';
 import { useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -18,6 +19,10 @@ import {
 import { useRuntime } from '../app/context';
 import { usePlugins } from '../plugins/context';
 import { currentSession, sessionTitle } from '../model/state';
+import {
+  sessionHasContent,
+  workspaceListed,
+} from '../model/session-management';
 import type { DialogId } from '../model/types';
 import { IconButton } from './common';
 import { t } from '../i18n';
@@ -68,12 +73,10 @@ export function Sidebar({
     navigate(`/session/${id}`);
     onNavigate?.();
   };
-  const newSession = (workspaceId?: string) =>
-    perform(async () => {
-      const id = await runtime.newSession(workspaceId);
-      navigate(`/session/${id}`);
-      onNavigate?.();
-    });
+  const newSession = (workspaceId?: string) => {
+    navigate(homePath(workspaceId));
+    onNavigate?.();
+  };
   // The open folder first, then the others by their latest session.
   const latest = (id: string) =>
     snapshot.sessions
@@ -83,12 +86,7 @@ export function Sidebar({
         0,
       );
   const projects = snapshot.workspaces
-    .filter((workspace) =>
-      snapshot.sessions.some(
-        (session) =>
-          session.workspaceId === workspace.id && !session.archivedAt,
-      ),
-    )
+    .filter((workspace) => workspaceListed(workspace, snapshot.sessions))
     .sort((a, b) =>
       a.id === current.workspaceId
         ? -1
@@ -171,7 +169,9 @@ export function Sidebar({
           const sessions = snapshot.sessions
             .filter(
               (session) =>
-                session.workspaceId === workspace.id && !session.archivedAt,
+                session.workspaceId === workspace.id &&
+                !session.archivedAt &&
+                sessionHasContent(session),
             )
             .sort(
               (a, b) =>
@@ -271,7 +271,7 @@ export function Sidebar({
               try {
                 const selected = await openNativeWorkspace(runtime);
                 if (selected) {
-                  navigate('/session/' + runtime.getSnapshot().activeSessionId);
+                  navigate(homePath(selected));
                   onNavigate?.();
                 }
               } catch (error) {

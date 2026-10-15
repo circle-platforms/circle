@@ -459,8 +459,38 @@ try {
   // Open folder sits in the sidebar, under the folders and their sessions.
   await page.getByRole('button', { name: 'open folder', exact: true }).click();
   await page
-    .getByRole('heading', { name: 'new session', exact: true })
+    .getByRole('heading', {
+      name: 'what should we build in project?',
+      exact: true,
+    })
     .waitFor();
+  const sessionsBeforeSend = (
+    await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('circle.workbench.preview.v1')),
+    )
+  ).sessions.length;
+  await page
+    .getByRole('textbox', { name: 'message', exact: true })
+    .fill('look at hello');
+  await page.getByRole('button', { name: 'send message', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: 'workspace trust', exact: true })
+    .waitFor();
+  await page
+    .getByRole('button', { name: 'trust in preview', exact: true })
+    .click();
+  await page.getByRole('button', { name: 'send message', exact: true }).click();
+  await page
+    .getByRole('heading', { name: 'look at hello', exact: true })
+    .waitFor();
+  assert.equal(
+    (
+      await page.evaluate(() =>
+        JSON.parse(localStorage.getItem('circle.workbench.preview.v1')),
+      )
+    ).sessions.length,
+    sessionsBeforeSend + 1,
+  );
   // The side panel starts closed; the top bar's files icon opens it.
   const files = page.getByRole('button', { name: 'files panel', exact: true });
   if ((await files.getAttribute('aria-pressed')) !== 'true')
@@ -569,7 +599,7 @@ try {
   });
   page = await app.firstWindow();
   await page
-    .getByRole('heading', { name: 'new session', exact: true })
+    .getByRole('heading', { name: 'look at hello', exact: true })
     .waitFor();
   const reopened = await page.evaluate(() =>
     JSON.parse(localStorage.getItem('circle.workbench.preview.v1')),

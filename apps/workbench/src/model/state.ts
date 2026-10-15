@@ -5,6 +5,7 @@ import {
   parseSlash,
 } from '../../../../src/tui/slash_commands.ts';
 import type {
+  BeginResult,
   CommandResult,
   Effort,
   Message,
@@ -12,6 +13,7 @@ import type {
   Session,
   SessionMode,
   WorkbenchSnapshot,
+  Workspace,
 } from './types.ts';
 import { createFixtures } from '../preview/fixtures.ts';
 import { t } from '../i18n/index.ts';
@@ -237,6 +239,55 @@ export class PreviewRuntime implements RuntimePort {
       state.sessions.unshift(session);
     });
     return session.id;
+  };
+  beginConversation = (input: {
+    workspaceId?: string | null;
+    text: string;
+  }): BeginResult => {
+    const text = input.text.trim();
+    if (!text) throw Error('prompt is empty');
+    let workspace = input.workspaceId
+      ? this.snapshot.workspaces.find((item) => item.id === input.workspaceId)
+      : this.snapshot.workspaces.find((item) => item.kind === 'scratch');
+    if (input.workspaceId && !workspace) throw Error('workspace not found');
+    if (workspace && !workspace.trusted) return { dialog: 'trust' };
+    let created: Workspace | undefined;
+    if (!workspace) {
+      created = {
+        id: crypto.randomUUID(),
+        name: 'circle',
+        path: this.snapshot.settings.workspaceFolder || 'scratch',
+        branch: '',
+        trusted: true,
+        kind: 'scratch',
+        origin: 'preview',
+        instructions: [],
+      };
+      workspace = created;
+    }
+    const session = freshSession(this.snapshot, workspace.id);
+    const message: Message = {
+      id: crypto.randomUUID(),
+      parentId: null,
+      role: 'user',
+      text,
+      at: new Date().toLocaleTimeString('en-GB', {
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+    };
+    session.messages = [message];
+    session.leafId = message.id;
+    session.title = text.split('\n')[0]!.slice(0, 60);
+    session.state = 'waiting';
+    this.change((state) => {
+      if (created && !state.workspaces.some((item) => item.id === created.id))
+        state.workspaces.push(created);
+      state.previousSessionId = state.activeSessionId;
+      state.activeSessionId = session.id;
+      state.sessions.unshift(session);
+    });
+    return { sessionId: session.id };
   };
   selectSession = (id: string) => {
     if (id === this.snapshot.activeSessionId) return;

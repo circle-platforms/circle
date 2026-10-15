@@ -21,7 +21,7 @@ The models page lists what the saved endpoint offered when it was connected or l
 
 The layout follows Claude's:
 
-- **The sidebar**: search, a new session, customize (skills, commands, MCP servers, extensions, tools and approvals) and all sessions; then your folders and their sessions, with action menus for each; open folder; and at the bottom the connection and settings.
+- **The sidebar**: search, a new session, customize (skills, commands, MCP servers, extensions, tools and approvals) and all sessions; then your folders and their sessions, with action menus for each; open folder; and at the bottom the connection and settings. New session opens the home composer. It does not create a session.
 - **The top bar**: the session's title, whose menu has rename, details, find, the session tree, fork, clone, compact, export and share; the folder and its git branch; and on the right the side panels — terminal, files, changes, activity, browser and context — and ⋯ for search, theme, connection and help. A click opens a panel on the right, a second click closes it.
 - **The conversation**: your messages on the right, Circle's answers as plain text. The tool calls between two answers fold into one line, such as `ran 2 commands, edited calc.py +1 −1`; a click opens them, each with its output and, for a file change, its diff. Thinking folds to one line too. The time, the usage and a copy button show under a message when the pointer is on it.
 
@@ -29,7 +29,9 @@ The app starts in a folder of its own, `workspace` inside its data folder, which
 
 ## Organizing sessions
 
-The ⋯ beside a folder creates a session, reveals the folder in Finder or the system file manager, collapses the sidebar groups, or archives all its sessions. A session's ⋯ pins, renames, archives, restores or deletes it. Deleting still asks for confirmation and preserves the workspace folder.
+The ⋯ beside a folder opens the home composer with that folder selected, reveals the folder in Finder or the system file manager, collapses the sidebar groups, or archives all its sessions. The + beside a folder does the same as new session, with that folder already chosen. A session's ⋯ pins, renames, archives, restores or deletes it. Deleting still asks for confirmation and preserves the workspace folder.
+
+New session, in the sidebar, on a folder, on the sessions page, or from the file menu, always opens the home composer: the question, the message box, and a project menu. The menu searches the folders Circle already knows, marks the selected one, and can open a new folder or work without a project (the scratch folder inside the data folder). Nothing is saved until the first message is sent. That message creates one session in the chosen folder, and the session then appears in the sidebar. A folder appears when it is opened or when a session in it has a message. A session with no messages and no title of its own stays out of the sidebar and the session list.
 
 Archiving hides a session from the sidebar. All sessions → archived sessions shows it again; its history stays readable, and restore conversation enables the composer. Until restored, it cannot change the saved branch, labels or conversation mode. A fork or clone can start a separate conversation from it. Archive state is kept in desktop metadata, without deleting the folder or changing the terminal's checkpoint history.
 

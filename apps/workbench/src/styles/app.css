@@ -1726,6 +1726,62 @@ pre {
   color: var(--muted);
   font-size: var(--ui-tiny);
 }
+.home {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.home .welcome {
+  padding: 12px 10px 8px;
+}
+.home-project-name {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.home-composer {
+  width: min(680px, 100%);
+  margin: 0 auto;
+  padding: 8px 28px 48px;
+}
+.home-composer .composer textarea {
+  min-height: 92px;
+}
+.project-menu {
+  min-width: 260px;
+  padding-top: 0;
+}
+.project-menu [role='menuitem'] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.project-menu [role='menuitem'] > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+.project-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+.project-picker-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+}
 .page {
   flex: 1;
   min-height: 0;

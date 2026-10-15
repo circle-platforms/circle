@@ -4,6 +4,7 @@ import type {
   RuntimeUpdate,
 } from '../../../desktop/src/runtime-protocol';
 import type {
+  BeginResult,
   CommandResult,
   RuntimePort,
   WorkbenchSnapshot,
@@ -414,6 +415,29 @@ export class LiveRuntime implements RuntimePort {
     }
     const result = (await this.native('new-session')) as { sessionId: string };
     return result.sessionId;
+  };
+  beginConversation = async (input: {
+    workspaceId?: string | null;
+    text: string;
+  }): Promise<BeginResult> => {
+    const text = input.text.trim();
+    if (!text) throw Error(t('prompt is empty'));
+    await this.changes;
+    const workspaceId = input.workspaceId || undefined;
+    if (workspaceId) {
+      const workspace = this.snapshot.workspaces.find(
+        (item) => item.id === workspaceId,
+      );
+      if (!workspace)
+        throw Error(t('open the workspace through the native folder dialog'));
+      if (!workspace.trusted) return { dialog: 'trust' };
+    }
+    const result = (await this.native('begin-session', {
+      ...(workspaceId ? { workspaceId } : {}),
+      text,
+      display: text,
+    })) as { sessionId: string };
+    return { sessionId: result.sessionId };
   };
   selectSession = async (id: string) => {
     await this.changes;

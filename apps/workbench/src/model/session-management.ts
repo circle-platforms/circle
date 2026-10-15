@@ -1,4 +1,31 @@
-import type { Session, WorkbenchSnapshot } from './types';
+import type { Session, WorkbenchSnapshot, Workspace } from './types';
+
+/**
+ * A session the sidebar and the session list should show. A click on new session
+ * used to leave a row with the placeholder title and no messages; those stay hidden.
+ */
+export function sessionHasContent(session: Session): boolean {
+  return (
+    session.state === 'waiting' ||
+    session.queue.length > 0 ||
+    session.messages.some((message) => message.role !== 'notice') ||
+    (session.title !== '' && session.title !== 'new session')
+  );
+}
+
+/** Folders in the sidebar: opened projects stay, empty scratch does not. */
+export function workspaceListed(
+  workspace: Workspace,
+  sessions: readonly Session[],
+): boolean {
+  const own = sessions.filter(
+    (session) => session.workspaceId === workspace.id,
+  );
+  const visible = own.filter((session) => !session.archivedAt);
+  if (workspace.kind === 'scratch') return visible.some(sessionHasContent);
+  if (visible.some(sessionHasContent) || visible.length > 0) return true;
+  return own.length === 0;
+}
 
 export function canArchiveSession(
   snapshot: WorkbenchSnapshot,

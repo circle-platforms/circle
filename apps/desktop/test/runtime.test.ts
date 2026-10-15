@@ -4231,3 +4231,101 @@ test('trusting a folder initializes every idle session with its own project cont
       .trusted,
   );
 });
+
+test('the first message from home creates one session in the chosen project', async (t) => {
+  const f = await setup(t, [
+    { message: assistant('parser started') },
+    { message: assistant('tests added') },
+    { message: assistant('loose answer') },
+  ]);
+  const project = join(f.root, 'parser');
+  await mkdir(project);
+  saveSettingsChange(f.home, (settings) => {
+    Object.assign(settings, trustFolder(settings, project));
+  });
+  const opened = await f.call('open-workspace', { path: project });
+  assert.equal(opened.ok, true, opened.error);
+  const workspaceId = (opened.data as { workspaceId: string }).workspaceId;
+  const inProject = () =>
+    f.controller
+      .snapshot()
+      .sessions.filter((session) => session.workspaceId === workspaceId);
+  assert.equal(inProject().length, 1);
+  assert.equal(inProject()[0]!.messages.length, 0);
+  const before = f.controller.snapshot().sessions.length;
+  const begun = await f.call('begin-session', {
+    workspaceId,
+    text: 'build the parser',
+    display: 'build the parser',
+  });
+  assert.equal(begun.ok, true, begun.error);
+  await wait(
+    () =>
+      inProject().some((session) =>
+        session.messages.some((message) =>
+          message.text.includes('build the parser'),
+        ),
+      ),
+    'first message stored',
+  );
+  assert.equal(inProject().length, 1);
+  assert.equal(f.controller.snapshot().sessions.length, before);
+  assert.equal(
+    (begun.data as { sessionId: string }).sessionId,
+    inProject()[0]!.id,
+  );
+  await wait(
+    () =>
+      inProject()[0]!.messages.some((message) => message.role === 'assistant'),
+    'first turn finished',
+  );
+  const again = await f.call('begin-session', {
+    workspaceId,
+    text: 'add tests',
+    display: 'add tests',
+  });
+  assert.equal(again.ok, true, again.error);
+  await wait(() => inProject().length === 2, 'second session');
+  await wait(
+    () =>
+      inProject().filter((session) =>
+        session.messages.some((message) => message.role === 'assistant'),
+      ).length === 2,
+    'second turn finished',
+  );
+  assert.equal(f.controller.snapshot().sessions.length, before + 1);
+  assert.ok(
+    inProject().every((session) =>
+      session.messages.some((message) => message.role === 'user'),
+    ),
+  );
+  const loose = await f.call('begin-session', {
+    text: 'a loose question',
+    display: 'a loose question',
+  });
+  assert.equal(loose.ok, true, loose.error);
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .sessions.filter((session) =>
+          session.messages.some((message) =>
+            message.text.includes('a loose question'),
+          ),
+        ).length === 1,
+    'scratch session',
+  );
+  const scratch = f.controller
+    .snapshot()
+    .sessions.filter((session) =>
+      session.messages.some((message) =>
+        message.text.includes('a loose question'),
+      ),
+    );
+  assert.equal(scratch.length, 1);
+  assert.notEqual(scratch[0]!.workspaceId, workspaceId);
+  const scratchWorkspace = f.controller
+    .snapshot()
+    .workspaces.find((item) => item.id === scratch[0]!.workspaceId);
+  assert.equal(scratchWorkspace?.kind, 'scratch');
+});

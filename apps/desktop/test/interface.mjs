@@ -349,11 +349,21 @@ try {
   await page.getByRole('heading', { name: 'models', exact: true }).waitFor();
   checks.push('custom key binding invokes its configured action');
   await reset();
+  const beforeNew = await state();
   await page.getByRole('button', { name: 'new session', exact: true }).click();
   await page
-    .getByRole('heading', { name: 'new session', exact: true })
+    .getByRole('heading', { name: 'what are we working on?', exact: true })
     .waitFor();
-  const resetSessionId = new URL(page.url()).hash.split('/').at(-1);
+  assert.equal(new URL(page.url()).hash, '#/home');
+  // Sample data stays in memory until a view writes it. Home must not add a row.
+  const afterNew = await state();
+  assert.equal(afterNew?.sessions.length ?? 3, beforeNew?.sessions.length ?? 3);
+  assert.equal(
+    afterNew?.activeSessionId ?? 'session1',
+    beforeNew?.activeSessionId ?? 'session1',
+  );
+  checks.push('new session opens home without creating an empty session');
+  await route('/session/session1');
   const resetDraft = 'preview reset regression draft';
   await page
     .getByRole('textbox', { name: 'message', exact: true })
@@ -432,7 +442,7 @@ try {
       .inputValue(),
     '',
   );
-  assert.notEqual(new URL(page.url()).hash.split('/').at(-1), resetSessionId);
+  assert.equal(new URL(page.url()).hash, '#/session/session1');
   await openPreview();
   await previewDialog
     .getByRole('button', { name: 'reset sample data', exact: true })

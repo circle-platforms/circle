@@ -14,6 +14,8 @@ import { PluginRegistry } from '../src/plugins/registry.ts';
 import type { WorkbenchPlugin } from '../src/plugins/types.ts';
 import {
   canArchiveSession,
+  sessionHasContent,
+  workspaceListed,
   workspaceSessions,
 } from '../src/model/session-management.ts';
 function storage() {
@@ -377,4 +379,93 @@ test('core times show as local clock times, with the day when it is not today', 
   assert.equal(shownTime('10:24', now), '10:24');
   assert.equal(shownTime('yesterday', now), 'yesterday');
   assert.equal(shownTime('streaming', now), 'streaming');
+});
+
+test('the first message from home creates one session in the chosen project', () => {
+  const runtime = new PreviewRuntime();
+  const before = runtime.getSnapshot().sessions.map((session) => session.id);
+  assert.deepEqual(
+    runtime.beginConversation({
+      workspaceId: 'workspace2',
+      text: 'edit the docs',
+    }),
+    { dialog: 'trust' },
+  );
+  assert.deepEqual(
+    runtime.getSnapshot().sessions.map((session) => session.id),
+    before,
+  );
+  runtime.change((state) => {
+    state.workspaces.find((item) => item.id === 'workspace2')!.trusted = true;
+  });
+  const started = runtime.beginConversation({
+    workspaceId: 'workspace2',
+    text: 'edit the docs',
+  });
+  assert.ok('sessionId' in started);
+  const created = runtime
+    .getSnapshot()
+    .sessions.filter((session) => !before.includes(session.id));
+  assert.equal(created.length, 1);
+  assert.equal(created[0]!.id, started.sessionId);
+  assert.equal(created[0]!.workspaceId, 'workspace2');
+  assert.deepEqual(
+    created[0]!.messages.map((message) => message.text),
+    ['edit the docs'],
+  );
+  assert.equal(sessionHasContent(created[0]!), true);
+  assert.equal(
+    sessionHasContent({
+      ...created[0]!,
+      title: 'new session',
+      messages: [],
+      queue: [],
+      state: 'idle',
+    }),
+    false,
+  );
+});
+
+test('working without a project creates one scratch session, and empty rows stay unlisted', () => {
+  const runtime = new PreviewRuntime();
+  const before = runtime.getSnapshot().sessions.length;
+  const started = runtime.beginConversation({
+    workspaceId: null,
+    text: 'a loose question',
+  });
+  assert.ok('sessionId' in started);
+  const snapshot = runtime.getSnapshot();
+  assert.equal(snapshot.sessions.length, before + 1);
+  const created = snapshot.sessions.find(
+    (session) => session.id === started.sessionId,
+  )!;
+  const workspace = snapshot.workspaces.find(
+    (item) => item.id === created.workspaceId,
+  )!;
+  assert.equal(workspace.kind, 'scratch');
+  assert.equal(created.messages[0]!.text, 'a loose question');
+  assert.equal(workspaceListed(workspace, snapshot.sessions), true);
+  const placeholder = {
+    ...created,
+    title: 'new session',
+    messages: [],
+    queue: [],
+    state: 'idle' as const,
+  };
+  assert.equal(sessionHasContent(placeholder), false);
+  assert.equal(workspaceListed(workspace, [placeholder]), false);
+  assert.equal(
+    workspaceListed({ ...workspace, id: 'opened', kind: 'project' }, [
+      { ...placeholder, workspaceId: 'opened' },
+    ]),
+    true,
+  );
+  const again = runtime.beginConversation({ text: 'another question' });
+  assert.ok('sessionId' in again);
+  assert.notEqual(again.sessionId, started.sessionId);
+  const scratch = runtime
+    .getSnapshot()
+    .sessions.filter((session) => session.workspaceId === workspace.id);
+  assert.equal(scratch.length, 2);
+  assert.ok(scratch.every((session) => session.messages.length === 1));
 });

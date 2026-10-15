@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { useRuntime } from './context';
 import { currentSession, sessionText, sessionTitle } from '../model/state';
+import { sessionHasContent } from '../model/session-management';
 import type {
   Attachment,
   DialogId,
@@ -53,6 +54,7 @@ import {
 import { Markdown } from '../components/Markdown';
 import { ToolMessage } from '../components/ToolMessage';
 import { Conversation } from '../features/Conversation';
+import { Home, homePath } from '../features/Home';
 import { Inspector, PanelButtons } from '../features/Panels';
 import { FileViewer } from '../features/FileViewer';
 import { ManagementPage } from '../features/Pages';
@@ -114,6 +116,8 @@ export function App() {
   const page = location.pathname.startsWith('/page/')
     ? (location.pathname.slice(6) as PageId)
     : null;
+  const home = location.pathname === '/home';
+  const homeWorkspace = new URLSearchParams(location.search).get('workspace');
   const inspectorVisible = inspectorOpen && !page;
   const onSession = () => {
     setFile(null);
@@ -193,6 +197,7 @@ export function App() {
   useEffect(() => {
     if (location.pathname === '/')
       navigate(`/session/${session.id}`, { replace: true });
+    if (location.pathname === '/home') return;
     const id = location.pathname.startsWith('/session/')
       ? location.pathname.slice(9)
       : undefined;
@@ -432,10 +437,11 @@ export function App() {
       if (action === 'open-folder') {
         void openNativeWorkspace(runtime)
           .then((selected) => {
-            if (selected) onSession();
+            if (selected) navigate(homePath(selected));
           })
           .catch((error) => notify(String(error)));
-      } else if (action === 'settings') navigate('/page/settings');
+      } else if (action === 'new') navigate(homePath());
+      else if (action === 'settings') navigate('/page/settings');
       else if (action === 'help') navigate('/page/help');
       else act(() => runtime.command(action));
     });
@@ -518,6 +524,12 @@ export function App() {
         )}
       </div>
     </section>
+  ) : home ? (
+    <Home
+      workspaceId={homeWorkspace}
+      onDialog={onDialog}
+      onStarted={(id) => navigate(`/session/${id}`)}
+    />
   ) : (
     <Conversation
       onDialog={onDialog}
@@ -570,7 +582,7 @@ export function App() {
       detail: t('platform plugin'),
       run: () => navigate('/page/' + page.id),
     })),
-    ...snapshot.sessions.map((item) => ({
+    ...snapshot.sessions.filter(sessionHasContent).map((item) => ({
       id: item.id,
       label: sessionTitle(item.title),
       detail: t('session · {workspace}', {
@@ -637,13 +649,15 @@ export function App() {
                   <PanelLeft size={16} />
                 </IconButton>
               </span>
-              {page || file || agent ? (
+              {page || file || agent || home ? (
                 <span className="page-title">
-                  {page
-                    ? (PAGE_NAMES[page]?.() ?? page)
-                    : file
-                      ? file
-                      : t('agent record')}
+                  {home
+                    ? t('new session')
+                    : page
+                      ? (PAGE_NAMES[page]?.() ?? page)
+                      : file
+                        ? file
+                        : t('agent record')}
                 </span>
               ) : (
                 <DropdownMenu.Root>
@@ -670,19 +684,21 @@ export function App() {
                   </DropdownMenu.Portal>
                 </DropdownMenu.Root>
               )}
-              <span className="project-chip" title={workspace.path}>
-                <Folder size={12} />
-                {workspace.name}
-                {workspace.branch && (
-                  <>
-                    <GitBranch size={11} />
-                    {workspace.branch}
-                  </>
-                )}
-              </span>
+              {!home && (
+                <span className="project-chip" title={workspace.path}>
+                  <Folder size={12} />
+                  {workspace.name}
+                  {workspace.branch && (
+                    <>
+                      <GitBranch size={11} />
+                      {workspace.branch}
+                    </>
+                  )}
+                </span>
+              )}
             </div>
             <div className="topbar-actions">
-              {!page && (
+              {!page && !home && (
                 <PanelButtons
                   panel={panel}
                   open={inspectorOpen}

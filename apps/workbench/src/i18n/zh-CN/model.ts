@@ -23,6 +23,7 @@ export const model: Record<string, string> = {
   'unknown command /{name}': '未知命令 /{name}',
   'the message and its files are over 64 MB; remove some pictures or PDFs':
     '消息和附带的文件超过 64 MB，请移除一些图片或 PDF',
+  'prompt is empty': '请先写一条消息',
   'session not found': '未找到会话',
   'no previous session': '没有上一个会话',
   'choose manual, accept-edits, plan or auto':

@@ -67,9 +67,10 @@ function adoptSelectedFiles(
     );
   });
 }
+/** Opens a folder and returns its workspace id. Does not create a session. */
 export async function openNativeWorkspace(
   runtime: RuntimePort,
-): Promise<NativeWorkspace | null> {
+): Promise<string | null> {
   const host = desktopHost();
   if (!host) return null;
   const selected = await host.chooseWorkspace();
@@ -79,7 +80,7 @@ export async function openNativeWorkspace(
       workspaceGrant: selected.id,
     })) as { workspaceId: string };
     adoptSelectedFiles(runtime, selected, result.workspaceId);
-    return selected;
+    return result.workspaceId;
   }
   const existing = runtime
     .getSnapshot()
@@ -93,6 +94,7 @@ export async function openNativeWorkspace(
         path: selected.path,
         branch: 'local workspace',
         trusted: false,
+        kind: 'project',
         instructions: [],
         origin: 'native',
       });
@@ -108,12 +110,7 @@ export async function openNativeWorkspace(
       })),
     );
   });
-  const session = runtime
-    .getSnapshot()
-    .sessions.find((session) => session.workspaceId === id);
-  if (session) await runtime.selectSession(session.id);
-  else await runtime.newSession(id);
-  return selected;
+  return id;
 }
 // Change where the default workspace lives. The folder comes from the same native
 // dialog and grant indirection as openNativeWorkspace: the window never names a
