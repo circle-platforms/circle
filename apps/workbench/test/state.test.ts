@@ -16,6 +16,7 @@ import {
   canArchiveSession,
   historyMessages,
   sessionHasContent,
+  visibleSessions,
   workspaceListed,
   workspaceSessions,
 } from '../src/model/session-management.ts';
@@ -591,6 +592,33 @@ test('the first home message keeps files chosen beside the box', () => {
   assert.equal(message.text, 'see this');
   assert.equal(message.attachments?.[0]?.name, 'note.txt');
   assert.equal(message.attachments?.[0]?.content, 'hello');
+});
+
+test('search and session counts omit a placeholder session', () => {
+  const runtime = new PreviewRuntime();
+  const real = runtime.getSnapshot().sessions[0]!;
+  const placeholder = {
+    ...real,
+    id: 'placeholder',
+    title: 'new session',
+    messages: [],
+    queue: [],
+    state: 'idle' as const,
+  };
+  const sessions = [placeholder, real];
+  const shown = visibleSessions(sessions);
+  assert.deepEqual(
+    shown.map((session) => session.id),
+    [real.id],
+  );
+  const indexed = shown.flatMap((session) => historyMessages(session));
+  assert.ok(indexed.length > 0);
+  assert.equal(
+    indexed.some((message) => message.text.includes('placeholder')),
+    false,
+  );
+  assert.equal(historyMessages(placeholder).length, 0);
+  assert.equal(sessionHasContent(placeholder), false);
 });
 
 test('search history includes assistant replies and skips tool rows', () => {

@@ -71,7 +71,7 @@ import { VariablesSettings } from './VariablesSettings';
 import { SessionMenu } from '../components/SessionMenus';
 import {
   canArchiveSession,
-  sessionHasContent,
+  visibleSessions,
 } from '../model/session-management';
 import { openHome } from './home-selection';
 import { NetworkStatus } from './NetworkStatus';
@@ -143,9 +143,8 @@ function SessionsPage({ onSession, onDialog }: Props) {
   const [all, setAll] = useState(false);
   const [archived, setArchived] = useState(false);
   const current = currentSession(snapshot);
-  const sessions = snapshot.sessions.filter(
+  const sessions = visibleSessions(snapshot.sessions).filter(
     (session) =>
-      sessionHasContent(session) &&
       (all || session.workspaceId === current.workspaceId) &&
       Boolean(session.archivedAt) === archived &&
       (session.title + ' ' + session.id)

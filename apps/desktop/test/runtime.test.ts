@@ -24,6 +24,10 @@ import {
   defaultSettings,
 } from '../../../src/settings.ts';
 import { visibleMessages } from '../../workbench/src/model/state.ts';
+import {
+  historyMessages,
+  visibleSessions,
+} from '../../workbench/src/model/session-management.ts';
 import { createServer } from 'node:http';
 import { ModelCatalog } from '../../../src/model_catalog.ts';
 import { loadSecrets } from '../../../src/secrets.ts';
@@ -2748,17 +2752,16 @@ test('switching back to a session that waits on an approval lands on it (#57)', 
         .interactions.some((row) => row.status === 'pending'),
     'approval',
   );
-  // The person visits another workspace mid-wait, as in the reported flow.
+  // Opening another folder mid-wait selects that project and does not create
+  // a session or leave the waiting one.
   const other = join(f.root, 'workspace2');
   await mkdir(other);
+  const before = f.controller.snapshot().sessions.map((session) => session.id);
   assert.equal((await f.call('open-workspace', { path: other })).ok, true);
-  const bId = f.controller.snapshot().activeSessionId;
-  assert.notEqual(bId, aId);
-  // Coming back must land on the session, not rebuild or refuse it: the
-  // runtime already holds it, and its turn waits on the very card to click.
-  const back = await f.call('select-session', { id: aId }, bId);
-  assert.equal(back.ok, true);
-  assert.equal(back.error, undefined);
+  assert.deepEqual(
+    f.controller.snapshot().sessions.map((session) => session.id),
+    before,
+  );
   assert.equal(f.controller.snapshot().activeSessionId, aId);
   const row = f.controller
     .snapshot()
@@ -2779,7 +2782,7 @@ test('switching back to a session that waits on an approval lands on it (#57)', 
       await f.call(
         'answer',
         { id: row.id, revision: row.revision, answer: 'approve' },
-        bId,
+        'not-the-waiting-session',
       )
     ).ok,
     false,
@@ -3419,7 +3422,9 @@ test('startup prefers the last-used folder, then workspace_folder, then the scra
   );
   assert.equal(first.snapshot().settings.workspaceFolder, configured);
 
-  // A folder opened later is what the next start resumes.
+  // Opening a folder selects it for home. It does not write a session, so the
+  // next start still resumes the folder that already had one.
+  const beforeOpen = first.snapshot().sessions.map((session) => session.id);
   assert.equal(
     (
       await first.dispatch({
@@ -3431,9 +3436,14 @@ test('startup prefers the last-used folder, then workspace_folder, then the scra
     ).ok,
     true,
   );
+  assert.deepEqual(
+    first.snapshot().sessions.map((session) => session.id),
+    beforeOpen,
+  );
+  assert.equal(activeWorkspacePath(first), configured);
   await first.close();
   const resumed = open();
-  assert.equal(activeWorkspacePath(resumed), lastUsed);
+  assert.equal(activeWorkspacePath(resumed), configured);
   await resumed.close();
 
   // A configured folder that is gone falls back to the scratch folder, which the
@@ -4309,11 +4319,14 @@ test('trusting a folder initializes every idle session with its own project cont
   );
 });
 
-test('opening a folder publishes it for the sidebar and the home picker', async (t) => {
+test('opening a folder publishes it for the home picker and does not create a session', async (t) => {
   const f = await setup(t, []);
   const project = join(f.root, 'circle-packs');
   await mkdir(project);
   const before = f.updates.length;
+  const sessions = f.controller
+    .snapshot()
+    .sessions.map((session) => session.id);
   const opened = await f.call('open-workspace', { path: project });
   assert.equal(opened.ok, true, opened.error);
   const id = (opened.data as { workspaceId: string }).workspaceId;
@@ -4327,6 +4340,123 @@ test('opening a folder publishes it for the sidebar and the home picker', async 
     f.controller.snapshot().workspaces.some((row) => row.id === id),
     true,
   );
+  assert.deepEqual(
+    f.controller.snapshot().sessions.map((session) => session.id),
+    sessions,
+  );
+  assert.equal(
+    f.controller
+      .snapshot()
+      .sessions.some((session) => session.workspaceId === id),
+    false,
+  );
+});
+
+test('picking folders writes no session until the first message is sent', async (t) => {
+  const f = await setup(t, [{ message: assistant('started') }]);
+  const ids = () =>
+    f.controller
+      .snapshot()
+      .sessions.map((session) => session.id)
+      .sort();
+  const stored = ids();
+  const searchIds = () =>
+    visibleSessions(f.controller.snapshot().sessions)
+      .map((session) => session.id)
+      .sort();
+  const searchable = searchIds();
+  const alpha = join(f.root, 'alpha');
+  const beta = join(f.root, 'beta');
+  await mkdir(alpha);
+  await mkdir(beta);
+  const openedAlpha = await f.call('open-workspace', { path: alpha });
+  assert.equal(openedAlpha.ok, true, openedAlpha.error);
+  assert.deepEqual(ids(), stored);
+  const openedBeta = await f.call('open-workspace', { path: beta });
+  assert.equal(openedBeta.ok, true, openedBeta.error);
+  const betaId = (openedBeta.data as { workspaceId: string }).workspaceId;
+  // A cancelled folder dialog never calls the runtime. Several picks still
+  // leave the store untouched.
+  assert.deepEqual(ids(), stored);
+  assert.deepEqual(searchIds(), searchable);
+  assert.equal(
+    f.controller
+      .snapshot()
+      .sessions.some((session) =>
+        [alpha, beta]
+          .map((folder) => realpathSync(folder))
+          .includes(
+            f.controller
+              .snapshot()
+              .workspaces.find(
+                (workspace) => workspace.id === session.workspaceId,
+              )?.path ?? '',
+          ),
+      ),
+    false,
+  );
+  const refused = await f.call('begin-session', {
+    workspaceId: betaId,
+    text: 'not yet',
+    display: 'not yet',
+  });
+  assert.equal(refused.ok, false);
+  assert.match(String(refused.error), /trust the workspace/);
+  assert.deepEqual(ids(), stored);
+  assert.equal(
+    (await f.call('trust', { enabled: true, workspaceId: betaId })).ok,
+    true,
+  );
+  assert.deepEqual(ids(), stored);
+  const begun = await f.call('begin-session', {
+    workspaceId: betaId,
+    text: 'build beta',
+    display: 'build beta',
+  });
+  assert.equal(begun.ok, true, begun.error);
+  await wait(() => ids().length === stored.length + 1, 'one session stored');
+  const created = f.controller
+    .snapshot()
+    .sessions.filter((session) => !stored.includes(session.id));
+  assert.equal(created.length, 1);
+  assert.equal(created[0]!.workspaceId, betaId);
+  assert.ok(
+    created[0]!.messages.some((message) => message.text.includes('build beta')),
+  );
+  const shown = visibleSessions(f.controller.snapshot().sessions);
+  assert.equal(
+    shown.filter((session) => !stored.includes(session.id)).length,
+    1,
+  );
+  assert.equal(
+    shown.some(
+      (session) =>
+        session.title === 'new session' && session.messages.length === 0,
+    ),
+    false,
+  );
+  assert.ok(
+    historyMessages(created[0]!).some((message) =>
+      message.text.includes('build beta'),
+    ),
+  );
+  const home = f.home;
+  await f.controller.close();
+  const store = new CheckpointStore(home);
+  try {
+    const rows = store.list();
+    assert.equal(rows.length, stored.length + 1);
+    assert.equal(
+      rows.filter((row) => row.workspace === realpathSync(beta)).length,
+      1,
+    );
+    assert.equal(
+      rows.filter((row) => row.workspace === realpathSync(alpha)).length,
+      0,
+    );
+  } finally {
+    store.close();
+  }
 });
 
 test('the first message from home creates one session in the chosen project', async (t) => {
@@ -4347,8 +4477,7 @@ test('the first message from home creates one session in the chosen project', as
     f.controller
       .snapshot()
       .sessions.filter((session) => session.workspaceId === workspaceId);
-  assert.equal(inProject().length, 1);
-  assert.equal(inProject()[0]!.messages.length, 0);
+  assert.equal(inProject().length, 0);
   const before = f.controller.snapshot().sessions.length;
   const begun = await f.call('begin-session', {
     workspaceId,
@@ -4366,7 +4495,7 @@ test('the first message from home creates one session in the chosen project', as
     'first message stored',
   );
   assert.equal(inProject().length, 1);
-  assert.equal(f.controller.snapshot().sessions.length, before);
+  assert.equal(f.controller.snapshot().sessions.length, before + 1);
   assert.equal(
     (begun.data as { sessionId: string }).sessionId,
     inProject()[0]!.id,
@@ -4390,7 +4519,7 @@ test('the first message from home creates one session in the chosen project', as
       ).length === 2,
     'second turn finished',
   );
-  assert.equal(f.controller.snapshot().sessions.length, before + 1);
+  assert.equal(f.controller.snapshot().sessions.length, before + 2);
   assert.ok(
     inProject().every((session) =>
       session.messages.some((message) => message.role === 'user'),

@@ -30,6 +30,7 @@ import { saveExport } from '../host';
 import { MAX_PROMPT_PAYLOAD } from '../../../desktop/src/runtime-protocol';
 import { t } from '../i18n/index.ts';
 import { SessionActionError } from './action-error';
+import { sessionHasContent } from './session-management';
 
 const LOCAL_SESSION = [
   'draft',
@@ -655,10 +656,10 @@ export class LiveRuntime implements RuntimePort {
       return { openSession: true };
     }
     if (name === 'resume' && args) {
+      const visible = this.snapshot.sessions.filter(sessionHasContent);
       const target =
-        this.snapshot.sessions.find(
-          (s) => s.id === args || s.id.endsWith(args),
-        ) ?? this.snapshot.sessions[Number(args) - 1];
+        visible.find((s) => s.id === args || s.id.endsWith(args)) ??
+        visible[Number(args) - 1];
       if (!target) throw Error(t('session not found'));
       await this.selectSession(target.id);
       return { openSession: true };

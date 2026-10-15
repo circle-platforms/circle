@@ -10,8 +10,8 @@ export function historyMessages(session: Session): Message[] {
 }
 
 /**
- * A session the sidebar and the session list should show. A click on new session
- * used to leave a row with the placeholder title and no messages; those stay hidden.
+ * A session the sidebar, the session list, search and counts should show.
+ * A row with the placeholder title and no messages is not one of these.
  */
 export function sessionHasContent(session: Session): boolean {
   return (
@@ -22,11 +22,16 @@ export function sessionHasContent(session: Session): boolean {
   );
 }
 
+/** Sessions Ctrl+K, the session list and counts may name. Placeholders are left out. */
+export function visibleSessions(sessions: readonly Session[]): Session[] {
+  return sessions.filter(sessionHasContent);
+}
+
 /**
  * Folders in the sidebar. A group appears only when a session in it has
- * something to show. An opened project with only a placeholder session stays
- * hidden, the same as an empty scratch group. The home project menu is separate
- * and still lists the folder.
+ * something to show. Opening a folder does not create a session, so the group
+ * appears with the first message. The home project menu is separate and still
+ * lists the folder.
  */
 export function workspaceListed(
   workspace: Workspace,

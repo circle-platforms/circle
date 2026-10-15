@@ -294,6 +294,9 @@ export class RuntimeController {
   private keySaved?: boolean;
   // A workspace's git branch, read at most every two seconds: snapshots follow tokens.
   private branches = new Map<string, { branch: string; at: number }>();
+  // Folders chosen on home before a message is sent. Remembering one does not
+  // write a session. The first message creates that session.
+  private opened = new Set<string>();
   private branch(path: string): string {
     const cached = this.branches.get(path);
     if (cached && Date.now() - cached.at < 2000) return cached.branch;
@@ -710,6 +713,7 @@ export class RuntimeController {
       ...new Set([
         ...rows.map((row) => row.workspace),
         runtime.options.workspace,
+        ...this.opened,
       ]),
     ];
     const sessions: Session[] = rows.map((row) => {
@@ -1754,6 +1758,8 @@ export class RuntimeController {
     for (const owner of this.runtimes.values())
       if (identity(owner.options.workspace) === id)
         return owner.options.workspace;
+    for (const folder of this.opened)
+      if (identity(folder) === id) return folder;
     try {
       const scratch = realpathSync(this.scratchPath());
       if (identity(scratch) === id || identity(this.scratchPath()) === id)
@@ -1783,8 +1789,8 @@ export class RuntimeController {
       runtime.setMode(p.mode);
     }
   }
-  // Reuse an untitled session with no messages so opening a folder, or the
-  // first launch, does not leave a second empty session beside the real one.
+  // A leftover untitled session with no messages is reused so the first message
+  // does not sit beside it. Opening a folder does not create one.
   private conversationRuntime(workspace: string): AgentRuntime {
     const empty = this.store
       .list(workspace)
@@ -2595,12 +2601,12 @@ export class RuntimeController {
       }
       case 'open-workspace': {
         const workspace = realpathSync(text(p.path, 'workspace', 8000));
-        const owner = this.runtime(workspace);
-        this.selectRuntime(owner);
-        return {
-          workspaceId: identity(workspace),
-          sessionId: owner.session.id,
-        };
+        if (!statSync(workspace).isDirectory())
+          throw Error('workspace is not a folder');
+        // Home state only. The session is created by begin-session, with the
+        // first message, and not before.
+        this.opened.add(workspace);
+        return { workspaceId: identity(workspace) };
       }
       case 'set-default-workspace': {
         // The path comes from the native dialog through the main process, exactly

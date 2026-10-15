@@ -19,10 +19,7 @@ import {
 import { useRuntime } from '../app/context';
 import { usePlugins } from '../plugins/context';
 import { currentSession, sessionTitle } from '../model/state';
-import {
-  sessionHasContent,
-  workspaceListed,
-} from '../model/session-management';
+import { visibleSessions, workspaceListed } from '../model/session-management';
 import type { DialogId } from '../model/types';
 import { IconButton } from './common';
 import { t } from '../i18n';
@@ -166,12 +163,10 @@ export function Sidebar({
       )}
       <div className="project-list">
         {projects.map((workspace) => {
-          const sessions = snapshot.sessions
+          const sessions = visibleSessions(snapshot.sessions)
             .filter(
               (session) =>
-                session.workspaceId === workspace.id &&
-                !session.archivedAt &&
-                sessionHasContent(session),
+                session.workspaceId === workspace.id && !session.archivedAt,
             )
             .sort(
               (a, b) =>

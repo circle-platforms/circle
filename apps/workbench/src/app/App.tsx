@@ -37,6 +37,7 @@ import { currentSession, sessionText, sessionTitle } from '../model/state';
 import {
   historyMessages,
   sessionHasContent,
+  visibleSessions,
 } from '../model/session-management';
 import type {
   Attachment,
@@ -619,7 +620,7 @@ export function App() {
       detail: t('platform plugin'),
       run: () => navigate('/page/' + page.id),
     })),
-    ...snapshot.sessions.filter(sessionHasContent).map((item) => ({
+    ...visibleSessions(snapshot.sessions).map((item) => ({
       id: item.id,
       label: sessionTitle(item.title),
       detail: t('session · {workspace}', {
@@ -648,7 +649,7 @@ export function App() {
         detail: t('file'),
         run: () => onFile(item.path),
       })),
-    ...snapshot.sessions.flatMap((item) =>
+    ...visibleSessions(snapshot.sessions).flatMap((item) =>
       historyMessages(item).map((message) => ({
         id: message.id,
         label: message.text,
