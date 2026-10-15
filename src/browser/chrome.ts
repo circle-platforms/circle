@@ -431,7 +431,7 @@ export class ChromeBrowser implements BrowserPort {
         child.off('error', done);
         resolve(exited);
       };
-      const done = (): void => finish(true);
+      const done = (): void => finish(this.exited(child));
       const timer = setTimeout(() => finish(this.exited(child)), timeout);
       child.once('exit', done);
       child.once('error', done);
@@ -468,8 +468,11 @@ export class ChromeBrowser implements BrowserPort {
     try {
       process.kill(-pid, 0);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
-      throw error;
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ESRCH') return false;
+      // Darwin also returns EPERM for a group containing only zombies. The
+      // process table still distinguishes that from live, unsignalable members.
+      if (code !== 'EPERM') throw error;
     }
     // An exited grandchild can remain a zombie until the OS reaps it; it cannot run or write.
     const output = await new Promise<string>((resolve, reject) =>
@@ -498,7 +501,11 @@ export class ChromeBrowser implements BrowserPort {
         // process its bounded grace period, then escalate; a forced-stop failure rejects.
         await this.stopProcess(child, false).catch(() => {});
         if (!(await this.waitForExit(child, Math.min(timeout, 1000)))) {
-          await this.stopProcess(child, true);
+          await this.stopProcess(child, true).catch(async (error) => {
+            // taskkill can finish before the owned child's exit event is delivered.
+            // Accept its failure only when that child actually exits within the bound.
+            if (!(await this.waitForExit(child, timeout))) throw error;
+          });
           if (!(await this.waitForExit(child, timeout)))
             throw new Error(
               'the browser process did not stop; retry closing the session',

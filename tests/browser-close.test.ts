@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcess } from 'node:child_process';
+import childProcess, { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
@@ -98,6 +99,64 @@ test('browser cleanup failure rejects and remains retryable instead of confirmin
   await browser.close();
 });
 
+for (const live of [false, true])
+  test(`browser close checks an EPERM process-group probe for ${live ? 'live members and preserves a refused cleanup' : 'zombies before confirming exit'}`, async (t) => {
+    const pid = 1_073_741_824;
+    const probeError = Object.assign(new Error('group probe refused'), {
+      code: 'EPERM',
+    });
+    const forceError = Object.assign(new Error('forced group stop refused'), {
+      code: 'EPERM',
+    });
+    const signals: (number | NodeJS.Signals | undefined)[] = [];
+    let running = live;
+    let tableChecks = 0;
+    t.after(() => {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    });
+    t.mock.method(
+      process,
+      'kill',
+      (target: number, signal?: NodeJS.Signals | number) => {
+        assert.equal(target, -pid);
+        signals.push(signal);
+        if (signal === 0) throw probeError;
+        assert.equal(signal, 'SIGKILL');
+        throw forceError;
+      },
+    );
+    t.mock.method(childProcess, 'execFile', ((
+      file: string,
+      args: readonly string[],
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      assert.equal(file, 'ps');
+      assert.deepEqual(args, ['-A', '-o', 'pgid=,stat=']);
+      tableChecks++;
+      callback(null, `${pid} Z\n${pid} ${running ? 'S' : 'Z'}\n`, '');
+      return new EventEmitter() as ChildProcess;
+    }) as unknown as typeof childProcess.execFile);
+    syncBuiltinESMExports();
+    const browser = new ChromeBrowser({ executable: process.execPath });
+    const state = browser as any;
+    state.processGroups.add(pid);
+    let closed = false;
+    state.cdp = { close: () => (closed = true) };
+    if (live) {
+      await assert.rejects(browser.close(), forceError);
+      assert.equal(state.processGroups.has(pid), true);
+      assert.equal(closed, false);
+      assert.deepEqual(signals, [0, 'SIGKILL']);
+      running = false;
+    }
+    await browser.close();
+    assert.equal(state.processGroups.has(pid), false);
+    assert.equal(closed, true);
+    assert.equal(tableChecks, live ? 2 : 1);
+    assert.deepEqual(signals, live ? [0, 'SIGKILL', 0] : [0]);
+  });
+
 function liveChild(): ChildProcess {
   return Object.assign(new EventEmitter(), {
     pid: 1_073_741_824,
@@ -105,6 +164,45 @@ function liveChild(): ChildProcess {
     signalCode: null,
   }) as unknown as ChildProcess;
 }
+
+test('browser close awaits actual exit when forced termination reports failure before the exit event', async () => {
+  const child = liveChild();
+  const browser = browserWithChild(child);
+  const state = browser as any;
+  const attempts: boolean[] = [];
+  let closed = false;
+  let exited = false;
+  state.cdp.close = () => {
+    assert.equal(exited, true);
+    closed = true;
+  };
+  state.stopProcess = async (_child: ChildProcess, force: boolean) => {
+    attempts.push(force);
+    if (force)
+      setImmediate(() => {
+        assert.equal(closed, false);
+        exited = true;
+        (child as unknown as { exitCode: number | null }).exitCode = 1;
+        child.emit('exit', 1, null);
+      });
+    throw new Error('termination command failed before the exit event');
+  };
+  await browser.close();
+  assert.deepEqual(attempts, [false, true]);
+  assert.equal(exited, true);
+  assert.equal(closed, true);
+  assert.notEqual(child.exitCode, null);
+});
+
+test('a child process error without exit does not confirm browser cleanup', async () => {
+  const child = liveChild();
+  const browser = browserWithChild(child);
+  const waiting: Promise<boolean> = (browser as any).waitForExit(child, 40);
+  child.emit('error', new Error('termination refused'));
+  assert.equal(await waiting, false);
+  assert.equal(child.exitCode, null);
+  assert.equal(child.signalCode, null);
+});
 
 test('browser close escalates a refused graceful termination instead of rejecting before force', async () => {
   const child = liveChild();
