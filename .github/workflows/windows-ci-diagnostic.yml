@@ -13,7 +13,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     env:
-      CIRCLE_HOME: ${{ runner.temp }}/circle-ci-diagnostic
+      CIRCLE_HOME: '${{ github.workspace }}/.tmp/circle-ci-diagnostic'
       CIRCLE_NO_MODELS_REFRESH: '1'
       CIRCLE_NO_UPDATE_CHECK: '1'
     steps:
