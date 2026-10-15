@@ -18,7 +18,7 @@ import type { Message, ModelResponse, Tool } from '../src/types.js';
 import { emptyUsage } from '../src/types.js';
 import { InteractionQueue } from '../src/tui/interaction_queue.js';
 import { installExitGuard } from '../src/exit_guard.js';
-import { scratch, cleanup } from './helpers.js';
+import { scratch, cleanup, cancellationFixture } from './helpers.js';
 let scriptNumber = 0;
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
@@ -470,10 +470,8 @@ test('native background subagents return immediately, retain live read-only chec
 });
 test('a background subagent ends every shell it owns before its report is marked complete', async (t) => {
   const root = scratch(t);
-  const command = script(
-    root,
-    `require('fs').writeFileSync('server-ready','ok'); setTimeout(()=>require('fs').writeFileSync('late-server','bad'),2000);`,
-  );
+  const fixture = await cancellationFixture(t, root);
+  const command = fixture.command;
   const model: import('../src/types.js').ChatModel = {
     model: 'controlled',
     complete: async (request) => {
@@ -492,7 +490,7 @@ test('a background subagent ends every shell it owns before its report is marked
               args: { command, background: true },
             },
           ]);
-        await until(() => existsSync(join(root, 'server-ready')));
+        await fixture.ready();
         return response('report', 'Server research finished.');
       }
       return hasTool
@@ -520,12 +518,15 @@ test('a background subagent ends every shell it owns before its report is marked
   cleanup(t, () => runtime.close());
   runtime.policy.setYolo(runtime.session.id, true);
   await runtime.harness.run('start');
+  await fixture.ready();
   await runtime.jobs.wait(['j1'], 5, new AbortController().signal);
   assert.equal(runtime.jobs.get('j1')!.status, 'done');
   assert.equal(runtime.jobs.get('j2')!.parent, 'j1');
   assert.equal(runtime.jobs.get('j2')!.status, 'stopped');
-  await delay(2200);
-  assert.equal(existsSync(join(root, 'late-server')), false);
+  // Permit the real descendant to write only after the report is complete. A slow
+  // Windows stop cannot be mistaken for a write that happened before cleanup.
+  assert.equal(await fixture.release(), 'closed');
+  assert.equal(existsSync(join(root, 'late')), false);
 });
 test('card ownership queues background interactions while typing, prioritizes foreground and cancels queued cards without presenting them', async (t) => {
   let typing = true;

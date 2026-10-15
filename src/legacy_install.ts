@@ -358,6 +358,19 @@ export function runningCopies(
       return code ? [{ path, code }] : [];
     });
     if (held.length || unread) {
+      const names = [
+        ...new Set(
+          programs.map((path) => basename(path).replace(/\.exe$/i, '')),
+        ),
+      ];
+      const encodedNames = Buffer.from(JSON.stringify(names), 'utf8').toString(
+        'base64',
+      );
+      // Query the native process API for the known image names. CIM/WMI can stall
+      // independently of the process table, even when the held executable is ours.
+      const lookup = unread
+        ? '[Diagnostics.Process]::GetProcesses()'
+        : `foreach ($circleName in $circleNames) { [Diagnostics.Process]::GetProcessesByName($circleName) }`;
       const result = run(
         join(
           process.env.SystemRoot || 'C:\\Windows',
@@ -370,10 +383,12 @@ export function runningCopies(
           '-NoProfile',
           '-NonInteractive',
           '-Command',
-          // Paths in Base64, so letters outside the console code page come back as they are
-          'Get-CimInstance -ClassName Win32_Process -Property ProcessId,ExecutablePath | ' +
-            'Where-Object { $_.ExecutablePath } | ForEach-Object { "$($_.ProcessId) ' +
-            '$([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($_.ExecutablePath)))" }',
+          `$circleNames = @([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedNames}')) | ConvertFrom-Json); ` +
+            `$circleProcesses = @(${lookup}); ` +
+            'foreach ($circleProcess in $circleProcesses) { try { ' +
+            '$circlePath = $circleProcess.MainModule.FileName; if ($circlePath) { ' +
+            '"$($circleProcess.Id) $([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($circlePath)))" ' +
+            '} } catch {} finally { $circleProcess.Dispose() } }',
         ],
         LIST_TIMEOUT,
       );
@@ -382,10 +397,13 @@ export function runningCopies(
         if (!/^\d+$/.test(pid) || !encoded) continue;
         const path = Buffer.from(encoded, 'base64').toString('utf8');
         if (
-          folders.some((folder) => inside(path, folder)) ||
+          folders.some((folder) =>
+            inside(real(path) ?? path, real(folder) ?? folder),
+          ) ||
           scripts.some(
             (script) =>
-              resolve(path).toLowerCase() === resolve(script).toLowerCase(),
+              resolve(real(path) ?? path).toLowerCase() ===
+              resolve(real(script) ?? script).toLowerCase(),
           )
         )
           pids.add(Number(pid));
