@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { connect, type Socket } from 'node:net';
 import { realpath, stat } from 'node:fs/promises';
@@ -168,6 +169,7 @@ export class WorkspaceDebugService {
     output: '',
     breakpoints: {},
   };
+  private emptyArgument?: string;
   constructor(private options: DebugOptions) {}
   snapshot() {
     return structuredClone(this.state);
@@ -277,7 +279,12 @@ export class WorkspaceDebugService {
             return {};
           }
           if (command === 'runInTerminal' && this.options.runInTerminal)
-            return this.options.runInTerminal(args);
+            return this.options.runInTerminal({
+              ...args,
+              args: args.args.map((value: string) =>
+                value === this.emptyArgument ? '' : value,
+              ),
+            });
           throw Error(`unsupported debug adapter request: ${command}`);
         });
         this.connections.add(connection);
@@ -405,13 +412,29 @@ export class WorkspaceDebugService {
       const generation = this.generation;
       try {
         const initialized = dap.initialized;
+        const launchArgs: string[] = Array.isArray(params.args)
+          ? params.args
+          : [];
+        // js-debug 1.140 filters empty configuration.args before spawning.
+        // Keep terminal argv literal with a private one-run placeholder; the
+        // internal console fallback uses runtimeArgs, which retains empties.
+        this.emptyArgument = `circle-empty-argument-${randomUUID()}`;
+        const internalEmptyArgs =
+          !this.options.runInTerminal && launchArgs.includes('');
         const launch = dap.request(method, {
           type: 'pwa-node',
           request: method,
           name: 'circle project',
           cwd: this.options.workspaceRoot,
-          program,
-          args: Array.isArray(params.args) ? params.args : [],
+          program: internalEmptyArgs ? undefined : program,
+          args: internalEmptyArgs
+            ? []
+            : launchArgs.map((value) =>
+                value === '' ? this.emptyArgument! : value,
+              ),
+          ...(internalEmptyArgs
+            ? { runtimeArgs: [program, ...launchArgs] }
+            : {}),
           runtimeExecutable:
             this.options.runtimeExecutable ?? this.options.nodeExecutable,
           env: { ELECTRON_RUN_AS_NODE: '1' },

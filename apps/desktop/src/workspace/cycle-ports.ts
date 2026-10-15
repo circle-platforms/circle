@@ -565,8 +565,9 @@ export function createWorkspaceCyclePorts(
             throw Error('cycle publish requires a clean candidate');
           await (
             await delivery(owner)
-          ).call('publish', {
+          ).publishPushed({
             revision: input.revision,
+            head: input.head,
             title: cycle.title,
             body: cycle.body,
           });

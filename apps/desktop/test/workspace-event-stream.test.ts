@@ -9,6 +9,9 @@ import {
 } from '../src/workspace/event-stream.ts';
 import { WorkspaceStreamStore } from '../../workbench/src/model/workspace-stream-store.ts';
 import { spawn as spawnPty } from 'node-pty';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { fileURLToPath } from 'node:url';
 
 const input = (text: string): EventInput => ({
   workspaceId: 'w',
@@ -273,4 +276,85 @@ test('real PTY bytes and task-state records replay with separate source sequence
       [1, 2, 3],
     );
     await stream.close();
+  }));
+
+test('a second in-process writer is refused without changing committed evidence and close is idempotent', () =>
+  fixture(async (path) => {
+    const first = await WorkspaceEventStream.open(path);
+    await first.append(input('original evidence'));
+    const original = await readFile(path);
+    await assert.rejects(WorkspaceEventStream.open(path), /active writer/);
+    assert.deepEqual(await readFile(path), original);
+    const closing = first.close();
+    assert.equal(first.close(), closing);
+    await closing;
+    const next = await WorkspaceEventStream.open(path);
+    assert.equal((await next.append(input('next owner'))).seq, 2);
+    assert.deepEqual(
+      (await next.replay()).events.map((event) => event.data.text),
+      ['original evidence', 'next owner'],
+    );
+    await next.close();
+  }));
+
+test('another process cannot write and a killed owner releases its lease for durable replay', () =>
+  fixture(async (path) => {
+    const module = new URL('../src/workspace/event-stream.ts', import.meta.url)
+      .href;
+    const loader = fileURLToPath(
+      new URL('../../../node_modules/tsx/dist/loader.mjs', import.meta.url),
+    );
+    const script = `const {WorkspaceEventStream}=await import(${JSON.stringify(module)});const stream=await WorkspaceEventStream.open(${JSON.stringify(path)});await stream.append(${JSON.stringify(input('crash survivor'))});console.log('LEASE_READY');setInterval(()=>{},1000);`;
+    const child = spawn(
+      process.execPath,
+      ['--import', loader, '--input-type=module', '-e', script],
+      { stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    const exited = once(child, 'close');
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let stdout = '',
+          stderr = '';
+        const timer = setTimeout(() => {
+          child.kill();
+          reject(Error('journal lease child timed out: ' + stderr));
+        }, 10000);
+        child.stdout.on('data', (chunk) => {
+          stdout += chunk;
+          if (stdout.includes('LEASE_READY')) {
+            clearTimeout(timer);
+            resolve();
+          }
+        });
+        child.stderr.on('data', (chunk) => {
+          stderr += chunk;
+        });
+        child.once('error', (error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+        child.once('close', () => {
+          clearTimeout(timer);
+          if (!stdout.includes('LEASE_READY'))
+            reject(Error('journal child exited: ' + stderr));
+        });
+      });
+      const original = await readFile(path);
+      await assert.rejects(WorkspaceEventStream.open(path), /active writer/);
+      assert.deepEqual(await readFile(path), original);
+      child.kill('SIGKILL');
+      await exited;
+      const recovered = await WorkspaceEventStream.open(path);
+      assert.equal(
+        (await recovered.replay()).events[0].data.text,
+        'crash survivor',
+      );
+      assert.equal((await recovered.append(input('after crash'))).seq, 2);
+      await recovered.close();
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill();
+        await exited;
+      }
+    }
   }));

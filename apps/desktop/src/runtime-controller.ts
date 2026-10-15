@@ -1,4 +1,5 @@
-import { spawn as spawnPty } from 'node-pty';
+import type { ResolveInputsRequest } from '../../../src/input_outbox.js';
+import { spawnPty } from './workspace/native-pty.js';
 import { createWorkspaceCyclePorts } from './workspace/cycle-ports.js';
 import { GitWorkspaceService } from './workspace/git.js';
 import { DeliveryService } from './workspace/delivery.js';
@@ -732,13 +733,16 @@ export class RuntimeController {
           });
         },
         workspaceId: identity(root),
-        credentialFiles: loadSettings(this.home).credential_files,
+        credentialFiles: settingsForRun(this.home, root).settings
+          .credential_files,
         emit: (event) => this.options.emitWorkspaceEvent?.(event),
         onPersistenceError: (error) => this.workspaceFailure(root, error),
       });
       this.workspaceServices.set(root, services);
     }
-    services.setCredentialFiles(loadSettings(this.home).credential_files);
+    services.setCredentialFiles(
+      settingsForRun(this.home, root).settings.credential_files,
+    );
     return services;
   }
   private fileMutations(workspace: string): FileMutations {
@@ -746,7 +750,7 @@ export class RuntimeController {
       read: async (path, signal) => {
         const documents = this.services(workspace).documents;
         const document = await documents.snapshot(
-          relative(documents.root, path),
+          relative(documents.root, path).split(sep).join('/'),
           { signal },
         );
         return {
@@ -760,14 +764,14 @@ export class RuntimeController {
         const result = await documents.applyChanges(
           changes.map((change) => ({
             ...change,
-            path: relative(documents.root, change.path),
+            path: relative(documents.root, change.path).split(sep).join('/'),
           })),
           { signal },
         );
         if (result.status !== 'applied')
           throw Object.assign(
             Error(
-              result.failures.map((f) => `${f.path}: ${f.message}`).join('; '),
+              `committed paths: ${result.committedPaths.length ? result.committedPaths.join(', ') : '(none)'}; failures: ${result.failures.map((f) => `${f.path}: ${f.message}`).join('; ')}`,
             ),
             { committedPaths: result.committedPaths },
           );
@@ -989,8 +993,33 @@ export class RuntimeController {
         request.params?.after as { offset: number; seq: number } | undefined,
         request.params?.limit as number | undefined,
       );
+    if (request.service === 'inputs' && request.method === 'list') {
+      const owner =
+        this.runtimes.get(id) ??
+        [...this.taskRuntimes.values()].find(
+          (runtime) => runtime.session.id === id,
+        );
+      if (owner) return owner.harness.recoverableInputs;
+      this.store.inputs.recover(id, randomUUID());
+      return this.store.inputs.recoverable(id);
+    }
     if (this.metadata.archivedAt(id))
       throw Error('restore this session before continuing');
+    if (request.service === 'inputs') {
+      const owner =
+        this.runtimes.get(id) ??
+        [...this.taskRuntimes.values()].find(
+          (runtime) => runtime.session.id === id,
+        ) ??
+        this.runtimes.open(workspace, id);
+      const result = owner.harness.resolveInputs(
+        request.params as unknown as ResolveInputsRequest,
+      );
+      if (result.applied && result.action === 'resume' && !owner.busy)
+        this.track(owner.harness.run(), owner);
+      this.publish();
+      return result;
+    }
     if (request.service === 'tasks')
       return this.workspaceOperation(command, workspace, request, () =>
         this.collaboration(workspace, id).call(
@@ -2529,11 +2558,21 @@ export class RuntimeController {
             text(item.name, 'filename', 500),
           ),
         );
-        if (runtime.busy)
+        if (
+          runtime.busy ||
+          this.store.inputs.get(runtime.session.id, command.id)
+        )
           runtime.harness.queue(
             prompt,
             kind === 'follow-up' ? 'followUp' : 'steer',
             attachments,
+            {
+              inputId: command.id,
+              display:
+                p.display === undefined
+                  ? undefined
+                  : text(p.display, 'display'),
+            },
           );
         else {
           const display =

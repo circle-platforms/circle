@@ -82,6 +82,8 @@ export interface TerminalSnapshot {
   lastSequence: number;
   logPath: string;
   error?: string;
+  /** Per-launch environment is kept in memory, never written to terminal history. */
+  transientEnvironment?: boolean;
   restartOf?: string;
   kind: 'shell' | 'service';
   command?: TerminalCommand;
@@ -130,6 +132,8 @@ export interface TerminalCreateOptions {
   label?: string;
   command?: TerminalCommand;
   readiness?: TerminalReadinessOptions;
+  /** Trusted host launch environment; never forwarded from renderer parameters. */
+  env?: Record<string, string | null>;
 }
 
 export interface TerminalManagerOptions {
@@ -153,6 +157,7 @@ export interface TerminalReplay {
 
 interface Entry {
   snapshot: TerminalSnapshot;
+  environment?: Record<string, string | null>;
   pty?: IPty;
   events?: WriteStream;
   output?: WriteStream;
@@ -238,13 +243,20 @@ export class TerminalManager {
       if (!options.command && options.readiness)
         throw Error('readiness checks need a service command');
       const readiness = validateReadiness(options.readiness);
+      const environment = validateEnvironment(options.env);
+      const effectiveEnvironment: NodeJS.ProcessEnv = {
+        ...process.env,
+        ...this.#options.env,
+      };
+      for (const [name, value] of Object.entries(environment ?? {})) {
+        if (value === null) delete effectiveEnvironment[name];
+        else effectiveEnvironment[name] = value;
+      }
+      effectiveEnvironment.TERM = 'xterm-256color';
       if (readiness?.port && (await portOpen(readiness.port)))
         throw Error(`port ${readiness.port} is already in use`);
       const command = options.command
-        ? await executable(options.command, cwd, {
-            ...process.env,
-            ...this.#options.env,
-          })
+        ? await executable(options.command, cwd, effectiveEnvironment)
         : undefined;
       const shell = command?.file ?? configuredShell;
       const args =
@@ -278,6 +290,7 @@ export class TerminalManager {
         lastSequence: 0,
         logPath: join(folder, 'output.log'),
         kind: command ? 'service' : 'shell',
+        ...(environment ? { transientEnvironment: true } : {}),
         ...(command
           ? ({
               command,
@@ -291,6 +304,7 @@ export class TerminalManager {
           : {}),
       };
       const entry = makeEntry(snapshot);
+      entry.environment = environment;
       entry.events = createWriteStream(join(folder, 'events.jsonl'), {
         flags: 'wx',
         mode: 0o600,
@@ -313,7 +327,7 @@ export class TerminalManager {
           cols,
           rows,
           name: 'xterm-256color',
-          env: { ...process.env, ...this.#options.env, TERM: 'xterm-256color' },
+          env: effectiveEnvironment,
           handleFlowControl: false,
         });
         snapshot.pid = entry.pty.pid;
@@ -473,7 +487,12 @@ export class TerminalManager {
   /** Restarts only the shell. Prior user input is deliberately not re-executed. */
   async restart(owner: string, id: string): Promise<TerminalSnapshot> {
     await this.#ready;
-    const old = this.#get(owner, id).snapshot;
+    const previous = this.#get(owner, id);
+    const old = previous.snapshot;
+    if (old.transientEnvironment && !previous.environment)
+      throw Error(
+        'per-launch environment is unavailable after restart; relaunch from its debugger or task',
+      );
     await this.close(owner, id);
     const next = await this.#create(
       {
@@ -496,6 +515,7 @@ export class TerminalManager {
         cols: old.cols,
         rows: old.rows,
         label: old.label,
+        env: previous.environment,
       },
       { serviceId: old.serviceId },
     );
@@ -1035,6 +1055,30 @@ async function processTable(): Promise<
       });
   }
   return result;
+}
+
+function validateEnvironment(
+  input?: Record<string, string | null>,
+): Record<string, string | null> | undefined {
+  if (input === undefined) return;
+  if (!input || typeof input !== 'object' || Array.isArray(input))
+    throw Error('invalid terminal environment');
+  const entries = Object.entries(input);
+  if (
+    entries.length > 1024 ||
+    entries.some(
+      ([name, value]) =>
+        !name ||
+        /[=\0]/.test(name) ||
+        name.length > 1024 ||
+        (value !== null &&
+          (typeof value !== 'string' ||
+            value.includes('\0') ||
+            value.length > 1024 * 1024)),
+    )
+  )
+    throw Error('invalid terminal environment');
+  return Object.fromEntries(entries);
 }
 
 function validateReadiness(

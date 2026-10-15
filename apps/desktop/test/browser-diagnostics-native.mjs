@@ -179,18 +179,26 @@ try {
     }),
   );
   assert.equal(await app.evaluate(() => globalThis.fixture.evaluation), 4);
-  await app.evaluate(
-    (_, reference) =>
-      globalThis.fixture.browser.diagnostics('test', {
-        action: 'debug',
-        command: 'removeBreakpoint',
-        reference,
-      }),
-    result.state.debugger.breakpoints[0].id,
-  );
-  await app.evaluate(() =>
-    globalThis.fixture.browser.diagnostics('test', { action: 'viewport' }),
-  );
+  // Pause again, then let the actual DevTools frontend own and resume it.
+  await app.evaluate(() => {
+    globalThis.fixture.gapResult = undefined;
+    void globalThis.fixture.window.contentView.children[0].webContents
+      .executeJavaScript('breakpointFixture()')
+      .then((value) => {
+        globalThis.fixture.gapResult = value;
+      });
+  });
+  for (let i = 0; i < 50; i++) {
+    result = await app.evaluate(() =>
+      globalThis.fixture.browser.diagnostics('test', { action: 'read' }),
+    );
+    if (result.state.debugger.paused) break;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(result.state.debugger.paused, true);
+  const gapReference = result.state.debugger.stackFrames[0].scopes.find(
+    (scope) => scope.name === 'local',
+  ).variablesReference;
   await app.evaluate(() =>
     globalThis.fixture.browser.diagnostics('test', { action: 'devtools' }),
   );
@@ -198,6 +206,29 @@ try {
     globalThis.fixture.browser.diagnostics('test', { action: 'read' }),
   );
   assert.equal(result.state.owner, 'devtools');
+  // The new DevTools client may resume on initialization. Otherwise use its
+  // real frontend shortcut, never a second CDP connection to the guest.
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  if (await app.evaluate(() => globalThis.fixture.gapResult === undefined)) {
+    await app.evaluate(() => {
+      const guest =
+        globalThis.fixture.window.contentView.children[0].webContents;
+      const frontend = guest.devToolsWebContents;
+      if (!frontend) throw Error('owned DevTools frontend missing');
+      frontend.focus();
+      frontend.sendInputEvent({ type: 'keyDown', keyCode: 'F8' });
+      frontend.sendInputEvent({ type: 'keyUp', keyCode: 'F8' });
+    });
+  }
+  for (let i = 0; i < 50; i++) {
+    if (await app.evaluate(() => globalThis.fixture.gapResult === 4)) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(
+    await app.evaluate(() => globalThis.fixture.gapResult),
+    4,
+    'actual page resumed during DevTools ownership gap',
+  );
   await app.evaluate(() =>
     globalThis.fixture.window.contentView.children[0].webContents.closeDevTools(),
   );
@@ -209,6 +240,25 @@ try {
     await new Promise((r) => setTimeout(r, 50));
   }
   assert.equal(result.state.owner, 'circle');
+  assert.equal(
+    result.state.debugger.paused,
+    false,
+    'reconnect must not restore stale paused state',
+  );
+  assert.deepEqual(result.state.debugger.stackFrames, []);
+  const stale = await app.evaluate(async (_, reference) => {
+    try {
+      await globalThis.fixture.browser.diagnostics('test', {
+        action: 'debug',
+        command: 'variables',
+        reference,
+      });
+      return null;
+    } catch (error) {
+      return String(error);
+    }
+  }, gapReference);
+  assert.match(stale, /stale variable reference/);
   await app.evaluate(() =>
     globalThis.fixture.window.contentView.children[0].webContents.executeJavaScript(
       `console.log('after reconnect')`,

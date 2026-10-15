@@ -279,3 +279,55 @@ test('restart marks unfinished side effects unknown and does not replay commit p
   );
   await recovered.close();
 });
+
+for (const failingRead of ['checks', 'logs'] as const) {
+  test(`CI ${failingRead} outages recover after backoff and restart without republishing`, async (t) => {
+    const f = await fixture(t);
+    const original = f.ports.delivery[failingRead];
+    let online = false,
+      calls = 0,
+      clock = 1000;
+    const delivery = f.ports.delivery as unknown as Record<
+      string,
+      (...args: unknown[]) => Promise<unknown>
+    >;
+    delivery[failingRead] = async (...args: unknown[]) => {
+      calls++;
+      if (!online) throw Error('EHOSTUNREACH secret-token');
+      return (original as (...args: unknown[]) => Promise<unknown>)(...args);
+    };
+    await f.cycle.close();
+    let service = await DeliveryCycleService.open({
+      dataDir: f.dataDir,
+      ports: f.ports,
+      clock: () => clock,
+    });
+    await service.create(f.spec, { operationId: 'create' });
+    assert.equal((await service.advance('web')).state, 'waiting_ci');
+    assert.match(service.snapshot('web').reason!, /temporarily unavailable/);
+    assert.doesNotMatch(
+      JSON.stringify(service.snapshot('web')),
+      /secret-token/,
+    );
+    await service.advance('web');
+    assert.equal(calls, 1);
+    await service.close();
+    service = await DeliveryCycleService.open({
+      dataDir: f.dataDir,
+      ports: f.ports,
+      clock: () => clock,
+    });
+    await service.advance('web');
+    assert.equal(calls, 1);
+    online = true;
+    clock += 1000;
+    assert.equal((await service.advance('web')).state, 'repairing');
+    assert.equal((await service.advance('web')).state, 'pending_human_merge');
+    assert.equal(f.effects.commit, 2);
+    assert.equal(f.effects.push, 2);
+    const state = JSON.parse(await readFile(f.fakeState, 'utf8'));
+    assert.equal(state.created, 1);
+    assert.equal(state.draft, false);
+    await service.close();
+  });
+}

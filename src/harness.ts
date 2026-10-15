@@ -22,6 +22,31 @@ import {
 } from './secrets.js';
 import { httpStatus } from './model_guard.js';
 import { validateAttachments } from './media.js';
+import type {
+  InputPayload,
+  StoredInput,
+  ResolveInputsRequest,
+  ResolveInputsResult,
+} from './input_outbox.js';
+type InputPresentation = Omit<InputPayload, 'text'>;
+const inputPresentation = ({
+  text: _text,
+  ...presentation
+}: InputPayload): InputPresentation => presentation;
+class InputPresentations extends Map<string, InputPresentation> {
+  constructor(
+    private readonly save: (
+      text: string,
+      presentation: InputPresentation,
+    ) => void,
+  ) {
+    super();
+  }
+  override set(text: string, presentation: InputPresentation): this {
+    this.save(text, presentation);
+    return super.set(text, presentation);
+  }
+}
 export type ApprovalDecision =
   | 'approve'
   | 'reject'
@@ -72,6 +97,7 @@ export interface QueuedMessage {
   message: string;
   display: string;
   pastes?: Record<string, string>;
+  attachments?: MediaAttachment[];
 }
 export class Harness {
   private promptFileAllowed(path: string): boolean {
@@ -91,16 +117,14 @@ export class Harness {
   private step?: AbortController;
   private steering: string[] = [];
   private followUps: string[] = [];
+  private steeringIds: string[] = [];
+  private followUpIds: string[] = [];
+  private readonly inputEpoch = randomUUID();
   private queueVersion = 0;
   /** How the input box showed a prompt the model reads in full: long pastes stay folded on screen. */
-  readonly shown = new Map<
-    string,
-    {
-      display: string;
-      pastes?: Record<string, string>;
-      attachments?: MediaAttachment[];
-    }
-  >();
+  readonly shown = new InputPresentations((text, presentation) =>
+    this.savePresentation(text, presentation),
+  );
   private active?: Promise<{ answer: string; usage: Usage }>;
   /** Secrets' values hidden as %NAME% in text the model reads. */
   readonly redact: Redactor;
@@ -117,6 +141,7 @@ export class Harness {
     this.model = options.model;
     this.system = options.system;
     options.store.repairInterrupted(this.sessionId);
+    options.store.inputs.recover(this.sessionId, this.inputEpoch);
   }
   get busy(): boolean {
     return Boolean(this.active);
@@ -134,18 +159,104 @@ export class Harness {
   private get readOnly(): boolean {
     return this.planMode || this.options.parentPlanMode?.() === true;
   }
+  private inputIds(mode: 'steer' | 'followUp'): string[] {
+    return mode === 'steer' ? this.steeringIds : this.followUpIds;
+  }
+  private input(id: string): StoredInput {
+    const input = this.options.store.inputs.get(this.sessionId, id);
+    if (!input || input.state !== 'queued' || input.epoch !== this.inputEpoch)
+      throw new Error('queued input changed');
+    return input;
+  }
+  private savePresentation(
+    text: string,
+    presentation: InputPresentation,
+  ): void {
+    const changes = [...this.steeringIds, ...this.followUpIds]
+      .map((id) => this.input(id))
+      .filter((input) => input.payload.text === text)
+      .map((input) => ({
+        id: input.id,
+        payload: { ...input.payload, ...presentation },
+      }));
+    if (changes.length)
+      this.options.store.inputs.update(
+        this.sessionId,
+        this.inputEpoch,
+        changes,
+      );
+    if (changes.length) this.queueVersion++;
+  }
+  get recoverableInputs() {
+    return this.options.store.inputs.recoverable(this.sessionId);
+  }
+  resolveInputs(request: ResolveInputsRequest): ResolveInputsResult {
+    const result = this.options.store.inputs.resolve(
+      this.sessionId,
+      this.inputEpoch,
+      request,
+    );
+    if (result.applied && request.action === 'resume') {
+      for (const input of result.items) {
+        (input.kind === 'steer' ? this.steering : this.followUps).push(
+          input.payload.text,
+        );
+        this.inputIds(input.kind).push(input.id);
+        Map.prototype.set.call(
+          this.shown,
+          input.payload.text,
+          inputPresentation(input.payload),
+        );
+      }
+      this.queueVersion++;
+    }
+    return result;
+  }
   queue(
     message: string,
     mode: 'steer' | 'followUp' = 'steer',
     attachments?: MediaAttachment[],
+    options: {
+      inputId?: string;
+      display?: string;
+      pastes?: Record<string, string>;
+    } = {},
   ): void {
-    if (attachments?.length) {
-      validateAttachments(attachments);
-      this.shown.set(message, {
-        display: message,
-        attachments: structuredClone(attachments),
-      });
-    }
+    if (attachments?.length) validateAttachments(attachments);
+    const previous = this.shown.get(message);
+    const duplicate = [...this.steering, ...this.followUps].includes(message);
+    const input = this.options.store.inputs.enqueue(
+      this.sessionId,
+      this.inputEpoch,
+      mode,
+      {
+        text: message,
+        display: options.display ?? previous?.display ?? message,
+        ...((options.pastes ?? previous?.pastes)
+          ? { pastes: options.pastes ?? previous!.pastes }
+          : {}),
+        ...(attachments?.length || (!duplicate && previous?.attachments)
+          ? {
+              attachments: attachments?.length
+                ? attachments
+                : previous!.attachments,
+            }
+          : {}),
+      },
+      options.inputId,
+    );
+    if (
+      input.state !== 'queued' ||
+      input.epoch !== this.inputEpoch ||
+      [...this.steeringIds, ...this.followUpIds].includes(input.id)
+    )
+      return;
+    this.inputIds(mode).push(input.id);
+    Map.prototype.set.call(
+      this.shown,
+      message,
+      inputPresentation(input.payload),
+    );
     (mode === 'steer' ? this.steering : this.followUps).push(message);
     this.queueVersion++;
   }
@@ -160,6 +271,11 @@ export class Harness {
     const queue = mode === 'steer' ? this.steering : this.followUps;
     if (!Number.isSafeInteger(index) || index < 0 || queue[index] !== expected)
       throw Error('queued message changed');
+    const ids = this.inputIds(mode);
+    this.options.store.inputs.update(this.sessionId, this.inputEpoch, [
+      { id: ids[index]!, state: 'discarded' },
+    ]);
+    ids.splice(index, 1);
     const [message] = queue.splice(index, 1);
     this.queueVersion++;
     if (![...this.steering, ...this.followUps].includes(message!))
@@ -192,7 +308,8 @@ export class Harness {
       throw Error('queued message changed');
     if (typeof updatedText !== 'string' || !updatedText.trim())
       throw Error('queued message cannot be empty');
-    const previous = this.shown.get(expectedText);
+    const ids = this.inputIds(mode);
+    const previous = this.input(ids[index]!).payload;
     const reference = /\[(?:Pasted text|Image|PDF) #(\d+)(?: \+\d+ lines)?\]/g;
     const message = updatedText.replace(
       reference,
@@ -226,20 +343,21 @@ export class Harness {
       throw Error(
         'queued message already has different attachments or folded text',
       );
+    this.options.store.inputs.update(this.sessionId, this.inputEpoch, [
+      { id: ids[index]!, payload: { text: message, ...shown } },
+    ]);
     queue[index] = message;
     this.queueVersion++;
-    this.shown.set(message, shown);
+    Map.prototype.set.call(this.shown, message, shown);
     if (![...this.steering, ...this.followUps].includes(expectedText))
       this.shown.delete(expectedText);
     return message;
   }
   /** The waiting messages as the input box showed them (long pastes and images folded). */
   get queuedShown(): { steering: string[]; followUp: string[] } {
-    const shown = (message: string) =>
-      this.shown.get(message)?.display ?? message;
     return {
-      steering: this.steering.map(shown),
-      followUp: this.followUps.map(shown),
+      steering: this.steeringIds.map((id) => this.input(id).payload.display),
+      followUp: this.followUpIds.map((id) => this.input(id).payload.display),
     };
   }
   /**
@@ -247,7 +365,22 @@ export class Harness {
    * (the last follow-up, else the last steering message), or `all` of them in list order.
    */
   takeBack(all = false): QueuedMessage[] {
-    const presentations = new Map(this.shown);
+    const ids = all
+      ? [...this.steeringIds, ...this.followUpIds]
+      : this.followUps.length
+        ? this.followUpIds.slice(-1)
+        : this.steeringIds.slice(-1);
+    const inputs = ids.map((id) => this.input(id));
+    this.options.store.inputs.update(
+      this.sessionId,
+      this.inputEpoch,
+      ids.map((id) => ({ id, state: 'recovery_pending' as const })),
+    );
+    if (all) {
+      this.steeringIds = [];
+      this.followUpIds = [];
+    } else if (this.followUps.length) this.followUpIds.splice(-1);
+    else this.steeringIds.splice(-1);
     const taken = all
       ? [...this.steering.splice(0), ...this.followUps.splice(0)]
       : this.followUps.length
@@ -257,12 +390,13 @@ export class Harness {
     for (const message of taken)
       if (![...this.steering, ...this.followUps].includes(message))
         this.shown.delete(message);
-    return taken.map((message) => {
-      const shown = presentations.get(message);
+    return taken.map((message, index) => {
+      const shown = inputs[index]!.payload;
       return {
         message,
         display: shown?.display ?? message,
         ...(shown?.pastes ? { pastes: shown.pastes } : {}),
+        ...(shown?.attachments ? { attachments: shown.attachments } : {}),
       };
     });
   }
@@ -278,6 +412,16 @@ export class Harness {
     return true;
   }
   clearQueue(): { steering: string[]; followUp: string[] } {
+    this.options.store.inputs.update(
+      this.sessionId,
+      this.inputEpoch,
+      [...this.steeringIds, ...this.followUpIds].map((id) => ({
+        id,
+        state: 'discarded',
+      })),
+    );
+    this.steeringIds = [];
+    this.followUpIds = [];
     this.queueVersion++;
     const result = {
       steering: this.steering.splice(0),
@@ -289,13 +433,38 @@ export class Harness {
   }
   // Stop the turn. `keepQueue`, as esc in 0.5.0: the messages it had not read yet stay, each
   // to be sent as a turn of its own (the steering ones first), and nothing starts them here.
-  async cancel(options: { keepQueue?: boolean } = {}): Promise<void> {
+  async cancel(
+    options: { keepQueue?: boolean; preserveInputs?: boolean } = {},
+  ): Promise<void> {
     this.queueVersion++;
-    if (options.keepQueue) this.followUps.unshift(...this.steering.splice(0));
-    else {
-      this.followUps = [];
-      this.steering = [];
-      this.shown.clear();
+    let persistenceError: unknown;
+    try {
+      if (options.keepQueue) {
+        this.options.store.inputs.update(
+          this.sessionId,
+          this.inputEpoch,
+          this.steeringIds.map((id) => ({ id, kind: 'followUp' })),
+        );
+        this.followUps.unshift(...this.steering.splice(0));
+        this.followUpIds.unshift(...this.steeringIds.splice(0));
+      } else {
+        if (!options.preserveInputs)
+          this.options.store.inputs.update(
+            this.sessionId,
+            this.inputEpoch,
+            [...this.steeringIds, ...this.followUpIds].map((id) => ({
+              id,
+              state: 'discarded',
+            })),
+          );
+        this.followUps = [];
+        this.steering = [];
+        this.followUpIds = [];
+        this.steeringIds = [];
+        this.shown.clear();
+      }
+    } catch (error) {
+      persistenceError = error;
     }
     this.controller?.abort(new Error('Interrupted'));
     try {
@@ -303,6 +472,7 @@ export class Harness {
     } catch {
       /* run_error and persisted results record the stop. */
     }
+    if (persistenceError) throw persistenceError;
   }
   // A prompt with the files it mentions and the ones given with it (the desktop's). A model
   // known not to read images gets their paths only, and the screen says so. A file that
@@ -353,10 +523,29 @@ export class Harness {
       ...(shown.pastes ? { pastes: shown.pastes } : {}),
     };
   }
-  private shiftQueued(mode: 'steer' | 'followUp'): string | undefined {
-    const message = (mode === 'steer' ? this.steering : this.followUps).shift();
-    if (message !== undefined) this.queueVersion++;
-    return message;
+  private nextQueued(mode: 'steer' | 'followUp'): StoredInput | undefined {
+    const id = this.inputIds(mode)[0];
+    return id ? this.input(id) : undefined;
+  }
+  private consumeInput(
+    input: StoredInput,
+    message: Pick<Message, 'content' | 'attachments'>,
+  ): void {
+    this.options.store.appendInput(this.sessionId, input.id, this.inputEpoch, {
+      id: input.id,
+      role: 'user',
+      ...message,
+      display: input.payload.display,
+      ...(input.payload.pastes ? { pastes: input.payload.pastes } : {}),
+    });
+    const ids = this.inputIds(input.kind),
+      index = ids.indexOf(input.id);
+    if (index < 0) throw new Error('queued input changed before consumption');
+    ids.splice(index, 1);
+    (input.kind === 'steer' ? this.steering : this.followUps).splice(index, 1);
+    this.queueVersion++;
+    if (![...this.steering, ...this.followUps].includes(input.payload.text))
+      this.shown.delete(input.payload.text);
   }
   // `display` is what the conversation shows for the prompt when it differs from the text
   // the model gets (`circle "question" @file`).
@@ -397,10 +586,15 @@ export class Harness {
     do {
       this.options.beforeTurn?.();
       signal.throwIfAborted();
-      const next = first
-        ? (prompt ?? this.shiftQueued('steer') ?? this.shiftQueued('followUp'))
-        : this.shiftQueued('followUp');
-      const result = await this.runTurn(next, signal);
+      const queued =
+        first && prompt !== undefined
+          ? undefined
+          : first
+            ? (this.nextQueued('steer') ?? this.nextQueued('followUp'))
+            : this.nextQueued('followUp');
+      const next =
+        first && prompt !== undefined ? prompt : queued?.payload.text;
+      const result = await this.runTurn(next, signal, queued);
       answer = result.answer;
       addUsage(total, result.usage);
       first = false;
@@ -410,25 +604,41 @@ export class Harness {
   private async runTurn(
     prompt: string | undefined,
     signal: AbortSignal,
+    queued?: StoredInput,
   ): Promise<{ answer: string; usage: Usage }> {
     const start = Date.now();
     const usage = emptyUsage();
     let answer = '';
     const given =
-      prompt === undefined ? undefined : this.shown.get(prompt)?.attachments;
-    const shown = prompt === undefined ? undefined : this.shownAs(prompt);
-    if (prompt !== undefined)
-      this.save({
-        id: randomUUID(),
-        role: 'user',
-        ...(await this.attach(
-          prompt,
-          this.options.session.workspace,
-          signal,
-          given,
-        )),
-        ...shown,
-      });
+      queued?.payload.attachments ??
+      (prompt === undefined ? undefined : this.shown.get(prompt)?.attachments);
+    const shown = queued
+      ? inputPresentation(queued.payload)
+      : prompt === undefined
+        ? undefined
+        : this.shownAs(prompt);
+    if (prompt !== undefined) {
+      const content = await this.attach(
+        prompt,
+        this.options.session.workspace,
+        signal,
+        given,
+      );
+      if (queued) {
+        if (
+          this.inputIds(queued.kind)[0] !== queued.id ||
+          JSON.stringify(this.input(queued.id).payload) !==
+            JSON.stringify(queued.payload)
+        ) {
+          const next = this.nextQueued(queued.kind);
+          return next
+            ? this.runTurn(next.payload.text, signal, next)
+            : { answer: '', usage: emptyUsage() };
+        }
+        this.consumeInput(queued, content);
+      } else
+        this.save({ id: randomUUID(), role: 'user', ...content, ...shown });
+    }
     const session = this.options.store.get(this.sessionId)!;
     if (!session.title && shown?.display !== undefined)
       this.options.store.rename(
@@ -448,22 +658,16 @@ export class Harness {
         while (this.steering.length) {
           const version = this.queueVersion;
           const message = this.steering[0]!;
+          const input = this.input(this.steeringIds[0]!);
           const content = await this.attach(
             message,
             session.workspace,
             signal,
-            this.shown.get(message)?.attachments,
+            input.payload.attachments,
           );
           if (version !== this.queueVersion || this.steering[0] !== message)
             continue;
-          this.steering.shift();
-          this.queueVersion++;
-          this.save({
-            id: randomUUID(),
-            role: 'user',
-            ...content,
-            ...this.shownAs(message),
-          });
+          this.consumeInput(input, content);
           this.bus.emit('steer', { payload: { message } });
         }
         this.options.beforeStep?.();

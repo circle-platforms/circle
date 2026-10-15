@@ -6,6 +6,7 @@ import type { Message } from './types.js';
 import type { LegacyImportPlan } from './legacy_sessions.js';
 import { createHash } from 'node:crypto';
 import { acquireSessionLease, type SessionLease } from './session_lock.js';
+import { InputOutbox } from './input_outbox.js';
 import {
   validateSessionGraph,
   orderedCheckpoints,
@@ -57,6 +58,7 @@ export const emptyContextState = (): ContextState => ({
   offloaded: {},
 });
 export class CheckpointStore {
+  readonly inputs: InputOutbox;
   private db: DatabaseSync;
   private readonly home?: string;
   private readonly ownership = new Map<string, SessionLease>();
@@ -127,6 +129,9 @@ export class CheckpointStore {
       this.db.exec('ROLLBACK');
       throw error;
     }
+    this.inputs = new InputOutbox(this.db, (id, action) =>
+      this.writing([id], action),
+    );
   }
   /** Hold execution ownership through turns, background tasks and shutdown. */
   claimSession(
@@ -270,10 +275,24 @@ export class CheckpointStore {
       this.appendOwned(sessionId, messages, expectedHead),
     );
   }
+  /** Commit a queued user message and its consumed receipt in one SQLite transaction. */
+  appendInput(
+    sessionId: string,
+    inputId: string,
+    epoch: string,
+    message: Message,
+  ): string | null {
+    if (message.role !== 'user' || message.id !== inputId)
+      throw new Error('queued input must append its stable user message id');
+    return this.writing([sessionId], () =>
+      this.appendOwned(sessionId, [message], undefined, { id: inputId, epoch }),
+    );
+  }
   private appendOwned(
     sessionId: string,
     messages: Message[],
     expectedHead?: string | null,
+    input?: { id: string; epoch: string },
   ): string | null {
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -281,6 +300,8 @@ export class CheckpointStore {
       if (!session) throw new Error('unknown session');
       if (expectedHead !== undefined && expectedHead !== session.head)
         throw new Error('session changed in another process');
+      if (input)
+        this.inputs.consumeInTransaction(sessionId, input.id, input.epoch);
       let head = session.head;
       const stored = messages.map((message) => JSON.stringify(message));
       for (const text of stored) {

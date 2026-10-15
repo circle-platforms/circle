@@ -6,6 +6,13 @@ afterwards. A persistence failure rejects writes and requires reopening the
 journal. Producers must await append: exceeding the pending-byte limit is an
 explicit backpressure error, not a dropped successful event.
 
+Each writer holds a separate `.owner.sqlite` SQLite write lease until close.
+A second owner, including another connection in the same process, fails before
+changing JSONL evidence. The operating system releases the lease when a process
+dies, so recovery does not depend on PID reuse or stale lock-file deletion.
+Concurrent close callers await the same cleanup operation. Existing journals
+are read without a format migration.
+
 Use `replay({offset, seq}, limit)` to recover a disconnected renderer. Limits are
 1–4096 records. Cursor offsets are byte boundaries, sequence numbers are globally
 contiguous within the journal, and epochs change when a producer restarts. Opening

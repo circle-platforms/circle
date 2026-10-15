@@ -612,6 +612,7 @@ export class BrowserSessions {
     contents.on('devtools-closed', () => {
       void (async () => {
         if (tab.closed || contents.isDestroyed()) return;
+        tab.diagnostics!.invalidateConnection();
         if (!contents.debugger.isAttached()) contents.debugger.attach('1.3');
         await Promise.all([
           enableDiagnostics(),
@@ -1565,6 +1566,7 @@ export class BrowserSessions {
     if (input.action === 'devtools') {
       this.control(id, 'take');
       // Human-only API: no model tool can invoke this explicit ownership handoff.
+      tab.diagnostics!.invalidateConnection();
       tab.diagnostics!.state.owner = 'devtools';
       tab.diagnostics!.resetEpoch();
       tab.screenshot = undefined;

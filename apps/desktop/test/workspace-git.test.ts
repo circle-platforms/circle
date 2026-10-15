@@ -209,3 +209,64 @@ test('trusted constructor identity signs commits while renderer identity overrid
     await rm(root, { recursive: true, force: true });
   }
 });
+test('same-head branch changes and origin push destination changes invalidate old revisions', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-git-base-'));
+  const remoteA = await mkdtemp(path.join(tmpdir(), 'circle-git-remote-a-'));
+  const remoteB = await mkdtemp(path.join(tmpdir(), 'circle-git-remote-b-'));
+  const s = new GitWorkspaceService(root);
+  try {
+    await s.git(['init', '-b', 'codex/a']);
+    await s.git(['config', 'user.name', 'Test']);
+    await s.git(['config', 'user.email', 'test@example.invalid']);
+    await writeFile(path.join(root, 'feature'), 'base');
+    await s.git(['add', 'feature']);
+    await s.git(['commit', '-m', 'Base']);
+    await s.git(['init', '--bare', remoteA]);
+    await s.git(['init', '--bare', remoteB]);
+    await s.git(['remote', 'add', 'origin', remoteA]);
+    await s.git(['branch', 'codex/b']);
+    const a = await s.snapshot();
+    await s.git(['checkout', 'codex/b']);
+    const b = await s.snapshot();
+    assert.equal(a.head, b.head);
+    assert.notEqual(a.revision, b.revision);
+    await assert.rejects(
+      s.call('push', { revision: a.revision }),
+      /branch or push destination changed/,
+    );
+    await assert.rejects(
+      s.git([
+        '--git-dir=' + remoteA,
+        'rev-parse',
+        '--verify',
+        'refs/heads/codex/b',
+      ]),
+    );
+    await s.git(['remote', 'set-url', '--push', 'origin', remoteB]);
+    const changedRemote = await s.snapshot();
+    assert.notEqual(changedRemote.revision, b.revision);
+    await assert.rejects(
+      s.call('push', { revision: b.revision }),
+      /push destination changed/,
+    );
+    await assert.rejects(
+      s.git([
+        '--git-dir=' + remoteB,
+        'rev-parse',
+        '--verify',
+        'refs/heads/codex/b',
+      ]),
+    );
+    await s.call('push', { revision: changedRemote.revision });
+    assert.equal(
+      (
+        await s.git(['--git-dir=' + remoteB, 'rev-parse', 'refs/heads/codex/b'])
+      ).trim(),
+      b.head,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(remoteA, { recursive: true, force: true });
+    await rm(remoteB, { recursive: true, force: true });
+  }
+});

@@ -1,4 +1,29 @@
 export const developer: Record<string, string> = {
+  'recovered queued inputs': '待恢复的排队输入',
+  'recovered input payload is unavailable; recovery copy retained':
+    '无法读取恢复内容；恢复副本已保留',
+  'conversation unavailable; recovery copy retained':
+    '会话不可用；恢复副本已保留',
+  'draft could not be updated; recovery copy retained':
+    '无法更新草稿；恢复副本已保留',
+  'copied to draft without sending; recovery copy retained until you explicitly remove it':
+    '已复制到草稿，尚未发送；恢复副本将保留，直到你明确移除',
+  'input explicitly resumed': '已按你的选择恢复输入',
+  'recovery copy explicitly removed': '已按你的选择移除恢复副本',
+  'nothing is sent automatically after restart; choose whether to resume, copy to draft or remove each input':
+    '重启后不会自动发送输入；请逐条选择恢复执行、复制到草稿或移除',
+  'input recovery unavailable': '输入恢复暂不可用',
+  'steering input': '引导输入',
+  'follow-up input': '后续输入',
+  '{n} media attachments': '{n} 个媒体附件',
+  'inspect full recovered input': '查看完整恢复内容',
+  'original display': '原始显示内容',
+  'resume this input': '恢复执行此输入',
+  'copied to draft': '已复制到草稿',
+  'return input to draft': '复制输入到草稿',
+  'I have checked the input and want to remove its recovery copy':
+    '我已核对该输入，确认移除它的恢复副本',
+  'discard recovered input': '移除恢复副本',
   operation: '操作',
   state: '状态',
   'technical operation': '技术详情',

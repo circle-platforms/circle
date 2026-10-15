@@ -111,6 +111,7 @@ export class LiveRuntime implements RuntimePort {
       host.onRuntimeDelta?.(this.receiveDelta) ?? (() => {});
   }
   private persist() {
+    if (this.disposed) return;
     try {
       this.storage?.setItem(
         'circle.workbench.live.views.v1',
@@ -125,6 +126,7 @@ export class LiveRuntime implements RuntimePort {
     }
   }
   private receive = (update: RuntimeUpdate) => {
+    if (this.disposed) return;
     if (!this.tokenBuffer.acceptFull(update)) return;
     this.seq = update.seq;
     this.snapshot = structuredClone(update.snapshot);
@@ -232,8 +234,9 @@ export class LiveRuntime implements RuntimePort {
     this.listed = workspaceId;
     const run = async () => {
       await this.listing;
+      if (this.disposed) return;
       const listed = await this.host.listWorkspace(workspaceId);
-      if (!listed) return;
+      if (!listed || this.disposed) return;
       this.files = [
         ...this.files.filter((file) => file.workspaceId !== workspaceId),
         ...listed.files.map((file) => ({
@@ -252,6 +255,7 @@ export class LiveRuntime implements RuntimePort {
     return this.listing;
   }
   private report(error: unknown, sessionId = this.snapshot.activeSessionId) {
+    if (this.disposed) return;
     if (error instanceof SessionActionError) sessionId = error.sessionId;
     const message =
       error instanceof Error ? error.message : t('runtime action failed');
@@ -274,6 +278,7 @@ export class LiveRuntime implements RuntimePort {
     this.unsubscribeDelta();
     if (this.tokenTimer) clearTimeout(this.tokenTimer);
     this.tokenPending = [];
+    this.listeners.clear();
   }
   getSnapshot = () => this.snapshot;
   subscribe = (listener: () => void) => {
@@ -299,6 +304,7 @@ export class LiveRuntime implements RuntimePort {
       for (const listener of this.listeners) listener();
     }
     const promise = (async () => {
+      if (this.disposed) throw Error(t('Circle runtime disconnected'));
       if (!this.snapshot.runtime?.connected)
         throw Error(t('Circle runtime disconnected'));
       const reply = await this.host.runtimeCommand({
@@ -307,7 +313,7 @@ export class LiveRuntime implements RuntimePort {
         sessionId,
         payload,
       });
-      this.receive(await this.host.runtimeState());
+      if (!this.disposed) this.receive(await this.host.runtimeState());
       if (!reply.ok) throw Error(reply.error ?? t('runtime action failed'));
       return reply.data;
     })().catch((error) => {
@@ -321,6 +327,7 @@ export class LiveRuntime implements RuntimePort {
     return promise;
   }
   updateSessionView = (sessionId: string, patch: SessionViewPatch): boolean => {
+    if (this.disposed) return false;
     if (
       !patch ||
       typeof patch !== 'object' ||
@@ -354,6 +361,7 @@ export class LiveRuntime implements RuntimePort {
     return true;
   };
   change = (update: (draft: WorkbenchSnapshot) => void) => {
+    if (this.disposed) return;
     const before = this.snapshot;
     const requested = structuredClone(before);
     update(requested);

@@ -54,6 +54,7 @@ export class WorkspaceServices {
   private delivery: Promise<DeliveryService>;
   private languages = new Map<string, LanguageService>();
   private debuggers = new Map<string, WorkspaceDebugService>();
+  private debugTerminals = new Map<string, Set<string>>();
   private sessions = new Set<string>();
   private epoch = randomUUID();
   private seq = 0;
@@ -335,6 +336,7 @@ export class WorkspaceServices {
       }
       await closingCycles;
       if (cycleCloseError) throw cycleCloseError;
+      this.debugTerminals.delete(sessionId);
       this.languages.get(sessionId)?.dispose();
       this.languages.delete(sessionId);
       for (const [id, owner] of this.loginOwners)
@@ -679,16 +681,56 @@ export class WorkspaceServices {
       if (!debug) {
         debug = new WorkspaceDebugService({
           ...this.options,
+          runInTerminal: async (request) => {
+            if (
+              !Array.isArray(request.args) ||
+              !request.args.length ||
+              request.args.some(
+                (arg) => typeof arg !== 'string' || arg.includes('\0'),
+              )
+            )
+              throw Error('debug terminal arguments are invalid');
+            const options = {
+              owner: sessionId,
+              sessionId,
+              cwd: request.cwd,
+              command: { file: request.args[0], args: request.args.slice(1) },
+              env: request.env,
+              label: 'debug',
+            };
+            const terminal = await this.terminals.create(options);
+            const ids = this.debugTerminals.get(sessionId) ?? new Set<string>();
+            ids.add(terminal.id);
+            this.debugTerminals.set(sessionId, ids);
+            if (!terminal.pid)
+              throw Error('debug terminal did not return a process id');
+            return { processId: terminal.pid };
+          },
           emit: (snapshot) => {
             void this.publish(sessionId, 'debug', sessionId, { snapshot });
           },
         });
         this.debuggers.set(sessionId, debug);
       }
-      return debug.handle(
-        method === 'list' ? 'snapshot' : method === 'start' ? 'launch' : method,
-        params,
-      );
+      try {
+        return await debug.handle(
+          method === 'list'
+            ? 'snapshot'
+            : method === 'start'
+              ? 'launch'
+              : method,
+          params,
+        );
+      } finally {
+        if (method === 'stop') {
+          await Promise.all(
+            [...(this.debugTerminals.get(sessionId) ?? [])].map((id) =>
+              this.terminals.close(sessionId, id),
+            ),
+          );
+          this.debugTerminals.delete(sessionId);
+        }
+      }
     }
     if (service === 'git' || service === 'delivery') {
       const target = service === 'git' ? await this.git : await this.delivery;

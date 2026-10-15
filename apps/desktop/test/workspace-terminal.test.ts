@@ -756,3 +756,112 @@ test(
     assert.equal(await portAvailable(port), true);
   },
 );
+
+test(
+  'trusted per-launch environment preserves debugger bootloader, null removals, exact argv and stdin without entering history',
+  { skip: !unix },
+  async (t) => {
+    const { manager, workspace, logRoot, options } = await setup(t, {
+      env: {
+        CIRCLE_PTY_REMOVE: 'inherited',
+        CIRCLE_PTY_OVERRIDE: 'manager',
+        NODE_OPTIONS: '--no-warnings',
+      },
+    });
+    const bootloader = join(workspace, 'debug bootloader.cjs');
+    await writeFile(bootloader, 'global.__circleDebugBootloader=true;\n');
+    const script =
+      "console.log(JSON.stringify({argv:process.argv.slice(1),boot:global.__circleDebugBootloader===true,removed:process.env.CIRCLE_PTY_REMOVE??null,override:process.env.CIRCLE_PTY_OVERRIDE,added:process.env.CIRCLE_PTY_ADDED}));process.stdin.once('data',data=>{console.log('STDIN:'+data.toString().trim());process.exit(0)});";
+    const env = {
+      NODE_OPTIONS: `--require ${JSON.stringify(bootloader)}`,
+      CIRCLE_PTY_REMOVE: null,
+      CIRCLE_PTY_OVERRIDE: 'launch',
+      CIRCLE_PTY_ADDED: 'per-launch',
+    };
+    const terminal = await manager.create({
+      owner,
+      sessionId: 'session-debug',
+      cwd: workspace,
+      command: {
+        file: process.execPath,
+        args: ['-e', script, '', 'space argument', ''],
+      },
+      env,
+    });
+    await wait(
+      async () =>
+        (await readFile(terminal.logPath, 'utf8')).includes('"boot":true'),
+      'debug bootloader output',
+    );
+    await manager.write(owner, terminal.id, 'typed through PTY\r');
+    await wait(
+      async () =>
+        (await manager.list(owner)).find((s) => s.id === terminal.id)
+          ?.status === 'exited',
+      'debug stdin exit',
+    );
+    const output = await readFile(terminal.logPath, 'utf8');
+    assert.ok(
+      output.includes(
+        JSON.stringify({
+          argv: ['', 'space argument', ''],
+          boot: true,
+          removed: null,
+          override: 'launch',
+          added: 'per-launch',
+        }),
+      ),
+      output,
+    );
+    assert.ok(output.includes('STDIN:typed through PTY'));
+    const metadata = await readFile(
+      join(logRoot, terminal.id, 'metadata.json'),
+      'utf8',
+    );
+    assert.equal(metadata.includes(bootloader), false);
+    assert.equal(metadata.includes('NODE_OPTIONS'), false);
+    assert.equal(
+      JSON.stringify(await manager.list(owner)).includes('NODE_OPTIONS'),
+      false,
+    );
+    const restarted = await manager.restart(owner, terminal.id);
+    await wait(
+      async () =>
+        (await readFile(restarted.logPath, 'utf8')).includes('"boot":true'),
+      'debug restart environment preserved',
+    );
+    await manager.write(owner, restarted.id, 'new stdin\r');
+    await wait(
+      async () =>
+        (await manager.list(owner)).find((s) => s.id === restarted.id)
+          ?.status === 'exited',
+      'restart stdin exit',
+    );
+    await assert.rejects(
+      manager.create({
+        owner,
+        sessionId: 'session-debug',
+        env: { 'BAD=KEY': 'value' },
+      }),
+      /invalid terminal environment/,
+    );
+    await assert.rejects(
+      manager.create({
+        owner,
+        sessionId: 'session-debug',
+        env: { BAD: 'value\0suffix' },
+      }),
+      /invalid terminal environment/,
+    );
+    await manager.dispose();
+    const restored = new TerminalManager(options, () => {});
+    try {
+      await assert.rejects(
+        restored.restart(owner, restarted.id),
+        /per-launch environment is unavailable/,
+      );
+    } finally {
+      await restored.dispose();
+    }
+  },
+);
