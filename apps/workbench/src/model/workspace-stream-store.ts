@@ -10,6 +10,13 @@ export type WorkspaceStreamEvent = WorkspaceServiceEvent & {
   sourceEpoch?: string;
 };
 export type StreamApplyResult = 'applied' | 'duplicate' | 'stale-epoch' | 'gap';
+export interface WorkspaceStreamCheckpoint {
+  version: 1;
+  cursor: WorkspaceStreamCursor;
+  epoch: string;
+  retiredEpochs: string[];
+  resources: { key: string; events: WorkspaceStreamEvent[] }[];
+}
 
 /** Small resource-scoped external store. Full evidence stays in the main journal;
  * React consumers only subscribe to the resource they display. A gap is never
@@ -38,6 +45,14 @@ export class WorkspaceStreamStore {
       schedule?: (flush: () => void) => void;
     } = {},
   ) {
+    if (
+      (options.maxBytes !== undefined &&
+        (!Number.isSafeInteger(options.maxBytes) || options.maxBytes < 1)) ||
+      (options.maxEventsPerResource !== undefined &&
+        (!Number.isSafeInteger(options.maxEventsPerResource) ||
+          options.maxEventsPerResource < 1))
+    )
+      throw Error('invalid workspace stream cache bounds');
     this.options = options;
   }
 
@@ -77,6 +92,144 @@ export class WorkspaceStreamStore {
     return () => {
       this.allListeners.delete(listener);
     };
+  }
+
+  /** Persist this single envelope atomically, never a cursor without its cache. */
+  checkpoint(): WorkspaceStreamCheckpoint {
+    return JSON.parse(
+      JSON.stringify({
+        version: 1,
+        cursor: this.cursorValue,
+        epoch: this.epoch,
+        retiredEpochs: [...this.retiredEpochs],
+        resources: [...this.values].map(([key, events]) => ({ key, events })),
+      }),
+    ) as WorkspaceStreamCheckpoint;
+  }
+
+  /** Bounded cache restore is not full-history recovery; raw originals remain
+   * on disk. Invalid checkpoints leave the current store completely unchanged.
+   */
+  restore(value: unknown): boolean {
+    try {
+      const json = JSON.stringify(value);
+      if (
+        new TextEncoder().encode(json).byteLength >
+        (this.options.maxBytes ?? 4 * 1024 * 1024) + 65536
+      )
+        return false;
+      const saved = JSON.parse(json) as WorkspaceStreamCheckpoint;
+      const validCursor = (cursor: WorkspaceStreamCursor) =>
+        !!cursor &&
+        Number.isSafeInteger(cursor.seq) &&
+        cursor.seq >= 0 &&
+        Number.isSafeInteger(cursor.offset) &&
+        cursor.offset >= 0 &&
+        (cursor.seq === 0) === (cursor.offset === 0);
+      if (
+        !saved ||
+        saved.version !== 1 ||
+        !validCursor(saved.cursor) ||
+        typeof saved.epoch !== 'string' ||
+        saved.epoch.length > 200 ||
+        !Array.isArray(saved.retiredEpochs) ||
+        saved.retiredEpochs.length > 64 ||
+        saved.retiredEpochs.some(
+          (epoch) =>
+            typeof epoch !== 'string' ||
+            !epoch ||
+            epoch.length > 200 ||
+            epoch === saved.epoch,
+        ) ||
+        !Array.isArray(saved.resources)
+      )
+        return false;
+      if ((saved.cursor.seq === 0) !== (saved.epoch === '')) return false;
+      const values = new Map<string, readonly WorkspaceStreamEvent[]>();
+      const sizes = new Map<string, number>();
+      const seen = new Set<number>();
+      let bytes = 0,
+        foundEndpoint = saved.cursor.seq === 0;
+      for (const resource of saved.resources) {
+        if (
+          !resource ||
+          typeof resource.key !== 'string' ||
+          values.has(resource.key) ||
+          !Array.isArray(resource.events) ||
+          !resource.events.length ||
+          resource.events.length > (this.options.maxEventsPerResource ?? 128)
+        )
+          return false;
+        let previousSeq = 0,
+          previousOffset = 0;
+        for (const event of resource.events) {
+          if (
+            !event ||
+            !validCursor(event.cursor) ||
+            event.seq !== event.cursor.seq ||
+            event.seq < 1 ||
+            event.seq > saved.cursor.seq ||
+            event.seq <= previousSeq ||
+            seen.has(event.seq) ||
+            event.cursor.offset <= previousOffset ||
+            event.cursor.offset > saved.cursor.offset ||
+            typeof event.epoch !== 'string' ||
+            !event.epoch ||
+            event.epoch.length > 200 ||
+            typeof event.at !== 'string' ||
+            !event.data ||
+            typeof event.data !== 'object' ||
+            Array.isArray(event.data) ||
+            ![
+              'documents',
+              'terminal',
+              'git',
+              'language',
+              'debug',
+              'tasks',
+              'delivery',
+            ].includes(event.service) ||
+            [event.workspaceId, event.sessionId, event.resourceId].some(
+              (id) => typeof id !== 'string' || !id || id.length > 200,
+            ) ||
+            WorkspaceStreamStore.resourceKey(event) !== resource.key
+          )
+            return false;
+          if (event.seq === saved.cursor.seq) {
+            if (
+              event.cursor.offset !== saved.cursor.offset ||
+              event.epoch !== saved.epoch
+            )
+              return false;
+            foundEndpoint = true;
+          }
+          seen.add(event.seq);
+          previousSeq = event.seq;
+          previousOffset = event.cursor.offset;
+        }
+        const size = new TextEncoder().encode(
+          JSON.stringify(resource.events),
+        ).byteLength;
+        bytes += size;
+        if (bytes > (this.options.maxBytes ?? 4 * 1024 * 1024)) return false;
+        values.set(resource.key, resource.events);
+        sizes.set(resource.key, size);
+      }
+      if (!foundEndpoint || (saved.cursor.seq === 0 && values.size))
+        return false;
+      for (const key of this.values.keys()) this.pendingKeys.add(key);
+      for (const key of values.keys()) this.pendingKeys.add(key);
+      this.values = values;
+      this.bytesByKey = sizes;
+      this.retainedBytes = bytes;
+      this.cursorValue = saved.cursor;
+      this.epoch = saved.epoch;
+      this.retiredEpochs = new Set(saved.retiredEpochs);
+      this.schedule();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   apply(event: WorkspaceStreamEvent): StreamApplyResult {
