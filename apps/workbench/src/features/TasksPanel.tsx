@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TaskRecord } from '../../../desktop/src/workspace/task-store';
 import { workspaceCall, subscribeWorkspace } from '../model/workspace-client';
 import { Button, DataBlock, Status } from '../components/common';
+import { PendingOperations } from './PendingOperations';
 import { TaskArtifacts } from './TaskArtifacts';
 import { TaskReviewForm } from './TaskReviewForm';
 import { t } from '../i18n';
@@ -100,6 +101,7 @@ export function TasksPanel({
         <strong>{t('collaboration tasks')}</strong>
         <Button onClick={() => void refresh()}>{t('refresh')}</Button>
       </header>
+      <PendingOperations key={sessionId} sessionId={sessionId} />
       <div className="tasks-limits">
         <label>
           {t('active agents')}{' '}

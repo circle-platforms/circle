@@ -1,5 +1,14 @@
 export const developer: Record<string, string> = {
   'no instruction files loaded': '尚未加载指令文件',
+  'load older operations': '读取更早的待核对操作',
+  'operations to reconcile': '待核对操作',
+  'inspect files, git and terminal effects before recording your review; this never repeats the operation':
+    '请先检查文件、Git 和终端中的实际结果，再记录核对结论；此操作不会重新执行命令',
+  'operation review unavailable': '暂时无法读取或记录操作核对',
+  'no operations awaiting review': '没有待核对的操作',
+  'operation details': '操作详情',
+  'observed effects and review evidence': '实际结果与核对依据',
+  'record review without replay': '记录核对结论（不重执行）',
   'needs review': '需核对',
   'opening file…': '正在打开文件…',
   rejected: '已拒绝',
