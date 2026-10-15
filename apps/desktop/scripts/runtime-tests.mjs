@@ -62,11 +62,27 @@ if (process.argv.includes('--prepare-only')) {
     .map((name) => join(root, 'test', name));
   const result = spawnSync(
     process.execPath,
-    [join(root, '../../node_modules/tsx/dist/cli.mjs'), '--test', ...tests],
+    [
+      join(root, '../../node_modules/tsx/dist/cli.mjs'),
+      '--test',
+      // CI must retain per-test failure diagnostics before a later native
+      // handle leak or cancellation prevents the final summary from printing.
+      ...(process.env.CI && process.env.CI !== 'false'
+        ? ['--test-reporter=tap']
+        : []),
+      ...tests,
+    ],
     {
       stdio: 'inherit',
       env: {
         ...process.env,
+        ...(process.env.CI && process.env.CI !== 'false'
+          ? {
+              CIRCLE_NATIVE_TEST_PROGRESS_DIR:
+                process.env.CIRCLE_NATIVE_TEST_PROGRESS_DIR ??
+                join(root, 'artifacts/runtime-progress'),
+            }
+          : {}),
         CIRCLE_JS_DEBUG_ADAPTER:
           process.env.CIRCLE_JS_DEBUG_ADAPTER ??
           join(dist, 'tools/js-debug/src/dapDebugServer.js'),
