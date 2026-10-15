@@ -253,3 +253,31 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+.recovered-inputs {
+  flex: 0 0 auto;
+  max-height: 40vh;
+  overflow: auto;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+}
+.recovered-inputs header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.recovered-inputs article {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.recovered-inputs pre {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.recovered-inputs label {
+  display: block;
+  margin: 8px 0;
+}

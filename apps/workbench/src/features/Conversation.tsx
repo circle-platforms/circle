@@ -32,6 +32,7 @@ import type { Attachment, DialogId, Message, PanelId } from '../model/types';
 import { Button, IconButton, FileChip, Status } from '../components/common';
 import { Markdown } from '../components/Markdown';
 import { ToolGroup, TurnRow } from '../components/ToolGroup';
+import { RecoveredInputs } from './RecoveredInputs';
 import { WindowedList } from '../components/WindowedList';
 import type { ReactNode, RefObject } from 'react';
 import { MessageView } from '../components/MessageView';
@@ -846,6 +847,9 @@ export function Conversation({
             {t('restore conversation')}
           </Button>
         </div>
+      )}
+      {snapshot.runtime?.connected && (
+        <RecoveredInputs key={session.id} sessionId={session.id} />
       )}
       {composerWritable && (
         <div className="composer-area">
