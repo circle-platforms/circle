@@ -176,6 +176,19 @@ export function NativeCodeEditor({
   const languageChoice = useLocale();
   const container = useRef<HTMLDivElement>(null);
   const owner = JSON.stringify([workspaceId, sessionId, path]);
+  const selectionIdentity = selection
+    ? JSON.stringify([
+        selection.startLineNumber,
+        selection.startColumn,
+        selection.endLineNumber,
+        selection.endColumn,
+      ])
+    : '';
+  const activeEditor = useRef<{
+    owner: string;
+    editor: monaco.editor.IStandaloneCodeEditor;
+    selectionIdentity: string;
+  } | null>(null);
   const callbacks = useRef({ owner, onChange, onSave, onNavigate });
   callbacks.current = { owner, onChange, onSave, onNavigate };
   useLayoutEffect(() => {
@@ -326,6 +339,7 @@ export function NativeCodeEditor({
       editor.setSelection(selection);
       editor.revealRangeInCenter(selection);
     }
+    activeEditor.current = { owner, editor, selectionIdentity };
     editor.focus();
     editor.addCommand(
       monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
@@ -530,6 +544,7 @@ export function NativeCodeEditor({
     update();
     return () => {
       active = false;
+      if (activeEditor.current?.editor === editor) activeEditor.current = null;
       states.set(uri, editor.saveViewState());
       clearTimeout(timer);
       disposables.forEach((item) => item.dispose());
@@ -544,8 +559,23 @@ export function NativeCodeEditor({
     readOnly,
     diff,
     live,
-    selection,
     languageChoice,
   ]);
+  // Source location updates reposition the existing view. Recreating it here
+  // disposes transient widgets (notably Rename) after asynchronous navigation.
+  useLayoutEffect(() => {
+    const current = activeEditor.current;
+    if (
+      !selection ||
+      !current ||
+      current.owner !== owner ||
+      current.selectionIdentity === selectionIdentity
+    )
+      return;
+    current.selectionIdentity = selectionIdentity;
+    current.editor.setSelection(selection);
+    current.editor.revealRangeInCenter(selection);
+    current.editor.focus();
+  }, [owner, selectionIdentity]);
   return <div className="native-code-editor" ref={container} />;
 }

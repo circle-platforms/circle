@@ -245,6 +245,40 @@ try {
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto(`${server.resolvedUrls.local[0]}test/editor-ui.html`);
   await page.locator('.monaco-editor').waitFor();
+  await page
+    .getByRole('button', { name: 'repeat source location', exact: true })
+    .click();
+  await page
+    .locator('.monaco-editor')
+    .evaluate((node) => (window.sourceLocationEditor = node));
+  await page
+    .getByRole('button', { name: 'repeat source location', exact: true })
+    .click();
+  assert.equal(
+    await page
+      .locator('.monaco-editor')
+      .evaluate((node) => node === window.sourceLocationEditor),
+    true,
+    'repeated source location must not destroy active editor widgets',
+  );
+
+  await page
+    .getByRole('button', { name: 'other source location', exact: true })
+    .click();
+  assert.equal(
+    await page
+      .locator('.monaco-editor')
+      .evaluate((node) => node === window.sourceLocationEditor),
+    true,
+    'new source locations reposition without view disposal',
+  );
+  await page.waitForFunction(() => {
+    const input = document.querySelector(
+      '.native-edit-context, textarea.inputarea',
+    );
+    const state = input.editContext ?? input;
+    return state.selectionStart === 0 && state.selectionEnd === 5;
+  });
   const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
   await page.locator('.view-lines').first().click();
   await page.keyboard.press(`${modifier}+End`);
