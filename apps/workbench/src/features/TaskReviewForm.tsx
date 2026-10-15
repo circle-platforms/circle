@@ -24,11 +24,11 @@ function patchIdentity(
 export function TaskReviewForm({
   task,
   sessionId,
-  onReviewed,
+  onRefresh,
 }: {
   task: TaskRecord;
   sessionId: string;
-  onReviewed: () => void;
+  onRefresh: () => void;
 }) {
   const identity = patchIdentity(task);
   const [baseline, setBaseline] = useState(() => ({
@@ -67,8 +67,11 @@ export function TaskReviewForm({
             evidence: checks[criterion]!.evidence.trim(),
           })),
         })
-          .then(onReviewed)
-          .catch((reason) => setError(String(reason)))
+          .then(onRefresh)
+          .catch((reason) => {
+            setError(String(reason));
+            onRefresh();
+          })
           .finally(() => setBusy(false));
       }}
     >

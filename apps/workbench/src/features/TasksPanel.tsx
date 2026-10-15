@@ -302,7 +302,7 @@ export function TasksPanel({
                 key={task.spec.id}
                 task={task}
                 sessionId={sessionId}
-                onReviewed={() => void refresh()}
+                onRefresh={() => void refresh()}
               />
             )}
             <div className="tasks-actions">
