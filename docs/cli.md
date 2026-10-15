@@ -4,12 +4,13 @@ nav_order: 16
 
 # CLI
 
-Circle has one command, `circle`, and one subcommand, `circle update`. Without options `circle` opens the full-screen interface in a folder you choose. With `-p` it runs a prompt and prints the answer.
+Circle has one command, `circle`, and two subcommands, `circle update` and `circle uninstall`. Without options `circle` opens the full-screen interface in a folder you choose. With `-p` it runs a prompt and prints the answer.
 
 ```bash
 circle [options] [folder] [@file ...] [message ...]
 circle -p "prompt" [folder]
 circle update [version] [--check]
+circle uninstall [--purge] [--yes]
 ```
 
 ## Folder, messages and files
@@ -157,6 +158,30 @@ The Python versions' `circle update` (0.5.0 and older) cannot install this versi
 When the full-screen interface starts, Circle checks once a day whether a newer release exists, and if it does, adds one faint line to the conversation: ``Circle 1.1.0 is available (you have 1.0.0) · run `circle update` ``. The check is a `HEAD` request to `github.com/<repo>/releases/latest`, made in the background; it sends nothing beyond what any web request carries. The answer is kept in `update-check.json` in the [data folder](configuration.md#where-circle-keeps-things). Print mode, line mode and RPC mode never check.
 
 Turn it off with `"update_check": false` in [settings](settings.md#keys), or `CIRCLE_NO_UPDATE_CHECK=1` in the environment.
+
+## Uninstalling
+
+```bash
+circle uninstall [--purge] [--yes]
+```
+
+| Option | What it does |
+|---|---|
+| *(none)* | Remove the installation. On a terminal, ask first. |
+| `--purge` | Also delete the data folder, `~/.circle` (or `CIRCLE_HOME`), with the settings, keys and sessions in it. |
+| `-y`, `--yes` | Do not ask. Required without a terminal. |
+
+`circle uninstall` removes what the installer put on the machine: the `circle` launcher, every version under the prefix with `current.ref` and `installation.json`, and the PATH change — the lines marked `# circle path` in `~/.zshrc` or `~/.bashrc`, or on Windows the launcher's folder in your user `PATH`. The data folder stays unless `--purge` deletes it too. On a terminal it lists what goes and asks; anywhere else it needs `--yes`. Files of other programs in the prefix folder, and a startup-file block for another folder, are left alone.
+
+Like `circle update`, it works on a copy that `install.sh` or `install.ps1` put in place: a git checkout is not touched, and the command stops with `circle uninstall requires an installer-managed installation`. It also stops, changing nothing, while another circle session runs from the same installation. On Windows the running version's own files cannot be deleted while they run; a small helper removes them a moment after this session ends. To open a folder that is called `uninstall`, write `./uninstall`.
+
+| Code | When |
+|---|---|
+| `0` | Removed. A PATH entry that could not be removed is a warning, not a failure. |
+| `1` | The question was declined, another session is running, the copy was not installed by the installer, the receipt could not be read, or a removal failed. |
+| `2` | An unknown option, or no terminal and no `--yes`. |
+
+The desktop application is removed separately: on Windows through Settings → Apps, on macOS and Linux by deleting the application.
 
 ## Full-screen and line mode
 

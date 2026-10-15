@@ -96,4 +96,4 @@ Commands the model runs, your own `!` commands and MCP servers Circle starts get
 | `CURL_CA_BUNDLE`   | `install.sh` (through curl)                      | A PEM file of certificate authorities, for a network that inspects HTTPS.                                                              |
 | `HTTPS_PROXY`      | `install.sh` (through curl), `install.ps1`       | A proxy for the download.                                                                                                              |
 
-The launcher sets `CIRCLE_INSTALL_PREFIX` for Circle, which is how `circle update` finds its installation. See [Installation and updates](installation.md).
+The launcher sets `CIRCLE_INSTALL_PREFIX` for Circle, which is how `circle update` and `circle uninstall` find their installation. See [Installation and updates](installation.md).

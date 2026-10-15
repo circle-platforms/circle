@@ -52,7 +52,7 @@ export interface Surroundings {
   prefix?: string;
   binDir?: string;
 }
-type Run = (
+export type Run = (
   command: string,
   args: string[],
   timeout?: number,
@@ -115,7 +115,7 @@ const real = (path: string): string | undefined => {
     return undefined;
   }
 };
-const inside = (path: string, folder: string): boolean => {
+export const inside = (path: string, folder: string): boolean => {
   const rest = relative(resolve(folder), resolve(path));
   return rest === '' || (!rest.startsWith('..') && !isAbsolute(rest));
 };

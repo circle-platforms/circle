@@ -42,7 +42,7 @@ If the installer stops with a certificate error, your network is replacing HTTPS
 
 Each version lives in its own folder, `versions/<version>/`, under the prefix. `current.ref` names the version the launcher runs, and `installation.json` records the folders and the repository for `circle update`. An installation keeps the newest three versions and the one it replaced, so a session started from an older one goes on running; other versions are removed.
 
-Your settings, keys, sessions, skills and the rest stay in the data folder, `~/.circle` (or `CIRCLE_HOME`), which installing and updating never touch. See [Configuration](configuration.md#where-circle-keeps-things).
+Your settings, keys, sessions, skills and the rest stay in the data folder, `~/.circle` (or `CIRCLE_HOME`), which installing and updating never touch and `circle uninstall` keeps unless `--purge` deletes it. See [Configuration](configuration.md#where-circle-keeps-things).
 
 ## Updates
 
@@ -53,6 +53,15 @@ circle update 1.0.0        # install this one, also an older one
 ```
 
 `circle update` downloads the release it found itself, on one line that shows how far it has got (percent, megabytes and speed), then runs the installer on that file with the same folders, and the installer says each step. `ctrl+c` during the download stops it and changes nothing. See [Updating](cli.md#updating) for its options and exit codes, and [The reminder](cli.md#the-reminder) for the daily check.
+
+## Uninstall
+
+```sh
+circle uninstall           # remove the program, keep the data folder
+circle uninstall --purge   # remove the program and the data folder
+```
+
+`circle uninstall` removes the launcher, every version under the prefix and the PATH change the installer made. On a terminal it lists what goes and asks first; `--yes` skips the question and is required without one. The data folder, `~/.circle`, stays unless `--purge` deletes it too. See [Uninstalling](cli.md#uninstalling). The desktop application is removed separately: on Windows through Settings → Apps, on macOS and Linux by deleting the application; its own data folder stays in place.
 
 ## Replacing the Python circle
 
