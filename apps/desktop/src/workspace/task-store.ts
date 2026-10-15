@@ -15,7 +15,8 @@ export type TaskState =
   | 'failed'
   | 'blocked'
   | 'cancelled'
-  | 'interrupted';
+  | 'interrupted'
+  | 'needs_review';
 export type TaskResource = 'agent' | 'build' | 'ui' | 'browser';
 export interface TaskSpec {
   id: string;

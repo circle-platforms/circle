@@ -7,7 +7,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { readFile, realpath } from 'node:fs/promises';
+import { mkdir, readFile, realpath } from 'node:fs/promises';
 import { isAbsolute, join, relative } from 'node:path';
 import {
   TaskStore,
@@ -41,6 +41,7 @@ export const DEFAULT_COLLABORATION_LIMITS: Readonly<CollaborationLimits> =
   Object.freeze({ agents: 8, builds: 2, ui: 1, browsers: 1 });
 export interface TaskExecutionResult {
   passed: boolean;
+  verdict?: 'passed' | 'failed' | 'needs_review';
   result?: Json;
   reason?: string;
   artifacts?: { path: string; kind: string }[];
@@ -48,6 +49,7 @@ export interface TaskExecutionResult {
 export interface TaskExecutionContext {
   signal: AbortSignal;
   worktree: string;
+  artifactDirectory: string;
   /** Enforce this in the injected runtime's permissions; Git worktrees are not security sandboxes. */
   access: TaskSpec['access'];
   dependencies: { task: TaskRecord; artifacts: TaskArtifact[] }[];
@@ -90,6 +92,7 @@ const terminal = new Set<TaskState>([
   'blocked',
   'cancelled',
   'interrupted',
+  'needs_review',
 ]);
 const failedDependency = new Set<TaskState>([
   'failed',
@@ -97,6 +100,7 @@ const failedDependency = new Set<TaskState>([
   'cancelling',
   'cancelled',
   'interrupted',
+  'needs_review',
 ]);
 function aborted(): Error {
   return new DOMException('task cancelled', 'AbortError');
@@ -573,9 +577,12 @@ export class CollaborationScheduler {
         branch: prepared.branch,
       });
       if (controller.signal.aborted) throw aborted();
+      const artifactDirectory = this.artifactDirectory(task);
+      await mkdir(artifactDirectory, { recursive: true, mode: 0o700 });
       const context: TaskExecutionContext = {
         signal: controller.signal,
         worktree: prepared.path,
+        artifactDirectory,
         access: task.spec.access,
         dependencies: task.spec.dependencies.map((dependency) => ({
           task: this.store.get(dependency)!,
@@ -654,10 +661,18 @@ export class CollaborationScheduler {
     else if (error !== undefined)
       this.update(id, 'failed', { reason: message(error) });
     else
-      this.update(id, result!.passed ? 'succeeded' : 'failed', {
-        result: result!.result,
-        reason: result!.reason,
-      });
+      this.update(
+        id,
+        result!.verdict === 'needs_review'
+          ? 'needs_review'
+          : result!.passed
+            ? 'succeeded'
+            : 'failed',
+        {
+          result: result!.result,
+          reason: result!.reason,
+        },
+      );
     this.reconcile();
   }
   private async runOperation<T extends Json>(
@@ -712,14 +727,28 @@ export class CollaborationScheduler {
     this.pendingOperations.set(key, promise);
     return promise;
   }
+  private artifactDirectory(task: TaskRecord): string {
+    return join(
+      this.options.dataDir,
+      'artifacts',
+      fingerprint(task.spec.id),
+      String(task.attempt),
+    );
+  }
   private async recordArtifact(
     task: TaskRecord,
     path: string,
     kind: string,
   ): Promise<TaskArtifact> {
     const target = await realpath(path);
-    if (!task.worktree || !contained(await realpath(task.worktree), target))
-      throw new Error('artifact must belong to the task worktree');
+    if (
+      !task.worktree ||
+      (!contained(await realpath(task.worktree), target) &&
+        !contained(await realpath(this.artifactDirectory(task)), target))
+    )
+      throw new Error(
+        'artifact must belong to the task worktree or its private artifact directory',
+      );
     const artifact: TaskArtifact = {
       id: randomUUID(),
       taskId: task.spec.id,
@@ -773,7 +802,12 @@ export class CollaborationScheduler {
       return this.store.get(id)!;
     }
     const task = this.store.get(id);
-    if (!task || !['failed', 'cancelled', 'interrupted'].includes(task.state))
+    if (
+      !task ||
+      !['failed', 'cancelled', 'interrupted', 'needs_review'].includes(
+        task.state,
+      )
+    )
       throw new Error('only a settled unsuccessful task can be retried');
     const next: TaskRecord = {
       spec: task.spec,

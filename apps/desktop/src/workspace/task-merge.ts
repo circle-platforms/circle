@@ -1,0 +1,321 @@
+import { execFile } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve } from 'node:path';
+import { promisify } from 'node:util';
+import type { TaskRecord } from './collaboration.js';
+import type { TaskChanges } from './task-executor.js';
+import { resolveTaskBaseline } from './task-worktrees.js';
+const exec = promisify(execFile);
+const queues = new Map<string, Promise<unknown>>();
+async function git(path: string, args: string[]): Promise<Buffer> {
+  return (
+    await exec('git', ['-C', path, ...args], {
+      encoding: 'buffer',
+      maxBuffer: 64 * 1024 * 1024,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    })
+  ).stdout;
+}
+const text = (value: Buffer) => value.toString('utf8').trim();
+function inside(root: string, path: string): boolean {
+  const child = relative(root, path);
+  return (
+    child === '' ||
+    (!isAbsolute(child) &&
+      child !== '..' &&
+      !child.startsWith('../') &&
+      !child.startsWith('..\\'))
+  );
+}
+export interface IntegrationWorkspace {
+  id: string;
+  path: string;
+  repository: string;
+  baseline: string;
+  merged: {
+    taskId: string;
+    attempt: number;
+    patchSha256: string;
+    commit: string;
+  }[];
+}
+export interface MergeCandidatesResult {
+  status: 'merged' | 'baseline_changed' | 'conflict' | 'needs_review';
+  workspace: IntegrationWorkspace;
+  head: string;
+  taskId?: string;
+  reason?: string;
+  conflicts?: string[];
+}
+export interface TaskIntegratorOptions {
+  workspace: string;
+  dataDir: string;
+  identity: { name: string; email: string };
+}
+/** Applies reviewed patches only in an owned integration worktree; never alters the caller's index or working files. */
+export class TaskIntegrator {
+  constructor(private readonly options: TaskIntegratorOptions) {
+    if (
+      !options.identity.name.trim() ||
+      !options.identity.email.trim() ||
+      /[\r\n]/.test(options.identity.name + options.identity.email)
+    )
+      throw new Error('integration commit identity is required');
+  }
+  private directory(id: string): string {
+    if (!/^[0-9a-f-]{36}$/.test(id)) throw new Error('invalid integration id');
+    return join(this.options.dataDir, 'integrations', id);
+  }
+  private async save(workspace: IntegrationWorkspace): Promise<void> {
+    await writeFile(
+      join(this.directory(workspace.id), 'owner.json'),
+      JSON.stringify(workspace, null, 2) + '\n',
+      { mode: 0o600 },
+    );
+  }
+  async create(baseline = 'HEAD'): Promise<IntegrationWorkspace> {
+    const pin = await resolveTaskBaseline(this.options.workspace, baseline);
+    await mkdir(this.options.dataDir, { recursive: true, mode: 0o700 });
+    if (inside(pin.workspace, await realpath(this.options.dataDir)))
+      throw new Error('integration data must be outside the source workspace');
+    const id = randomUUID(),
+      directory = this.directory(id);
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const path = join(directory, 'workspace');
+    await git(pin.workspace, [
+      'worktree',
+      'add',
+      '--detach',
+      path,
+      pin.baseline,
+    ]);
+    const workspace: IntegrationWorkspace = {
+      id,
+      path,
+      repository: pin.workspace,
+      baseline: pin.baseline,
+      merged: [],
+    };
+    await this.save(workspace);
+    return workspace;
+  }
+  async get(id: string): Promise<IntegrationWorkspace> {
+    const workspace = JSON.parse(
+      await readFile(join(this.directory(id), 'owner.json'), 'utf8'),
+    ) as IntegrationWorkspace;
+    if (
+      workspace.id !== id ||
+      (await realpath(workspace.repository)) !==
+        (await realpath(this.options.workspace)) ||
+      (await realpath(workspace.path)) !==
+        (await realpath(join(this.directory(id), 'workspace')))
+    )
+      throw new Error('integration ownership mismatch');
+    const sourceCommon = await realpath(
+      resolve(
+        this.options.workspace,
+        text(
+          await git(this.options.workspace, ['rev-parse', '--git-common-dir']),
+        ),
+      ),
+    );
+    const targetCommon = await realpath(
+      resolve(
+        workspace.path,
+        text(await git(workspace.path, ['rev-parse', '--git-common-dir'])),
+      ),
+    );
+    if (
+      sourceCommon !== targetCommon ||
+      (await realpath(workspace.path)) ===
+        (await realpath(this.options.workspace))
+    )
+      throw new Error('integration is not an isolated worktree');
+    return workspace;
+  }
+  async mergeCandidates(
+    id: string,
+    tasks: TaskRecord[],
+    options: { expectedHead: string; signal?: AbortSignal },
+  ): Promise<MergeCandidatesResult> {
+    const key = join(this.options.dataDir, id),
+      previous = queues.get(key) ?? Promise.resolve();
+    const result = previous
+      .catch(() => {})
+      .then(() => this.merge(id, tasks, options));
+    queues.set(key, result);
+    try {
+      return await result;
+    } finally {
+      if (queues.get(key) === result) queues.delete(key);
+    }
+  }
+  private async merge(
+    id: string,
+    tasks: TaskRecord[],
+    options: { expectedHead: string; signal?: AbortSignal },
+  ): Promise<MergeCandidatesResult> {
+    const workspace = await this.get(id);
+    let head = text(await git(workspace.path, ['rev-parse', 'HEAD']));
+    const outcome = (
+      status: MergeCandidatesResult['status'],
+      fields: Partial<MergeCandidatesResult> = {},
+    ): MergeCandidatesResult => ({ status, workspace, head, ...fields });
+    if (head !== options.expectedHead)
+      return outcome('baseline_changed', {
+        reason: 'integration HEAD changed; revalidate the candidate set',
+      });
+    if (
+      text(
+        await git(workspace.path, [
+          'status',
+          '--porcelain',
+          '--untracked-files=all',
+        ]),
+      )
+    )
+      return outcome('needs_review', {
+        reason:
+          'integration worktree contains changes; resolve or retain them before continuing',
+      });
+    const candidates = new Map(tasks.map((task) => [task.spec.id, task]));
+    if (candidates.size !== tasks.length)
+      return outcome('needs_review', { reason: 'duplicate candidates' });
+    const ordered: TaskRecord[] = [],
+      visiting = new Set<string>(),
+      visited = new Set<string>();
+    const visit = (task: TaskRecord): void => {
+      if (visiting.has(task.spec.id))
+        throw new Error('candidate dependency cycle');
+      if (visited.has(task.spec.id)) return;
+      visiting.add(task.spec.id);
+      for (const dependency of task.spec.dependencies) {
+        const prior = candidates.get(dependency);
+        if (prior) visit(prior);
+        else if (!workspace.merged.some((entry) => entry.taskId === dependency))
+          throw new Error(`dependency ${dependency} has not been integrated`);
+      }
+      visiting.delete(task.spec.id);
+      visited.add(task.spec.id);
+      ordered.push(task);
+    };
+    try {
+      for (const task of tasks) visit(task);
+    } catch (error) {
+      return outcome('needs_review', { reason: (error as Error).message });
+    }
+    for (const task of ordered) {
+      options.signal?.throwIfAborted();
+      const report = task.result as
+        { verdict?: string; changes?: TaskChanges } | undefined;
+      const changes = report?.changes;
+      if (
+        task.state !== 'succeeded' ||
+        report?.verdict !== 'passed' ||
+        !changes ||
+        changes.baseline !== workspace.baseline ||
+        task.spec.baseline !== workspace.baseline
+      )
+        return outcome('needs_review', {
+          taskId: task.spec.id,
+          reason:
+            'candidate is not independently accepted against this integration baseline',
+        });
+      const integrated = workspace.merged.find(
+        (entry) => entry.taskId === task.spec.id,
+      );
+      if (integrated) {
+        if (
+          integrated.attempt !== task.attempt ||
+          integrated.patchSha256 !== changes.sha256
+        )
+          return outcome('needs_review', {
+            taskId: task.spec.id,
+            reason: 'a different attempt is already integrated',
+          });
+        continue;
+      }
+      const artifactRoot = await realpath(
+        join(this.options.dataDir, 'artifacts'),
+      );
+      const patchPath = await realpath(changes.patchPath);
+      if (!inside(artifactRoot, patchPath))
+        return outcome('needs_review', {
+          taskId: task.spec.id,
+          reason: 'patch is outside task artifact storage',
+        });
+      const patch = await readFile(patchPath);
+      if (createHash('sha256').update(patch).digest('hex') !== changes.sha256)
+        return outcome('needs_review', {
+          taskId: task.spec.id,
+          reason: 'patch changed after acceptance',
+        });
+      const before = text(await git(workspace.path, ['rev-parse', 'HEAD']));
+      if (before !== head)
+        return outcome('baseline_changed', {
+          reason: 'integration HEAD changed during merge',
+          head: before,
+        });
+      if (patch.length) {
+        try {
+          await git(workspace.path, [
+            'apply',
+            '--3way',
+            '--index',
+            '--',
+            patchPath,
+          ]);
+        } catch (error) {
+          const conflicts = [
+            ...new Set(
+              (await git(workspace.path, ['ls-files', '--unmerged', '-z']))
+                .toString()
+                .split('\0')
+                .filter(Boolean)
+                .map((line) => line.slice(line.indexOf('\t') + 1)),
+            ),
+          ];
+          return outcome('conflict', {
+            taskId: task.spec.id,
+            conflicts,
+            reason: `patch could not be integrated; working files retained: ${(error as Error).message}`,
+          });
+        }
+        options.signal?.throwIfAborted();
+        if (text(await git(workspace.path, ['rev-parse', 'HEAD'])) !== before)
+          return outcome('baseline_changed', {
+            reason: 'integration HEAD changed before commit',
+          });
+        const paths = (
+          await git(workspace.path, ['diff', '--cached', '--name-only', '-z'])
+        )
+          .toString()
+          .split('\0')
+          .filter(Boolean);
+        if (paths.length) {
+          const title = `Integrate task ${task.spec.id.replace(/[\r\n]/g, ' ')}`;
+          await git(workspace.path, [
+            '-c',
+            `user.name=${this.options.identity.name}`,
+            '-c',
+            `user.email=${this.options.identity.email}`,
+            'commit',
+            '-s',
+            '-m',
+            title,
+          ]);
+          head = text(await git(workspace.path, ['rev-parse', 'HEAD']));
+        }
+      }
+      workspace.merged.push({
+        taskId: task.spec.id,
+        attempt: task.attempt,
+        patchSha256: changes.sha256,
+        commit: head,
+      });
+      await this.save(workspace);
+    }
+    return outcome('merged');
+  }
+}
