@@ -6,6 +6,11 @@ import { win32 } from 'node:path';
 
 type RequestedLookupKind =
   'cim-all' | 'native-names' | 'native-all' | 'unknown';
+type ProbeOptions = Readonly<{
+  queryScript?: string;
+  forbidCim?: boolean;
+  windowsHide?: boolean;
+}>;
 
 export type ProcessQueryProbeReport = Readonly<{
   parentPid: number;
@@ -26,6 +31,8 @@ export type ProcessQueryProbeReport = Readonly<{
   originalQuerySha256: string;
   effectiveQuerySha256: string;
   executedScriptSha256: string;
+  requestedWindowsHide: boolean | 'default';
+  effectiveWindowsHide: boolean;
 }>;
 
 function cleanMarkers(
@@ -73,7 +80,7 @@ function cleanMarkers(
 export function instrumentSpawnSync(
   original: typeof childProcess.spawnSync,
   report: (evidence: ProcessQueryProbeReport) => void,
-  probeOptions: Readonly<{ queryScript?: string; forbidCim?: boolean }> = {},
+  probeOptions: ProbeOptions = {},
 ): typeof childProcess.spawnSync {
   const nonce = randomUUID().replaceAll('-', '');
   let sequence = 0;
@@ -112,6 +119,14 @@ export function instrumentSpawnSync(
           ? "function Get-CimInstance { throw 'CIM is unavailable in this synthetic probe' };\n"
           : '') + probeOptions.queryScript
       : script;
+    const requestedWindowsHide =
+      'windowsHide' in options && typeof options.windowsHide === 'boolean'
+        ? options.windowsHide
+        : 'default';
+    const effectiveOptions =
+      probeOptions.windowsHide === undefined
+        ? options
+        : { ...options, windowsHide: probeOptions.windowsHide };
     const current = ++sequence;
     const entered = `CIRCLE_QUERY_PROBE_${nonce}_${current}_ENTERED`;
     const completed = `CIRCLE_QUERY_PROBE_${nonce}_${current}_COMPLETED`;
@@ -135,7 +150,7 @@ export function instrumentSpawnSync(
     const result = Reflect.apply(original, childProcess, [
       command,
       instrumentedArgs,
-      options,
+      effectiveOptions,
     ]) as ReturnType<typeof childProcess.spawnSync>;
     const stdout = typeof result.stdout === 'string' ? result.stdout : '';
     const stderr = typeof result.stderr === 'string' ? result.stderr : '';
@@ -182,6 +197,9 @@ export function instrumentSpawnSync(
           executedScriptSha256: createHash('sha256')
             .update(executedScript)
             .digest('hex'),
+          requestedWindowsHide,
+          effectiveWindowsHide:
+            probeOptions.windowsHide ?? requestedWindowsHide === true,
         }),
       );
     } catch {
@@ -202,8 +220,10 @@ if (
   process.env.CIRCLE_QUERY_PROBE === '1' &&
   !Reflect.get(childProcess.spawnSync, installed)
 ) {
-  let probeOptions: Readonly<{ queryScript?: string; forbidCim?: boolean }> =
-    {};
+  let probeOptions: ProbeOptions =
+    process.env.CIRCLE_QUERY_PROBE_HIDE_WINDOWS === '1'
+      ? { windowsHide: true }
+      : {};
   if (process.env.CIRCLE_QUERY_PROBE_NATIVE === '1') {
     const candidate = await import(
       new URL('../src/windows_native_process_query.ts', import.meta.url).href
@@ -213,6 +233,7 @@ if (
         'The native process query probe script must be a string',
       );
     probeOptions = {
+      ...probeOptions,
       queryScript: candidate.WINDOWS_NATIVE_PROCESS_QUERY,
       forbidCim: true,
     };

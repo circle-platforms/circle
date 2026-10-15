@@ -110,12 +110,99 @@ test('the opt-in probe preserves one query call, its original pipeline and its d
   assert.equal(reports[0]!.originalQuerySha256, hash(pipeline));
   assert.equal(reports[0]!.effectiveQuerySha256, hash(pipeline));
   assert.equal(reports[0]!.executedScriptSha256, hash(executedScript));
+  assert.equal(reports[0]!.requestedWindowsHide, 'default');
+  assert.equal(reports[0]!.effectiveWindowsHide, false);
   assert.equal(reports[0]!.scriptEnteredObserved, true);
   assert.equal(reports[0]!.pipelineCompletedObserved, true);
   assert.equal(reports[0]!.pipelineElapsedMs, 0);
   assert.equal(reports[0]!.parentPid, process.pid);
   assert.equal(reports[0]!.helperReportedPid, 12345);
   assert.ok(Object.isFrozen(reports[0]));
+});
+
+test('a hide-window experiment changes only the recognized query option and keeps the CIM body', () => {
+  const stdio: ['pipe', 'pipe', 'pipe'] = ['pipe', 'pipe', 'pipe'];
+  Object.freeze(stdio);
+  const env = Object.freeze({ SYNTHETIC_QUERY_PROBE: '1' });
+  for (const windowsHide of [true, false]) {
+    const originalOptions = Object.freeze({
+      ...options,
+      stdio,
+      env,
+      windowsHide: !windowsHide,
+      maxBuffer: 4_194_304,
+    });
+    const originalArgs = Object.freeze([...args]);
+    let calls = 0;
+    let entry: ProcessQueryProbeReport | undefined;
+    let expectedArgs: readonly string[] = originalArgs;
+    const output = result();
+    const run = instrumentSpawnSync(
+      runner((actualCommand, actualArgs, actualOptions) => {
+        calls++;
+        assert.equal(actualCommand, command);
+        if (expectedArgs === originalArgs) {
+          assert.notEqual(actualOptions, originalOptions);
+          assert.deepEqual(actualOptions, { ...originalOptions, windowsHide });
+          const copied = actualOptions as typeof originalOptions;
+          assert.equal(copied.stdio, stdio);
+          assert.equal(copied.env, env);
+          assert.equal(copied.timeout, 30_000);
+          assert.notEqual(actualArgs, originalArgs);
+          const actual = actualArgs as string[];
+          assert.deepEqual(actual.slice(0, 3), args.slice(0, 3));
+          assert.equal(actual[3]!.split(pipeline).length, 2);
+          assert.equal(actual[3]!.includes('function Get-CimInstance'), false);
+        } else {
+          assert.equal(actualArgs, expectedArgs);
+          assert.equal(actualOptions, originalOptions);
+        }
+        return output;
+      }),
+      (report) => {
+        entry = report;
+      },
+      { windowsHide },
+    );
+    assert.equal(run(command, originalArgs, originalOptions), output);
+    assert.equal(calls, 1);
+    assert.deepEqual(originalArgs, args);
+    assert.equal(originalOptions.windowsHide, !windowsHide);
+    assert.equal(entry!.requestedWindowsHide, !windowsHide);
+    assert.equal(entry!.effectiveWindowsHide, windowsHide);
+    assert.equal(entry!.queryTransformed, false);
+    assert.equal(entry!.lookupKind, 'cim-all');
+    assert.equal(entry!.originalQuerySha256, hash(pipeline));
+    assert.equal(entry!.effectiveQuerySha256, hash(pipeline));
+    expectedArgs = ['-Command', 'Write-Output "unrelated command"'];
+    entry = undefined;
+    assert.equal(run(command, expectedArgs, originalOptions), output);
+    assert.equal(calls, 2);
+    assert.equal(entry, undefined);
+  }
+});
+
+test('default probing preserves an explicit hide-window option and the original options object', () => {
+  for (const windowsHide of [true, false]) {
+    const originalOptions = Object.freeze({ ...options, windowsHide });
+    let entry: ProcessQueryProbeReport | undefined;
+    let calls = 0;
+    const output = result();
+    const run = instrumentSpawnSync(
+      runner((_command, _args, actualOptions) => {
+        calls++;
+        assert.equal(actualOptions, originalOptions);
+        return output;
+      }),
+      (report) => {
+        entry = report;
+      },
+    );
+    assert.equal(run(command, args, originalOptions), output);
+    assert.equal(calls, 1);
+    assert.equal(entry!.requestedWindowsHide, windowsHide);
+    assert.equal(entry!.effectiveWindowsHide, windowsHide);
+  }
 });
 
 test('a candidate replaces one recognized query without changing its call, arguments or deadline', () => {
