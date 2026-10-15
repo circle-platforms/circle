@@ -21,9 +21,51 @@ test('workspace routing preserves revisions, isolates terminal owners and persis
     runtimeExecutable: process.execPath,
     adapterPath: path.join(root, 'missing-adapter'),
     ghPath: path.join(root, 'missing-gh'),
+    credentialFiles: ['private.custom'],
+    terminalEnv: {
+      HOME: root,
+      ZDOTDIR: root,
+      HISTFILE: path.join(root, '.history'),
+      ENV: '',
+      BASH_ENV: '',
+    },
     emit: (event) => events.push(event),
   });
   try {
+    await writeFile(path.join(root, 'private.custom'), 'not for tools');
+    await assert.rejects(
+      service.call('session-a', 'documents', 'read', {
+        path: 'private.custom',
+      }),
+      /file is not available in this workspace/,
+    );
+    await writeFile(path.join(root, 'later.secret'), 'not for tools');
+    service.setCredentialFiles(['private.custom', 'later.secret']);
+    await assert.rejects(
+      service.call('session-a', 'documents', 'read', { path: 'later.secret' }),
+      /file is not available in this workspace/,
+    );
+    await assert.rejects(
+      service.call('session-a', 'documents', 'read', { path: 123 }),
+      /string/,
+    );
+    await assert.rejects(
+      service.call('session-a', 'terminal', 'create', { cols: '80' }),
+      /integer/,
+    );
+    await assert.rejects(
+      service.call('session-a', 'terminal', 'create', {
+        command: { file: 123 },
+      }),
+      /string/,
+    );
+    await assert.rejects(
+      service.call('session-a', 'terminal', 'create', {
+        command: { file: 'node' },
+        readiness: { port: '80' },
+      }),
+      /integer/,
+    );
     await writeFile(path.join(root, 'a.ts'), 'export const a = 1;\n');
     const doc = (await service.call('session-a', 'documents', 'read', {
       path: 'a.ts',

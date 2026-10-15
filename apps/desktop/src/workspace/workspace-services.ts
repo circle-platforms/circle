@@ -25,6 +25,8 @@ export interface WorkspaceServicesOptions {
   adapterPath: string;
   ghPath: string;
   credentialStore?: CredentialStore;
+  credentialFiles?: string[];
+  terminalEnv?: NodeJS.ProcessEnv;
   emit: (event: WorkspaceServiceEvent) => void;
 }
 /** One host-owned service container per granted workspace; renderer identities never select owners. */
@@ -61,7 +63,9 @@ export class WorkspaceServices {
     this.ready.catch((e) => {
       this.failure = e;
     });
-    this.documents = new WorkspaceDocuments(options.workspaceRoot);
+    this.documents = new WorkspaceDocuments(options.workspaceRoot, {
+      credentialFiles: options.credentialFiles,
+    });
     this.watch = this.documents.watch(
       (snapshot) => {
         for (const session of this.sessions)
@@ -87,6 +91,7 @@ export class WorkspaceServices {
       {
         workspaceRoot: options.workspaceRoot,
         logRoot: path.join(directory, 'terminals'),
+        env: options.terminalEnv,
       },
       (event) =>
         this.persist({
@@ -119,6 +124,9 @@ export class WorkspaceServices {
         }),
     );
     this.delivery.catch(() => {});
+  }
+  setCredentialFiles(patterns: string[]) {
+    this.documents.setCredentialFiles(patterns);
   }
   private persist(event: WorkspaceServiceEvent): Promise<void> {
     const operation = this.pending.then(async () => {
@@ -158,14 +166,19 @@ export class WorkspaceServices {
     params: Record<string, unknown> = {},
   ): Promise<unknown> {
     if (this.closed) throw Error('workspace services are closed');
-    if (!sessionId || sessionId.includes('\0'))
+    if (!params || typeof params !== 'object' || Array.isArray(params))
+      throw Error('workspace parameters must be an object');
+    if (typeof sessionId !== 'string' || !sessionId || sessionId.includes('\0'))
       throw Error('session identity is required');
     await this.ready;
     if (this.failure) throw this.failure;
     this.sessions.add(sessionId);
     if (service === 'documents') {
       let result: unknown;
-      const file = String(params.path ?? '');
+      const file =
+        method === 'read' || method === 'save'
+          ? requiredString(params, 'path')
+          : '';
       if (method === 'read') return this.documents.read(file);
       if (method === 'refresh') return this.documents.refresh();
       if (method === 'save') {
@@ -183,8 +196,23 @@ export class WorkspaceServices {
           params.expectedRevision,
         );
       } else if (method === 'applyEdits') {
-        if (!Array.isArray(params.edits))
-          throw Error('document edits are required');
+        if (
+          !Array.isArray(params.edits) ||
+          params.edits.some(
+            (edit) =>
+              !edit ||
+              typeof edit !== 'object' ||
+              typeof edit.path !== 'string' ||
+              typeof edit.content !== 'string' ||
+              !(
+                edit.expectedRevision === null ||
+                typeof edit.expectedRevision === 'string'
+              ),
+          )
+        )
+          throw Error(
+            'document edits require path, content and expectedRevision',
+          );
         result = await this.documents.applyEdits(
           params.edits as WorkspaceDocumentEdit[],
         );
@@ -199,9 +227,26 @@ export class WorkspaceServices {
       return result;
     }
     if (service === 'terminal') {
-      const id = String(params.id ?? params.terminalId ?? '');
-      if (method === 'create')
+      const id = ['create', 'list'].includes(method)
+        ? ''
+        : requiredString(
+            { ...params, id: params.id ?? params.terminalId },
+            'id',
+          );
+      if (method === 'create') {
+        for (const name of ['cwd', 'shell', 'label'])
+          optionalString(params, name);
+        for (const name of ['cols', 'rows'])
+          optionalInteger(params, name, 1, 1000);
+        if (
+          params.args !== undefined &&
+          (!Array.isArray(params.args) ||
+            params.args.some((arg) => typeof arg !== 'string'))
+        )
+          throw Error('terminal args must be strings');
+        const serviceOptions = validateServiceOptions(params);
         return this.terminals.create({
+          ...serviceOptions,
           owner: sessionId,
           sessionId,
           cwd:
@@ -214,30 +259,46 @@ export class WorkspaceServices {
           rows: params.rows as number | undefined,
           label: params.label as string | undefined,
         });
+      }
       if (method === 'list') return this.terminals.list(sessionId);
       if (method === 'write')
-        return this.terminals.write(sessionId, id, params.data as string);
+        return this.terminals.write(
+          sessionId,
+          id,
+          requiredString(params, 'data', true),
+        );
       if (method === 'resize')
         return this.terminals.resize(
           sessionId,
           id,
-          params.cols as number,
-          params.rows as number,
+          requiredInteger(params, 'cols', 1, 1000),
+          requiredInteger(params, 'rows', 1, 1000),
         );
-      if (method === 'signal')
+      if (method === 'signal') {
+        if (
+          typeof params.signal !== 'string' ||
+          !['SIGINT', 'SIGTERM', 'SIGKILL'].includes(params.signal)
+        )
+          throw Error('invalid terminal signal');
         return this.terminals.signal(
           sessionId,
           id,
           params.signal as TerminalSignal,
         );
+      }
       if (method === 'close') return this.terminals.close(sessionId, id);
       if (method === 'restart') return this.terminals.restart(sessionId, id);
       if (method === 'replay')
         return this.terminals.replay(
           sessionId,
           id,
-          (params.afterSequence ?? params.after ?? 0) as number,
-          (params.limit ?? 256) as number,
+          requiredInteger(
+            { after: params.afterSequence ?? params.after ?? 0 },
+            'after',
+            0,
+            Number.MAX_SAFE_INTEGER,
+          ),
+          requiredInteger({ limit: params.limit ?? 256 }, 'limit', 1, 2000),
         );
       throw Error('unknown terminal method');
     }
@@ -249,9 +310,14 @@ export class WorkspaceServices {
       }
       const result = language.call(method, params);
       if (method === 'open' || method === 'change' || method === 'close')
-        await this.publish(sessionId, 'language', String(params.path), {
-          kind: method,
-        });
+        await this.publish(
+          sessionId,
+          'language',
+          requiredString(params, 'path'),
+          {
+            kind: method,
+          },
+        );
       return result;
     }
     if (service === 'debug') {
@@ -304,4 +370,95 @@ export class WorkspaceServices {
     await this.pending;
     await (await this.ready).close();
   }
+}
+
+function requiredString(
+  params: Record<string, unknown>,
+  key: string,
+  empty = false,
+): string {
+  const value = params[key];
+  if (typeof value !== 'string' || (!empty && !value) || value.includes('\0'))
+    throw Error(`${key} must be a string`);
+  return value;
+}
+function optionalString(params: Record<string, unknown>, key: string) {
+  if (params[key] !== undefined) requiredString(params, key);
+}
+function requiredInteger(
+  params: Record<string, unknown>,
+  key: string,
+  min: number,
+  max: number,
+): number {
+  const value = params[key];
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    value < min ||
+    value > max
+  )
+    throw Error(`${key} must be an integer between ${min} and ${max}`);
+  return value;
+}
+function optionalInteger(
+  params: Record<string, unknown>,
+  key: string,
+  min: number,
+  max: number,
+) {
+  if (params[key] !== undefined) requiredInteger(params, key, min, max);
+}
+
+function validateServiceOptions(params: Record<string, unknown>) {
+  let command: { file: string; args?: string[] } | undefined;
+  let readiness:
+    { pattern?: string; port?: number; timeoutMs?: number } | undefined;
+  if (params.command !== undefined) {
+    const value = params.command;
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      throw Error('service command is required');
+    const record = value as Record<string, unknown>;
+    if (Object.keys(record).some((key) => !['file', 'args'].includes(key)))
+      throw Error('unknown service command field');
+    const file = requiredString(record, 'file');
+    if (
+      record.args !== undefined &&
+      (!Array.isArray(record.args) ||
+        record.args.some(
+          (arg) => typeof arg !== 'string' || arg.includes('\0'),
+        ))
+    )
+      throw Error('command args must be strings');
+    if (params.shell !== undefined || params.args !== undefined)
+      throw Error('command cannot be combined with shell startup options');
+    command = { file, args: record.args as string[] | undefined };
+  }
+  if (params.readiness !== undefined) {
+    if (!command) throw Error('readiness requires a service command');
+    const value = params.readiness;
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      throw Error('invalid service readiness');
+    const record = value as Record<string, unknown>;
+    if (
+      Object.keys(record).some(
+        (key) => !['pattern', 'port', 'timeoutMs'].includes(key),
+      )
+    )
+      throw Error('unknown readiness field');
+    optionalString(record, 'pattern');
+    optionalInteger(record, 'port', 1, 65535);
+    optionalInteger(record, 'timeoutMs', 1, 300000);
+    if (record.pattern === undefined && record.port === undefined)
+      throw Error('readiness requires a literal pattern or local port');
+    readiness = {
+      pattern: record.pattern as string | undefined,
+      port: record.port as number | undefined,
+      timeoutMs: record.timeoutMs as number | undefined,
+    };
+  }
+  return {
+    ...(command ? { command } : {}),
+    ...(readiness ? { readiness } : {}),
+  };
 }
