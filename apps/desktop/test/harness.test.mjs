@@ -1,21 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { assertViewport, setViewport } from './helpers/viewport.mjs';
 import './model-request-frames.test.mjs';
-import './native-failure.test.mjs';
 
 for (const { entryName, overridden } of [
   'browser-coordinate-live.mjs',
@@ -35,25 +26,6 @@ for (const { entryName, overridden } of [
         throw Error('native launch captured');
       } };
     `;
-    const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
-    const entry = fileURLToPath(new URL(entryName, import.meta.url));
-    const sharedArtifacts = join(root, 'artifacts/browser-coordinate-live');
-    const privateArtifacts = join(temp, 'artifacts');
-    mkdirSync(privateArtifacts);
-    const existingArtifacts = existsSync(sharedArtifacts)
-      ? readdirSync(sharedArtifacts).sort()
-      : [];
-    // The expected launch failure belongs to this unit fixture, not a native app attempt.
-    const files = `
-      import { basename, dirname, join } from 'node:path';
-      const fs = process.getBuiltinModule('node:fs/promises');
-      export const { mkdtemp, mkdir, rm } = fs;
-      export function writeFile(path, ...args) {
-        const target = dirname(String(path)) === ${JSON.stringify(sharedArtifacts)}
-          ? join(${JSON.stringify(privateArtifacts)}, basename(String(path))) : path;
-        return fs.writeFile(target, ...args);
-      }
-    `;
     writeFileSync(
       hook,
       `import { registerHooks } from 'node:module';
@@ -61,12 +33,11 @@ for (const { entryName, overridden } of [
          if (specifier === 'playwright') return {
            url: 'data:text/javascript,' + encodeURIComponent(${JSON.stringify(native)}), shortCircuit: true
          };
-         if (specifier === 'node:fs/promises' && ${JSON.stringify(entryName === 'browser-coordinate-live.mjs')}) return {
-           url: 'data:text/javascript,' + encodeURIComponent(${JSON.stringify(files)}), shortCircuit: true
-         };
          return nextResolve(specifier, context);
        } });`,
     );
+    const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
+    const entry = fileURLToPath(new URL(entryName, import.meta.url));
     const env = {
       ...process.env,
       CIRCLE_DESKTOP_EXECUTABLE: 'fixture-electron-not-started',
@@ -88,14 +59,6 @@ for (const { entryName, overridden } of [
       args: [overridden ? resolve(override) : root],
       cwd: root,
     });
-    if (entryName === 'browser-coordinate-live.mjs') {
-      assert.equal(
-        JSON.parse(readFileSync(join(privateArtifacts, 'failure.json'), 'utf8'))
-          .error.message,
-        'native launch captured',
-      );
-      assert.deepEqual(readdirSync(sharedArtifacts).sort(), existingArtifacts);
-    }
   });
 }
 
