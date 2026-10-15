@@ -21,6 +21,9 @@ import type {
   TerminalReplay,
 } from '../src/workspace/terminal.ts';
 import type { WorkspaceServiceEvent } from '../src/workspace-protocol.ts';
+const interactiveShell =
+  process.platform === 'win32' ? { args: ['/d', '/q'] } : { shell: '/bin/sh' };
+
 test('workspace routing preserves revisions, isolates terminal owners and persists before delivery', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'circle-services-'));
   const data = await mkdtemp(path.join(tmpdir(), 'circle-services-data-'));
@@ -170,7 +173,7 @@ test('workspace routing preserves revisions, isolates terminal owners and persis
       /changed/i,
     );
     const terminal = (await service.call('session-a', 'terminal', 'create', {
-      shell: '/bin/sh',
+      ...interactiveShell,
       owner: 'session-b',
       sessionId: 'session-b',
     })) as TerminalSnapshot;
@@ -230,10 +233,10 @@ test('releasing one session waits for its PTY exit and preserves another session
   });
   try {
     const a = (await service.call('session-a', 'terminal', 'create', {
-      shell: '/bin/sh',
+      ...interactiveShell,
     })) as TerminalSnapshot;
     const b = (await service.call('session-b', 'terminal', 'create', {
-      shell: '/bin/sh',
+      ...interactiveShell,
     })) as TerminalSnapshot;
     assert.equal(await service.hasActiveSession('session-a'), true);
     assert.equal(await service.hasActiveSessionResources('session-b'), true);
@@ -284,7 +287,7 @@ test('blocked durable writer bounds 100000 incoming events and exposes one failu
   });
   try {
     const terminal = (await service.call('session-a', 'terminal', 'create', {
-      shell: '/bin/sh',
+      ...interactiveShell,
     })) as TerminalSnapshot;
     const promises: Promise<unknown>[] = [];
     for (let i = 0; i < 100000; i++)
@@ -436,7 +439,7 @@ test('concurrent disposal shares completion and late sources are not reported as
   };
   try {
     const terminal = (await service.call('s', 'terminal', 'create', {
-      shell: '/bin/sh',
+      ...interactiveShell,
     })) as TerminalSnapshot;
     await service.replay();
     let done = false;
