@@ -190,15 +190,20 @@ export function WorkspaceMenu({
   workspace,
   onNew,
   onCollapseAll,
+  tipOpen,
 }: {
   workspace: Workspace;
   onNew: () => void;
   onCollapseAll: () => void;
+  tipOpen?: boolean;
 }) {
   const { snapshot, runtime, perform } = useRuntime();
   const sessions = workspaceSessions(snapshot, workspace.id);
   return (
-    <Menu label={t('workspace actions for {name}', { name: workspace.name })}>
+    <Menu
+      label={t('workspace actions for {name}', { name: workspace.name })}
+      tipOpen={tipOpen}
+    >
       <DropdownMenu.Item onSelect={onNew}>{t('new session')}</DropdownMenu.Item>
       <Reveal workspaceId={workspace.id} />
       <DropdownMenu.Item onSelect={onCollapseAll}>

@@ -307,6 +307,28 @@ try {
     .getByRole('button', { name: 'show 2 more', exact: true })
     .waitFor();
   checks.push('recent shows five sessions before show more');
+  const recentRows = sections.nth(0).locator('.session-row');
+  await recentRows.nth(0).locator('a.session-link').focus();
+  await page.keyboard.press('Shift+F10');
+  await page
+    .getByRole('menuitem', { name: 'rename session', exact: true })
+    .waitFor();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => {
+    const tips = [...document.querySelectorAll('.tooltip')];
+    return (
+      tips.length === 1 &&
+      !tips[0].classList.contains('session-hover') &&
+      document.activeElement?.getAttribute('aria-label') ===
+        'session actions for Extra recent 0'
+    );
+  });
+  await recentRows.nth(3).hover();
+  await page.waitForFunction(() => {
+    const tips = [...document.querySelectorAll('.tooltip')];
+    return tips.length === 1 && tips[0].classList.contains('session-hover');
+  });
+  checks.push("hovering another row leaves only that row's card");
   await application.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows()[0];
     if (window.isMaximized()) window.unmaximize();
@@ -327,26 +349,71 @@ try {
     clientHeight: node.clientHeight,
   }));
   assert.ok(beforeScroll.scrollHeight > beforeScroll.clientHeight);
-  await list.hover();
+  await recentRows.nth(0).locator('a.session-link').focus();
+  await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(() => {
+    const tips = [...document.querySelectorAll('.tooltip')];
+    return tips.length === 1 && !tips[0].classList.contains('session-hover');
+  });
+  await recentRows.nth(0).locator('a.session-link').hover();
   await page.mouse.wheel(0, 240);
   await page.waitForFunction(() => {
     const node = document.querySelector('.project-list');
-    return node instanceof HTMLElement && node.scrollTop > 0;
+    return (
+      node instanceof HTMLElement &&
+      node.scrollTop > 0 &&
+      document.querySelectorAll('.tooltip').length === 0
+    );
   });
-  const scrolled = await list.evaluate((node) => node.scrollTop);
-  assert.ok(scrolled > 0);
+  checks.push('the sidebar list scrolls');
+  checks.push('scrolling the sidebar closes a menu tip');
+  await list.evaluate((node) => {
+    const row = [...node.querySelectorAll('[data-row-key]')].find(
+      (item) => item.dataset.rowKey === 'recent:extra3',
+    );
+    if (!(row instanceof HTMLElement)) return;
+    node.scrollTop +=
+      row.getBoundingClientRect().top - node.getBoundingClientRect().top;
+  });
+  await page.waitForFunction(() => {
+    const node = document.querySelector('.project-list');
+    const row = node?.querySelector('[data-row-key="recent:extra3"]');
+    if (!(node instanceof HTMLElement) || !(row instanceof HTMLElement))
+      return false;
+    return (
+      Math.abs(
+        row.getBoundingClientRect().top - node.getBoundingClientRect().top,
+      ) < 2
+    );
+  });
+  const anchored = await list.evaluate((node) => {
+    const row = node.querySelector('[data-row-key="recent:extra3"]');
+    if (!(row instanceof HTMLElement)) return null;
+    return {
+      delta: row.getBoundingClientRect().top - node.getBoundingClientRect().top,
+      scrollTop: node.scrollTop,
+    };
+  });
+  assert.ok(anchored);
   const still = page.getByRole('textbox', { name: 'message', exact: true });
   await still.fill('keep the sidebar still');
   await still.press('Enter');
   await page
     .locator('article.message.user', { hasText: 'keep the sidebar still' })
     .waitFor();
-  assert.ok(
-    Math.abs((await list.evaluate((node) => node.scrollTop)) - scrolled) < 2,
-  );
+  const kept = await list.evaluate((node) => {
+    const row = node.querySelector('[data-row-key="recent:extra3"]');
+    if (!(row instanceof HTMLElement)) return null;
+    return {
+      delta: row.getBoundingClientRect().top - node.getBoundingClientRect().top,
+      scrollTop: node.scrollTop,
+    };
+  });
+  assert.ok(kept);
+  assert.ok(Math.abs(kept.delta - anchored.delta) < 2);
+  assert.ok(kept.scrollTop > anchored.scrollTop + 8);
   await setViewport(application, page, restored);
-  checks.push('the sidebar list scrolls');
-  checks.push('sending a message keeps the sidebar scroll position');
+  checks.push('sending a message keeps the row at the top of the sidebar');
   for (const command of sourceCommands) {
     await reset();
     await page

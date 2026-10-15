@@ -89,15 +89,29 @@ export function Sidebar({
   const [roving, setRoving] = useState<string | null>(null);
   const anchors = useRef(new Map<string, HTMLAnchorElement>());
   const listRef = useRef<HTMLDivElement>(null);
-  const listScroll = useRef(0);
-  // Captured during render, so a scroll event from the reorder itself cannot
-  // replace the position the user had before this update.
-  const pinnedScroll = useRef(0);
-  pinnedScroll.current = listScroll.current;
+  // The row at the top of the list, and how far it sits from that edge.
+  const anchor = useRef<{ key: string; delta: number } | null>(null);
+  const [pointerKey, setPointerKey] = useState<string | null>(null);
+  const [popupsHeld, setPopupsHeld] = useState(false);
+  const scrolling = useRef(false);
+  const scrollTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  useEffect(() => () => clearTimeout(scrollTimer.current), []);
+  // A new message moves rows. Keep the row that was at the top of the view there.
   useLayoutEffect(() => {
-    const node = listRef.current;
-    if (node && node.scrollTop !== pinnedScroll.current)
-      node.scrollTop = pinnedScroll.current;
+    const list = listRef.current;
+    const saved = anchor.current;
+    if (!list || !saved) return;
+    const row = [...list.querySelectorAll<HTMLElement>('[data-row-key]')].find(
+      (item) => item.dataset.rowKey === saved.key,
+    );
+    if (!row) return;
+    const delta =
+      row.getBoundingClientRect().top - list.getBoundingClientRect().top;
+    const error = delta - saved.delta;
+    if (Math.abs(error) > 1) list.scrollTop += error;
+    anchor.current = listAnchor(list);
   });
   const goSession = async (id: string) => {
     await runtime.selectSession(id);
@@ -171,7 +185,15 @@ export function Sidebar({
     if (rowBox.top < listBox.top) list.scrollTop -= listBox.top - rowBox.top;
     else if (rowBox.bottom > listBox.bottom)
       list.scrollTop += rowBox.bottom - listBox.bottom;
-    listScroll.current = list.scrollTop;
+    anchor.current = listAnchor(list);
+  };
+  const enterRow = (key: string) => {
+    if (scrolling.current) return;
+    setPointerKey(key);
+    setPopupsHeld(false);
+  };
+  const leaveRow = (key: string) => {
+    setPointerKey((current) => (current === key ? null : current));
   };
   const waiting = new Set(
     snapshot.interactions
@@ -186,6 +208,7 @@ export function Sidebar({
       return (
         <SessionRow
           key={rowKey}
+          rowKey={rowKey}
           session={session}
           tabIndex={rowKey === tabKey ? 0 : -1}
           details={
@@ -201,6 +224,11 @@ export function Sidebar({
           }}
           onKeyDown={(event) => onRowKeyDown(rowKey, event)}
           onFocusRow={() => setRoving(rowKey)}
+          pointerKey={pointerKey}
+          popupsHeld={popupsHeld}
+          listRef={listRef}
+          onPointerEnter={() => enterRow(rowKey)}
+          onPointerLeave={() => leaveRow(rowKey)}
           linkRef={(node) => {
             if (node) anchors.current.set(rowKey, node);
             else anchors.current.delete(rowKey);
@@ -278,7 +306,13 @@ export function Sidebar({
         className="project-list"
         ref={listRef}
         onScroll={(event) => {
-          listScroll.current = event.currentTarget.scrollTop;
+          anchor.current = listAnchor(event.currentTarget);
+          scrolling.current = true;
+          setPopupsHeld(true);
+          clearTimeout(scrollTimer.current);
+          scrollTimer.current = setTimeout(() => {
+            scrolling.current = false;
+          }, 150);
         }}
       >
         {recent.length > 0 && (
@@ -309,7 +343,12 @@ export function Sidebar({
           const open = all.includes(workspace.id);
           return (
             <section className="project" key={workspace.id}>
-              <div className="project-header" title={workspace.path}>
+              <div
+                className="project-header"
+                title={workspace.path}
+                onPointerEnter={() => enterRow('header')}
+                onPointerLeave={() => leaveRow('header')}
+              >
                 <button
                   className="project-name"
                   aria-expanded={!collapsed.includes(workspace.id)}
@@ -320,12 +359,14 @@ export function Sidebar({
                 <div className="project-actions">
                   <IconButton
                     label={t('new session in {name}', { name: workspace.name })}
+                    tipOpen={popupsHeld ? false : undefined}
                     onClick={() => newSession(workspace.id)}
                   >
                     <Plus size={13} />
                   </IconButton>
                   <WorkspaceMenu
                     workspace={workspace}
+                    tipOpen={popupsHeld ? false : undefined}
                     onNew={() => newSession(workspace.id)}
                     onCollapseAll={() =>
                       setCollapsed([
@@ -427,6 +468,7 @@ export function Sidebar({
 }
 
 function SessionRow({
+  rowKey,
   session,
   tabIndex,
   details,
@@ -436,9 +478,15 @@ function SessionRow({
   onOpen,
   onKeyDown,
   onFocusRow,
+  pointerKey,
+  popupsHeld,
+  listRef,
+  onPointerEnter,
+  onPointerLeave,
   linkRef,
   onDialog,
 }: {
+  rowKey: string;
   session: Session;
   tabIndex: number;
   details?: { project?: string; age: ActivityAge; absolute?: string };
@@ -448,6 +496,11 @@ function SessionRow({
   onOpen: (id: string) => void;
   onKeyDown: (event: KeyboardEvent<HTMLAnchorElement>) => void;
   onFocusRow: () => void;
+  pointerKey: string | null;
+  popupsHeld: boolean;
+  listRef: { current: HTMLDivElement | null };
+  onPointerEnter: () => void;
+  onPointerLeave: () => void;
   linkRef: (node: HTMLAnchorElement | null) => void;
   onDialog?: (dialog: DialogId, selection?: string) => void;
 }) {
@@ -459,8 +512,28 @@ function SessionRow({
   const linkNode = useRef<HTMLAnchorElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [buttonFocused, setButtonFocused] = useState(false);
+  const [inView, setInView] = useState(true);
+  useLayoutEffect(() => {
+    const row = menuButton.current?.closest('.session-row') ?? null;
+    const visible = rowInView(row, listRef.current);
+    setInView((current) => (current === visible ? current : visible));
+  });
+  const blocked =
+    menuOpen || popupsHeld || (pointerKey !== null && pointerKey !== rowKey);
+  // Project rows have no card, so a hover tip is their label. A recent row's
+  // tip shows only while its own button is focused and no other row is hovered.
+  const tipOpen = blocked
+    ? false
+    : details
+      ? buttonFocused && inView
+      : undefined;
   const row = (
-    <div className="session-row">
+    <div
+      className="session-row"
+      data-row-key={rowKey}
+      onPointerEnter={onPointerEnter}
+      onPointerLeave={onPointerLeave}
+    >
       <NavLink
         ref={(node) => {
           linkNode.current = node;
@@ -503,7 +576,7 @@ function SessionRow({
         buttonRef={menuButton}
         open={menuOpen}
         onOpenChange={setMenuOpen}
-        tipOpen={menuOpen ? false : details ? buttonFocused : undefined}
+        tipOpen={tipOpen}
         onFocus={() => setButtonFocused(true)}
         onBlur={() => setButtonFocused(false)}
         onKeyDown={(event) => {
@@ -528,13 +601,45 @@ function SessionRow({
   return details ? (
     <RecentHover
       details={details}
-      suppressed={renaming || buttonFocused || menuOpen}
+      suppressed={
+        renaming ||
+        buttonFocused ||
+        menuOpen ||
+        popupsHeld ||
+        (pointerKey !== null && pointerKey !== rowKey)
+      }
     >
       {row}
     </RecentHover>
   ) : (
     row
   );
+}
+
+function listAnchor(list: HTMLElement) {
+  const listTop = list.getBoundingClientRect().top;
+  let chosen: HTMLElement | null = null;
+  let delta = 0;
+  for (const row of list.querySelectorAll<HTMLElement>('[data-row-key]')) {
+    const next = row.getBoundingClientRect().top - listTop;
+    if (next <= 1) {
+      chosen = row;
+      delta = next;
+    } else if (!chosen) {
+      chosen = row;
+      delta = next;
+      break;
+    } else break;
+  }
+  const key = chosen?.dataset.rowKey;
+  return key ? { key, delta } : null;
+}
+
+function rowInView(row: Element | null, list: HTMLElement | null) {
+  if (!row || !list) return false;
+  const listBox = list.getBoundingClientRect();
+  const rowBox = row.getBoundingClientRect();
+  return rowBox.bottom > listBox.top + 1 && rowBox.top < listBox.bottom - 1;
 }
 
 function menuKey(event: { key: string; shiftKey: boolean }) {

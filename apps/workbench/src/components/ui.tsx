@@ -3,6 +3,7 @@ import { Dialog, Tooltip } from 'radix-ui';
 import {
   useEffect,
   useRef,
+  useState,
   type ButtonHTMLAttributes,
   type ReactNode,
   type Ref,
@@ -31,11 +32,19 @@ export function IconButton({
   tipOpen?: boolean;
   ref?: Ref<HTMLButtonElement>;
 }) {
+  const [hovered, setHovered] = useState(false);
+  useEffect(() => {
+    if (tipOpen === false) setHovered(false);
+  }, [tipOpen]);
+  // `tipOpen` forces the tip. Otherwise hover and focus decide, including after a
+  // forced close, so the same button can show a tip again.
+  const shown = tipOpen === true ? true : tipOpen === false ? false : hovered;
   return (
     <Tooltip.Root
-      {...(tipOpen === undefined
-        ? {}
-        : { open: tipOpen, onOpenChange: () => {} })}
+      open={shown}
+      onOpenChange={(next) => {
+        if (tipOpen === undefined) setHovered(next);
+      }}
     >
       <Tooltip.Trigger asChild>
         <button ref={ref} className="icon-button" aria-label={label} {...props}>
