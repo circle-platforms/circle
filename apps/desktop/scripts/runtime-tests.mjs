@@ -1,11 +1,10 @@
 import {
-  runtimeTestArguments,
-  orderRuntimeTestFiles,
+  runtimeTestGroups,
+  runRuntimeTestGroups,
 } from './runtime-test-options.mjs';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir, stat, mkdir, mkdtemp } from 'node:fs/promises';
 import { join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
 import {
   DEBUG_VERSION,
   GH_VERSION,
@@ -60,44 +59,37 @@ try {
 if (process.argv.includes('--prepare-only')) {
   console.log(`Developer tool receipts ready for ${target}`);
 } else {
-  const tests = orderRuntimeTestFiles(
-    (await readdir(join(root, 'test'))).filter((name) =>
-      name.endsWith('.test.ts'),
-    ),
-  ).map((name) => join(root, 'test', name));
-  const result = spawnSync(
-    process.execPath,
-    runtimeTestArguments(
-      join(root, '../../node_modules/tsx/dist/cli.mjs'),
-      tests,
-      {
-        ci: Boolean(process.env.CI && process.env.CI !== 'false'),
-      },
-    ),
-    {
-      stdio: 'inherit',
-      env: {
-        ...process.env,
-        ...(process.env.CI && process.env.CI !== 'false'
-          ? {
-              CIRCLE_NATIVE_TEST_PROGRESS_DIR:
-                process.env.CIRCLE_NATIVE_TEST_PROGRESS_DIR ??
-                join(root, 'artifacts/runtime-progress'),
-            }
-          : {}),
-        CIRCLE_JS_DEBUG_ADAPTER:
-          process.env.CIRCLE_JS_DEBUG_ADAPTER ??
-          join(dist, 'tools/js-debug/src/dapDebugServer.js'),
-        CIRCLE_JS_DEBUG_RUNTIME:
-          process.env.CIRCLE_JS_DEBUG_RUNTIME ??
-          join(
-            dist,
-            'tools/node/bin',
-            process.platform === 'win32' ? 'node.exe' : 'node',
-          ),
-      },
+  const tests = (await readdir(join(root, 'test')))
+    .filter((name) => name.endsWith('.test.ts'))
+    .map((name) => join(root, 'test', name));
+  const receipts = join(root, 'artifacts/runtime-progress/runner');
+  await mkdir(receipts, { recursive: true });
+  const result = runRuntimeTestGroups({
+    executable: process.execPath,
+    tsxPath: join(root, '../../node_modules/tsx/dist/cli.mjs'),
+    groups: runtimeTestGroups(tests),
+    ci: Boolean(process.env.CI && process.env.CI !== 'false'),
+    receiptDirectory: await mkdtemp(join(receipts, 'attempt-')),
+    env: {
+      ...process.env,
+      ...(process.env.CI && process.env.CI !== 'false'
+        ? {
+            CIRCLE_NATIVE_TEST_PROGRESS_DIR:
+              process.env.CIRCLE_NATIVE_TEST_PROGRESS_DIR ??
+              join(root, 'artifacts/runtime-progress'),
+          }
+        : {}),
+      CIRCLE_JS_DEBUG_ADAPTER:
+        process.env.CIRCLE_JS_DEBUG_ADAPTER ??
+        join(dist, 'tools/js-debug/src/dapDebugServer.js'),
+      CIRCLE_JS_DEBUG_RUNTIME:
+        process.env.CIRCLE_JS_DEBUG_RUNTIME ??
+        join(
+          dist,
+          'tools/node/bin',
+          process.platform === 'win32' ? 'node.exe' : 'node',
+        ),
     },
-  );
-  if (result.error) throw result.error;
-  process.exitCode = result.status ?? 1;
+  });
+  process.exitCode = result.exitCode;
 }
