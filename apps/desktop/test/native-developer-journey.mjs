@@ -1,3 +1,12 @@
+import {
+  createNativeEditorFixture,
+  runNativeEditorJourney,
+} from './helpers/native-editor-journey.mjs';
+import {
+  journeyShellInput,
+  isolatedJourneyPath,
+  assertBundledJourneyNode,
+} from './helpers/native-journey-platform.mjs';
 // Real renderer interactions; RPC is limited to fixture preparation and effect queries.
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
@@ -14,6 +23,7 @@ import { setViewport } from './helpers/viewport.mjs';
 const require = createRequire(import.meta.url);
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const packaged = !!process.env.CIRCLE_DESKTOP_EXECUTABLE;
+const diagnostic = process.env.CIRCLE_NATIVE_JOURNEY_DIAGNOSTIC === '1';
 const output = resolve(
   process.env.CIRCLE_NATIVE_JOURNEY_EVIDENCE ??
     join(
@@ -39,6 +49,7 @@ await Promise.all([
     join(repo, 'AGENTS.md'),
     '# local fixture rules\nKeep native journey changes isolated.\n',
   ),
+  writeFile(join(repo, 'git-probe.txt'), 'baseline\n'),
   writeFile(join(repo, 'README.md'), baseline),
   writeFile(join(repo, 'debug.cjs'), program),
   writeFile(join(repo, 'browser-source.js'), browserSource),
@@ -47,12 +58,17 @@ await Promise.all([
     JSON.stringify({ name: 'native-journey', private: true }),
   ),
 ]);
+await createNativeEditorFixture(repo);
 const git = async (...args) =>
   (await promisify(execFile)('git', ['-C', repo, ...args])).stdout;
 await git('init', '-b', 'main');
 await git(
   'add',
+  'editor-main.ts',
+  'editor-lib.ts',
+  '.circle-editor-journey.json',
   'AGENTS.md',
+  'git-probe.txt',
   'README.md',
   'debug.cjs',
   'browser-source.js',
@@ -67,6 +83,7 @@ await git(
   '-m',
   'Create isolated journey baseline',
 );
+await writeFile(join(repo, 'git-probe.txt'), 'baseline\nJOURNEY_GIT_HUNK\n');
 const fixture = join(temp, 'model.json');
 await writeFile(
   fixture,
@@ -183,11 +200,7 @@ const env = {
   CIRCLE_DESKTOP_RUNTIME_FIXTURE: fixture,
 };
 delete env.ELECTRON_RUN_AS_NODE;
-if (packaged)
-  env.PATH =
-    process.platform === 'win32'
-      ? `${process.env.SystemRoot}\\System32`
-      : '/usr/bin:/bin:/usr/sbin:/sbin';
+if (packaged) env.PATH = await isolatedJourneyPath();
 let app, page;
 const checks = [];
 const errors = [];
@@ -201,17 +214,71 @@ const until = async (predicate, label) => {
     await new Promise((done) => setTimeout(done, 40));
   }
 };
+const dependencies = {
+  'developer layout and active-turn manual edit save': [
+    'native identity and task layout',
+  ],
+  'two isolated write agents and readonly agent with pending Git approval': [
+    'developer layout and active-turn manual edit save',
+  ],
+};
 const check = async (name, action) => {
   phase = name;
   console.log('native journey: ' + name);
+  const blocked = (dependencies[name] ?? []).filter(
+    (dependency) =>
+      checks.find((c) => c.name === dependency)?.status !== 'passed',
+  );
+  if (blocked.length) {
+    checks.push({
+      name,
+      status: 'blocked',
+      reason: 'requires successful ' + blocked.join(', '),
+    });
+    return;
+  }
   const start = Date.now();
-  const result = await action();
-  checks.push({
-    name,
-    status: 'passed',
-    durationMs: Date.now() - start,
-    result,
-  });
+  try {
+    if (sessionId && page) {
+      const parent = page.locator(
+        `.sidebar .session-link[href="#/session/${sessionId}"]`,
+      );
+      if (await parent.isVisible()) await parent.click();
+      const quick = page.getByRole('dialog', {
+        name: 'quick open',
+        exact: true,
+      });
+      if (await quick.isVisible()) await page.keyboard.press('Escape');
+    }
+    const result = await action();
+    checks.push({
+      name,
+      status: 'passed',
+      durationMs: Date.now() - start,
+      result,
+    });
+  } catch (error) {
+    const image =
+      'phase-' +
+      checks.length +
+      '-' +
+      name.replace(/[^a-z0-9]+/gi, '-') +
+      '-failure.png';
+    await page?.screenshot({ path: join(output, image) }).catch(() => {});
+    checks.push({
+      name,
+      status: 'failed',
+      durationMs: Date.now() - start,
+      error: String(error),
+      screenshot: image,
+    });
+    if (!diagnostic) throw error;
+  } finally {
+    await writeFile(
+      join(output, 'progress.json'),
+      JSON.stringify({ phase, diagnostic, checks, buildIdentity }, null, 2),
+    );
+  }
 };
 const launchRoot = resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? root);
 const buildIdentity = {
@@ -263,6 +330,20 @@ try {
       buildIdentity.files[file] = createHash('sha256')
         .update(await readFile(join(actualApp.appPath, file)))
         .digest('hex');
+  const toolsRoot = actualApp.appPath.replace(
+    /([\\/])app\.asar$/,
+    '$1app.asar.unpacked',
+  );
+  buildIdentity.bundledNode = await assertBundledJourneyNode(
+    join(
+      toolsRoot,
+      'dist',
+      'tools',
+      'node',
+      'bin',
+      process.platform === 'win32' ? 'node.exe' : 'node',
+    ),
+  );
   page = await app.firstWindow();
   page.setDefaultTimeout(15000);
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -318,6 +399,32 @@ try {
     );
     await screenshot('01-task-layout');
   });
+  await check(
+    'native editor semantic navigation and conflict journey',
+    async () => {
+      await page
+        .getByRole('button', { name: 'files panel', exact: true })
+        .click();
+      const result = await runNativeEditorJourney({
+        page,
+        workspace: repo,
+        sessionId,
+        output,
+      });
+      await writeFile(
+        join(output, 'editor-journey.json'),
+        JSON.stringify(result, null, 2),
+      );
+      if (
+        await page
+          .getByRole('button', { name: 'close inspector', exact: true })
+          .count()
+      )
+        await page
+          .getByRole('button', { name: 'close inspector', exact: true })
+          .click();
+    },
+  );
   await check(
     'loaded project instruction source opens actual file',
     async () => {
@@ -423,10 +530,7 @@ try {
       .locator('.native-terminal .xterm-helper-textarea')
       .last();
     await terminal.focus();
-    await page.keyboard.type(
-      "printf 'JOURNEY_INPUT? '; read answer; printf '\\nJOURNEY_ECHO:%s\\n' \"$answer\"\n",
-    );
-    await page.keyboard.type('native-input\n');
+    for (const chunk of journeyShellInput()) await page.keyboard.type(chunk);
     await until(async () => {
       const terminals = await query('terminal', 'list');
       if (!terminals.length) return false;
@@ -445,10 +549,12 @@ try {
       .getByRole('button', { name: 'refresh', exact: true })
       .first()
       .click();
-    await panel.getByRole('button', { name: 'README.md', exact: true }).click();
+    await panel
+      .getByRole('button', { name: 'git-probe.txt', exact: true })
+      .click();
     await panel
       .getByLabel('git diff', { exact: true })
-      .filter({ hasText: 'JOURNEY_MANUAL_SAVE' })
+      .filter({ hasText: 'JOURNEY_GIT_HUNK' })
       .waitFor();
     await panel
       .getByRole('button', { name: 'stage this hunk', exact: true })
@@ -456,15 +562,17 @@ try {
       .click();
     await until(
       async () =>
-        (await git('diff', '--cached', '--', 'README.md')).includes(
-          'JOURNEY_MANUAL_SAVE',
+        (await git('diff', '--cached', '--', 'git-probe.txt')).includes(
+          'JOURNEY_GIT_HUNK',
         ),
       'actual index hunk staged',
     );
     await panel
       .getByRole('button', { name: 'staged changes', exact: true })
       .click();
-    await panel.getByRole('button', { name: 'README.md', exact: true }).click();
+    await panel
+      .getByRole('button', { name: 'git-probe.txt', exact: true })
+      .click();
     await screenshot('04-staged-git-hunk');
     await panel
       .getByRole('button', { name: 'unstage this hunk', exact: true })
@@ -472,8 +580,8 @@ try {
       .click();
     await until(
       async () =>
-        !(await git('diff', '--cached', '--', 'README.md')).includes(
-          'JOURNEY_MANUAL_SAVE',
+        !(await git('diff', '--cached', '--', 'git-probe.txt')).includes(
+          'JOURNEY_GIT_HUNK',
         ),
       'actual index hunk unstaged',
     );
@@ -801,6 +909,11 @@ try {
     await screenshot('09-zh-light-narrow');
   });
   assert.deepEqual(errors, []);
+  assert.equal(
+    checks.filter((c) => c.status !== 'passed').length,
+    0,
+    'native journey has failed or blocked phases; see per-phase evidence',
+  );
   receipt = {
     status: 'passed',
     packaged,
@@ -839,6 +952,7 @@ try {
     JSON.stringify(
       {
         ...receipt,
+        diagnostic,
         buildIdentity,
         cleanup: {
           applicationClosed: !cleanupError,
