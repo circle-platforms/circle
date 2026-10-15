@@ -549,19 +549,35 @@ export class ChromeBrowser implements BrowserPort {
         if (process.platform !== 'win32' && child.pid)
           this.processGroups.add(child.pid);
         if (!(await this.waitForExit(child, timeout))) {
-          // Windows taskkill can refuse a graceful stop and require /F. Still give the
-          // process its bounded grace period, then escalate; a forced-stop failure rejects.
+          // Windows taskkill can refuse a graceful stop and require /F. Keep its
+          // bounded grace period and observe the owned root after escalation.
           await this.stopProcess(child, false).catch(() => {});
           if (!(await this.waitForExit(child, Math.min(timeout, 1000)))) {
-            await this.stopProcess(child, true);
+            let forceFailed = false;
+            let forceError: unknown;
+            try {
+              await this.stopProcess(child, true);
+            } catch (error) {
+              if (process.platform !== 'win32') throw error;
+              forceFailed = true;
+              forceError = error;
+            }
             // A successful tree command is not an observed root exit. Stop the
             // same owned handle once, then retain the existing exit verification.
-            if (process.platform === 'win32' && !this.exited(child))
+            if (
+              !forceFailed &&
+              process.platform === 'win32' &&
+              !this.exited(child)
+            )
               child.kill('SIGKILL');
-            if (!(await this.waitForExit(child, timeout)))
+            // A failed taskkill callback can precede the owned root's exit.
+            // Observe the same bounded exit phase before retaining its error.
+            if (!(await this.waitForExit(child, timeout))) {
+              if (forceFailed) throw forceError;
               throw new Error(
                 'the browser process did not stop; retry closing the session',
               );
+            }
           }
         }
         this.ownedRoots.delete(child);
