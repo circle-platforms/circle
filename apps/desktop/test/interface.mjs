@@ -395,6 +395,10 @@ try {
     clientHeight: node.clientHeight,
   }));
   assert.ok(beforeScroll.scrollHeight > beforeScroll.clientHeight);
+  await projectRow('orbit-api', 'Fix the reconnect race')
+    .locator('a.session-link')
+    .focus();
+  await expectCard(projectRow('orbit-api', 'Fix the reconnect race'));
   await recentRows.nth(0).locator('a.session-link').focus();
   await page.keyboard.press('ArrowRight');
   await page.waitForFunction(() => {

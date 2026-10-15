@@ -219,6 +219,9 @@ export function Sidebar({
     menuFocusRef.current = key;
     setMenuFocus(key);
     if (!key) return;
+    // Focus takes ownership from a pointer resting over a different row.
+    // A later pointer movement can still hand the popup back to that row.
+    setHoveredKey(null);
     pointerAtScroll.current = null;
     scrollClosedRef.current = false;
     setScrollClosed(false);
