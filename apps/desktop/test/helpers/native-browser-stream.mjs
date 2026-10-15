@@ -23,7 +23,7 @@ export async function runNativeBrowserStream({
         '.browser-diagnostics [data-console-id]',
       )) {
         if (!row.textContent.includes('JOURNEY_PUSH_')) continue;
-        const id = row.dataset.consoleId,
+        const id = Number(row.dataset.consoleId),
           event = events.get(id);
         if (!event || pending.has(id)) continue;
         pending.add(id);

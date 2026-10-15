@@ -699,10 +699,8 @@ try {
   await check(
     'terminal search complete copy independent buffers and managed service lifecycle',
     async () => {
-      await app.evaluate(({ clipboard }) => {
-        globalThis.__terminalClipboard = clipboard
-          .availableFormats()
-          .map((format) => [format, clipboard.readBuffer(format)]);
+      await app.evaluate(async ({ clipboard }) => {
+        globalThis.__terminalClipboard = await clipboard.read();
       });
       try {
         await runNativeTerminalJourney({
@@ -720,10 +718,8 @@ try {
           screenshot,
         });
       } finally {
-        await app.evaluate(({ clipboard }) => {
-          clipboard.clear();
-          for (const [format, buffer] of globalThis.__terminalClipboard ?? [])
-            clipboard.writeBuffer(format, buffer);
+        await app.evaluate(async ({ clipboard }) => {
+          await clipboard.write(globalThis.__terminalClipboard ?? []);
           delete globalThis.__terminalClipboard;
         });
       }
