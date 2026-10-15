@@ -47,6 +47,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     env:
       CIRCLE_NATIVE_JOURNEY_WEB_DEBUG: '1'
+      # Retain independent phase evidence; failed or blocked phases still fail the job.
+      CIRCLE_NATIVE_JOURNEY_DIAGNOSTIC: '1'
       # PUSH measures browser Console/CDP/IPC delivery, not a remote Git push.
       CIRCLE_NATIVE_JOURNEY_PUSH: '1'
     # Both application modes and both viewport widths run on each native architecture.
@@ -158,6 +160,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       CIRCLE_NATIVE_JOURNEY_WEB_DEBUG: '1'
+      # Retain independent phase evidence; failed or blocked phases still fail the job.
+      CIRCLE_NATIVE_JOURNEY_DIAGNOSTIC: '1'
       # PUSH measures browser Console/CDP/IPC delivery, not a remote Git push.
       CIRCLE_NATIVE_JOURNEY_PUSH: '1'
     # Two native journeys (12m each), existing MSI/update budget (15m),
