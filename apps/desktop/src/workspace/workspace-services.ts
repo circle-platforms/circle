@@ -115,7 +115,15 @@ export class WorkspaceServices {
       {
         workspaceRoot: options.workspaceRoot,
         logRoot: path.join(directory, 'terminals'),
-        env: options.terminalEnv,
+        env: {
+          ...options.terminalEnv,
+          PATH: [
+            path.dirname(options.runtimeExecutable),
+            options.terminalEnv?.PATH ?? process.env.PATH,
+          ]
+            .filter(Boolean)
+            .join(path.delimiter),
+        },
       },
       (event) => {
         return this.persist({
