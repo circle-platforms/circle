@@ -91,7 +91,11 @@ export type ActivityAge =
   | { kind: 'hours'; n: number }
   | { kind: 'days'; n: number };
 
-/** How long ago a message time is. A time that is not an instant stays as written. */
+/**
+ * How long ago a message time is. A time that is not an instant stays as written.
+ * The count rounds down, as the terminal's `4h` does for 4 hours 45 minutes:
+ * `sessionAge` in `src/tui/slash_handlers.ts`.
+ */
 export function activityAge(at: string, now = new Date()): ActivityAge {
   const parsed = Date.parse(at);
   if (!Number.isFinite(parsed)) return { kind: 'raw', text: at };

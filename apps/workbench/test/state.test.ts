@@ -820,6 +820,14 @@ test('recent lists every context newest first, and its hover names only a projec
     ),
     { kind: 'hours', n: 2 },
   );
+  // 4h45m floors to 4 hours, the same count the terminal shows as `4h`.
+  assert.deepEqual(
+    activityAge(
+      new Date(now.getTime() - (4 * 60 + 45) * 60 * 1000).toISOString(),
+      now,
+    ),
+    { kind: 'hours', n: 4 },
+  );
   assert.equal(
     projectTag({ ...older, workspaceId: 'missing' }, workspaces),
     undefined,

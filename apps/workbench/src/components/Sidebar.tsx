@@ -91,6 +91,8 @@ export function Sidebar({
   // The row at the top of the list, and how far it sits from that edge.
   const anchor = useRef<{ key: string; delta: number } | null>(null);
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  const [menuFocus, setMenuFocus] = useState<string | null>(null);
+  const menuFocusRef = useRef<string | null>(null);
   // A scroll closes popups. They stay closed until the pointer actually moves,
   // so the scroll itself cannot pin a tip over the search box.
   const [scrollClosed, setScrollClosed] = useState(false);
@@ -98,6 +100,10 @@ export function Sidebar({
   const pointerAtScroll = useRef<{ x: number; y: number } | null>(null);
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
   const ignoreScrollClose = useRef(false);
+  // Only a real scroll (wheel, touch, or the scrollbar) dismisses a popup.
+  // Focusing a row or opening a session can nudge scrollTop, and that must
+  // not hide the card under a pointer that has not moved.
+  const scrollGesture = useRef(false);
   const seenOrder = useRef<string | null>(null);
   const goSession = async (id: string) => {
     await runtime.selectSession(id);
@@ -209,6 +215,32 @@ export function Sidebar({
   const leaveRow = (key: string) => {
     setHoveredKey((current) => (current === key ? null : current));
   };
+  const claimMenu = (key: string | null) => {
+    menuFocusRef.current = key;
+    setMenuFocus(key);
+    if (!key) return;
+    pointerAtScroll.current = null;
+    scrollClosedRef.current = false;
+    setScrollClosed(false);
+  };
+  // The pointer is still on a row after a click. Put that row's card back if
+  // the click's render dropped it.
+  const keepHover = () => {
+    requestAnimationFrame(() => {
+      const point = lastPointer.current;
+      if (!point || menuFocusRef.current) return;
+      const hit = document.elementFromPoint(point.x, point.y);
+      const key =
+        hit instanceof Element
+          ? hit.closest<HTMLElement>('[data-row-key]')?.dataset.rowKey
+          : undefined;
+      if (!key) return;
+      pointerAtScroll.current = null;
+      scrollClosedRef.current = false;
+      setScrollClosed(false);
+      setHoveredKey(key);
+    });
+  };
   const waiting = new Set(
     snapshot.interactions
       .filter((item) => item.status === 'pending')
@@ -238,10 +270,13 @@ export function Sidebar({
           onFocusRow={() => setRoving(rowKey)}
           hovered={hoveredKey === rowKey}
           hoveredKey={hoveredKey}
+          menuFocus={menuFocus}
           scrollClosed={scrollClosed}
           listRef={listRef}
           onPoint={(point) => pointRow(rowKey, point)}
           onPointerLeave={() => leaveRow(rowKey)}
+          onMenuFocus={claimMenu}
+          onKeepHover={keepHover}
           linkRef={(node) => {
             if (node) anchors.current.set(rowKey, node);
             else anchors.current.delete(rowKey);
@@ -321,9 +356,25 @@ export function Sidebar({
         onPointerMove={(event) => {
           lastPointer.current = { x: event.clientX, y: event.clientY };
         }}
+        onPointerDown={(event) => {
+          if (event.target === event.currentTarget)
+            scrollGesture.current = true;
+        }}
+        onWheel={() => {
+          scrollGesture.current = true;
+        }}
+        onTouchMove={() => {
+          scrollGesture.current = true;
+        }}
         onScroll={(event) => {
           anchor.current = listAnchor(event.currentTarget);
-          if (ignoreScrollClose.current || scrollClosedRef.current) return;
+          if (
+            ignoreScrollClose.current ||
+            !scrollGesture.current ||
+            scrollClosedRef.current
+          )
+            return;
+          scrollGesture.current = false;
           pointerAtScroll.current = lastPointer.current;
           scrollClosedRef.current = true;
           setScrollClosed(true);
@@ -497,10 +548,13 @@ function SessionRow({
   onFocusRow,
   hovered,
   hoveredKey,
+  menuFocus,
   scrollClosed,
   listRef,
   onPoint,
   onPointerLeave,
+  onMenuFocus,
+  onKeepHover,
   linkRef,
   onDialog,
 }: {
@@ -516,10 +570,13 @@ function SessionRow({
   onFocusRow: () => void;
   hovered: boolean;
   hoveredKey: string | null;
+  menuFocus: string | null;
   scrollClosed: boolean;
   listRef: { current: HTMLDivElement | null };
   onPoint: (point: { x: number; y: number }) => void;
   onPointerLeave: () => void;
+  onMenuFocus: (key: string | null) => void;
+  onKeepHover: () => void;
   linkRef: (node: HTMLAnchorElement | null) => void;
   onDialog?: (dialog: DialogId, selection?: string) => void;
 }) {
@@ -530,7 +587,6 @@ function SessionRow({
   const menuButton = useRef<HTMLButtonElement>(null);
   const linkNode = useRef<HTMLAnchorElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [buttonFocused, setButtonFocused] = useState(false);
   const [linkFocused, setLinkFocused] = useState(false);
   const [inView, setInView] = useState(true);
   useLayoutEffect(() => {
@@ -542,18 +598,22 @@ function SessionRow({
     onPoint({ x: event.clientX, y: event.clientY });
   // The card follows the pointer. The tooltip library drops the hover that
   // arrives just after another tip closes, so it cannot be the thing that opens it.
+  // The focused … button owns the popup while the pointer rests on its row
+  // or nowhere. Moving onto another row lets that row's card replace the tip.
+  const keyboardOwns =
+    menuFocus !== null && (hoveredKey === null || hoveredKey === menuFocus);
   const cardOpen =
     !renaming &&
     !menuOpen &&
-    !buttonFocused &&
+    !keyboardOwns &&
     !scrollClosed &&
     (hovered || (linkFocused && hoveredKey === null));
   const tipOpen =
+    keyboardOwns &&
+    menuFocus === rowKey &&
     !menuOpen &&
     !scrollClosed &&
-    buttonFocused &&
-    inView &&
-    (hoveredKey === null || hoveredKey === rowKey);
+    inView;
   const row = (
     <div
       className="session-row"
@@ -585,6 +645,7 @@ function SessionRow({
           event.preventDefault();
           linkNode.current?.focus({ preventScroll: true });
           onOpen(session.id);
+          onKeepHover();
         }}
         onFocus={() => {
           setLinkFocused(true);
@@ -620,8 +681,8 @@ function SessionRow({
         open={menuOpen}
         onOpenChange={setMenuOpen}
         tipOpen={tipOpen}
-        onFocus={() => setButtonFocused(true)}
-        onBlur={() => setButtonFocused(false)}
+        onFocus={() => onMenuFocus(rowKey)}
+        onBlur={() => onMenuFocus(null)}
         onKeyDown={(event) => {
           if (
             event.key === 'ArrowLeft' &&

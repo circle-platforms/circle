@@ -162,6 +162,11 @@ try {
     return false;
   });
   assert.equal(flickered, false);
+  await recentActive.click();
+  await hover.waitFor();
+  await recentActive.click();
+  await hover.waitFor();
+  checks.push('clicking a row keeps its hover card while the pointer stays');
   await menu.click();
   await page
     .getByRole('menuitem', { name: 'rename session', exact: true })
@@ -249,6 +254,20 @@ try {
       !document.querySelector('.session-hover')
     );
   });
+  await page.keyboard.press('ArrowLeft');
+  await recentRow.hover();
+  await page.waitForFunction(() => document.querySelector('.session-hover'));
+  await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(() => {
+    const tips = [...document.querySelectorAll('.tooltip')];
+    return (
+      document.activeElement?.getAttribute('aria-label') ===
+        'session actions for Fix the reconnect race' &&
+      tips.length === 1 &&
+      !tips[0].classList.contains('session-hover')
+    );
+  });
+  checks.push('right arrow replaces the hover card with the menu tip');
   await page.keyboard.press('ArrowLeft');
   await page.waitForFunction(() =>
     document.activeElement?.classList.contains('session-link'),
