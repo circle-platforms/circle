@@ -672,3 +672,56 @@ test('parent conversations share the configured app model pool without holding l
         ?.messages.some((m) => m.text === 'second parent completed') === true,
   );
 });
+
+test('completed native saves survive controller restart without replaying writes', async (t) => {
+  const f = await setup(t);
+  await writeFile(join(f.workspace, 'answer.txt'), 'before');
+  const read = await f.service('documents', 'read', { path: 'answer.txt' });
+  assert.equal(read.ok, true, read.error);
+  const command = {
+    id: randomUUID(),
+    name: 'workspace-service',
+    sessionId: f.controller.snapshot().activeSessionId,
+    payload: {
+      service: 'documents',
+      method: 'save',
+      params: {
+        path: 'answer.txt',
+        content: 'saved once',
+        expectedRevision: (read.data as any).revision,
+      },
+    },
+  };
+  const saved = await f.controller.dispatch(command);
+  assert.equal(saved.ok, true, saved.error);
+  await f.controller.close();
+  await writeFile(join(f.workspace, 'answer.txt'), 'external edit after save');
+  const restarted = new RuntimeController({
+    home: f.home,
+    workspace: f.workspace,
+    userHome: f.home,
+    model: new ScriptedModel([]),
+    emit: () => {},
+  });
+
+  const replay = await restarted.dispatch(command);
+  assert.equal(replay.ok, true, replay.error);
+  assert.deepEqual(replay.data, saved.data);
+  assert.equal(
+    await readFile(join(f.workspace, 'answer.txt'), 'utf8'),
+    'external edit after save',
+  );
+  const different = await restarted.dispatch({
+    ...command,
+    payload: {
+      ...command.payload,
+      params: { ...command.payload.params, content: 'wrong second input' },
+    },
+  });
+  assert.equal(different.ok, false);
+  assert.equal(
+    await readFile(join(f.workspace, 'answer.txt'), 'utf8'),
+    'external edit after save',
+  );
+  await restarted.close();
+});

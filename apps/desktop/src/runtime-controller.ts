@@ -87,7 +87,9 @@ import { TurnStatus } from '../../../src/tui/turn_status.js';
 import { currentNetworkStatus } from '../../../src/net.js';
 import { SessionMetadata } from './session-metadata';
 import { WorkspaceServices } from './workspace/workspace-services';
+import { OperationLedger } from './workspace/operation-ledger';
 import { TaskService } from './workspace/task-service';
+import { createTaskVerifier } from './workspace/task-verification';
 import { CollaborationResources } from './workspace/collaboration';
 import { createCollaborationTools } from './workspace/collaboration-tools';
 import type { TaskRecord } from './workspace/task-store';
@@ -97,6 +99,7 @@ import type { RuntimeCredentialStore } from './runtime-private-channel';
 import {
   validateWorkspaceRequest,
   type WorkspaceServiceEvent,
+  type WorkspaceServiceRequest,
 } from './workspace-protocol';
 import { formatMcpArguments, parseMcpArguments } from './mcp-arguments';
 import { PlanCompletionTracker } from '../../../src/plan_state.js';
@@ -307,6 +310,10 @@ export class RuntimeController {
   private workspaceServices = new Map<string, WorkspaceServices>();
   private taskServices = new Map<string, TaskService>();
   private taskResources = new CollaborationResources();
+  private taskVerifiers = new Map<
+    string,
+    ReturnType<typeof createTaskVerifier>
+  >();
   private taskWorkspaces = new Map<string, string>();
   private workspaceRoots = new Map<
     string,
@@ -318,6 +325,7 @@ export class RuntimeController {
   private workspaceEpoch = randomUUID();
   private workspaceSeq = 0;
   private stoppedJobs = new Set<string>();
+  private operationLedger?: Promise<OperationLedger>;
   private accepted = new Map<
     string,
     { signature: string; reply: Promise<RuntimeReply> }
@@ -530,18 +538,27 @@ export class RuntimeController {
     sessionId: string,
     workspace: string,
   ): Promise<void> {
+    const owned = new Map<string, string>();
+    owned.set(sessionId, workspace);
+    for (const service of this.taskServices.values())
+      for (const child of service.ownedRuntimeSessions(sessionId))
+        owned.set(child.sessionId, child.worktree ?? workspace);
     const results = await Promise.allSettled(
       [...this.taskServices.values()].map((service) =>
         service.cancelSession(sessionId),
       ),
     );
-    const taskErrors = results
+    const errors = results
       .filter((result) => result.status === 'rejected')
       .map((result) => result.reason);
-    if (taskErrors.length)
-      throw new AggregateError(taskErrors, 'session task cleanup failed');
-    await this.workspaceServices.get(workspace)?.releaseSession(sessionId);
+    if (errors.length)
+      throw new AggregateError(errors, 'session task cleanup failed');
+    for (const [id, root] of owned) {
+      await this.workspaceServices.get(root)?.releaseSession(id);
+      if (id !== sessionId) await this.options.beforeDelete?.(id);
+    }
   }
+
   private async nativeSessionActive(
     sessionId: string,
     workspace: string,
@@ -715,6 +732,34 @@ export class RuntimeController {
       },
     };
   }
+  private taskVerifier(
+    workspace: string,
+    baseline: string,
+  ): ReturnType<typeof createTaskVerifier> {
+    const root = this.trustedWorkspace(workspace);
+    const key = `${root}\0${baseline}`;
+    let verifier = this.taskVerifiers.get(key);
+    if (!verifier) {
+      verifier = createTaskVerifier({
+        workspace: root,
+        baseline,
+        dataDir: join(
+          this.options.dataFolder ?? this.home,
+          'verification',
+          identity(root),
+          baseline,
+        ),
+        runtimeExecutable:
+          this.options.workspaceTools?.runtimeExecutable ?? process.execPath,
+        withBuildResource: (run, _signal, context) =>
+          context.withResource('build', run),
+        createReviewer: (task, context) =>
+          this.createRuntime(context.worktree, undefined, task),
+      });
+      this.taskVerifiers.set(key, verifier);
+    }
+    return verifier;
+  }
   private collaboration(
     workspace: string,
     ownerSessionId: string,
@@ -738,8 +783,11 @@ export class RuntimeController {
         ),
         createRuntime: (task, context) => {
           this.taskWorkspaces.set(realpathSync(context.worktree), root);
+          this.taskVerifier(root, task.spec.baseline);
           return this.createRuntime(context.worktree, undefined, task);
         },
+        verify: (task, context) =>
+          this.taskVerifier(root, task.spec.baseline)(task, context),
         onRuntimeCreated: (task, runtime) => {
           this.taskRuntimes.set(task.spec.id, runtime);
           this.activeRuns.add(runtime.session.id);
@@ -775,6 +823,75 @@ export class RuntimeController {
     }
     return service;
   }
+  private ledger(): Promise<OperationLedger> {
+    return (this.operationLedger ??= OperationLedger.open({
+      directory: join(
+        this.options.dataFolder ?? this.home,
+        'workspace-operations',
+      ),
+      redactError: (error) =>
+        (error as { code?: string })?.code === 'DOCUMENT_CONFLICT'
+          ? 'file changed on disk; reload and compare your draft before saving'
+          : 'operation failed; inspect effects before retrying',
+    }));
+  }
+  private async workspaceOperation(
+    command: RuntimeCommand,
+    workspace: string,
+    request: WorkspaceServiceRequest,
+    action: () => Promise<unknown>,
+  ): Promise<unknown> {
+    const reads: Record<string, string[]> = {
+      documents: ['read', 'refresh', 'resolveSource'],
+      terminal: ['list', 'replay'],
+      git: ['status', 'snapshot', 'diff', 'branches'],
+      debug: [
+        'snapshot',
+        'list',
+        'threads',
+        'stack',
+        'stackTrace',
+        'scopes',
+        'variables',
+        'setBreakpoints',
+        'breakpoints',
+        'pause',
+        'stop',
+      ],
+      tasks: ['list', 'events', 'artifacts', 'readArtifact'],
+      delivery: ['status', 'checks', 'logs'],
+    };
+    const read =
+      request.service === 'language' ||
+      request.service === 'events' ||
+      reads[request.service]?.includes(request.method) ||
+      (request.service === 'tasks' &&
+        request.method === 'settings' &&
+        request.params?.limits === undefined) ||
+      (request.service === 'delivery' &&
+        request.method === 'login' &&
+        request.params?.action === 'poll');
+    if (read) return action();
+    const paramsHash = createHash('sha256')
+      .update(
+        JSON.stringify({
+          workspace,
+          grant: this.workspaceRoots.get(workspace),
+          params: request.params ?? {},
+        }),
+      )
+      .digest('hex');
+    return (await this.ledger()).run(
+      {
+        id: command.id,
+        sessionId: command.sessionId!,
+        service: request.service,
+        method: request.method,
+        paramsHash,
+      },
+      action,
+    );
+  }
   private async workspaceCommand(command: RuntimeCommand): Promise<unknown> {
     this.metadata.refresh();
     const id = text(command.sessionId, 'session', 200);
@@ -794,12 +911,17 @@ export class RuntimeController {
       const existing = this.workspaceServices.get(row.workspace);
       if (!existing)
         throw Error('no native resources are owned by this session');
-      return existing.call(id, request.service, request.method, request.params);
+      return this.workspaceOperation(command, row.workspace, request, () =>
+        existing.call(id, request.service, request.method, request.params),
+      );
     }
     if (request.service === 'tasks' && request.method === 'cancel') {
       const origin = this.taskWorkspaces.get(row.workspace) ?? row.workspace;
       const existing = this.taskServices.get(origin);
-      if (existing) return existing.call(id, request.method, request.params);
+      if (existing)
+        return this.workspaceOperation(command, row.workspace, request, () =>
+          existing.call(id, request.method, request.params),
+        );
     }
     const workspace = this.trustedWorkspace(row.workspace);
     if (request.service === 'events')
@@ -810,16 +932,20 @@ export class RuntimeController {
     if (this.metadata.archivedAt(id))
       throw Error('restore this session before continuing');
     if (request.service === 'tasks')
-      return this.collaboration(workspace, id).call(
+      return this.workspaceOperation(command, workspace, request, () =>
+        this.collaboration(workspace, id).call(
+          id,
+          request.method,
+          request.params,
+        ),
+      );
+    return this.workspaceOperation(command, workspace, request, () =>
+      this.services(workspace).call(
         id,
+        request.service,
         request.method,
         request.params,
-      );
-    return this.services(workspace).call(
-      id,
-      request.service,
-      request.method,
-      request.params,
+      ),
     );
   }
   private createRuntime(
@@ -3316,6 +3442,7 @@ export class RuntimeController {
     await Promise.all(
       [...this.workspaceServices.values()].map((service) => service.dispose()),
     );
+    if (this.operationLedger) await (await this.operationLedger).close();
     this.store.close();
   }
 }
