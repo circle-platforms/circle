@@ -12,6 +12,7 @@ import {
   formatWindow,
   nextBusySeconds,
 } from '../src/model/format.ts';
+import { focusMarkedField } from '../src/model/dialog-focus.ts';
 import {
   DESKTOP_SEARCH_CHORD,
   DESKTOP_SETTINGS_CHORD,
@@ -116,6 +117,63 @@ test('the footer and busy word write numbers as the terminal does', () => {
   assert.equal(comma(',', { meta: true }), true);
   assert.equal(comma(',', { ctrl: true, shift: true }), false);
   assert.equal(comma(','), false);
+});
+
+test('search opens with focus in the field, not on the close button', () => {
+  let prevented = false;
+  let focused = false;
+  const marked = {
+    querySelector: (selector: string) => {
+      assert.equal(selector, '[data-initial-focus]');
+      return {
+        focus() {
+          focused = true;
+        },
+      };
+    },
+  };
+  assert.equal(
+    focusMarkedField(marked, {
+      preventDefault() {
+        prevented = true;
+      },
+    }),
+    true,
+  );
+  assert.equal(prevented, true);
+  assert.equal(focused, true);
+  prevented = false;
+  assert.equal(
+    focusMarkedField(
+      { querySelector: () => null },
+      {
+        preventDefault() {
+          prevented = true;
+        },
+      },
+    ),
+    false,
+  );
+  assert.equal(prevented, false);
+  const app = readFileSync(
+    fileURLToPath(new URL('../src/app/App.tsx', import.meta.url)),
+    'utf8',
+  );
+  const search = app.slice(
+    app.indexOf('open={searchOpen}'),
+    app.indexOf('<DialogHost'),
+  );
+  assert.match(search, /<SearchInput\s+autoFocus/);
+  const field = readFileSync(
+    fileURLToPath(new URL('../src/components/common.tsx', import.meta.url)),
+    'utf8',
+  );
+  assert.match(field, /data-initial-focus=\{focus \? '' : undefined\}/);
+  const modal = readFileSync(
+    fileURLToPath(new URL('../src/components/ui.tsx', import.meta.url)),
+    'utf8',
+  );
+  assert.match(modal, /focusMarkedField\(event\.currentTarget, event\)/);
 });
 
 test('settings opens from the window, including a focused sidebar or composer', () => {

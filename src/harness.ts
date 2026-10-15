@@ -23,7 +23,11 @@ import {
 import { httpStatus } from './model_guard.js';
 import { validateAttachments } from './media.js';
 import { readPrompt } from './system_prompt.js';
-import { fallbackTitle, sanitizeGeneratedTitle } from './session_title.js';
+import {
+  fallbackTitle,
+  sanitizeGeneratedTitle,
+  titleWorthy,
+} from './session_title.js';
 export type ApprovalDecision =
   | 'approve'
   | 'reject'
@@ -335,7 +339,7 @@ export class Harness {
   private generateTitle(display: string, fallback: string): void {
     const model = this.options.model;
     const prompt = display.trim();
-    if (!model.sideRequests || prompt.length < 24) return;
+    if (!model.sideRequests || !titleWorthy(prompt)) return;
     const report = (message: string): void => {
       this.bus.emit('info', {
         payload: { model_notice: { event: 'title_failed', message } },

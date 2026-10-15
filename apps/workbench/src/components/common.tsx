@@ -34,15 +34,19 @@ export function SearchInput({
   onChange,
   label = t('search'),
   placeholder = t('search…'),
+  autoFocus = false,
   inputProps,
 }: {
   value: string;
   onChange: (value: string) => void;
   label?: string;
   placeholder?: string;
+  // The dialog close button is the first tab stop, so this marks the field.
+  autoFocus?: boolean;
   // keys, focus and the list it controls, for a search over a list of choices
   inputProps?: InputHTMLAttributes<HTMLInputElement>;
 }) {
+  const focus = autoFocus || Boolean(inputProps?.autoFocus);
   return (
     <div className="search-field">
       <Search size={15} />
@@ -51,6 +55,8 @@ export function SearchInput({
         aria-label={label}
         value={value}
         placeholder={placeholder}
+        autoFocus={focus}
+        data-initial-focus={focus ? '' : undefined}
         onChange={(event) => onChange(event.target.value)}
       />
       {value && (

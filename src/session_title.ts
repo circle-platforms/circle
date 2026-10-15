@@ -2,6 +2,19 @@ const LATIN =
   /^(?:please|pls|plz|can you|could you|would you|i need you to|i want you to|i(?:'|’)d like you to|help me(?: to)?)\s*/i;
 const CJK_LEAD = /^(?:帮我|请你|请|麻烦你|麻烦)\s*/;
 
+/**
+ * A side request is worth it once the prompt is a sentence. Four words covers
+ * a short question such as "README.md what is this". A long line with fewer
+ * words, including CJK without spaces, still qualifies. A greeting such as
+ * "hi" stays on the fallback.
+ */
+export function titleWorthy(text: string): boolean {
+  const line = text.replace(/\s+/g, ' ').trim();
+  if (!line) return false;
+  if (line.split(' ').length >= 4) return true;
+  return line.length >= 24;
+}
+
 /** A title for the sidebar when the model has not named the session yet. */
 export function fallbackTitle(text: string): string {
   const line = text.replace(/\s+/g, ' ').trim();

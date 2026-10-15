@@ -1,6 +1,7 @@
 import { Search, ShieldAlert, X } from 'lucide-react';
 import { Dialog, Tooltip } from 'radix-ui';
 import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react';
+import { focusMarkedField } from '../model/dialog-focus';
 import { t } from '../i18n';
 export function Button({
   children,
@@ -56,6 +57,10 @@ export function Modal({
         <Dialog.Content
           className={`dialog-content ${wide ? 'wide' : ''}`}
           aria-describedby={description ? 'dialog-description' : undefined}
+          onOpenAutoFocus={(event) => {
+            if (event.currentTarget instanceof Element)
+              focusMarkedField(event.currentTarget, event);
+          }}
         >
           <div className="dialog-heading">
             <div>

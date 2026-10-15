@@ -836,6 +836,7 @@ export function App() {
           title={t('search')}
         >
           <SearchInput
+            autoFocus
             value={search}
             onChange={setSearch}
             label={t('global search')}

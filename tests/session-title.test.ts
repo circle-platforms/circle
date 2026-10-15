@@ -12,7 +12,11 @@ import { ExtensionHost } from '../src/extensions.js';
 import { Harness } from '../src/harness.js';
 import { GatewayModel } from '../src/model.js';
 import { defaultSettings, saveCredentials } from '../src/settings.js';
-import { fallbackTitle, sanitizeGeneratedTitle } from '../src/session_title.js';
+import {
+  fallbackTitle,
+  sanitizeGeneratedTitle,
+  titleWorthy,
+} from '../src/session_title.js';
 import type { ChatModel, ModelRequest, ModelResponse } from '../src/types.js';
 import { emptyUsage } from '../src/types.js';
 import { cleanup, scratch } from './helpers.js';
@@ -176,6 +180,19 @@ test('a rename made while the title is pending wins', async (t) => {
   assert.equal(store.get(session.id)!.title, 'Custom');
 });
 
+test('a model title is asked for four words, and a greeting stays local', () => {
+  assert.equal(titleWorthy('hi'), false);
+  assert.equal(titleWorthy('hello there'), false);
+  assert.equal(titleWorthy('README.md what is this'), true);
+  assert.equal(titleWorthy('@README.md what is this'), true);
+  assert.equal(titleWorthy('fix the login bug now!!'), true);
+  assert.equal(titleWorthy('   '), false);
+  const cjk = '帮我把桌面端会话标题改成一句短摘要不要把整段提示放进侧边栏';
+  assert.ok(cjk.length >= 24);
+  assert.equal(cjk.split(' ').length, 1);
+  assert.equal(titleWorthy(cjk), true);
+});
+
 test('a short prompt keeps the fallback and skips the model', async (t) => {
   const root = scratch(t);
   const model = new TitleModel('done', 'Should not appear');
@@ -191,19 +208,23 @@ test('a short prompt keeps the fallback and skips the model', async (t) => {
   );
 });
 
-test('a prompt under 24 characters does not ask for a title', async (t) => {
+test('four words ask for a title even when the prompt is short', async (t) => {
   const root = scratch(t);
-  const model = new TitleModel('done', 'Should not appear');
-  const { harness: run, store } = harness(root, model);
+  const model = new TitleModel('done', 'Readme heading');
+  const { harness: run, store, session } = harness(root, model);
   cleanup(t, () => store.close());
-  const prompt = 'fix the login bug now!!';
-  assert.equal(prompt.length, 23);
+  const prompt = 'README.md what is this';
+  assert.ok(prompt.length < 24);
+  assert.equal(prompt.split(' ').length, 4);
   await run.run(prompt);
-  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(store.get(session.id)!.title, prompt);
   assert.equal(
     model.requests.filter((request) => request.maxTokens === 128).length,
-    0,
+    1,
   );
+  model.releaseTitle();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(store.get(session.id)!.title, 'Readme heading');
 });
 
 test('a refusal leaves the fallback title', async (t) => {
