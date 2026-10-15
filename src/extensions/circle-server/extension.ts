@@ -119,7 +119,7 @@ const USAGE = [
   '/server login <url> <user>       sign in; the password is asked on a masked card',
   '/server logout                   forget the token',
   '/server packs                    what the server can do',
-  '/server submit <pack> <file>     hand it work with this file, follow it, save the results',
+  '/server submit <pack> <file>     hand it work with this file, follow it, save the results (module-execute takes the flow input JSON instead of a file)',
   '/server tasks                    the tasks you handed over from here',
   '/server task <id>                show a task and follow it until it ends',
   '/server respond <id> <answer>    answer what a task is waiting on (text, key=value or JSON)',
@@ -1007,13 +1007,37 @@ export async function register(api: ExtensionAPI): Promise<void> {
       throw new ServerError(
         'no project: sign in again with /server login <url> <user>',
       );
-    const path = resolve(context.workspace, file);
-    if (!existsSync(path)) throw new ServerError(`no such file: ${path}`);
-    const source = await upload(path, config.scopeId);
-    context.append(
-      `  uploaded ${source.name} · sha256 ${short(source.sha256)} → ${source.id}`,
-    );
-    const title = `${pack}: ${source.name}`;
+    // module-execute is the hub's generic execution flow: its input is the frozen
+    // FlowSubmission itself (flowId, methodPin, resources, sources, value,
+    // controlledBytes), validated strictly by the hub. No file upload, and no
+    // sourceRevisionId/sourceSha256 — the hub refuses those with INVALID_PAYLOAD.
+    const moduleExecute = pack === 'module-execute';
+    if (moduleExecute && file)
+      throw new ServerError(
+        'module-execute takes the flow input, not a file: /server submit module-execute <input-json>',
+      );
+    if (
+      moduleExecute &&
+      (typeof extra.flowId !== 'string' ||
+        !extra.flowId ||
+        !isRecord(extra.methodPin) ||
+        !isRecord(extra.resources))
+    )
+      throw new ServerError(
+        'module-execute input is the flow: {flowId, methodPin, resources, sources?, value?, controlledBytes?}',
+      );
+    let source: Awaited<ReturnType<typeof upload>> | undefined;
+    if (!moduleExecute) {
+      const path = resolve(context.workspace, file);
+      if (!existsSync(path)) throw new ServerError(`no such file: ${path}`);
+      source = await upload(path, config.scopeId);
+      context.append(
+        `  uploaded ${source.name} · sha256 ${short(source.sha256)} → ${source.id}`,
+      );
+    }
+    const title = moduleExecute
+      ? `${pack}: ${String(extra.flowId)}`
+      : `${pack}: ${source!.name}`;
     const idempotencyKey =
       'circle-' +
       sha256(
@@ -1021,7 +1045,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
           JSON.stringify([
             config.scopeId,
             pack,
-            source.sha256,
+            source?.sha256 ?? '',
             again ? Date.now() : 0,
             ...(Object.keys(extra).length
               ? [
@@ -1039,11 +1063,13 @@ export async function register(api: ExtensionAPI): Promise<void> {
         title,
         capabilityPackId: pack,
         idempotencyKey,
-        input: {
-          ...extra,
-          sourceRevisionId: source.id,
-          sourceSha256: source.sha256,
-        },
+        input: moduleExecute
+          ? extra
+          : {
+              ...extra,
+              sourceRevisionId: source!.id,
+              sourceSha256: source!.sha256,
+            },
       },
     });
     const task = isRecord(data) ? data : {};
@@ -1944,6 +1970,30 @@ export async function register(api: ExtensionAPI): Promise<void> {
     async submit(rest, context) {
       const again = rest.includes('--again');
       const [pack, ...files] = rest.filter((word) => word !== '--again');
+      if (pack === 'module-execute') {
+        if (files.length !== 1)
+          throw new ServerError(
+            'usage: /server submit module-execute <input-json> [--again]',
+          );
+        let flow: unknown;
+        try {
+          flow = JSON.parse(files[0]!);
+        } catch {
+          throw new ServerError(
+            'module-execute takes the flow input as a JSON object',
+          );
+        }
+        if (!isRecord(flow))
+          throw new ServerError(
+            'module-execute takes the flow input as a JSON object',
+          );
+        const task = await handOver(pack, '', again, context, flow);
+        context.append(
+          `✓ accepted ${task.taskId} · ${task.phase} · input ${task.inputRevisionId}${task.deduplicated ? ' · the same request as before, no new task' : ''} · following it; closing Circle does not stop it`,
+        );
+        void follow(task.taskId, context);
+        return;
+      }
       if (!pack || files.length !== 1)
         throw new ServerError('usage: /server submit <pack> <file> [--again]');
       const task = await handOver(pack, files[0]!, again, context);
@@ -2168,26 +2218,30 @@ export async function register(api: ExtensionAPI): Promise<void> {
   );
   api.registerTool(
     'circle_server_submit',
-    'Hand circle-server a task on one file of the workspace with a capability pack, for example mindmap-compile on an .xmind. The server keeps the task; this waits in the background and, once it is delivered, saves the results in the workspace after checking their SHA-256. It sends the file to the server and writes files, so it asks first.',
+    'Hand circle-server a task with a capability pack: for a file pack (for example mindmap-compile) give the workspace file; for module-execute give the flow input object instead (flowId, methodPin, resources, sources, value, controlledBytes — the hub validates it strictly). The server keeps the task; this waits in the background and, once it is delivered, saves the results in the workspace after checking their SHA-256. It sends the file to the server and writes files, so it asks first.',
     {
       type: 'object',
       properties: {
         pack: { type: 'string', description: 'capability pack id' },
-        file: { type: 'string', description: 'path in the workspace' },
+        file: { type: 'string', description: 'path in the workspace (file packs)' },
         input: {
           type: 'object',
           description:
-            'the rest of the task input the pack asks for, for example the asset ids it binds and the build; the uploaded file’s sourceRevisionId and sourceSha256 are filled in here',
+            'module-execute: the whole flow input. Other packs: the rest of the task input the pack asks for, for example the asset ids it binds and the build; the uploaded file’s sourceRevisionId and sourceSha256 are filled in here',
         },
       },
-      required: ['pack', 'file'],
+      required: ['pack'],
     },
     async (args) => {
       const pack = String(args.pack ?? '');
       const file = String(args.file ?? '');
-      if (!pack || !file) throw new api.ToolError('pack and file are required');
+      if (!pack) throw new api.ToolError('pack is required');
       if (args.input !== undefined && !isRecord(args.input))
         throw new api.ToolError('input is an object of task input fields');
+      if (pack === 'module-execute' && !isRecord(args.input))
+        throw new api.ToolError('module-execute needs the flow input object');
+      if (pack !== 'module-execute' && !file)
+        throw new api.ToolError('file is required');
       const accepted = collecting();
       let task;
       try {
