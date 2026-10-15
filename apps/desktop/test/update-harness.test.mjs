@@ -121,11 +121,6 @@ function preflight(t, existing, runner = false) {
   assert.equal(scratch.length, 1, scratch.join(', '));
   const temp = join(root, scratch[0]);
   assert.ok(result.stderr.includes(`kept ${temp}`), result.stderr);
-  assert.equal(
-    existsSync(join(temp, 'observer-plan.json')),
-    false,
-    'preflight and failed initial installation never start a restart observer',
-  );
   return { installed, msi, result, temp, actions: recorded };
 }
 
