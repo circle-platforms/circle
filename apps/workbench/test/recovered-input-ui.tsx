@@ -2,14 +2,15 @@ import { createRoot } from 'react-dom/client';
 import { RuntimeProvider, useRuntime } from '../src/app/context';
 import { RecoveredInputs } from '../src/features/RecoveredInputs';
 import { createFixtures } from '../src/preview/fixtures';
-import type { RuntimePort } from '../src/model/types';
+import { LiveRuntime } from '../src/model/live';
+import type { DesktopBridge } from '../../desktop/src/contracts';
 const snapshot = createFixtures();
 const session = snapshot.sessions[0];
 session.id = 'recovery-session';
 session.draft = 'existing draft';
 session.attachments = [];
 snapshot.activeSessionId = session.id;
-const listeners = new Set<() => void>();
+snapshot.runtime = { connected: true, configured: true };
 const full = Array.from({ length: 600 }, (_, i) => `preserved line ${i}`).join(
   '\n',
 );
@@ -61,24 +62,31 @@ Object.assign(window, {
     },
   },
 });
-let state = snapshot;
-const runtime = {
-  getSnapshot: () => state,
-  subscribe: (listener: () => void) => {
-    listeners.add(listener);
-    return () => listeners.delete(listener);
+let storageFails = new URLSearchParams(location.search).has('storageFailure');
+Object.assign(window, {
+  allowRecoveryStorage: () => {
+    storageFails = false;
   },
-  updateSessionView: (id: string, patch: object) => {
-    state = {
-      ...state,
-      sessions: state.sessions.map((s) =>
-        s.id === id ? { ...s, ...patch } : s,
-      ),
-    };
-    listeners.forEach((listener) => listener());
-    return true;
+});
+const host = {
+  ...window.circleDesktop,
+  onRuntime: () => () => {},
+} as unknown as DesktopBridge;
+const runtime = new LiveRuntime(
+  host,
+  { seq: 1, connected: true, snapshot },
+  {
+    getItem: (key) => localStorage.getItem(key),
+    setItem: (key, value) => {
+      if (storageFails)
+        throw new DOMException(
+          'controlled quota failure',
+          'QuotaExceededError',
+        );
+      localStorage.setItem(key, value);
+    },
   },
-} as unknown as RuntimePort;
+);
 function Fixture() {
   const { snapshot } = useRuntime();
   const s = snapshot.sessions[0];

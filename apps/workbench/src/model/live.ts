@@ -110,8 +110,8 @@ export class LiveRuntime implements RuntimePort {
     this.unsubscribeDelta =
       host.onRuntimeDelta?.(this.receiveDelta) ?? (() => {});
   }
-  private persist() {
-    if (this.disposed) return;
+  private persist(): boolean {
+    if (this.disposed) return false;
     try {
       this.storage?.setItem(
         'circle.workbench.live.views.v1',
@@ -121,8 +121,10 @@ export class LiveRuntime implements RuntimePort {
           plugins: this.plugins,
         }),
       );
+      return true;
     } catch {
       this.report(Error(t('UI preferences could not be saved')));
+      return false;
     }
   }
   private receive = (update: RuntimeUpdate) => {
@@ -347,7 +349,7 @@ export class LiveRuntime implements RuntimePort {
         !Object.is(previous[key as keyof Session], value) &&
         !equal(previous[key as keyof Session], value),
     );
-    if (!changed) return true;
+    if (!changed) return this.persist();
     const copy = structuredClone(patch);
     const sessions = this.snapshot.sessions.slice();
     sessions[index] = { ...previous, ...copy };
@@ -356,9 +358,9 @@ export class LiveRuntime implements RuntimePort {
       ...copy,
     });
     this.snapshot = { ...this.snapshot, sessions };
-    this.persist();
+    const persisted = this.persist();
     for (const listener of this.listeners) listener();
-    return true;
+    return persisted;
   };
   change = (update: (draft: WorkbenchSnapshot) => void) => {
     if (this.disposed) return;
