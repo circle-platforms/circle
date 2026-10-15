@@ -202,7 +202,7 @@ test(
           await new Promise((r) => setTimeout(r, 30));
       } while (!threads.threads.length && Date.now() < until);
       assert.ok(threads.threads.length);
-      await service.handle('pause', { threadId: threads.threads[0].id });
+      await service.handle('pause');
       await new Promise((r) => setTimeout(r, 100));
       assert.equal(service.snapshot().status, 'paused');
       await service.stop();

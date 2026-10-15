@@ -492,8 +492,15 @@ export class WorkspaceDebugService {
       ['next', 'stepIn', 'stepOut', 'continue', 'pause', 'stackTrace'].includes(
         method,
       )
-    )
+    ) {
       args.threadId ??= this.state.threadId;
+      if (args.threadId === undefined) {
+        const result = await (this.target ?? this.dap).request('threads');
+        args.threadId = result.threads?.[0]?.id;
+        if (args.threadId === undefined)
+          throw Error('no debug thread is ready');
+      }
+    }
     return (this.target ?? this.dap).request(method, args);
   }
   async stop() {
