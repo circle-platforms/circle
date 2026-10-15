@@ -38,6 +38,8 @@ export function GitPanel({
   const refresh = async () => {
     const next = await workspaceCall<GitSnapshot>(sessionId, 'git', 'status');
     setState(next);
+    const visible = new Set(next.entries.map((entry) => entry.path));
+    setSelected((current) => current.filter((path) => visible.has(path)));
     return next;
   };
   useEffect(() => {
@@ -56,6 +58,10 @@ export function GitPanel({
         ...extra,
       });
       setState(next);
+      const visible = new Set(next.entries.map((entry) => entry.path));
+      setSelected((current) =>
+        method === 'commit' ? [] : current.filter((path) => visible.has(path)),
+      );
       setDiff('');
     } catch (e) {
       setError(String(e));
