@@ -725,3 +725,48 @@ test('completed native saves survive controller restart without replaying writes
   );
   await restarted.close();
 });
+
+test('pending operation review is restricted to its owning session and never replays effects', async (t) => {
+  const f = await setup(t);
+  const owner = f.controller.snapshot().activeSessionId;
+  const operationId = randomUUID();
+  const failed = await f.controller.dispatch({
+    id: operationId,
+    name: 'workspace-service',
+    sessionId: owner,
+    payload: {
+      service: 'terminal',
+      method: 'write',
+      params: { id: 'missing-terminal', data: 'private input' },
+    },
+  });
+  assert.equal(failed.ok, false);
+  const listed = await f.service('operations', 'list', {
+    state: 'needs_review',
+  });
+  assert.equal(listed.ok, true, listed.error);
+  const metadata = (listed.data as any[]).find((row) => row.id === operationId);
+  assert.equal(metadata.sessionId, owner);
+  assert.equal(JSON.stringify(metadata).includes('private input'), false);
+  await f.call('new-session');
+  const foreign = await f.service('operations', 'review', {
+    id: operationId,
+    note: 'checked',
+  });
+  assert.equal(foreign.ok, false);
+  const reviewed = await f.service(
+    'operations',
+    'review',
+    { id: operationId, note: 'confirmed no terminal was created' },
+    owner,
+  );
+  assert.equal(reviewed.ok, true, reviewed.error);
+  assert.equal((reviewed.data as any).state, 'reconciled');
+  const pending = await f.service(
+    'operations',
+    'list',
+    { state: 'needs_review' },
+    owner,
+  );
+  assert.equal((pending.data as any[]).length, 0);
+});

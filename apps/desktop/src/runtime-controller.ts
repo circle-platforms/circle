@@ -924,6 +924,24 @@ export class RuntimeController {
         );
     }
     const workspace = this.trustedWorkspace(row.workspace);
+    if (request.service === 'operations') {
+      const ledger = await this.ledger();
+      if (request.method === 'list')
+        return ledger.list({ ...request.params, sessionId: id });
+      const operationId = text(request.params?.id, 'operation', 200);
+      let before: number | undefined;
+      let found = false;
+      do {
+        const page = ledger.list({ sessionId: id, limit: 500, before });
+        found = page.some((operation) => operation.id === operationId);
+        if (found || page.length < 500) break;
+        before = page[page.length - 1].cursor;
+      } while (true);
+      if (!found) throw Error('operation is not owned by this session');
+      return ledger.acknowledgeUnknown(operationId, {
+        note: text(request.params?.note, 'review note', 4096),
+      });
+    }
     if (request.service === 'events')
       return this.services(workspace).replay(
         request.params?.after as { offset: number; seq: number } | undefined,
