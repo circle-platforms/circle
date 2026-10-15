@@ -124,6 +124,8 @@ export interface RuntimeOptions {
   // `--model`: used for this run, kept over a reload, never saved.
   modelOverride?: string;
   model?: ChatModel;
+  /** Wrap every parent/child completion without replacing the provider used for connection ownership. */
+  wrapModel?: (model: ChatModel) => ChatModel;
   catalog?: ModelCatalog;
   extraTools?: Tool[];
   /** Where the extensions that ship with Circle are; false for none (tests). */
@@ -196,6 +198,8 @@ export class AgentRuntime {
   extensions: ExtensionHost;
   private integrationsReady?: Promise<void>;
   private baseModel?: ChatModel;
+  private readonly modelWrappers = new WeakMap<ChatModel, ChatModel>();
+  private readonly wrappedModels = new WeakSet<ChatModel>();
   private authFingerprint?: string;
   private coreTools: Tool[] = [];
   // An extension changed its tools after loading; applied between turns, never inside one.
@@ -355,6 +359,17 @@ export class AgentRuntime {
         });
     });
   }
+  private wrapModel(model: ChatModel): ChatModel {
+    if (!this.options.wrapModel || this.wrappedModels.has(model)) return model;
+    const previous = this.modelWrappers.get(model);
+    if (previous) return previous;
+    const wrapped = this.options.wrapModel(model);
+    if (!wrapped || typeof wrapped.complete !== 'function')
+      throw new Error('model wrapper must return a ChatModel');
+    this.modelWrappers.set(model, wrapped);
+    this.wrappedModels.add(wrapped);
+    return wrapped;
+  }
   private createHarness(modelOverride?: ChatModel): Harness {
     const model =
       modelOverride ??
@@ -448,11 +463,13 @@ export class AgentRuntime {
           .find((agent) => agent.spec.name === name);
         if (!custom && !['general-purpose', 'explore'].includes(name))
           throw new Error('unknown subagent type');
-        const childModel = custom?.spec.model
-          ? this.extensions.model(
-              this.gatewayModel(this.options.settings, custom.spec.model),
-            )
-          : parentHarness.model;
+        const childModel = this.wrapModel(
+          custom?.spec.model
+            ? this.extensions.model(
+                this.gatewayModel(this.options.settings, custom.spec.model),
+              )
+            : parentHarness.model,
+        );
         const session = this.store.create(
           this.options.workspace,
           childModel.model,
@@ -680,7 +697,7 @@ export class AgentRuntime {
       variables: () => this.options.settings.variables,
       secrets: () => loadSecrets(this.options.home),
       redact: this.redact,
-      model: this.extensions.model(model),
+      model: this.wrapModel(this.extensions.model(model)),
       tools,
       store: this.store,
       session: this.session,
@@ -926,7 +943,7 @@ export class AgentRuntime {
           base.filter((tool) => tool.name !== 'wait_jobs'),
         );
         this.describeSubagents(this.harness.tools);
-        this.harness.model = host.model(this.baseModel!);
+        this.harness.model = this.wrapModel(host.model(this.baseModel!));
         this.refreshSystemPrompt();
         host.emit('session_start', {
           workspace: this.options.workspace,
@@ -1010,7 +1027,7 @@ export class AgentRuntime {
     const nextModel = this.gatewayModel(this.options.settings, model);
     nextModel.effort = effort;
     this.baseModel = nextModel;
-    this.harness.model = this.extensions.model(this.baseModel);
+    this.harness.model = this.wrapModel(this.extensions.model(this.baseModel));
     this.refreshSystemPrompt();
   }
   /** An explicit login/logout replaces every cached client, including future sessions. */
@@ -1032,7 +1049,7 @@ export class AgentRuntime {
     this.options.modelOverride = undefined;
     this.options.model = ready ? undefined : nextModel;
     this.baseModel = nextModel;
-    this.harness.model = this.extensions.model(nextModel);
+    this.harness.model = this.wrapModel(this.extensions.model(nextModel));
     if (!ready) this.authFingerprint = this.savedConnectionFingerprint();
     this.refreshSystemPrompt();
   }
