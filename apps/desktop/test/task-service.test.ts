@@ -269,3 +269,159 @@ test('service executes real runtime, exposes actual artifacts, refuses unverifie
   );
   assert.equal(await git(workspace, 'rev-parse', 'HEAD'), baseline);
 });
+
+test('authorized workspaces share global agent/UI pools and one durable settings stream', async (t) => {
+  const workspaceA = scratch(t),
+    workspaceB = scratch(t),
+    data = scratch(t);
+  await repository(workspaceA);
+  await repository(workspaceB);
+  const { CollaborationResources } =
+    await import('../src/workspace/collaboration.js');
+  const resources = new CollaborationResources({ agents: 2 });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const started: string[] = [];
+  const make = (workspace: string, name: string) =>
+    new TaskService({
+      workspace,
+      dataDir: join(data, name),
+      resources,
+      settingsPath: join(data, 'shared', 'limits.json'),
+      emit: () => {},
+      createRuntime: async (record, ctx) => {
+        const home = join(data, 'homes', record.spec.id);
+        await mkdir(home, { recursive: true });
+        const model = new ScriptedModel([
+          async () => {
+            started.push(record.spec.id);
+            await gate;
+            return {
+              message: message('done'),
+              usage: {
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+              },
+            };
+          },
+        ]);
+        return new AgentRuntime({
+          workspace: ctx.worktree,
+          home,
+          userHome: home,
+          model,
+          settings: trustFolder(defaultSettings(), ctx.worktree),
+          headless: true,
+          bundledExtensions: false,
+          screenshot: false,
+        });
+      },
+    });
+  const first = make(workspaceA, 'a'),
+    second = make(workspaceB, 'b');
+  cleanup(t, async () => {
+    release();
+    await Promise.all([first.close(), second.close()]);
+  });
+  await first.call('a-session', 'enqueue', {
+    operationId: 'a',
+    tasks: [{ ...task('ui-a'), resource: 'ui' }],
+  });
+  await until(async () => started.includes('ui-a'));
+  await second.call('b-session', 'enqueue', {
+    operationId: 'b',
+    tasks: [{ ...task('ui-b'), resource: 'ui' }, task('independent-b')],
+  });
+  await until(async () => started.length === 2);
+  assert.ok(started.includes('independent-b'));
+  assert.ok(!started.includes('ui-b'));
+  assert.notEqual(first.getTask('ui-a')!.runtimeSessionId, 'a-session');
+  assert.ok(first.getTask('ui-a')!.runtimeSessionId);
+  await Promise.all([
+    first.call('a-session', 'settings', { limits: { agents: 3 } }),
+    second.call('b-session', 'settings', { limits: { builds: 4 } }),
+  ]);
+  assert.deepEqual(await second.call('b-session', 'settings'), {
+    agents: 3,
+    builds: 4,
+    ui: 1,
+    browsers: 1,
+  });
+  release();
+  await until(async () =>
+    [
+      ...((await first.call('a-session', 'list')) as TaskRecord[]),
+      ...((await second.call('b-session', 'list')) as TaskRecord[]),
+    ].every((record) => record.state === 'needs_review'),
+  );
+});
+
+test('deleting an owner cancels only its task runtimes and awaits model cleanup; task views use the same ownership', async (t) => {
+  const workspace = scratch(t),
+    dataDir = scratch(t);
+  await repository(workspace);
+  const entered = new Set<string>(),
+    closed = new Set<string>();
+  const service = new TaskService({
+    workspace,
+    dataDir,
+    emit: () => {},
+    onRuntimeClosed: (task) => {
+      closed.add(task.spec.id);
+    },
+    createRuntime: async (record, ctx) => {
+      const home = join(dataDir, 'homes', record.spec.id);
+      await mkdir(home, { recursive: true });
+      const model = new ScriptedModel([
+        async (request) => {
+          entered.add(record.spec.id);
+          await new Promise<void>((_resolve, reject) => {
+            request.signal.addEventListener(
+              'abort',
+              () => reject(request.signal.reason),
+              { once: true },
+            );
+          });
+          throw new Error('not reached');
+        },
+      ]);
+      return new AgentRuntime({
+        workspace: ctx.worktree,
+        home,
+        userHome: home,
+        model,
+        settings: trustFolder(defaultSettings(), ctx.worktree),
+        headless: true,
+        bundledExtensions: false,
+        screenshot: false,
+      });
+    },
+  });
+  cleanup(t, () => service.close());
+  await service.call('parent-a', 'enqueue', {
+    operationId: 'a',
+    tasks: [task('a')],
+  });
+  await service.call('parent-b', 'enqueue', {
+    operationId: 'b',
+    tasks: [task('b')],
+  });
+  await until(async () => entered.size === 2);
+  assert.equal(service.hasActiveSession('parent-a'), true);
+  const childB = service.getTask('b')!.runtimeSessionId!;
+  assert.equal(service.hasActiveSession(childB), true);
+  await service.cancelSession('parent-a');
+  assert.equal(service.getTask('a')!.state, 'cancelled');
+  assert.equal(closed.has('a'), true);
+  assert.equal(service.hasActiveSession('parent-a'), false);
+  assert.equal(service.getTask('b')!.state, 'running');
+  assert.equal(closed.has('b'), false);
+  assert.equal(service.hasActiveSession('parent-b'), true);
+  await service.cancelSession(childB);
+  assert.equal(service.getTask('b')!.state, 'cancelled');
+  assert.equal(closed.has('b'), true);
+  assert.equal(service.hasActiveSession('parent-b'), false);
+});

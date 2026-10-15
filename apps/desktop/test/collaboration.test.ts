@@ -570,3 +570,85 @@ test('scheduler awaits operations even when executor returns before its operatio
     'settled',
   );
 });
+
+test('cleanup failure remains interrupted and close rejects until the actual cleanup succeeds', async (t) => {
+  const repo = scratch(t),
+    data = scratch(t);
+  await repository(repo);
+  let permitCleanup = false;
+  const scheduler = new CollaborationScheduler({
+    dataDir: data,
+    executor: async (_task, ctx) => {
+      ctx.onCleanup(() => {
+        if (!permitCleanup) throw new Error('owned process did not exit');
+      });
+      return { passed: true };
+    },
+  });
+  cleanup(t, () => scheduler.close());
+  await scheduler.enqueue([spec('cleanup', repo)], { operationId: 'cleanup' });
+  scheduler.start();
+  await scheduler.waitForIdle();
+  assert.equal(scheduler.get('cleanup')!.state, 'interrupted');
+  await assert.rejects(scheduler.close(), /cleanup has not completed/);
+  assert.throws(
+    () =>
+      new CollaborationScheduler({
+        dataDir: data,
+        executor: async () => ({ passed: true }),
+      }),
+    /already open/,
+  );
+  permitCleanup = true;
+  await scheduler.close();
+});
+
+test('shared external build leases coordinate with tasks and nested verification reuses its owned lease', async (t) => {
+  const repo = scratch(t),
+    data = scratch(t);
+  await repository(repo);
+  const { CollaborationResources } =
+    await import('../src/workspace/collaboration.js');
+  const resources = new CollaborationResources({ agents: 2, builds: 1 });
+  const release = gate();
+  let externalStarted = false,
+    buildStarted = false,
+    independent = false,
+    nested = false;
+  const external = resources.withResource('build', async () => {
+    externalStarted = true;
+    await release.promise;
+  });
+  await until(() => externalStarted);
+  const scheduler = new CollaborationScheduler({
+    dataDir: data,
+    resources,
+    executor: async (task, ctx) => {
+      if (task.spec.id === 'build') {
+        buildStarted = true;
+        await ctx.withResource('build', () =>
+          resources.withResource('build', async () => {
+            nested = true;
+          }),
+        );
+      } else independent = true;
+      return { passed: true };
+    },
+  });
+  cleanup(t, async () => {
+    release.resolve();
+    await external;
+    await scheduler.close();
+  });
+  await scheduler.enqueue(
+    [spec('build', repo, { resource: 'build' }), spec('independent', repo)],
+    { operationId: 'shared-build' },
+  );
+  scheduler.start();
+  await until(() => independent);
+  assert.equal(buildStarted, false);
+  release.resolve();
+  await external;
+  await scheduler.waitForIdle();
+  assert.equal(nested, true);
+});

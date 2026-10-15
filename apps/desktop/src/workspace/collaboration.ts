@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   closeSync,
   mkdirSync,
@@ -50,6 +51,7 @@ export interface TaskExecutionContext {
   signal: AbortSignal;
   worktree: string;
   artifactDirectory: string;
+  bindRuntimeSession(sessionId: string): void;
   /** Enforce this in the injected runtime's permissions; Git worktrees are not security sandboxes. */
   access: TaskSpec['access'];
   dependencies: { task: TaskRecord; artifacts: TaskArtifact[] }[];
@@ -77,6 +79,7 @@ export interface CollaborationOptions {
   dataDir: string;
   executor: TaskExecutor;
   limits?: Partial<CollaborationLimits>;
+  resources?: CollaborationResources;
 }
 export class OperationNeedsReviewError extends Error {
   constructor(readonly operationId: string) {
@@ -152,19 +155,19 @@ class ResourcePool {
     public capacity: number,
     private readonly changed: () => void,
   ) {}
-  tryAcquire(): (() => void) | undefined {
+  tryAcquire(): ((notify?: boolean) => void) | undefined {
     if (this.active >= this.capacity || this.waiters.length) return;
     this.active++;
     return this.release();
   }
-  private release(): () => void {
+  private release(): (notify?: boolean) => void {
     let released = false;
-    return () => {
+    return (notify = true) => {
       if (released) return;
       released = true;
       this.active--;
       this.drain();
-      this.changed();
+      if (notify) this.changed();
     };
   }
   private drain(): void {
@@ -202,15 +205,82 @@ class ResourcePool {
     });
   }
 }
+/** One instance per app worker; every authorized workspace shares these limits. */
+export class CollaborationResources {
+  readonly pools: Record<TaskResource, ResourcePool>;
+  private readonly ownership = new AsyncLocalStorage<Set<TaskResource>>();
+  private limits: CollaborationLimits;
+  private readonly listeners = new Set<() => void>();
+  constructor(limits: Partial<CollaborationLimits> = {}) {
+    this.limits = { ...DEFAULT_COLLABORATION_LIMITS, ...limits };
+    validateLimits(this.limits);
+    const changed = () => {
+      for (const listener of this.listeners) listener();
+    };
+    this.pools = {
+      agent: new ResourcePool(this.limits.agents, changed),
+      build: new ResourcePool(this.limits.builds, changed),
+      ui: new ResourcePool(this.limits.ui, changed),
+      browser: new ResourcePool(this.limits.browsers, changed),
+    };
+  }
+  getLimits(): CollaborationLimits {
+    return { ...this.limits };
+  }
+  /** @internal The scheduler already owns these leases before starting an executor. */
+  runWithHeldResources<T>(resources: TaskResource[], action: () => T): T {
+    return this.ownership.run(
+      new Set([...(this.ownership.getStore() ?? []), ...resources]),
+      action,
+    );
+  }
+  async withResource<T>(
+    resource: TaskResource,
+    action: () => Promise<T>,
+    signal: AbortSignal = new AbortController().signal,
+  ): Promise<T> {
+    signal.throwIfAborted();
+    if (this.ownership.getStore()?.has(resource)) return action();
+    const release = await this.pools[resource].acquire(signal);
+    try {
+      return await this.runWithHeldResources([resource], async () => {
+        signal.throwIfAborted();
+        return action();
+      });
+    } finally {
+      release();
+    }
+  }
+  setLimits(limits: Partial<CollaborationLimits>): void {
+    const next = { ...this.limits, ...limits };
+    validateLimits(next);
+    this.limits = next;
+    this.pools.agent.resize(next.agents);
+    this.pools.build.resize(next.builds);
+    this.pools.ui.resize(next.ui);
+    this.pools.browser.resize(next.browsers);
+    for (const listener of this.listeners) listener();
+  }
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+}
 /** Main-process only. The caller supplies an authorized repository root and an approval-aware executor. */
 export class CollaborationScheduler {
   private readonly store: TaskStore;
   private readonly trees: TaskWorktrees;
   private readonly pools: Record<TaskResource, ResourcePool>;
+  private readonly resources: CollaborationResources;
+  private readonly unsubscribeResources: () => void;
   private readonly listeners = new Set<(event: CollaborationEvent) => void>();
   private readonly active = new Map<
     string,
     { controller: AbortController; done: Promise<void> }
+  >();
+  private readonly failedCleanups = new Map<
+    string,
+    (() => void | Promise<void>)[]
   >();
   private readonly pendingOperations = new Map<string, Promise<Json>>();
   private readonly idleWaiters = new Set<() => void>();
@@ -223,6 +293,8 @@ export class CollaborationScheduler {
   private closed = false;
   private closePromise?: Promise<void>;
   constructor(private readonly options: CollaborationOptions) {
+    if (!isAbsolute(options.dataDir))
+      throw new Error('collaboration data directory must be absolute');
     this.limits = { ...DEFAULT_COLLABORATION_LIMITS, ...options.limits };
     validateLimits(this.limits);
     mkdirSync(options.dataDir, { recursive: true, mode: 0o700 });
@@ -235,12 +307,11 @@ export class CollaborationScheduler {
       throw error;
     }
     this.trees = new TaskWorktrees(join(options.dataDir, 'worktrees'));
-    this.pools = {
-      agent: new ResourcePool(this.limits.agents, () => this.schedule()),
-      build: new ResourcePool(this.limits.builds, () => this.schedule()),
-      ui: new ResourcePool(this.limits.ui, () => this.schedule()),
-      browser: new ResourcePool(this.limits.browsers, () => this.schedule()),
-    };
+    this.resources =
+      options.resources ?? new CollaborationResources(this.limits);
+    this.limits = this.resources.getLimits();
+    this.pools = this.resources.pools;
+    this.unsubscribeResources = this.resources.subscribe(() => this.schedule());
     this.store.transaction(() => {
       for (const task of this.store.list())
         if (
@@ -472,17 +543,12 @@ export class CollaborationScheduler {
     this.schedule();
   }
   getLimits(): CollaborationLimits {
-    return { ...this.limits };
+    return this.resources.getLimits();
   }
   setLimits(limits: Partial<CollaborationLimits>): void {
     this.assertOpen();
-    const next = { ...this.limits, ...limits };
-    validateLimits(next);
-    this.limits = next;
-    this.pools.agent.resize(next.agents);
-    this.pools.build.resize(next.builds);
-    this.pools.ui.resize(next.ui);
-    this.pools.browser.resize(next.browsers);
+    this.resources.setLimits(limits);
+    const next = this.resources.getLimits();
     this.event('limits.changed', { ...next });
     this.schedule();
   }
@@ -533,13 +599,17 @@ export class CollaborationScheduler {
         const releaseResource =
           resource === 'agent' ? () => {} : this.pools[resource].tryAcquire();
         if (!releaseResource) {
-          releaseAgent();
+          releaseAgent(false);
           continue;
         }
         const controller = new AbortController();
         // Defer executor creation until ownership is in the active map (including synchronous cancellation).
         const done = Promise.resolve()
-          .then(() => this.execute(task.spec.id, controller, resource))
+          .then(() =>
+            this.resources.runWithHeldResources(['agent', resource], () =>
+              this.execute(task.spec.id, controller, resource),
+            ),
+          )
           .finally(() => {
             this.active.delete(task.spec.id);
             releaseResource();
@@ -547,6 +617,7 @@ export class CollaborationScheduler {
             this.schedule();
             this.checkIdle();
           });
+        void done.catch(() => {});
         this.active.set(task.spec.id, { controller, done });
         this.update(task.spec.id, 'preparing', { reason: undefined });
       }
@@ -583,6 +654,17 @@ export class CollaborationScheduler {
         signal: controller.signal,
         worktree: prepared.path,
         artifactDirectory,
+        bindRuntimeSession: (sessionId) => {
+          if (!sessionId.trim())
+            throw new Error('runtime session id is required');
+          const current = this.store.get(id)!;
+          this.update(id, current.state, { runtimeSessionId: sessionId });
+          this.event(
+            'task.session',
+            { runtimeSessionId: sessionId },
+            this.store.get(id),
+          );
+        },
         access: task.spec.access,
         dependencies: task.spec.dependencies.map((dependency) => ({
           task: this.store.get(dependency)!,
@@ -598,19 +680,7 @@ export class CollaborationScheduler {
             this.update(id, 'running', { reason: undefined });
         },
         withResource: (name, action) =>
-          track(
-            (async () => {
-              if (controller.signal.aborted) throw aborted();
-              if (name === resource) return action();
-              const release = await this.pools[name].acquire(controller.signal);
-              try {
-                if (controller.signal.aborted) throw aborted();
-                return await action();
-              } finally {
-                release();
-              }
-            })(),
-          ),
+          track(this.resources.withResource(name, action, controller.signal)),
         runOperation: (operationId, input, action) =>
           track(
             this.runOperation(
@@ -644,13 +714,16 @@ export class CollaborationScheduler {
       void outcomes;
     }
     const cleanupErrors: unknown[] = [];
+    const failedCleanups: (() => void | Promise<void>)[] = [];
     for (const cleanup of cleanups.reverse())
       try {
         await cleanup();
       } catch (cause) {
         cleanupErrors.push(cause);
+        failedCleanups.push(cleanup);
       }
     if (cleanupErrors.length) {
+      this.failedCleanups.set(id, failedCleanups);
       this.update(id, 'interrupted', {
         reason: `cleanup failed: ${cleanupErrors.map(message).join('; ')}`,
       });
@@ -674,6 +747,8 @@ export class CollaborationScheduler {
         },
       );
     this.reconcile();
+    if (cleanupErrors.length)
+      throw new AggregateError(cleanupErrors, 'task cleanup failed');
   }
   private async runOperation<T extends Json>(
     task: TaskRecord,
@@ -772,6 +847,31 @@ export class CollaborationScheduler {
     this.publish(event);
     return artifact;
   }
+  hasActiveTask(id: string): boolean {
+    const task = this.store.get(id);
+    return (
+      this.active.has(id) ||
+      this.failedCleanups.has(id) ||
+      Boolean(task && !terminal.has(task.state))
+    );
+  }
+  private async settleFailedCleanup(id: string): Promise<void> {
+    const callbacks = this.failedCleanups.get(id);
+    if (!callbacks) return;
+    const remaining: (() => void | Promise<void>)[] = [],
+      errors: unknown[] = [];
+    for (const callback of callbacks)
+      try {
+        await callback();
+      } catch (error) {
+        remaining.push(callback);
+        errors.push(error);
+      }
+    if (remaining.length) this.failedCleanups.set(id, remaining);
+    else this.failedCleanups.delete(id);
+    if (errors.length)
+      throw new AggregateError(errors, 'task cleanup has not completed');
+  }
   async cancel(id: string): Promise<TaskRecord> {
     this.assertOpen();
     const task = this.store.get(id);
@@ -787,6 +887,7 @@ export class CollaborationScheduler {
       this.reconcile();
       this.schedule();
     }
+    await this.settleFailedCleanup(id);
     this.checkIdle();
     return this.store.get(id)!;
   }
@@ -801,6 +902,8 @@ export class CollaborationScheduler {
         throw new Error('operationId was reused');
       return this.store.get(id)!;
     }
+    if (this.failedCleanups.has(id))
+      throw new Error('finish task cleanup before retrying');
     const task = this.store.get(id);
     if (
       !task ||
@@ -876,6 +979,24 @@ export class CollaborationScheduler {
       await Promise.allSettled(
         [...this.active.values()].map((entry) => entry.done),
       );
+      const errors: unknown[] = [];
+      for (const [id, callbacks] of this.failedCleanups) {
+        const remaining: (() => void | Promise<void>)[] = [];
+        for (const callback of callbacks)
+          try {
+            await callback();
+          } catch (error) {
+            errors.push(error);
+            remaining.push(callback);
+          }
+        if (remaining.length) this.failedCleanups.set(id, remaining);
+        else this.failedCleanups.delete(id);
+      }
+      if (errors.length) {
+        this.closePromise = undefined;
+        throw new AggregateError(errors, 'task cleanup has not completed');
+      }
+      this.unsubscribeResources();
       this.listeners.clear();
       this.store.close();
       this.closed = true;

@@ -46,6 +46,7 @@ export interface TaskVerificationContext {
   /** Actual redacted runtime events; no model-supplied verification claims. */
   events: CircleEvent[];
   artifactDirectory: string;
+  withResource: TaskExecutionContext['withResource'];
 }
 export interface AgentTaskExecutorOptions {
   createRuntime(
@@ -247,8 +248,15 @@ export function createAgentTaskExecutor(
       runtime.jobs.list().some((job) => job.status === 'running')
     )
       throw new Error('task factory returned a runtime with existing work');
+    context.bindRuntimeSession(runtime.session.id);
     runtime.runOptions.exclude_tools = [
-      ...new Set([...runtime.runOptions.exclude_tools, 'task']),
+      ...new Set([
+        ...runtime.runOptions.exclude_tools,
+        'task',
+        ...runtime.allTools
+          .filter((tool) => tool.name.startsWith('native_tasks_'))
+          .map((tool) => tool.name),
+      ]),
     ];
     const readonly = context.access === 'readonly';
     if (readonly) {
@@ -264,6 +272,7 @@ export function createAgentTaskExecutor(
       runtime.harness.tools = runtime.harness.tools.filter(
         (tool) =>
           tool.name !== 'task' &&
+          !tool.name.startsWith('native_tasks_') &&
           (!readonly || (READ_TOOLS.has(tool.name) && tool.effect === 'read')),
       );
     };
@@ -338,6 +347,7 @@ export function createAgentTaskExecutor(
           changes,
           events,
           artifactDirectory: context.artifactDirectory,
+          withResource: context.withResource,
         })
       : [];
     if (!Array.isArray(checks))

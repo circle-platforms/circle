@@ -1,6 +1,15 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { TaskRecord } from './collaboration.js';
@@ -8,14 +17,56 @@ import type { TaskChanges } from './task-executor.js';
 import { resolveTaskBaseline } from './task-worktrees.js';
 const exec = promisify(execFile);
 const queues = new Map<string, Promise<unknown>>();
-async function git(path: string, args: string[]): Promise<Buffer> {
+async function git(
+  path: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = {},
+): Promise<Buffer> {
   return (
     await exec('git', ['-C', path, ...args], {
       encoding: 'buffer',
       maxBuffer: 64 * 1024 * 1024,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...env },
     })
   ).stdout;
+}
+async function gitInput(
+  path: string,
+  args: string[],
+  input: Buffer,
+  env: NodeJS.ProcessEnv = {},
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('git', ['-C', path, ...args], {
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...env },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const output: Buffer[] = [],
+      errors: Buffer[] = [];
+    let bytes = 0;
+    child.stdout.on('data', (chunk: Buffer) => {
+      bytes += chunk.length;
+      if (bytes > 64 * 1024 * 1024) child.kill();
+      else output.push(chunk);
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      bytes += chunk.length;
+      if (bytes > 64 * 1024 * 1024) child.kill();
+      else errors.push(chunk);
+    });
+    child.once('error', reject);
+    child.stdin.on('error', () => {});
+    child.once('close', (code) =>
+      code === 0
+        ? resolve(Buffer.concat(output))
+        : reject(
+            new Error(
+              `git ${args[0]} failed (${code}): ${Buffer.concat(errors).toString('utf8')}`,
+            ),
+          ),
+    );
+    child.stdin.end(input);
+  });
 }
 const text = (value: Buffer) => value.toString('utf8').trim();
 function inside(root: string, path: string): boolean {
@@ -56,6 +107,8 @@ export interface TaskIntegratorOptions {
 /** Applies reviewed patches only in an owned integration worktree; never alters the caller's index or working files. */
 export class TaskIntegrator {
   constructor(private readonly options: TaskIntegratorOptions) {
+    if (!isAbsolute(options.dataDir))
+      throw new Error('integration data directory must be absolute');
     if (
       !options.identity.name.trim() ||
       !options.identity.email.trim() ||
@@ -258,54 +311,148 @@ export class TaskIntegrator {
           head: before,
         });
       if (patch.length) {
+        const indexPath = text(
+          await git(workspace.path, [
+            'rev-parse',
+            '--path-format=absolute',
+            '--git-path',
+            'index',
+          ]),
+        );
+        const lockPath = `${indexPath}.lock`;
+        let lock;
         try {
-          await git(workspace.path, [
-            'apply',
-            '--3way',
-            '--index',
-            '--',
-            patchPath,
-          ]);
+          lock = await open(lockPath, 'wx', 0o600);
         } catch (error) {
-          const conflicts = [
-            ...new Set(
-              (await git(workspace.path, ['ls-files', '--unmerged', '-z']))
-                .toString()
-                .split('\0')
-                .filter(Boolean)
-                .map((line) => line.slice(line.indexOf('\t') + 1)),
-            ),
-          ];
-          return outcome('conflict', {
-            taskId: task.spec.id,
-            conflicts,
-            reason: `patch could not be integrated; working files retained: ${(error as Error).message}`,
-          });
+          if ((error as NodeJS.ErrnoException).code === 'EEXIST')
+            return outcome('needs_review', {
+              taskId: task.spec.id,
+              reason: 'integration Git index is in use',
+            });
+          throw error;
         }
-        options.signal?.throwIfAborted();
-        if (text(await git(workspace.path, ['rev-parse', 'HEAD'])) !== before)
-          return outcome('baseline_changed', {
-            reason: 'integration HEAD changed before commit',
-          });
-        const paths = (
-          await git(workspace.path, ['diff', '--cached', '--name-only', '-z'])
-        )
-          .toString()
-          .split('\0')
-          .filter(Boolean);
-        if (paths.length) {
-          const title = `Integrate task ${task.spec.id.replace(/[\r\n]/g, ' ')}`;
-          await git(workspace.path, [
-            '-c',
-            `user.name=${this.options.identity.name}`,
-            '-c',
-            `user.email=${this.options.identity.email}`,
-            'commit',
-            '-s',
-            '-m',
-            title,
-          ]);
-          head = text(await git(workspace.path, ['rev-parse', 'HEAD']));
+        let temporary: string;
+        try {
+          temporary = await mkdtemp(join(this.directory(id), 'merge-'));
+        } catch (error) {
+          await lock.close();
+          await rm(lockPath, { force: true });
+          throw error;
+        }
+        const env = {
+          GIT_INDEX_FILE: join(temporary, 'index'),
+          GIT_OPTIONAL_LOCKS: '0',
+        };
+        let installed = false;
+        const installIndex = async () => {
+          await lock.writeFile(await readFile(env.GIT_INDEX_FILE));
+          await lock.close();
+          await rename(lockPath, indexPath);
+          installed = true;
+        };
+        try {
+          // Recheck under the real Git index lock. Concurrent stage/checkout cannot join this commit.
+          if (
+            text(
+              await git(
+                workspace.path,
+                ['status', '--porcelain', '--untracked-files=all'],
+                { GIT_OPTIONAL_LOCKS: '0' },
+              ),
+            )
+          )
+            return outcome('needs_review', {
+              reason:
+                'integration worktree changed before its Git index lock was acquired',
+            });
+          await git(workspace.path, ['read-tree', before], env);
+          await git(workspace.path, ['update-index', '--refresh'], env);
+          try {
+            await gitInput(
+              workspace.path,
+              ['apply', '--3way', '--index', '-'],
+              patch,
+              env,
+            );
+          } catch (error) {
+            const conflicts = [
+              ...new Set(
+                (
+                  await git(
+                    workspace.path,
+                    ['ls-files', '--unmerged', '-z'],
+                    env,
+                  )
+                )
+                  .toString()
+                  .split('\0')
+                  .filter(Boolean)
+                  .map((line) => line.slice(line.indexOf('\t') + 1)),
+              ),
+            ];
+            await installIndex();
+            return outcome('conflict', {
+              taskId: task.spec.id,
+              conflicts,
+              reason: `patch could not be integrated; working files retained: ${(error as Error).message}`,
+            });
+          }
+          options.signal?.throwIfAborted();
+          if (text(await git(workspace.path, ['rev-parse', 'HEAD'])) !== before)
+            return outcome('baseline_changed', {
+              reason: 'integration HEAD changed before commit',
+            });
+          const paths = (
+            await git(
+              workspace.path,
+              ['diff', '--cached', '--name-only', '-z'],
+              env,
+            )
+          )
+            .toString()
+            .split('\0')
+            .filter(Boolean);
+          if (paths.some((path) => !changes.paths.includes(path)))
+            return outcome('needs_review', {
+              taskId: task.spec.id,
+              reason:
+                'unexpected paths entered the candidate index; files retained',
+            });
+          if (paths.length) {
+            const tree = text(await git(workspace.path, ['write-tree'], env));
+            const title = `Integrate task ${task.spec.id.replace(/[\r\n]/g, ' ')}`;
+            const body = Buffer.from(
+              `${title}\n\nSigned-off-by: ${this.options.identity.name} <${this.options.identity.email}>\n`,
+            );
+            const identity = {
+              ...env,
+              GIT_AUTHOR_NAME: this.options.identity.name,
+              GIT_AUTHOR_EMAIL: this.options.identity.email,
+              GIT_COMMITTER_NAME: this.options.identity.name,
+              GIT_COMMITTER_EMAIL: this.options.identity.email,
+            };
+            const commit = text(
+              await gitInput(
+                workspace.path,
+                ['commit-tree', tree, '-p', before, '-F', '-'],
+                body,
+                identity,
+              ),
+            );
+            try {
+              await git(workspace.path, ['update-ref', 'HEAD', commit, before]);
+            } catch {
+              return outcome('baseline_changed', {
+                reason: 'integration HEAD changed while committing',
+              });
+            }
+            head = commit;
+          }
+          await installIndex();
+        } finally {
+          await lock.close().catch(() => {});
+          if (!installed) await rm(lockPath, { force: true });
+          await rm(temporary, { recursive: true, force: true });
         }
       }
       workspace.merged.push({

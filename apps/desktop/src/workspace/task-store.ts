@@ -37,6 +37,7 @@ export interface TaskRecord {
   state: TaskState;
   attempt: number;
   worktree?: string;
+  runtimeSessionId?: string;
   branch?: string;
   reason?: string;
   result?: Json;

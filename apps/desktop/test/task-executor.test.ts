@@ -533,7 +533,7 @@ test('real 3-way conflicts retain integration files and do not mark later task m
     expectedHead: baseline,
   });
   assert.equal(result.status, 'conflict');
-  assert.equal(result.taskId, 'b');
+  assert.equal(result.taskId, 'b', JSON.stringify(result));
   assert.ok(result.conflicts!.includes('value.txt'));
   assert.equal(result.workspace.merged.length, 1);
   assert.match(
@@ -621,5 +621,99 @@ test('rename capture removes the original path and verification mutations requir
   assert.equal(
     await readFile(join(target.path, 'renamed.txt'), 'utf8'),
     'base\n',
+  );
+});
+
+test('integration applies verified bytes from stdin and prevents concurrent staging from entering its commit', async (t) => {
+  const repo = scratch(t),
+    data = scratch(t),
+    shim = scratch(t);
+  const baseline = await repository(repo);
+  const tasks = await acceptedTasks(repo, data, t, [
+    ['a', 'a.txt', 'verified'],
+  ]);
+  const integrator = new TaskIntegrator({
+    workspace: repo,
+    dataDir: data,
+    identity: { name: 'Fixture', email: 'fixture@example.invalid' },
+  });
+  const workspace = await integrator.create(baseline);
+  const originalPath = process.env.PATH;
+  const realGit = (
+    await exec('/usr/bin/which', ['git'], { encoding: 'utf8' })
+  ).stdout.trim();
+  const patchPath = (tasks[0]!.result as { changes: { patchPath: string } })
+    .changes.patchPath;
+  const stageResult = join(data, 'concurrent-stage.txt');
+  const script = `#!${process.execPath}\nconst {spawnSync}=require('node:child_process');const fs=require('node:fs');const args=process.argv.slice(2);if(args.includes('apply')){fs.writeFileSync(${JSON.stringify(patchPath)},'tampered after hash');fs.writeFileSync(${JSON.stringify(join(workspace.path, 'unrelated.txt'))},'human concurrent file');const stageEnv={...process.env};delete stageEnv.GIT_INDEX_FILE;const stage=spawnSync(${JSON.stringify(realGit)},['-C',${JSON.stringify(workspace.path)},'add','--','unrelated.txt'],{encoding:'utf8',env:stageEnv});fs.writeFileSync(${JSON.stringify(stageResult)},String(stage.status));}const result=spawnSync(${JSON.stringify(realGit)},args,{stdio:'inherit'});process.exit(result.status??1);\n`;
+  await writeFile(join(shim, 'git'), script, { mode: 0o700 });
+  process.env.PATH = shim + ':' + originalPath;
+  try {
+    const result = await integrator.mergeCandidates(workspace.id, tasks, {
+      expectedHead: baseline,
+    });
+    assert.equal(result.status, 'merged', result.reason);
+    assert.equal(
+      await readFile(join(workspace.path, 'a.txt'), 'utf8'),
+      'verified',
+    );
+    assert.equal(await readFile(patchPath, 'utf8'), 'tampered after hash');
+    assert.notEqual(await readFile(stageResult, 'utf8'), '0');
+    await assert.rejects(git(workspace.path, 'show', 'HEAD:unrelated.txt'));
+    assert.equal(
+      await readFile(join(workspace.path, 'unrelated.txt'), 'utf8'),
+      'human concurrent file',
+    );
+    assert.equal(await git(repo, 'rev-parse', 'HEAD'), baseline);
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});
+
+test('task runtime cannot inherit parent-only native task tools through a mistaken factory', async (t) => {
+  const repo = scratch(t),
+    data = scratch(t),
+    home = scratch(t);
+  await repository(repo);
+  let expanded = 0;
+  const model = new ScriptedModel([
+    {
+      message: assistant('', [
+        { id: 'escape', name: 'native_tasks_enqueue', args: {} },
+      ]),
+    },
+    { message: assistant('finished') },
+  ]);
+  const scheduler = new CollaborationScheduler({
+    dataDir: data,
+    executor: createAgentTaskExecutor({
+      createRuntime: runtimeFactory(home, model, {
+        approve: async () => 'approve',
+        extraTools: [
+          {
+            name: 'native_tasks_enqueue',
+            effect: 'execute',
+            subagents: false,
+            description: 'parent only',
+            parameters: { type: 'object', properties: {} },
+            run: async () => {
+              expanded++;
+              return 'unexpected';
+            },
+          },
+        ],
+      }),
+    }),
+  });
+  cleanup(t, () => scheduler.close());
+  await scheduler.enqueue([spec('child', repo)], { operationId: 'recursive' });
+  scheduler.start();
+  await scheduler.waitForIdle();
+  assert.equal(expanded, 0);
+  assert.ok(
+    model.requests.every(
+      (request) =>
+        !request.tools.some((tool) => tool.name.startsWith('native_tasks_')),
+    ),
   );
 });

@@ -2,10 +2,11 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { rename, rm, writeFile } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 import {
   CollaborationScheduler,
+  type CollaborationResources,
   DEFAULT_COLLABORATION_LIMITS,
   type CollaborationEvent,
   type CollaborationLimits,
@@ -19,8 +20,11 @@ import {
 } from './task-executor.js';
 import { TaskIntegrator } from './task-merge.js';
 const exec = promisify(execFile);
+const settingsQueues = new Map<string, Promise<unknown>>();
 export interface TaskServiceOptions extends AgentTaskExecutorOptions {
   dataDir: string;
+  resources?: CollaborationResources;
+  settingsPath?: string;
   /** Already granted and trusted by the root controller, never copied from renderer params. */
   workspace: string;
   emit(event: CollaborationEvent): void;
@@ -79,7 +83,6 @@ export class TaskService {
   private readonly lifetime = new AbortController();
   private integrator?: Promise<TaskIntegrator>;
   private unsubscribe: () => void;
-  private mutations: Promise<unknown> = Promise.resolve();
   private closing = false;
   private closePromise?: Promise<void>;
   constructor(private readonly options: TaskServiceOptions) {
@@ -87,8 +90,16 @@ export class TaskService {
       throw new Error('task service data directory must be absolute');
     this.workspace = realpathSync(options.workspace);
     mkdirSync(options.dataDir, { recursive: true, mode: 0o700 });
-    this.settingsPath = join(options.dataDir, 'task-settings.json');
-    let saved: CollaborationLimits = { ...DEFAULT_COLLABORATION_LIMITS };
+    if (options.resources && !options.settingsPath)
+      throw new Error('shared task resources require a shared settings path');
+    if (options.settingsPath && !isAbsolute(options.settingsPath))
+      throw new Error('task settings path must be absolute');
+    this.settingsPath =
+      options.settingsPath ?? join(options.dataDir, 'task-settings.json');
+    mkdirSync(dirname(this.settingsPath), { recursive: true, mode: 0o700 });
+    let saved: CollaborationLimits = options.resources?.getLimits() ?? {
+      ...DEFAULT_COLLABORATION_LIMITS,
+    };
     try {
       saved = limits(
         JSON.parse(readFileSync(this.settingsPath, 'utf8')),
@@ -100,13 +111,47 @@ export class TaskService {
           `could not load task settings: ${(error as Error).message}`,
         );
     }
+    if (options.resources) options.resources.setLimits(saved);
     this.scheduler = new CollaborationScheduler({
+      resources: options.resources,
       dataDir: options.dataDir,
       limits: saved,
       executor: createAgentTaskExecutor(options),
     });
     this.unsubscribe = this.scheduler.subscribe((event) => options.emit(event));
     if (options.autoStart !== false) this.scheduler.start();
+  }
+  hasActiveSession(sessionId: string): boolean {
+    return this.scheduler
+      .list()
+      .some(
+        (task) =>
+          (task.spec.sessionId === sessionId ||
+            task.runtimeSessionId === sessionId) &&
+          this.scheduler.hasActiveTask(task.spec.id),
+      );
+  }
+  async cancelSession(sessionId: string): Promise<void> {
+    if (this.closing) throw new Error('task service is closing');
+    const owned = this.scheduler
+      .list()
+      .filter(
+        (task) =>
+          (task.spec.sessionId === sessionId ||
+            task.runtimeSessionId === sessionId) &&
+          this.scheduler.hasActiveTask(task.spec.id),
+      );
+    const results = await Promise.allSettled(
+      owned.map((task) => this.scheduler.cancel(task.spec.id)),
+    );
+    const errors = results
+      .filter((result) => result.status === 'rejected')
+      .map((result) => result.reason);
+    if (errors.length)
+      throw new AggregateError(
+        errors,
+        'session tasks have not completed cleanup',
+      );
   }
   getTask(id: string): TaskRecord | undefined {
     return this.scheduler.get(id);
@@ -179,8 +224,15 @@ export class TaskService {
     };
   }
   private serial<T>(action: () => Promise<T>): Promise<T> {
-    const pending = this.mutations.catch(() => {}).then(action);
-    this.mutations = pending;
+    const previous = settingsQueues.get(this.settingsPath) ?? Promise.resolve();
+    const pending = previous.catch(() => {}).then(action);
+    settingsQueues.set(this.settingsPath, pending);
+    void pending
+      .finally(() => {
+        if (settingsQueues.get(this.settingsPath) === pending)
+          settingsQueues.delete(this.settingsPath);
+      })
+      .catch(() => {});
     return pending;
   }
   private async dispatch(
