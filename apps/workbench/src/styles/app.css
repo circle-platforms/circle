@@ -642,6 +642,48 @@ pre {
   padding: 0;
   background: none;
 }
+.code-block {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.code-block-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px 4px 12px;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  border-bottom: 1px solid var(--border);
+}
+.code-block-bar button {
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+}
+.code-block-bar button:hover {
+  color: var(--fg);
+}
+.code-block pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.token-comment {
+  color: var(--muted);
+}
+.token-string {
+  color: var(--accent);
+}
+.token-keyword {
+  color: var(--violet);
+}
+.token-number {
+  color: var(--attention);
+}
 .markdown a {
   color: var(--accent);
   text-decoration: underline;
@@ -1947,7 +1989,10 @@ pre {
   border-top: 1px solid var(--border);
   margin-top: 28px;
   padding-top: 23px;
-  max-width: 850px;
+}
+.page.settings-page {
+  width: min(1080px, 100%);
+  margin-inline: auto;
 }
 .settings-block.first {
   margin-top: 0;
@@ -3397,6 +3442,60 @@ pre {
   line-height: 1.5;
   margin-top: 2px;
 }
+.effort-menu {
+  min-width: 260px;
+}
+.effort-menu [role='menuitem'] {
+  display: grid;
+  grid-template-columns: 1fr 14px;
+  align-items: start;
+  gap: 9px;
+}
+.effort-menu strong {
+  display: block;
+  font-weight: 550;
+}
+.effort-menu small {
+  display: block;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  line-height: 1.5;
+  margin-top: 2px;
+}
+.viewing-tag {
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  white-space: nowrap;
+}
+.session-rename {
+  width: 100%;
+  min-width: 0;
+  padding: 0 2px;
+  border: 0;
+  border-bottom: 1px solid var(--accent);
+  border-radius: 0;
+  background: transparent;
+}
+.session-menu [role='menuitem'] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--ui-small);
+}
+.session-menu kbd {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--ui-tiny);
+}
+.keybinding-list kbd {
+  font-family: var(--mono);
+  font-size: var(--ui-tiny);
+  color: var(--muted);
+}
+.skill-draft {
+  margin-bottom: 18px;
+}
 
 /* A request where it happens in the conversation. */
 .inline-request {
@@ -3623,6 +3722,12 @@ pre {
    plain text and folded tool calls, and a round input box with a footbar under it. */
 .workbench {
   grid-template-columns: 252px minmax(0, 1fr);
+}
+.workbench.sidebar-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+.workbench.sidebar-collapsed .desktop-sidebar {
+  display: none;
 }
 .sidebar {
   padding: 0 10px;
@@ -3904,6 +4009,7 @@ pre {
   opacity: 0;
   transition: opacity 0.15s ease;
 }
+.message.user .message-meta,
 .message:hover .message-meta,
 .message-meta:focus-within {
   opacity: 1;

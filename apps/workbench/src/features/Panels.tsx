@@ -390,7 +390,7 @@ export function ContextPanel({ onDialog }: Pick<Props, 'onDialog'>) {
         values={{
           [t('workspace')]: workspace.path,
           [t('model')]: session.model,
-          [t('effort')]: EFFORT_TEXT[session.effort]?.() ?? session.effort,
+          [t('effort')]: EFFORT_TEXT[session.effort]?.label() ?? session.effort,
           [t('mode')]: MODE_TEXT[sessionMode(session)].label(),
           [t('connection')]: snapshot.runtime?.configured
             ? t('configured')

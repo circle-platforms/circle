@@ -2615,6 +2615,35 @@ export class RuntimeController {
         );
         return { name, path };
       }
+      case 'create-skill': {
+        if (runtime.busy)
+          throw Error('finish the current turn before adding a skill');
+        if (
+          !isFolderTrusted(runtime.options.settings, runtime.options.workspace)
+        )
+          throw Error('trust this workspace first');
+        const name = text(p.name, 'skill name', 64);
+        if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name))
+          throw Error('invalid skill name');
+        const description = text(p.description ?? '', 'description', 1024);
+        const body = text(p.body ?? '', 'skill', 120_000);
+        const folder = join(
+          runtime.options.workspace,
+          '.circle',
+          'skills',
+          name,
+        );
+        mkdirSync(folder, { recursive: true, mode: 0o700 });
+        const skillPath = join(folder, 'SKILL.md');
+        if (existsSync(skillPath)) throw Error('skill already exists');
+        writeFileSync(
+          skillPath,
+          `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n\n${body}\n`,
+          { mode: 0o600 },
+        );
+        await runtime.reloadIntegrations();
+        return { name, path: skillPath };
+      }
       case 'write-file': {
         if (
           !isFolderTrusted(runtime.options.settings, runtime.options.workspace)

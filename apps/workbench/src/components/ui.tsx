@@ -95,13 +95,15 @@ export function Badge({
 export function EmptyState({
   title,
   children,
+  icon,
 }: {
   title: string;
   children?: ReactNode;
+  icon?: ReactNode;
 }) {
   return (
     <div className="empty-state">
-      <Search size={25} />
+      {icon ?? <Search size={25} />}
       <h3>{title}</h3>
       {children && <p>{children}</p>}
     </div>

@@ -1,5 +1,5 @@
 import { desktopHost, openNativeWorkspace } from '../host';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   Plus,
@@ -63,6 +63,43 @@ export function Sidebar({
   const current = currentSession(snapshot);
   const [all, setAll] = useState<string[]>([]);
   const [collapsed, setCollapsed] = useState<string[]>([]);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const renameDone = useRef(false);
+  const beginRename = (id: string) => {
+    renameDone.current = false;
+    setRenaming(id);
+  };
+  const commitRename = (sessionId: string, value: string, previous: string) => {
+    if (renameDone.current) return;
+    renameDone.current = true;
+    setRenaming(null);
+    const title = value.trim();
+    if (!title || title === previous) return;
+    perform(() =>
+      runtime.change((state) => {
+        const target = state.sessions.find((item) => item.id === sessionId);
+        if (target) target.title = title;
+      }),
+    );
+  };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'F2' || event.ctrlKey || event.metaKey || event.altKey)
+        return;
+      if (document.querySelector('[role="dialog"]')) return;
+      if (document.documentElement.dataset.keyCapture) return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        target.closest('input, textarea, [contenteditable="true"]')
+      )
+        return;
+      event.preventDefault();
+      beginRename(snapshot.activeSessionId);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [snapshot.activeSessionId]);
   const goSession = async (id: string) => {
     await runtime.selectSession(id);
     navigate(`/session/${id}`);
@@ -230,7 +267,41 @@ export function Sidebar({
                       });
                     }}
                   >
-                    <span>{sessionTitle(session.title)}</span>
+                    {renaming === session.id ? (
+                      <input
+                        className="session-rename"
+                        aria-label={t('rename session')}
+                        defaultValue={
+                          session.title === 'new session' ? '' : session.title
+                        }
+                        autoFocus
+                        onClick={(event) => event.preventDefault()}
+                        onKeyDown={(event) => {
+                          event.stopPropagation();
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            commitRename(
+                              session.id,
+                              event.currentTarget.value,
+                              session.title,
+                            );
+                          } else if (event.key === 'Escape') {
+                            event.preventDefault();
+                            renameDone.current = true;
+                            setRenaming(null);
+                          }
+                        }}
+                        onBlur={(event) =>
+                          commitRename(
+                            session.id,
+                            event.currentTarget.value,
+                            session.title,
+                          )
+                        }
+                      />
+                    ) : (
+                      <span>{sessionTitle(session.title)}</span>
+                    )}
                     {waiting.has(session.id) ? (
                       <i className="attention-dot" />
                     ) : session.state === 'waiting' ? (
@@ -239,6 +310,7 @@ export function Sidebar({
                   </NavLink>
                   <SessionMenu
                     session={session}
+                    onRename={() => beginRename(session.id)}
                     onDialog={(dialog, selection) =>
                       onDialog?.(dialog, selection)
                     }

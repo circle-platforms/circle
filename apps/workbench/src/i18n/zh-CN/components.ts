@@ -18,6 +18,7 @@ export const components: Record<string, string> = {
   'agent record': '子代理记录',
   'copy tool output': '复制工具输出',
   copied: '已复制',
+  copy: '复制',
   'clipboard unavailable': '剪贴板不可用',
   'raw input': '原始输入',
   'raw output': '原始输出',

@@ -12,6 +12,18 @@ const RETRIES: Record<string, () => string> = {
   'endpoint error': () => t('endpoint error'),
   error: () => t('error'),
 };
+const VERBS: Record<string, () => string> = {
+  thinking: () => t('thinking'),
+  considering: () => t('considering'),
+  analyzing: () => t('analyzing'),
+  brewing: () => t('brewing'),
+  pondering: () => t('pondering'),
+  cogitating: () => t('cogitating'),
+  reflecting: () => t('reflecting'),
+  processing: () => t('processing'),
+  evaluating: () => t('evaluating'),
+  examining: () => t('examining'),
+};
 function retryText(retry: string) {
   const match = retry.match(/^(.*) (\d+\/\d+)$/);
   if (!match) return retry;
@@ -34,6 +46,7 @@ export function TurnClock({ turn }: { turn: NonNullable<Session['turn']> }) {
   return (
     <span className="turn-clock" aria-live="off" data-testid="turn-clock">
       {[
+        ...(turn.verb ? [VERBS[turn.verb.toLowerCase()]?.() ?? turn.verb] : []),
         ...(turn.retry ? [retryText(turn.retry)] : []),
         formatBusyElapsed(seconds),
         // An endpoint gives a request's tokens when it ends: none until then

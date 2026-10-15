@@ -7,15 +7,17 @@ export function Page({
   title,
   description,
   action,
+  className = '',
   children,
 }: {
   title: string;
   description?: string;
   action?: ReactNode;
+  className?: string;
   children: ReactNode;
 }) {
   return (
-    <section className="page">
+    <section className={`page ${className}`.trim()}>
       <header className="page-heading">
         <div>
           <h1>{title}</h1>

@@ -33,6 +33,7 @@ export const conversation: Record<string, string> = {
   'toggle plan': '展开或收起计划',
   'plan steps': '计划步骤',
   'plan completed · {n} steps': '计划已完成 · {n} 个步骤',
+  '✖ the turn failed': '✖ 这一轮失败了',
   'archived conversation · read only': '已归档对话 · 只读',
   'restore conversation': '恢复对话',
   steering: '插话',

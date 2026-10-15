@@ -491,6 +491,7 @@ export class LiveRuntime implements RuntimePort {
         'trust-workspace': 'trust',
         'save-secret': 'save-secret',
         'remove-secret': 'remove-secret',
+        'create-skill': 'create-skill',
         execute: 'shell',
       };
       if (kind === 'export-session') {

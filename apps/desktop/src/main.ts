@@ -109,6 +109,25 @@ const forcedLanguage: NativeLocale | undefined = process.env
   : fixtureProfile
     ? 'en'
     : undefined;
+// GTK file dialogs take their button labels from the process locale at init, which is
+// before the window can say which language it shows. A Chinese start asks for zh_CN now.
+function startupLocale(): NativeLocale {
+  if (forcedLanguage) return forcedLanguage;
+  try {
+    return systemNativeLocale(app.getPreferredSystemLanguages());
+  } catch {
+    return systemNativeLocale([
+      Intl.DateTimeFormat().resolvedOptions().locale ?? '',
+    ]);
+  }
+}
+if (startupLocale() === 'zh-CN') {
+  app.commandLine.appendSwitch('lang', 'zh-CN');
+  if (!/^zh/i.test(process.env.LANG ?? '')) {
+    process.env.LANG = 'zh_CN.UTF-8';
+    process.env.LC_MESSAGES = 'zh_CN.UTF-8';
+  }
+}
 function checkSender(event: IpcMainInvokeEvent) {
   if (
     !window ||

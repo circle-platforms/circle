@@ -1,6 +1,20 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from 'react';
 import { DropdownMenu } from 'radix-ui';
-import { MoreHorizontal } from 'lucide-react';
+import {
+  Archive,
+  FolderOpen,
+  MoreHorizontal,
+  Pencil,
+  Pin,
+  Plus,
+  Trash2,
+} from 'lucide-react';
+import { formatChord } from '../model/shortcuts';
 import { desktopHost } from '../host';
 import { useRuntime } from '../app/context';
 import {
@@ -34,6 +48,24 @@ function Menu({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+function Item({
+  icon: Icon,
+  label,
+  hint,
+  ...props
+}: {
+  icon: typeof Pin;
+  label: string;
+  hint?: string;
+} & ComponentProps<typeof DropdownMenu.Item>) {
+  return (
+    <DropdownMenu.Item {...props}>
+      <Icon size={14} />
+      <span>{label}</span>
+      {hint && <kbd>{hint}</kbd>}
+    </DropdownMenu.Item>
+  );
+}
 function Reveal({ workspaceId }: { workspaceId: string }) {
   const { perform } = useRuntime();
   const [platform, setPlatform] = useState('');
@@ -51,21 +83,24 @@ function Reveal({ workspaceId }: { workspaceId: string }) {
     };
   }, [host]);
   return (
-    <DropdownMenu.Item
+    <Item
+      icon={FolderOpen}
+      label={platform === 'darwin' ? t('show in finder') : t('show in folder')}
       disabled={!host}
       onSelect={() => perform(() => host!.revealWorkspace(workspaceId))}
-    >
-      {platform === 'darwin' ? t('show in finder') : t('show in folder')}
-    </DropdownMenu.Item>
+    />
   );
 }
 
 export function SessionMenu({
   session,
   onDialog,
+  onRename,
 }: {
   session: Session;
   onDialog: (dialog: DialogId, selection?: string) => void;
+  /** When set, rename edits the sidebar row instead of opening a dialog. */
+  onRename?: () => void;
 }) {
   const { snapshot, runtime, perform } = useRuntime();
   const archive = () =>
@@ -85,7 +120,9 @@ export function SessionMenu({
     });
   return (
     <Menu label={t('session actions for {title}', { title: session.title })}>
-      <DropdownMenu.Item
+      <Item
+        icon={Pin}
+        label={session.pinned ? t('unpin session') : t('pin session')}
         onSelect={() =>
           perform(() =>
             runtime.change((state) => {
@@ -96,21 +133,26 @@ export function SessionMenu({
             }),
           )
         }
-      >
-        {session.pinned ? t('unpin session') : t('pin session')}
-      </DropdownMenu.Item>
+      />
       <Reveal workspaceId={session.workspaceId} />
-      <DropdownMenu.Item onSelect={() => onDialog('rename', session.id)}>
-        {t('rename session')}
-      </DropdownMenu.Item>
-      <DropdownMenu.Item
+      <Item
+        icon={Pencil}
+        label={t('rename session')}
+        hint={onRename ? 'F2' : undefined}
+        onSelect={() =>
+          onRename ? onRename() : onDialog('rename', session.id)
+        }
+      />
+      <Item
+        icon={Archive}
+        label={session.archivedAt ? t('restore session') : t('archive session')}
         disabled={!session.archivedAt && !canArchiveSession(snapshot, session)}
         onSelect={archive}
-      >
-        {session.archivedAt ? t('restore session') : t('archive session')}
-      </DropdownMenu.Item>
+      />
       <DropdownMenu.Separator className="dropdown-separator" />
-      <DropdownMenu.Item
+      <Item
+        icon={Trash2}
+        label={t('delete session')}
         disabled={
           session.lifecycle === 'deleting' ||
           session.occupied ||
@@ -119,9 +161,7 @@ export function SessionMenu({
               !canArchiveSession(snapshot, session)))
         }
         onSelect={() => onDialog('delete-session', session.id)}
-      >
-        {t('delete session')}
-      </DropdownMenu.Item>
+      />
     </Menu>
   );
 }
@@ -139,7 +179,12 @@ export function WorkspaceMenu({
   const sessions = workspaceSessions(snapshot, workspace.id);
   return (
     <Menu label={t('workspace actions for {name}', { name: workspace.name })}>
-      <DropdownMenu.Item onSelect={onNew}>{t('new session')}</DropdownMenu.Item>
+      <Item
+        icon={Plus}
+        label={t('new session')}
+        hint={formatChord('ctrl+n')}
+        onSelect={onNew}
+      />
       <Reveal workspaceId={workspace.id} />
       <DropdownMenu.Item onSelect={onCollapseAll}>
         {t('collapse all')}

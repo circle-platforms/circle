@@ -1,5 +1,5 @@
 import { desktopHost, setDefaultWorkspace } from '../host';
-import { validateKeybindings } from '../model/shortcuts';
+import { KeybindingsEditor } from './KeybindingsEditor';
 import { usePlugins } from '../plugins/context';
 import { pairing } from '../plugins/registry';
 import { useState } from 'react';
@@ -38,6 +38,7 @@ import { useRuntime } from '../app/context';
 import {
   currentSession,
   EFFORTS,
+  MODES,
   sessionMode,
   sessionTitle,
 } from '../model/state';
@@ -202,7 +203,9 @@ function SessionsPage({ onSession, onDialog }: Props) {
                   · {shownTime(session.updatedAt)}
                 </small>
               </span>
-              {session.id === current.id && <Badge>{t('open')}</Badge>}
+              {session.id === current.id && (
+                <span className="viewing-tag">{t('viewing')}</span>
+              )}
               {session.archivedAt && <Badge>{t('archived')}</Badge>}
             </button>
             <IconButton
@@ -429,7 +432,7 @@ function ModelsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
                 )
               }
             >
-              {EFFORT_TEXT[effort]()}
+              {EFFORT_TEXT[effort].label()}
             </button>
           ))}
         </div>
@@ -454,15 +457,112 @@ function ModelsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
   );
 }
 function SkillsPage() {
-  const { snapshot, runtime, act } = useRuntime();
+  const { snapshot, runtime, act, perform, notify } = useRuntime();
   const [query, setQuery] = useState('');
   const [id, setId] = useState(snapshot.skills[0]?.id ?? '');
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({ name: '', description: '', body: '' });
   const selected = snapshot.skills.find((skill) => skill.id === id);
+  const addSkill = () =>
+    perform(async () => {
+      const name = draft.name.trim();
+      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
+        notify(t('use a name like review-diff'));
+        return;
+      }
+      if (runtime.mode === 'live')
+        await runtime.request('create-skill', {
+          name,
+          description: draft.description.trim(),
+          body: draft.body,
+        });
+      else
+        runtime.change((state) => {
+          state.skills.push({
+            id: name,
+            name,
+            description: draft.description.trim(),
+            path: `.circle/skills/${name}/SKILL.md`,
+            scope: 'project',
+            content: draft.body,
+          });
+        });
+      setAdding(false);
+      setDraft({ name: '', description: '', body: '' });
+      notify(t('skill added'));
+    });
   return (
     <Page
       title={t('skills')}
       description={t('Instructions loaded into a conversation when needed.')}
+      action={
+        <div className="inline-actions">
+          <Button
+            onClick={() => {
+              runtime.request('reload');
+              notify(
+                runtime.mode === 'live'
+                  ? t('reloading skills')
+                  : 'reload requested; nothing was loaded',
+              );
+            }}
+          >
+            <RotateCcw size={13} />
+            {t('reload')}
+          </Button>
+          <Button onClick={() => setAdding((value) => !value)}>
+            <Plus size={14} />
+            {t('add skill')}
+          </Button>
+        </div>
+      }
     >
+      {adding && (
+        <form
+          className="form-stack skill-draft"
+          onSubmit={(event) => {
+            event.preventDefault();
+            addSkill();
+          }}
+        >
+          <label className="field-label" htmlFor="skill-name">
+            {t('skill name')}
+          </label>
+          <input
+            id="skill-name"
+            className="input"
+            value={draft.name}
+            onChange={(event) =>
+              setDraft({ ...draft, name: event.target.value })
+            }
+          />
+          <label className="field-label" htmlFor="skill-description">
+            {t('skill description')}
+          </label>
+          <input
+            id="skill-description"
+            className="input"
+            value={draft.description}
+            onChange={(event) =>
+              setDraft({ ...draft, description: event.target.value })
+            }
+          />
+          <label className="field-label" htmlFor="skill-body">
+            {t('skill instructions')}
+          </label>
+          <textarea
+            id="skill-body"
+            className="input short"
+            value={draft.body}
+            onChange={(event) =>
+              setDraft({ ...draft, body: event.target.value })
+            }
+          />
+          <Button type="submit" className="primary">
+            {t('add skill')}
+          </Button>
+        </form>
+      )}
       {snapshot.skills.length ? (
         <div className="catalog-layout">
           <div>
@@ -516,7 +616,7 @@ function SkillsPage() {
           </div>
         </div>
       ) : (
-        <EmptyState title={t('no skills yet')}>
+        <EmptyState title={t('no skills yet')} icon={<BookOpen size={25} />}>
           {t(
             'Add a folder with a SKILL.md file to .circle/skills in your project. Circle reads it when a session starts.',
           )}
@@ -664,7 +764,7 @@ function CommandsPage() {
           </div>
         </div>
       ) : (
-        <EmptyState title={t('no commands yet')}>
+        <EmptyState title={t('no commands yet')} icon={<Command size={25} />}>
           {t(
             'Save a prompt as a Markdown file in .circle/commands in your project, or use new command.',
           )}
@@ -719,46 +819,49 @@ function McpPage() {
       }
     >
       {!snapshot.mcp.length && (
-        <EmptyState title={t('no MCP servers yet')}>
+        <EmptyState title={t('no MCP servers yet')} icon={<Plug size={25} />}>
           {t('Add a server to give Circle tools from another program.')}
         </EmptyState>
       )}
-      <div className="records">
-        {snapshot.mcp.map((item) => (
-          <div key={item.id} className="record-row">
-            <button
-              className="record-main"
-              onClick={() => setSelected(item.id)}
-            >
-              <Plug size={18} />
-              <span>
-                <strong>{item.name}</strong>
-                <small>
-                  {item.transport} ·{' '}
-                  {tn(item.tools.length, '{n} tool', '{n} tools')}
-                  {item.error ? ' · ' + item.error : ''}
-                </small>
-              </span>
-              <Status value={item.status} />
-            </button>
-            <Button onClick={() => setEditing(structuredClone(item))}>
-              {t('configure')}
-            </Button>
-            <Switch
-              label={t('enable {name}', { name: item.name })}
-              checked={item.enabled}
-              onChange={(enabled) =>
-                perform(() =>
-                  runtime.change((state) => {
-                    state.mcp.find((server) => server.id === item.id)!.enabled =
-                      enabled;
-                  }),
-                )
-              }
-            />
-          </div>
-        ))}
-      </div>
+      {snapshot.mcp.length > 0 && (
+        <div className="records">
+          {snapshot.mcp.map((item) => (
+            <div key={item.id} className="record-row">
+              <button
+                className="record-main"
+                onClick={() => setSelected(item.id)}
+              >
+                <Plug size={18} />
+                <span>
+                  <strong>{item.name}</strong>
+                  <small>
+                    {item.transport} ·{' '}
+                    {tn(item.tools.length, '{n} tool', '{n} tools')}
+                    {item.error ? ' · ' + item.error : ''}
+                  </small>
+                </span>
+                <Status value={item.status} />
+              </button>
+              <Button onClick={() => setEditing(structuredClone(item))}>
+                {t('configure')}
+              </Button>
+              <Switch
+                label={t('enable {name}', { name: item.name })}
+                checked={item.enabled}
+                onChange={(enabled) =>
+                  perform(() =>
+                    runtime.change((state) => {
+                      state.mcp.find(
+                        (server) => server.id === item.id,
+                      )!.enabled = enabled;
+                    }),
+                  )
+                }
+              />
+            </div>
+          ))}
+        </div>
+      )}
       <Modal
         open={!!server}
         onOpenChange={(open) => {
@@ -947,7 +1050,10 @@ function ExtensionsPage() {
       {tab === 'runtime' ? (
         <div className="extension-list">
           {!snapshot.extensions.length && (
-            <EmptyState title={t('no extensions yet')}>
+            <EmptyState
+              title={t('no extensions yet')}
+              icon={<Blocks size={25} />}
+            >
               {t(
                 'Put an extension in .circle/extensions/<name>/ in your project, then reload.',
               )}
@@ -1115,15 +1221,25 @@ function ApprovalsPage() {
       title={t('approvals')}
       description={t('Allow rules belong to the current session.')}
     >
-      <div className="connection-banner">
-        <ShieldCheck size={18} />
-        <span>{MODE_TEXT[sessionMode(session)].label()}</span>
-        <small>
-          {runtime.mode === 'live'
-            ? MODE_TEXT[sessionMode(session)].detail()
-            : 'preview policy'}
-        </small>
+      <div className="segmented" role="group" aria-label={t('approval mode')}>
+        {MODES.map((mode) => (
+          <button
+            key={mode}
+            aria-pressed={sessionMode(session) === mode}
+            className={sessionMode(session) === mode ? 'active' : ''}
+            onClick={() =>
+              perform(() =>
+                runtime.change((state) => {
+                  currentSession(state).mode = mode;
+                }),
+              )
+            }
+          >
+            {MODE_TEXT[mode].label()}
+          </button>
+        ))}
       </div>
+      <p className="panel-note">{MODE_TEXT[sessionMode(session)].detail()}</p>
       <div className="records">
         {rules.map((rule) => (
           <div className="record-row" key={rule.id}>
@@ -1197,14 +1313,12 @@ const THEME_LABELS: Record<'auto' | 'light' | 'dark', () => string> = {
 function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
   const { snapshot, runtime, perform, notify } = useRuntime();
   const settings = snapshot.settings;
-  const [bindings, setBindings] = useState(
-    JSON.stringify(settings.keybindings, null, 2),
-  );
   const [launch, setLaunch] = useState('--mode rpc --no-tools');
   const save = (update: (draft: WorkbenchSnapshotSettings) => void) =>
     perform(() => runtime.change((state) => update(state.settings)));
   return (
     <Page
+      className="settings-page"
       title={t('settings')}
       description={
         runtime.mode === 'live'
@@ -1286,20 +1400,15 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
         <div className="setting-row">
           <span>{t('model')}</span>
           <code>{settings.defaultModel}</code>
-          <Button onClick={() => onDialog('connect')}>{t('connection')}</Button>
+          <Button onClick={() => onDialog('connect')}>
+            {snapshot.runtime?.configured
+              ? t('change connection')
+              : t('connect a model')}
+          </Button>
         </div>
         <div className="setting-row">
-          <label htmlFor="double-escape">{t('double escape')}</label>
-          <select
-            id="double-escape"
-            value={settings.doubleEscape}
-            onChange={(event) =>
-              save((value) => {
-                value.doubleEscape = event.target
-                  .value as typeof settings.doubleEscape;
-              })
-            }
-          >
+          <span>{t('double Esc')}</span>
+          <div className="segmented" role="group" aria-label={t('double Esc')}>
             {(
               [
                 ['tree', () => t('open the session tree')],
@@ -1307,30 +1416,43 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
                 ['none', () => t('nothing')],
               ] as const
             ).map(([value, label]) => (
-              <option key={value} value={value}>
+              <button
+                key={value}
+                aria-pressed={settings.doubleEscape === value}
+                className={settings.doubleEscape === value ? 'active' : ''}
+                onClick={() =>
+                  save((draft) => {
+                    draft.doubleEscape = value;
+                  })
+                }
+              >
                 {label()}
-              </option>
+              </button>
             ))}
-          </select>
+          </div>
         </div>
         <div className="setting-row">
-          <label htmlFor="default-effort">{t('thinking depth')}</label>
-          <select
-            id="default-effort"
-            value={settings.defaultEffort}
-            onChange={(event) =>
-              save((value) => {
-                value.defaultEffort = event.target
-                  .value as typeof settings.defaultEffort;
-              })
-            }
+          <span>{t('thinking depth')}</span>
+          <div
+            className="segmented"
+            role="group"
+            aria-label={t('thinking depth')}
           >
             {(['default', ...EFFORTS] as Effort[]).map((value) => (
-              <option key={value} value={value}>
-                {EFFORT_TEXT[value]()}
-              </option>
+              <button
+                key={value}
+                aria-pressed={settings.defaultEffort === value}
+                className={settings.defaultEffort === value ? 'active' : ''}
+                onClick={() =>
+                  save((draft) => {
+                    draft.defaultEffort = value;
+                  })
+                }
+              >
+                {EFFORT_TEXT[value].label()}
+              </button>
             ))}
-          </select>
+          </div>
         </div>
       </section>
       <section className="settings-block">
@@ -1414,29 +1536,7 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
         <Button onClick={() => onDialog('hotkeys')}>
           {t('view shortcuts')}
         </Button>
-        <textarea
-          aria-label={t('keybindings json')}
-          className="code-editor short"
-          value={bindings}
-          onChange={(event) => setBindings(event.target.value)}
-        />
-        <Button
-          onClick={() =>
-            perform(() => {
-              const parsed = validateKeybindings(JSON.parse(bindings));
-              save((value) => {
-                value.keybindings = parsed;
-              });
-              notify(
-                runtime.mode === 'live'
-                  ? t('key preferences saved')
-                  : 'preview key preferences saved',
-              );
-            })
-          }
-        >
-          {t('save key preferences')}
-        </Button>
+        <KeybindingsEditor />
       </section>
       {runtime.mode === 'preview' && (
         <section className="settings-block">

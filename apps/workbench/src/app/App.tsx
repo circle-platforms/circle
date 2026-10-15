@@ -96,6 +96,11 @@ export function App() {
   )!;
   const narrow = useNarrow();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const toggleSidebar = () => {
+    if (narrow) setSidebarOpen((open) => !open);
+    else setSidebarCollapsed((closed) => !closed);
+  };
   // Closed at first, as Claude's side panel; the top bar's icons open it.
   const [inspectorOpen, setInspectorOpen] = useState(false);
   useEffect(() => {
@@ -531,6 +536,7 @@ export function App() {
       }}
       finding={finding}
       setFinding={setFinding}
+      onToggleSidebar={toggleSidebar}
     />
   );
   // The session's own actions, under its title as Claude has them.
@@ -621,7 +627,9 @@ export function App() {
   );
   return (
     <Tooltip.Provider delayDuration={300}>
-      <div className="workbench">
+      <div
+        className={`workbench${sidebarCollapsed && !narrow ? ' sidebar-collapsed' : ''}`}
+      >
         {desktopHost() && <div className="desktop-drag-region" />}
         <div className="desktop-sidebar">
           <Sidebar onSearch={() => setSearchOpen(true)} onDialog={onDialog} />
@@ -629,14 +637,12 @@ export function App() {
         <main className="workspace">
           <header className="topbar">
             <div className="topbar-title">
-              <span className="mobile-only">
-                <IconButton
-                  label={t('open navigation')}
-                  onClick={() => setSidebarOpen(true)}
-                >
-                  <PanelLeft size={16} />
-                </IconButton>
-              </span>
+              <IconButton
+                label={t('show or hide the sidebar')}
+                onClick={toggleSidebar}
+              >
+                <PanelLeft size={16} />
+              </IconButton>
               {page || file || agent ? (
                 <span className="page-title">
                   {page
@@ -670,16 +676,18 @@ export function App() {
                   </DropdownMenu.Portal>
                 </DropdownMenu.Root>
               )}
-              <span className="project-chip" title={workspace.path}>
-                <Folder size={12} />
-                {workspace.name}
-                {workspace.branch && (
-                  <>
-                    <GitBranch size={11} />
-                    {workspace.branch}
-                  </>
-                )}
-              </span>
+              {!page && (
+                <span className="project-chip" title={workspace.path}>
+                  <Folder size={12} />
+                  {workspace.name}
+                  {workspace.branch && (
+                    <>
+                      <GitBranch size={11} />
+                      {workspace.branch}
+                    </>
+                  )}
+                </span>
+              )}
             </div>
             <div className="topbar-actions">
               {!page && (

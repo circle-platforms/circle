@@ -1,4 +1,4 @@
-import { matchingAction } from '../model/shortcuts';
+import { effectiveBindings, matchingAction } from '../model/shortcuts';
 import { planVisible } from '../../../../src/plan_state';
 import { agentActivityText } from '../model/activity';
 import { usePlugins } from '../plugins/context';
@@ -63,6 +63,7 @@ interface Props {
   onCommand: () => void;
   finding: boolean;
   setFinding: (value: boolean | ((value: boolean) => boolean)) => void;
+  onToggleSidebar?: () => void;
 }
 const MEDIA_TYPES = new Set([
   'image/png',
@@ -116,6 +117,7 @@ export function Conversation({
   onCommand,
   finding,
   setFinding,
+  onToggleSidebar,
 }: Props) {
   const { snapshot, runtime, perform, act, notify } = useRuntime();
   const session = currentSession(snapshot);
@@ -362,11 +364,17 @@ export function Conversation({
   }, [find, findIndex]);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
+      if (document.documentElement.dataset.keyCapture) return;
       if (document.querySelector('[role="dialog"]')) return;
       const current = latestView.current.session;
-      const control = event.ctrlKey || event.metaKey;
-      const mapped = matchingAction(event, snapshot.settings.keybindings);
+      const mapped = matchingAction(
+        event,
+        effectiveBindings(snapshot.settings.keybindings),
+      );
       if (current.archivedAt && mapped !== 'find') return;
+      // A copy chord over a selection stays a cut or a copy.
+      if (mapped === 'message.copy' && window.getSelection()?.toString())
+        return;
       if (mapped) {
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -387,9 +395,14 @@ export function Conversation({
         } else if (mapped === 'history.search') onCommand();
         else if (mapped === 'exit') onDialog('exit');
         else if (mapped === 'secret.enter') onDialog('secret');
+        else if (mapped === 'sidebar.toggle') onToggleSidebar?.();
         else if (mapped === 'suspend' || mapped === 'job.background') {
           runtime.request(mapped === 'suspend' ? 'suspend' : 'background');
-          notify(t('host request recorded; no process changed'));
+          notify(
+            mapped === 'job.background'
+              ? t('background request recorded; no process was changed')
+              : t('host request recorded; no process changed'),
+          );
         } else if (mapped === 'message.followup')
           act(() => runtime.send('follow-up'));
         else if (mapped === 'message.dequeue')
@@ -424,14 +437,17 @@ export function Conversation({
         else if (mapped === 'mode.cycle')
           setMode(nextMode(sessionMode(current)));
         else if (mapped === 'model.cycle') {
-          const next =
-            snapshot.models[
-              (snapshot.models.findIndex(
-                (model) => model.id === current.model,
-              ) +
-                1) %
-                snapshot.models.length
-            ];
+          const models = snapshot.models.filter(
+            (model) =>
+              !snapshot.settings.enabledModels.length ||
+              snapshot.settings.enabledModels.includes(model.id),
+          );
+          const next = models.length
+            ? models[
+                (models.findIndex((model) => model.id === current.model) + 1) %
+                  models.length
+              ]
+            : undefined;
           if (next)
             perform(() =>
               runtime.change((state) => {
@@ -440,79 +456,6 @@ export function Conversation({
             );
         }
         return;
-      }
-      if (
-        event.altKey &&
-        !event.ctrlKey &&
-        !event.metaKey &&
-        !event.shiftKey &&
-        event.key.toLowerCase() === 'p'
-      ) {
-        event.preventDefault();
-        setPlanCollapsed(false);
-        requestAnimationFrame(() => planItems.current?.focus());
-        return;
-      }
-      if (control && event.key.toLowerCase() === 'f') {
-        event.preventDefault();
-        setFinding((value) => !value);
-        return;
-      }
-      if (control && event.key.toLowerCase() === 'o') {
-        event.preventDefault();
-        act(() => runtime.command('details'));
-      }
-      if (control && event.key.toLowerCase() === 't') {
-        event.preventDefault();
-        act(() => runtime.command('thinking'));
-      }
-      if (control && event.key.toLowerCase() === 'l') {
-        event.preventDefault();
-        act(() => runtime.command('models'));
-      }
-      if (control && event.key.toLowerCase() === 'r') {
-        event.preventDefault();
-        onCommand();
-      }
-      if (control && event.key.toLowerCase() === 'g') {
-        event.preventDefault();
-        onDialog('editor');
-      }
-      if (control && event.key.toLowerCase() === 's') {
-        event.preventDefault();
-        onDialog('secret');
-      }
-      if (control && event.key.toLowerCase() === 'p') {
-        event.preventDefault();
-        const models = snapshot.models.filter(
-          (model) =>
-            !snapshot.settings.enabledModels.length ||
-            snapshot.settings.enabledModels.includes(model.id),
-        );
-        const next =
-          models[
-            (models.findIndex((model) => model.id === current.model) + 1) %
-              models.length
-          ];
-        if (next)
-          perform(() =>
-            runtime.change((state) => {
-              currentSession(state).model = next.id;
-            }),
-          );
-      }
-      if (control && event.key.toLowerCase() === 'b') {
-        event.preventDefault();
-        runtime.request('background');
-        notify(t('background request recorded; no process was changed'));
-      }
-      if (
-        control &&
-        event.key.toLowerCase() === 'x' &&
-        !window.getSelection()?.toString()
-      ) {
-        event.preventDefault();
-        act(() => runtime.command('copy'));
       }
     };
     addEventListener('keydown', handler);
@@ -523,6 +466,7 @@ export function Conversation({
     snapshot.settings.enabledModels,
     snapshot.settings.keybindings,
     session.id,
+    onToggleSidebar,
   ]);
   const jobs = snapshot.jobs.filter(
     (job) =>
@@ -683,7 +627,9 @@ export function Conversation({
                   {item.message.role === 'notice' ? (
                     <div className="transcript-notice">
                       {item.message.planCompleted === undefined
-                        ? item.message.text
+                        ? item.message.text === '✖ the turn failed'
+                          ? t('✖ the turn failed')
+                          : item.message.text
                         : t('plan completed · {n} steps', {
                             n: item.message.planCompleted,
                           })}

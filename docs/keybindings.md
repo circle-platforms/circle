@@ -238,8 +238,11 @@ A key named there does that action everywhere, in a card or a list too, and no l
 | `secret.enter` | `ctrl+s` |
 | `newline` | `ctrl+j` |
 | `job.background` | `ctrl+b` |
+| `sidebar.toggle` | desktop `ctrl+b` |
 
 Key names are written as on this page: `ctrl+k`, `alt+up`, `shift+tab`, `f1` to `f12`. `/hotkeys` lists the default keys.
+
+The desktop application uses its own defaults for a few actions: `ctrl+b` shows or hides the sidebar, `alt+b` backgrounds a job, `ctrl+alt+s` enters a secret, `alt+c` copies the last answer, `ctrl+shift+m` opens the model list and `alt+m` cycles models. The keys in the table above are the terminal's, except `sidebar.toggle`, which is desktop only.
 
 ## Which key wins
 

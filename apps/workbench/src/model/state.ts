@@ -15,6 +15,7 @@ import type {
 } from './types.ts';
 import { createFixtures } from '../preview/fixtures.ts';
 import { t } from '../i18n/index.ts';
+import { fallbackTitle } from '../../../../src/session_title.ts';
 /** A session's title; the core's placeholder for an untitled one reads in the interface language. */
 export const sessionTitle = (title: string) =>
   title === 'new session' ? t('new session') : title;
@@ -328,8 +329,7 @@ export class PreviewRuntime implements RuntimePort {
         target.messages.push(message);
         target.leafId = message.id;
         target.hiddenIds = [];
-        if (target.title === 'new session')
-          target.title = text.split('\n')[0]!.slice(0, 60);
+        if (target.title === 'new session') target.title = fallbackTitle(text);
         target.state = 'waiting';
       }
       target.draft = '';

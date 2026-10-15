@@ -85,12 +85,15 @@ function desktopShortcuts(): [string, string][] {
     [mod + 'N', t('new session')],
     [mod + 'O', t('open folder')],
     [mod + ',', t('settings')],
-    [mod + 'P', t('next model')],
-    [mod + 'L', t('models')],
+    ['Alt+M', t('next model')],
+    [mod + 'Shift+M', t('models')],
+    [mod + 'B', t('show or hide the sidebar')],
+    ['Alt+B', t('background the turn')],
     [mod + 'T', t('show or hide thinking')],
     [mod + 'G', t('write the message in a larger editor')],
-    [mod + 'S', t('enter a secret')],
-    [mod + 'X', t('copy the last answer, when nothing is selected')],
+    ['Ctrl+Alt+S', t('enter a secret')],
+    ['Alt+C', t('copy the last answer, when nothing is selected')],
+    ['F2', t('rename session')],
   ];
 }
 // What the runtime's probe-connection answers (src/probe.ts resolveEndpoint): the kind of

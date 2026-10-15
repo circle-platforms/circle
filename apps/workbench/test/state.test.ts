@@ -8,7 +8,12 @@ import {
 } from '../src/model/state.ts';
 import { parsePreviewBundle } from '../src/model/transfer.ts';
 import { shownTime } from '../src/model/time.ts';
-import { validateKeybindings, matchingAction } from '../src/model/shortcuts.ts';
+import {
+  KEY_ACTIONS,
+  effectiveBindings,
+  validateKeybindings,
+  matchingAction,
+} from '../src/model/shortcuts.ts';
 import { PlatformPreviewService } from '../src/plugins/platform/store.ts';
 import { PluginRegistry } from '../src/plugins/registry.ts';
 import type { WorkbenchPlugin } from '../src/plugins/types.ts';
@@ -274,6 +279,51 @@ test('custom key preferences validate actions and resolve aliases', () => {
       bindings,
     ),
     'model.select',
+  );
+  assert.equal(
+    matchingAction(
+      {
+        key: 'b',
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+        metaKey: true,
+      },
+      {},
+    ),
+    undefined,
+  );
+  assert.equal(KEY_ACTIONS['sidebar.toggle'], 'ctrl+b');
+  assert.equal(KEY_ACTIONS['secret.enter'], 'ctrl+alt+s');
+  assert.equal(KEY_ACTIONS['message.copy'], 'alt+c');
+  assert.equal(KEY_ACTIONS['model.select'], 'ctrl+shift+m');
+  assert.equal(KEY_ACTIONS['model.cycle'], 'alt+m');
+  assert.equal(KEY_ACTIONS['job.background'], 'alt+b');
+  assert.equal(
+    matchingAction(
+      {
+        key: 'b',
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+        metaKey: true,
+      },
+      effectiveBindings(),
+    ),
+    'sidebar.toggle',
+  );
+  assert.equal(
+    matchingAction(
+      {
+        key: 's',
+        ctrlKey: true,
+        altKey: true,
+        shiftKey: false,
+        metaKey: false,
+      },
+      effectiveBindings({ 'secret.enter': 'ctrl+k' }),
+    ),
+    undefined,
   );
 });
 test('platform work and execution retain independent states after Circle interaction', () => {

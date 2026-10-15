@@ -104,9 +104,13 @@ export function VariablesSettings() {
     <section className="settings-block">
       <h2>{t('variables')}</h2>
       <p className="panel-note">
-        {t(
-          "Written as Windows writes environment variables: %NAME% in a tool's arguments takes the value when the tool runs. The model also reads the values.",
-        )}
+        {document.documentElement.dataset.desktop === 'win32'
+          ? t(
+              "Written as Windows writes environment variables: %NAME% in a tool's arguments takes the value when the tool runs. The model also reads the values.",
+            )
+          : t(
+              "Write %NAME% in a tool's arguments. Circle puts the value in when the tool runs. The model also reads the values.",
+            )}
       </p>
       <VariableTable
         label={t('variables')}
