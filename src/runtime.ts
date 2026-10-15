@@ -152,6 +152,11 @@ export interface RuntimeOptions {
     signal: AbortSignal,
     origin?: InteractionContext,
   ) => Promise<void>;
+  /**
+   * Keep a new session out of the database until its first message. The terminal uses this
+   * so startup and /new do not leave an empty row.
+   */
+  deferSession?: boolean;
 }
 export class AgentRuntime {
   readonly migration: MigrationReport;
@@ -237,6 +242,10 @@ export class AgentRuntime {
           options.settings.auth.model,
           this.runOptions.session_name,
           options.sessionId,
+          null,
+          Boolean(options.deferSession) &&
+            !this.runOptions.session_name &&
+            !options.sessionId,
         );
       this.store.claimSession(this.session.id, (error) =>
         this.ownershipLost(error),
@@ -1221,6 +1230,10 @@ export class AgentRuntime {
     const session = this.store.create(
       this.options.workspace,
       this.harness.model.model,
+      this.runOptions.session_name,
+      undefined,
+      null,
+      Boolean(this.options.deferSession) && !this.runOptions.session_name,
     );
     this.store.claimSession(session.id, (error) => this.ownershipLost(error));
     this.session = session;
@@ -1230,6 +1243,7 @@ export class AgentRuntime {
     this.applyDefaultMode();
     this.bus.setRunId(this.session.id);
     this.store.releaseSession(previous);
+    this.store.dropDeferred(previous);
     this.extensions.emit('session_start', {
       workspace: this.options.workspace,
       session_id: this.session.id,

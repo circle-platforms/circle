@@ -22,6 +22,8 @@ import {
 } from './secrets.js';
 import { httpStatus } from './model_guard.js';
 import { validateAttachments } from './media.js';
+import { readPrompt } from './system_prompt.js';
+import { fallbackTitle, sanitizeGeneratedTitle } from './session_title.js';
 export type ApprovalDecision =
   | 'approve'
   | 'reject'
@@ -101,6 +103,9 @@ export class Harness {
     }
   >();
   private active?: Promise<{ answer: string; usage: Usage }>;
+  /** Text of the model call in flight, kept when the user stops it before the reply is stored. */
+  private streamed = '';
+  private streamedThinking = '';
   /** Secrets' values hidden as %NAME% in text the model reads. */
   readonly redact: Redactor;
   constructor(readonly options: HarnessOptions) {
@@ -321,6 +326,41 @@ export class Harness {
     } while (this.followUps.length);
     return { answer, usage: total };
   }
+  /**
+   * Ask the model for a short title after the fallback is already saved. A scripted model
+   * never sees this call. A rename that landed first is left alone.
+   */
+  private generateTitle(display: string, fallback: string): void {
+    const model = this.options.model;
+    const prompt = display.trim();
+    if (!model.sideRequests || prompt.length <= 40) return;
+    void model
+      .complete({
+        system: readPrompt('agent', 'title.md'),
+        messages: [
+          {
+            id: 'title',
+            role: 'user',
+            content: prompt.slice(0, 2000),
+          },
+        ],
+        tools: [],
+        signal: AbortSignal.timeout(20_000),
+        effort: 'minimal',
+        token: () => {},
+      })
+      .then((response) => {
+        const title = sanitizeGeneratedTitle(response.message.content);
+        if (!title) return;
+        const current = this.options.store.get(this.sessionId);
+        if (!current || current.title !== fallback) return;
+        this.options.store.rename(this.sessionId, title);
+        this.bus.emit('info', { payload: { title } });
+      })
+      .catch(() => {
+        /* The fallback title stays. A side request must not fail the turn. */
+      });
+  }
   private async runTurn(
     prompt: string | undefined,
     signal: AbortSignal,
@@ -344,11 +384,12 @@ export class Harness {
         ...shown,
       });
     const session = this.options.store.get(this.sessionId)!;
-    if (!session.title && shown?.display !== undefined)
-      this.options.store.rename(
-        this.sessionId,
-        shown.display.split('\n')[0]!.slice(0, 100),
-      );
+    if (!session.title && shown?.display !== undefined) {
+      const fallback = fallbackTitle(shown.display);
+      this.options.store.rename(this.sessionId, fallback);
+      this.bus.emit('info', { payload: { title: fallback } });
+      void this.generateTitle(shown.display, fallback);
+    }
     this.bus.emit('run_start', { payload: { message: prompt } });
     try {
       for (let step = 0; step < (this.options.maxSteps ?? 9999); step++) {
@@ -381,6 +422,8 @@ export class Harness {
         this.options.beforeStep?.();
         try {
           stepSignal.throwIfAborted();
+          this.streamed = '';
+          this.streamedThinking = '';
           this.bus.emit('llm_start');
           const response = await this.model.complete({
             system:
@@ -397,10 +440,13 @@ export class Harness {
             signal: stepSignal,
             notice: (event) =>
               this.bus.emit('info', { payload: { model_notice: event } }),
-            token: (text, thinking) =>
+            token: (text, thinking) => {
+              if (thinking) this.streamedThinking += text;
+              else this.streamed += text;
               this.bus.emit('llm_token', {
                 payload: { text, thinking: Boolean(thinking) },
-              }),
+              });
+            },
           });
           stepSignal.throwIfAborted();
           const message = {
@@ -415,6 +461,8 @@ export class Harness {
               ),
           };
           this.save(message);
+          this.streamed = '';
+          this.streamedThinking = '';
           addUsage(usage, response.usage);
           this.bus.emit('llm_end', {
             payload: { message },
@@ -463,6 +511,38 @@ export class Harness {
       }
       throw new Error('maximum model steps reached');
     } catch (error) {
+      if (this.streamed.trim() || this.streamedThinking.trim()) {
+        try {
+          this.save({
+            id: randomUUID(),
+            role: 'assistant',
+            content: this.streamed,
+            ...(this.streamedThinking
+              ? { thinking: this.streamedThinking }
+              : {}),
+            usage: {
+              input_tokens: 0,
+              output_tokens: Math.max(
+                1,
+                Math.ceil(
+                  (this.streamed.length + this.streamedThinking.length) / 4,
+                ),
+              ),
+              cache_read_tokens: 0,
+            },
+          });
+        } catch {
+          /* The store may already be closing. The turn still reports the failure. */
+        }
+        this.streamed = '';
+        this.streamedThinking = '';
+      } else if (!signal.aborted)
+        try {
+          // A bad model name, or any failure before a reply, must not leave a session.
+          this.options.store.abandonUnanswered(this.sessionId);
+        } catch {
+          /* Keep the original failure. */
+        }
       const failure = signal.aborted ? signal.reason : error;
       this.bus.emit('run_error', {
         payload: {

@@ -473,7 +473,8 @@ test('real Anthropic requests fit legacy thinking and output budgets and include
     model.contextWindow,
     modelProfile('anthropic', model.model)!.max_input_tokens,
   );
-  assert.equal(model.outputBudget, 24_192);
+  assert.equal(model.effort, 'medium');
+  assert.equal(model.outputBudget, 16_384);
   const wrapper = new ExtensionHost({
     workspace: root,
     home: root,

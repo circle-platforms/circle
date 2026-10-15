@@ -277,13 +277,15 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
       trailing.push(note);
     else placed.set(anchor, [...(placed.get(anchor) ?? []), note]);
   });
-  const noticeBlock = (note: string): void =>
+  const noticeBlock = (note: string): void => {
+    const failed = note.startsWith('✖') && !note.startsWith('✖ Interrupted');
     block(
       note.startsWith('✖') ? '✖' : ' ',
       note.replace(/^✖\s*/, ''),
       '',
-      note.startsWith('✖') ? p.red : p.dim,
+      failed ? p.red : p.dim,
     );
+  };
   for (const note of placed.get('') ?? []) noticeBlock(note);
   const agents = taskAgents(messages, state.subagents ?? []);
   // The reply a running turn is working on: the newest one with tool calls.

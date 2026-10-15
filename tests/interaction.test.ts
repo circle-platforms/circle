@@ -485,12 +485,15 @@ test('/editor hands the terminal to the editor and loads what it wrote, whatever
   assert.equal(ui.externalEditor, false);
 });
 
-test('ctrl+l draws the screen again from scratch and opens the model list; ctrl+b says when there is nothing to move', async (t) => {
+test('ctrl+l redraws the screen; alt+l opens the model list; ctrl+b says when there is nothing to move', async (t) => {
   const { app, ui, log, key, runtime, script, workspace } = await session(t);
   ui.loadModels = async () => ['scripted', 'other'];
   ui.repaint();
   log.length = 0;
   key('ctrl+l');
+  assert.equal(app.state.picker, undefined);
+  assert.deepEqual(log[0], ['write', '\x1b[2J']);
+  key('alt+l');
   await until(() => Boolean(app.state.picker));
   assert.equal(app.state.picker!.title, 'Model');
   assert.deepEqual(log[0], ['write', '\x1b[2J']);
@@ -677,13 +680,13 @@ test('/resume: esc on the new name or on the delete question leaves the session 
   key('ctrl+r');
   await until(() => list.asking);
   assert.equal(
-    stripAnsi(list.rows(80)[1]!).trimEnd(),
-    '   New name: question one▏  enter saves · esc cancels',
+    stripAnsi(list.rows(120)[1]!).trimEnd(),
+    '   Rename: question one▏  typing replaces the name · enter saves · esc cancels',
   );
   type(' renamed');
   key('escape');
   assert.equal(runtime.store.get(other)!.title, 'question one');
-  key('ctrl+d');
+  key('ctrl+k');
   await until(() => list.asking);
   assert.equal(
     stripAnsi(list.rows(80)[1]!).trimEnd(),

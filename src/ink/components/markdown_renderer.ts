@@ -2,6 +2,7 @@ import { Lexer, type Token, type Tokens } from 'marked';
 import { decodeHTML } from 'entities';
 import { palette, sgrJoin } from '../theme.js';
 import { stringWidth, stripAnsi, wrap } from '../string_width.js';
+import { highlightLine } from '../highlight.js';
 export interface MarkdownStyle {
   base?: string;
   background?: string;
@@ -194,16 +195,24 @@ function blocks(
     else if (token.type === 'code') {
       const code = token as Tokens.Code;
       const room = Math.max(1, width - 2);
-      const content = wrap(code.text, room);
+      const lang = (code.lang || '').trim();
+      const paint = (line: string, shown: string): string =>
+        p.panel_bg +
+        p.text +
+        ' ' +
+        shown +
+        ' '.repeat(Math.max(0, width - 1 - stringWidth(line))) +
+        p.reset;
+      if (lang)
+        rows.push(
+          paint(
+            lang,
+            p.faint + lang.slice(0, room) + p.reset + p.panel_bg + p.text,
+          ),
+        );
       rows.push(
-        ...content.map(
-          (line) =>
-            p.panel_bg +
-            p.text +
-            ' ' +
-            line +
-            ' '.repeat(Math.max(0, width - 1 - stringWidth(line))) +
-            p.reset,
+        ...wrap(code.text.replace(/\n$/, ''), room).map((line) =>
+          paint(line, lang ? highlightLine(lang, line) : line),
         ),
       );
     } else if (token.type === 'blockquote')

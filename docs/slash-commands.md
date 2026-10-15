@@ -31,7 +31,7 @@ Going back with `/tree` while a turn runs stops the turn first. A [custom comman
 | `/undo` | | Undo the last turn on screen. |
 | `/redo` | | Bring it back. |
 | `/compact [hint]` | `/summarize` | Summarize older messages now. |
-| `/jobs [id]` | `/tasks` | List the session's [background jobs](background-jobs.md), running ones first, or open one's page. `enter` opens a job's page: a band with its lamp, id and command, state and time, and the file its output goes to, then the end of the output. `ctrl+d` stops a running job (after asking in the list) or removes one that has ended. |
+| `/jobs [id]` | `/tasks` | List the session's [background jobs](background-jobs.md), running ones first, or open one's page. `enter` opens a job's page: a band with its lamp, id and command, state and time, and the file its output goes to, then the end of the output. `ctrl+k` stops a running job (after asking in the list) or removes one that has ended. |
 
 What these do and do not do is on [Sessions](sessions.md). Several have limits in this version.
 
@@ -46,7 +46,7 @@ What these do and do not do is on [Sessions](sessions.md). Several have limits i
 | `/unshare` | Delete that copy. |
 | `/editor` | Edit the draft in `$VISUAL` or `$EDITOR`, which may include arguments such as `code -w`; without either, `nvim`, `vim` or `nano` (`notepad` on Windows). The result is put back in the input box, not sent. `ctrl+g` does the same. |
 | `/thinking [level]` | Hide or show the model's thinking rows. With a level, the same as `/effort <level>`. |
-| `/effort [level]` | Choose how hard the model thinks from a list, or set it: `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Applies for the rest of this run; `ctrl+s` in the list also saves it. See [Choose a model](models.md#thinking-depth). |
+| `/effort [level]` | Choose how hard the model thinks from a list, or set it: `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Applies for the rest of this run; `alt+d` in the list also saves it. See [Choose a model](models.md#thinking-depth). |
 | `/details` | Expand or collapse tool output, the same as `ctrl+o`. |
 
 ## Safety and mode
@@ -65,11 +65,11 @@ See [Security](security.md).
 
 | Command | Aliases | What it does |
 |---|---|---|
-| `/models [name]` | `/model` | Choose a model from what the endpoint offers, or use one by its id, for this session. `ctrl+s` in the list also saves it as the default. |
+| `/models [name]` | `/model` | Choose a model from what the endpoint offers, or use one by its id, for this session. `alt+d` in the list also saves it as the default. `alt+l` opens the list; `alt+m` switches to the next model. |
 | `/login` | `/connect` | Change the endpoint, key and model. It asks on its list's own line for the base URL, filled in with the saved one, then the key, shown as dots (an empty `enter` keeps the saved key while the URL stays on the saved host; another host needs its key); `esc` on the key goes back to the URL, and `esc` on the URL leaves. Then it lists the endpoint's models to search; `enter` on a search nothing matches uses what you typed. The session switches to them and they are saved, with the URL that answered; nothing is saved before a model is chosen. |
 | `/logout` | | Clear the saved credentials and mark Circle as not set up. |
-| `/settings` | | A list of the settings: theme, whether thinking is shown, what `esc` `esc` opens, and the model, thinking depth, default mode, endpoint, trusted folders, MCP servers and data folder. `enter` changes the marked one and saves it at once; the model, depth and MCP rows open `/models`, `/effort` and `/mcp`, the default mode row opens the mode list (`enter` for this session, `ctrl+s` also saves `default_mode`), and the endpoint row opens `/login`. |
-| `/variables [NAME=value]` | | Variables, written as Windows writes environment variables: `NAME=value` sets one and `NAME=` removes it; the model writes `%NAME%` in a tool's arguments and Circle puts the value in when the tool runs. Without an argument, a list of the variables and secrets; `enter` puts a row's command in the input box. |
+| `/settings` | | A list of the settings: theme, whether thinking is shown, what `esc` `esc` opens, and the model, thinking depth, default mode, endpoint, trusted folders, MCP servers and data folder. `enter` changes the marked one and saves it at once; the model, depth and MCP rows open `/models`, `/effort` and `/mcp`, the default mode row opens the mode list (`enter` for this session, `alt+d` also saves `default_mode`), and the endpoint row opens `/login`. |
+| `/variables [NAME=value]` | | `NAME=value` sets a named value and `NAME=` removes it. Circle fills that name in when a tool runs. The model still writes `%NAME%` in the arguments; on Windows the command says so, and elsewhere it does not. Without an argument, a list of the variables and secrets; `enter` puts a row's command in the input box. |
 | `/secrets [NAME]` | | A secret: a variable whose value the model never sees. `/secrets NAME` asks for the value on a masked card and keeps it in `secrets.json`; `NAME=` removes it. A value typed after `=` is refused. See [Secrets by name](security.md#secrets-by-name). |
 | `/themes [auto\|dark\|light]` | | Show or set the theme. It applies at once and is saved. `auto` follows your terminal live; `dark` or `light` overrides it. |
 

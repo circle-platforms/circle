@@ -530,9 +530,9 @@ test('/copy uses pbcopy, wl-copy, then xclip, and clip on Windows with UTF-16 te
   );
 });
 
-test('ctrl+x copies the last answer with a local tool, or writes it to a file when there is none', async (t) => {
+test('alt+c copies the last answer with a local tool, or writes it to a file when there is none', async (t) => {
   const s = await session(t, ['  the answer  ']);
-  s.feed('\x18');
+  s.feed('\x1bc');
   await settle();
   assert.deepEqual(
     s.calls.map((call) => [call.command, call.input.toString()]),
@@ -547,14 +547,14 @@ test('ctrl+x copies the last answer with a local tool, or writes it to a file wh
     platform: 'darwin',
     run: none.run,
   });
-  s.feed('\x18');
+  s.feed('\x1bc');
   await settle();
   const path = join(s.root, 'exports', 'last-copy.txt');
   assert.equal(readFileSync(path, 'utf8'), 'the answer\n');
   assert.equal(s.app.state.notices.at(-1), `No clipboard tool · wrote ${path}`);
 
   const empty = await session(t);
-  empty.feed('\x18');
+  empty.feed('\x1bc');
   await settle();
   assert.equal(empty.app.state.flash, 'No assistant message to copy');
   assert.ok(!existsSync(join(empty.root, 'exports')));

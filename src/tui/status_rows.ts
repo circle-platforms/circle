@@ -144,31 +144,35 @@ function meterParts(meters: Meters): {
   head: string;
   context: string;
   percent: number;
+  /** Pieces dropped from the right until the footer fits: context, cache, then cost. */
+  lines: string[];
 } {
   const usage = meters.usage;
   const cached = Math.min(usage.cache_read_tokens, usage.input_tokens);
   const rate = usage.input_tokens ? (cached / usage.input_tokens) * 100 : 0;
-  const head = [
-    `↑ ${formatTokens(usage.input_tokens)} · ↓ ${formatTokens(usage.output_tokens)}`,
-    ...(meters.costText ? [meters.costText] : []),
-    `cache ${rate.toFixed(1)}%`,
-  ].join(' · ');
-  if (meters.contextInput === undefined)
-    return { head, context: '', percent: 0 };
-  if (!meters.contextWindow)
-    return {
-      head,
-      context: `ctx ${formatTokens(meters.contextInput)}/N/A`,
-      percent: 0,
-    };
-  const percent = Math.min(
-    999,
-    (meters.contextInput / meters.contextWindow) * 100,
-  );
+  const tokens = `↑ ${formatTokens(usage.input_tokens)} · ↓ ${formatTokens(usage.output_tokens)}`;
+  const cache = `cache ${rate.toFixed(1)}%`;
+  const cost = meters.costText ?? '';
+  const head = [tokens, ...(cost ? [cost] : []), cache].join(' · ');
+  let context = '';
+  let percent = 0;
+  if (meters.contextInput !== undefined && !meters.contextWindow)
+    context = `ctx ${formatTokens(meters.contextInput)}/N/A`;
+  else if (meters.contextInput !== undefined && meters.contextWindow) {
+    percent = Math.min(999, (meters.contextInput / meters.contextWindow) * 100);
+    context = `ctx ${formatTokens(meters.contextInput)}/${formatWindow(meters.contextWindow)} (${Math.round(percent)}%)`;
+  }
+  const lines = [
+    [tokens, cost, cache, context],
+    [tokens, cost, cache],
+    [tokens, cost],
+    [tokens],
+  ].map((parts) => parts.filter(Boolean).join(' · '));
   return {
     head,
-    context: `ctx ${formatTokens(meters.contextInput)}/${formatWindow(meters.contextWindow)} (${Math.round(percent)}%)`,
+    context,
     percent,
+    lines,
   };
 }
 // The footer: the meters, and a flash at the right for a second or two. While a flash shows,
@@ -181,8 +185,14 @@ export function footerRow(
   status: { text: string; lamp: LampState }[] = [],
 ): string {
   const p = palette();
-  const { head, context, percent } = meterParts(meters);
-  const plain = context ? `${head} · ${context}` : head;
+  const parts = meterParts(meters);
+  const { context, percent } = parts;
+  const room = Math.max(1, width - 1);
+  const fitted =
+    parts.lines.find((line) => stringWidth(line) <= room) ??
+    parts.lines[parts.lines.length - 1]!;
+  const plain = stringWidth(fitted) <= room ? fitted : truncate(fitted, room);
+  const showsContext = Boolean(context) && plain.includes(context);
   if (flash) {
     const shown = truncate(flash, Math.max(1, width - 2));
     const room = width - 1 - stringWidth(shown) - 3;
@@ -196,15 +206,12 @@ export function footerRow(
     );
     return p.faint + ' ' + left + ' '.repeat(gap) + shown + ' ' + p.reset;
   }
-  if (stringWidth(plain) + 1 > width)
-    return p.faint + ' ' + truncate(plain, Math.max(1, width - 1)) + p.reset;
   const left =
-    !context || percent < 70
+    !showsContext || percent < 70
       ? p.faint + ' ' + plain + p.reset
       : p.faint +
         ' ' +
-        head +
-        ' · ' +
+        plain.slice(0, plain.length - context.length) +
         p.reset +
         (percent >= 90 ? p.red : p.yellow) +
         context +

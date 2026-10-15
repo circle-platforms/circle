@@ -32,6 +32,7 @@ import {
 import { SessionRuntimeManager } from '../session_manager.js';
 import { fromJsonl } from '../session_export.js';
 import { sessionOccupied, SessionOccupiedError } from '../session_lock.js';
+import { friendlyModelError } from '../model_error.js';
 import { agentName } from './strip_rows.js';
 import type { CircleSettings } from '../settings.js';
 import {
@@ -548,7 +549,9 @@ export class SessionApp {
         this.runtime.policy.mode(this.runtime.session.id) === 'accept-edits';
       this.state.busy = this.runtime.busy;
       const stats = this.runtime.stats();
-      this.state.usage = stats.usage;
+      this.state.usage = { ...stats.usage };
+      if (this.state.busy && this.turns.pendingOutput)
+        this.state.usage.output_tokens += this.turns.pendingOutput;
       const facts =
         this.runtime.harness.model.modelFacts ??
         this.runtime.catalog.facts(
@@ -904,6 +907,9 @@ export class SessionApp {
       ),
     );
     const runtime = this.createRuntime(options, this.view);
+    // Old builds inserted a row on startup and on every /new. Drop the ones
+    // nobody is using; a leased empty session stays until that runtime ends.
+    runtime.store.purgeEmptySessions();
     this.sessions.register(runtime);
     this.off = () => {
       for (const off of this.subscriptions.values()) off();
@@ -957,6 +963,7 @@ export class SessionApp {
       : undefined;
     runtime = new AgentRuntime({
       ...options,
+      deferSession: true,
       extraTools: [
         ...(options.extraTools ?? []),
         ...(browser
@@ -1088,16 +1095,22 @@ export class SessionApp {
               this.state.usage,
             ) as (keyof typeof this.state.usage)[])
               this.state.usage[key] += event.usage?.[key] ?? 0;
-          } else if (event.kind === 'run_error')
-            // A key the endpoint turned down (401, 403) says where to change it, as in 0.5.0.
-            this.addNotice(
-              '✖ ' +
-                String(event.payload.message) +
-                ([401, 403].includes(Number(event.payload.status))
-                  ? ' · /login to change the key'
-                  : ''),
-            );
-          else if (event.kind === 'info' && event.payload.model_notice) {
+          } else if (event.kind === 'run_error') {
+            // A stop is a dim marker. A key the endpoint turned down says where to change it.
+            this.state.streaming = '';
+            this.state.thinking = '';
+            if (event.payload.interrupted) this.addNotice('✖ Interrupted');
+            else {
+              const status = Number(event.payload.status);
+              this.addNotice(
+                '✖ ' +
+                  friendlyModelError(String(event.payload.message), status) +
+                  ([401, 403].includes(status)
+                    ? ' · /login to change the key'
+                    : ''),
+              );
+            }
+          } else if (event.kind === 'info' && event.payload.model_notice) {
             const notice = event.payload.model_notice as {
               event: string;
               [key: string]: unknown;
@@ -1184,6 +1197,9 @@ export class SessionApp {
     return this.sessions;
   }
   private changeSession(id?: string): Promise<void> {
+    // /new always opens another runtime. An unused one stays deferred (no
+    // sqlite row) until its first message, so startup and /new do not persist
+    // empty sessions, and a live conversation can still sit beside it.
     this.ensureSessions();
     const work = this.selecting.then(async () => {
       const runtime = id
@@ -1197,12 +1213,15 @@ export class SessionApp {
   private async deleteSession(id: string): Promise<boolean> {
     this.ensureSessions();
     const active = this.runtime;
-    const source = active!.store.get(id);
+    // A session that has never been written lives only on the runtime that
+    // created it. The selected runtime's store does not have that deferred row.
+    const owned = this.sessions!.get(id);
+    const source = owned?.store.get(id) ?? active!.store.get(id);
     if (!source) throw new Error('unknown session');
     const runtime =
       this.sessions!.get(id) ?? this.sessions!.open(source.workspace, id);
     const view = this.views.get(runtime)!;
-    const nextId =
+    const listed =
       active === runtime
         ? runtime.store
             .list(this.workspace)
@@ -1214,6 +1233,17 @@ export class SessionApp {
                   !sessionOccupied(this.home, session.id)),
             )?.id
         : undefined;
+    // Another /new may still be deferred, so it is absent from the table.
+    const nextId =
+      listed ??
+      (active === runtime
+        ? [...this.sessions!.values()].find(
+            (other) =>
+              other.session.id !== id &&
+              other.options.workspace === runtime.options.workspace &&
+              this.sessions!.lifecycle(other.session.id) === 'open',
+          )?.session.id
+        : undefined);
     await this.sessions!.delete(id, { confirmed: true });
     view.interactions.close();
     view.selection.close();
@@ -1352,7 +1382,7 @@ export class SessionApp {
     try {
       const choice = await this.askChoice(
         'secret',
-        `${request.question}\n${secretDestination(request)}\nctrl+s enters a masked value`,
+        `${request.question}\n${secretDestination(request)}\nenter secret, then type the value`,
         ['enter secret', 'cancel'],
         signal,
       );
@@ -1888,7 +1918,7 @@ export class SessionApp {
       if (key === 'escape') {
         this.state.jobDetail = undefined;
         void this.command('jobs', '');
-      } else if (key === 'ctrl+d')
+      } else if (key === 'ctrl+k')
         void (async () => {
           if (job.status === 'running') {
             if (
@@ -1931,11 +1961,6 @@ export class SessionApp {
         this.repaint();
         return;
       }
-      if (key === 'ctrl+s' && this.secretReady && dialog.input === undefined) {
-        this.pending?.complete('enter secret');
-        this.repaint();
-        return;
-      }
       if (key === 'escape' || key === 'ctrl+c')
         this.pending?.complete(dialog.options.at(-1) || '');
       else if (dialog.input !== undefined) {
@@ -1964,17 +1989,18 @@ export class SessionApp {
       this.repaint();
       return;
     }
-    if (key === 'ctrl+s') {
+    if (key === 'ctrl+d' && !this.state.draft) {
+      this.exit(0);
+      return;
+    }
+    // alt+k, not ctrl+s: ctrl+s is XOFF and freezes a terminal that has ixon on.
+    // Idle presses do nothing; a waiting request opens its card.
+    if (key === 'alt+k') {
       const request = listPending(this.home)[0];
       if (request)
         void this.enterSecret(request, new AbortController().signal).catch(
           (error) => this.fail(error),
         );
-      else this.flash('No secret request');
-      return;
-    }
-    if (key === 'ctrl+d' && !this.state.draft) {
-      this.exit(0);
       return;
     }
     if (this.composer.completionKey(key)) {
@@ -1995,16 +2021,24 @@ export class SessionApp {
     } else if (key === 'escape') {
       this.jobWakeSnoozed = true;
       if (this.runtime?.busy) this.interrupt();
-      else if (
-        !this.state.draft &&
+      else if (this.state.draft) {
+        // One esc is not enough to throw the draft away. The second clears it,
+        // and ctrl+y puts that draft back.
+        if (Date.now() - this.lastEscape < 800) {
+          this.composer.stashClear();
+          this.flash('cleared · ctrl+y restores');
+          this.lastEscape = 0;
+        } else {
+          this.lastEscape = Date.now();
+          this.flash('press esc again to clear · ctrl+y restores');
+        }
+      } else if (
         Date.now() - this.lastEscape < 500 &&
         this.settings.double_escape !== 'none'
-      )
+      ) {
+        this.lastEscape = 0;
         void this.command(this.settings.double_escape, '');
-      // Only an esc on an empty box counts toward esc esc: the one that clears your
-      // text must not open the tree as well
-      this.lastEscape = this.state.draft ? 0 : Date.now();
-      if (!this.runtime?.busy) this.composer.clear();
+      } else this.lastEscape = Date.now();
     } else if (key === 'ctrl+b') {
       const count = this.runtime?.jobs.backgroundForeground() ?? 0;
       this.flash(
@@ -2031,15 +2065,17 @@ export class SessionApp {
           : 'Thinking collapsed',
       );
     } else if (key === 'ctrl+l') {
-      // The screen is drawn again from scratch, then the model list opens
+      // readline: redraw. The model list is alt+l (/models).
       this.terminal.write('\x1b[2J');
       this.screen.invalidate();
+      this.repaint();
+    } else if (key === 'alt+l')
       void this.command('models', '').catch((error) => this.fail(error));
-    } else if (key === 'ctrl+g')
+    else if (key === 'ctrl+g')
       void this.command('editor', '').catch((error) => this.fail(error));
-    else if (key === 'ctrl+x')
+    else if (key === 'alt+c')
       void this.command('copy', '').catch((error) => this.fail(error));
-    else if (key === 'ctrl+p')
+    else if (key === 'alt+m')
       void this.cycleModel().catch((error) => this.fail(error));
     else if (key === 'shift+tab' && this.runtime)
       // cycles the session mode, as shift+tab does in other coding agents
@@ -2400,8 +2436,10 @@ export class SessionApp {
         return owner.runtime!;
       },
       createSession: async () => {
+        const before = this.runtime?.session.id;
         await this.changeSession();
         owner = this.selectedView;
+        return this.runtime?.session.id !== before;
       },
       openSession: async (id) => {
         await this.changeSession(id);
@@ -2649,7 +2687,7 @@ export class SessionApp {
         if (runtime.harness.busy) throw new Error('a turn is running');
         runtime.setModel(model);
         this.flash(
-          `Model → ${model} · this session (ctrl+s in /models saves it)`,
+          `Model → ${model} · this session (alt+d in /models saves it)`,
           4000,
         );
       };
@@ -2670,7 +2708,7 @@ export class SessionApp {
                   ? runtime.runOptions.models
                   : this.settings.enabled_models
                 ).length && this.scopedModels().includes(model)
-                  ? 'in ctrl+p'
+                  ? 'in alt+m'
                   : '',
               ]
                 .filter(Boolean)
@@ -2678,13 +2716,13 @@ export class SessionApp {
             }));
           this.picker('Model', rows(), (item) => choose(item.key), {
             hint:
-              'enter uses it in this session · ctrl+s also makes it the default · ' +
-              'tab adds it to ctrl+p or takes it out',
+              'enter uses it in this session · alt+d also makes it the default · ' +
+              'tab adds it to alt+m or takes it out',
             empty:
               'No model matches · /models <id> uses an id the endpoint does not list',
             focusKey: runtime.harness.model.model,
             keys: {
-              'ctrl+s': (item) => {
+              'alt+d': (item) => {
                 if (!item) return;
                 runtime.setModel(item.key);
                 this.settings.auth.model = item.key;
@@ -2713,8 +2751,8 @@ export class SessionApp {
                 this.state.picker?.setItems(rows());
                 this.flash(
                   next.length
-                    ? `ctrl+p goes through ${next.length} model${next.length === 1 ? '' : 's'}`
-                    : 'ctrl+p goes through every listed model',
+                    ? `alt+m goes through ${next.length} model${next.length === 1 ? '' : 's'}`
+                    : 'alt+m goes through every listed model',
                   2000,
                 );
               },

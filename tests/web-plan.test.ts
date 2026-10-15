@@ -226,7 +226,7 @@ test('read-only mode allows plan files and plan-only patches but blocks other ef
         {
           id: 'plan-write',
           name: 'write_file',
-          args: { file_path: '/plan.md', content: 'plan' },
+          args: { file_path: 'plan.md', content: 'plan' },
         },
         {
           id: 'normal-write',

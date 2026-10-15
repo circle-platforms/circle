@@ -510,7 +510,7 @@ test('a secret is typed masked and capped, an empty one is refused, and the draf
     10000,
   );
   s.type('draft');
-  s.key('ctrl+s');
+  s.key('alt+k');
   await until(() => Boolean(s.app.state.dialog));
   assert.deepEqual(s.app.state.dialog!.options, ['enter secret', 'cancel']);
   s.key('enter');

@@ -5,7 +5,11 @@ import { ensureHome, normalizeWorkspace } from './paths.js';
 import type { Message } from './types.js';
 import type { LegacyImportPlan } from './legacy_sessions.js';
 import { createHash } from 'node:crypto';
-import { acquireSessionLease, type SessionLease } from './session_lock.js';
+import {
+  acquireSessionLease,
+  sessionOccupied,
+  type SessionLease,
+} from './session_lock.js';
 import {
   validateSessionGraph,
   orderedCheckpoints,
@@ -128,6 +132,70 @@ export class CheckpointStore {
       throw error;
     }
   }
+  /** Sessions kept in memory until the first message, so an unused /new leaves no row. */
+  private deferred = new Map<string, Session>();
+  /**
+   * Delete untitled sessions that never received a message. A live runtime still
+   * holds the lease, so opening another store does not remove a conversation
+   * that simply has not been written yet. The terminal calls this on startup.
+   */
+  purgeEmptySessions(): void {
+    const ids = (
+      this.db
+        .prepare(
+          `SELECT id FROM sessions WHERE parent_id IS NULL AND head IS NULL AND title = ''`,
+        )
+        .all() as { id: string }[]
+    ).filter(({ id }) => !this.home || !sessionOccupied(this.home, id));
+    if (!ids.length) return;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const { id } of ids)
+        this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
+      this.db.exec('COMMIT');
+      this.writeVersion++;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+  /** Drop a session that was never written, or one whose only turn failed before a reply. */
+  abandonUnanswered(sessionId: string): boolean {
+    const session = this.get(sessionId);
+    if (!session) return false;
+    const messages = session.head ? this.messages(sessionId) : [];
+    if (
+      messages.some(
+        (message) =>
+          message.role === 'assistant' ||
+          message.role === 'tool' ||
+          Boolean(message.tool_calls?.length),
+      )
+    )
+      return false;
+    this.writing([sessionId], () => {
+      this.db.exec('BEGIN IMMEDIATE');
+      try {
+        this.db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
+        this.db.exec('COMMIT');
+      } catch (error) {
+        this.db.exec('ROLLBACK');
+        throw error;
+      }
+      this.messageCache.delete(sessionId);
+      this.deferred.set(sessionId, {
+        ...session,
+        title: '',
+        head: null,
+        updated: Date.now(),
+      });
+      this.writeVersion++;
+    });
+    return true;
+  }
+  dropDeferred(sessionId: string): void {
+    this.deferred.delete(sessionId);
+  }
   /** Hold execution ownership through turns, background tasks and shutdown. */
   claimSession(
     sessionId: string,
@@ -167,12 +235,53 @@ export class CheckpointStore {
     title = '',
     id = 'circle-' + randomUUID().slice(0, 8),
     parentId: string | null = null,
+    defer = false,
   ): Session {
+    if (defer && !parentId && !this.row(id)) {
+      const now = Date.now();
+      const session: Session = {
+        id,
+        workspace: normalizeWorkspace(workspace),
+        title,
+        model,
+        head: null,
+        created: now,
+        updated: now,
+        parent_id: null,
+      };
+      this.deferred.set(id, session);
+      return { ...session };
+    }
     if (parentId && this.ownership.has(parentId))
       this.claimSession(id, this.ownershipHandlers.get(parentId));
     return this.writing(parentId ? [parentId, id] : [id], () =>
       this.createOwned(workspace, model, title, id, parentId),
     );
+  }
+  private row(id: string): Session | undefined {
+    return this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as
+      Session | undefined;
+  }
+  private materialize(sessionId: string): void {
+    const pending = this.deferred.get(sessionId);
+    if (!pending || this.row(sessionId)) {
+      this.deferred.delete(sessionId);
+      return;
+    }
+    this.db
+      .prepare(
+        'INSERT INTO sessions (id,workspace,title,model,head,created,updated,parent_id) VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+      )
+      .run(
+        pending.id,
+        pending.workspace,
+        pending.title,
+        pending.model,
+        pending.created,
+        Date.now(),
+        pending.parent_id,
+      );
+    this.deferred.delete(sessionId);
   }
   private createOwned(
     workspace: string,
@@ -200,27 +309,37 @@ export class CheckpointStore {
     return this.get(id)!;
   }
   get(id: string): Session | undefined {
-    return this.db
-      .prepare('SELECT * FROM sessions WHERE id = ?')
-      .get(id) as unknown as Session | undefined;
+    const stored = this.row(id);
+    if (stored) return stored;
+    const pending = this.deferred.get(id);
+    return pending ? { ...pending } : undefined;
   }
   find(suffix: string): Session | undefined {
-    const sessions = this.list().filter(
-      (session) => session.id === suffix || session.id.endsWith(suffix),
-    );
-    if (sessions.length > 1) throw new Error('session id is ambiguous');
-    return sessions[0];
+    // list() hides an untitled session with no messages. Opening one by id,
+    // including a live empty session another process still leases, must see it.
+    // Child sessions stay out of discovery; children() is how a parent finds them.
+    const sessions = [
+      ...(this.db
+        .prepare('SELECT * FROM sessions WHERE parent_id IS NULL')
+        .all() as unknown as Session[]),
+      ...[...this.deferred.values()].filter((session) => !session.parent_id),
+    ].filter((session) => session.id === suffix || session.id.endsWith(suffix));
+    const unique = [
+      ...new Map(sessions.map((session) => [session.id, session])).values(),
+    ];
+    if (unique.length > 1) throw new Error('session id is ambiguous');
+    return unique[0];
   }
   list(workspace?: string, includeChildren = false): Session[] {
     return (workspace
       ? this.db
           .prepare(
-            `SELECT * FROM sessions WHERE workspace = ? ${includeChildren ? '' : 'AND parent_id IS NULL'} ORDER BY updated DESC`,
+            `SELECT * FROM sessions WHERE workspace = ? ${includeChildren ? '' : "AND parent_id IS NULL AND NOT (head IS NULL AND title = '')"} ORDER BY updated DESC`,
           )
           .all(normalizeWorkspace(workspace))
       : this.db
           .prepare(
-            `SELECT * FROM sessions ${includeChildren ? '' : 'WHERE parent_id IS NULL'} ORDER BY updated DESC`,
+            `SELECT * FROM sessions ${includeChildren ? '' : "WHERE parent_id IS NULL AND NOT (head IS NULL AND title = '')"} ORDER BY updated DESC`,
           )
           .all()) as unknown as Session[];
   }
@@ -230,6 +349,12 @@ export class CheckpointStore {
       .all(parentId) as unknown as Session[];
   }
   rename(id: string, title: string): void {
+    const pending = this.deferred.get(id);
+    if (pending && !this.row(id)) {
+      pending.title = title;
+      pending.updated = Date.now();
+      return;
+    }
     this.db
       .prepare('UPDATE sessions SET title = ?, updated = ? WHERE id = ?')
       .run(title, Date.now(), id);
@@ -266,6 +391,7 @@ export class CheckpointStore {
     messages: Message[],
     expectedHead?: string | null,
   ): string | null {
+    if (!messages.length) return this.get(sessionId)?.head ?? null;
     return this.writing([sessionId], () =>
       this.appendOwned(sessionId, messages, expectedHead),
     );
@@ -277,6 +403,7 @@ export class CheckpointStore {
   ): string | null {
     this.db.exec('BEGIN IMMEDIATE');
     try {
+      this.materialize(sessionId);
       const session = this.get(sessionId);
       if (!session) throw new Error('unknown session');
       if (expectedHead !== undefined && expectedHead !== session.head)
@@ -378,6 +505,7 @@ export class CheckpointStore {
       seen.add(id);
       for (const child of this.children(id)) visit(child.id, seen);
       this.messageCache.delete(id);
+      this.deferred.delete(id);
       this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
     };
     this.db.exec('BEGIN IMMEDIATE');
@@ -784,6 +912,7 @@ export class CheckpointStore {
         pending.set(call.id, call.name);
       if (message.role === 'tool') pending.delete(message.tool_call_id!);
     }
+    if (!pending.size) return;
     this.append(
       sessionId,
       [...pending].map(([id, name]) => ({

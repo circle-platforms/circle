@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { platform } from 'node:os';
 import { currentBranch } from './git_info.js';
 import type { RunOptions } from './run_options.js';
-import { formatMemorySources } from './memory_sources.js';
+import { formatMemorySources, readCappedText } from './memory_sources.js';
 const prompts = fileURLToPath(new URL('./prompts/', import.meta.url));
 export function readPrompt(...parts: string[]): string {
   return readFileSync(join(prompts, ...parts), 'utf8').trim();
@@ -51,10 +51,7 @@ export function discoverContextFiles(workspace: string): [string, string][] {
         const identity = `${stat.dev}:${stat.ino}`;
         if (!stat.isFile() || seen.has(identity)) continue;
         seen.add(identity);
-        files.push([
-          path,
-          readFileSync(path).subarray(0, 120000).toString('utf8').trim(),
-        ]);
+        files.push([path, readCappedText(path)]);
       } catch {
         /* No instruction file here. */
       }
@@ -84,7 +81,12 @@ function sessionPrompt(model: string): string {
     ['`Grep`', '`grep`'],
   ])
     session = session.replaceAll(from!, to!);
-  return session;
+  // Worked examples are long and untested. The rules above them stay.
+  return session
+    .replace(/<example>[\s\S]*?<\/example>/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 // `.circle/<name>` in the project, else `<name>` in the data folder, as 0.5.0 read them.
 function promptFile(
@@ -196,7 +198,7 @@ export function buildSystemPrompt(
   if (variables.length || catalog.secrets?.length)
     sections.push(
       '<variables>\n' +
-        "Variables the user keeps in Circle. Write %NAME% in a tool's arguments (a command, a browser field, an MCP tool's input) and Circle puts the value in when the tool runs, as Windows does with environment variables. Files you write keep %NAME% as text." +
+        "Variables the user keeps in Circle. Write %NAME% in a tool's arguments (a command, a browser field, an MCP tool's input) and Circle puts the value in when the tool runs. Files you write keep %NAME% as text." +
         (variables.length
           ? '\n' +
             variables.map(([name, value]) => `- ${name} = ${value}`).join('\n')

@@ -12,25 +12,25 @@ This page also lists what the current version does not do. Read [What does not c
 
 | Command | What it does |
 |---|---|
-| `/new` (`/clear`) | Start a new session. The old one stays in the folder's list. |
+| `/new` (`/clear`) | Start a new session. The old one stays in the folder's list once it has a message. A session with no messages yet is kept only in this terminal, and it is written when the first message is sent. |
 | `/resume` (`/sessions`) | Pick a session from a list. See [Pick a session](#pick-a-session). |
 | `/resume <n or id>` | Open a session by its place in that list or by the end of its id. |
 | `/continue` | Switch back to the previous session. |
-| `/name <title>` | Give the session a title. The first line of your first message is used until you do. |
+| `/name <title>` | Give the session a title. Until you do, Circle uses a short title from the first message (a leading "please" is dropped, and a long line is cut). A model may replace that title when the message is long. |
 | `/session` | Show the session's id and title, its folder and model, where it is kept, how many messages and tool calls it holds, and the tokens this run has used. |
 
 Session ids look like `circle-3f9a1c2e`. `circle --session-id <id>` opens or starts a session with an id you choose, `--name` gives it a title from the start, and `--no-session` keeps a conversation in memory only. See [CLI](cli.md#arguments-and-options).
 
 ## Pick a session
 
-`/resume` and `circle -r` open a list of this folder's sessions, newest first, with how long ago each was used. Type to narrow it.
+`/resume` and `circle -r` open a list of this folder's sessions, newest first, with how long ago each was used. A session that was never sent a message, or whose only turn failed before any reply, is not listed. Type to narrow the list: the search matches titles and the text of your messages and the model's replies. When nothing matches, the list says `No matches`. When the folder has no sessions, it says so. The marked row starts with `>`.
 
 | Key | What it does |
 |---|---|
 | `enter` | Open the session. |
-| `tab` | Switch between this folder's sessions and every folder's. |
-| `ctrl+r` | Rename the session. |
-| `ctrl+d` | Delete the session and its messages after confirmation, stopping its turn and tasks first. |
+| `tab` | Switch between this folder's sessions and every folder's. The hint under the title changes with the switch, and every folder's rows name the folder. |
+| `ctrl+r` | Rename the session. The old name is selected, so typing replaces it. |
+| `ctrl+k` | Delete the session and its messages after confirmation, stopping its turn and tasks first. |
 | `esc` | Clear the search, or close the list. |
 
 A session from another folder is not moved. Picking one copies it into a new session in this folder, and the original stays where it was.

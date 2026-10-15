@@ -257,6 +257,11 @@ export class Composer {
     this.pastes.clear();
     this.state.completion = undefined;
   }
+  /** Clear the draft and keep it for ctrl+y. */
+  stashClear(): void {
+    this.killed = this.state.draft;
+    this.clear();
+  }
   insert(text: string): void {
     const chars = this.chars;
     const added = Array.from(text);
@@ -403,8 +408,13 @@ export class Composer {
     else if (key === 'home' || key === 'ctrl+a') this.state.draftCursor = 0;
     else if (key === 'end' || key === 'ctrl+e') this.state.draftCursor = length;
     else if (key === 'shift+enter' || key === 'ctrl+j') this.insert('\n');
-    else if (key === 'ctrl+u') this.clear();
-    else if (WORD_LEFT.has(key))
+    else if (key === 'ctrl+u') {
+      // readline: delete back to the start of this line, not the whole draft.
+      let start = cursor;
+      while (start > 0 && this.chars[start - 1] !== '\n') start--;
+      this.cut(start, cursor);
+      if (!this.state.draft) this.state.completion = undefined;
+    } else if (WORD_LEFT.has(key))
       this.state.draftCursor = this.wordStart(cursor);
     else if (WORD_RIGHT.has(key)) this.state.draftCursor = this.wordEnd(cursor);
     else if (DELETE_WORD_BACK.has(key))
@@ -439,17 +449,21 @@ export class Composer {
       return true;
     }
     if (key === 'pageup' || key === 'pagedown') return true;
-    if (key === 'up' || key === 'down') {
+    if (
+      key === 'up' ||
+      key === 'down' ||
+      key === 'ctrl+p' ||
+      key === 'ctrl+n'
+    ) {
       // A draft of several rows: ↑ ↓ move between them first (while browsing the
-      // history they keep browsing)
+      // history they keep browsing). ctrl+p / ctrl+n are the readline history keys.
+      const upward = key === 'up' || key === 'ctrl+p';
       const history = host.history;
-      if (!history.browsing && this.moveVertical(key === 'up' ? -1 : 1))
-        return true;
-      if (key === 'up' && empty && !history.canGoUp()) host.scroll(3);
-      else if (key === 'down' && empty && !history.canGoDown()) host.scroll(-3);
+      if (!history.browsing && this.moveVertical(upward ? -1 : 1)) return true;
+      if (upward && empty && !history.canGoUp()) host.scroll(3);
+      else if (!upward && empty && !history.canGoDown()) host.scroll(-3);
       else {
-        const value =
-          key === 'up' ? history.up(this.state.draft) : history.down();
+        const value = upward ? history.up(this.state.draft) : history.down();
         if (value !== undefined) this.set(value);
       }
       return true;

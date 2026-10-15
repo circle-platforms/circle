@@ -392,7 +392,10 @@ test('/help lists custom and extension commands; /hotkeys shows what each key do
   const keys = app.state.notices.at(-1)!;
   assert.match(keys, /^Keyboard shortcuts:/);
   assert.match(keys, /ctrl\+q {10}queue a follow-up: sent when the turn ends/);
-  assert.match(keys, /esc esc {9}the session tree \(\/tree\)/);
+  assert.match(keys, /esc esc +clear a draft/);
+  assert.match(keys, /session tree \(\/tree\)/);
+  assert.match(keys, /ctrl\+l +redraw the screen/);
+  assert.match(keys, /alt\+l +choose a model/);
 });
 
 test('/init sends the initialize template with the focus; a custom command replaces a built-in one', async (t) => {
@@ -424,7 +427,7 @@ test('/init sends the initialize template with the focus; a custom command repla
   );
 });
 
-test('/jobs lists running jobs first; ctrl+d stops one after asking in the list or removes one that ended', async (t) => {
+test('/jobs lists running jobs first; ctrl+k stops one after asking in the list or removes one that ended', async (t) => {
   const { app, runtime, key, workspace } = await session(t);
   const script = (name: string, code: string): string => {
     writeFileSync(join(workspace, name), code);
@@ -448,7 +451,7 @@ test('/jobs lists running jobs first; ctrl+d stops one after asking in the list 
   assert.match(picker.items[0]!.meta!, /^running · \d+s · other session$/);
   assert.match(picker.items[1]!.meta!, /^done · \d+s$/);
   // The question is asked in the list, as 0.5.0 did; esc keeps the job running.
-  await key('ctrl+d');
+  await key('ctrl+k');
   assert.equal(app.state.dialog, undefined);
   assert.equal(app.state.picker, picker);
   assert.ok(picker.asking);
@@ -464,7 +467,7 @@ test('/jobs lists running jobs first; ctrl+d stops one after asking in the list 
   await key('escape');
   assert.ok(!picker.asking);
   assert.equal(runtime.jobs.get(running.id)?.status, 'running');
-  await key('ctrl+d');
+  await key('ctrl+k');
   await key('enter');
   await until(() => runtime.jobs.get(running.id)?.status === 'stopped');
   assert.equal((app as any).ended, false);
@@ -472,7 +475,7 @@ test('/jobs lists running jobs first; ctrl+d stops one after asking in the list 
     () => app.state.picker?.items[0]?.meta?.startsWith('stopped') === true,
   );
   app.state.picker!.focus = 1;
-  await key('ctrl+d');
+  await key('ctrl+k');
   assert.equal(runtime.jobs.get(ended.id), undefined);
   assert.deepEqual(
     app.state.picker!.items.map((item) => item.key),
@@ -856,7 +859,7 @@ test("/approvals remove keeps a trusted project's copy of the same pattern", asy
   );
 });
 
-test('/settings picks the mode new sessions start in, and ctrl+s saves it', async (t) => {
+test('/settings picks the mode new sessions start in, and alt+d saves it', async (t) => {
   const home = scratch(t);
   const workspace = scratch(t);
   const saved = trustFolder(defaultSettings(), workspace);
@@ -896,12 +899,12 @@ test('/settings picks the mode new sessions start in, and ctrl+s saves it', asyn
     app.state.notices.at(-1),
     'Accept edits · workspace file edits run without asking, commands and deletes still ask',
   );
-  // ctrl+s writes default_mode and takes the session with it
+  // alt+d writes default_mode and takes the session with it
   await app.submit('/settings');
   await choose('default mode');
   const list = app.state.picker!;
   list.focus = list.items.findIndex((item) => item.label === 'auto');
-  await key('ctrl+s');
+  await key('alt+d');
   assert.equal(loadSettings(home).default_mode, 'auto');
   assert.equal(runtime.mode, 'auto');
   assert.equal(
@@ -1048,15 +1051,22 @@ test('/tree, /fork, /clone, /new, /continue and /resume move between branches an
     app.state.notices.at(-1),
     "✖ No session 'nothing' in this folder · /resume lists them",
   );
-  // The list: ctrl+r renames and ctrl+d always asks, including the open session.
+  // The list: ctrl+r renames (the old name is selected) and ctrl+k always asks.
   await app.submit('/resume');
   assert.equal(app.state.picker!.title, 'Sessions · this folder');
+  assert.match(
+    app.state
+      .picker!.rows(160)
+      .map((row) => stripAnsi(row))
+      .join('\n'),
+    /tab every folder/,
+  );
   const focus = (id: string): void => {
     const picker = app.state.picker!;
     picker.focus = picker.matches().findIndex((item) => item.key === id);
   };
   focus(first);
-  await key('ctrl+d');
+  await key('ctrl+k');
   assert.ok(app.state.picker!.asking);
   await key('escape');
   assert.ok(app.runtime!.store.get(first));
@@ -1064,12 +1074,22 @@ test('/tree, /fork, /clone, /new, /continue and /resume move between branches an
   await key('ctrl+r');
   assert.equal(app.state.dialog, undefined);
   assert.ok(app.state.picker!.asking);
+  const asked = stripAnsi(app.state.picker!.rows(200).join('\n'));
+  assert.match(asked, /Rename:/);
+  assert.match(asked, /typing replaces the name/);
+  await key('Z', 'Z');
+  const replaced = stripAnsi(app.state.picker!.rows(200).join('\n'));
+  assert.match(replaced, /Rename: Z/);
+  assert.doesNotMatch(replaced, /Rename:.*question/);
+  await key('escape');
+  focus(cloned);
+  await key('ctrl+r');
   await key('ctrl+u');
   for (const char of '  the   clone ') await key(char, char);
   await key('enter');
   assert.equal(app.runtime!.store.get(cloned)!.title, 'the clone');
   focus(cloned);
-  await key('ctrl+d');
+  await key('ctrl+k');
   assert.equal(app.state.dialog, undefined);
   assert.ok(app.state.picker!.asking);
   await key('enter');
@@ -1077,6 +1097,21 @@ test('/tree, /fork, /clone, /new, /continue and /resume move between branches an
   assert.ok(app.state.picker!.items.every((item) => item.key !== cloned));
   await key('tab');
   assert.equal(app.state.picker!.title, 'Sessions · every folder');
+  assert.match(
+    app.state
+      .picker!.rows(200)
+      .map((row) => stripAnsi(row))
+      .join('\n'),
+    /tab this folder/,
+  );
+  assert.ok(
+    app.state.picker!.items.some((item) => (item.meta ?? '').includes('/')),
+  );
+  app.state.picker!.query = 'answer one';
+  assert.ok(app.state.picker!.matches().some((item) => item.key === first));
+  app.state.picker!.query = 'no-such-word-zz';
+  assert.equal(app.state.picker!.matches().length, 0);
+  assert.match(stripAnsi(app.state.picker!.rows(80).join('\n')), /No matches/);
 });
 
 test('/compact, /mcp, /extensions, /trust and /reload report as 0.5.0 did', async (t) => {
@@ -1294,7 +1329,7 @@ test("/login asks for the URL and the key on its list, lists the endpoint's mode
   assert.ok(!seen.some((line) => line.includes('old-key')), seen.join('\n'));
 });
 
-test('/variables and /secrets keep values as Windows writes them, and the model is told the names', async (t) => {
+test('/variables and /secrets keep named values, and the model is told the names', async (t) => {
   const { app, model, home, key, screen } = await session(t, [answer('noted')]);
   await app.submit('/variables base_url=https://example.test');
   assert.deepEqual(loadSettings(home).variables, {
@@ -1302,7 +1337,7 @@ test('/variables and /secrets keep values as Windows writes them, and the model 
   });
   assert.match(
     screen(),
-    /BASE_URL=https:\/\/example\.test · the model writes %BASE_URL% to use it/,
+    /BASE_URL=https:\/\/example\.test · Circle fills BASE_URL in when a tool runs/,
   );
   await app.submit('/variables 1BAD=x');
   assert.match(screen(), /Usage: \/variables NAME=value/);
@@ -1318,7 +1353,7 @@ test('/variables and /secrets keep values as Windows writes them, and the model 
   await saving;
   assert.match(
     screen(),
-    /Saved secret API_TOKEN · the model writes %API_TOKEN% to use it/,
+    /Saved secret API_TOKEN · Circle fills API_TOKEN in when a tool runs/,
   );
   assert.deepEqual(
     JSON.parse(readFileSync(join(home, 'secrets.json'), 'utf8')),

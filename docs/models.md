@@ -33,11 +33,11 @@ The protocol is set by setup, never guessed from a model name: a model called `c
 /models qwen3.8-flash   use this id
 ```
 
-`/models` (or `ctrl+l`) lists the models the endpoint offers, asking it with the saved protocol; when it cannot be asked, a red line says why. Type to search. `enter` uses the model for this session; `ctrl+s` uses it and saves it as the default for new sessions. The list marks the saved one `default`.
+`/models` (or `alt+l`) lists the models the endpoint offers, asking it with the saved protocol; when it cannot be asked, a red line says why. Type to search. `enter` uses the model for this session; `alt+d` uses it and saves it as the default for new sessions. The list marks the saved one `default`. `ctrl+l` redraws the screen and does not open this list.
 
-`/models <id>` uses the id for this session without checking that the endpoint knows it. To keep it, open `/models` and press `ctrl+s` on it.
+`/models <id>` uses the id for this session without checking that the endpoint knows it. To keep it, open `/models` and press `alt+d` on it. An id the endpoint rejects is shown as a short message that points back at `/models`, not as the raw error body.
 
-`ctrl+p` switches to the next model for this session. It goes through the models in `enabled_models` in `settings.json`, for example `["step-3.7-flash", "step-5-*"]`, where a pattern is matched against what the endpoint lists. With no `enabled_models` it goes through every listed model. Rows in the scope are marked `in ctrl+p` in `/models`, and `tab` there adds the marked model to the scope or takes it out; the list is saved as `enabled_models` (for this run only when Circle was started with `--models`).
+`alt+m` switches to the next model for this session. It goes through the models in `enabled_models` in `settings.json`, for example `["step-3.7-flash", "step-5-*"]`, where a pattern is matched against what the endpoint lists. With no `enabled_models` it goes through every listed model. Rows in the scope are marked `in alt+m` in `/models`, and `tab` there adds the marked model to the scope or takes it out; the list is saved as `enabled_models` (for this run only when Circle was started with `--models`).
 
 A model cannot be switched while a turn runs. The footer shows cost and context for the current model.
 
@@ -57,7 +57,7 @@ Circle signs in only with an API URL and key. It has no OAuth sign-in, so a Chat
 
 Circle asks models for extended thinking when the protocol supports it. The depth is one of `minimal`, `low`, `medium`, `high`, `xhigh` or `max`.
 
-- `/effort` lists the depths. `enter` uses one for the rest of this run; `ctrl+s` also saves it as `default_thinking` in `settings.json`.
+- `/effort` lists the depths. `enter` uses one for the rest of this run; `alt+d` also saves it as `default_thinking` in `settings.json`.
 - `/effort <level>` and `/thinking <level>` set it for the rest of this run.
 - `alt+t` switches to the next depth.
 - `--thinking <level>` sets it for one run and is never saved.
@@ -65,7 +65,7 @@ Circle asks models for extended thinking when the protocol supports it. The dept
 
 A change applies from the next message. When the model has a depth, the header shows it after the model name, such as `step-3.7-flash • high`.
 
-- **Anthropic protocol**: the default is `xhigh`. For a model whose profile lists the levels it supports, Circle sends the highest one at or below your choice. For older Claude models that take a thinking budget, the budgets are 1,024 for `minimal`, 2,048 for `low`, 8,192 for `medium`, 16,000 for `high` and `xhigh`, and 31,999 for `max`, kept below the answer limit.
+- **Anthropic protocol**: the default is `medium`. For a model whose profile lists the levels it supports, Circle sends the highest one at or below your choice. For older Claude models that take a thinking budget, the budgets are 1,024 for `minimal`, 2,048 for `low`, 8,192 for `medium`, 16,000 for `high` and `xhigh`, and 31,999 for `max`, kept below the answer limit.
 - **OpenAI protocol**: nothing is sent unless you choose a depth; then it is sent as `reasoning_effort`.
 
 If an endpoint rejects a parameter Circle sent (thinking, reasoning effort, stream options and a few others), Circle drops that parameter, sends the request again, and does not send it again for the rest of the session. You see one line saying so. A request drops at most four parameters.
