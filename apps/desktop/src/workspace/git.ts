@@ -100,7 +100,16 @@ export class GitWorkspaceService {
       if (/[RC]/.test(row.slice(0, 2))) entry.originalPath = fields[++i];
       entries.push(entry);
     }
-    const hash = createHash('sha256').update(head).update(raw);
+    const originPushUrls = await this.git([
+      'remote',
+      'get-url',
+      '--push',
+      '--all',
+      'origin',
+    ]).catch(() => '');
+    const hash = createHash('sha256')
+      .update(JSON.stringify({ head, branch, originPushUrls }))
+      .update(raw);
     const indexPath = (
       await this.git(['rev-parse', '--git-path', 'index'])
     ).trim();
@@ -207,7 +216,9 @@ export class GitWorkspaceService {
       .then(async () => {
         const state = await this.snapshot();
         if (params.revision !== state.revision)
-          throw Error('repository changed; refresh before retrying');
+          throw Error(
+            'repository, branch or push destination changed; refresh before retrying',
+          );
         if (method === 'stage')
           await this.git(['add', '--', ...this.paths(params.paths)]);
         else if (method === 'unstage')
