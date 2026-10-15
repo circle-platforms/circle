@@ -268,6 +268,76 @@ test('service executes real runtime, exposes actual artifacts, refuses unverifie
     'actual',
   );
   assert.equal(await git(workspace, 'rev-parse', 'HEAD'), baseline);
+  const pendingReview = service.getTask('claimed')!;
+  const reviewParams = {
+    id: 'claimed',
+    expectedAttempt: pendingReview.attempt,
+    expectedPatchSha256: (
+      pendingReview.result as { changes: { sha256: string } }
+    ).changes.sha256,
+    checks: [
+      {
+        criterion: 'actual file',
+        evidence: 'I inspected claimed.txt and verified the actual contents',
+      },
+    ],
+  };
+  await assert.rejects(
+    service.call('origin', 'review', {
+      ...reviewParams,
+      expectedAttempt: pendingReview.attempt + 1,
+    }),
+    /stale/,
+  );
+  await assert.rejects(
+    service.call('origin', 'review', { ...reviewParams, checks: [] }),
+    /each acceptance/,
+  );
+  const reviewed = (await service.call(
+    'origin',
+    'review',
+    reviewParams,
+  )) as TaskRecord;
+  assert.equal(reviewed.state, 'succeeded');
+  assert.equal(
+    (reviewed.result as { review: { reviewer: string } }).review.reviewer,
+    'human',
+  );
+  assert.equal(
+    ((await service.call('origin', 'review', reviewParams)) as TaskRecord)
+      .state,
+    'succeeded',
+  );
+  const humanArtifacts = (await service.call('origin', 'artifacts', {
+    id: 'claimed',
+  })) as { kind: string }[];
+  assert.equal(
+    humanArtifacts.filter((artifact) => artifact.kind === 'human-review')
+      .length,
+    1,
+  );
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === 'task.reviewed' &&
+        (event.payload as { reviewer: string }).reviewer === 'human',
+    ),
+  );
+  const currentHead = await git(integration.path, 'rev-parse', 'HEAD');
+  assert.equal(
+    (
+      (await service.call('origin', 'mergeCandidates', {
+        integrationId: integration.id,
+        taskIds: ['claimed'],
+        expectedHead: currentHead,
+      })) as { status: string }
+    ).status,
+    'merged',
+  );
+  assert.equal(
+    await readFile(join(integration.path, 'claimed.txt'), 'utf8'),
+    'actual',
+  );
 });
 
 test('authorized workspaces share global agent/UI pools and one durable settings stream', async (t) => {
@@ -424,4 +494,97 @@ test('deleting an owner cancels only its task runtimes and awaits model cleanup;
   assert.equal(service.getTask('b')!.state, 'cancelled');
   assert.equal(closed.has('b'), true);
   assert.equal(service.hasActiveSession('parent-b'), false);
+});
+
+test('human acceptance binds every criterion to the displayed attempt, actual head and immutable patch', async (t) => {
+  const workspace = scratch(t),
+    dataDir = scratch(t);
+  await repository(workspace);
+  const service = new TaskService({
+    workspace,
+    dataDir,
+    emit: () => {},
+    createRuntime: async (record, ctx) => {
+      const home = join(dataDir, 'homes', record.spec.id);
+      await mkdir(home, { recursive: true });
+      return new AgentRuntime({
+        workspace: ctx.worktree,
+        home,
+        userHome: home,
+        model: new ScriptedModel([{ message: message('claim') }]),
+        settings: trustFolder(defaultSettings(), ctx.worktree),
+        headless: true,
+        bundledExtensions: false,
+        screenshot: false,
+      });
+    },
+  });
+  cleanup(t, () => service.close());
+  await service.call('parent', 'enqueue', {
+    operationId: 'reviewed',
+    tasks: [
+      {
+        ...task('reviewed'),
+        acceptanceCriteria: ['first criterion', 'second criterion'],
+      },
+    ],
+  });
+  await until(
+    async () => service.getTask('reviewed')?.state === 'needs_review',
+  );
+  const record = service.getTask('reviewed')!,
+    changes = (
+      record.result as { changes: { sha256: string; patchPath: string } }
+    ).changes;
+  const params = {
+    id: 'reviewed',
+    expectedAttempt: record.attempt,
+    expectedPatchSha256: changes.sha256,
+    checks: [
+      {
+        criterion: 'first criterion',
+        evidence: 'I inspected the first expected behavior',
+      },
+      {
+        criterion: 'second criterion',
+        evidence: 'I inspected the second expected behavior',
+      },
+    ],
+  };
+  await assert.rejects(
+    service.call('parent', 'review', {
+      ...params,
+      checks: params.checks.slice(0, 1),
+    }),
+    /each acceptance/,
+  );
+  await writeFile(join(record.worktree!, 'source.txt'), 'later changes');
+  await assert.rejects(
+    service.call('parent', 'review', params),
+    /worktree changed/,
+  );
+  await writeFile(join(record.worktree!, 'source.txt'), 'source');
+  const originalPatch = await readFile(changes.patchPath);
+  await writeFile(changes.patchPath, 'tampered');
+  await assert.rejects(
+    service.call('parent', 'review', params),
+    /patch changed/,
+  );
+  await writeFile(changes.patchPath, originalPatch);
+  await git(
+    record.worktree!,
+    '-c',
+    'user.name=Fixture',
+    '-c',
+    'user.email=fixture@example.invalid',
+    'commit',
+    '--allow-empty',
+    '-m',
+    'Change candidate head',
+  );
+  await assert.rejects(
+    service.call('parent', 'review', params),
+    /worktree changed/,
+  );
+  assert.equal(service.getTask('reviewed')!.state, 'needs_review');
 });

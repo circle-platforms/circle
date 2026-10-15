@@ -847,12 +847,97 @@ export class CollaborationScheduler {
     this.publish(event);
     return artifact;
   }
+  acceptHumanReview(
+    id: string,
+    options: {
+      expectedAttempt: number;
+      expectedPatchSha256: string;
+      checks: { criterion: string; evidence: string }[];
+      result: Json;
+      artifact: TaskArtifact;
+    },
+  ): TaskRecord {
+    this.assertOpen();
+    const operationId = `human-review:${fingerprint([id, options.expectedAttempt, options.expectedPatchSha256])}`;
+    const hash = fingerprint(options.checks);
+    const previous = this.store.operation(operationId);
+    if (previous) {
+      if (previous.fingerprint !== hash)
+        throw new Error('human review was repeated with different evidence');
+      return this.store.get(id)!;
+    }
+    const task = this.store.get(id);
+    const changes = (
+      task?.result as { changes?: { sha256?: string } } | undefined
+    )?.changes;
+    if (
+      !task ||
+      task.state !== 'needs_review' ||
+      this.active.has(id) ||
+      task.attempt !== options.expectedAttempt ||
+      changes?.sha256 !== options.expectedPatchSha256
+    )
+      throw new Error('task review is stale; reload the task and its patch');
+    const events: CollaborationEvent[] = [];
+    this.store.transaction(() => {
+      task.state = 'succeeded';
+      task.result = options.result;
+      task.reason =
+        'all acceptance criteria were explicitly reviewed by a person';
+      task.updatedAt = Date.now();
+      this.store.put(task);
+      this.store.addArtifact(options.artifact);
+      this.store.putOperation({
+        id: operationId,
+        kind: 'human-review',
+        fingerprint: hash,
+        state: 'succeeded',
+        taskId: id,
+        attempt: task.attempt,
+        result: { reviewer: 'human', patchSha256: options.expectedPatchSha256 },
+      });
+      events.push(
+        this.store.event(
+          'artifact.created',
+          {
+            id: options.artifact.id,
+            path: options.artifact.path,
+            sha256: options.artifact.sha256,
+            kind: options.artifact.kind,
+          },
+          task,
+        ),
+      );
+      events.push(
+        this.store.event(
+          'task.reviewed',
+          {
+            reviewer: 'human',
+            patchSha256: options.expectedPatchSha256,
+            checks: options.checks,
+          },
+          task,
+        ),
+      );
+      events.push(
+        this.store.event(
+          'task.succeeded',
+          { state: 'succeeded', reviewer: 'human' },
+          task,
+        ),
+      );
+    });
+    for (const event of events) this.publish(event);
+    this.reconcile();
+    this.schedule();
+    return task;
+  }
   hasActiveTask(id: string): boolean {
     const task = this.store.get(id);
     return (
       this.active.has(id) ||
       this.failedCleanups.has(id) ||
-      Boolean(task && !terminal.has(task.state))
+      Boolean(task && (!terminal.has(task.state) || task.state === 'blocked'))
     );
   }
   private async settleFailedCleanup(id: string): Promise<void> {
@@ -882,7 +967,7 @@ export class CollaborationScheduler {
       active.controller.abort();
       this.reconcile();
       await active.done;
-    } else if (!terminal.has(task.state)) {
+    } else if (!terminal.has(task.state) || task.state === 'blocked') {
       this.update(id, 'cancelled', { reason: 'cancelled before execution' });
       this.reconcile();
       this.schedule();

@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync } from 'node:fs';
-import { rename, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 import {
@@ -11,11 +11,15 @@ import {
   type CollaborationEvent,
   type CollaborationLimits,
   type TaskRecord,
+  type Json,
+  type TaskArtifact,
   type TaskResource,
   type TaskSpec,
 } from './collaboration.js';
 import {
   createAgentTaskExecutor,
+  captureTaskChanges,
+  type TaskChanges,
   type AgentTaskExecutorOptions,
 } from './task-executor.js';
 import { TaskIntegrator } from './task-merge.js';
@@ -287,6 +291,8 @@ export class TaskService {
           params.cursor === undefined ? 0 : (params.cursor as number),
           params.limit === undefined ? 1000 : (params.limit as number),
         );
+      case 'review':
+        return this.serial(() => this.review(params));
       case 'settings':
         return this.serial(async () => {
           const current = this.scheduler.getLimits();
@@ -340,6 +346,136 @@ export class TaskService {
       default:
         throw new Error('unknown task operation');
     }
+  }
+  private async review(params: Record<string, unknown>): Promise<TaskRecord> {
+    const id = string(params.id, 'task id'),
+      expectedPatchSha256 = string(
+        params.expectedPatchSha256,
+        'expected patch hash',
+      );
+    const expectedAttempt = params.expectedAttempt;
+    if (
+      !Number.isSafeInteger(expectedAttempt) ||
+      Number(expectedAttempt) < 1 ||
+      !/^[0-9a-f]{64}$/.test(expectedPatchSha256)
+    )
+      throw new Error('invalid task review version');
+    const task = this.scheduler.get(id);
+    if (!task) throw new Error('unknown task');
+    if (!Array.isArray(params.checks) || params.checks.length > 1000)
+      throw new Error('explicit acceptance evidence is required');
+    const checks = params.checks
+      .map((input) => {
+        const value = object(input, 'acceptance evidence');
+        return {
+          criterion: string(value.criterion, 'acceptance criterion', 8192),
+          evidence: string(value.evidence, 'acceptance evidence', 8192),
+        };
+      })
+      .sort((a, b) =>
+        a.criterion < b.criterion ? -1 : a.criterion > b.criterion ? 1 : 0,
+      );
+    if (
+      new Set(checks.map((check) => check.criterion)).size !== checks.length ||
+      checks.some(
+        (check) => !task.spec.acceptanceCriteria.includes(check.criterion),
+      ) ||
+      !task.spec.acceptanceCriteria.every((criterion) =>
+        checks.some((check) => check.criterion === criterion),
+      )
+    )
+      throw new Error(
+        'each acceptance criterion requires explicit human evidence',
+      );
+    const previous = task.result as
+      | {
+          verdict?: string;
+          changes?: TaskChanges;
+          checks?: Json[];
+          review?: {
+            reviewer?: string;
+            expectedAttempt?: number;
+            expectedPatchSha256?: string;
+            checks?: typeof checks;
+          };
+        }
+      | undefined;
+    if (
+      task.state === 'succeeded' &&
+      previous?.review?.reviewer === 'human' &&
+      previous.review.expectedAttempt === expectedAttempt &&
+      previous.review.expectedPatchSha256 === expectedPatchSha256 &&
+      JSON.stringify(previous.review.checks) === JSON.stringify(checks)
+    )
+      return task;
+    if (
+      task.state !== 'needs_review' ||
+      task.attempt !== expectedAttempt ||
+      previous?.changes?.sha256 !== expectedPatchSha256 ||
+      !task.worktree
+    )
+      throw new Error('task review is stale; reload the task and its patch');
+    const changes = previous.changes;
+    const acceptedPatch = await readFile(changes.patchPath);
+    if (
+      createHash('sha256').update(acceptedPatch).digest('hex') !==
+      expectedPatchSha256
+    )
+      throw new Error('task patch changed after it was displayed');
+    const directory = dirname(changes.patchPath),
+      temporary = await mkdtemp(join(directory, 'review-'));
+    try {
+      const current = await captureTaskChanges(task, task.worktree, temporary);
+      if (
+        current.head !== changes.head ||
+        current.sha256 !== expectedPatchSha256
+      )
+        throw new Error('task worktree changed after its patch was displayed');
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+    const reviewed = {
+      reviewer: 'human',
+      at: Date.now(),
+      expectedAttempt: Number(expectedAttempt),
+      expectedPatchSha256,
+      head: changes.head,
+      checks,
+    };
+    const path = join(directory, `human-review-${randomUUID()}.json`),
+      body = JSON.stringify(reviewed, null, 2) + '\n';
+    await writeFile(path, body, { mode: 0o600 });
+    const artifact: TaskArtifact = {
+      id: randomUUID(),
+      taskId: id,
+      attempt: task.attempt,
+      baseline: task.spec.baseline,
+      path,
+      sha256: createHash('sha256').update(body).digest('hex'),
+      kind: 'human-review',
+      createdAt: Date.now(),
+    };
+    const result = {
+      ...previous,
+      verdict: 'passed',
+      review: reviewed,
+      checks: [
+        ...(previous.checks ?? []),
+        ...checks.map((check) => ({
+          ...check,
+          status: 'passed',
+          source: 'independent-review',
+          reviewer: 'human',
+        })),
+      ],
+    };
+    return this.scheduler.acceptHumanReview(id, {
+      expectedAttempt: Number(expectedAttempt),
+      expectedPatchSha256,
+      checks,
+      result: result as unknown as Json,
+      artifact,
+    });
   }
   private integration(): Promise<TaskIntegrator> {
     this.integrator ??= (async () => {
