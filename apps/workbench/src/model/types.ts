@@ -90,6 +90,18 @@ export interface Session {
   id: string;
   /** Desktop-only organization; the core transcript and project files stay intact. */
   archivedAt?: string;
+  lifecycle?: 'open' | 'deleting';
+  /** Another process owns execution of this conversation. */
+  occupied?: boolean;
+  /** The last renderer action failure, kept with its source session for this window. */
+  actionError?: string;
+  /** Renderer-only state; never changes the core conversation or execution. */
+  presentation?: {
+    scroll?: { top: number; follow: boolean };
+    planCollapsed?: boolean;
+    disclosures?: Record<string, { open: boolean; defaultOpen: boolean }>;
+    toolTabs?: Record<string, 'input' | 'output'>;
+  };
   title: string;
   workspaceId: string;
   model: string;
@@ -365,10 +377,11 @@ export interface RuntimePort {
   request: (
     kind: string,
     payload?: Record<string, unknown>,
+    sessionId?: string,
   ) => string | Promise<unknown>;
   newSession: (workspaceId?: string) => string | Promise<string>;
   selectSession: (id: string) => void | Promise<void>;
-  deleteSession: (id: string) => void | Promise<void>;
+  deleteSession: (id: string, confirmed?: boolean) => void | Promise<void>;
   branch: (messageId: string, kind: 'tree' | 'fork') => void | Promise<void>;
   answer: (
     id: string,

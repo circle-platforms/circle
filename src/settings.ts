@@ -7,6 +7,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import lockfile from 'proper-lockfile';
 import {
   credentialsPath,
   settingsPath,
@@ -193,6 +194,9 @@ export function saveSettings(
   home = circleHome(),
 ): string {
   const path = settingsPath(ensureHome(home));
+  return withPrivateJsonLock(path, () => saveSettingsUnlocked(settings, path));
+}
+function saveSettingsUnlocked(settings: CircleSettings, path: string): string {
   let previous: Record<string, unknown> = {};
   try {
     const raw = readJson(path);
@@ -202,6 +206,34 @@ export function saveSettings(
   }
   writePrivateJson(path, { ...previous, ...settings });
   return path;
+}
+// The public settings API is synchronous. Critical sections contain only local reads and
+// atomic renames; brief bounded retries serialize other Circle processes without dropping
+// a field another terminal just changed. Never call an asynchronous operation inside one.
+export function withPrivateJsonLock<T>(path: string, operation: () => T): T {
+  const deadline = Date.now() + 5000;
+  let release: (() => void) | undefined;
+  while (!release) {
+    try {
+      release = lockfile.lockSync(path, {
+        realpath: false,
+        stale: 30000,
+        update: 5000,
+      });
+    } catch (error) {
+      if (
+        (error as NodeJS.ErrnoException).code !== 'ELOCKED' ||
+        Date.now() >= deadline
+      )
+        throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+  try {
+    return operation();
+  } finally {
+    release();
+  }
 }
 export function loadCredentials(home = circleHome()): Record<string, string> {
   const path = credentialsPath(home);
@@ -218,12 +250,14 @@ export function saveCredentials(
   home = circleHome(),
 ): string {
   const path = credentialsPath(ensureHome(home));
-  writePrivateJson(path, { ...loadCredentials(home), ...credentials });
+  withPrivateJsonLock(path, () =>
+    writePrivateJson(path, { ...loadCredentials(home), ...credentials }),
+  );
   return path;
 }
 export function clearCredentials(home = circleHome()): string {
   const path = credentialsPath(ensureHome(home));
-  writePrivateJson(path, {});
+  withPrivateJsonLock(path, () => writePrivateJson(path, {}));
   for (const key of [
     'OPENAI_API_KEY',
     'ANTHROPIC_API_KEY',
@@ -373,10 +407,13 @@ export function saveSettingsChange(
   home: string,
   change: (saved: CircleSettings) => void,
 ): CircleSettings {
-  const saved = loadSettings(home);
-  change(saved);
-  saveSettings(saved, home);
-  return saved;
+  const path = settingsPath(ensureHome(home));
+  return withPrivateJsonLock(path, () => {
+    const saved = loadSettings(home);
+    change(saved);
+    saveSettingsUnlocked(saved, path);
+    return saved;
+  });
 }
 // Settings as one run uses them: the saved ones, the project's own in a trusted folder, then
 // `--model`.

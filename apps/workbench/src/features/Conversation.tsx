@@ -50,6 +50,7 @@ import {
 import { nextMode, sessionMode } from '../model/state';
 import type { SessionMode } from '../model/types';
 import { t, tn } from '../i18n';
+import { useSessionPresentation } from '../model/presentation';
 interface Props {
   onDialog: (dialog: DialogId, selection?: string) => void;
   onPanel: (panel: PanelId, selection?: string) => void;
@@ -121,6 +122,10 @@ export function Conversation({
     (item) => item.id === session.workspaceId,
   )!;
   const messages = visibleMessages(session);
+  const composerWritable =
+    !session.archivedAt &&
+    session.lifecycle !== 'deleting' &&
+    !session.occupied;
   const input = useRef<HTMLTextAreaElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const column = useRef<HTMLDivElement>(null);
@@ -129,8 +134,17 @@ export function Conversation({
   const [completionIndex, setCompletionIndex] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [historyIndex, setHistoryIndex] = useState(-1);
-  const [planCollapsed, setPlanCollapsed] = useState(false);
-  useEffect(() => setPlanCollapsed(false), [session.id]);
+  const { view, update: updateView } = useSessionPresentation();
+  const planCollapsed = view.planCollapsed ?? false;
+  const setPlanCollapsed = (
+    value: boolean | ((previous: boolean) => boolean),
+  ) =>
+    updateView((target) => {
+      target.planCollapsed =
+        typeof value === 'function'
+          ? value(target.planCollapsed ?? false)
+          : value;
+    });
   const planItems = useRef<HTMLDivElement>(null);
   // Native snapshots recreate arrays; unrelated events must not undo manual scrolling.
   const planVersion = JSON.stringify(session.todos);
@@ -163,7 +177,8 @@ export function Conversation({
       });
       perform(() =>
         runtime.change((state) => {
-          const target = currentSession(state);
+          const target = state.sessions.find((item) => item.id === session.id);
+          if (!target || target.lifecycle === 'deleting') return;
           const count =
             target.attachments.filter((item) => item.kind === 'image').length +
             1;
@@ -185,6 +200,13 @@ export function Conversation({
   };
   const lastEscape = useRef(0);
   const savedDraft = useRef('');
+  useEffect(() => {
+    setHistoryIndex(-1);
+    savedDraft.current = '';
+    lastEscape.current = 0;
+    setFind('');
+    setFindIndex(0);
+  }, [session.id]);
   const latestView = useRef({ session, onDialog, onPanel });
   latestView.current = { session, onDialog, onPanel };
   const matches = messages.filter((message) =>
@@ -266,6 +288,7 @@ export function Conversation({
   // a window behind others gets no frames.
   const stuck = useRef(true);
   const height = useRef(0);
+  const position = useRef({ top: 0, follow: true });
   const follow = (force = false) => {
     const box = scroller.current;
     if (!box) return;
@@ -273,6 +296,7 @@ export function Conversation({
     if (stuck.current)
       box.scrollTo({ top: box.scrollHeight, behavior: 'instant' });
     height.current = box.scrollHeight;
+    position.current = { top: box.scrollTop, follow: stuck.current };
   };
   useEffect(() => {
     const box = scroller.current;
@@ -280,6 +304,7 @@ export function Conversation({
     if (!box || !content) return;
     const scrolled = () => {
       stuck.current = height.current - box.scrollTop - box.clientHeight < 48;
+      position.current = { top: box.scrollTop, follow: stuck.current };
     };
     box.addEventListener('scroll', scrolled, { passive: true });
     const resized = new ResizeObserver(() => follow());
@@ -293,14 +318,37 @@ export function Conversation({
   const last = messages.at(-1);
   const lastRole = last?.role;
   const lastSize = (last?.text.length ?? 0) + (last?.thinking?.length ?? 0);
-  useLayoutEffect(() => follow(true), [session.id]);
-  // A message you just sent brings the end back into view
-  const count = useRef(messages.length);
   useLayoutEffect(() => {
-    const sent = messages.length > count.current && lastRole === 'user';
-    count.current = messages.length;
+    const box = scroller.current;
+    const saved = session.presentation?.scroll;
+    stuck.current = saved?.follow ?? true;
+    if (box) {
+      box.scrollTo({
+        top: saved?.top ?? box.scrollHeight,
+        behavior: 'instant',
+      });
+      height.current = box.scrollHeight;
+      position.current = { top: box.scrollTop, follow: stuck.current };
+      follow();
+    }
+    return () => {
+      const saved = { ...position.current };
+      runtime.change((state) => {
+        const target = state.sessions.find((item) => item.id === session.id);
+        if (target) (target.presentation ??= {}).scroll = saved;
+      });
+    };
+  }, [session.id, runtime]);
+  // A message you just sent brings the end back into view
+  const count = useRef({ sessionId: session.id, length: messages.length });
+  useLayoutEffect(() => {
+    const sent =
+      count.current.sessionId === session.id &&
+      messages.length > count.current.length &&
+      lastRole === 'user';
+    count.current = { sessionId: session.id, length: messages.length };
     follow(sent);
-  }, [messages.length, lastRole, lastSize, session.state]);
+  }, [session.id, messages.length, lastRole, lastSize, session.state]);
   useEffect(() => setFinding(false), [session.id, messages.length]);
   useEffect(() => {
     if (find && matches.length) {
@@ -322,6 +370,7 @@ export function Conversation({
         event.stopImmediatePropagation();
         const commands: Record<string, string> = {
           'model.select': 'models',
+          'session.select': 'resume',
           'thinking.toggle': 'thinking',
           'tools.expand': 'details',
           'editor.external': 'editor',
@@ -471,6 +520,7 @@ export function Conversation({
     snapshot.models,
     snapshot.settings.enabledModels,
     snapshot.settings.keybindings,
+    session.id,
   ]);
   const jobs = snapshot.jobs.filter(
     (job) =>
@@ -697,6 +747,13 @@ export function Conversation({
           )}
         </div>
       </div>
+      {(session.lifecycle === 'deleting' || session.occupied) && (
+        <div className="archive-banner" role="status">
+          {session.lifecycle === 'deleting'
+            ? t('stopping work before deletion…')
+            : t('open in another terminal; view only')}
+        </div>
+      )}
       {session.archivedAt && (
         <div className="archive-banner" data-testid="archive-banner">
           <span>{t('archived conversation · read only')}</span>
@@ -714,7 +771,7 @@ export function Conversation({
           </Button>
         </div>
       )}
-      {!session.archivedAt && (
+      {composerWritable && (
         <div className="composer-area">
           {planVisible(
             session.todos,

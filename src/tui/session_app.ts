@@ -29,18 +29,19 @@ import {
   type InteractionContext,
   type RuntimeOptions,
 } from '../runtime.js';
+import { SessionRuntimeManager } from '../session_manager.js';
+import { fromJsonl } from '../session_export.js';
+import { sessionOccupied, SessionOccupiedError } from '../session_lock.js';
 import { agentName } from './strip_rows.js';
 import type { CircleSettings } from '../settings.js';
 import {
   applyProjectSettings,
   saveCredentials,
-  saveSettings,
   saveSettingsChange,
   loadCredentials,
   trustFolder,
   isFolderTrusted,
   isReady,
-  withConnection,
 } from '../settings.js';
 import { resolveEndpoint } from '../probe.js';
 import { PROVIDER_PRESETS } from '../providers.js';
@@ -64,7 +65,6 @@ import { InputHistory } from './input_history.js';
 import { Composer } from './composer.js';
 import { TranscriptFind } from './transcript_find.js';
 import { InteractionQueue, ParkedDraft } from './interaction_queue.js';
-import { installExitGuard } from '../exit_guard.js';
 import {
   CompactionProgress,
   compactionDone,
@@ -127,26 +127,99 @@ interface DialogPending {
   complete: (answer: unknown) => void;
   abort?: () => void;
 }
+interface SessionView {
+  runtime?: AgentRuntime;
+  state: ScreenState;
+  plan: PlanPanel;
+  undo: UndoHistory;
+  turns: TurnStatus;
+  agents: SubagentNavigation;
+  selection: MouseSelection;
+  history: InputHistory;
+  composer: Composer;
+  interactions: InteractionQueue;
+  parked: ParkedDraft;
+  pending?: DialogPending;
+  suspendedDialog?: ScreenState['dialog'];
+  flashTimer?: NodeJS.Timeout;
+  card?: Card<unknown>;
+  secretReady?: SecretRequest;
+  backgroundCard: boolean;
+  meterCleared?: string;
+  shared?: string;
+  jobWakeAt: number;
+  jobWakeCount: number;
+  jobWakeSnoozed: boolean;
+  jobsList?: { list: Picker; rows: () => PickerItem[] };
+}
 export class SessionApp {
-  private plan = new PlanPanel();
+  private view!: SessionView;
+  private selectedView!: SessionView;
+  private views = new Map<AgentRuntime, SessionView>();
+  private sessions?: SessionRuntimeManager;
+  private browsers = new Map<AgentRuntime, ChromeBrowser>();
+  private subscriptions = new Map<AgentRuntime, () => void>();
+  private runtimeOptions?: Omit<RuntimeOptions, 'approve' | 'question'>;
+  private selecting: Promise<void> = Promise.resolve();
+  private inView<T>(view: SessionView, action: () => T): T {
+    const previous = this.view;
+    this.view = view;
+    try {
+      return action();
+    } finally {
+      this.view = previous;
+    }
+  }
+  private get plan(): PlanPanel {
+    return this.view.plan;
+  }
   private knownModels?: string[];
   private knownModelsEndpoint = '';
   private runScopeOnly?: boolean;
-  runtime?: AgentRuntime;
-  readonly state: ScreenState;
+  get runtime(): AgentRuntime | undefined {
+    return this.view.runtime;
+  }
+  set runtime(value: AgentRuntime | undefined) {
+    this.view.runtime = value;
+  }
+  get state(): ScreenState {
+    return this.view.state;
+  }
   private input = new InputParser((event) => this.handle(event));
   private screen = new ScreenRenderer((text) => process.stdout.write(text));
   private theme: ThemeWatch;
   private remap: Record<string, string>;
-  private pending?: DialogPending;
-  private card?: Card<unknown>;
-  private parked = new ParkedDraft();
-  private secretReady?: SecretRequest;
+  private get pending() {
+    return this.view.pending;
+  }
+  private set pending(value: DialogPending | undefined) {
+    this.view.pending = value;
+  }
+  private get card() {
+    return this.view.card;
+  }
+  private set card(value: Card<unknown> | undefined) {
+    this.view.card = value;
+  }
+  private get parked() {
+    return this.view.parked;
+  }
+  private get secretReady() {
+    return this.view.secretReady;
+  }
+  private set secretReady(value: SecretRequest | undefined) {
+    this.view.secretReady = value;
+  }
   private ended = false;
   private closing?: Promise<void>;
   private externalEditor = false;
   private animation?: NodeJS.Timeout;
-  private flashTimer?: NodeJS.Timeout;
+  private get flashTimer() {
+    return this.view.flashTimer;
+  }
+  private set flashTimer(value: NodeJS.Timeout | undefined) {
+    this.view.flashTimer = value;
+  }
   private keyProblems: string[];
   private done!: (code: number) => void;
   private completion: Promise<number>;
@@ -156,27 +229,61 @@ export class SessionApp {
   // /login while its lists are open: the answers so far.
   private loginFlow?: SetupFlow;
   // The /jobs list while it is open, with its rows: it follows the jobs as they change.
-  private jobsList?: { list: Picker; rows: () => PickerItem[] };
+  private get jobsList() {
+    return this.view.jobsList;
+  }
+  private set jobsList(value: SessionView['jobsList']) {
+    this.view.jobsList = value;
+  }
   // After /undo or /redo, the answer whose request the footer's ctx no longer describes.
-  private meterCleared?: string;
-  private history: InputHistory;
-  private composer: Composer;
+  private get meterCleared() {
+    return this.view.meterCleared;
+  }
+  private set meterCleared(value: string | undefined) {
+    this.view.meterCleared = value;
+  }
+  private get history() {
+    return this.view.history;
+  }
+  private get composer() {
+    return this.view.composer;
+  }
   private commandList?: Map<string, string>;
   private off?: () => void;
   private offSignals?: () => void;
-  private jobWakeAt = 0;
-  private jobWakeCount = 0;
-  private jobWakeSnoozed = false;
+  private get jobWakeAt() {
+    return this.view.jobWakeAt;
+  }
+  private set jobWakeAt(value: number) {
+    this.view.jobWakeAt = value;
+  }
+  private get jobWakeCount() {
+    return this.view.jobWakeCount;
+  }
+  private set jobWakeCount(value: number) {
+    this.view.jobWakeCount = value;
+  }
+  private get jobWakeSnoozed() {
+    return this.view.jobWakeSnoozed;
+  }
+  private set jobWakeSnoozed(value: boolean) {
+    this.view.jobWakeSnoozed = value;
+  }
   // As in 0.5.0, a background agent's card shows whether a turn runs or not: after the
   // turn's own cards (the queue takes those first) and once typing pauses.
   // The conversation browser, when a Chrome or Edge is installed
-  private browser?: ChromeBrowser;
-  private interactions = new InteractionQueue(
-    () => !this.externalEditor && !this.state.dialog,
-    () => Boolean(this.state.draft || this.state.picker),
-  );
-  private backgroundCard = false;
-  private agents = new SubagentNavigation();
+  private get interactions() {
+    return this.view.interactions;
+  }
+  private get backgroundCard() {
+    return this.view.backgroundCard;
+  }
+  private set backgroundCard(value: boolean) {
+    this.view.backgroundCard = value;
+  }
+  private get agents() {
+    return this.view.agents;
+  }
   private planCompletions = new Map<string, PlanCompletionTracker>();
   private agentActivity = new Map<
     string,
@@ -208,13 +315,18 @@ export class SessionApp {
   private activityVersion = 0;
   // The terminal's and the system's clipboard; tests put their own in its place.
   clipboard = new Clipboard();
-  private selection = new MouseSelection({
-    scroll: (delta) => this.scrollTranscript(delta),
-    copy: (text) => this.copySelection(text),
-    repaint: () => this.repaint(),
-  });
-  private shared?: string;
-  private turns = new TurnStatus();
+  private get selection() {
+    return this.view.selection;
+  }
+  private get shared() {
+    return this.view.shared;
+  }
+  private set shared(value: string | undefined) {
+    this.view.shared = value;
+  }
+  private get turns() {
+    return this.view.turns;
+  }
   private welcomeState: WelcomeState;
   // The runtime is loading the folder's things (attach): the welcome's lamps blink.
   private connecting = false;
@@ -223,7 +335,9 @@ export class SessionApp {
   private started = false;
   private title = '';
   private titleAt = 0;
-  private undo = new UndoHistory();
+  private get undo() {
+    return this.view.undo;
+  }
   private dataListener = (data: string): void => {
     if (this.externalEditor) return;
     for (const event of this.input.feed(data)) this.handle(event);
@@ -267,7 +381,24 @@ export class SessionApp {
     const keys = loadRemap(home);
     this.remap = keys.remap;
     this.keyProblems = keys.problems;
-    this.state = {
+    this.view = this.makeView();
+    this.selectedView = this.view;
+    this.theme = new ThemeWatch(
+      settings.theme,
+      (text) => {
+        if (!this.externalEditor) process.stdout.write(text);
+      },
+      (flip) => (flip ? this.flash(`Theme → ${flip}`) : this.repaint()),
+    );
+    this.completion = new Promise((resolve) => {
+      this.done = resolve;
+    });
+    this.welcomeState = new WelcomeState(workspace);
+  }
+  private makeView(): SessionView {
+    const settings = this.settings;
+    const workspace = this.workspace;
+    const state: ScreenState = {
       messages: [],
       notices: [],
       noticeAnchors: [],
@@ -292,19 +423,34 @@ export class SessionApp {
       scroll: 0,
       hiddenTurns: 0,
     };
-    this.theme = new ThemeWatch(
-      settings.theme,
-      (text) => {
-        if (!this.externalEditor) process.stdout.write(text);
-      },
-      (flip) => (flip ? this.flash(`Theme → ${flip}`) : this.repaint()),
-    );
-    this.completion = new Promise((resolve) => {
-      this.done = resolve;
+    const view = {
+      state,
+      plan: new PlanPanel(),
+      undo: new UndoHistory(),
+      turns: new TurnStatus(),
+      agents: new SubagentNavigation(),
+      parked: new ParkedDraft(),
+      backgroundCard: false,
+      jobWakeAt: 0,
+      jobWakeCount: 0,
+      jobWakeSnoozed: false,
+    } as SessionView;
+    view.selection = new MouseSelection({
+      scroll: (delta) => this.inView(view, () => this.scrollTranscript(delta)),
+      copy: (text) => this.inView(view, () => this.copySelection(text)),
+      repaint: () => this.repaint(),
     });
-    this.history = InputHistory.forHome(home);
-    this.composer = new Composer(this.state, {
-      history: this.history,
+    view.interactions = new InteractionQueue(
+      () =>
+        this.selectedView === view &&
+        !this.externalEditor &&
+        !state.dialog &&
+        !view.suspendedDialog,
+      () => Boolean(state.draft || state.picker),
+    );
+    view.history = InputHistory.forHome(this.home);
+    view.composer = new Composer(state, {
+      history: view.history,
       columns: () => process.stdout.columns || 80,
       viewRows: () =>
         this.state.view?.rows ?? Math.max(1, (process.stdout.rows || 24) - 8),
@@ -322,7 +468,7 @@ export class SessionApp {
       commands: () => this.completionCommands(),
       files: (partial, limit) => complete(partial, this.workspace, limit),
     });
-    this.welcomeState = new WelcomeState(workspace);
+    return view;
   }
   start(): void {
     process.stdin.setRawMode(true);
@@ -339,6 +485,9 @@ export class SessionApp {
     this.theme.start();
     this.animation = setInterval(() => {
       if (
+        [...this.views.values()].some(
+          (view) => view.runtime?.busy || view.interactions.pendingCount > 0,
+        ) ||
         this.state.busy ||
         this.state.waiting ||
         this.runtime?.jobs.list().some((job) => job.status === 'running') ||
@@ -347,20 +496,28 @@ export class SessionApp {
         this.connecting
       )
         this.requestRender();
-      this.wakeJobs();
+      for (const view of this.views.values())
+        this.inView(view, () => this.wakeJobs());
     }, 160);
     this.repaint();
   }
   private repaint(): void {
     // A repaint can come from work that settles after leaving (a stopped job, a late reply):
     // the session store may be closed by then.
-    if (this.ended || this.externalEditor || this.runtime?.isClosing) return;
+    if (
+      this.view !== this.selectedView ||
+      this.ended ||
+      this.externalEditor ||
+      (this.runtime?.isClosing &&
+        this.sessions?.lifecycle(this.runtime.session.id) !== 'deleting')
+    )
+      return;
     // A direct draw supersedes any coalesced frame still waiting.
     if (this.renderTimer) clearTimeout(this.renderTimer);
     this.renderTimer = undefined;
     this.renderQueued = false;
     this.lastRenderAt = performance.now();
-    if (this.runtime) {
+    if (this.runtime && !this.runtime.isClosing) {
       this.state.messages = this.undo.visible(this.runtime.harness.messages);
       this.state.userShells = this.runtime.userShells.views.filter(
         (shell) => shell.sessionId === this.runtime!.session.id,
@@ -520,7 +677,8 @@ export class SessionApp {
         }
       };
     }
-    this.syncStatus();
+    if (!this.runtime?.isClosing) this.syncStatus();
+    else this.state.busy = false;
     const cursor: { value?: ScreenCursor } = {};
     const rows = renderScreen(
       this.state,
@@ -533,7 +691,8 @@ export class SessionApp {
   }
   // Coalesced frame request for high-frequency sources; one draw at most every 16 ms.
   requestRender(): void {
-    if (this.ended || this.externalEditor) return;
+    if (this.view !== this.selectedView || this.ended || this.externalEditor)
+      return;
     if (this.renderQueued) return;
     this.renderQueued = true;
     const wait = Math.max(0, 16 - (performance.now() - this.lastRenderAt));
@@ -552,6 +711,23 @@ export class SessionApp {
     this.state.branch = this.welcomeState.branch();
     this.state.thinkingDepth = this.runtime?.thinkingLevel;
     this.state.extensionStatus = this.runtime?.extensions.statuses() ?? [];
+    this.state.otherSessions = [...this.views.entries()].flatMap(
+      ([runtime, view]) => {
+        if (runtime === this.runtime || runtime.isClosing) return [];
+        const waiting =
+          view.state.waiting || view.interactions.pendingCount > 0;
+        if (!waiting && !runtime.busy) return [];
+        return [
+          {
+            id: runtime.session.id,
+            title:
+              runtime.store.get(runtime.session.id)?.title ||
+              runtime.session.id,
+            waiting,
+          },
+        ];
+      },
+    );
     this.turns.fill(this.state);
     this.state.welcome = welcomeRows(
       process.stdout.columns || 80,
@@ -587,10 +763,11 @@ export class SessionApp {
     }
   }
   private flash(text: string, ttl = 1800): void {
-    this.state.flash = text;
+    const view = this.view;
+    view.state.flash = text;
     if (this.flashTimer) clearTimeout(this.flashTimer);
     this.flashTimer = setTimeout(() => {
-      this.state.flash = '';
+      view.state.flash = '';
       this.repaint();
     }, ttl);
     this.repaint();
@@ -659,10 +836,17 @@ export class SessionApp {
   // The URL that answered (`<url>/v1` when only that lists models), as line-mode setup and
   // 0.5.0 save it; the typed one when nothing answered.
   private saveConnection(flow: SetupFlow): void {
-    const settings = withConnection(flow.auth(), this.home);
+    const auth = flow.auth();
     saveCredentials({ api_key: flow.apiKey }, this.home);
-    saveSettings(settings, this.home);
-    this.settings = settings;
+    this.settings = saveSettingsChange(this.home, (saved) => {
+      if (
+        saved.auth.base_url.replace(/\/+$/, '') !==
+        auth.base_url.replace(/\/+$/, '')
+      )
+        saved.enabled_models = [];
+      saved.auth = auth;
+      saved.initialized = true;
+    });
   }
   private trustWorkspace(): void {
     this.settings = trustFolder(this.settings, this.workspace);
@@ -702,200 +886,359 @@ export class SessionApp {
     options: Omit<RuntimeOptions, 'approve' | 'question'>,
   ): Promise<void> {
     this.connecting = true;
-    // The conversation's browser: a Chrome or Edge window, started at the first browser
-    // action. Without one installed the model has no browser tools.
-    const executable = findBrowser();
-    if (executable && !this.browser)
-      this.browser = new ChromeBrowser({
-        executable,
-        trustFile: join(this.home, 'browser-certificates.json'),
-        headless: process.env.CIRCLE_BROWSER_HEADLESS === '1',
-        handoff: (reason, signal) =>
-          this.interactions.run(() => this.handBrowser(reason, signal), signal),
-        mode: () => this.runtime?.mode,
-      });
-    this.runtime = new AgentRuntime({
-      ...options,
-      extraTools: [
-        ...(options.extraTools ?? []),
-        ...(this.browser
-          ? browserTools(this.browser, {
-              confirm: (_session, approval, signal) =>
-                this.interactions.run(
-                  () => this.confirmBrowser(approval, signal),
-                  signal,
-                  false,
-                ),
-              ...runtimeBrowserOptions(() => this.runtime!),
-            })
-          : []),
-      ],
-      settings: this.settings,
-      ...this.cardHooks(),
-      onExtensionStatus: () => this.requestRender(),
-      openUrl: async (url) => {
-        await openInBrowser(url);
-        this.flash('Opened in the browser');
-      },
-    });
+    this.runtimeOptions = options;
+    this.sessions = new SessionRuntimeManager((workspace, session) =>
+      this.createRuntime(
+        {
+          ...this.runtimeOptions!,
+          workspace,
+          session,
+          sessionId: undefined,
+          continue: false,
+          fork: undefined,
+        },
+        this.makeView(),
+      ),
+    );
+    const runtime = this.createRuntime(options, this.view);
+    this.sessions.register(runtime);
+    this.off = () => {
+      for (const off of this.subscriptions.values()) off();
+      this.subscriptions.clear();
+    };
     this.offSignals?.();
-    this.offSignals = installExitGuard(this.runtime, (code) => {
+    const stop = (code: number): void => {
       void this.close().then(
         () => process.exit(code),
         () => process.exit(code),
       );
-    });
-    this.off = this.runtime.bus.subscribe((event) => {
-      // Stream tokens draw through the coalescing scheduler; everything else at once.
-      let coalesce = false;
-      this.turns.apply(event, () => this.runtime?.harness.messages.at(-1)?.id);
-      if (event.kind === 'compaction') {
-        const progress = event.payload as unknown as CompactionEvent;
-        if (progress.sessionId === this.runtime?.session.id) {
-          if (progress.phase === 'start')
-            this.state.compaction = new CompactionProgress(progress.trigger);
-          this.state.compaction?.apply(progress);
-          if (progress.phase === 'done') {
-            this.state.compaction = undefined;
-            this.notice(compactionDone(progress));
-          }
-          if (progress.phase === 'error') this.state.compaction = undefined;
-        }
-      }
-      if (event.kind === 'job_ended') this.jobWakeAt = Date.now() + 1000;
-      if (event.kind === 'todo_list' && !event.tags.subagent) {
-        const sessionId = this.runtime!.session.id;
-        let tracker = this.planCompletions.get(sessionId);
-        if (!tracker) {
-          tracker = new PlanCompletionTracker();
-          this.planCompletions.set(sessionId, tracker);
-        }
-        const completed = tracker.update(this.runtime!.todos);
-        if (completed !== undefined)
-          this.addNotice(`plan completed · ${completed} steps`);
-      }
-      if (['job_started', 'job_updated', 'job_ended'].includes(event.kind))
-        this.refreshJobsList();
-      if (event.tags.subagent) {
-        const id = String(event.tags.subagent);
-        const old = this.agentActivity.get(id);
-        const state =
-          event.kind === 'run_end'
-            ? 'done'
-            : event.kind === 'run_error'
-              ? 'error'
-              : event.kind === 'tool_waiting'
-                ? 'waiting'
-                : event.kind === 'tool_start' ||
-                    event.kind === 'llm_start' ||
-                    event.kind === 'run_start'
-                  ? 'running'
-                  : (old?.state ?? 'running');
-        this.agentActivity.set(id, {
-          state,
-          name: String(event.tags.name || old?.name || 'subagent'),
-          background: Boolean(event.tags.job_id) || old?.background,
-          jobId: event.tags.job_id ? String(event.tags.job_id) : old?.jobId,
-          activity: nextAgentActivity(old?.activity, event),
-        });
-        this.activityVersion++;
-        if (event.kind === 'llm_end')
-          for (const key of Object.keys(
-            this.state.usage,
-          ) as (keyof typeof this.state.usage)[])
-            this.state.usage[key] += event.usage?.[key] ?? 0;
-        if (event.kind === 'llm_token') this.requestRender();
-        else this.repaint();
-        return;
-      }
-      if (event.kind === 'run_start') {
-        this.plan.follow();
-        this.state.started = Date.now();
-        // The stop mark belongs to the turn that was stopped. Snapshot it for /undo,
-        // then drop it: a new turn has started, so it must not stay at the bottom.
-        this.undo.push(this.screenBefore(event.payload.message));
-        const anchors = this.state.noticeAnchors ?? [];
-        const kept = this.state.notices
-          .map((note, index) => [note, anchors[index]] as const)
-          .filter(([note]) => note !== '✖ Interrupted');
-        this.state.notices = kept.map(([note]) => note);
-        this.state.noticeAnchors = kept.map(([, anchor]) => anchor);
-        this.state.scroll = 0;
-      } else if (event.kind === 'llm_start' || event.kind === 'steer') {
-        // A step stopped to read a message drops the reply it was writing
-        this.state.streaming = '';
-        this.state.thinking = '';
-      } else if (event.kind === 'llm_token') {
-        if (event.payload.thinking)
-          this.state.thinking += String(event.payload.text);
-        else this.state.streaming += String(event.payload.text);
-        coalesce = true;
-      } else if (event.kind === 'llm_end') {
-        this.state.streaming = '';
-        this.state.thinking = '';
-        for (const key of Object.keys(
-          this.state.usage,
-        ) as (keyof typeof this.state.usage)[])
-          this.state.usage[key] += event.usage?.[key] ?? 0;
-      } else if (event.kind === 'run_error')
-        // A key the endpoint turned down (401, 403) says where to change it, as in 0.5.0.
-        this.addNotice(
-          '✖ ' +
-            String(event.payload.message) +
-            ([401, 403].includes(Number(event.payload.status))
-              ? ' · /login to change the key'
-              : ''),
-        );
-      else if (event.kind === 'info' && event.payload.model_notice) {
-        const notice = event.payload.model_notice as {
-          event: string;
-          [key: string]: unknown;
-        };
-        if (notice.event === 'retry') {
-          // What the failed request had written is not kept: it starts again
-          this.state.streaming = '';
-          this.state.thinking = '';
-          this.flash(
-            `Retry ${notice.attempt}/${notice.max} in ${(Number(notice.wait_ms) / 1000).toFixed(1)}s`,
-          );
-        } else if (notice.event === 'param_dropped')
-          this.notice(
-            `Endpoint does not support ${notice.param}; continuing without it`,
-          );
-        else if (notice.event === 'images_left_out')
-          this.notice(
-            `${notice.model} does not read images; sent their paths only`,
-          );
-        else if (notice.event === 'files_left_out')
-          this.notice(
-            `✖ Not attached: ${(notice.problems as string[]).join('; ')}`,
-          );
-        else if (
-          ['repeat_retry', 'missing_finish_retry'].includes(notice.event)
-        ) {
-          this.state.streaming = '';
-          this.state.thinking = '';
-          this.flash('Retrying model request');
-        } else if (notice.event === 'output_budget_exhausted')
-          this.notice('✖ Model output budget exhausted before an answer');
-        else if (notice.event === 'missing_finish' && notice.truncated)
-          this.notice('Model response may be truncated');
-        else if (notice.event === 'repetition_stopped')
-          this.notice('Model output was repeating; stopped the stream');
-      }
-      if (coalesce) this.requestRender();
-      else this.repaint();
-    });
+    };
+    const term = (): void => stop(143);
+    const hup = (): void => stop(129);
+    process.on('SIGTERM', term);
+    process.on('SIGHUP', hup);
+    this.offSignals = () => {
+      process.off('SIGTERM', term);
+      process.off('SIGHUP', hup);
+    };
     try {
-      await this.runtime.initialize();
+      await runtime.initialize();
     } finally {
       this.connecting = false;
     }
-    for (const error of this.runtime.migration.errors)
+    for (const error of runtime.migration.errors)
       this.fail(
         `Could not migrate ${error.thread || 'legacy data'}: ${error.message}`,
       );
     this.repaint();
+  }
+  private createRuntime(
+    options: Omit<RuntimeOptions, 'approve' | 'question'>,
+    view: SessionView,
+  ): AgentRuntime {
+    let runtime!: AgentRuntime;
+    // Each conversation owns its browser, callbacks and grants, just like its MCP/LSP clients.
+    const executable = findBrowser();
+    const browser = executable
+      ? new ChromeBrowser({
+          executable,
+          trustFile: join(this.home, 'browser-certificates.json'),
+          headless: process.env.CIRCLE_BROWSER_HEADLESS === '1',
+          handoff: (reason, signal) =>
+            view.interactions.run(
+              () => this.inView(view, () => this.handBrowser(reason, signal)),
+              signal,
+            ),
+          mode: () => runtime?.mode,
+        })
+      : undefined;
+    runtime = new AgentRuntime({
+      ...options,
+      extraTools: [
+        ...(options.extraTools ?? []),
+        ...(browser
+          ? browserTools(browser, {
+              confirm: (_session, approval, signal) =>
+                view.interactions.run(
+                  () =>
+                    this.inView(view, () =>
+                      this.confirmBrowser(approval, signal),
+                    ),
+                  signal,
+                ),
+              ...runtimeBrowserOptions(() => runtime),
+            })
+          : []),
+      ],
+      settings: structuredClone(this.settings),
+      beforeDelete: async () => {
+        await browser?.close();
+        await options.beforeDelete?.();
+      },
+      ...this.cardHooks(view),
+      onExtensionStatus: () => this.inView(view, () => this.requestRender()),
+      openUrl: async (url) => {
+        await openInBrowser(url);
+        this.inView(view, () => this.flash('Opened in the browser'));
+      },
+    });
+    view.runtime = runtime;
+    this.views.set(runtime, view);
+    if (browser) this.browsers.set(runtime, browser);
+    this.subscriptions.set(
+      runtime,
+      runtime.bus.subscribe((event) => {
+        this.inView(view, () => {
+          // Stream tokens draw through the coalescing scheduler; everything else at once.
+          let coalesce = false;
+          this.turns.apply(
+            event,
+            () => this.runtime?.harness.messages.at(-1)?.id,
+          );
+          if (event.kind === 'compaction') {
+            const progress = event.payload as unknown as CompactionEvent;
+            if (progress.sessionId === this.runtime?.session.id) {
+              if (progress.phase === 'start')
+                this.state.compaction = new CompactionProgress(
+                  progress.trigger,
+                );
+              this.state.compaction?.apply(progress);
+              if (progress.phase === 'done') {
+                this.state.compaction = undefined;
+                this.notice(compactionDone(progress));
+              }
+              if (progress.phase === 'error') this.state.compaction = undefined;
+            }
+          }
+          if (event.kind === 'job_ended') this.jobWakeAt = Date.now() + 1000;
+          if (event.kind === 'todo_list' && !event.tags.subagent) {
+            const sessionId = this.runtime!.session.id;
+            let tracker = this.planCompletions.get(sessionId);
+            if (!tracker) {
+              tracker = new PlanCompletionTracker();
+              this.planCompletions.set(sessionId, tracker);
+            }
+            const completed = tracker.update(this.runtime!.todos);
+            if (completed !== undefined)
+              this.addNotice(`plan completed · ${completed} steps`);
+          }
+          if (['job_started', 'job_updated', 'job_ended'].includes(event.kind))
+            this.refreshJobsList();
+          if (event.tags.subagent) {
+            const id = String(event.tags.subagent);
+            const old = this.agentActivity.get(id);
+            const state =
+              event.kind === 'run_end'
+                ? 'done'
+                : event.kind === 'run_error'
+                  ? 'error'
+                  : event.kind === 'tool_waiting'
+                    ? 'waiting'
+                    : event.kind === 'tool_start' ||
+                        event.kind === 'llm_start' ||
+                        event.kind === 'run_start'
+                      ? 'running'
+                      : (old?.state ?? 'running');
+            this.agentActivity.set(id, {
+              state,
+              name: String(event.tags.name || old?.name || 'subagent'),
+              background: Boolean(event.tags.job_id) || old?.background,
+              jobId: event.tags.job_id ? String(event.tags.job_id) : old?.jobId,
+              activity: nextAgentActivity(old?.activity, event),
+            });
+            this.activityVersion++;
+            if (event.kind === 'llm_end')
+              for (const key of Object.keys(
+                this.state.usage,
+              ) as (keyof typeof this.state.usage)[])
+                this.state.usage[key] += event.usage?.[key] ?? 0;
+            if (event.kind === 'llm_token') this.requestRender();
+            else this.repaint();
+            return;
+          }
+          if (event.kind === 'run_start') {
+            this.plan.follow();
+            this.state.started = Date.now();
+            // The stop mark belongs to the turn that was stopped. Snapshot it for /undo,
+            // then drop it: a new turn has started, so it must not stay at the bottom.
+            this.undo.push(this.screenBefore(event.payload.message));
+            const anchors = this.state.noticeAnchors ?? [];
+            const kept = this.state.notices
+              .map((note, index) => [note, anchors[index]] as const)
+              .filter(([note]) => note !== '✖ Interrupted');
+            this.state.notices = kept.map(([note]) => note);
+            this.state.noticeAnchors = kept.map(([, anchor]) => anchor);
+            this.state.scroll = 0;
+          } else if (event.kind === 'llm_start' || event.kind === 'steer') {
+            // A step stopped to read a message drops the reply it was writing
+            this.state.streaming = '';
+            this.state.thinking = '';
+          } else if (event.kind === 'llm_token') {
+            if (event.payload.thinking)
+              this.state.thinking += String(event.payload.text);
+            else this.state.streaming += String(event.payload.text);
+            coalesce = true;
+          } else if (event.kind === 'llm_end') {
+            this.state.streaming = '';
+            this.state.thinking = '';
+            for (const key of Object.keys(
+              this.state.usage,
+            ) as (keyof typeof this.state.usage)[])
+              this.state.usage[key] += event.usage?.[key] ?? 0;
+          } else if (event.kind === 'run_error')
+            // A key the endpoint turned down (401, 403) says where to change it, as in 0.5.0.
+            this.addNotice(
+              '✖ ' +
+                String(event.payload.message) +
+                ([401, 403].includes(Number(event.payload.status))
+                  ? ' · /login to change the key'
+                  : ''),
+            );
+          else if (event.kind === 'info' && event.payload.model_notice) {
+            const notice = event.payload.model_notice as {
+              event: string;
+              [key: string]: unknown;
+            };
+            if (notice.event === 'retry') {
+              // What the failed request had written is not kept: it starts again
+              this.state.streaming = '';
+              this.state.thinking = '';
+              this.flash(
+                `Retry ${notice.attempt}/${notice.max} in ${(Number(notice.wait_ms) / 1000).toFixed(1)}s`,
+              );
+            } else if (notice.event === 'param_dropped')
+              this.notice(
+                `Endpoint does not support ${notice.param}; continuing without it`,
+              );
+            else if (notice.event === 'images_left_out')
+              this.notice(
+                `${notice.model} does not read images; sent their paths only`,
+              );
+            else if (notice.event === 'files_left_out')
+              this.notice(
+                `✖ Not attached: ${(notice.problems as string[]).join('; ')}`,
+              );
+            else if (
+              ['repeat_retry', 'missing_finish_retry'].includes(notice.event)
+            ) {
+              this.state.streaming = '';
+              this.state.thinking = '';
+              this.flash('Retrying model request');
+            } else if (notice.event === 'output_budget_exhausted')
+              this.notice('✖ Model output budget exhausted before an answer');
+            else if (notice.event === 'missing_finish' && notice.truncated)
+              this.notice('Model response may be truncated');
+            else if (notice.event === 'repetition_stopped')
+              this.notice('Model output was repeating; stopped the stream');
+          }
+          if (coalesce) this.requestRender();
+          else this.repaint();
+        });
+        if (view !== this.selectedView) this.requestRender();
+      }),
+    );
+    return runtime;
+  }
+  private async selectRuntime(runtime: AgentRuntime): Promise<void> {
+    await runtime.initialize();
+    if (this.ended || this.sessions?.lifecycle(runtime.session.id) !== 'open')
+      throw new Error('session is closing');
+    const old = this.runtime?.session.id;
+    this.state.picker = undefined;
+    this.jobsList = undefined;
+    if (this.view.suspendedDialog) {
+      this.state.dialog = this.view.suspendedDialog;
+      this.view.suspendedDialog = undefined;
+    }
+    this.view = this.views.get(runtime)!;
+    this.selectedView = this.view;
+    if (old && old !== runtime.session.id) this.previousSession = old;
+    this.commandList = undefined;
+    this.subagentCache = undefined;
+    this.screen.invalidate();
+    this.repaint();
+  }
+  private ensureSessions(): SessionRuntimeManager {
+    if (!this.sessions) {
+      const runtime = this.runtime!;
+      this.runtimeOptions = runtime.options;
+      this.sessions = new SessionRuntimeManager((workspace, session) =>
+        this.createRuntime(
+          {
+            ...this.runtimeOptions!,
+            workspace,
+            session,
+            sessionId: undefined,
+            continue: false,
+            fork: undefined,
+          },
+          this.makeView(),
+        ),
+      );
+      this.sessions.register(runtime);
+      this.views.set(runtime, this.view);
+    }
+    return this.sessions;
+  }
+  private changeSession(id?: string): Promise<void> {
+    this.ensureSessions();
+    const work = this.selecting.then(async () => {
+      const runtime = id
+        ? this.sessions!.open(this.workspace, id)
+        : this.sessions!.create(this.workspace);
+      await this.selectRuntime(runtime);
+    });
+    this.selecting = work.catch(() => {});
+    return work;
+  }
+  private async deleteSession(id: string): Promise<boolean> {
+    this.ensureSessions();
+    const active = this.runtime;
+    const source = active!.store.get(id);
+    if (!source) throw new Error('unknown session');
+    const runtime =
+      this.sessions!.get(id) ?? this.sessions!.open(source.workspace, id);
+    const view = this.views.get(runtime)!;
+    const nextId =
+      active === runtime
+        ? runtime.store
+            .list(this.workspace)
+            .find(
+              (session) =>
+                session.id !== id &&
+                this.sessions!.lifecycle(session.id) === 'open' &&
+                (this.sessions!.get(session.id) ||
+                  !sessionOccupied(this.home, session.id)),
+            )?.id
+        : undefined;
+    await this.sessions!.delete(id, { confirmed: true });
+    view.interactions.close();
+    view.selection.close();
+    if (view.flashTimer) clearTimeout(view.flashTimer);
+    this.subscriptions.get(runtime)?.();
+    this.subscriptions.delete(runtime);
+    this.browsers.delete(runtime);
+    this.views.delete(runtime);
+    if (this.previousSession === id) this.previousSession = '';
+    if (this.selectedView === view) {
+      let next: AgentRuntime;
+      try {
+        next = nextId
+          ? this.sessions!.open(this.workspace, nextId)
+          : this.sessions!.create(this.workspace);
+      } catch (error) {
+        if (
+          !(error instanceof SessionOccupiedError) &&
+          !(error instanceof Error && error.message === 'unknown session')
+        )
+          throw error;
+        next = this.sessions!.create(this.workspace);
+      }
+      await this.selectRuntime(next);
+      this.previousSession = '';
+      return true;
+    }
+    return false;
   }
   private wakeJobs(): void {
     const runtime = this.runtime;
@@ -914,28 +1257,31 @@ export class SessionApp {
     )
       return;
     this.jobWakeCount++;
+    const view = this.view;
     void runtime
       .runJobNotices()
       .catch(() => {
-        this.jobWakeSnoozed = true;
+        view.jobWakeSnoozed = true;
       })
       .finally(() => this.repaint());
   }
   // Approvals, questions and secrets reach the runtime through the card queue: one card at
   // a time, the turn's own before a background agent's, none while you are typing.
-  private cardHooks(): Pick<RuntimeOptions, 'approve' | 'question' | 'secret'> {
+  private cardHooks(
+    view: SessionView = this.view,
+  ): Pick<RuntimeOptions, 'approve' | 'question' | 'secret'> {
     const asCard = <T>(
       action: () => Promise<T>,
       signal: AbortSignal,
       origin?: { jobId?: string },
     ): Promise<T> =>
-      this.interactions.run(
+      view.interactions.run(
         async () => {
-          this.backgroundCard = Boolean(origin?.jobId);
+          view.backgroundCard = Boolean(origin?.jobId);
           try {
-            return await action();
+            return await this.inView(view, action);
           } finally {
-            this.backgroundCard = false;
+            view.backgroundCard = false;
           }
         },
         signal,
@@ -986,18 +1332,20 @@ export class SessionApp {
     };
   }
   private async showCard<T>(card: Card<T>, signal?: AbortSignal): Promise<T> {
-    this.card = card as Card<unknown>;
+    const view = this.view;
+    view.card = card as Card<unknown>;
     try {
       return await this.dialog<T>(card.state(), signal);
     } finally {
-      this.card = undefined;
+      view.card = undefined;
     }
   }
   private async enterSecret(
     request: SecretRequest,
     signal: AbortSignal,
   ): Promise<void> {
-    this.secretReady = request;
+    const view = this.view;
+    view.secretReady = request;
     try {
       const choice = await this.askChoice(
         'secret',
@@ -1009,21 +1357,23 @@ export class SessionApp {
         await cancelRequest(this.home, request.id);
         return;
       }
-      const value = await this.showCard(
-        new SecretCard(
-          `${request.question}\n${secretDestination(request)}`,
-          request.mask !== false,
+      const value = await this.inView(view, () =>
+        this.showCard(
+          new SecretCard(
+            `${request.question}\n${secretDestination(request)}`,
+            request.mask !== false,
+          ),
+          signal,
         ),
-        signal,
       );
       if (value === null) {
         await cancelRequest(this.home, request.id);
         return;
       }
       await submitAnswer(this.home, request.id, value);
-      this.flash('Collected · not shown');
+      this.inView(view, () => this.flash('Collected · not shown'));
     } finally {
-      this.secretReady = undefined;
+      view.secretReady = undefined;
     }
   }
   private askChoice(
@@ -1040,30 +1390,33 @@ export class SessionApp {
     state: NonNullable<ScreenState['dialog']>,
     signal?: AbortSignal,
   ): Promise<T> {
-    if (this.pending)
+    const view = this.view;
+    const screen = view.state;
+    if (view.pending)
       return Promise.reject(new Error('another question is waiting'));
     if (signal?.aborted) return Promise.reject(signal.reason);
     // An open list is hidden while the card is up and given back after.
-    const list = this.state.picker;
-    this.state.picker = undefined;
-    this.parked.park(this.state);
-    this.state.dialog = state;
-    this.state.planFocused = false;
-    this.state.waiting = true;
+    const list = screen.picker;
+    screen.picker = undefined;
+    view.parked.park(screen);
+    screen.dialog = state;
+    screen.planFocused = false;
+    screen.waiting = true;
     return new Promise<T>((resolve, reject) => {
       const close = (): void => {
-        this.pending = undefined;
-        this.state.dialog = undefined;
-        this.state.waiting = false;
-        this.state.picker ??= list;
-        this.parked.restore(this.state);
+        view.pending = undefined;
+        screen.dialog = undefined;
+        view.suspendedDialog = undefined;
+        screen.waiting = false;
+        screen.picker ??= list;
+        view.parked.restore(screen);
         this.repaint();
       };
       const abort = (): void => {
         close();
         reject(signal?.reason || new Error('Interrupted'));
       };
-      this.pending = {
+      view.pending = {
         complete: (answer) => {
           signal?.removeEventListener('abort', abort);
           close();
@@ -1307,7 +1660,7 @@ export class SessionApp {
     }
     if (event.type === 'switch') {
       if (this.runtime)
-        void this.runtime.switchSession(event.id).then(
+        void this.changeSession(event.id).then(
           () => this.repaint(),
           (error) => this.fail(error),
         );
@@ -1322,7 +1675,9 @@ export class SessionApp {
     if (!this.state.dialog) this.interactions.typed();
     if (event.type === 'paste') {
       this.state.planFocused = false;
-      if (this.state.find && !this.state.dialog) {
+      if (this.state.picker && this.state.picker.options.search !== false)
+        this.state.picker.paste(event.text);
+      else if (this.state.find && !this.state.dialog) {
         this.state.find.query += event.text;
         this.state.find.refresh(
           transcriptRows(this.state, process.stdout.columns || 80),
@@ -1334,14 +1689,11 @@ export class SessionApp {
           query: this.history.query!,
           match: match !== undefined,
         };
-      } else if (this.card) {
+      } else if (this.card && this.state.dialog) {
         this.card.paste(event.text);
         this.state.dialog = this.card.state();
       } else if (this.state.dialog?.input !== undefined)
         this.state.dialog.input += event.text;
-      else if (this.state.picker && this.state.picker.options.search !== false)
-        // where typing goes: the search, or the line the list asks for (a key, as dots)
-        this.state.picker.paste(event.text);
       else if (!this.state.dialog) {
         // Files dragged onto the terminal arrive as their paths. An empty paste reads the
         // clipboard's picture, as ctrl+v does.
@@ -1359,6 +1711,12 @@ export class SessionApp {
     }
     const key = this.remap[event.key] || event.key;
     const char = event.char;
+    if (key === 'alt+s' && this.runtime) {
+      this.view.suspendedDialog ??= this.state.dialog;
+      this.state.dialog = undefined;
+      void this.command('resume', '').catch((error) => this.fail(error));
+      return;
+    }
     if (
       !this.state.dialog &&
       !this.state.picker &&
@@ -1522,6 +1880,8 @@ export class SessionApp {
       key !== 'ctrl+z'
     ) {
       const job = this.state.jobDetail;
+      const owner = this.view;
+      const runtime = this.runtime!;
       if (key === 'escape') {
         this.state.jobDetail = undefined;
         void this.command('jobs', '');
@@ -1534,11 +1894,11 @@ export class SessionApp {
                 'keep running',
               ])) === 'stop job'
             )
-              await this.runtime!.jobs.stop(job.id, 'user');
+              await runtime.jobs.stop(job.id, 'user');
           } else {
-            this.runtime!.jobs.remove(job.id);
-            this.state.jobDetail = undefined;
-            await this.command('jobs', '');
+            runtime.jobs.remove(job.id);
+            owner.state.jobDetail = undefined;
+            await this.inView(owner, () => this.command('jobs', ''));
           }
           this.repaint();
         })().catch((error) => this.fail(error));
@@ -1726,6 +2086,7 @@ export class SessionApp {
   // ctrl+v: a picture on the clipboard goes in the box as `[Image #N]`, kept as a PNG with the
   // project's data; image files copied in the file manager go in as they are.
   private async pasteImage(): Promise<void> {
+    const view = this.view;
     const folder = join(
       projectDataDir(this.workspace, this.home),
       'pasted_images',
@@ -1742,11 +2103,12 @@ export class SessionApp {
     ).filter(
       (file) => mediaType(file) && existsSync(file) && statSync(file).size > 0,
     );
-    if (files.length) this.attachFiles(files);
-    else {
-      this.flash('No image on the clipboard');
-      this.repaint();
-    }
+    if (this.ended || view.runtime?.isClosing) return;
+    this.inView(view, () => {
+      if (files.length) this.attachFiles(files);
+      else this.flash('No image on the clipboard');
+    });
+    this.repaint();
   }
   private attachFiles(files: string[]): void {
     for (const file of files) this.composer.attach(file);
@@ -1784,18 +2146,19 @@ export class SessionApp {
   // yet are sent next, one turn each, the steering ones first.
   private interrupt(): void {
     const runtime = this.runtime;
+    const view = this.view;
     if (!runtime) return;
     void runtime.cancel({ keepQueue: true }).then(() => {
       if (
         this.ended ||
-        this.runtime !== runtime ||
+        runtime.isClosing ||
         runtime.busy ||
         !runtime.harness.pendingMessageCount
       )
         return;
       // A message of yours starts this turn: finished jobs may start turns again
-      this.jobWakeSnoozed = false;
-      this.jobWakeCount = 0;
+      view.jobWakeSnoozed = false;
+      view.jobWakeCount = 0;
       void runtime.harness
         .run()
         .catch(() => {
@@ -1855,6 +2218,7 @@ export class SessionApp {
   }
   /** Send the draft: the model reads the long pastes, the screen and the history keep it as shown. */
   private send(kind: 'steer' | 'followUp'): void {
+    const view = this.view;
     const raw = this.state.draft;
     const shown = raw.trim();
     if (!shown) return;
@@ -1869,7 +2233,7 @@ export class SessionApp {
       this.flash('Queued follow-up');
     } else
       void this.submit(message, raw, false, shown, pastes).catch((error) =>
-        this.fail(error),
+        this.inView(view, () => this.fail(error)),
       );
   }
   /** Everything that can follow `/` for the completion list, read again each time a `/` is typed. */
@@ -1927,16 +2291,24 @@ export class SessionApp {
         return;
       }
     }
-    if (!this.runtime) return;
+    const runtime = this.runtime;
+    const view = this.view;
+    if (
+      !runtime ||
+      (this.sessions && this.sessions.lifecycle(runtime.session.id) !== 'open')
+    )
+      return;
     if (!plain && message.startsWith('!')) {
       try {
-        await this.runtime.userShells.run(
+        await runtime.userShells.run(
           message.slice(message.startsWith('!!') ? 2 : 1),
           message.startsWith('!!'),
         );
       } finally {
-        if (!this.runtime.busy && this.runtime.harness.pendingMessageCount)
-          void this.runtime.harness.run().catch((error) => this.fail(error));
+        if (!runtime.busy && runtime.harness.pendingMessageCount)
+          void runtime.harness
+            .run()
+            .catch((error) => this.inView(view, () => this.fail(error)));
         this.repaint();
       }
       return;
@@ -1944,13 +2316,13 @@ export class SessionApp {
     this.jobWakeSnoozed = false;
     this.jobWakeCount = 0;
     if (shown !== message)
-      this.runtime.harness.shown.set(message, { display: shown, pastes });
-    if (this.runtime.busy) {
-      this.runtime.harness.queue(message);
+      runtime.harness.shown.set(message, { display: shown, pastes });
+    if (runtime.busy) {
+      runtime.harness.queue(message);
       this.flash('Queued steering');
     } else {
       try {
-        await this.runtime.harness.run(message);
+        await runtime.harness.run(message);
       } catch {
         /* Run error is already displayed by the event bus. */
       }
@@ -1967,8 +2339,13 @@ export class SessionApp {
     options: PickerOptions = {},
     closed?: () => void,
   ): Picker {
+    const view = this.view;
     const shut = (): void => {
-      if (this.state.picker === list) this.state.picker = undefined;
+      if (view.state.picker === list) view.state.picker = undefined;
+      if (view.suspendedDialog) {
+        view.state.dialog = view.suspendedDialog;
+        view.suspendedDialog = undefined;
+      }
     };
     const freeText = options.freeText;
     const list: Picker = new Picker(
@@ -2001,10 +2378,10 @@ export class SessionApp {
     );
     list.settle = (work) => {
       Promise.resolve()
-        .then(work)
+        .then(() => this.inView(view, work))
         .then(
           () => this.repaint(),
-          (error) => this.fail(error),
+          (error) => this.inView(view, () => this.fail(error)),
         );
     };
     this.state.picker = list;
@@ -2014,8 +2391,60 @@ export class SessionApp {
   // What the commands in slash_handlers.ts use of the session.
   private commandHost(): CommandHost {
     const app = this;
+    let owner = this.view;
     return {
-      runtime: this.runtime!,
+      get runtime() {
+        return owner.runtime!;
+      },
+      createSession: async () => {
+        await this.changeSession();
+        owner = this.selectedView;
+      },
+      openSession: async (id) => {
+        await this.changeSession(id);
+        owner = this.selectedView;
+      },
+      deleteSession: async (id) => {
+        if (await this.deleteSession(id)) owner = this.selectedView;
+      },
+      selected: () => owner === this.selectedView,
+      refreshConnection: () => this.refreshConnections(),
+      sessionStatus: (id) => {
+        if (this.sessions?.lifecycle(id) === 'deleting') return 'deleting';
+        const runtime = this.sessions?.get(id);
+        const view = runtime && this.views.get(runtime);
+        return view &&
+          (view.state.waiting || view.interactions.pendingCount > 0)
+          ? 'waiting for you'
+          : runtime?.busy
+            ? 'running'
+            : undefined;
+      },
+      importSession: async (text) => {
+        fromJsonl(text);
+        const sessions = this.ensureSessions();
+        const runtime = sessions.create(this.workspace);
+        const previousId = runtime.session.id;
+        try {
+          await runtime.importSession(text);
+          sessions.reindex(runtime, previousId);
+          runtime.store.delete(previousId);
+          await this.selectRuntime(runtime);
+          owner = this.selectedView;
+        } catch (error) {
+          // Keep the source view selected and release the temporary runtime on failure.
+          if (sessions.get(previousId) === runtime)
+            sessions.reindex(runtime, previousId);
+          await sessions.delete(runtime.session.id, { confirmed: true });
+          this.views.get(runtime)?.interactions.close();
+          this.subscriptions.get(runtime)?.();
+          this.subscriptions.delete(runtime);
+          await this.browsers.get(runtime)?.close();
+          this.browsers.delete(runtime);
+          this.views.delete(runtime);
+          throw error;
+        }
+      },
       home: this.home,
       workspace: this.workspace,
       get settings() {
@@ -2024,13 +2453,17 @@ export class SessionApp {
       set settings(value) {
         app.settings = value;
       },
-      state: this.state,
-      undo: this.undo,
+      get state() {
+        return owner.state;
+      },
+      get undo() {
+        return owner.undo;
+      },
       get shared() {
-        return app.shared;
+        return owner.shared;
       },
       set shared(value) {
-        app.shared = value;
+        owner.shared = value;
       },
       get previousSession() {
         return app.previousSession;
@@ -2038,23 +2471,24 @@ export class SessionApp {
       set previousSession(value) {
         app.previousSession = value;
       },
-      notice: (text) => this.notice(text),
-      flash: (text, ttl) => this.flash(text, ttl),
-      fail: (error) => this.fail(error),
+      notice: (text) => this.inView(owner, () => this.notice(text)),
+      flash: (text, ttl) => this.inView(owner, () => this.flash(text, ttl)),
+      fail: (error) => this.inView(owner, () => this.fail(error)),
       repaint: () => this.repaint(),
       picker: (title, items, choose, options) => {
-        this.picker(title, items, choose, options);
+        this.inView(owner, () => this.picker(title, items, choose, options));
       },
       closePicker: () => {
-        this.state.picker = undefined;
+        owner.state.picker = undefined;
         this.repaint();
       },
-      setDraft: (text, pastes) => this.composer.restore(text, pastes),
+      setDraft: (text, pastes) => owner.composer.restore(text, pastes),
       snoozeJobs: () => {
-        this.jobWakeSnoozed = true;
+        owner.jobWakeSnoozed = true;
       },
-      send: (text) => this.submit(text, text, true),
-      command: (name, args) => this.command(name, args),
+      send: (text) => this.inView(owner, () => this.submit(text, text, true)),
+      command: (name, args) =>
+        this.inView(owner, () => this.command(name, args)),
       setTheme: (mode) => {
         this.theme.mode = mode;
         this.theme.apply();
@@ -2063,12 +2497,13 @@ export class SessionApp {
       trustWorkspace: () => this.trustWorkspace(),
       clipboard: (text) => this.clipboard.copyNative(text),
       followJobs: (list, rows) => {
-        this.jobsList = { list, rows };
+        owner.jobsList = { list, rows };
       },
-      secretValue: (body) => this.showCard(new SecretCard(body, true)),
+      secretValue: (body) =>
+        this.inView(owner, () => this.showCard(new SecretCard(body, true))),
       clearContextMeter: () => {
-        this.meterCleared =
-          this.runtime?.harness.messages
+        owner.meterCleared =
+          owner.runtime?.harness.messages
             .filter((message) => message.role === 'assistant' && message.usage)
             .at(-1)?.id ?? '';
       },
@@ -2099,22 +2534,25 @@ export class SessionApp {
       runtime.harness.model.model,
     );
   }
-  private async loadModels(): Promise<string[]> {
+  private async loadModels(runtime = this.runtime!): Promise<string[]> {
+    const settings = runtime.options.settings;
     const credentials = loadCredentials(this.home);
     const result = await resolveEndpoint(
-      this.settings.auth.base_url,
-      credentials[this.settings.auth.api_key_ref] || '',
-      { protocol: this.settings.auth.protocol },
+      settings.auth.base_url,
+      credentials[settings.auth.api_key_ref] || '',
+      { protocol: settings.auth.protocol },
     );
     if (result.status === 'failed') throw new Error(result.detail);
     this.knownModels = result.models;
     this.knownModelsEndpoint =
-      this.settings.auth.protocol + ':' + this.settings.auth.base_url;
-    return modelScope(result.models, [], this.runtime!.harness.model.model);
+      settings.auth.protocol + ':' + settings.auth.base_url;
+    return modelScope(result.models, [], runtime.harness.model.model);
   }
   private async cycleModel(): Promise<void> {
-    if (!this.runtime) return;
-    if (this.runtime.busy) {
+    const runtime = this.runtime;
+    const view = this.view;
+    if (!runtime) return;
+    if (runtime.busy) {
       this.flash('Busy · switch models when the turn has finished');
       return;
     }
@@ -2123,30 +2561,85 @@ export class SessionApp {
       this.knownModelsEndpoint !==
         this.settings.auth.protocol + ':' + this.settings.auth.base_url
     )
-      await this.loadModels();
-    const scope = this.scopedModels();
+      await this.loadModels(runtime);
+    if (runtime.isClosing) return;
+    const scope = this.inView(view, () => this.scopedModels());
     if (scope.length < 2) {
-      this.flash('Only one model to cycle through · /models lists them');
+      this.inView(view, () =>
+        this.flash('Only one model to cycle through · /models lists them'),
+      );
       return;
     }
-    const current = scope.indexOf(this.runtime.harness.model.model);
-    await this.command('models', scope[(current + 1) % scope.length]!);
+    const current = scope.indexOf(runtime.harness.model.model);
+    await this.inView(view, () =>
+      this.command('models', scope[(current + 1) % scope.length]!),
+    );
+  }
+  private connectionBusy(): boolean {
+    const runtimes = this.views.size
+      ? [...this.views.keys()]
+      : this.runtime
+        ? [this.runtime]
+        : [];
+    return runtimes.some(
+      (runtime) =>
+        !runtime.isClosing &&
+        (runtime.busy ||
+          runtime.jobs.list().some((job) => job.status === 'running')),
+    );
+  }
+  private refreshConnections(): void {
+    if (this.connectionBusy())
+      throw new Error(
+        'wait for all sessions to finish before changing the connection',
+      );
+    const runtimes = this.views.size
+      ? [...this.views.keys()]
+      : this.runtime
+        ? [this.runtime]
+        : [];
+    for (const runtime of runtimes) {
+      if (runtime.isClosing) continue;
+      const settings = structuredClone(runtime.options.settings);
+      settings.auth = structuredClone(this.settings.auth);
+      settings.initialized = this.settings.initialized;
+      settings.enabled_models = [...this.settings.enabled_models];
+      runtime.refreshConnection(settings);
+    }
+    if (this.runtimeOptions)
+      this.runtimeOptions = {
+        ...this.runtimeOptions,
+        model: this.runtime?.options.model,
+        modelOverride: undefined,
+      };
+    this.knownModels = undefined;
+    this.commandList = undefined;
   }
   async command(name: string, args: string): Promise<void> {
+    const view = this.view;
     if (!this.runtime) return;
+    if (['login', 'logout'].includes(name) && this.connectionBusy()) {
+      this.flash(
+        'Busy · wait for all sessions to finish before changing the connection',
+      );
+      return;
+    }
     if (await runCommand(this.commandHost(), name, args, () => this.exit(0)))
       return;
     try {
-      await this.ownCommand(name, args);
+      await this.inView(view, () => this.ownCommand(name, args));
     } catch (error) {
-      this.fail(
-        `/${name} failed: ${error instanceof Error ? error.message : String(error)}`,
+      this.inView(view, () =>
+        this.fail(
+          `/${name} failed: ${error instanceof Error ? error.message : String(error)}`,
+        ),
       );
     }
   }
   // The commands that open SessionApp's own lists and dialogs.
   private async ownCommand(name: string, args: string): Promise<void> {
     const runtime = this.runtime;
+    const view = this.view;
     if (!runtime) return;
     if (name === 'models') {
       const choose = (model: string): void => {
@@ -2159,68 +2652,71 @@ export class SessionApp {
       };
       if (args.trim()) choose(args.trim());
       else {
-        const models = await this.loadModels();
-        this.scopedModels();
-        const rows = (): PickerItem[] =>
-          models.map((model) => ({
-            key: model,
-            label: model,
-            current: model === runtime.harness.model.model,
-            meta: [
-              model === this.settings.auth.model ? 'default' : '',
-              (this.runScopeOnly
-                ? runtime.runOptions.models
-                : this.settings.enabled_models
-              ).length && this.scopedModels().includes(model)
-                ? 'in ctrl+p'
-                : '',
-            ]
-              .filter(Boolean)
-              .join(' · '),
-          }));
-        this.picker('Model', rows(), (item) => choose(item.key), {
-          hint:
-            'enter uses it in this session · ctrl+s also makes it the default · ' +
-            'tab adds it to ctrl+p or takes it out',
-          empty:
-            'No model matches · /models <id> uses an id the endpoint does not list',
-          focusKey: runtime.harness.model.model,
-          keys: {
-            'ctrl+s': (item) => {
-              if (!item) return;
-              runtime.setModel(item.key);
-              this.settings.auth.model = item.key;
-              saveSettingsChange(this.home, (saved) => {
-                saved.auth.model = item.key;
-              });
-              this.state.picker = undefined;
-              this.notice(`Model → ${item.key} · saved as the default`);
-            },
-            tab: (item) => {
-              if (!item) return;
-              const scoped = this.runScopeOnly
-                ? runtime.runOptions.models
-                : this.settings.enabled_models;
-              const chosen = scoped.length ? this.scopedModels() : [];
-              const next = chosen.includes(item.key)
-                ? chosen.filter((model) => model !== item.key)
-                : [...chosen, item.key];
-              if (this.runScopeOnly) runtime.runOptions.models = next;
-              else {
-                this.settings.enabled_models = next;
+        const models = await this.loadModels(runtime);
+        if (runtime.isClosing) return;
+        this.inView(view, () => {
+          this.scopedModels();
+          const rows = (): PickerItem[] =>
+            models.map((model) => ({
+              key: model,
+              label: model,
+              current: model === runtime.harness.model.model,
+              meta: [
+                model === this.settings.auth.model ? 'default' : '',
+                (this.runScopeOnly
+                  ? runtime.runOptions.models
+                  : this.settings.enabled_models
+                ).length && this.scopedModels().includes(model)
+                  ? 'in ctrl+p'
+                  : '',
+              ]
+                .filter(Boolean)
+                .join(' · '),
+            }));
+          this.picker('Model', rows(), (item) => choose(item.key), {
+            hint:
+              'enter uses it in this session · ctrl+s also makes it the default · ' +
+              'tab adds it to ctrl+p or takes it out',
+            empty:
+              'No model matches · /models <id> uses an id the endpoint does not list',
+            focusKey: runtime.harness.model.model,
+            keys: {
+              'ctrl+s': (item) => {
+                if (!item) return;
+                runtime.setModel(item.key);
+                this.settings.auth.model = item.key;
                 saveSettingsChange(this.home, (saved) => {
-                  saved.enabled_models = next;
+                  saved.auth.model = item.key;
                 });
-              }
-              this.state.picker?.setItems(rows());
-              this.flash(
-                next.length
-                  ? `ctrl+p goes through ${next.length} model${next.length === 1 ? '' : 's'}`
-                  : 'ctrl+p goes through every listed model',
-                2000,
-              );
+                this.state.picker = undefined;
+                this.notice(`Model → ${item.key} · saved as the default`);
+              },
+              tab: (item) => {
+                if (!item) return;
+                const scoped = this.runScopeOnly
+                  ? runtime.runOptions.models
+                  : this.settings.enabled_models;
+                const chosen = scoped.length ? this.scopedModels() : [];
+                const next = chosen.includes(item.key)
+                  ? chosen.filter((model) => model !== item.key)
+                  : [...chosen, item.key];
+                if (this.runScopeOnly) runtime.runOptions.models = next;
+                else {
+                  this.settings.enabled_models = next;
+                  saveSettingsChange(this.home, (saved) => {
+                    saved.enabled_models = next;
+                  });
+                }
+                this.state.picker?.setItems(rows());
+                this.flash(
+                  next.length
+                    ? `ctrl+p goes through ${next.length} model${next.length === 1 ? '' : 's'}`
+                    : 'ctrl+p goes through every listed model',
+                  2000,
+                );
+              },
             },
-          },
+          });
         });
       }
       return;
@@ -2262,7 +2758,7 @@ export class SessionApp {
   // Circle signs in only with an API URL and key). Nothing is saved before a model is chosen;
   // esc on the key goes back to the URL, esc on the URL leaves.
   private login(): void {
-    const runtime = this.runtime!;
+    const view = this.view;
     const flow = new SetupFlow(this.home);
     this.loginFlow = flow;
     const title = (): string =>
@@ -2323,90 +2819,98 @@ export class SessionApp {
       this.repaint();
     };
     // The list for the step the answers have reached; at the end, sign in with them.
-    const next = (): void => {
-      if (this.loginFlow !== flow) return; // left with esc while the endpoint was asked
-      if (flow.step === 'done') {
-        this.loginFlow = undefined;
-        this.saveConnection(flow);
-        // The model chosen here wins over `--model` and the project's, as in 0.5.0
-        const chosen = this.settings.auth.model;
-        runtime.options.modelOverride = undefined;
-        this.applyRunSettings();
-        this.settings.auth.model = this.state.model = chosen;
-        runtime.options.settings = this.settings;
-        runtime.setModel(this.settings.auth.model);
-        this.notice(
-          `Signed in to ${endpointName(this.settings.auth.base_url)} · model ${this.settings.auth.model}`,
-        );
-      } else if (flow.step === 'probing') {
-        this.picker(
-          title(),
-          [],
-          () => {},
-          { empty: `asking ${endpointName(flow.baseUrl)} for its models…` },
-          leave,
-        );
-        void flow.runProbe().then(
-          () => next(),
-          (error) => this.fail(error),
-        );
-      } else if (flow.step === 'protocol')
-        this.picker(
-          title(),
-          [
-            { key: 'openai', label: 'OpenAI-style API' },
-            { key: 'anthropic', label: 'Anthropic-style API' },
-          ],
-          (item) => {
-            flow.chooseProtocol(item.key === 'anthropic' ? 1 : 0);
-            next();
-          },
-          {
-            hint: `${flow.status} · which kind of API is it?`,
-            focusKey: flow.focus ? 'anthropic' : 'openai',
-          },
-          leave,
-        );
-      else if (flow.step === 'model') {
-        const current = this.settings.auth.model;
-        this.picker(
-          title(),
-          flow.models.map((model) => ({
-            key: model,
-            label: model,
-            current: model === current,
-          })),
-          (item) => {
-            flow.use(item.key);
-            next();
-          },
-          {
-            hint: flow.status,
-            focusKey: current,
-            // An id the endpoint did not list, not checked
-            freeText: (text) => {
-              flow.use(text);
+    const next = (): void =>
+      this.inView(view, () => {
+        if (this.loginFlow !== flow) return; // left with esc while the endpoint was asked
+        if (flow.step === 'done') {
+          this.loginFlow = undefined;
+          if (this.connectionBusy()) {
+            this.fail(
+              'Sign in cancelled · wait for all sessions to finish before changing the connection',
+            );
+            return;
+          }
+          this.saveConnection(flow);
+          // The model chosen here wins over `--model` and the project's, as in 0.5.0
+          const chosen = this.settings.auth.model;
+          this.applyRunSettings();
+          this.settings.auth.model = this.state.model = chosen;
+          this.refreshConnections();
+          this.notice(
+            `Signed in to ${endpointName(this.settings.auth.base_url)} · model ${this.settings.auth.model}`,
+          );
+        } else if (flow.step === 'probing') {
+          this.picker(
+            title(),
+            [],
+            () => {},
+            { empty: `asking ${endpointName(flow.baseUrl)} for its models…` },
+            leave,
+          );
+          void flow.runProbe().then(
+            () => next(),
+            (error) => this.inView(view, () => this.fail(error)),
+          );
+        } else if (flow.step === 'protocol')
+          this.picker(
+            title(),
+            [
+              { key: 'openai', label: 'OpenAI-style API' },
+              { key: 'anthropic', label: 'Anthropic-style API' },
+            ],
+            (item) => {
+              flow.chooseProtocol(item.key === 'anthropic' ? 1 : 0);
               next();
             },
-            empty: flow.models.length
-              ? 'No model matches · enter uses what you typed'
-              : 'Type the model id your endpoint uses',
-          },
-          leave,
-        );
-      } else if (flow.step === 'provider') {
-        this.picker(
-          title(),
-          PROVIDER_PRESETS.map((item) => ({ key: item.id, label: item.name })),
-          (item) => {
-            flow.chooseProvider(item.key);
-            ask();
-          },
-          { hint: 'which provider?' },
-          leave,
-        );
-      } else ask();
-    };
+            {
+              hint: `${flow.status} · which kind of API is it?`,
+              focusKey: flow.focus ? 'anthropic' : 'openai',
+            },
+            leave,
+          );
+        else if (flow.step === 'model') {
+          const current = this.settings.auth.model;
+          this.picker(
+            title(),
+            flow.models.map((model) => ({
+              key: model,
+              label: model,
+              current: model === current,
+            })),
+            (item) => {
+              flow.use(item.key);
+              next();
+            },
+            {
+              hint: flow.status,
+              focusKey: current,
+              // An id the endpoint did not list, not checked
+              freeText: (text) => {
+                flow.use(text);
+                next();
+              },
+              empty: flow.models.length
+                ? 'No model matches · enter uses what you typed'
+                : 'Type the model id your endpoint uses',
+            },
+            leave,
+          );
+        } else if (flow.step === 'provider') {
+          this.picker(
+            title(),
+            PROVIDER_PRESETS.map((item) => ({
+              key: item.id,
+              label: item.name,
+            })),
+            (item) => {
+              flow.chooseProvider(item.key);
+              ask();
+            },
+            { hint: 'which provider?' },
+            leave,
+          );
+        } else ask();
+      });
     next();
   }
   /** pbcopy, wl-copy or xclip (clip on Windows); false when none took the text. */
@@ -2511,9 +3015,13 @@ export class SessionApp {
     this.repaint();
   }
   private copySelection(text: string): void {
+    const view = this.view;
     void this.clipboard.copySelection(text).then(
-      () => this.flash(`Copied ${Array.from(text).length} chars`),
-      (error) => this.fail(error),
+      () =>
+        this.inView(view, () =>
+          this.flash(`Copied ${Array.from(text).length} chars`),
+        ),
+      (error) => this.inView(view, () => this.fail(error)),
     );
   }
   // $VISUAL, $EDITOR, or nvim, vim or nano (notepad on Windows), on the draft in full; what
@@ -2576,8 +3084,12 @@ export class SessionApp {
     this.ended = true;
     this.off?.();
     this.offSignals?.();
-    this.interactions.close();
-    this.pending?.abort?.();
+    for (const view of this.views.values()) {
+      view.interactions.close();
+      view.pending?.abort?.();
+      if (view.flashTimer) clearTimeout(view.flashTimer);
+      view.selection.close();
+    }
     this.input.close();
     this.theme.close();
     if (this.animation) clearInterval(this.animation);
@@ -2593,9 +3105,15 @@ export class SessionApp {
     // As 0.5.0 did once the screen was gone: the jobs that leaving stopped, then the
     // command that opens this conversation again.
     const runtime = this.runtime;
-    const jobs = runtime ? runningJobs(runtime) : 0;
+    const jobs = [...this.views.keys()].reduce(
+      (sum, owner) => sum + runningJobs(owner),
+      0,
+    );
     const hint = runtime ? resumeHint(runtime, this.workspace) : '';
-    await Promise.all([runtime?.close(), this.browser?.close()]);
+    await Promise.all([
+      this.sessions?.close() ?? runtime?.close(),
+      ...[...this.browsers.values()].map((browser) => browser.close()),
+    ]);
     for (const line of [stoppedJobsLine(jobs), hint])
       if (line) this.terminal.write(line + '\n');
   }

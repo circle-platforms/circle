@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { join, basename } from 'node:path';
 import { readFileSync } from 'node:fs';
 import type { ChatModel, Message, ToolCall } from './types.js';
@@ -31,6 +31,9 @@ import { McpManager } from './mcp_loader.js';
 import { ExtensionHost } from './extensions.js';
 import {
   isFolderTrusted,
+  isReady,
+  loadSettings,
+  loadCredentials,
   saveSettingsChange,
   settingsForRun,
   VARIABLE_NAME,
@@ -125,6 +128,8 @@ export interface RuntimeOptions {
   onExtensionStatus?: () => void;
   /** Opens a link an extension asked for (api.openUrl); the URL is already checked. */
   openUrl?: (url: string) => Promise<void>;
+  /** External session resources must be gone before history and ownership are removed. */
+  beforeDelete?: () => Promise<void>;
   /** How `screenshot` takes the screen: tests give their own runner; false leaves it out.
    * By default it is offered where there is a desktop on this machine. */
   screenshot?: Omit<ScreenshotOptions, 'app' | 'target'> | false;
@@ -159,6 +164,11 @@ export class AgentRuntime {
   readonly catalog: ModelCatalog;
   private childJobOwners = new Map<string, import('./jobs.js').JobOwner>();
   private closing = false;
+  private ownershipError?: Error;
+  private deleting = false;
+  get isDeleting(): boolean {
+    return this.deleting;
+  }
   /** close() has begun: the session store may already be closed. */
   get isClosing(): boolean {
     return this.closing;
@@ -176,6 +186,7 @@ export class AgentRuntime {
   extensions: ExtensionHost;
   private integrationsReady?: Promise<void>;
   private baseModel?: ChatModel;
+  private authFingerprint?: string;
   private coreTools: Tool[] = [];
   // An extension changed its tools after loading; applied between turns, never inside one.
   private toolsStale = false;
@@ -202,6 +213,40 @@ export class AgentRuntime {
     this.migration = this.runOptions.no_session
       ? { imported: [], skipped: [], errors: [] }
       : migrateLegacy(options.home, this.store);
+    try {
+      let session: Session | undefined;
+      if (options.session) {
+        session = this.store.find(options.session);
+        if (!session) throw new Error('unknown session');
+        if (session.workspace !== options.workspace)
+          session = this.store.fork(session.id, options.workspace);
+      } else if (options.continue) {
+        session = this.store.list(options.workspace)[0];
+        if (!session) throw new Error('no saved session in this folder');
+      } else if (options.fork) {
+        const parent = this.store.find(options.fork);
+        if (!parent) throw new Error('unknown session to fork');
+        session = this.store.fork(parent.id, options.workspace);
+      }
+      this.session =
+        session ??
+        this.store.create(
+          options.workspace,
+          options.settings.auth.model,
+          this.runOptions.session_name,
+          options.sessionId,
+        );
+      this.store.claimSession(this.session.id, (error) =>
+        this.ownershipLost(error),
+      );
+      // A delete may have completed between discovery and acquiring the lease.
+      const current = this.store.get(this.session.id);
+      if (!current) throw new Error('unknown session');
+      this.session = current;
+    } catch (error) {
+      this.store.close();
+      throw error;
+    }
     this.sandbox = new Sandbox(
       options.workspace,
       projectDataDir(options.workspace, options.home),
@@ -236,7 +281,11 @@ export class AgentRuntime {
       this.redact(text, {}, () => written(this.store.messages(sessionId)));
     this.userShells = new UserShells(this.jobs, this.store, {
       sessionId: () => this.session.id,
-      busy: () => this.busy,
+      busy: () =>
+        Boolean(this.ownershipError) ||
+        this.closing ||
+        this.deleting ||
+        this.busy,
       modelBusy: () => this.harness.busy,
       planMode: () => this.harness.planMode,
       changed: () => this.bus.emit('info', { payload: { user_shell: true } }),
@@ -258,33 +307,19 @@ export class AgentRuntime {
         this.bus.emit('info', { payload: { model_notice: event } }),
     });
     this.extensions = this.extensionHost(new Set());
-    let session: Session | undefined;
-    if (options.session) {
-      session = this.store.find(options.session);
-      if (!session) throw new Error('unknown session');
-      if (session.workspace !== options.workspace)
-        session = this.store.fork(session.id, options.workspace);
-    } else if (options.continue) {
-      session = this.store.list(options.workspace)[0];
-      if (!session) throw new Error('no saved session in this folder');
-    } else if (options.fork) {
-      const parent = this.store.find(options.fork);
-      if (!parent) throw new Error('unknown session to fork');
-      session = this.store.fork(parent.id, options.workspace);
-    }
-    this.session =
-      session ??
-      this.store.create(
-        options.workspace,
-        options.settings.auth.model,
-        this.runOptions.session_name,
-        options.sessionId,
-      );
     if (this.runOptions.session_name)
       this.store.rename(this.session.id, this.runOptions.session_name);
-    this.harness = this.createHarness(options.model);
-    this.todos = restoredTodos(this.harness.messages);
-    this.applyDefaultMode();
+    try {
+      this.harness = this.createHarness(options.model);
+      this.todos = restoredTodos(this.harness.messages);
+      this.applyDefaultMode();
+    } catch (error) {
+      // Integrations have not loaded and jobs cannot have started in the constructor.
+      void this.jobs.close();
+      void this.catalog.close();
+      this.store.close();
+      throw error;
+    }
     this.bus.setRunId(this.session.id);
     if (!options.model)
       void this.catalog.refreshIfStale(() =>
@@ -314,13 +349,9 @@ export class AgentRuntime {
     const model =
       modelOverride ??
       this.baseModel ??
-      new GatewayModel(
-        this.options.settings,
-        this.options.home,
-        undefined,
-        {},
-        this.catalog,
-      );
+      this.gatewayModel(this.options.settings);
+    if (model instanceof GatewayModel && !this.authFingerprint)
+      this.authFingerprint = this.savedConnectionFingerprint();
     this.baseModel = model;
     const system = this.systemPrompt(model.model);
     let tools = buildTools(this.sandbox, {
@@ -394,6 +425,9 @@ export class AgentRuntime {
       },
       compact: async (hint, context) => this.compact(hint, context.signal),
       task: async (args, context) => {
+        context.signal.throwIfAborted();
+        if (this.closing || this.deleting)
+          throw new Error('session is closing');
         const parentHarness = this.harness;
         const parentSessionId = context.sessionId;
         const name = String(args.subagent_type || 'general-purpose');
@@ -404,13 +438,7 @@ export class AgentRuntime {
           throw new Error('unknown subagent type');
         const childModel = custom?.spec.model
           ? this.extensions.model(
-              new GatewayModel(
-                this.options.settings,
-                this.options.home,
-                custom.spec.model,
-                {},
-                this.catalog,
-              ),
+              this.gatewayModel(this.options.settings, custom.spec.model),
             )
           : parentHarness.model;
         const session = this.store.create(
@@ -651,10 +679,15 @@ export class AgentRuntime {
       priceUsage: (model, usage) =>
         priceCall(this.catalog.facts(model, this.options.settings), usage),
       beforeRun: async (signal) => {
+        if (this.ownershipError) throw this.ownershipError;
+        this.requireTurnConnection();
+        if (this.closing || this.deleting)
+          throw new Error('session is closing');
         if (this.userShells.busy) throw new Error('a user command is running');
         if (this.activeCompaction) throw new Error('a compaction is running');
         await this.initialize(signal);
       },
+      beforeTurn: () => this.requireTurnConnection(),
       beforeStep: () => {
         this.userShells.flush();
         const messages = this.jobs.takeNotices(this.harness.sessionId);
@@ -954,17 +987,104 @@ export class AgentRuntime {
     if (this.busy) throw new Error('a turn is running');
     if (!model.trim()) throw new Error('model ID is required');
     const effort = this.thinkingLevel;
-    const nextModel = new GatewayModel(
-      this.options.settings,
+    const nextModel = this.gatewayModel(this.options.settings, model);
+    nextModel.effort = effort;
+    this.baseModel = nextModel;
+    this.harness.model = this.extensions.model(this.baseModel);
+    this.refreshSystemPrompt();
+  }
+  /** An explicit login/logout replaces every cached client, including future sessions. */
+  refreshConnection(settings: CircleSettings): void {
+    this.requireIdleSession();
+    const nextSettings = structuredClone(settings);
+    const ready = isReady(nextSettings);
+    const nextModel: ChatModel = ready
+      ? this.gatewayModel(nextSettings, undefined, true)
+      : {
+          model: 'not connected',
+          async complete(): Promise<never> {
+            throw new Error('connect an API URL, key and model first');
+          },
+        };
+    if (nextModel instanceof GatewayModel)
+      nextModel.effort = this.thinkingLevel;
+    this.options.settings = nextSettings;
+    this.options.modelOverride = undefined;
+    this.options.model = ready ? undefined : nextModel;
+    this.baseModel = nextModel;
+    this.harness.model = this.extensions.model(nextModel);
+    if (!ready) this.authFingerprint = this.savedConnectionFingerprint();
+    this.refreshSystemPrompt();
+  }
+  private savedConnectionFingerprint(): string {
+    const saved = loadSettings(this.options.home);
+    // The default model can change while each session keeps its selected model.
+    const { protocol, base_url, api_key_ref } = saved.auth;
+    return createHash('sha256')
+      .update(
+        JSON.stringify({
+          initialized: saved.initialized,
+          auth: { protocol, base_url, api_key_ref },
+          credentials: Object.entries(loadCredentials(this.options.home)).sort(
+            ([a], [b]) => a.localeCompare(b),
+          ),
+        }),
+      )
+      .digest('hex');
+  }
+  private requireCurrentConnection(): void {
+    // Scripted/injected models have no saved credentials or network client to invalidate.
+    if (!(this.baseModel instanceof GatewayModel)) return;
+    if (this.authFingerprint !== this.savedConnectionFingerprint())
+      throw new Error(
+        'saved connection changed in another Circle runtime; reconnect before continuing',
+      );
+  }
+  private requireTurnConnection(): void {
+    try {
+      this.requireCurrentConnection();
+    } catch (error) {
+      this.bus.emit('run_error', {
+        payload: {
+          message: error instanceof Error ? error.message : String(error),
+          connection_changed: true,
+        },
+      });
+      throw error;
+    }
+  }
+  private gatewayModel(
+    settings: CircleSettings,
+    model?: string,
+    explicit = false,
+  ): GatewayModel {
+    if (!explicit) this.requireCurrentConnection();
+    const saved = loadSettings(this.options.home);
+    if (saved.initialized && isReady(settings)) {
+      const endpoint = (value: string) => value.trim().replace(/\/+$/, '');
+      if (
+        saved.auth.protocol !== settings.auth.protocol ||
+        endpoint(saved.auth.base_url) !== endpoint(settings.auth.base_url) ||
+        saved.auth.api_key_ref !== settings.auth.api_key_ref
+      )
+        throw new Error(
+          'saved connection changed in another Circle runtime; reconnect before continuing',
+        );
+    }
+    const fingerprint = this.savedConnectionFingerprint();
+    const gateway = new GatewayModel(
+      settings,
       this.options.home,
       model,
       {},
       this.catalog,
     );
-    nextModel.effort = effort;
-    this.baseModel = nextModel;
-    this.harness.model = this.extensions.model(this.baseModel);
-    this.refreshSystemPrompt();
+    if (fingerprint !== this.savedConnectionFingerprint())
+      throw new Error(
+        'saved connection changed in another Circle runtime; reconnect before continuing',
+      );
+    this.authFingerprint = fingerprint;
+    return gateway;
   }
   get thinkingLevel(): string {
     return this.baseModel instanceof GatewayModel
@@ -1041,6 +1161,9 @@ export class AgentRuntime {
     };
   }
   async compact(hint = '', signal?: AbortSignal): Promise<string> {
+    if (this.ownershipError) throw this.ownershipError;
+    if (!signal) this.requireCurrentConnection();
+    if (this.closing || this.deleting) throw new Error('session is closing');
     if (signal)
       return this.context.compact(
         this.session.id,
@@ -1082,43 +1205,60 @@ export class AgentRuntime {
     ]);
   }
   async newSession(): Promise<void> {
-    if (this.busy) throw new Error('a turn is running');
-    this.session = this.store.create(
+    this.requireIdleSession();
+    const previous = this.session.id;
+    const session = this.store.create(
       this.options.workspace,
       this.harness.model.model,
     );
+    this.store.claimSession(session.id, (error) => this.ownershipLost(error));
+    this.session = session;
     this.todos = [];
     this.harness = this.createHarness(this.options.model);
     this.todos = restoredTodos(this.harness.messages);
     this.applyDefaultMode();
     this.bus.setRunId(this.session.id);
+    this.store.releaseSession(previous);
     this.extensions.emit('session_start', {
       workspace: this.options.workspace,
       session_id: this.session.id,
     });
   }
   async switchSession(id: string): Promise<void> {
-    if (this.busy) throw new Error('a turn is running');
+    this.requireIdleSession();
     let session = this.store.find(id);
     if (!session) throw new Error('unknown session');
     if (session.workspace !== this.options.workspace)
       session = this.store.fork(session.id, this.options.workspace);
+    const previous = this.session.id;
+    this.store.claimSession(session.id, (error) => this.ownershipLost(error));
     this.session = session;
     this.harness = this.createHarness(this.options.model);
     this.todos = restoredTodos(this.harness.messages);
     this.applyDefaultMode();
     this.bus.setRunId(session.id);
+    if (previous !== session.id) this.store.releaseSession(previous);
+  }
+  private requireIdleSession(): void {
+    if (this.ownershipError) throw this.ownershipError;
+    if (this.closing || this.deleting) throw new Error('session is closing');
+    if (this.busy) throw new Error('a turn is running');
+    if (this.jobs.list().some((job) => job.status === 'running'))
+      throw new Error('background tasks are running');
   }
   async importSession(text: string): Promise<void> {
-    if (this.busy) throw new Error('a turn is running');
+    this.requireIdleSession();
     const { header, messages, graph } = fromJsonl(text);
     if (graph) {
       const session = this.store.importGraph(graph, this.options.workspace);
+      const previous = this.session.id;
+      this.store.claimSession(session.id, (error) => this.ownershipLost(error));
       this.session = session;
       this.harness = this.createHarness(this.options.model);
       this.todos = restoredTodos(this.harness.messages);
       this.applyDefaultMode();
       this.bus.setRunId(session.id);
+      this.store.releaseSession(previous);
       this.extensions.emit('session_start', {
         workspace: this.options.workspace,
         session_id: session.id,
@@ -1156,7 +1296,33 @@ export class AgentRuntime {
     this.closingPromise = this.closeResources(saveJobNotes);
     return this.closingPromise;
   }
-  private async closeResources(saveJobNotes: boolean): Promise<void> {
+  private ownershipLost(error: Error): void {
+    this.ownershipError = error;
+    this.bus.emit('error', {
+      payload: { message: error.message, session_ownership_lost: true },
+    });
+    void this.cancel();
+  }
+  /** Delete only after all writers and owned processes have finished, while still leased. */
+  async deleteSession(): Promise<void> {
+    if (this.closing && !this.deleting)
+      throw new Error('session is already closing');
+    if (this.closingPromise) return this.closingPromise;
+    this.deleting = true;
+    this.closing = true;
+    this.closingPromise = this.closeResources(false, true);
+    try {
+      await this.closingPromise;
+    } catch (error) {
+      // Keep both history and ownership for a safe retry after cleanup failed.
+      this.closingPromise = undefined;
+      throw error;
+    }
+  }
+  private async closeResources(
+    saveJobNotes: boolean,
+    deleteSession = false,
+  ): Promise<void> {
     if (this.toolsCheck) clearTimeout(this.toolsCheck);
     await this.catalog.close();
     this.compactionController?.abort(new Error('Interrupted'));
@@ -1164,8 +1330,8 @@ export class AgentRuntime {
     await this.harness.cancel();
     await this.userShells.cancel();
     const stopped = await this.jobs.close();
-    this.userShells.flush();
-    for (const sessionId of saveJobNotes
+    if (!this.ownershipError) this.userShells.flush();
+    for (const sessionId of saveJobNotes && !this.ownershipError
       ? new Set(stopped.map((job) => job.sessionId))
       : []) {
       const notices = this.jobs.takeNotices(sessionId);
@@ -1176,6 +1342,11 @@ export class AgentRuntime {
     await this.extensions.close(2000);
     await this.mcp.close();
     await this.lsp.close();
+    if (deleteSession) await this.options.beforeDelete?.();
+    if (deleteSession)
+      this.store.delete(this.session.id, (ids) => {
+        for (const id of ids) this.policy.store.remove(id);
+      });
     this.store.close();
   }
   async runJobNotices(): Promise<string | undefined> {

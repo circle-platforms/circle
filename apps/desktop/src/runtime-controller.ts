@@ -15,6 +15,12 @@ import {
 } from 'node:fs';
 import { basename, join, relative, isAbsolute, sep } from 'node:path';
 import { AgentRuntime, type InteractionContext } from '../../../src/runtime.js';
+import { SessionRuntimeManager } from '../../../src/session_manager.js';
+import {
+  sessionOccupied,
+  SessionOccupiedError,
+} from '../../../src/session_lock.js';
+import { CheckpointStore } from '../../../src/checkpoint_store.js';
 import type {
   ChatModel,
   ToolCall,
@@ -25,7 +31,6 @@ import type { ApprovalDecision } from '../../../src/harness.js';
 import {
   loadSettings,
   settingsForRun,
-  saveSettings,
   saveSettingsChange,
   saveCredentials,
   clearCredentials,
@@ -206,6 +211,7 @@ export interface ControllerOptions {
   openUrl?: (url: string) => void;
   /** The conversation browsers in the main process; without it there are no browser tools. */
   browser?: BrowserPort;
+  beforeDelete?: (sessionId: string) => Promise<void>;
 }
 
 /** The IPC adapter delegates execution and persistence to the existing Circle core. */
@@ -221,10 +227,14 @@ export class RuntimeController {
       after: string | null;
       text: string;
       at: string;
-      planCompleted: number;
+      planCompleted?: number;
     }[]
   >();
-  private runtimes = new Map<string, AgentRuntime>();
+  private runtimes = new SessionRuntimeManager((workspace, sessionId) =>
+    this.createRuntime(workspace, sessionId),
+  );
+  private workspaceSessions = new Map<string, string>();
+  private readonly store: CheckpointStore;
   // The last link an extension asked to open; the window opens each id once.
   private openRequest?: { id: string; url: string; sessionId: string };
   private active!: AgentRuntime;
@@ -260,12 +270,14 @@ export class RuntimeController {
   >();
   private error?: string;
   private closing = false;
+  private closePromise?: Promise<void>;
   private mutation = Promise.resolve();
   private accepted = new Map<
     string,
     { signature: string; reply: Promise<RuntimeReply> }
   >();
   private tasks = new Set<Promise<unknown>>();
+  private cancelling = new Set<string>();
   private discoveredModels: string[] = [];
   // What the connection form's last probe found, so that saving that endpoint lists its
   // models. Never the key.
@@ -290,6 +302,7 @@ export class RuntimeController {
     this.home = options.home;
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
     this.metadata = new SessionMetadata(this.home);
+    this.store = new CheckpointStore(this.home);
     const saved = this.savedLocation();
     const settings = loadSettings(this.home);
     const workspace =
@@ -300,8 +313,19 @@ export class RuntimeController {
     mkdirSync(workspace, { recursive: true });
     // The empty, app-owned scratch workspace is safe to initialize without user files.
     if (workspace === join(this.home, 'workspace'))
-      saveSettings(trustFolder(settings, workspace), this.home);
-    this.active = this.runtime(workspace, saved?.sessionId);
+      saveSettingsChange(this.home, (saved) => {
+        Object.assign(saved, trustFolder(saved, workspace));
+      });
+    try {
+      this.active = this.runtime(workspace, saved?.sessionId);
+    } catch (error) {
+      if (!(error instanceof SessionOccupiedError)) {
+        this.store.close();
+        throw error;
+      }
+      // Another terminal may have resumed the last desktop session meanwhile.
+      this.active = this.runtime(workspace);
+    }
   }
   private scratchPath(): string {
     return join(this.home, 'workspace');
@@ -388,13 +412,27 @@ export class RuntimeController {
   }
   private runtime(workspace: string, sessionId?: string): AgentRuntime {
     workspace = realpathSync(workspace);
-    const existing = this.runtimes.get(workspace);
-    if (existing) return existing;
+    const remembered = sessionId ?? this.workspaceSessions.get(workspace);
+    const owner = remembered ? this.runtimes.get(remembered) : undefined;
+    if (owner && this.runtimes.lifecycle(owner.session.id) === 'open')
+      return owner;
+    const runtime = this.runtimes.open(workspace, sessionId);
+    this.workspaceSessions.set(workspace, runtime.session.id);
+    return runtime;
+  }
+  private selectRuntime(runtime: AgentRuntime): void {
+    this.previous = this.active.session.id;
+    this.active = runtime;
+    this.workspaceSessions.set(runtime.options.workspace, runtime.session.id);
+  }
+  private createRuntime(workspace: string, sessionId?: string): AgentRuntime {
     const settings = settingsForRun(this.home, workspace).settings;
     const create = (session?: string) =>
       new AgentRuntime({
         workspace,
         home: this.home,
+        beforeDelete: () =>
+          this.options.beforeDelete?.(runtime.session.id) ?? Promise.resolve(),
         userHome: this.options.userHome,
         localContext: isFolderTrusted(settings, workspace),
         settings,
@@ -455,7 +493,6 @@ export class RuntimeController {
       else throw error;
     }
     runtime.bus.subscribe((event) => this.event(runtime, event));
-    this.runtimes.set(workspace, runtime);
     const tracker = new PlanCompletionTracker();
     tracker.reset(runtime.todos);
     this.planCompletions.set(runtime.session.id, tracker);
@@ -468,8 +505,8 @@ export class RuntimeController {
     });
   }
   private projectMessages(runtime: AgentRuntime, id: string): Message[] {
-    const nodes = runtime.store.tree(id);
-    const labels = runtime.store.labels(id);
+    const nodes = this.store.tree(id);
+    const labels = this.store.labels(id);
     const turns = this.turnUsage.get(id) ?? {};
     const result: Message[] = [];
     const calls = new Map<string, Message>();
@@ -595,7 +632,7 @@ export class RuntimeController {
     if (stream && (stream.text || stream.thinking))
       result.push({
         id: stream.id,
-        parentId: runtime.store.get(id)?.head ?? null,
+        parentId: this.store.get(id)?.head ?? null,
         role: 'assistant',
         text: stream.text,
         thinking: stream.thinking,
@@ -604,11 +641,12 @@ export class RuntimeController {
     return result;
   }
   snapshot(): WorkbenchSnapshot {
+    this.metadata.refresh();
     const runtime = this.active;
     const settings = runtime.options.settings;
     const savedSettings = loadSettings(this.home);
     const defaultFolder = this.defaultWorkspace(savedSettings);
-    const rows = runtime.store.list();
+    const rows = this.store.list();
     const paths = [
       ...new Set([
         ...rows.map((row) => row.workspace),
@@ -616,15 +654,15 @@ export class RuntimeController {
       ]),
     ];
     const sessions: Session[] = rows.map((row) => {
-      const owner = this.runtimes.get(row.workspace);
+      const owner = this.runtimes.get(row.id);
       const selected = owner?.session.id === row.id;
       const queue = selected
         ? owner.harness.queuedMessages
         : { steering: [], followUp: [] };
       const path = new Set(
-        runtime.store.messages(row.id).map((message) => message.id),
+        this.store.messages(row.id).map((message) => message.id),
       );
-      const branchIds = runtime.store
+      const branchIds = this.store
         .tree(row.id)
         .filter((node) => node.message && path.has(node.message.id))
         .flatMap((node) => [
@@ -644,6 +682,9 @@ export class RuntimeController {
       return {
         id: row.id,
         archivedAt: this.metadata.archivedAt(row.id),
+        lifecycle:
+          this.runtimes.lifecycle(row.id) === 'deleting' ? 'deleting' : 'open',
+        occupied: !owner && sessionOccupied(this.home, row.id),
         title: row.title || 'new session',
         workspaceId: identity(row.workspace),
         model: selected ? owner.harness.model.model : row.model,
@@ -672,7 +713,7 @@ export class RuntimeController {
         readOnly: selected ? owner.harness.planMode : false,
         auto: selected ? owner.policy.yoloEnabled(row.id) : false,
         mode: selected ? owner.mode : 'manual',
-        meters: selected ? this.meters(owner) : undefined,
+        meters: selected && !owner.isClosing ? this.meters(owner) : undefined,
         turn: this.turn(row.id),
         changes: this.changeList(row.id),
         showThinking: !settings.hide_thinking,
@@ -735,7 +776,7 @@ export class RuntimeController {
       })),
       sessions,
       files: [],
-      agents: runtime.store
+      agents: this.store
         .list(undefined, true)
         .filter((row) => row.parent_id)
         .map((row) => ({
@@ -1472,13 +1513,29 @@ export class RuntimeController {
       request,
     );
   }
-  private track(task: Promise<unknown>) {
+  private track(
+    task: Promise<unknown>,
+    runtime = this.active,
+    reportFailure = false,
+  ) {
+    const sessionId = runtime.session.id;
     this.tasks.add(task);
     void task
       .catch((error) => {
         if (!this.closing) {
-          this.error =
-            error instanceof Error ? error.message : 'runtime failed';
+          if (this.runtimes.lifecycle(sessionId) !== 'open') return;
+          // Harness errors already arrive through run_error on the source session.
+          // A manual compaction has no harness turn, so attach its error here.
+          if (reportFailure && !this.cancelling.has(sessionId)) {
+            const rows = this.failures.get(sessionId) ?? [];
+            rows.push({
+              id: `failure-${randomUUID()}`,
+              after: this.store.get(sessionId)?.head ?? null,
+              text: `✖ ${error instanceof Error ? error.message : 'runtime failed'}`,
+              at: new Date().toISOString(),
+            });
+            this.failures.set(sessionId, rows);
+          }
           this.publish();
         }
       })
@@ -1525,6 +1582,7 @@ export class RuntimeController {
             'rename-session',
             'archive-session',
             'answer',
+            'stop-job',
           ].includes(command.name)
         )
           throw Error('session changed; retry from the current session');
@@ -1563,9 +1621,11 @@ export class RuntimeController {
     workspace: string,
     action = 'archiving',
   ): void {
-    const owner = this.runtimes.get(workspace);
+    const owner = this.runtimes.get(id);
     if (
-      (owner?.session.id === id && owner.busy) ||
+      (!owner && sessionOccupied(this.home, id)) ||
+      (owner?.session.id === id &&
+        (owner.busy || this.runtimes.lifecycle(id) !== 'open')) ||
       owner?.jobs.list(id).some((job) => job.status === 'running') ||
       [...this.pending.values()].some((pending) => pending.row.sessionId === id)
     )
@@ -1577,8 +1637,21 @@ export class RuntimeController {
     this.planCompletions.set(runtime.session.id, tracker);
   }
   private async execute(command: RuntimeCommand): Promise<unknown> {
+    this.metadata.refresh();
     const p = command.payload;
     let runtime = this.active;
+    if (
+      this.runtimes.lifecycle(runtime.session.id) !== 'open' &&
+      ![
+        'state',
+        'close',
+        'select-session',
+        'new-session',
+        'delete-session',
+        'answer',
+      ].includes(command.name)
+    )
+      throw Error('session is deleting; wait for cleanup to finish');
     if (
       this.metadata.archivedAt(runtime.session.id) &&
       [
@@ -1646,13 +1719,23 @@ export class RuntimeController {
         else {
           const display =
             p.display === undefined ? undefined : text(p.display, 'display');
-          this.track(runtime.harness.run(prompt, display, attachments));
+          this.track(
+            runtime.harness.run(prompt, display, attachments),
+            runtime,
+          );
         }
         return {};
       }
-      case 'abort':
-        await runtime.cancel({ keepQueue: false });
+      case 'abort': {
+        const id = runtime.session.id;
+        this.cancelling.add(id);
+        try {
+          await runtime.cancel({ keepQueue: false });
+        } finally {
+          this.cancelling.delete(id);
+        }
         return {};
+      }
       case 'clear-queue':
         return runtime.harness.clearQueue();
       case 'remove-queued': {
@@ -1667,43 +1750,95 @@ export class RuntimeController {
       case 'background':
         return runtime.jobs.backgroundForeground();
       case 'new-session': {
-        const previous = runtime.session.id;
-        await runtime.newSession();
-        this.resetPlan(runtime);
-        this.previous = previous;
-        return { sessionId: runtime.session.id };
+        const owner = this.runtimes.create(runtime.options.workspace);
+        this.selectRuntime(owner);
+        return { sessionId: owner.session.id };
       }
       case 'select-session': {
         const id = text(p.id, 'session', 200);
-        const row = runtime.store.get(id);
+        const row = this.store.get(id);
         if (!row || row.parent_id) throw Error('session not found');
         if (id === runtime.session.id) return { sessionId: id };
-        this.previous = runtime.session.id;
-        runtime = this.runtime(row.workspace);
-        // The owner runtime already holds this session when the person
-        // switches back to a turn that waits on an approval: only the active
-        // pointer moves then. switchSession would rebuild a harness mid-turn
-        // and refuse it with 'a turn is running', locking the answer out.
-        if (runtime.session.id !== id) {
-          await runtime.switchSession(id);
-          this.resetPlan(runtime);
-        }
-        this.active = runtime;
-        return { sessionId: runtime.session.id };
+        const owner = this.runtimes.open(row.workspace, id);
+        this.selectRuntime(owner);
+        return { sessionId: owner.session.id };
       }
       case 'delete-session': {
         const id = text(p.id, 'session', 200);
-        const row = runtime.store.get(id);
+        const row = this.store.get(id);
         if (!row || row.parent_id) throw Error('session not found');
-        this.assertArchivable(id, row.workspace, 'deleting');
-        const owner = this.runtimes.get(row.workspace);
-        if (owner?.session.id === id) {
-          await owner.newSession();
-          this.resetPlan(owner);
+        const owner =
+          this.runtimes.get(id) ?? this.runtimes.open(row.workspace, id);
+        const owned = new Set([id]);
+        const descendants = this.store.list(undefined, true);
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const child of descendants)
+            if (
+              child.parent_id &&
+              owned.has(child.parent_id) &&
+              !owned.has(child.id)
+            ) {
+              owned.add(child.id);
+              changed = true;
+            }
         }
-        runtime.store.delete(id);
-        this.metadata.set([id], false);
-        return {};
+        if (
+          p.confirmed !== true &&
+          (owner.busy ||
+            owner.jobs.list().some((job) => job.status === 'running') ||
+            [...this.pending.values()].some((pending) =>
+              owned.has(pending.row.sessionId),
+            ))
+        )
+          throw Error(
+            'confirm stopping this session and its tasks before deleting it',
+          );
+        const deletion = this.runtimes.delete(id, {
+          confirmed: p.confirmed === true,
+        });
+        this.publish();
+        await deletion;
+        this.metadata.set([...owned], false);
+        for (const target of owned) {
+          this.streams.delete(target);
+          this.activeRuns.delete(target);
+          this.failures.delete(target);
+          this.notices.delete(target);
+          this.planCompletions.delete(target);
+          this.turns.delete(target);
+          this.turnUsage.delete(target);
+          this.activities.delete(target);
+          this.changes.delete(target);
+          for (const key of this.diffs.keys())
+            if (key.startsWith(`${target}:`)) this.diffs.delete(key);
+          for (const key of this.toolStates.keys())
+            if (key.startsWith(`${target}:`)) this.toolStates.delete(key);
+        }
+        if (this.openRequest && owned.has(this.openRequest.sessionId))
+          this.openRequest = undefined;
+        this.history = this.history.filter(
+          (item) => !owned.has(item.sessionId),
+        );
+        if (this.previous === id) this.previous = null;
+        if (this.workspaceSessions.get(row.workspace) === id)
+          this.workspaceSessions.delete(row.workspace);
+        if (this.active === owner) {
+          const fallback = this.store
+            .list(row.workspace)
+            .find(
+              (item) =>
+                !this.metadata.archivedAt(item.id) &&
+                (this.runtimes.get(item.id) ||
+                  !sessionOccupied(this.home, item.id)),
+            );
+          this.active = fallback
+            ? this.runtimes.open(row.workspace, fallback.id)
+            : this.runtimes.create(row.workspace);
+          this.workspaceSessions.set(row.workspace, this.active.session.id);
+        }
+        return { sessionId: this.active.session.id };
       }
       case 'archive-session': {
         const id = text(p.id, 'session', 200);
@@ -1738,7 +1873,12 @@ export class RuntimeController {
       case 'fork':
       case 'clone':
       case 'select-branch': {
-        if (runtime.busy) throw Error('stop the current turn before branching');
+        if (
+          command.name === 'select-branch' &&
+          (runtime.busy ||
+            runtime.jobs.list().some((job) => job.status === 'running'))
+        )
+          throw Error('stop the current turn before branching');
         const nodes = runtime.store.tree(runtime.session.id);
         const node = p.messageId
           ? nodes.find((node) => node.id === p.messageId)
@@ -1763,7 +1903,9 @@ export class RuntimeController {
             runtime.options.workspace,
             head,
           );
-          await runtime.switchSession(fork.id);
+          const owner = this.runtimes.open(runtime.options.workspace, fork.id);
+          this.selectRuntime(owner);
+          runtime = owner;
           this.previous = previous;
         }
         runtime.policy.setYolo(runtime.session.id, false);
@@ -1785,9 +1927,9 @@ export class RuntimeController {
       case 'set-model': {
         runtime.setModel(text(p.modelId, 'model', 500));
         if (p.saveDefault === true) {
-          const settings = loadSettings(this.home);
-          settings.auth.model = runtime.harness.model.model;
-          saveSettings(settings, this.home);
+          const settings = saveSettingsChange(this.home, (saved) => {
+            saved.auth.model = runtime.harness.model.model;
+          });
           runtime.options.settings.auth.model = settings.auth.model;
         }
         return {};
@@ -1809,12 +1951,9 @@ export class RuntimeController {
         if (
           [...this.runtimes.values()].some(
             (owner) =>
+              owner.isClosing ||
               owner.busy ||
-              owner.jobs
-                .list()
-                .some(
-                  (job) => job.kind === 'agent' && job.status === 'running',
-                ),
+              owner.jobs.list().some((job) => job.status === 'running'),
           )
         )
           throw Error('finish the current turn before changing connection');
@@ -1831,11 +1970,15 @@ export class RuntimeController {
         if (!secret) throw Error('enter the API key for this endpoint');
         saveCredentials({ api_key: secret }, this.home);
         this.keySaved = true;
-        const settings = withConnection(
-          { protocol, base_url: baseUrl, model, api_key_ref: 'api_key' },
-          this.home,
-        );
-        saveSettings(settings, this.home);
+        const settings = saveSettingsChange(this.home, (saved) => {
+          Object.assign(
+            saved,
+            withConnection(
+              { protocol, base_url: baseUrl, model, api_key_ref: 'api_key' },
+              this.home,
+            ),
+          );
+        });
         // The models listed are this endpoint's: what the form's probe found at the URL and
         // kind of API being saved, or none until they are asked for.
         const probed = this.probed;
@@ -1846,15 +1989,13 @@ export class RuntimeController {
             ? [...probed.models]
             : [];
         for (const owner of this.runtimes.values()) {
-          owner.options.settings = {
+          owner.refreshConnection({
             ...owner.options.settings,
             auth: structuredClone(settings.auth),
             initialized: settings.initialized,
             // withConnection empties it when the endpoint changes: it named the old one's models
             enabled_models: [...settings.enabled_models],
-          };
-          owner.options.model = undefined;
-          owner.setModel(model);
+          });
         }
         return {};
       }
@@ -1892,157 +2033,155 @@ export class RuntimeController {
         if (
           [...this.runtimes.values()].some(
             (owner) =>
+              owner.isClosing ||
               owner.busy ||
-              owner.jobs
-                .list()
-                .some(
-                  (job) => job.kind === 'agent' && job.status === 'running',
-                ),
+              owner.jobs.list().some((job) => job.status === 'running'),
           )
         )
           throw Error('stop the current turn before signing out');
         clearCredentials(this.home);
-        const settings = loadSettings(this.home);
-        settings.initialized = false;
-        settings.auth.base_url = '';
-        saveSettings(settings, this.home);
+        const settings = saveSettingsChange(this.home, (saved) => {
+          saved.initialized = false;
+          saved.auth.base_url = '';
+        });
         for (const owner of this.runtimes.values()) {
-          owner.options.settings = structuredClone(settings);
-          owner.options.model = new DisconnectedModel();
-          owner.harness.model = owner.options.model;
+          owner.refreshConnection({
+            ...owner.options.settings,
+            auth: structuredClone(settings.auth),
+            initialized: settings.initialized,
+          });
         }
         return {};
       }
       case 'trust': {
         if (p.enabled !== true)
           throw Error('explicit trust confirmation required');
-        saveSettings(
-          trustFolder(loadSettings(this.home), runtime.options.workspace),
-          this.home,
-        );
+        saveSettingsChange(this.home, (saved) => {
+          Object.assign(saved, trustFolder(saved, runtime.options.workspace));
+        });
         runtime.options.localContext = true;
         await runtime.reloadIntegrations();
         return {};
       }
       case 'save-settings': {
-        const settings = loadSettings(this.home);
         const data = p.settings as Record<string, unknown>;
-        if (!data || typeof data !== 'object' || Array.isArray(data))
-          throw Error('invalid settings');
-        if (
-          data.workspaceFolder !== undefined ||
-          data.oldWorkspaceFolder !== undefined
-        )
-          throw Error(
-            'the default workspace only changes through the native folder dialog',
-          );
-        if (data.theme !== undefined) {
-          if (!['auto', 'light', 'dark'].includes(String(data.theme)))
-            throw Error('invalid theme');
-          settings.theme = data.theme as CircleSettings['theme'];
-        }
-        if (data.hideThinking !== undefined)
-          settings.hide_thinking = flag(data.hideThinking);
-        if (data.updateCheck !== undefined)
-          settings.update_check = flag(data.updateCheck);
-        if (data.defaultModel !== undefined)
-          settings.auth.model = text(data.defaultModel, 'model', 500);
-        if (data.defaultEffort !== undefined) {
-          const value = text(data.defaultEffort, 'effort', 20);
+        const settings = saveSettingsChange(this.home, (settings) => {
+          if (!data || typeof data !== 'object' || Array.isArray(data))
+            throw Error('invalid settings');
           if (
-            ![
-              'default',
-              'minimal',
-              'low',
-              'medium',
-              'high',
-              'xhigh',
-              'max',
-            ].includes(value)
+            data.workspaceFolder !== undefined ||
+            data.oldWorkspaceFolder !== undefined
           )
-            throw Error('invalid effort');
-          settings.default_thinking = value === 'default' ? '' : value;
-        }
-        if (data.doubleEscape !== undefined) {
-          if (!['tree', 'fork', 'none'].includes(String(data.doubleEscape)))
-            throw Error('invalid shortcut');
-          settings.double_escape =
-            data.doubleEscape as CircleSettings['double_escape'];
-        }
-        for (const [ui, core] of [
-          ['enabledModels', 'enabled_models'],
-          ['credentialFiles', 'credential_files'],
-        ] as const)
-          if (data[ui] !== undefined) {
+            throw Error(
+              'the default workspace only changes through the native folder dialog',
+            );
+          if (data.theme !== undefined) {
+            if (!['auto', 'light', 'dark'].includes(String(data.theme)))
+              throw Error('invalid theme');
+            settings.theme = data.theme as CircleSettings['theme'];
+          }
+          if (data.hideThinking !== undefined)
+            settings.hide_thinking = flag(data.hideThinking);
+          if (data.updateCheck !== undefined)
+            settings.update_check = flag(data.updateCheck);
+          if (data.defaultModel !== undefined)
+            settings.auth.model = text(data.defaultModel, 'model', 500);
+          if (data.defaultEffort !== undefined) {
+            const value = text(data.defaultEffort, 'effort', 20);
             if (
-              !Array.isArray(data[ui]) ||
-              !(data[ui] as unknown[]).every(
-                (item) => typeof item === 'string' && item.length < 1000,
-              )
+              ![
+                'default',
+                'minimal',
+                'low',
+                'medium',
+                'high',
+                'xhigh',
+                'max',
+              ].includes(value)
             )
-              throw Error('invalid settings list');
-            settings[core] = data[ui] as string[];
+              throw Error('invalid effort');
+            settings.default_thinking = value === 'default' ? '' : value;
           }
-        if (data.variables !== undefined) {
-          if (
-            !data.variables ||
-            typeof data.variables !== 'object' ||
-            Array.isArray(data.variables)
-          )
-            throw Error('invalid variables');
-          const variables: Record<string, string> = {};
-          for (const [name, value] of Object.entries(data.variables)) {
-            if (!VARIABLE_NAME.test(name))
-              throw Error(
-                'a variable name is capital letters, digits and _, starting with a letter',
-              );
-            // One name, one value: %NAME% must not mean two things
-            if (secretNames(this.home).includes(name))
-              throw Error(`${name} is already a secret`);
-            variables[name] = text(value, 'variable value', 2000);
+          if (data.doubleEscape !== undefined) {
+            if (!['tree', 'fork', 'none'].includes(String(data.doubleEscape)))
+              throw Error('invalid shortcut');
+            settings.double_escape =
+              data.doubleEscape as CircleSettings['double_escape'];
           }
-          settings.variables = variables;
-        }
-        if (p.mcp !== undefined) {
-          if (!Array.isArray(p.mcp)) throw Error('invalid MCP settings');
-          settings.mcp_servers = p.mcp.map((entry) => {
-            if (!entry || typeof entry !== 'object')
-              throw Error('invalid MCP server');
-            const row = entry as Record<string, unknown>;
-            const transport = text(row.transport, 'transport', 50);
+          for (const [ui, core] of [
+            ['enabledModels', 'enabled_models'],
+            ['credentialFiles', 'credential_files'],
+          ] as const)
+            if (data[ui] !== undefined) {
+              if (
+                !Array.isArray(data[ui]) ||
+                !(data[ui] as unknown[]).every(
+                  (item) => typeof item === 'string' && item.length < 1000,
+                )
+              )
+                throw Error('invalid settings list');
+              settings[core] = data[ui] as string[];
+            }
+          if (data.variables !== undefined) {
             if (
-              !['stdio', 'sse', 'streamable_http', 'websocket'].includes(
+              !data.variables ||
+              typeof data.variables !== 'object' ||
+              Array.isArray(data.variables)
+            )
+              throw Error('invalid variables');
+            const variables: Record<string, string> = {};
+            for (const [name, value] of Object.entries(data.variables)) {
+              if (!VARIABLE_NAME.test(name))
+                throw Error(
+                  'a variable name is capital letters, digits and _, starting with a letter',
+                );
+              // One name, one value: %NAME% must not mean two things
+              if (secretNames(this.home).includes(name))
+                throw Error(`${name} is already a secret`);
+              variables[name] = text(value, 'variable value', 2000);
+            }
+            settings.variables = variables;
+          }
+          if (p.mcp !== undefined) {
+            if (!Array.isArray(p.mcp)) throw Error('invalid MCP settings');
+            settings.mcp_servers = p.mcp.map((entry) => {
+              if (!entry || typeof entry !== 'object')
+                throw Error('invalid MCP server');
+              const row = entry as Record<string, unknown>;
+              const transport = text(row.transport, 'transport', 50);
+              if (
+                !['stdio', 'sse', 'streamable_http', 'websocket'].includes(
+                  transport,
+                )
+              )
+                throw Error('invalid transport');
+              return {
+                ...settings.mcp_servers.find(
+                  (saved) =>
+                    saved.name === row.name || (row.id && saved.id === row.id),
+                ),
+                id: text(row.id ?? row.name, 'server id', 200),
+                name: text(row.name, 'server name', 100),
                 transport,
-              )
-            )
-              throw Error('invalid transport');
-            return {
-              ...settings.mcp_servers.find(
-                (saved) =>
-                  saved.name === row.name || (row.id && saved.id === row.id),
-              ),
-              id: text(row.id ?? row.name, 'server id', 200),
-              name: text(row.name, 'server name', 100),
-              transport,
-              command: text(row.command ?? '', 'command', 4000),
-              args: splitArguments(text(row.args ?? '', 'args', 4000)),
-              url: text(row.url ?? '', 'url', 4000),
-              enabled: flag(row.enabled),
-            };
-          });
-        }
-        if (p.extensions !== undefined) {
-          if (!Array.isArray(p.extensions)) throw Error('invalid extensions');
-          for (const row of p.extensions as {
-            name: string;
-            enabled: boolean;
-          }[])
-            settings.extensions[text(row.name, 'extension', 100)] = {
-              ...settings.extensions[row.name],
-              enabled: flag(row.enabled),
-            };
-        }
-        saveSettings(settings, this.home);
+                command: text(row.command ?? '', 'command', 4000),
+                args: splitArguments(text(row.args ?? '', 'args', 4000)),
+                url: text(row.url ?? '', 'url', 4000),
+                enabled: flag(row.enabled),
+              };
+            });
+          }
+          if (p.extensions !== undefined) {
+            if (!Array.isArray(p.extensions)) throw Error('invalid extensions');
+            for (const row of p.extensions as {
+              name: string;
+              enabled: boolean;
+            }[])
+              settings.extensions[text(row.name, 'extension', 100)] = {
+                ...settings.extensions[row.name],
+                enabled: flag(row.enabled),
+              };
+          }
+        });
         Object.assign(runtime.options.settings, {
           theme: settings.theme,
           hide_thinking: settings.hide_thinking,
@@ -2115,7 +2254,11 @@ export class RuntimeController {
         if (!this.options.model && !isReady(runtime.options.settings))
           throw Error('connect an endpoint before compacting');
         if (runtime.busy) throw Error('a turn is running');
-        this.track(runtime.compact(text(p.hint ?? '', 'hint', 10000)));
+        this.track(
+          runtime.compact(text(p.hint ?? '', 'hint', 10000)),
+          runtime,
+          true,
+        );
         return {};
       case 'export': {
         const format = p.format ?? 'jsonl';
@@ -2139,12 +2282,19 @@ export class RuntimeController {
           name: `${runtime.session.id}.${format}`,
         };
       }
-      case 'import':
+      case 'import': {
+        const previous = runtime.session.id;
         await runtime.importSession(
           text(p.content, 'session export', 4_000_000),
         );
+        this.runtimes.reindex(runtime, previous);
+        this.workspaceSessions.set(
+          runtime.options.workspace,
+          runtime.session.id,
+        );
         this.resetPlan(runtime);
         return { sessionId: runtime.session.id };
+      }
       case 'stop-job': {
         const id = text(p.id, 'job', 200);
         const jobId = id.split(':').at(-1)!;
@@ -2178,8 +2328,7 @@ export class RuntimeController {
       case 'open-workspace': {
         const workspace = realpathSync(text(p.path, 'workspace', 8000));
         const owner = this.runtime(workspace);
-        this.previous = runtime.session.id;
-        this.active = owner;
+        this.selectRuntime(owner);
         return {
           workspaceId: identity(workspace),
           sessionId: owner.session.id,
@@ -2203,8 +2352,7 @@ export class RuntimeController {
         });
         this.defaultFolder = undefined;
         const owner = this.runtime(workspace);
-        this.previous = runtime.session.id;
-        this.active = owner;
+        this.selectRuntime(owner);
         return {
           workspaceId: identity(workspace),
           sessionId: owner.session.id,
@@ -2247,7 +2395,16 @@ export class RuntimeController {
           await extension.handler(args, {
             workspace: runtime.options.workspace,
             toast: (message) => {
-              this.error = message;
+              const id = runtime.session.id;
+              if (this.runtimes.lifecycle(id) !== 'open') return;
+              const rows = this.notices.get(id) ?? [];
+              rows.push({
+                id: `extension-${randomUUID()}`,
+                after: this.store.get(id)?.head ?? null,
+                text: message,
+                at: new Date().toISOString(),
+              });
+              this.notices.set(id, rows);
               this.publish();
             },
             append: (content) =>
@@ -2255,7 +2412,7 @@ export class RuntimeController {
                 { id: randomUUID(), role: 'assistant', content },
               ]),
             sendUserMessage: (prompt) => {
-              this.track(runtime.harness.run(prompt));
+              this.track(runtime.harness.run(prompt), runtime);
             },
           });
           return {};
@@ -2402,10 +2559,11 @@ export class RuntimeController {
         saveSecret(this.home, name, value);
         if (previous && previous !== name) removeSecret(this.home, previous);
         if (replaces !== undefined) {
-          settings.variables = variables;
-          saveSettings(settings, this.home);
+          const saved = saveSettingsChange(this.home, (current) => {
+            delete current.variables[replaces];
+          });
           for (const owner of this.runtimes.values())
-            owner.options.settings.variables = { ...variables };
+            owner.options.settings.variables = { ...saved.variables };
         }
         this.secretsChanged();
         return {};
@@ -2452,16 +2610,18 @@ export class RuntimeController {
         return {};
     }
   }
-  async close() {
-    if (this.closing) return;
+  close(): Promise<void> {
+    if (!this.closePromise) this.closePromise = this.closeAll();
+    return this.closePromise;
+  }
+  private async closeAll(): Promise<void> {
     this.persistLocation();
     this.closing = true;
     for (const pending of this.pending.values())
       pending.reject(new Error('runtime closed'));
     this.pending.clear();
-    await Promise.all(
-      [...this.runtimes.values()].map((runtime) => runtime.close()),
-    );
+    await this.runtimes.close();
     await Promise.allSettled(this.tasks);
+    this.store.close();
   }
 }

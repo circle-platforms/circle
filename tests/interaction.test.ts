@@ -76,7 +76,11 @@ async function session(
     ui.offSignals?.();
     if (ui.flashTimer) clearTimeout(ui.flashTimer);
     ui.input.close();
-    await runtime.close();
+    for (const view of ui.views.values()) view.interactions.close();
+    await (ui.sessions?.close() ?? runtime.close());
+    await Promise.all(
+      [...ui.browsers.values()].map((browser: any) => browser.close()),
+    );
   });
   const key = (name: string, char = ''): void =>
     ui.handle({ type: 'key', key: name, char });
@@ -598,9 +602,11 @@ test('a session from 0.5.0 keeps its pastes: /fork and /tree put them back and t
   ui.handle({ type: 'key', key: 'enter', char: '' });
   await until(() => app.state.draft === '[Pasted text #2 +3 lines] explain');
   ui.handle({ type: 'key', key: 'enter', char: '' });
-  await until(() => model.requests.length === 1 && !runtime.busy);
+  await until(() => model.requests.length === 1 && !app.runtime!.busy);
   assert.equal(model.requests[0]!.messages.at(-1)!.content, `${paste} explain`);
-  assert.deepEqual(runtime.harness.messages.at(-2)!.pastes, { '2': paste });
+  assert.deepEqual(app.runtime!.harness.messages.at(-2)!.pastes, {
+    '2': paste,
+  });
 });
 
 test('esc on the /tree label line leaves the label as it was; enter on an empty one removes it', async (t) => {

@@ -56,6 +56,13 @@ import {
 
 export interface CommandHost {
   readonly runtime: AgentRuntime;
+  createSession?(): Promise<void>;
+  openSession?(id: string): Promise<void>;
+  deleteSession?(id: string): Promise<void>;
+  selected?(): boolean;
+  refreshConnection?(): void;
+  sessionStatus?(id: string): string | undefined;
+  importSession?(text: string): Promise<void>;
   readonly home: string;
   readonly workspace: string;
   settings: CircleSettings;
@@ -114,6 +121,11 @@ const BUSY_OK = new Set([
   'tree',
   'jobs',
   'logout',
+  'new',
+  'resume',
+  'continue',
+  'fork',
+  'clone',
 ]);
 // These only show a list when they have no argument. With one they change what the turn
 // works with: `/skill <name>` writes into the conversation the turn is writing, and
@@ -958,7 +970,8 @@ async function importSession(host: CommandHost, args: string): Promise<void> {
   const previous = runtime.session.id;
   if (extname(path).toLowerCase() === '.jsonl') {
     try {
-      await runtime.importSession(text);
+      if (host.importSession) await host.importSession(text);
+      else await runtime.importSession(text);
     } catch (error) {
       host.fail(
         `${basename(path)} is not a Circle JSONL export: ${reason(error)}`,
@@ -969,18 +982,20 @@ async function importSession(host: CommandHost, args: string): Promise<void> {
     host.undo.showAll();
     host.state.notices = [];
     host.state.noticeAnchors = [];
-    host.notice(`Imported ${path} → ${runtime.session.id}`);
+    host.notice(`Imported ${path} → ${host.runtime.session.id}`);
     return;
   }
   // Any other file: its text on screen, and the start of it for the model.
   host.undo.push(current(host));
-  await runtime.newSession();
+  if (host.createSession) await host.createSession();
+  else await runtime.newSession();
+  const imported = host.runtime;
   host.previousSession = previous;
-  runtime.store.rename(
-    runtime.session.id,
+  imported.store.rename(
+    imported.session.id,
     basename(path, extname(path)).slice(0, 60),
   );
-  runtime.store.append(runtime.session.id, [
+  imported.store.append(imported.session.id, [
     {
       id: randomUUID(),
       role: 'user',
@@ -1196,6 +1211,7 @@ function logout(host: CommandHost): void {
     saved.auth = defaultAuth();
     saved.initialized = false;
   });
+  host.refreshConnection?.();
   host.notice(
     'Signed out · credentials cleared · /login or `circle --init` before the next turn',
   );
@@ -1351,9 +1367,10 @@ function redrawn(host: CommandHost, note: string): void {
 async function newSession(host: CommandHost): Promise<void> {
   const runtime = host.runtime;
   host.previousSession = runtime.session.id;
-  await runtime.newSession();
+  if (host.createSession) await host.createSession();
+  else await runtime.newSession();
   host.state.usage = emptyUsage();
-  redrawn(host, `New session ${runtime.session.id}`);
+  redrawn(host, `New session ${host.runtime.session.id}`);
 }
 async function continueSession(host: CommandHost): Promise<void> {
   const runtime = host.runtime;
@@ -1363,10 +1380,10 @@ async function continueSession(host: CommandHost): Promise<void> {
     return;
   }
   host.previousSession = runtime.session.id;
-  await runtime.switchSession(previous);
-  redrawn(
-    host,
-    `Continued ${previous} · ${(runtime.store.get(previous)?.title || previous).slice(0, 40)}`,
+  if (host.openSession) await host.openSession(previous);
+  else await runtime.switchSession(previous);
+  host.notice(
+    `Continued ${previous} · ${(host.runtime.store.get(previous)?.title || previous).slice(0, 40)}`,
   );
 }
 // Open a saved session. One from another folder is copied into this one; the original stays.
@@ -1374,13 +1391,13 @@ async function openSession(host: CommandHost, id: string): Promise<void> {
   const runtime = host.runtime;
   const source = runtime.store.get(id);
   const previous = runtime.session.id;
-  await runtime.switchSession(id);
+  if (host.openSession) await host.openSession(id);
+  else await runtime.switchSession(id);
   host.previousSession = previous;
-  redrawn(
-    host,
-    runtime.session.id === id
+  host.notice(
+    host.runtime.session.id === id
       ? `Resumed ${id} · ${(source?.title || id).slice(0, 40)}`
-      : `Forked ${id} from ${shortPath(source?.workspace ?? '')} → ${runtime.session.id}`,
+      : `Forked ${id} from ${shortPath(source?.workspace ?? '')} → ${host.runtime.session.id}`,
   );
 }
 // /resume [n|id]: a list of this folder's sessions, or one by its number there or the end of
@@ -1430,6 +1447,9 @@ function sessionList(host: CommandHost, everywhere: boolean, query = ''): void {
       label: session.title || '(untitled)',
       meta:
         sessionAge(session.updated) +
+        (host.sessionStatus?.(session.id)
+          ? ` · ${host.sessionStatus(session.id)}`
+          : '') +
         (session.workspace === here ? '' : ` · ${pathTail(session.workspace)}`),
       search: `${session.id} ${session.workspace}`,
       current: session.id === runtime.session.id,
@@ -1459,17 +1479,14 @@ function sessionList(host: CommandHost, everywhere: boolean, query = ''): void {
         },
         'ctrl+d': (item) => {
           if (!item) return;
-          if (item.key === runtime.session.id) {
-            host.flash('The session you are in cannot be deleted');
-            return;
-          }
           const label = item.label.slice(0, 40);
           host.state.picker?.confirm(
-            `Delete “${label}” and its messages?`,
-            () => {
-              runtime.store.delete(item.key);
+            `${host.sessionStatus?.(item.key) ? 'Stop and delete' : 'Delete'} “${label}” and its messages?`,
+            async () => {
+              if (host.deleteSession) await host.deleteSession(item.key);
+              else runtime.store.delete(item.key);
               if (host.previousSession === item.key) host.previousSession = '';
-              again();
+              if (host.selected?.() !== false) again();
               host.flash(`Deleted ${label}`);
             },
           );
@@ -1498,8 +1515,14 @@ async function tree(
       host.flash('Already here');
       return;
     }
-    // Going back stops the running turn first, as esc would.
-    if (runtime.busy) await runtime.cancel();
+    if (
+      !fork &&
+      (runtime.busy ||
+        runtime.jobs.list().some((job) => job.status === 'running'))
+    )
+      throw new Error(
+        'change this branch after the current turn and background jobs finish',
+      );
     const point = user ? checkpoint.parent : checkpoint.id;
     if (fork) {
       const session = runtime.store.fork(
@@ -1508,7 +1531,8 @@ async function tree(
         point,
       );
       host.previousSession = runtime.session.id;
-      await runtime.switchSession(session.id);
+      if (host.openSession) await host.openSession(session.id);
+      else await runtime.switchSession(session.id);
     } else runtime.store.select(runtime.session.id, point);
     if (user)
       host.setDraft(
@@ -1521,8 +1545,8 @@ async function tree(
         ? `Back ${user ? 'before your message' : 'after that answer'} · ` +
             'your next message starts a new branch · /tree shows them all'
         : named
-          ? `Forked from ${key} → ${runtime.session.id}`
-          : `Forked → ${runtime.session.id} · your message is back in the box`,
+          ? `Forked from ${key} → ${host.runtime.session.id}`
+          : `Forked → ${host.runtime.session.id} · your message is back in the box`,
     );
   };
   // /fork <id>: straight from that message.
@@ -1758,7 +1782,8 @@ async function clone(host: CommandHost): Promise<void> {
   const runtime = host.runtime;
   const session = runtime.store.fork(runtime.session.id, host.workspace);
   host.previousSession = runtime.session.id;
-  await runtime.switchSession(session.id);
+  if (host.openSession) await host.openSession(session.id);
+  else await runtime.switchSession(session.id);
   redrawn(host, `Cloned this branch → ${session.id}`);
 }
 
