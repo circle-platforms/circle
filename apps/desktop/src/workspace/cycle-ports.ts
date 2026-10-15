@@ -484,17 +484,29 @@ export function createWorkspaceCyclePorts(
         withResource: options.withResource,
       });
       const after = await (await git(owner.integration.path)).snapshot();
+      const accepted = (check: TaskVerificationCheck) =>
+        check.status === 'passed' &&
+        Boolean(check.evidence.trim()) &&
+        (check.source !== 'command' ||
+          (Boolean(check.command?.trim()) && check.exitCode === 0));
       const evidence = checks.map((check) => ({
         criterion: check.criterion,
-        status: check.status,
+        status:
+          check.status === 'passed' && !accepted(check)
+            ? ('needs_review' as const)
+            : check.status,
         source: check.source,
-        detail: redacted(check.evidence),
+        detail: redacted(
+          check.status === 'passed' && !accepted(check)
+            ? 'acceptance requires nonempty evidence and an identified command with exit code zero when command-based'
+            : check.evidence,
+        ),
       }));
       return {
         passed:
           snapshot.revision === after.revision &&
           checks.length > 0 &&
-          checks.every((check) => check.status === 'passed') &&
+          checks.every(accepted) &&
           cycle.acceptanceCriteria.every((criterion) =>
             checks.some(
               (check) =>

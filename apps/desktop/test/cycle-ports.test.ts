@@ -822,3 +822,80 @@ test('requesting review rechecks the candidate after CI and restores draft if th
     'an already-ready verified candidate is idempotent',
   );
 });
+
+test('cycle verification rejects empty evidence and contradictory command success claims', async (t) => {
+  const f = await fixture(t),
+    service = new TaskService({
+      workspace: f.workspace,
+      dataDir: join(f.dataDir, 'tasks'),
+      identity,
+      autoStart: false,
+      emit: () => {},
+      createRuntime: () => {
+        throw Error('must not run');
+      },
+    });
+  cleanup(t, () => service.close());
+  const base = {
+    workspace: f.workspace,
+    dataDir: join(f.dataDir, 'ports'),
+    sessionId: 'trusted-session',
+    getTaskService: () => service,
+    identity,
+    withResource: async <T>(
+      _resource: 'build' | 'ui' | 'browser',
+      run: () => Promise<T>,
+    ) => run(),
+  };
+  const cycle: CycleRecord = {
+    id: 'contradictory-evidence',
+    workspace: f.workspace,
+    title: 'Require real evidence',
+    body: 'Do not trust status alone',
+    acceptanceCriteria: [criterion],
+    state: 'working',
+    attempt: 0,
+    taskIds: [],
+    failureCounts: {},
+    updatedAt: new Date().toISOString(),
+  };
+  await createWorkspaceCyclePorts({
+    ...base,
+    verify: async () => [],
+  }).tasks.create(
+    cycle,
+    { kind: 'implementation', prompt: 'Implement' },
+    { operationId: 'create' },
+  );
+  for (const check of [
+    {
+      criterion,
+      status: 'passed' as const,
+      source: 'inspection' as const,
+      evidence: '   ',
+    },
+    {
+      criterion,
+      status: 'passed' as const,
+      source: 'command' as const,
+      evidence: 'actual command failed',
+      command: 'node oracle.cjs',
+      exitCode: 1,
+    },
+    {
+      criterion,
+      status: 'passed' as const,
+      source: 'command' as const,
+      evidence: 'command identity was not recorded',
+      exitCode: 0,
+    },
+  ]) {
+    const result = await createWorkspaceCyclePorts({
+      ...base,
+      verify: async () => [check],
+    }).verify(cycle);
+    assert.equal(result.passed, false);
+    assert.equal(result.evidence[0].status, 'needs_review');
+    assert.match(result.evidence[0].detail, /acceptance requires/);
+  }
+});
