@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { execFileSync } from 'node:child_process';
 import { resetDesktopOutput } from '../scripts/build-output.mjs';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -70,38 +71,31 @@ test('staged native runtime includes target addons, executable helper and TypeSc
       )
     ).size > 1000,
   );
-  const pty = require('node-pty');
-  assert.equal(typeof pty.spawn, 'function');
-  // Linux uses forkpty directly and has no spawn-helper executable. Exercise
-  // the copied addon instead of asserting a macOS-only implementation detail.
-  const terminal = pty.spawn(
+  // The native addon must be loaded in a child: Windows holds its DLL open
+  // until the loading process exits, even after every PTY has been released.
+  const cleanupPath = fileURLToPath(
+    new URL('../src/workspace/pty-exit-cleanup.mjs', import.meta.url),
+  );
+  const output = execFileSync(
     process.execPath,
     [
       '-e',
-      "console.log('STAGED_TTY:'+process.stdin.isTTY+':'+process.stdout.isTTY)",
+      `
+    const assert = require('node:assert/strict');
+    const load = require('node:module').createRequire(${JSON.stringify(join(dist, 'probe.cjs'))});
+    const pty = load('node-pty');
+    const {installWindowsPtyExitCleanup} = require(${JSON.stringify(cleanupPath)});
+    const terminal = pty.spawn(process.execPath, ['-e', "console.log('STAGED_TTY:'+process.stdin.isTTY+':'+process.stdout.isTTY)"], {cwd:${JSON.stringify(dist)},cols:80,rows:24});
+    installWindowsPtyExitCleanup(terminal,{version:load('node-pty/package.json').version});
+    let output='';
+    terminal.onData(chunk=>output+=chunk);
+    const timer=setTimeout(()=>{terminal.kill();throw Error('staged PTY did not exit');},8000);
+    terminal.onExit(({exitCode})=>{clearTimeout(timer);assert.equal(exitCode,0);assert.match(output,/STAGED_TTY:true:true/);console.log('STAGED_PTY_RELEASED');});
+  `,
     ],
-    { cwd: dist, cols: 80, rows: 24 },
+    { encoding: 'utf8', timeout: 12000 },
   );
-  let output = '';
-  terminal.onData((chunk) => {
-    output += chunk;
-  });
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      terminal.kill();
-      reject(Error('staged PTY did not exit'));
-    }, 8000);
-    terminal.onExit(({ exitCode }) => {
-      clearTimeout(timer);
-      try {
-        assert.equal(exitCode, 0);
-        assert.match(output, /STAGED_TTY:true:true/);
-        resolve();
-      } catch (error) {
-        reject(error);
-      }
-    });
-  });
+  assert.match(output, /STAGED_PTY_RELEASED/);
   if (process.platform === 'darwin') {
     const helper = await stat(
       join(
