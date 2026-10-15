@@ -392,14 +392,15 @@ export function App() {
               target.leafId = messageId;
             });
             onSession();
-          } else
-            runtime.change((state) => {
-              const target = state.sessions.find(
-                (session) => session.id === originSessionId,
-              );
-              if (target && target.lifecycle !== 'deleting')
-                target.attachments.push(nativeAttachment(item));
-            });
+          } else {
+            const target = runtime
+              .getSnapshot()
+              .sessions.find((session) => session.id === originSessionId);
+            if (target && target.lifecycle !== 'deleting')
+              runtime.updateSessionView(originSessionId, {
+                attachments: [...target.attachments, nativeAttachment(item)],
+              });
+          }
         }
       } catch (error) {
         if (runtime.getSnapshot().activeSessionId !== originSessionId) return;
@@ -504,13 +505,13 @@ export function App() {
             size: item.size,
             truncated: kind === 'file' && item.size > 256000,
           };
-          runtime.change((state) => {
-            const target = state.sessions.find(
-              (session) => session.id === originSessionId,
-            );
-            if (target && target.lifecycle !== 'deleting')
-              target.attachments.push(attachment);
-          });
+          const target = runtime
+            .getSnapshot()
+            .sessions.find((session) => session.id === originSessionId);
+          if (target && target.lifecycle !== 'deleting')
+            runtime.updateSessionView(originSessionId, {
+              attachments: [...target.attachments, attachment],
+            });
         }
       } catch (error) {
         if (runtime.getSnapshot().activeSessionId !== originSessionId) return;
@@ -717,76 +718,78 @@ export function App() {
       />
     </NativeResourceBoundary>
   );
-  const searchItems = [
-    ...[
-      { id: 'new', label: t('new session') },
-      { id: 'compact', label: t('compact context') },
-      { id: 'fork', label: t('fork') },
-      { id: 'export', label: t('export') },
-      { id: 'name', label: t('rename') },
-    ].map((command) => ({
-      id: 'command-' + command.id,
-      label: command.label,
-      detail: t('command'),
-      run: () => act(() => runtime.command(command.id)),
-    })),
-    ...pluginPages.map(({ page }) => ({
-      id: 'plugin-' + page.id,
-      label: page.title,
-      detail: t('platform plugin'),
-      run: () => navigate('/page/' + page.id),
-    })),
-    ...snapshot.sessions.map((item) => ({
-      id: item.id,
-      label: sessionTitle(item.title),
-      detail: t('session · {workspace}', {
-        workspace: String(
-          snapshot.workspaces.find(
-            (workspace) => workspace.id === item.workspaceId,
-          )?.name,
-        ),
-      }),
-      run: () => {
-        runtime.selectSession(item.id);
-        onSession();
-      },
-    })),
-    ...NAVIGATION.map((item) => ({
-      id: item.id,
-      label: item.label(),
-      detail: t('page'),
-      run: () => navigate('/page/' + item.id),
-    })),
-    ...snapshot.files
-      .filter((item) => item.workspaceId === session.workspaceId)
-      .map((item) => ({
-        id: item.id,
-        label: item.path,
-        detail: t('file'),
-        run: () => onFile(item.path),
-      })),
-    ...snapshot.sessions.flatMap((item) =>
-      item.messages
-        .filter((message) => message.role === 'user')
-        .map((message) => ({
-          id: message.id,
-          label: message.text,
-          detail: t('message history'),
+  const searchItems = searchOpen
+    ? [
+        ...[
+          { id: 'new', label: t('new session') },
+          { id: 'compact', label: t('compact context') },
+          { id: 'fork', label: t('fork') },
+          { id: 'export', label: t('export') },
+          { id: 'name', label: t('rename') },
+        ].map((command) => ({
+          id: 'command-' + command.id,
+          label: command.label,
+          detail: t('command'),
+          run: () => act(() => runtime.command(command.id)),
+        })),
+        ...pluginPages.map(({ page }) => ({
+          id: 'plugin-' + page.id,
+          label: page.title,
+          detail: t('platform plugin'),
+          run: () => navigate('/page/' + page.id),
+        })),
+        ...snapshot.sessions.map((item) => ({
+          id: item.id,
+          label: sessionTitle(item.title),
+          detail: t('session · {workspace}', {
+            workspace: String(
+              snapshot.workspaces.find(
+                (workspace) => workspace.id === item.workspaceId,
+              )?.name,
+            ),
+          }),
           run: () => {
-            runtime.change((state) => {
-              currentSession(state).draft = message.text;
-            });
+            runtime.selectSession(item.id);
             onSession();
           },
         })),
-    ),
-  ].filter(
-    (item) =>
-      (!quickOpen || item.detail === t('file')) &&
-      (item.label + ' ' + item.detail)
-        .toLowerCase()
-        .includes(search.toLowerCase()),
-  );
+        ...NAVIGATION.map((item) => ({
+          id: item.id,
+          label: item.label(),
+          detail: t('page'),
+          run: () => navigate('/page/' + item.id),
+        })),
+        ...snapshot.files
+          .filter((item) => item.workspaceId === session.workspaceId)
+          .map((item) => ({
+            id: item.id,
+            label: item.path,
+            detail: t('file'),
+            run: () => onFile(item.path),
+          })),
+        ...snapshot.sessions.flatMap((item) =>
+          item.messages
+            .filter((message) => message.role === 'user')
+            .map((message) => ({
+              id: message.id,
+              label: message.text,
+              detail: t('message history'),
+              run: () => {
+                runtime.change((state) => {
+                  currentSession(state).draft = message.text;
+                });
+                onSession();
+              },
+            })),
+        ),
+      ].filter(
+        (item) =>
+          (!quickOpen || item.detail === t('file')) &&
+          (item.label + ' ' + item.detail)
+            .toLowerCase()
+            .includes(search.toLowerCase()),
+      )
+    : [];
   return (
     <SourceNavigation onFile={onFile}>
       <Tooltip.Provider delayDuration={300}>

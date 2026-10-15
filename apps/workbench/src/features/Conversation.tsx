@@ -3,7 +3,7 @@ import { planVisible } from '../../../../src/plan_state';
 import { agentActivityText } from '../model/activity';
 import { usePlugins } from '../plugins/context';
 import { PluginBoundary } from '../plugins/Boundary';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUp,
   ChevronDown,
@@ -151,7 +151,10 @@ export function Conversation({
   const workspace = snapshot.workspaces.find(
     (item) => item.id === session.workspaceId,
   )!;
-  const messages = visibleMessages(session);
+  const messages = useMemo(
+    () => visibleMessages(session),
+    [session.messages, session.branchIds, session.hiddenIds, session.leafId],
+  );
   const composerWritable =
     !session.archivedAt &&
     session.lifecycle !== 'deleting' &&
@@ -212,28 +215,33 @@ export function Conversation({
         reader.onerror = () => reject(reader.error);
         reader.readAsDataURL(file);
       });
-      perform(() =>
-        runtime.change((state) => {
-          const target = state.sessions.find((item) => item.id === session.id);
-          if (!target || target.lifecycle === 'deleting') return;
-          const count =
-            target.attachments.filter((item) => item.kind === 'image').length +
-            1;
-          target.attachments.push({
-            id: crypto.randomUUID(),
-            name:
-              file.name && file.name !== 'image.png'
-                ? file.name
-                : `pasted image ${count}.png`,
-            kind: file.type === 'application/pdf' ? 'document' : 'image',
-            content,
-            mime: file.type,
-            size: file.size,
-          });
-        }),
-      );
+      perform(() => {
+        const target = runtime
+          .getSnapshot()
+          .sessions.find((item) => item.id === session.id);
+        if (!target || target.lifecycle === 'deleting') return;
+        const count =
+          target.attachments.filter((item) => item.kind === 'image').length + 1;
+        runtime.updateSessionView(session.id, {
+          attachments: [
+            ...target.attachments,
+            {
+              id: crypto.randomUUID(),
+              name:
+                file.name && file.name !== 'image.png'
+                  ? file.name
+                  : `pasted image ${count}.png`,
+              kind: file.type === 'application/pdf' ? 'document' : 'image',
+              content,
+              mime: file.type,
+              size: file.size,
+            },
+          ],
+        });
+      });
     }
-    input.current?.focus();
+    if (runtime.getSnapshot().activeSessionId === session.id)
+      input.current?.focus();
   };
   const lastEscape = useRef(0);
   const savedDraft = useRef('');
@@ -247,11 +255,17 @@ export function Conversation({
   }, [session.id]);
   const latestView = useRef({ session, onDialog, onPanel });
   latestView.current = { session, onDialog, onPanel };
-  const matches = messages.filter((message) =>
-    (message.text + ' ' + (message.tool?.output ?? ''))
-      .toLowerCase()
-      .replace(/\s+/g, ' ')
-      .includes(find.toLowerCase().replace(/\s+/g, ' ')),
+  const matches = useMemo(
+    () =>
+      !find
+        ? []
+        : messages.filter((message) =>
+            (message.text + ' ' + (message.tool?.output ?? ''))
+              .toLowerCase()
+              .replace(/\s+/g, ' ')
+              .includes(find.toLowerCase().replace(/\s+/g, ' ')),
+          ),
+    [messages, find],
   );
   const slash = session.draft.startsWith('/') && !session.draft.includes(' ');
   const mention = session.draft.match(/(?:^|\s)@([^\s]*)$/)?.[1];
@@ -292,11 +306,9 @@ export function Conversation({
           .slice(0, 7)
       : [];
   const setDraft = (value: string) =>
-    perform(() =>
-      runtime.change((state) => {
-        currentSession(state).draft = value;
-      }),
-    );
+    perform(() => {
+      runtime.updateSessionView(session.id, { draft: value });
+    });
   const chooseCompletion = (index: number, send = false) => {
     const item = completions[index];
     if (!item) return;
@@ -594,7 +606,7 @@ export function Conversation({
   };
   // The turn's clock goes on the row of its latest tools, as Claude's does; before any, on
   // a row of its own. Waiting for you, it stops.
-  const items = groupMessages(messages);
+  const items = useMemo(() => groupMessages(messages), [messages]);
   const clock = pending.length ? undefined : session.turn;
   const asked = items.findLastIndex(
     (item) => item.kind !== 'tools' && item.message.role === 'user',
@@ -1150,18 +1162,19 @@ export function Conversation({
                   event.preventDefault();
                   const id = crypto.randomUUID();
                   const marker = `[pasted text ${session.attachments.filter((file) => file.kind === 'paste').length + 1} · ${text.split('\n').length} lines]`;
-                  perform(() =>
-                    runtime.change((state) => {
-                      const target = currentSession(state);
-                      target.attachments.push({
-                        id,
-                        name: marker,
-                        kind: 'paste',
-                        content: text,
-                      });
-                      target.draft += marker;
-                    }),
-                  );
+                  perform(() => {
+                    const target = runtime
+                      .getSnapshot()
+                      .sessions.find((item) => item.id === session.id);
+                    if (!target || target.lifecycle === 'deleting') return;
+                    runtime.updateSessionView(session.id, {
+                      attachments: [
+                        ...target.attachments,
+                        { id, name: marker, kind: 'paste', content: text },
+                      ],
+                      draft: target.draft + marker,
+                    });
+                  });
                 }
               }}
               onKeyDown={(event) => {
@@ -1298,13 +1311,17 @@ export function Conversation({
                     name={file.name}
                     onClick={() => onPanel('context', file.id)}
                     onRemove={() =>
-                      perform(() =>
-                        runtime.change((state) => {
-                          currentSession(state).attachments = currentSession(
-                            state,
-                          ).attachments.filter((item) => item.id !== file.id);
-                        }),
-                      )
+                      perform(() => {
+                        const target = runtime
+                          .getSnapshot()
+                          .sessions.find((item) => item.id === session.id);
+                        if (target)
+                          runtime.updateSessionView(session.id, {
+                            attachments: target.attachments.filter(
+                              (item) => item.id !== file.id,
+                            ),
+                          });
+                      })
                     }
                   />
                 ))}
