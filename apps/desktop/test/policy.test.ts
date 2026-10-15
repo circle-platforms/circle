@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises';
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  writeFile,
+  symlink,
+  rm,
+} from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -149,6 +156,25 @@ test('workspace grants exclude directory links and reject replaced parent direct
       /outside the selected workspace/,
     );
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+test('workspace grants still open when a subdirectory cannot be read', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-grant-unreadable-'));
+  const hidden = join(root, 'selected', 'hidden');
+  try {
+    const selected = join(root, 'selected');
+    await mkdir(hidden, { recursive: true });
+    await writeFile(join(selected, 'note.md'), 'yes');
+    await writeFile(join(hidden, 'secret.txt'), 'nope');
+    await chmod(hidden, 0);
+    const workspace = await new WorkspaceGrants().open(selected);
+    const paths = workspace.files.map((file) => file.path);
+    assert.ok(paths.includes('note.md'));
+    if (typeof process.getuid === 'function' && process.getuid() !== 0)
+      assert.equal(paths.includes('hidden/secret.txt'), false);
+  } finally {
+    await chmod(hidden, 0o700);
     await rm(root, { recursive: true, force: true });
   }
 });

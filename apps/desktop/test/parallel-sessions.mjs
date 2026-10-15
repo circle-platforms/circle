@@ -154,6 +154,7 @@ try {
   const select = async (id) => {
     await page
       .locator(`.sidebar .session-link[href="#/session/${id}"]`)
+      .first()
       .click();
     await until(
       async () => (await state()).activeSessionId === id,
@@ -183,6 +184,7 @@ try {
         name: `session actions for ${label}`,
         exact: true,
       })
+      .first()
       .click();
     await page
       .getByRole('menuitem', { name: 'delete session', exact: true })
@@ -224,9 +226,11 @@ try {
     packaged,
   );
   const a = (await state()).activeSessionId;
-  await okay('rename-session', { id: a, title: 'parallel A' });
+  // The home composer reuses this untitled session for the first message.
+  // Naming it first would make that message start a different session.
   await send('A saved baseline');
   await page.getByText('fixture line 80', { exact: true }).waitFor();
+  await okay('rename-session', { id: a, title: 'parallel A' });
   await until(async () => (await session(a)).state === 'idle', 'A saved');
   await send('A hold open');
   await until(
@@ -333,6 +337,7 @@ try {
   assert(pending);
   await page
     .locator(`.sidebar .session-link[href="#/session/${b}"] .attention-dot`)
+    .first()
     .waitFor();
   assert.equal(
     await page.locator('.inline-request').count(),
