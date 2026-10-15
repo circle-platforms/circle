@@ -14,6 +14,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import { activeVersion, pruneVersions } from '../src/install_layout.js';
 import {
   chooseLocation,
@@ -357,9 +358,9 @@ async function startPython(
     started,
     [
       '-e',
-      "process.stdin.resume(); process.stdin.on('end', () => process.exit(0));",
+      "process.stdout.write('R'); process.stdin.resume(); process.stdin.on('end', () => process.exit(0));",
     ],
-    { stdio: ['pipe', 'ignore', 'ignore'] },
+    { stdio: ['pipe', 'pipe', 'ignore'] },
   );
   // Windows cannot delete the folder while the program in it still runs: wait for its exit.
   cleanup(t, async () => {
@@ -368,7 +369,15 @@ async function startPython(
     child.kill();
     await exited;
   });
-  await new Promise((resolve) => child.once('spawn', resolve));
+  await once(child, 'spawn');
+  const [ready] = await once(child.stdout, 'data', {
+    signal: AbortSignal.timeout(15000),
+  });
+  assert.equal(
+    ready.toString(),
+    'R',
+    'the copied program reached its own code',
+  );
   return { prefix, frozen, child, path: windows ? [pathEntry] : [bin] };
 }
 
