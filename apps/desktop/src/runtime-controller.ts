@@ -88,6 +88,7 @@ import { currentNetworkStatus } from '../../../src/net.js';
 import { SessionMetadata } from './session-metadata';
 import { WorkspaceServices } from './workspace/workspace-services';
 import { TaskService } from './workspace/task-service';
+import { createCollaborationTools } from './workspace/collaboration-tools';
 import type { TaskRecord } from './workspace/task-store';
 import type { FileMutations } from '../../../src/file_mutations.js';
 import type { RuntimeCredentialStore } from './runtime-private-channel';
@@ -600,7 +601,8 @@ export class RuntimeController {
     workspace: string,
     ownerSessionId: string,
   ): TaskService {
-    const root = this.trustedWorkspace(workspace);
+    const granted = this.trustedWorkspace(workspace);
+    const root = this.taskWorkspaces.get(granted) ?? granted;
     let service = this.taskServices.get(root);
     if (!service) {
       service = new TaskService({
@@ -621,6 +623,13 @@ export class RuntimeController {
         onRuntimeClosed: (task, runtime) => {
           this.taskRuntimes.delete(task.spec.id);
           this.activeRuns.delete(runtime.session.id);
+          if (this.active === runtime) {
+            this.viewedSessionId = runtime.session.id;
+            const parent = task.spec.sessionId
+              ? this.runtimes.get(task.spec.sessionId)
+              : undefined;
+            this.active = parent ?? [...this.runtimes.values()][0] ?? runtime;
+          }
         },
         emit: (event) => {
           const task = event.taskId
@@ -692,37 +701,70 @@ export class RuntimeController {
           (isReady(settings) ? undefined : new DisconnectedModel()),
         catalog: this.options.catalog?.(this.home),
         session,
-        extraTools: this.options.browser
-          ? browserTools(this.options.browser, {
-              confirm: (_sessionId, approval, signal, callId) =>
-                approval.kind === 'upload'
-                  ? this.confirmUpload(runtime, approval, signal, callId)
-                  : approval.kind === 'download'
-                    ? this.confirmDownload(runtime, approval, signal, callId)
-                    : approval.kind === 'coordinate'
-                      ? this.confirmCoordinate(
-                          runtime,
-                          approval,
-                          signal,
-                          callId,
-                        )
-                      : this.confirmCertificate(
-                          runtime,
-                          approval,
-                          signal,
-                          callId,
-                        ),
-              // Paths as the file tools take them (a credential file never goes), the
-              // conversation to record and the values a replayed script takes
-              ...runtimeBrowserOptions(() => runtime),
-            })
-          : undefined,
+        extraTools: [
+          ...(!task
+            ? createCollaborationTools({
+                sessionId: () => runtime.session.id,
+                service: () =>
+                  this.collaboration(
+                    runtime.options.workspace,
+                    runtime.session.id,
+                  ),
+              })
+            : []),
+          ...(this.options.browser
+            ? browserTools(this.options.browser, {
+                confirm: (_sessionId, approval, signal, callId) =>
+                  approval.kind === 'upload'
+                    ? this.confirmUpload(runtime, approval, signal, callId)
+                    : approval.kind === 'download'
+                      ? this.confirmDownload(runtime, approval, signal, callId)
+                      : approval.kind === 'coordinate'
+                        ? this.confirmCoordinate(
+                            runtime,
+                            approval,
+                            signal,
+                            callId,
+                          )
+                        : this.confirmCertificate(
+                            runtime,
+                            approval,
+                            signal,
+                            callId,
+                          ),
+                // Paths as the file tools take them (a credential file never goes), the
+                // conversation to record and the values a replayed script takes
+                ...runtimeBrowserOptions(() => runtime),
+              })
+            : []),
+        ],
         approve: (call, signal, origin) =>
-          this.approve(runtime, call, signal, origin),
+          this.approve(
+            runtime,
+            call,
+            signal,
+            task
+              ? { ...origin, name: task.spec.id, agent: runtime.session.id }
+              : origin,
+          ),
         question: (args, signal, origin) =>
-          this.question(runtime, args, signal, origin),
+          this.question(
+            runtime,
+            args,
+            signal,
+            task
+              ? { ...origin, name: task.spec.id, agent: runtime.session.id }
+              : origin,
+          ),
         secret: (request, signal, origin) =>
-          this.secret(runtime, request, signal, origin),
+          this.secret(
+            runtime,
+            request,
+            signal,
+            task
+              ? { ...origin, name: task.spec.id, agent: runtime.session.id }
+              : origin,
+          ),
         onExtensionStatus: () => this.publish(),
         openUrl: async (url) => {
           this.openRequest = {
@@ -939,7 +981,11 @@ export class RuntimeController {
       ]),
     ];
     const sessions: Session[] = rows.map((row) => {
-      const owner = this.runtimes.get(row.id);
+      const owner =
+        this.runtimes.get(row.id) ??
+        [...this.taskRuntimes.values()].find(
+          (task) => task.session.id === row.id,
+        );
       const selected = owner?.session.id === row.id;
       const queue = selected
         ? owner.harness.queuedMessages
@@ -1065,6 +1111,7 @@ export class RuntimeController {
                 .find((owner) => owner.options.workspace === path)
                 ?.loadedInstructions.map((file) => ({
                   name: file.path,
+                  path: file.path,
                   content: file.content,
                 })) ?? [])
             : [],
@@ -2129,6 +2176,13 @@ export class RuntimeController {
       case 'select-session': {
         const id = text(p.id, 'session', 200);
         const row = this.store.get(id);
+        const taskRuntime = [...this.taskRuntimes.values()].find(
+          (task) => task.session.id === id,
+        );
+        if (taskRuntime && !taskRuntime.isClosing) {
+          this.selectRuntime(taskRuntime);
+          return { sessionId: id };
+        }
         if (!row || row.parent_id) throw Error('session not found');
         if (id === this.selectedSessionId && !this.viewedSessionId)
           return { sessionId: id };

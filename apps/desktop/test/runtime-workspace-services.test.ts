@@ -253,3 +253,34 @@ test('human save while agent write approval waits prevents stale agent overwrite
     ),
   );
 });
+
+test('loaded project rules expose their real source path in the native snapshot', async (t) => {
+  const f = await setup(t, [{ message: assistant('rules loaded') }]);
+  await writeFile(
+    join(f.workspace, 'AGENTS.md'),
+    'independent loaded rule marker',
+  );
+  await f.call('prompt', { text: 'load actual project context' });
+  await wait(() => f.model.requests.length === 1);
+  assert.ok(
+    f.model.requests[0]!.tools.some(
+      (tool) => tool.name === 'native_tasks_enqueue',
+    ),
+  );
+  const instructions = f.controller
+    .snapshot()
+    .workspaces.find(
+      (w) =>
+        w.path ===
+        f.controller.snapshot().workspaces.find((p) => p.trusted)?.path,
+    )!.instructions;
+  const rule = instructions.find((rule) =>
+    rule.content.includes('independent loaded rule marker'),
+  );
+  assert.ok(rule);
+  assert.ok(rule.path);
+  assert.equal(
+    await readFile(rule.path!, 'utf8'),
+    'independent loaded rule marker',
+  );
+});
