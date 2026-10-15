@@ -9,6 +9,9 @@ import { ScriptedModel } from '../../../src/testing.js';
 import { emptyUsage, type ModelResponse } from '../../../src/types.js';
 import { ModelCatalog } from '../../../src/model_catalog.js';
 import { initializeNetwork } from '../../../src/network_bootstrap.js';
+import { RuntimeCredentialClient } from './runtime-private-channel';
+import { workspaceToolsForWorker } from './runtime-tools';
+import type { WorkspaceServiceEvent } from './workspace-protocol';
 
 type Port = {
   postMessage(value: unknown): void;
@@ -73,12 +76,19 @@ if (fixturePath) {
   );
 }
 const browser = new BrowserBridge((message) => port.postMessage(message));
+const credentialStore = new RuntimeCredentialClient((message) =>
+  port.postMessage(message),
+);
 const controller = new RuntimeController({
   home,
   // The supervisor keeps home as runtime-home inside the application's data folder
   dataFolder: dirname(home),
   model,
   browser,
+  credentialStore,
+  workspaceTools: workspaceToolsForWorker(import.meta.url, process.execPath),
+  emitWorkspaceEvent: (event: WorkspaceServiceEvent) =>
+    port.postMessage({ type: 'workspace-event', event }),
   beforeDelete: (sessionId) => browser.releaseSession(sessionId),
   userHome: home,
   catalog: process.env.CIRCLE_WORKBENCH_TEST_PROFILE
@@ -89,6 +99,10 @@ const controller = new RuntimeController({
   openUrl: (url) => port.postMessage({ type: 'open-url', url }),
 });
 port.on('message', ({ data }) => {
+  if ((data as { type?: unknown })?.type === 'credential-reply') {
+    credentialStore.receive(data);
+    return;
+  }
   const message = data as { type?: unknown; reply?: BrowserReply };
   if (message?.type === 'browser-reply' && message.reply) {
     browser.receive(message.reply);
@@ -103,6 +117,7 @@ async function close() {
   if (exiting) return;
   exiting = true;
   await controller.close();
+  credentialStore.close();
   process.exit(0);
 }
 process.on('SIGTERM', () => {

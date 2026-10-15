@@ -1,6 +1,11 @@
 import { utilityProcess, type UtilityProcess } from 'electron';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import type { WorkspaceServiceEvent } from './workspace-protocol';
+import {
+  executeCredentialRequest,
+  type RuntimeCredentialStore,
+} from './runtime-private-channel';
 import type {
   RuntimeCommand,
   RuntimeReply,
@@ -32,6 +37,12 @@ export class RuntimeSupervisor {
   private exited?: Promise<void>;
   private closing?: Promise<void>;
   private listeners = new Set<(update: RuntimeUpdate) => void>();
+  private workspaceListeners = new Set<
+    (event: WorkspaceServiceEvent) => void
+  >();
+  private credentialStore?: RuntimeCredentialStore;
+  private credentialRequests = new Map<string, Promise<unknown>>();
+  private completedCredentialRequests = new Set<string>();
   // The runtime's browser requests under way, to stop when it says so or exits
   private browserRequests = new Map<string, AbortController>();
   private browserHandler?: BrowserHandler;
@@ -74,7 +85,22 @@ export class RuntimeSupervisor {
           request?: unknown;
           id?: unknown;
           sessionId?: unknown;
+          event?: WorkspaceServiceEvent;
         }) => {
+          if (message.type === 'workspace-event' && message.event) {
+            for (const listener of this.workspaceListeners) {
+              try {
+                listener(message.event);
+              } catch {
+                /* subscriber reconnects via durable replay */
+              }
+            }
+            return;
+          }
+          if (message.type === 'credential-request') {
+            this.credentials(message, child);
+            return;
+          }
           if (message.type === 'open-url' && typeof message.url === 'string')
             this.openUrl(message.url);
           if (message.type === 'browser') this.browser(message.request);
@@ -103,6 +129,8 @@ export class RuntimeSupervisor {
         child.once('exit', (code) => {
           clearTimeout(timer);
           this.child = undefined;
+          this.credentialRequests.clear();
+          this.completedCredentialRequests.clear();
           for (const request of this.browserRequests.values()) request.abort();
           this.browserRequests.clear();
           const error = Error(`Circle runtime exited (${code})`);
@@ -140,6 +168,48 @@ export class RuntimeSupervisor {
   }
   onSessionCleanup(handler: (sessionId: string) => Promise<void>) {
     this.sessionCleanup = handler;
+  }
+  onWorkspaceEvent(listener: (event: WorkspaceServiceEvent) => void) {
+    this.workspaceListeners.add(listener);
+    return () => {
+      this.workspaceListeners.delete(listener);
+    };
+  }
+  onCredentials(store: RuntimeCredentialStore) {
+    this.credentialStore = store;
+  }
+  private credentials(message: unknown, child: UtilityProcess) {
+    const id = (message as { id?: unknown })?.id;
+    if (
+      typeof id !== 'string' ||
+      !/^[a-zA-Z0-9_-]{1,100}$/.test(id) ||
+      this.credentialRequests.has(id) ||
+      this.completedCredentialRequests.has(id)
+    )
+      return;
+    if (this.credentialRequests.size >= 64) {
+      child.postMessage({
+        type: 'credential-reply',
+        id,
+        ok: false,
+        error: 'native credential operation failed',
+      });
+      return;
+    }
+    const operation = executeCredentialRequest(message, this.credentialStore)
+      .then((reply) => {
+        if (reply && this.child === child) child.postMessage(reply);
+      })
+      .finally(() => {
+        // Keep a small request ledger so duplicate IDs cannot repeat a put/delete.
+        this.credentialRequests.delete(id);
+        this.completedCredentialRequests.add(id);
+        if (this.completedCredentialRequests.size > 128)
+          this.completedCredentialRequests.delete(
+            this.completedCredentialRequests.values().next().value!,
+          );
+      });
+    this.credentialRequests.set(id, operation);
   }
   private releaseSession(id: unknown, sessionId: unknown) {
     if (
