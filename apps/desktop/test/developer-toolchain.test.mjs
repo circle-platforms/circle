@@ -1,12 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  ensureNativeDependencyPermissions,
   prepareNativeDependencies,
   prepareDeveloperTools,
   verifyArchive,
@@ -75,3 +83,27 @@ test('staged native runtime includes target addons, executable helper and TypeSc
     assert.ok(helper.mode & 0o111);
   }
 });
+
+test(
+  'source dependency permissions repair non-executable archive helper after install',
+  {
+    skip:
+      process.platform === 'win32' &&
+      'Windows uses ConPTY executables instead of Unix spawn-helper',
+  },
+  async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'circle-pty-install-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const dependency = join(root, 'node_modules/node-pty');
+    const prebuild = join(dependency, 'prebuilds/darwin-arm64');
+    const compiled = join(dependency, 'build/Release');
+    await mkdir(prebuild, { recursive: true });
+    await mkdir(compiled, { recursive: true });
+    await writeFile(join(dependency, 'package.json'), '{"name":"node-pty"}');
+    for (const folder of [prebuild, compiled])
+      await writeFile(join(folder, 'spawn-helper'), 'fixture', { mode: 0o644 });
+    await ensureNativeDependencyPermissions(root);
+    for (const folder of [prebuild, compiled])
+      assert.ok((await stat(join(folder, 'spawn-helper'))).mode & 0o111);
+  },
+);

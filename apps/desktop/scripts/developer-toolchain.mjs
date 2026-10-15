@@ -90,15 +90,19 @@ export async function prepareNativeDependencies(root, dist) {
     const source = dirname(require.resolve(`${name}/package.json`));
     await cp(source, join(dist, 'node_modules', name), { recursive: true });
   }
+  await ensureNativeDependencyPermissions(dist);
+}
+export async function ensureNativeDependencyPermissions(root) {
+  const require = createRequire(join(root, 'package.json'));
+  const nodePtyRoot = dirname(require.resolve('node-pty/package.json'));
   for (const folder of ['build/Release', 'build/Debug']) {
-    await chmod(
-      join(dist, 'node_modules/node-pty', folder, 'spawn-helper'),
-      0o755,
-    ).catch((error) => {
-      if (error.code !== 'ENOENT') throw error;
-    });
+    await chmod(join(nodePtyRoot, folder, 'spawn-helper'), 0o755).catch(
+      (error) => {
+        if (error.code !== 'ENOENT') throw error;
+      },
+    );
   }
-  const helpers = join(dist, 'node_modules/node-pty/prebuilds');
+  const helpers = join(nodePtyRoot, 'prebuilds');
   for (const target of await readdir(helpers)) {
     const helper = join(helpers, target, 'spawn-helper');
     await chmod(helper, 0o755).catch((error) => {
@@ -236,8 +240,11 @@ if (
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
   const root = fileURLToPath(new URL('..', import.meta.url));
-  await prepareDeveloperTools(join(root, 'dist'), {
-    platform: process.env.CIRCLE_DESKTOP_PLATFORM,
-    arch: process.env.CIRCLE_DESKTOP_ARCH,
-  });
+  if (process.argv.includes('--native-permissions'))
+    await ensureNativeDependencyPermissions(root);
+  else
+    await prepareDeveloperTools(join(root, 'dist'), {
+      platform: process.env.CIRCLE_DESKTOP_PLATFORM,
+      arch: process.env.CIRCLE_DESKTOP_ARCH,
+    });
 }
