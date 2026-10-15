@@ -10,7 +10,9 @@ import type {
   RuntimeCommand,
   RuntimeReply,
   RuntimeUpdate,
+  RuntimeTokenDelta,
 } from './runtime-protocol';
+import { RuntimeTokenBuffer } from './runtime-token-stream';
 import {
   validateBrowserRequest,
   type BrowserReply,
@@ -34,6 +36,9 @@ export class RuntimeSupervisor {
     }
   >();
   private latest?: RuntimeUpdate;
+  private tokenBuffer = new RuntimeTokenBuffer();
+  private tokenListeners = new Set<(delta: RuntimeTokenDelta) => void>();
+  private tokenResync?: Promise<void>;
   private exited?: Promise<void>;
   private closing?: Promise<void>;
   private listeners = new Set<(update: RuntimeUpdate) => void>();
@@ -86,7 +91,32 @@ export class RuntimeSupervisor {
           id?: unknown;
           sessionId?: unknown;
           event?: WorkspaceServiceEvent;
+          delta?: RuntimeTokenDelta;
         }) => {
+          if (message.type === 'token-delta' && message.delta) {
+            const result = this.tokenBuffer.apply(message.delta);
+            if (result === 'applied') {
+              for (const listener of this.tokenListeners) {
+                try {
+                  listener(message.delta);
+                } catch {
+                  /* a consumer can pull state */
+                }
+              }
+            } else if (result !== 'duplicate' && !this.tokenResync) {
+              this.tokenResync = this.command({
+                id: randomUUID(),
+                name: 'state',
+                payload: {},
+              })
+                .then(() => {})
+                .catch(() => {})
+                .finally(() => {
+                  this.tokenResync = undefined;
+                });
+            }
+            return;
+          }
           if (message.type === 'workspace-event' && message.event) {
             for (const listener of this.workspaceListeners) {
               try {
@@ -109,7 +139,7 @@ export class RuntimeSupervisor {
           if (message.type === 'browser-cancel')
             this.browserRequests.get(String(message.id))?.abort();
           if (message.type === 'update' && message.update) {
-            if (this.latest && message.update.seq <= this.latest.seq) return;
+            if (!this.tokenBuffer.acceptFull(message.update)) return;
             this.latest = message.update;
             clearTimeout(timer);
             resolve();
@@ -140,6 +170,7 @@ export class RuntimeSupervisor {
           }
           this.pending.clear();
           if (this.latest) {
+            this.latest = this.tokenBuffer.materialize();
             this.latest = {
               ...this.latest,
               seq: this.latest.seq + 1,
@@ -173,6 +204,12 @@ export class RuntimeSupervisor {
     this.workspaceListeners.add(listener);
     return () => {
       this.workspaceListeners.delete(listener);
+    };
+  }
+  onTokenDelta(listener: (delta: RuntimeTokenDelta) => void) {
+    this.tokenListeners.add(listener);
+    return () => {
+      this.tokenListeners.delete(listener);
     };
   }
   onCredentials(store: RuntimeCredentialStore) {
@@ -282,7 +319,7 @@ export class RuntimeSupervisor {
   }
   state() {
     if (!this.latest) throw Error('runtime not ready');
-    return this.latest;
+    return this.latest.connected ? this.tokenBuffer.materialize() : this.latest;
   }
   subscribe(listener: (update: RuntimeUpdate) => void) {
     this.listeners.add(listener);

@@ -492,6 +492,10 @@ app
         if (window && !window.isDestroyed())
           window.webContents.send('circle:workspace-event', event);
       });
+      runtime.onTokenDelta((delta) => {
+        if (window && !window.isDestroyed())
+          window.webContents.send('circle:runtime-token-delta', delta);
+      });
       runtime.subscribe((update) => {
         const current = new Set(
           update.snapshot.sessions.map((session) => session.id),

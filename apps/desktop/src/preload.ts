@@ -32,6 +32,13 @@ const bridge: DesktopBridge = {
     ipcRenderer.on('circle:runtime-update', handler);
     return () => ipcRenderer.removeListener('circle:runtime-update', handler);
   },
+  onRuntimeDelta: (listener) => {
+    const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
+      listener(value);
+    ipcRenderer.on('circle:runtime-token-delta', handler);
+    return () =>
+      ipcRenderer.removeListener('circle:runtime-token-delta', handler);
+  },
   onWorkspaceEvent: (listener) => {
     const handler = (_event: unknown, value: Parameters<typeof listener>[0]) =>
       listener(value);

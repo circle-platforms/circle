@@ -54,6 +54,9 @@ export interface DesktopBridge {
   runtimeState: () => Promise<RuntimeUpdate>;
   runtimeCommand: (command: RuntimeCommand) => Promise<RuntimeReply>;
   onRuntime: (listener: (update: RuntimeUpdate) => void) => () => void;
+  onRuntimeDelta?: (
+    listener: (delta: import('./runtime-protocol').RuntimeTokenDelta) => void,
+  ) => () => void;
   onWorkspaceEvent?: (
     listener: (event: WorkspaceServiceEvent) => void,
   ) => () => void;

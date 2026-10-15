@@ -2,7 +2,9 @@ import type { DesktopBridge } from '../../../desktop/src/contracts';
 import type {
   RuntimeCommandName,
   RuntimeUpdate,
+  RuntimeTokenDelta,
 } from '../../../desktop/src/runtime-protocol';
+import { RuntimeTokenBuffer } from '../../../desktop/src/runtime-token-stream';
 import type {
   CommandResult,
   RuntimePort,
@@ -58,6 +60,12 @@ export class LiveRuntime implements RuntimePort {
   private plugins?: string[];
   private changes = Promise.resolve();
   private unsubscribe: () => void;
+  private unsubscribeDelta: () => void = () => {};
+  private tokenBuffer = new RuntimeTokenBuffer();
+  private tokenTimer?: ReturnType<typeof setTimeout>;
+  private tokenResync?: Promise<void>;
+  private tokenPending: RuntimeTokenDelta[] = [];
+  private disposed = false;
   constructor(
     private host: DesktopBridge,
     initial: RuntimeUpdate,
@@ -98,6 +106,8 @@ export class LiveRuntime implements RuntimePort {
     }
     this.receive(initial);
     this.unsubscribe = host.onRuntime(this.receive);
+    this.unsubscribeDelta =
+      host.onRuntimeDelta?.(this.receiveDelta) ?? (() => {});
   }
   private persist() {
     try {
@@ -114,7 +124,7 @@ export class LiveRuntime implements RuntimePort {
     }
   }
   private receive = (update: RuntimeUpdate) => {
-    if (update.seq <= this.seq) return;
+    if (!this.tokenBuffer.acceptFull(update)) return;
     this.seq = update.seq;
     this.snapshot = structuredClone(update.snapshot);
     this.snapshot.files = this.files;
@@ -151,6 +161,69 @@ export class LiveRuntime implements RuntimePort {
     )
       void this.listWorkspace(workspace);
   };
+  private receiveDelta = (delta: RuntimeTokenDelta) => {
+    if (this.disposed) return;
+    if (this.tokenResync) {
+      this.bufferToken(delta);
+      return;
+    }
+    const result = this.tokenBuffer.apply(delta);
+    if (result === 'applied') this.scheduleTokens();
+    else if (result !== 'duplicate') {
+      this.bufferToken(delta);
+      this.resyncTokens();
+    }
+  };
+  private bufferToken(delta: RuntimeTokenDelta) {
+    if (this.tokenPending.length >= 4096) this.tokenPending = [];
+    this.tokenPending.push(delta);
+  }
+  private resyncTokens(attempt = 0) {
+    if (this.tokenResync || this.disposed) return;
+    this.tokenResync = this.host
+      .runtimeState()
+      .then((update) => {
+        if (this.disposed) return;
+        this.receive(update);
+        const pending = this.tokenPending.sort((a, b) => a.seq - b.seq);
+        this.tokenPending = [];
+        for (const delta of pending) {
+          const result = this.tokenBuffer.apply(delta);
+          if (result === 'applied') this.scheduleTokens();
+          else if (result !== 'duplicate') this.bufferToken(delta);
+        }
+      })
+      .catch((error) => {
+        if (!this.disposed) this.report(error);
+      })
+      .finally(() => {
+        this.tokenResync = undefined;
+        if (this.tokenPending.length && !this.disposed) {
+          if (attempt < 1) this.resyncTokens(attempt + 1);
+          else {
+            this.tokenPending = [];
+            this.report(Error(t('Circle runtime disconnected')));
+          }
+        }
+      });
+  }
+  private scheduleTokens() {
+    if (this.tokenTimer) return;
+    this.tokenTimer = setTimeout(() => {
+      this.tokenTimer = undefined;
+      if (this.disposed) return;
+      const update = this.tokenBuffer.materialize();
+      this.snapshot = {
+        ...this.snapshot,
+        sessions: update.snapshot.sessions.map((session) => ({
+          ...session,
+          ...(this.views.get(session.id) ?? {}),
+          actionError: this.sessionErrors.get(session.id),
+        })),
+      };
+      for (const listener of this.listeners) listener();
+    }, 16);
+  }
   // The active workspace's files when the desktop may list it (trusted), so the files
   // panel and @ completion work without opening the folder again.
   private listWorkspace(workspaceId: string): Promise<void> {
@@ -195,7 +268,11 @@ export class LiveRuntime implements RuntimePort {
     for (const listener of this.listeners) listener();
   }
   dispose() {
+    this.disposed = true;
     this.unsubscribe();
+    this.unsubscribeDelta();
+    if (this.tokenTimer) clearTimeout(this.tokenTimer);
+    this.tokenPending = [];
   }
   getSnapshot = () => this.snapshot;
   subscribe = (listener: () => void) => {

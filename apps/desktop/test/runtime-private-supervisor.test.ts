@@ -197,3 +197,67 @@ test('credential completion for an exited worker cannot be delivered to a new ow
       false,
     );
   }));
+
+test('token deltas hydrate runtimeState without publishing full snapshots and deleted sessions stay deleted', () =>
+  fixture(async (supervisor, child) => {
+    const snapshot = {
+      sessions: [{ id: 's', messages: [], branchIds: [], leafId: null }],
+      runtime: { connected: true },
+    };
+    child.emit('message', {
+      type: 'update',
+      update: {
+        seq: 2,
+        connected: true,
+        snapshot,
+        tokenStream: { epoch: 'tokens', seq: 0 },
+      },
+    });
+    let fulls = 0,
+      deltas = 0;
+    supervisor.subscribe(() => fulls++);
+    supervisor.onTokenDelta(() => deltas++);
+    child.emit('message', {
+      type: 'token-delta',
+      delta: {
+        epoch: 'tokens',
+        seq: 1,
+        baseSeq: 2,
+        sessionId: 's',
+        streamId: 'stream',
+        parentId: null,
+        text: 'last visible chunk',
+        at: 'now',
+      },
+    });
+    assert.equal(fulls, 0);
+    assert.equal(deltas, 1);
+    assert.equal(
+      supervisor.state().snapshot.sessions[0].messages[0].text,
+      'last visible chunk',
+    );
+    child.emit('message', {
+      type: 'update',
+      update: {
+        seq: 3,
+        connected: true,
+        snapshot: { ...snapshot, sessions: [] },
+        tokenStream: { epoch: 'tokens', seq: 1 },
+      },
+    });
+    child.emit('message', {
+      type: 'token-delta',
+      delta: {
+        epoch: 'tokens',
+        seq: 1,
+        baseSeq: 2,
+        sessionId: 's',
+        streamId: 'stream',
+        parentId: null,
+        text: 'late duplicate',
+        at: 'now',
+      },
+    });
+    assert.equal(supervisor.state().snapshot.sessions.length, 0);
+    assert.equal(deltas, 1);
+  }));

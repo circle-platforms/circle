@@ -12,6 +12,7 @@ import { initializeNetwork } from '../../../src/network_bootstrap.js';
 import { RuntimeCredentialClient } from './runtime-private-channel';
 import { workspaceToolsForWorker } from './runtime-tools';
 import type { WorkspaceServiceEvent } from './workspace-protocol';
+import type { RuntimeTokenDelta } from './runtime-protocol';
 
 type Port = {
   postMessage(value: unknown): void;
@@ -96,6 +97,8 @@ const controller = new RuntimeController({
         new ModelCatalog(path, { env: { CIRCLE_NO_MODELS_REFRESH: '1' } })
     : undefined,
   emit: (update) => port.postMessage({ type: 'update', update }),
+  emitTokenDelta: (delta: RuntimeTokenDelta) =>
+    port.postMessage({ type: 'token-delta', delta }),
   openUrl: (url) => port.postMessage({ type: 'open-url', url }),
 });
 port.on('message', ({ data }) => {
