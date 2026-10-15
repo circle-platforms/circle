@@ -172,6 +172,50 @@ test('save checks disk revisions, preserves file mode and keeps a stable file id
   assert.equal(await readFile(join(root, 'main.ts'), 'utf8'), saved.content);
 });
 
+test(
+  'saving an existing document preserves its actual mode under a more restrictive process umask',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const { root, documents } = await fixture(t);
+    const file = join(root, 'mode.txt');
+    await writeFile(file, 'before');
+    await chmod(file, 0o640);
+    const original = await documents.read('mode.txt');
+    assert.equal((await stat(file)).mode & 0o777, 0o640);
+    const previous = process.umask(0o077);
+    try {
+      const saved = await documents.save(
+        'mode.txt',
+        'after',
+        original.revision,
+      );
+      assert.equal(saved.content, 'after');
+      assert.equal(await readFile(file, 'utf8'), 'after');
+      assert.equal((await stat(file)).mode & 0o777, 0o640);
+      assert.deepEqual(await readdir(root), ['mode.txt']);
+    } finally {
+      process.umask(previous);
+    }
+  },
+);
+
+test(
+  'creating a new document still honors the process umask rather than broadening its initial mode',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const { root, documents } = await fixture(t);
+    const previous = process.umask(0o200);
+    try {
+      await documents.save('new.txt', 'new', null);
+      assert.equal((await stat(join(root, 'new.txt'))).mode & 0o777, 0o400);
+      assert.equal(await readFile(join(root, 'new.txt'), 'utf8'), 'new');
+      assert.deepEqual(await readdir(root), ['new.txt']);
+    } finally {
+      process.umask(previous);
+    }
+  },
+);
+
 test('external changes and deletes never silently overwrite a developer edit', async (t) => {
   const { root, documents } = await fixture(t);
   await writeFile(join(root, 'file.txt'), 'original');

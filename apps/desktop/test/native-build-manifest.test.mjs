@@ -1,3 +1,4 @@
+import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { verifyNativeBuildManifest } from './helpers/native-build-manifest.mjs';
@@ -79,8 +80,24 @@ test('executed evidence reads bytes only from the actual app identity and preloa
       });
     }
     const app = {
+      firstWindow: async () => ({}),
+      context: () => ({
+        newCDPSession: async () => {
+          let parsed;
+          return {
+            on: (name, listener) => {
+              parsed = listener;
+            },
+            send: async () =>
+              parsed({ url: join(root, 'dist', 'preload.cjs') }),
+            detach: async () => {},
+          };
+        },
+      }),
       evaluate: async (callback, arg) =>
-        callback(
+        runInNewContext('(' + callback.toString() + ')', {
+          process,
+        })(
           {
             app: { getAppPath: () => root, isPackaged: false },
             BrowserWindow: {

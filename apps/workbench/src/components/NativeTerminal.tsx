@@ -33,7 +33,11 @@ import '@xterm/xterm/css/xterm.css';
 import '../styles/terminal.css';
 
 type Controls = {
-  search: (text: string, previous: boolean) => boolean;
+  search: (
+    text: string,
+    previous: boolean,
+    isCurrent: () => boolean,
+  ) => Promise<boolean | undefined>;
   focus: () => void;
   selection: () => string;
 };
@@ -83,6 +87,8 @@ export function NativeTerminal({
   const [opened, setOpened] = useState<string[]>([]);
   const [query, setQuery] = useState('');
   const [found, setFound] = useState(true);
+  const searchRequest = useRef(0);
+  const currentSearch = useRef({ sessionId, query, selectedId: '' });
   const [reload, setReload] = useState(0);
   const [serviceOpen, setServiceOpen] = useState(false);
   const [serviceName, setServiceName] = useState('');
@@ -98,6 +104,15 @@ export function NativeTerminal({
   const visible = terminals.filter((item) => item.sessionId === sessionId);
   const selected =
     visible.find((item) => item.id === selectedId) ?? visible.at(-1);
+  currentSearch.current = { sessionId, query, selectedId: selected?.id ?? '' };
+
+  useEffect(() => {
+    searchRequest.current++;
+    setFound(true);
+    return () => {
+      searchRequest.current++;
+    };
+  }, [sessionId, selected?.id]);
 
   const adopt = useCallback((snapshot: TerminalSnapshot) => {
     setTerminals((current) => mergeTerminalSnapshot(current, snapshot));
@@ -270,11 +285,31 @@ export function NativeTerminal({
       }));
     });
 
-  const find = (previous: boolean) => {
+  const find = async (previous: boolean) => {
     if (!selected || !query) return;
-    setFound(
-      controls.current.get(selected.id)?.search(query, previous) ?? false,
-    );
+    const target = { sessionId, query, selectedId: selected.id };
+    const request = ++searchRequest.current;
+    const current = () =>
+      request === searchRequest.current &&
+      currentSearch.current.sessionId === target.sessionId &&
+      currentSearch.current.selectedId === target.selectedId &&
+      currentSearch.current.query === target.query;
+    setFound(true);
+    try {
+      const result = await controls.current
+        .get(selected.id)
+        ?.search(query, previous, current);
+      if (current() && result !== undefined) setFound(result);
+    } catch (reason) {
+      if (current())
+        setOperations((previous) => ({
+          ...previous,
+          [target.sessionId]: {
+            ...previous[target.sessionId],
+            error: reason instanceof Error ? reason.message : String(reason),
+          },
+        }));
+    }
   };
 
   return (
@@ -464,6 +499,7 @@ export function NativeTerminal({
             placeholder={t('find in terminal')}
             value={query}
             onChange={(event) => {
+              searchRequest.current++;
               setQuery(event.target.value);
               setFound(true);
             }}
@@ -471,7 +507,7 @@ export function NativeTerminal({
               event.stopPropagation();
               if (event.key === 'Enter') {
                 event.preventDefault();
-                find(event.shiftKey);
+                void find(event.shiftKey);
               }
               if (event.key === 'Escape') {
                 event.preventDefault();
@@ -482,14 +518,18 @@ export function NativeTerminal({
           <IconButton
             label={t('previous match')}
             disabled={!query}
-            onClick={() => find(true)}
+            onClick={() => {
+              void find(true);
+            }}
           >
             <ArrowUp size={14} />
           </IconButton>
           <IconButton
             label={t('next match')}
             disabled={!query}
-            onClick={() => find(false)}
+            onClick={() => {
+              void find(false);
+            }}
           >
             <ArrowDown size={14} />
           </IconButton>
@@ -704,6 +744,7 @@ function TerminalSurface({
   const container = useRef<HTMLDivElement>(null);
   const instance = useRef<{ terminal: Terminal; fit: FitAddon } | null>(null);
   const synchronizeRef = useRef<(() => void) | null>(null);
+  const notifySearchesRef = useRef<(() => void) | null>(null);
   const activeRef = useRef(active);
   const statusRef = useRef(snapshot.status);
   const [error, setError] = useState('');
@@ -737,26 +778,25 @@ function TerminalSurface({
     terminal.loadAddon(search);
     terminal.open(container.current);
     instance.current = { terminal, fit };
-    register({
-      search: (text, previous) =>
-        previous ? search.findPrevious(text) : search.findNext(text),
-      focus: () => terminal.focus(),
-      selection: () => terminal.getSelection(),
-    });
     let cancelled = false;
-    let syncing = false;
+    let inFlight: Promise<void> | undefined;
     let dirty = false;
     let cursor = 0;
+    const pendingSearches = new Set<() => void>();
+    const notifySearches = () => {
+      for (const check of pendingSearches) check();
+    };
+    notifySearchesRef.current = notifySearches;
     let sendInput = Promise.resolve();
     const showError = (reason: unknown) => {
       if (!cancelled)
         setError(reason instanceof Error ? reason.message : String(reason));
     };
-    const synchronize = async () => {
+    const synchronize = (): Promise<void> => {
       dirty = true;
-      if (syncing || cancelled || !activeRef.current) return;
-      syncing = true;
-      try {
+      if (cancelled || !activeRef.current) return Promise.resolve();
+      if (inFlight) return inFlight;
+      inFlight = (async () => {
         do {
           dirty = false;
           let more: boolean;
@@ -776,29 +816,65 @@ function TerminalSurface({
                   terminal.write(event.data!, resolve),
                 );
               cursor = next;
+              notifySearches();
             }
             adopt(page.snapshot);
             more = page.hasMore;
           } while (more && !cancelled && activeRef.current);
         } while (dirty && !cancelled && activeRef.current);
-      } catch (reason) {
-        showError(reason);
-      } finally {
-        syncing = false;
-      }
+      })().finally(() => {
+        inFlight = undefined;
+      });
+      return inFlight;
     };
+    register({
+      search: async (text, previous, isCurrent) => {
+        // Pin the log end for this request. Waiting for the entire live pump
+        // could never finish while a service continuously produces output.
+        const boundary = await workspaceCall<TerminalReplay>(
+          snapshot.sessionId,
+          'terminal',
+          'replay',
+          { id: snapshot.id, afterSequence: cursor, limit: 1 },
+        );
+        if (cancelled || !activeRef.current || !isCurrent()) return undefined;
+        await new Promise<void>((resolve, reject) => {
+          const check = () => {
+            if (
+              cursor >= boundary.snapshot.lastSequence ||
+              cancelled ||
+              !activeRef.current ||
+              !isCurrent()
+            ) {
+              pendingSearches.delete(check);
+              resolve();
+            }
+          };
+          pendingSearches.add(check);
+          check();
+          void synchronize().catch((reason) => {
+            pendingSearches.delete(check);
+            reject(reason);
+          });
+        });
+        if (cancelled || !activeRef.current || !isCurrent()) return undefined;
+        return previous ? search.findPrevious(text) : search.findNext(text);
+      },
+      focus: () => terminal.focus(),
+      selection: () => terminal.getSelection(),
+    });
     const unsubscribe = subscribeWorkspace((event) => {
       if (
         event.service === 'terminal' &&
         event.resourceId === snapshot.id &&
         event.sessionId === snapshot.sessionId
       )
-        void synchronize();
+        void synchronize().catch(showError);
     });
     synchronizeRef.current = () => {
-      void synchronize();
+      void synchronize().catch(showError);
     };
-    void synchronize();
+    void synchronize().catch(showError);
     const input = terminal.onData((data) => {
       if (statusRef.current !== 'running') return;
       sendInput = sendInput
@@ -859,6 +935,7 @@ function TerminalSurface({
     });
     return () => {
       cancelled = true;
+      notifySearches();
       unsubscribe();
       input.dispose();
       dimensions.dispose();
@@ -868,6 +945,7 @@ function TerminalSurface({
       terminal.dispose();
       instance.current = null;
       synchronizeRef.current = null;
+      notifySearchesRef.current = null;
       // A view closing never closes its PTY. It can be reopened through list/replay.
     };
     // Identity alone owns this view; status updates must not recreate its screen.
@@ -875,6 +953,7 @@ function TerminalSurface({
   }, [snapshot.id, snapshot.sessionId, retry]);
 
   useEffect(() => {
+    if (!active) notifySearchesRef.current?.();
     if (active && instance.current && container.current?.clientWidth) {
       instance.current.fit.fit();
       synchronizeRef.current?.();

@@ -406,3 +406,55 @@ test('read-only refresh preserves index bytes and required write locks', async (
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('parallel snapshots retry a changed baseline and reject continuous mutation', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-git-consistent-'));
+  const service = new ObservedGit(root);
+  try {
+    await service.git(['init', '-b', 'codex/a']);
+    await service.git(['config', 'user.name', 'Fixture']);
+    await service.git(['config', 'user.email', 'fixture@example.invalid']);
+    await writeFile(path.join(root, 'value'), 'original\n');
+    await service.git(['add', 'value']);
+    await service.git(['commit', '-m', 'Create baseline']);
+    await service.git(['branch', 'codex/b']);
+    const run = service.git.bind(service);
+    let active = 0,
+      peak = 0,
+      statusReads = 0;
+    let branchCaptured!: () => void;
+    const branchRead = new Promise<void>((resolve) => {
+      branchCaptured = resolve;
+    });
+    service.git = async (args, input) => {
+      active++;
+      peak = Math.max(peak, active);
+      try {
+        const value = await run(args, input);
+        if (args[0] === 'symbolic-ref') branchCaptured();
+        if (args[0] === 'status' && ++statusReads === 1) {
+          await branchRead;
+          await run(['switch', 'codex/b']);
+        }
+        return value;
+      } finally {
+        active--;
+      }
+    };
+    const result = await service.snapshot();
+    assert.equal(result.branch, 'codex/b');
+    assert.ok(statusReads >= 3, 'a mixed first read must be retried');
+    assert.ok(peak > 1, 'independent read commands run concurrently');
+    let writes = 0;
+    service.git = async (args, input) => {
+      const value = await run(args, input);
+      if (args[0] === 'status')
+        await writeFile(path.join(root, 'value'), `change ${++writes}\n`);
+      return value;
+    };
+    await assert.rejects(service.snapshot(), /changed while reading/);
+    assert.equal(writes, 4, 'unstable reads stop at a bounded retry count');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -10,7 +10,7 @@ import {
   realpathSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { LanguageService } from '../src/workspace/language.ts';
 function fixture(t: test.TestContext) {
@@ -525,11 +525,14 @@ test(
   (t) => {
     const { root, service: original } = fixture(t);
     original.dispose();
-    const shortRoot = execFileSync(
+    const command = spawnSync(
       'cmd.exe',
       ['/d', '/c', `for %I in ("${root}") do @echo %~sI`],
-      { encoding: 'utf8' },
-    ).trim();
+      { encoding: 'utf8', windowsVerbatimArguments: true },
+    );
+    assert.ifError(command.error);
+    assert.equal(command.status, 0, command.stderr);
+    const shortRoot = command.stdout.trim();
     const service = new LanguageService(shortRoot);
     t.after(() => service.dispose());
     const main = realpathSync.native(join(root, 'main.ts'));

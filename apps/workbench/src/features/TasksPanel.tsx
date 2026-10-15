@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import type { TaskRecord } from '../../../desktop/src/workspace/task-store';
 import { workspaceCall, subscribeWorkspace } from '../model/workspace-client';
 import { Button, DataBlock, Status } from '../components/common';
@@ -38,14 +44,25 @@ export function TasksPanel({
   const [busy, setBusy] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const instruction = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    if (createOpen) instruction.current?.focus();
+  }, [createOpen]);
   const generation = useRef(0);
+  const revealedTask = useRef<string | null>(null);
   useEffect(() => {
-    if (focusTaskId) {
-      const item = document.getElementById('task-' + focusTaskId);
-      item?.scrollIntoView({ block: 'nearest' });
-      item?.focus();
+    if (!focusTaskId) {
+      revealedTask.current = null;
+      return;
     }
-  }, [focusTaskId, tasks]);
+    const request = sessionId + ':' + focusTaskId;
+    if (revealedTask.current === request) return;
+    const item = document.getElementById('task-' + focusTaskId);
+    if (item) {
+      item.scrollIntoView({ block: 'nearest' });
+      item.focus();
+      revealedTask.current = request;
+    }
+  }, [focusTaskId, tasks, sessionId]);
   const refresh = useCallback(async () => {
     const epoch = generation.current;
     try {
@@ -107,8 +124,6 @@ export function TasksPanel({
           aria-controls={'new-task-' + sessionId}
           onClick={() => {
             setCreateOpen((value) => !value);
-            if (!createOpen)
-              requestAnimationFrame(() => instruction.current?.focus());
           }}
         >
           {createOpen ? t('close task form') : t('new task')}

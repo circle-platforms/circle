@@ -415,16 +415,19 @@ export class WorkspaceDocuments {
       dirname(full),
       `.circle-document-${randomUUID()}.tmp`,
     );
-    const mode = await stat(full).then(
+    const originalMode = await stat(full).then(
       (info) => info.mode & 0o777,
       (error) => {
-        if (missing(error)) return 0o600;
+        if (missing(error)) return undefined;
         throw error;
       },
     );
-    const handle = await open(temporary, 'wx', mode);
+    const handle = await open(temporary, 'wx', originalMode ?? 0o600);
     try {
       await handle.writeFile(edit.content, { encoding: 'utf8', signal });
+      // Creation applies umask. Reapply only an existing file's mode; new files
+      // must retain the user's creation mask rather than gaining permissions.
+      if (originalMode !== undefined) await handle.chmod(originalMode);
       await handle.sync();
     } catch (error) {
       await handle.close();

@@ -37,7 +37,8 @@ Object.assign(window, {
       if (service === 'operations') return { ok: true, data: [] };
       if (method === 'settings')
         return { ok: true, data: { agents: 8, builds: 2, ui: 1, browsers: 1 } };
-      if (method === 'list') return { ok: true, data: records };
+      if (method === 'list')
+        return { ok: true, data: structuredClone(records) };
       if (method === 'enqueue') {
         records = [
           ...records,
@@ -66,5 +67,12 @@ Object.assign(window, {
   },
 });
 createRoot(document.getElementById('root')!).render(
-  <TasksPanel sessionId="task-fixture" onSession={() => {}} />,
+  <>
+    <TasksPanel
+      sessionId="task-fixture"
+      onSession={() => {}}
+      focusTaskId={query.has('focusTask') ? 'task-0' : undefined}
+    />
+    {query.has('focusTask') && <textarea aria-label="manual editor" />}
+  </>,
 );

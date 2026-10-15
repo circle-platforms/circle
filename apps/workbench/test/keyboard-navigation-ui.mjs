@@ -94,7 +94,15 @@ try {
       ),
   );
   const transcript = page.locator('.transcript');
-  await transcript.evaluate((node) => (node.scrollTop = 120));
+  await transcript.evaluate((node) =>
+    node.scrollTo({ top: 120, behavior: 'instant' }),
+  );
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  );
   const scrollBefore = await transcript.evaluate((node) => node.scrollTop);
   assert.ok(scrollBefore > 0);
   await page
@@ -110,7 +118,11 @@ try {
     Math.abs(
       (await transcript.evaluate((node) => node.scrollTop)) - scrollBefore,
     ) <= 2,
-    'layout preserves transcript reading position',
+    'layout preserves transcript reading position ' +
+      JSON.stringify({
+        scrollBefore,
+        after: await transcript.evaluate((node) => node.scrollTop),
+      }),
   );
   await page
     .getByRole('button', { name: 'developer layout', exact: true })
@@ -118,6 +130,69 @@ try {
   const nativeHelperChecks = [];
   await runNativeKeyboardJourney({ page, checks: nativeHelperChecks });
   assert.equal(nativeHelperChecks.length, 1);
+  await page.getByRole('button', { name: 'task layout', exact: true }).click();
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  );
+  const nearBottom = await transcript.evaluate(async (node) => {
+    node.scrollTo({
+      top: Math.max(0, node.scrollHeight - node.clientHeight - 15),
+      behavior: 'instant',
+    });
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    );
+    return { top: node.scrollTop, max: node.scrollHeight - node.clientHeight };
+  });
+  assert.ok(nearBottom.max > 15);
+  await page
+    .getByRole('button', { name: 'developer layout', exact: true })
+    .click();
+  await page.getByRole('button', { name: 'task layout', exact: true }).click();
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  );
+  const afterNearBottom = await transcript.evaluate((node) => ({
+    top: node.scrollTop,
+    max: node.scrollHeight - node.clientHeight,
+  }));
+  assert.ok(
+    Math.abs(afterNearBottom.top - nearBottom.top) <= 2,
+    'manual reading 15px above bottom must survive layout resize: ' +
+      JSON.stringify({ nearBottom, afterNearBottom }),
+  );
+  await transcript.evaluate((node) =>
+    node.scrollTo({ top: node.scrollHeight, behavior: 'instant' }),
+  );
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  );
+  await page.setViewportSize({ width: 1000, height: 900 });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  );
+  const following = await transcript.evaluate((node) => ({
+    top: node.scrollTop,
+    max: node.scrollHeight - node.clientHeight,
+  }));
+  assert.ok(
+    Math.abs(following.top - following.max) <= 2,
+    'a person at the actual end still follows layout reflow: ' +
+      JSON.stringify(following),
+  );
   console.log(
     'quick-open keyboard, palette Escape focus, layout draft/selection passed',
   );

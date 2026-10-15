@@ -906,12 +906,18 @@ try {
       'console source cursor is at actual line2',
     );
     await screenshot('06-console-to-source');
-    await page
-      .getByRole('button', { name: 'browser panel', exact: true })
-      .click();
-    await page
-      .getByRole('button', { name: 'page diagnostics', exact: true })
-      .click();
+    const browserToggle = page.getByRole('button', {
+      name: 'browser panel',
+      exact: true,
+    });
+    if ((await browserToggle.getAttribute('aria-pressed')) !== 'true')
+      await browserToggle.click();
+    const diagnosticsToggle = page.getByRole('button', {
+      name: 'page diagnostics',
+      exact: true,
+    });
+    if ((await diagnosticsToggle.getAttribute('aria-expanded')) !== 'true')
+      await diagnosticsToggle.click();
     await panel.getByRole('tab', { name: 'network', exact: true }).click();
     await panel.getByRole('button', { name: /GET 200.*api\/data/ }).click();
     await panel.getByText('JOURNEY_NETWORK_OK', { exact: true }).waitFor();

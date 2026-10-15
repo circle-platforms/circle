@@ -45,6 +45,15 @@ interface Gateway {
   base: string;
   bodies: Record<string, unknown>[];
   keys: string[];
+  trace: {
+    request: number;
+    at: number;
+    phase: 'request' | 'body' | 'finish' | 'close';
+    method?: string;
+    path?: string;
+    status?: number;
+    complete?: boolean;
+  }[];
 }
 // A local OpenAI-style endpoint: /v1/models lists `models`, each chat request takes the next
 // reply (the last one repeats).
@@ -55,11 +64,32 @@ async function gateway(
 ): Promise<Gateway> {
   const bodies: Record<string, unknown>[] = [];
   const keys: string[] = [];
+  const trace: Gateway['trace'] = [];
+  let requests = 0;
   let count = 0;
   const instance = createServer(
     async (request: IncomingMessage, response: ServerResponse) => {
+      const id = ++requests;
+      trace.push({
+        request: id,
+        at: Date.now(),
+        phase: 'request',
+        method: request.method,
+        path: request.url,
+      });
+      for (const phase of ['finish', 'close'] as const)
+        response.once(phase, () =>
+          trace.push({
+            request: id,
+            at: Date.now(),
+            phase,
+            status: response.statusCode,
+            complete: response.writableFinished,
+          }),
+        );
       let text = '';
       for await (const chunk of request) text += chunk;
+      trace.push({ request: id, at: Date.now(), phase: 'body' });
       keys.push(String(request.headers.authorization ?? ''));
       if (request.method === 'GET' && request.url === '/v1/models') {
         response.writeHead(200, { 'Content-Type': 'application/json' });
@@ -119,8 +149,13 @@ async function gateway(
   });
   const address = instance.address();
   assert.ok(address && typeof address === 'object');
-  return { base: `http://127.0.0.1:${address.port}`, bodies, keys };
+  return { base: `http://127.0.0.1:${address.port}`, bodies, keys, trace };
 }
+// Only phase metadata is diagnostic; request bodies and authorization stay out of it.
+const observeGateway = (endpoint: Gateway): Record<string, unknown> => ({
+  gatewayRequests: endpoint.bodies.length,
+  gatewayTrace: endpoint.trace.slice(-16).map((event) => ({ ...event })),
+});
 function setUp(
   home: string,
   base: string,
@@ -142,6 +177,11 @@ interface Run {
   lifecycle: {
     pid?: number;
     spawnedAt: number;
+    spawnAcknowledgedAt?: number;
+    stdoutFirstAt?: number;
+    stderrFirstAt?: number;
+    stdoutBytes: number;
+    stderrBytes: number;
     beforeMainAt?: number;
     stdinOpenBeforeMain?: boolean;
     stdinEndedByFixture: boolean;
@@ -157,6 +197,8 @@ class CliFixtureDeadline extends Error {
   constructor(
     readonly timeoutMs: number,
     readonly lifecycle: Run['lifecycle'],
+    readonly output: { stdoutTail: string; stderrTail: string },
+    readonly observation: Record<string, unknown>,
   ) {
     super(`CLI fixture exceeded ${timeoutMs}ms`);
   }
@@ -197,6 +239,7 @@ function circle(
     env?: Record<string, string>;
     startupDelayMs?: number;
     timeoutMs?: number;
+    observe?: () => Record<string, unknown>;
   } = {},
 ): Promise<Run> {
   return new Promise((done, reject) => {
@@ -232,11 +275,24 @@ function circle(
     const lifecycle: Run['lifecycle'] = {
       pid: child.pid,
       spawnedAt,
+      stdoutBytes: 0,
+      stderrBytes: 0,
       stdinEndedByFixture: false,
       exited: false,
     };
-    child.stdout.on('data', (data) => (stdout += data));
+    const outputTails = () => ({
+      stdoutTail: stdout.slice(-4096),
+      stderrTail: stderr.slice(-4096),
+    });
+    child.once('spawn', () => (lifecycle.spawnAcknowledgedAt = Date.now()));
+    child.stdout.on('data', (data: Buffer) => {
+      lifecycle.stdoutFirstAt ??= Date.now();
+      lifecycle.stdoutBytes += data.length;
+      stdout += data;
+    });
     child.stderr.on('data', (data) => {
+      lifecycle.stderrFirstAt ??= Date.now();
+      lifecycle.stderrBytes += data.length;
       stderr += data;
       const ready = stderr.match(/circle fixture before main (\d+)\n/);
       if (ready && lifecycle.beforeMainAt === undefined) {
@@ -262,6 +318,8 @@ function circle(
       clearTimeout(deadline);
       clearTimeout(force);
       lifecycle.closedAt = Date.now();
+      if (failure instanceof CliFixtureDeadline)
+        Object.assign(failure.output, outputTails());
       if (failure) reject(failure);
       else done({ code, stdout, stderr, lifecycle });
     });
@@ -269,7 +327,19 @@ function circle(
     const timeoutMs = options.timeoutMs ?? 30_000;
     const deadline = setTimeout(() => {
       lifecycle.timedOutAt = Date.now();
-      failure ??= new CliFixtureDeadline(timeoutMs, lifecycle);
+      let observation: Record<string, unknown>;
+      try {
+        observation = options.observe?.() ?? {};
+      } catch (error) {
+        // Diagnostics must not prevent termination of the owned hung child.
+        observation = { observationError: String(error).slice(-4096) };
+      }
+      failure ??= new CliFixtureDeadline(
+        timeoutMs,
+        lifecycle,
+        outputTails(),
+        observation,
+      );
       child.kill();
       force = setTimeout(() => {
         if (!lifecycle.exited) child.kill('SIGKILL');
@@ -311,25 +381,38 @@ test('@file is read from the current folder, then the workspace, and inlined aft
   writeFileSync(join(workspace, 'inner.txt'), 'from the workspace\n\n');
   writeFileSync(join(here, 'blob.bin'), Buffer.from([0xff, 0xfe, 0x00, 0x80]));
   const endpoint = await gateway(t, [{ content: 'ok' }]);
+  const observe = () => observeGateway(endpoint);
   setUp(home, endpoint.base, [workspace]);
   const run = await circle(
     home,
     ['-p', 'review these', '@notes.txt', '@inner.txt', workspace],
-    { cwd: here },
+    { cwd: here, observe },
   );
   assert.equal(run.code, 0, run.stderr);
   assert.equal(run.stdout, 'ok\n');
+  assert.ok(run.lifecycle.spawnAcknowledgedAt! >= run.lifecycle.spawnedAt);
+  assert.ok(run.lifecycle.stdoutFirstAt! >= run.lifecycle.spawnAcknowledgedAt!);
+  assert.equal(run.lifecycle.stdoutBytes, Buffer.byteLength(run.stdout));
+  assert.equal(run.lifecycle.stderrBytes, Buffer.byteLength(run.stderr));
+  assert.deepEqual(
+    endpoint.trace
+      .filter((event) => event.request === 1)
+      .map((event) => event.phase),
+    ['request', 'body', 'finish', 'close'],
+  );
   assert.equal(
     userText(endpoint.bodies[0]!),
     'review these\n\n<file path="notes.txt">\nfrom the current folder\n</file>\n\n<file path="inner.txt">\nfrom the workspace\n</file>',
   );
   const missing = await circle(home, ['-p', 'x', '@gone.txt', workspace], {
     cwd: here,
+    observe,
   });
   assert.equal(missing.code, 2);
   assert.match(missing.stderr, /no such file: gone\.txt/);
   const binary = await circle(home, ['-p', 'x', '@blob.bin', workspace], {
     cwd: here,
+    observe,
   });
   assert.equal(binary.code, 2);
   assert.match(binary.stderr, /blob\.bin is not a text file/);
@@ -340,6 +423,7 @@ test('@file is read from the current folder, then the workspace, and inlined aft
   writeFileSync(join(here, 'far.png'), png);
   const image = await circle(home, ['-p', 'look', '@shot.png', workspace], {
     cwd: here,
+    observe,
   });
   assert.equal(image.code, 0, image.stderr);
   const content = (
@@ -352,6 +436,7 @@ test('@file is read from the current folder, then the workspace, and inlined aft
   // One outside the workspace goes too, mentioned by its full path
   const far = await circle(home, ['-p', 'look', '@far.png', workspace], {
     cwd: here,
+    observe,
   });
   assert.equal(far.code, 0, far.stderr);
   const farContent = (
@@ -726,6 +811,7 @@ test('an open stdin survives a slow real CLI startup, waits three seconds and re
     stdin: null,
     startupDelayMs: 10_001,
     env: { CIRCLE_NO_UPDATE_CHECK: '1' },
+    observe: () => observeGateway(endpoint),
   });
   t.diagnostic(
     JSON.stringify({
@@ -756,21 +842,55 @@ test('the CLI fixture deadline rejects after its owned real child exits and send
       startupDelayMs: 10_001,
       timeoutMs: 100,
       env: { CIRCLE_NO_UPDATE_CHECK: '1' },
+      observe: () => observeGateway(endpoint),
     }),
     (error) => {
       assert.ok(error instanceof CliFixtureDeadline);
       assert.equal(error.timeoutMs, 100);
       assert.ok(error.lifecycle.pid! > 0);
+      assert.ok(
+        error.lifecycle.spawnAcknowledgedAt! >= error.lifecycle.spawnedAt,
+      );
       assert.ok(error.lifecycle.timedOutAt! - error.lifecycle.spawnedAt >= 100);
       assert.equal(error.lifecycle.stdinEndedByFixture, false);
       assert.equal(error.lifecycle.exited, true);
       assert.equal(error.lifecycle.code, null);
       assert.ok(error.lifecycle.signal);
       assert.ok(error.lifecycle.closedAt! >= error.lifecycle.timedOutAt!);
+      assert.deepEqual(error.observation, {
+        gatewayRequests: 0,
+        gatewayTrace: [],
+      });
+      assert.ok(error.output.stdoutTail.length <= 4096);
+      assert.ok(error.output.stderrTail.length <= 4096);
       return true;
     },
   );
   assert.equal(endpoint.bodies.length, 0);
+});
+
+test('a failed CLI deadline observer still terminates and waits for its owned child', async (t) => {
+  await assert.rejects(
+    circle(scratch(t), ['--version'], {
+      stdin: null,
+      startupDelayMs: 10_001,
+      timeoutMs: 100,
+      observe: () => {
+        throw new Error('fixture observation failed');
+      },
+    }),
+    (error) => {
+      assert.ok(error instanceof CliFixtureDeadline);
+      assert.equal(error.lifecycle.stdinEndedByFixture, false);
+      assert.equal(error.lifecycle.exited, true);
+      assert.ok(error.lifecycle.signal);
+      assert.ok(error.lifecycle.closedAt! >= error.lifecycle.timedOutAt!);
+      assert.deepEqual(error.observation, {
+        observationError: 'Error: fixture observation failed',
+      });
+      return true;
+    },
+  );
 });
 
 test('the trust question asked line by line saves the folder, and no keeps it untrusted', async (t) => {

@@ -16,6 +16,7 @@ import { realpathSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { DeliveryService } from '../src/workspace/delivery.ts';
+import { GitWorkspaceService } from '../src/workspace/git.ts';
 import { startNodeCliFixture } from './helpers/node-cli-fixture.ts';
 import { WorkspaceEventStream } from '../src/workspace/event-stream.ts';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -957,6 +958,73 @@ test('controller task verification executes a pinned project oracle in an isolat
 });
 
 test('controller isolates same-named cycles by session and repairs real PR checks before human merge', async (t) => {
+  // Observe actual operations without substituting results or caching scans.
+  // Nested spans distinguish Git process time from verifier/reviewer wall time.
+  const operationTimings: unknown[] = [];
+  let operationSequence = 0;
+  async function timed<T>(
+    kind: string,
+    details: Record<string, unknown>,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const id = ++operationSequence;
+    const startedAt = Date.now();
+    const start = performance.now();
+    operationTimings.push({ id, kind, event: 'start', startedAt, ...details });
+    try {
+      const result = await run();
+      operationTimings.push({
+        id,
+        kind,
+        event: 'end',
+        startedAt,
+        endedAt: Date.now(),
+        durationMs: performance.now() - start,
+        status: 'completed',
+        ...details,
+      });
+      return result;
+    } catch (error) {
+      operationTimings.push({
+        id,
+        kind,
+        event: 'end',
+        startedAt,
+        endedAt: Date.now(),
+        durationMs: performance.now() - start,
+        status: 'failed',
+        error: String(error),
+        ...details,
+      });
+      throw error;
+    }
+  }
+  const actualGit = GitWorkspaceService.prototype.git;
+  const actualSnapshot = GitWorkspaceService.prototype.snapshot;
+  t.mock.method(
+    GitWorkspaceService.prototype,
+    'git',
+    function (this: GitWorkspaceService, args: string[], input?: string) {
+      return timed(
+        'git',
+        {
+          cwd: this.root,
+          args,
+          inputBytes: input === undefined ? 0 : Buffer.byteLength(input),
+        },
+        () => actualGit.call(this, args, input),
+      );
+    },
+  );
+  t.mock.method(
+    GitWorkspaceService.prototype,
+    'snapshot',
+    function (this: GitWorkspaceService) {
+      return timed('git.snapshot', { cwd: this.root }, () =>
+        actualSnapshot.call(this),
+      );
+    },
+  );
   const tools = await mkdtemp(join(tmpdir(), 'circle-cycle-gh-'));
   const cliTranscript = join(
     import.meta.dirname,
@@ -970,6 +1038,10 @@ test('controller isolates same-named cycles by session and repairs real PR check
       await readFile(join(tools, 'calls'), 'utf8').catch((error) =>
         JSON.stringify({ error: String(error) }),
       ),
+    );
+    await writeFile(
+      cliTranscript.replace('controller-cli-', 'controller-operation-'),
+      operationTimings.map((entry) => JSON.stringify(entry)).join('\n') + '\n',
     );
     await rm(tools, { recursive: true, force: true });
   });
@@ -1059,6 +1131,32 @@ if(process.argv[2]==='--ipc'){
       ghPath: gh,
     },
   });
+  const controller = f.controller as any;
+  const actualVerifier = controller.taskVerifier.bind(controller);
+  const wrappedVerifiers = new WeakMap<Function, Function>();
+  t.mock.method(
+    controller,
+    'taskVerifier',
+    (workspace: string, baseline: string) => {
+      const verifier = actualVerifier(workspace, baseline);
+      let wrapped = wrappedVerifiers.get(verifier);
+      if (!wrapped) {
+        wrapped = (task: any, context: any) =>
+          timed(
+            'task.verify',
+            {
+              taskId: task.spec.id,
+              baseline: task.spec.baseline,
+              cwd: context.worktree,
+              attempt: task.attempt,
+            },
+            () => verifier(task, context),
+          );
+        wrappedVerifiers.set(verifier, wrapped);
+      }
+      return wrapped;
+    },
+  );
   try {
     execFileSync('git', ['-C', f.workspace, 'config', 'user.name', 'Fixture']);
     execFileSync('git', [
@@ -1215,6 +1313,7 @@ if(process.argv[2]==='--ipc'){
       const records = (taskReply.data ?? []) as any[];
       const receipt = {
         cliTranscript,
+        operationTimings,
         cycles: [...final.values()],
         deadline: end,
         finalObservations: Object.fromEntries(observedAt),

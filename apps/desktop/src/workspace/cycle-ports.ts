@@ -196,10 +196,20 @@ export function createWorkspaceCyclePorts(
           ).trim(),
         ),
       );
-    if ((await common(original)) !== (await common(target)))
+    const [sourceCommon, targetCommon] = await Promise.all([
+      common(original),
+      common(target),
+    ]);
+    if (sourceCommon !== targetCommon)
       throw Error('cycle integration belongs to another repository');
-    const snapshot = await (await git(target)).snapshot();
-    if (snapshot.branch !== owner.branch || !owner.branch.startsWith('codex/'))
+    const branch = (
+      await (
+        await git(target)
+      )
+        .git(['symbolic-ref', '--short', '-q', 'HEAD'])
+        .catch(() => 'detached')
+    ).trim();
+    if (branch !== owner.branch || !owner.branch.startsWith('codex/'))
       throw Error(
         'cycle integration branch changed; inspect before continuing',
       );
@@ -298,6 +308,10 @@ export function createWorkspaceCyclePorts(
     const owner = await owned(cycle),
       service = await git(owner.integration.path),
       snapshot = await service.snapshot();
+    if (snapshot.branch !== owner.branch)
+      throw Error(
+        'cycle integration branch changed; inspect before continuing',
+      );
     if (
       expected &&
       (snapshot.revision !== expected.revision ||

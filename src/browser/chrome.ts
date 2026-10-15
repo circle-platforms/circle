@@ -469,12 +469,21 @@ export class ChromeBrowser implements BrowserPort {
       process.kill(-pid, 0);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
-      throw error;
+      // Darwin may deny a group probe after termination. EPERM proves neither
+      // exit nor liveness: inspect actual members below, and fail if ps fails.
+      if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
     }
     // An exited grandchild can remain a zombie until the OS reaps it; it cannot run or write.
     const output = await new Promise<string>((resolve, reject) =>
-      execFile('ps', ['-A', '-o', 'pgid=,stat='], (error, stdout) =>
-        error ? reject(error) : resolve(stdout),
+      execFile(
+        'ps',
+        ['-A', '-o', 'pgid=,stat='],
+        {
+          timeout: Math.max(1, this.options.closeTimeout ?? 3000),
+          // A stalled inspector must not outlive this check by ignoring SIGTERM.
+          killSignal: 'SIGKILL',
+        },
+        (error, stdout) => (error ? reject(error) : resolve(stdout)),
       ),
     );
     return output.split('\n').some((line) => {

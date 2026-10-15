@@ -338,8 +338,8 @@ export function runningCopies(
         pids.add(Number(name));
     }
   } else if (where.platform === 'win32') {
-    // Windows will not open a running program for writing. Listing processes starts PowerShell,
-    // which took 15 to 20 s on a loaded machine, so it runs only when a program of a copy is held.
+    // Windows will not open a running program for writing. Query only after a
+    // held program is found; Get-Process avoids starting the WMI/CIM provider.
     const programs = [...scripts];
     let unread = false;
     for (const folder of folders)
@@ -371,9 +371,8 @@ export function runningCopies(
           '-NonInteractive',
           '-Command',
           // Paths in Base64, so letters outside the console code page come back as they are
-          'Get-CimInstance -ClassName Win32_Process -Property ProcessId,ExecutablePath | ' +
-            'Where-Object { $_.ExecutablePath } | ForEach-Object { "$($_.ProcessId) ' +
-            '$([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($_.ExecutablePath)))" }',
+          'Get-Process | Where-Object { $_.Path } | ForEach-Object { "$($_.Id) ' +
+            '$([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($_.Path)))" }',
         ],
         LIST_TIMEOUT,
       );
