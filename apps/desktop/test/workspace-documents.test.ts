@@ -2,6 +2,7 @@ import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   link,
+  chmod,
   mkdtemp,
   mkdir,
   readFile,
@@ -241,6 +242,66 @@ test('cancellation between committed documents reports partial progress without 
   assert.equal(await readFile(join(root, 'a.ts'), 'utf8'), 'new A');
   assert.equal(await readFile(join(root, 'b.ts'), 'utf8'), 'B');
 });
+
+test(
+  'cleanup failure retains partial disk facts and names the staged file',
+  {
+    skip: process.platform === 'win32' || process.getuid?.() === 0,
+  },
+  async (t) => {
+    const { root, documents } = await fixture(t);
+    await writeFile(join(root, 'a.ts'), 'A');
+    await writeFile(join(root, 'b.ts'), 'B');
+    const a = await documents.read('a.ts');
+    const b = await documents.read('b.ts');
+    const reader = documents as unknown as {
+      readTarget(
+        full: string,
+        path: string,
+        signal?: AbortSignal,
+      ): Promise<WorkspaceDocument>;
+    };
+    const original = reader.readTarget.bind(documents);
+    t.mock.method(
+      reader,
+      'readTarget',
+      async (full: string, path: string, signal?: AbortSignal) => {
+        const value = await original(full, path, signal);
+        if (path === 'a.ts' && value.content === 'new A') {
+          await chmod(root, 0o500);
+          throw Error('read failure after permissions changed');
+        }
+        return value;
+      },
+    );
+    try {
+      const result = await documents.applyEdits([
+        { path: 'a.ts', content: 'new A', expectedRevision: a.revision },
+        { path: 'b.ts', content: 'new B', expectedRevision: b.revision },
+      ]);
+      assert.equal(result.status, 'partial');
+      assert.deepEqual(result.committedPaths, ['a.ts']);
+      assert.deepEqual(
+        result.remaining.map((edit) => edit.path),
+        ['b.ts'],
+      );
+      assert.ok(
+        result.failures.some((failure) =>
+          failure.message.includes('could not remove staged file'),
+        ),
+      );
+      assert.equal(await readFile(join(root, 'a.ts'), 'utf8'), 'new A');
+      assert.equal(await readFile(join(root, 'b.ts'), 'utf8'), 'B');
+      assert.ok(
+        (await readdir(root)).some((name) =>
+          name.startsWith('.circle-document-'),
+        ),
+      );
+    } finally {
+      await chmod(root, 0o700);
+    }
+  },
+);
 
 test('cancelled writes never create or replace files', async (t) => {
   const { root, documents } = await fixture(t);

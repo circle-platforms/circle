@@ -436,6 +436,7 @@ export class WorkspaceDocuments {
       const applied: WorkspaceDocument[] = [];
       const committedPaths: string[] = [];
       const staged: { full: string; temporary: string }[] = [];
+      let result: WorkspaceEditResult | undefined;
       let active = 0;
       try {
         if (new Set(edits.map((edit) => edit.path)).size !== edits.length)
@@ -462,13 +463,14 @@ export class WorkspaceDocuments {
           // Once replacement happened, report it even if cancellation arrives.
           applied.push(await this.readTarget(staged[index]!.full, edit.path));
         }
-        return {
+        result = {
           status: 'applied',
           applied,
           committedPaths,
           failures: [],
           remaining: [],
         };
+        return result;
       } catch (error) {
         const failure: WorkspaceEditFailure = {
           path: edits[active]?.path ?? '',
@@ -486,17 +488,28 @@ export class WorkspaceDocuments {
             : {}),
         };
         const committed = new Set(committedPaths);
-        return {
+        result = {
           status: committedPaths.length ? 'partial' : 'rejected',
           applied,
           committedPaths,
           failures: [failure],
           remaining: edits.filter((edit) => !committed.has(edit.path)),
         };
+        return result;
       } finally {
-        await Promise.all(
+        const cleanup = await Promise.allSettled(
           staged.map(({ temporary }) => rm(temporary, { force: true })),
         );
+        for (const [index, outcome] of cleanup.entries()) {
+          if (outcome.status !== 'rejected') continue;
+          if (!result) throw outcome.reason;
+          result.status = committedPaths.length ? 'partial' : 'rejected';
+          result.failures.push({
+            path: relative(this.root, staged[index]!.full).split(sep).join('/'),
+            kind: 'io',
+            message: `could not remove staged file ${basename(staged[index]!.temporary)}: ${errorMessage(outcome.reason)}`,
+          });
+        }
       }
     }, options.signal);
   }
