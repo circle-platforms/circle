@@ -32,6 +32,7 @@ import {
   loadSettings,
   settingsForRun,
   saveSettingsChange,
+  withConnectionLock,
   saveCredentials,
   clearCredentials,
   withConnection,
@@ -52,7 +53,11 @@ import {
 import { loadSkillBody } from '../../../src/skills.js';
 import { attachmentFromBase64, MAX_MEDIA_BYTES } from '../../../src/media.js';
 import { readPrompt } from '../../../src/system_prompt.js';
-import { toMarkdown, toHtml } from '../../../src/session_export.js';
+import {
+  toMarkdown,
+  toHtml,
+  toSessionBundle,
+} from '../../../src/session_export.js';
 import {
   browserTools,
   runtimeBrowserOptions,
@@ -238,6 +243,9 @@ export class RuntimeController {
   // The last link an extension asked to open; the window opens each id once.
   private openRequest?: { id: string; url: string; sessionId: string };
   private active!: AgentRuntime;
+  // Inspecting another process's history never acquires its execution lease.
+  private viewedSessionId?: string;
+  private pendingTrustReloads = new Set<AgentRuntime>();
   private previous: string | null = null;
   private sequence = 0;
   private pending = new Map<string, Pending>();
@@ -421,9 +429,57 @@ export class RuntimeController {
     return runtime;
   }
   private selectRuntime(runtime: AgentRuntime): void {
-    this.previous = this.active.session.id;
+    this.previous = this.selectedSessionId;
     this.active = runtime;
+    this.viewedSessionId = undefined;
     this.workspaceSessions.set(runtime.options.workspace, runtime.session.id);
+  }
+  private get selectedSessionId(): string {
+    return this.viewedSessionId ?? this.active.session.id;
+  }
+  private get selectedWorkspace(): string {
+    return this.viewedSessionId
+      ? (this.store.get(this.viewedSessionId)?.workspace ??
+          this.active.options.workspace)
+      : this.active.options.workspace;
+  }
+  private async reloadTrustedRuntime(runtime: AgentRuntime): Promise<void> {
+    if (
+      !this.pendingTrustReloads.has(runtime) ||
+      runtime.busy ||
+      runtime.isClosing ||
+      this.closing
+    )
+      return;
+    this.pendingTrustReloads.delete(runtime);
+    try {
+      await runtime.reloadIntegrations();
+    } catch (error) {
+      if (!runtime.isClosing) this.pendingTrustReloads.add(runtime);
+      throw error;
+    }
+  }
+  private synchronizeSharedSettings(settings: CircleSettings): void {
+    for (const owner of this.runtimes.values()) {
+      if (
+        !owner.options.localContext &&
+        isFolderTrusted(settings, owner.options.workspace) &&
+        !owner.isClosing
+      ) {
+        owner.options.localContext = true;
+        this.pendingTrustReloads.add(owner);
+      }
+      Object.assign(owner.options.settings, {
+        theme: settings.theme,
+        hide_thinking: settings.hide_thinking,
+        double_escape: settings.double_escape,
+        update_check: settings.update_check,
+        enabled_models: [...settings.enabled_models],
+        credential_files: [...settings.credential_files],
+        variables: { ...settings.variables },
+        trusted_folders: [...settings.trusted_folders],
+      });
+    }
   }
   private createRuntime(workspace: string, sessionId?: string): AgentRuntime {
     const settings = settingsForRun(this.home, workspace).settings;
@@ -500,8 +556,8 @@ export class RuntimeController {
   }
   private persistLocation() {
     writePrivateJson(join(this.home, 'desktop-session.json'), {
-      workspace: this.active.options.workspace,
-      sessionId: this.active.session.id,
+      workspace: this.selectedWorkspace,
+      sessionId: this.selectedSessionId,
     });
   }
   private projectMessages(runtime: AgentRuntime, id: string): Message[] {
@@ -642,9 +698,12 @@ export class RuntimeController {
   }
   snapshot(): WorkbenchSnapshot {
     this.metadata.refresh();
+    if (this.viewedSessionId && !this.store.get(this.viewedSessionId))
+      this.viewedSessionId = undefined;
     const runtime = this.active;
     const settings = runtime.options.settings;
     const savedSettings = loadSettings(this.home);
+    const inspecting = !!this.viewedSessionId;
     const defaultFolder = this.defaultWorkspace(savedSettings);
     const rows = this.store.list();
     const paths = [
@@ -688,8 +747,9 @@ export class RuntimeController {
         title: row.title || 'new session',
         workspaceId: identity(row.workspace),
         model: selected ? owner.harness.model.model : row.model,
-        effort: ((selected ? owner.thinkingLevel : settings.default_thinking) ||
-          'default') as Effort,
+        effort: ((selected
+          ? owner.thinkingLevel
+          : savedSettings.default_thinking) || 'default') as Effort,
         draft: '',
         attachments: [],
         messages: this.projectMessages(runtime, row.id),
@@ -716,7 +776,7 @@ export class RuntimeController {
         meters: selected && !owner.isClosing ? this.meters(owner) : undefined,
         turn: this.turn(row.id),
         changes: this.changeList(row.id),
-        showThinking: !settings.hide_thinking,
+        showThinking: !savedSettings.hide_thinking,
         expandTools: false,
         todos: selected
           ? owner.todos.map((todo, i) => ({
@@ -753,7 +813,7 @@ export class RuntimeController {
       });
     return {
       version: 1,
-      activeSessionId: runtime.session.id,
+      activeSessionId: this.selectedSessionId,
       previousSessionId: this.previous,
       runtime: {
         connected: !this.closing,
@@ -770,7 +830,7 @@ export class RuntimeController {
         name: path === join(this.home, 'workspace') ? 'circle' : basename(path),
         path,
         branch: this.branch(path),
-        trusted: isFolderTrusted(settings, path),
+        trusted: isFolderTrusted(savedSettings, path),
         origin: 'native',
         instructions: [],
       })),
@@ -836,48 +896,53 @@ export class RuntimeController {
         })),
       ),
       models,
-      skills: runtime.skills.map((skill) => ({
-        id: identity(skill.path),
-        name: skill.name,
-        description: skill.description,
-        path: skill.path,
-        scope:
-          skill.source_label.startsWith('Project') ||
-          skill.source_label.startsWith('Ancestor')
-            ? 'project'
-            : 'user',
-        content: loadSkillBody(skill.name, runtime.skills),
-      })),
-      commands: isFolderTrusted(settings, runtime.options.workspace)
-        ? [
-            ...discoverCustomCommands(
-              runtime.options.workspace,
-              this.home,
-              this.options.userHome,
-            ).map((command) => ({
-              name: command.name,
-              description: command.description,
-              arguments: command.argument_hint,
-              scope: command.source.startsWith(runtime.options.workspace)
-                ? ('project' as const)
-                : ('user' as const),
-              template: command.template,
-            })),
-            ...[...runtime.extensions.commands().values()].map((command) => ({
-              name: command.name,
-              description: command.description,
-              arguments: '',
-              scope: 'extension' as const,
-              template: '',
-            })),
-          ]
-        : [],
+      skills: inspecting
+        ? []
+        : runtime.skills.map((skill) => ({
+            id: identity(skill.path),
+            name: skill.name,
+            description: skill.description,
+            path: skill.path,
+            scope:
+              skill.source_label.startsWith('Project') ||
+              skill.source_label.startsWith('Ancestor')
+                ? 'project'
+                : 'user',
+            content: loadSkillBody(skill.name, runtime.skills),
+          })),
+      commands:
+        !inspecting && isFolderTrusted(settings, runtime.options.workspace)
+          ? [
+              ...discoverCustomCommands(
+                runtime.options.workspace,
+                this.home,
+                this.options.userHome,
+              ).map((command) => ({
+                name: command.name,
+                description: command.description,
+                arguments: command.argument_hint,
+                scope: command.source.startsWith(runtime.options.workspace)
+                  ? ('project' as const)
+                  : ('user' as const),
+                template: command.template,
+              })),
+              ...[...runtime.extensions.commands().values()].map((command) => ({
+                name: command.name,
+                description: command.description,
+                arguments: '',
+                scope: 'extension' as const,
+                template: '',
+              })),
+            ]
+          : [],
       mcp: savedSettings.mcp_servers.map((spec, i) => {
-        const applied = settings.mcp_servers.find(
-          (row) => row.name === spec.name,
-        );
+        const applied = inspecting
+          ? undefined
+          : settings.mcp_servers.find((row) => row.name === spec.name);
         const pendingReload = JSON.stringify(applied) !== JSON.stringify(spec);
-        const status = runtime.mcp.status.find((row) => row.name === spec.name);
+        const status = inspecting
+          ? undefined
+          : runtime.mcp.status.find((row) => row.name === spec.name);
         return {
           id: String(spec.id ?? spec.name ?? i),
           name: String(spec.name ?? `server ${i + 1}`),
@@ -905,48 +970,56 @@ export class RuntimeController {
             })),
         };
       }),
-      extensions: runtime.extensions.extensions.map((extension) => ({
-        id: extension.name,
-        name: extension.name,
-        version: extension.version,
-        scope: extension.source,
-        enabled: extension.enabled,
-        status:
-          extension.enabled && !extension.error ? extension.status : undefined,
-        view:
-          extension.enabled && !extension.error ? extension.view : undefined,
-        tools: extension.tools.map((tool) => tool.name),
-        commands: extension.commands.map((command) => command.name),
-        events: [...extension.handlers.keys()],
-        error: extension.error || undefined,
-      })),
+      extensions: inspecting
+        ? []
+        : runtime.extensions.extensions.map((extension) => ({
+            id: extension.name,
+            name: extension.name,
+            version: extension.version,
+            scope: extension.source,
+            enabled: extension.enabled,
+            status:
+              extension.enabled && !extension.error
+                ? extension.status
+                : undefined,
+            view:
+              extension.enabled && !extension.error
+                ? extension.view
+                : undefined,
+            tools: extension.tools.map((tool) => tool.name),
+            commands: extension.commands.map((command) => command.name),
+            events: [...extension.handlers.keys()],
+            error: extension.error || undefined,
+          })),
       requests: [],
-      tools: runtime.allTools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        kind: tool.effect,
-        detail:
-          tool.approval === false
-            ? 'Runs under the core tool boundary.'
-            : 'Approval is enforced by the Circle core.',
-        schema: tool.parameters,
-      })),
+      tools: inspecting
+        ? []
+        : runtime.allTools.map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            kind: tool.effect,
+            detail:
+              tool.approval === false
+                ? 'Runs under the core tool boundary.'
+                : 'Approval is enforced by the Circle core.',
+            schema: tool.parameters,
+          })),
       uiPlugins: ['files', 'activity', 'browser'],
       openUrl: this.openRequest,
       settings: {
-        theme: settings.theme,
-        hideThinking: settings.hide_thinking,
-        defaultModel: settings.auth.model,
-        defaultEffort: (settings.default_thinking || 'default') as Effort,
-        enabledModels: settings.enabled_models,
-        doubleEscape: settings.double_escape,
+        theme: savedSettings.theme,
+        hideThinking: savedSettings.hide_thinking,
+        defaultModel: savedSettings.auth.model,
+        defaultEffort: (savedSettings.default_thinking || 'default') as Effort,
+        enabledModels: savedSettings.enabled_models,
+        doubleEscape: savedSettings.double_escape,
         endpoint: settings.auth.base_url,
         protocol: settings.auth.protocol as 'openai' | 'anthropic',
-        credentialFiles: settings.credential_files,
-        variables: { ...settings.variables },
+        credentialFiles: savedSettings.credential_files,
+        variables: { ...savedSettings.variables },
         // Names only: a saved value never leaves the runtime
         secrets: secretNames(this.home),
-        updateCheck: settings.update_check,
+        updateCheck: savedSettings.update_check,
         workspaceFolder: defaultFolder.folder,
         ...(defaultFolder.stale
           ? { oldWorkspaceFolder: defaultFolder.stale }
@@ -1098,6 +1171,14 @@ export class RuntimeController {
   }
   private event(runtime: AgentRuntime, event: CircleEvent) {
     if (runtime.isClosing) return;
+    if (
+      ['run_end', 'run_error'].includes(event.kind) &&
+      this.pendingTrustReloads.has(runtime)
+    )
+      setImmediate(() => {
+        if (!runtime.isClosing && !this.closing)
+          this.track(this.reloadTrustedRuntime(runtime), runtime, true);
+      });
     const id = String(
       event.tags?.subagent ?? event.tags?.session_id ?? runtime.session.id,
     );
@@ -1575,7 +1656,7 @@ export class RuntimeController {
         // Reject stale actions after a session switch. Answer additionally binds its request origin.
         if (
           command.sessionId &&
-          command.sessionId !== this.active.session.id &&
+          command.sessionId !== this.selectedSessionId &&
           ![
             'select-session',
             'delete-session',
@@ -1606,6 +1687,7 @@ export class RuntimeController {
       'close',
       'background',
       'stop-job',
+      'delete-session',
     ].includes(command.name);
     const result = immediate ? operation() : this.mutation.then(operation);
     if (!immediate) this.mutation = result.then(() => {});
@@ -1638,10 +1720,40 @@ export class RuntimeController {
   }
   private async execute(command: RuntimeCommand): Promise<unknown> {
     this.metadata.refresh();
+    this.synchronizeSharedSettings(loadSettings(this.home));
     const p = command.payload;
     let runtime = this.active;
     if (
-      this.runtimes.lifecycle(runtime.session.id) !== 'open' &&
+      this.viewedSessionId &&
+      ![
+        'state',
+        'close',
+        'select-session',
+        'new-session',
+        'open-workspace',
+        'set-default-workspace',
+        'delete-session',
+        'archive-session',
+        'archive-workspace',
+        'rename-session',
+        'answer',
+        'stop-job',
+        'export',
+        'clone',
+        'fork',
+      ].includes(command.name)
+    ) {
+      const row = this.store.get(this.viewedSessionId);
+      if (!row) throw Error('session not found');
+      // This acquires a lease only after the previous writer released it. A live
+      // foreign writer rejects the action without touching the selected history.
+      runtime = this.runtimes.open(row.workspace, row.id);
+      this.active = runtime;
+      this.viewedSessionId = undefined;
+      this.workspaceSessions.set(row.workspace, row.id);
+    }
+    if (
+      this.runtimes.lifecycle(this.selectedSessionId) !== 'open' &&
       ![
         'state',
         'close',
@@ -1653,7 +1765,7 @@ export class RuntimeController {
     )
       throw Error('session is deleting; wait for cleanup to finish');
     if (
-      this.metadata.archivedAt(runtime.session.id) &&
+      this.metadata.archivedAt(this.selectedSessionId) &&
       [
         'prompt',
         'shell',
@@ -1676,6 +1788,7 @@ export class RuntimeController {
       case 'state':
         return this.snapshot();
       case 'prompt': {
+        await this.reloadTrustedRuntime(runtime);
         if (
           !isFolderTrusted(runtime.options.settings, runtime.options.workspace)
         )
@@ -1750,7 +1863,7 @@ export class RuntimeController {
       case 'background':
         return runtime.jobs.backgroundForeground();
       case 'new-session': {
-        const owner = this.runtimes.create(runtime.options.workspace);
+        const owner = this.runtimes.create(this.selectedWorkspace);
         this.selectRuntime(owner);
         return { sessionId: owner.session.id };
       }
@@ -1758,10 +1871,20 @@ export class RuntimeController {
         const id = text(p.id, 'session', 200);
         const row = this.store.get(id);
         if (!row || row.parent_id) throw Error('session not found');
-        if (id === runtime.session.id) return { sessionId: id };
-        const owner = this.runtimes.open(row.workspace, id);
-        this.selectRuntime(owner);
-        return { sessionId: owner.session.id };
+        if (id === this.selectedSessionId && !this.viewedSessionId)
+          return { sessionId: id };
+        try {
+          const owner = this.runtimes.open(row.workspace, id);
+          await this.reloadTrustedRuntime(owner);
+          if (owner.isClosing || this.closing)
+            throw Error('session is closing');
+          this.selectRuntime(owner);
+        } catch (error) {
+          if (!(error instanceof SessionOccupiedError)) throw error;
+          this.previous = this.selectedSessionId;
+          this.viewedSessionId = id;
+        }
+        return { sessionId: id };
       }
       case 'delete-session': {
         const id = text(p.id, 'session', 200);
@@ -1824,7 +1947,8 @@ export class RuntimeController {
         if (this.previous === id) this.previous = null;
         if (this.workspaceSessions.get(row.workspace) === id)
           this.workspaceSessions.delete(row.workspace);
-        if (this.active === owner) {
+        this.pendingTrustReloads.delete(owner);
+        if (!this.closing && this.active === owner) {
           const fallback = this.store
             .list(row.workspace)
             .find(
@@ -1838,11 +1962,11 @@ export class RuntimeController {
             : this.runtimes.create(row.workspace);
           this.workspaceSessions.set(row.workspace, this.active.session.id);
         }
-        return { sessionId: this.active.session.id };
+        return { sessionId: this.selectedSessionId };
       }
       case 'archive-session': {
         const id = text(p.id, 'session', 200);
-        const row = runtime.store.get(id);
+        const row = this.store.get(id);
         if (!row || row.parent_id) throw Error('session not found');
         const archive = flag(p.archived);
         if (archive) this.assertArchivable(id, row.workspace);
@@ -1851,7 +1975,7 @@ export class RuntimeController {
       }
       case 'archive-workspace': {
         const workspaceId = text(p.workspaceId, 'workspace', 200);
-        const rows = runtime.store
+        const rows = this.store
           .list()
           .filter((row) => identity(row.workspace) === workspaceId);
         if (!rows.length) throw Error('workspace not found');
@@ -1863,9 +1987,9 @@ export class RuntimeController {
         return { archived: rows.length };
       }
       case 'rename-session':
-        if (!runtime.store.get(String(p.id ?? command.sessionId)))
+        if (!this.store.get(String(p.id ?? command.sessionId)))
           throw Error('session not found');
-        runtime.store.rename(
+        this.store.rename(
           String(p.id ?? command.sessionId),
           text(p.title, 'title', 500),
         );
@@ -1879,31 +2003,28 @@ export class RuntimeController {
             runtime.jobs.list().some((job) => job.status === 'running'))
         )
           throw Error('stop the current turn before branching');
-        const nodes = runtime.store.tree(runtime.session.id);
+        const sourceId = this.selectedSessionId;
+        const workspace = this.selectedWorkspace;
+        const nodes = this.store.tree(sourceId);
         const node = p.messageId
           ? nodes.find((node) => node.id === p.messageId)
           : undefined;
-        if (p.messageId && !node) throw Error('checkpoint not found');
+        if ((p.messageId || command.name !== 'clone') && !node)
+          throw Error('checkpoint not found');
         const head =
           command.name === 'clone'
-            ? runtime.store.get(runtime.session.id)!.head
+            ? this.store.get(sourceId)!.head
             : command.name === 'fork'
               ? node!.parent
               : node!.id;
-        runtime.store.requireBalancedTools(
-          runtime.store.messages(runtime.session.id, head),
-        );
+        this.store.requireBalancedTools(this.store.messages(sourceId, head));
         if (command.name === 'select-branch') {
           runtime.store.select(runtime.session.id, head);
           await runtime.switchSession(runtime.session.id);
         } else {
-          const previous = runtime.session.id;
-          const fork = runtime.store.fork(
-            runtime.session.id,
-            runtime.options.workspace,
-            head,
-          );
-          const owner = this.runtimes.open(runtime.options.workspace, fork.id);
+          const previous = sourceId;
+          const fork = this.store.fork(sourceId, workspace, head);
+          const owner = this.runtimes.open(workspace, fork.id);
           this.selectRuntime(owner);
           runtime = owner;
           this.previous = previous;
@@ -1968,17 +2089,19 @@ export class RuntimeController {
         // change alone; another host needs its own key.
         const secret = this.keyFor(baseUrl, p.apiKey);
         if (!secret) throw Error('enter the API key for this endpoint');
-        saveCredentials({ api_key: secret }, this.home);
-        this.keySaved = true;
-        const settings = saveSettingsChange(this.home, (saved) => {
-          Object.assign(
-            saved,
-            withConnection(
-              { protocol, base_url: baseUrl, model, api_key_ref: 'api_key' },
-              this.home,
-            ),
-          );
+        const settings = withConnectionLock(this.home, () => {
+          saveCredentials({ api_key: secret }, this.home);
+          return saveSettingsChange(this.home, (saved) => {
+            Object.assign(
+              saved,
+              withConnection(
+                { protocol, base_url: baseUrl, model, api_key_ref: 'api_key' },
+                this.home,
+              ),
+            );
+          });
         });
+        this.keySaved = true;
         // The models listed are this endpoint's: what the form's probe found at the URL and
         // kind of API being saved, or none until they are asked for.
         const probed = this.probed;
@@ -2039,10 +2162,12 @@ export class RuntimeController {
           )
         )
           throw Error('stop the current turn before signing out');
-        clearCredentials(this.home);
-        const settings = saveSettingsChange(this.home, (saved) => {
-          saved.initialized = false;
-          saved.auth.base_url = '';
+        const settings = withConnectionLock(this.home, () => {
+          clearCredentials(this.home);
+          return saveSettingsChange(this.home, (saved) => {
+            saved.initialized = false;
+            saved.auth.base_url = '';
+          });
         });
         for (const owner of this.runtimes.values()) {
           owner.refreshConnection({
@@ -2056,11 +2181,20 @@ export class RuntimeController {
       case 'trust': {
         if (p.enabled !== true)
           throw Error('explicit trust confirmation required');
-        saveSettingsChange(this.home, (saved) => {
+        const settings = saveSettingsChange(this.home, (saved) => {
           Object.assign(saved, trustFolder(saved, runtime.options.workspace));
         });
-        runtime.options.localContext = true;
-        await runtime.reloadIntegrations();
+        this.synchronizeSharedSettings(settings);
+        const reloads: Promise<void>[] = [];
+        for (const owner of this.runtimes.values())
+          if (
+            owner.options.workspace === runtime.options.workspace &&
+            this.pendingTrustReloads.has(owner) &&
+            !owner.isClosing
+          ) {
+            reloads.push(this.reloadTrustedRuntime(owner));
+          }
+        await Promise.all(reloads);
         return {};
       }
       case 'save-settings': {
@@ -2182,15 +2316,7 @@ export class RuntimeController {
               };
           }
         });
-        Object.assign(runtime.options.settings, {
-          theme: settings.theme,
-          hide_thinking: settings.hide_thinking,
-          double_escape: settings.double_escape,
-          update_check: settings.update_check,
-          enabled_models: settings.enabled_models,
-          credential_files: settings.credential_files,
-          variables: settings.variables,
-        });
+        this.synchronizeSharedSettings(settings);
         if (data.variables !== undefined)
           for (const owner of this.runtimes.values()) {
             owner.options.settings.variables = { ...settings.variables };
@@ -2264,8 +2390,14 @@ export class RuntimeController {
         const format = p.format ?? 'jsonl';
         if (!['jsonl', 'html', 'md'].includes(String(format)))
           throw Error('choose jsonl, html or md');
-        runtime.exportSession(); // The same busy/background gate also applies to presentation exports.
-        const row = runtime.store.get(runtime.session.id)!;
+        // A foreign view reads committed history without instantiating an executable
+        // owner. Its export still requires complete tool call/result pairs.
+        if (!this.viewedSessionId) runtime.exportSession();
+        const row = this.store.get(this.selectedSessionId)!;
+        const messages = this.viewedSessionId
+          ? this.store.messages(row.id)
+          : runtime.harness.messages;
+        this.store.requireBalancedTools(messages);
         const meta = {
           thread_id: row.id,
           title: row.title,
@@ -2275,11 +2407,13 @@ export class RuntimeController {
         return {
           content:
             format === 'jsonl'
-              ? runtime.exportSession()
+              ? this.viewedSessionId
+                ? toSessionBundle(this.store, row.id)
+                : runtime.exportSession()
               : format === 'html'
-                ? toHtml(runtime.harness.messages, meta)
-                : toMarkdown(runtime.harness.messages, meta),
-          name: `${runtime.session.id}.${format}`,
+                ? toHtml(messages, meta)
+                : toMarkdown(messages, meta),
+          name: `${row.id}.${format}`,
         };
       }
       case 'import': {

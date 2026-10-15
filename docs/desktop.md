@@ -37,7 +37,7 @@ Conversations in the same folder can run together. Creating or switching a conve
 
 A running turn, pending request or running background job prevents archiving, including after switching to another conversation. Archive all checks every session first and changes none when one is busy. Archive state survives restarting the application. Deleting a running conversation asks you to stop it and its tasks, waits for cleanup, and then removes its history. Deleting the selected conversation selects the most recent available conversation in that folder, or creates an empty one. Workspace files stay.
 
-A conversation open for execution in another Circle terminal cannot be resumed or deleted here until that terminal releases it; fork a saved checkpoint to work independently. Conversations in the same folder still share its real files.
+Selecting a conversation owned by another Circle terminal opens its committed history read-only. Execution and deletion stay locked until that terminal releases it; export the saved history or fork a complete checkpoint to work independently. Conversations in the same folder still share its real files.
 
 ## Asking and answering
 

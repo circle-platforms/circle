@@ -3757,11 +3757,29 @@ test('desktop startup preserves a saved session owned by another terminal and st
         .find((row) => row.id === id)!
         .messages.some((row) => row.text === 'saved bytes'),
     );
-    for (const name of [
-      'select-session',
-      'delete-session',
-      'archive-session',
-    ] as const) {
+    const select = await restarted.dispatch({
+      id: randomUUID(),
+      name: 'select-session',
+      sessionId: snapshot.activeSessionId,
+      payload: { id },
+    });
+    assert.equal(select.ok, true);
+    const viewing = restarted.snapshot();
+    assert.equal(viewing.activeSessionId, id);
+    assert.equal(viewing.sessions.find((row) => row.id === id)!.occupied, true);
+    assert(
+      viewing.sessions
+        .find((row) => row.id === id)!
+        .messages.some((row) => row.text === 'saved bytes'),
+    );
+    const prompt = await restarted.dispatch({
+      id: randomUUID(),
+      name: 'prompt',
+      sessionId: id,
+      payload: { text: 'must not execute in the foreign writer' },
+    });
+    assert.equal(prompt.ok, false);
+    for (const name of ['delete-session', 'archive-session'] as const) {
       const result = await restarted.dispatch({
         id: randomUUID(),
         name,
@@ -3770,6 +3788,35 @@ test('desktop startup preserves a saved session owned by another terminal and st
       });
       assert.equal(result.ok, false, name);
     }
+    assert.equal(owner.store.get(id)?.id, id);
+    const exported = await restarted.dispatch({
+      id: randomUUID(),
+      name: 'export',
+      sessionId: id,
+      payload: { format: 'md' },
+    });
+    assert.equal(exported.ok, true);
+    assert(
+      String((exported.data as { content: string }).content).includes(
+        'saved bytes',
+      ),
+    );
+    const cloned = await restarted.dispatch({
+      id: randomUUID(),
+      name: 'clone',
+      sessionId: id,
+      payload: {},
+    });
+    assert.equal(cloned.ok, true);
+    assert.notEqual(restarted.snapshot().activeSessionId, id);
+    assert(
+      restarted
+        .snapshot()
+        .sessions.find(
+          (row) => row.id === restarted.snapshot().activeSessionId,
+        )!
+        .messages.some((row) => row.text === 'saved bytes'),
+    );
     assert.equal(owner.store.get(id)?.id, id);
   } finally {
     await restarted.close();
@@ -3977,4 +4024,210 @@ test('the internal browser cleanup bridge awaits acknowledgment and rejects a fa
   });
   await assert.rejects(failed, /fixture close failed/);
   bridge.close();
+});
+
+test('a background session cleanup leaves selection and other model turns responsive', async (t) => {
+  let release!: () => void;
+  let entered = false;
+  let cleanups = 0;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  const f = await setup(
+    t,
+    [{ message: assistant('independent answer') }],
+    true,
+    undefined,
+    async () => {
+      cleanups++;
+      entered = true;
+      await gate;
+    },
+  );
+  const a = f.controller.snapshot().activeSessionId;
+  await f.call('new-session');
+  const b = f.controller.snapshot().activeSessionId;
+  await f.call('new-session');
+  const c = f.controller.snapshot().activeSessionId;
+  const command = {
+    id: randomUUID(),
+    name: 'delete-session' as const,
+    sessionId: c,
+    payload: { id: b, confirmed: true },
+  };
+  const deleting = f.controller.dispatch(command);
+  const retry = f.controller.dispatch(command);
+  await wait(() => entered, 'background cleanup entered');
+  assert.equal(
+    f.controller.snapshot().sessions.find((row) => row.id === b)!.lifecycle,
+    'deleting',
+  );
+  const selected = f.call('select-session', { id: a });
+  await wait(
+    () => f.controller.snapshot().activeSessionId === a,
+    'select A while B cleanup remains blocked',
+  );
+  assert.equal((await selected).ok, true);
+  assert.equal(
+    (await f.call('prompt', { text: 'A while B deletes' })).ok,
+    true,
+  );
+  await wait(
+    () =>
+      f.model.requests.length === 1 &&
+      f.controller.snapshot().sessions.find((row) => row.id === a)!.state ===
+        'idle',
+    'A completes before B cleanup',
+  );
+  assert(
+    f.controller
+      .snapshot()
+      .sessions.find((row) => row.id === a)!
+      .messages.some((row) => row.text === 'independent answer'),
+  );
+  assert.equal(cleanups, 1);
+  release();
+  assert.equal((await deleting).ok, true);
+  assert.deepEqual(await retry, await deleting);
+  assert.equal(f.controller.snapshot().activeSessionId, a);
+  assert.equal(
+    f.controller.snapshot().sessions.some((row) => row.id === b),
+    false,
+  );
+});
+
+test('closing during active deletion waits for cleanup without creating a fallback runtime', async (t) => {
+  let release!: () => void;
+  let entered = false;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  const f = await setup(t, [], true, undefined, async () => {
+    entered = true;
+    await gate;
+  });
+  const id = f.controller.snapshot().activeSessionId;
+  const deletion = f.call('delete-session', { id, confirmed: true });
+  await wait(() => entered, 'active deletion cleanup entered');
+  let closed = false;
+  const closing = f.controller.close().then(() => {
+    closed = true;
+  });
+  await delay(10);
+  assert.equal(closed, false);
+  release();
+  assert.equal((await deletion).ok, true);
+  await closing;
+  const store = new CheckpointStore(f.home);
+  try {
+    assert.equal(store.get(id), undefined);
+    assert.equal(store.list().length, 0);
+  } finally {
+    store.close();
+  }
+});
+
+test('shared desktop preferences and saved defaults do not revert when switching running same-folder sessions', async (t) => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  const f = await setup(t, [
+    async () => {
+      await gate;
+      return {
+        message: assistant('original model completed'),
+        usage: emptyUsage(),
+      };
+    },
+  ]);
+  const a = f.controller.snapshot().activeSessionId;
+  await f.call('prompt', { text: 'hold A' });
+  await wait(() => f.model.requests.length === 1, 'original model in flight');
+  await f.call('new-session');
+  const settings = {
+    theme: 'dark',
+    hideThinking: true,
+    defaultModel: 'saved-default',
+    defaultEffort: 'high',
+    doubleEscape: 'fork',
+    updateCheck: false,
+    enabledModels: ['saved-default'],
+  };
+  assert.equal((await f.call('save-settings', { settings })).ok, true);
+  await f.call('select-session', { id: a });
+  const selected = f.controller.snapshot();
+  for (const [key, value] of Object.entries(settings))
+    assert.deepEqual(
+      selected.settings[key as keyof typeof selected.settings],
+      value,
+      key,
+    );
+  assert.equal(
+    selected.sessions.find((row) => row.id === a)!.model,
+    'scripted',
+  );
+  assert.equal(selected.sessions.find((row) => row.id === a)!.state, 'waiting');
+  assert.equal(f.model.requests.length, 1);
+  release();
+  await wait(
+    () =>
+      f.controller.snapshot().sessions.find((row) => row.id === a)!.state ===
+      'idle',
+    'A original request completes',
+  );
+  assert(selected.sessions.every((row) => row.showThinking === false));
+});
+
+test('trusting a folder initializes every idle session with its own project context', async (t) => {
+  const f = await setup(
+    t,
+    [{ message: assistant('trusted A') }, { message: assistant('trusted B') }],
+    false,
+  );
+  await writeFile(
+    join(f.workspace, 'AGENTS.md'),
+    'Independent trusted workspace instructions marker.\n',
+  );
+  const a = f.controller.snapshot().activeSessionId;
+  await f.call('new-session');
+  const b = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('trust', { enabled: true })).ok, true);
+  await f.call('select-session', { id: a });
+  assert.equal(
+    (await f.call('prompt', { text: 'trusted A request' })).ok,
+    true,
+  );
+  await wait(
+    () =>
+      f.model.requests.length === 1 &&
+      f.controller.snapshot().sessions.find((row) => row.id === a)!.state ===
+        'idle',
+    'trusted A request',
+  );
+  assert(
+    f.model.requests[0]!.system.includes(
+      'Independent trusted workspace instructions marker',
+    ),
+  );
+  await f.call('select-session', { id: b });
+  assert.equal(
+    (await f.call('prompt', { text: 'trusted B request' })).ok,
+    true,
+  );
+  await wait(() => f.model.requests.length === 2, 'trusted B request');
+  assert(
+    f.model.requests[1]!.system.includes(
+      'Independent trusted workspace instructions marker',
+    ),
+  );
+  assert(
+    f.controller
+      .snapshot()
+      .workspaces.find((row) => row.path === realpathSync(f.workspace))!
+      .trusted,
+  );
 });
