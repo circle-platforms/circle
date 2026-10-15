@@ -170,6 +170,10 @@ async function fixture(t: TestContext) {
 
 test('real Git and stateful fakegh drive failed CI to repair, new push and human review without duplicate effects', async (t) => {
   const f = await fixture(t);
+  await assert.rejects(
+    f.cycle.create(f.spec, { operationId: '' }),
+    /valid operation id/,
+  );
   await f.cycle.create(f.spec, { operationId: 'create' });
   assert.equal((await f.cycle.advance('web')).state, 'repairing');
   const first = await f.git('rev-parse', 'HEAD');

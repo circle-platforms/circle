@@ -255,6 +255,8 @@ export class DeliveryCycleService {
     input: unknown,
     run: () => Promise<T>,
   ): Promise<T> {
+    if (!operationId || operationId.length > 200)
+      throw Error('valid operation id is required');
     const inputHash = hash(input);
     const previous = this.ledger.operations.find(
       (item) => item.id === operationId,
@@ -301,6 +303,8 @@ export class DeliveryCycleService {
     operation: { operationId: string },
   ): Promise<CycleRecord> {
     if (this.closed) throw Error('delivery cycle service is closed');
+    if (!operation.operationId || operation.operationId.length > 200)
+      throw Error('valid operation id is required');
     if (
       !/^[A-Za-z0-9_-]{1,100}$/.test(spec.id) ||
       !spec.workspace ||
@@ -570,9 +574,9 @@ export class DeliveryCycleService {
           results.checks.some((item) => item.bucket === 'pending')
         )
           return copy(cycle);
-        const failures = results.checks.filter(
-          (item) => item.bucket !== 'pass',
-        );
+        const failures = results.checks
+          .filter((item) => item.bucket !== 'pass')
+          .sort((left, right) => left.name.localeCompare(right.name));
         if (failures.length) {
           const logs = (
             await Promise.all(
