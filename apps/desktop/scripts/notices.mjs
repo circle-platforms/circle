@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const renderer = join(root, '../workbench');
 const entries = [];
-for (const project of [renderer, join(root, '../..')]) {
+for (const project of [renderer, root, join(root, '../..')]) {
   const lock = JSON.parse(
     await readFile(join(project, 'package-lock.json'), 'utf8'),
   );

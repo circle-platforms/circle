@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { prepareDeveloperTools } from './developer-toolchain.mjs';
 import { packager } from '@electron/packager';
 import { cp, mkdir, rm, readFile, writeFile, symlink } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +22,10 @@ if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version))
   throw Error(`invalid desktop version ${version}`);
 await rm(stage, { recursive: true, force: true });
 await mkdir(stage, { recursive: true });
+await prepareDeveloperTools(join(root, 'dist'), {
+  platform: process.env.CIRCLE_DESKTOP_PLATFORM ?? process.platform,
+  arch: process.env.CIRCLE_DESKTOP_ARCH ?? process.arch,
+});
 await cp(join(root, 'dist'), join(stage, 'dist'), { recursive: true });
 await cp(join(root, '../../LICENSE'), join(stage, 'LICENSE'));
 await cp(join(root, '../../NOTICE'), join(stage, 'NOTICE'));
@@ -60,7 +65,7 @@ const paths = await packager({
       : platform === 'win32'
         ? join(root, 'dist/assets/circle.ico')
         : join(root, 'dist/assets/circle.png'),
-  asar: true,
+  asar: { unpack: '**/{node_modules,tools}/**' },
   overwrite: true,
   prune: false,
 });
