@@ -1,8 +1,16 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync } from 'node:fs';
-import { mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join } from 'node:path';
+import {
+  mkdtemp,
+  readFile,
+  realpath,
+  stat,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import {
   CollaborationScheduler,
@@ -23,6 +31,7 @@ import {
   type AgentTaskExecutorOptions,
 } from './task-executor.js';
 import { TaskIntegrator } from './task-merge.js';
+import { taskArtifactDirectory } from './task-store.js';
 const exec = promisify(execFile);
 const settingsQueues = new Map<string, Promise<unknown>>();
 export interface TaskServiceOptions extends AgentTaskExecutorOptions {
@@ -84,6 +93,7 @@ export class TaskService {
   private readonly workspace: string;
   private readonly settingsPath: string;
   private readonly pending = new Set<Promise<unknown>>();
+  private readonly records = new Map<string, TaskRecord>();
   private readonly lifetime = new AbortController();
   private integrator?: Promise<TaskIntegrator>;
   private unsubscribe: () => void;
@@ -123,28 +133,73 @@ export class TaskService {
       limits: saved,
       executor: createAgentTaskExecutor(options),
     });
-    this.unsubscribe = this.scheduler.subscribe((event) => options.emit(event));
+    for (const task of this.scheduler.list())
+      for (const attempt of this.scheduler.attempts(task.spec.id))
+        this.records.set(`${attempt.spec.id}:${attempt.attempt}`, attempt);
+    this.unsubscribe = this.scheduler.subscribe((event) => {
+      if (event.taskId) {
+        const task = this.scheduler.get(event.taskId);
+        if (task) this.records.set(`${task.spec.id}:${task.attempt}`, task);
+      }
+      options.emit(event);
+    });
     if (options.autoStart !== false) this.scheduler.start();
+  }
+  private ownedSessionIds(sessionId: string): Set<string> {
+    const sessions = new Set<string>([sessionId]);
+    let changed: boolean;
+    do {
+      changed = false;
+      for (const task of this.records.values())
+        if (
+          task.runtimeSessionId &&
+          (sessions.has(task.spec.sessionId ?? '') ||
+            sessions.has(task.runtimeSessionId)) &&
+          !sessions.has(task.runtimeSessionId)
+        ) {
+          sessions.add(task.runtimeSessionId);
+          changed = true;
+        }
+    } while (changed);
+    return sessions;
+  }
+  ownedRuntimeSessions(
+    sessionId: string,
+  ): { sessionId: string; worktree?: string }[] {
+    const owned = this.ownedSessionIds(sessionId),
+      sessions = new Map<string, { sessionId: string; worktree?: string }>();
+    for (const task of this.records.values())
+      if (task.runtimeSessionId && owned.has(task.runtimeSessionId))
+        sessions.set(task.runtimeSessionId, {
+          sessionId: task.runtimeSessionId,
+          ...(task.worktree ? { worktree: task.worktree } : {}),
+        });
+    return [...sessions.values()];
   }
   hasActiveSession(sessionId: string): boolean {
     if (this.closed) return false;
+    const owned = this.ownedSessionIds(sessionId);
     return this.scheduler
       .list()
       .some(
         (task) =>
-          (task.spec.sessionId === sessionId ||
-            task.runtimeSessionId === sessionId) &&
+          (owned.has(task.spec.sessionId ?? '') ||
+            owned.has(task.runtimeSessionId ?? '')) &&
           this.scheduler.hasActiveTask(task.spec.id),
       );
   }
   async cancelSession(sessionId: string): Promise<void> {
-    if (this.closing) throw new Error('task service is closing');
+    if (this.closing) {
+      await this.close();
+      return;
+    }
+    const sessions = this.ownedSessionIds(sessionId);
     const owned = this.scheduler
       .list()
       .filter(
         (task) =>
-          (task.spec.sessionId === sessionId ||
-            task.runtimeSessionId === sessionId) &&
+          (sessions.has(task.spec.sessionId ?? '') ||
+            sessions.has(task.runtimeSessionId ?? '')) &&
           this.scheduler.hasActiveTask(task.spec.id),
       );
     const results = await Promise.allSettled(
@@ -294,6 +349,8 @@ export class TaskService {
           params.cursor === undefined ? 0 : (params.cursor as number),
           params.limit === undefined ? 1000 : (params.limit as number),
         );
+      case 'readArtifact':
+        return this.readArtifact(params);
       case 'review':
         return this.serial(() => this.review(params));
       case 'settings':
@@ -342,6 +399,14 @@ export class TaskService {
               params.expectedHead,
               'expected integration commit',
             ),
+            ...(params.expectedBaseline === undefined
+              ? {}
+              : {
+                  expectedBaseline: string(
+                    params.expectedBaseline,
+                    'expected candidate baseline',
+                  ),
+                }),
             signal: this.lifetime.signal,
           },
         );
@@ -349,6 +414,100 @@ export class TaskService {
       default:
         throw new Error('unknown task operation');
     }
+  }
+  private async readArtifact(params: Record<string, unknown>) {
+    if (Object.hasOwn(params, 'path') || Object.hasOwn(params, 'patchPath'))
+      throw new Error('renderer cannot select artifact paths');
+    const id = string(params.id, 'task id'),
+      artifactId = string(params.artifactId, 'artifact id');
+    const task = this.scheduler.get(id);
+    if (!task) throw new Error('unknown task');
+    const artifact = this.scheduler
+      .artifacts(id)
+      .find((entry) => entry.id === artifactId);
+    if (!artifact) throw new Error('artifact does not belong to this task');
+    const attempt = this.scheduler
+      .attempts(id)
+      .find((entry) => entry.attempt === artifact.attempt);
+    if (!attempt) throw new Error('artifact attempt is missing');
+    const target = await realpath(artifact.path),
+      roots: string[] = [];
+    for (const root of [
+      attempt.worktree,
+      taskArtifactDirectory(this.options.dataDir, id, artifact.attempt),
+    ])
+      if (root)
+        try {
+          roots.push(await realpath(root));
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+    if (
+      !roots.some((root) => {
+        const path = relative(root, target);
+        return (
+          path === '' ||
+          (!isAbsolute(path) &&
+            path !== '..' &&
+            !path.startsWith('../') &&
+            !path.startsWith('..\\'))
+        );
+      })
+    )
+      throw new Error('artifact is outside its owned task resources');
+    const info = await stat(target);
+    if (!info.isFile() || info.size > 64 * 1024 * 1024)
+      throw new Error('artifact is not a supported text file');
+    const bytes = await readFile(target);
+    if (bytes.length > 64 * 1024 * 1024)
+      throw new Error('artifact is too large');
+    if (createHash('sha256').update(bytes).digest('hex') !== artifact.sha256)
+      throw new Error('artifact changed after it was recorded');
+    let content: string;
+    try {
+      content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch {
+      throw new Error('artifact is not UTF-8 text');
+    }
+    const offset = params.offset === undefined ? 0 : (params.offset as number),
+      limit =
+        params.limit === undefined ? 256 * 1024 : (params.limit as number);
+    if (
+      !Number.isSafeInteger(offset) ||
+      offset < 0 ||
+      offset > content.length ||
+      !Number.isSafeInteger(limit) ||
+      limit < 2 ||
+      limit > 1024 * 1024
+    )
+      throw new Error('invalid artifact page');
+    const low = (value: number) => value >= 0xdc00 && value <= 0xdfff,
+      high = (value: number) => value >= 0xd800 && value <= 0xdbff;
+    if (
+      offset &&
+      low(content.charCodeAt(offset)) &&
+      high(content.charCodeAt(offset - 1))
+    )
+      throw new Error('artifact offset splits a character; use nextOffset');
+    let end = Math.min(content.length, offset + limit);
+    if (
+      end < content.length &&
+      high(content.charCodeAt(end - 1)) &&
+      low(content.charCodeAt(end))
+    )
+      end--;
+    const truncated = end < content.length;
+    return {
+      id: artifact.id,
+      kind: artifact.kind,
+      sha256: artifact.sha256,
+      content: content.slice(offset, end),
+      offset,
+      ...(truncated ? { nextOffset: end } : {}),
+      truncated,
+      totalCharacters: content.length,
+      byteLength: bytes.length,
+    };
   }
   private async review(params: Record<string, unknown>): Promise<TaskRecord> {
     const id = string(params.id, 'task id'),
@@ -461,6 +620,7 @@ export class TaskService {
     const result = {
       ...previous,
       verdict: 'passed',
+      reason: 'all acceptance criteria were explicitly reviewed by a person',
       review: reviewed,
       checks: [
         ...(previous.checks ?? []),

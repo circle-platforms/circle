@@ -12,6 +12,7 @@ import { mkdir, readFile, realpath } from 'node:fs/promises';
 import { isAbsolute, join, relative } from 'node:path';
 import {
   TaskStore,
+  taskArtifactDirectory,
   type CollaborationEvent,
   type Json,
   type OperationRecord,
@@ -803,11 +804,10 @@ export class CollaborationScheduler {
     return promise;
   }
   private artifactDirectory(task: TaskRecord): string {
-    return join(
+    return taskArtifactDirectory(
       this.options.dataDir,
-      'artifacts',
-      fingerprint(task.spec.id),
-      String(task.attempt),
+      task.spec.id,
+      task.attempt,
     );
   }
   private async recordArtifact(

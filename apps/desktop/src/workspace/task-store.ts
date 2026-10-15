@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 export type Json =
@@ -73,6 +73,19 @@ export interface OperationRecord {
   attempt?: number;
   state: 'running' | 'succeeded' | 'needs_review';
   result?: Json;
+}
+
+export function taskArtifactDirectory(
+  dataDir: string,
+  taskId: string,
+  attempt: number,
+): string {
+  return join(
+    dataDir,
+    'artifacts',
+    createHash('sha256').update(JSON.stringify(taskId)).digest('hex'),
+    String(attempt),
+  );
 }
 
 /** Dedicated database: no migration or access to the user's Circle session database. */

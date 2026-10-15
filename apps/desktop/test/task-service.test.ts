@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  readFile,
+  realpath,
+  symlink,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -211,7 +218,7 @@ test('service executes real runtime, exposes actual artifacts, refuses unverifie
     verify: async (record, ctx) => {
       if (record.spec.id === 'claimed') return [];
       assert.equal(
-        await readFile(join(ctx.worktree, 'accepted.txt'), 'utf8'),
+        await readFile(join(ctx.worktree, record.spec.id + '.txt'), 'utf8'),
         'actual',
       );
       return [
@@ -219,7 +226,7 @@ test('service executes real runtime, exposes actual artifacts, refuses unverifie
           criterion: 'actual file',
           status: 'passed',
           source: 'inspection',
-          evidence: 'assert compared actual accepted.txt',
+          evidence: `assert compared actual ${record.spec.id}.txt`,
         },
       ];
     },
@@ -238,7 +245,21 @@ test('service executes real runtime, exposes actual artifacts, refuses unverifie
   assert.equal(service.getTask('claimed')!.state, 'needs_review');
   const artifacts = (await service.call('origin', 'artifacts', {
     id: 'accepted',
-  })) as unknown[];
+  })) as { id: string; kind: string }[];
+  const patch = artifacts.find((artifact) => artifact.kind === 'task-patch')!;
+  const shown = (await service.call('origin', 'readArtifact', {
+    id: 'accepted',
+    artifactId: patch.id,
+  })) as { content: string; sha256: string; truncated: boolean };
+  assert.match(shown.content, /actual/);
+  assert.equal(shown.truncated, false);
+  await assert.rejects(
+    service.call('origin', 'readArtifact', {
+      id: 'claimed',
+      artifactId: patch.id,
+    }),
+    /does not belong/,
+  );
   assert.equal(artifacts.length, 4);
   assert.ok(events.some((event) => event.type === 'artifact.created'));
   const integration = (await service.call('origin', 'createIntegration', {
@@ -265,6 +286,67 @@ test('service executes real runtime, exposes actual artifacts, refuses unverifie
     expectedHead: baseline,
   })) as { status: string };
   assert.equal(merged.status, 'merged');
+  assert.equal(
+    await readFile(join(integration.path, 'accepted.txt'), 'utf8'),
+    'actual',
+  );
+  assert.equal(await git(workspace, 'rev-parse', 'HEAD'), baseline);
+  const repairBaseline = await git(integration.path, 'rev-parse', 'HEAD');
+  await service.call('origin', 'enqueue', {
+    operationId: 'repair-round',
+    tasks: [{ ...task('repair'), baseline: repairBaseline }],
+  });
+  await until(async () => service.getTask('repair')!.state === 'succeeded');
+  const repairRequest = {
+    integrationId: integration.id,
+    taskIds: ['repair'],
+    expectedHead: repairBaseline,
+  };
+  assert.equal(
+    (
+      (await service.call('origin', 'mergeCandidates', repairRequest)) as {
+        status: string;
+      }
+    ).status,
+    'needs_review',
+    'a repair cannot silently use the initial integration baseline',
+  );
+  const unrelated = await git(
+    workspace,
+    '-c',
+    'user.name=Fixture',
+    '-c',
+    'user.email=fixture@example.invalid',
+    'commit-tree',
+    await git(workspace, 'rev-parse', 'HEAD^{tree}'),
+    '-m',
+    'Create unrelated baseline',
+  );
+  for (const expectedBaseline of ['HEAD', unrelated, '0'.repeat(40)]) {
+    const refused = (await service.call('origin', 'mergeCandidates', {
+      ...repairRequest,
+      expectedBaseline,
+    })) as { status: string; reason: string };
+    assert.equal(refused.status, 'needs_review');
+    assert.match(refused.reason, /baseline/);
+    assert.equal(
+      await git(integration.path, 'rev-parse', 'HEAD'),
+      repairBaseline,
+    );
+  }
+  assert.equal(
+    (
+      (await service.call('origin', 'mergeCandidates', {
+        ...repairRequest,
+        expectedBaseline: repairBaseline,
+      })) as { status: string }
+    ).status,
+    'merged',
+  );
+  assert.equal(
+    await readFile(join(integration.path, 'repair.txt'), 'utf8'),
+    'actual',
+  );
   assert.equal(
     await readFile(join(integration.path, 'accepted.txt'), 'utf8'),
     'actual',
@@ -449,7 +531,7 @@ test('deleting an owner cancels only its task runtimes and awaits model cleanup;
       await mkdir(home, { recursive: true });
       const model = new ScriptedModel([
         async (request) => {
-          entered.add(record.spec.id);
+          entered.add(`${record.spec.id}:${record.attempt}`);
           await new Promise<void>((_resolve, reject) => {
             request.signal.addEventListener(
               'abort',
@@ -485,17 +567,36 @@ test('deleting an owner cancels only its task runtimes and awaits model cleanup;
   assert.equal(service.hasActiveSession('parent-a'), true);
   const childB = service.getTask('b')!.runtimeSessionId!;
   assert.equal(service.hasActiveSession(childB), true);
+  const childA = service.getTask('a')!.runtimeSessionId!;
+  await service.call(childA, 'enqueue', {
+    operationId: 'nested',
+    tasks: [task('nested')],
+  });
+  await until(async () => entered.size === 3);
+  assert.equal(service.ownedRuntimeSessions('parent-a').length, 2);
   await service.cancelSession('parent-a');
   assert.equal(service.getTask('a')!.state, 'cancelled');
   assert.equal(closed.has('a'), true);
+  assert.equal(service.getTask('nested')!.state, 'cancelled');
   assert.equal(service.hasActiveSession('parent-a'), false);
   assert.equal(service.getTask('b')!.state, 'running');
   assert.equal(closed.has('b'), false);
   assert.equal(service.hasActiveSession('parent-b'), true);
+  await service.call('parent-a', 'retry', {
+    id: 'a',
+    operationId: 'new-attempt',
+  });
+  await until(async () => entered.has('a:2'));
+  assert.notEqual(service.getTask('a')!.runtimeSessionId, childA);
+  assert.equal(service.ownedRuntimeSessions('parent-a').length, 3);
+  await service.cancelSession('parent-a');
   await service.cancelSession(childB);
   assert.equal(service.getTask('b')!.state, 'cancelled');
   assert.equal(closed.has('b'), true);
   assert.equal(service.hasActiveSession('parent-b'), false);
+  await service.close();
+  await service.cancelSession('parent-a');
+  assert.equal(service.ownedRuntimeSessions('parent-a').length, 3);
 });
 
 test('human acceptance binds every criterion to the displayed attempt, actual head and immutable patch', async (t) => {
@@ -589,4 +690,84 @@ test('human acceptance binds every criterion to the displayed attempt, actual he
     /worktree changed/,
   );
   assert.equal(service.getTask('reviewed')!.state, 'needs_review');
+});
+
+test('artifact viewer verifies ledger ownership and bytes, paginates Unicode and rejects symlink escapes', async (t) => {
+  const workspace = scratch(t),
+    dataDir = scratch(t),
+    outside = scratch(t);
+  await repository(workspace);
+  const content = 'A😀中B';
+  const service = new TaskService({
+    workspace,
+    dataDir,
+    emit: () => {},
+    createRuntime: async (record, ctx) => {
+      const home = join(dataDir, 'homes', record.spec.id);
+      await mkdir(home, { recursive: true });
+      return new AgentRuntime({
+        workspace: ctx.worktree,
+        home,
+        userHome: home,
+        model: new ScriptedModel([{ message: message('done') }]),
+        settings: trustFolder(defaultSettings(), ctx.worktree),
+        headless: true,
+        bundledExtensions: false,
+        screenshot: false,
+      });
+    },
+    verify: async (_record, ctx) => {
+      const path = join(ctx.artifactDirectory, 'proof.log');
+      await writeFile(path, content);
+      return [
+        {
+          criterion: 'actual file',
+          status: 'passed',
+          source: 'inspection',
+          evidence: 'source was inspected',
+          artifactPaths: [path],
+        },
+      ];
+    },
+  });
+  cleanup(t, () => service.close());
+  await service.call('parent', 'enqueue', {
+    operationId: 'artifact',
+    tasks: [task('artifact')],
+  });
+  await until(async () => service.getTask('artifact')?.state === 'succeeded');
+  const artifacts = (await service.call('parent', 'artifacts', {
+    id: 'artifact',
+  })) as { id: string; kind: string; path: string }[];
+  const proof = artifacts.find((artifact) => artifact.kind === 'verification')!;
+  const read = (offset = 0) =>
+    service.call('parent', 'readArtifact', {
+      id: 'artifact',
+      artifactId: proof.id,
+      offset,
+      limit: 2,
+    }) as Promise<{ content: string; truncated: boolean; nextOffset?: number }>;
+  const first = await read();
+  assert.equal(first.content, 'A');
+  assert.equal(first.truncated, true);
+  const second = await read(first.nextOffset!);
+  assert.equal(second.content, '😀');
+  const third = await read(second.nextOffset!);
+  assert.equal(third.content, '中B');
+  assert.equal(third.truncated, false);
+  await assert.rejects(read(2), /splits a character/);
+  await assert.rejects(
+    service.call('parent', 'readArtifact', {
+      id: 'artifact',
+      artifactId: proof.id,
+      path: '/private',
+    }),
+    /cannot select artifact paths/,
+  );
+  await writeFile(proof.path, 'changed');
+  await assert.rejects(read(), /changed after it was recorded/);
+  await writeFile(join(outside, 'same.txt'), content);
+  await unlink(proof.path);
+  await symlink(join(outside, 'same.txt'), proof.path);
+  await assert.rejects(read(), /outside its owned/);
 });

@@ -104,6 +104,12 @@ export interface TaskIntegratorOptions {
   dataDir: string;
   identity: { name: string; email: string };
 }
+export interface MergeCandidatesOptions {
+  expectedHead: string;
+  /** Exact creation baseline of this repair round; must be an ancestor of the owned integration HEAD. */
+  expectedBaseline?: string;
+  signal?: AbortSignal;
+}
 /** Applies reviewed patches only in an owned integration worktree; never alters the caller's index or working files. */
 export class TaskIntegrator {
   constructor(private readonly options: TaskIntegratorOptions) {
@@ -190,7 +196,7 @@ export class TaskIntegrator {
   async mergeCandidates(
     id: string,
     tasks: TaskRecord[],
-    options: { expectedHead: string; signal?: AbortSignal },
+    options: MergeCandidatesOptions,
   ): Promise<MergeCandidatesResult> {
     const key = join(this.options.dataDir, id),
       previous = queues.get(key) ?? Promise.resolve();
@@ -207,7 +213,7 @@ export class TaskIntegrator {
   private async merge(
     id: string,
     tasks: TaskRecord[],
-    options: { expectedHead: string; signal?: AbortSignal },
+    options: MergeCandidatesOptions,
   ): Promise<MergeCandidatesResult> {
     const workspace = await this.get(id);
     let head = text(await git(workspace.path, ['rev-parse', 'HEAD']));
@@ -219,6 +225,23 @@ export class TaskIntegrator {
       return outcome('baseline_changed', {
         reason: 'integration HEAD changed; revalidate the candidate set',
       });
+    const baseline = options.expectedBaseline ?? workspace.baseline;
+    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(baseline))
+      return outcome('needs_review', {
+        reason: 'candidate baseline must be a fixed commit SHA',
+      });
+    try {
+      await git(workspace.path, [
+        'merge-base',
+        '--is-ancestor',
+        baseline,
+        head,
+      ]);
+    } catch {
+      return outcome('needs_review', {
+        reason: 'candidate baseline is not an ancestor of integration HEAD',
+      });
+    }
     if (
       text(
         await git(workspace.path, [
@@ -267,8 +290,8 @@ export class TaskIntegrator {
         task.state !== 'succeeded' ||
         report?.verdict !== 'passed' ||
         !changes ||
-        changes.baseline !== workspace.baseline ||
-        task.spec.baseline !== workspace.baseline
+        changes.baseline !== baseline ||
+        task.spec.baseline !== baseline
       )
         return outcome('needs_review', {
           taskId: task.spec.id,
