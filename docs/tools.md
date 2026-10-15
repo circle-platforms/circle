@@ -18,7 +18,29 @@ The main agent has these twenty-one core tools. The desktop application adds the
 | `grep` | Search file contents for **literal text**, not a regular expression. Modes: files with matches (the default), matching lines, counts. A `glob` argument limits the files searched. | no | 1,000 matches unless the call asks for more. Skips `.git`, `node_modules`, binary files, files over 10 MB and credential files. |
 | `lsp` | Ask a language server: go to definition, find references, hover, symbols in a file or the workspace, implementations. Positions are 1-based. | no | Needs `pylsp` (Python), `typescript-language-server` (TypeScript and JavaScript), `gopls` (Go) or `rust-analyzer` (Rust) on your `PATH`. 8 seconds per answer. |
 | `webfetch` | Fetch a URL. Formats: `markdown` (the default), `text`, `html`. JSON is pretty-printed. | no | 500,000 bytes, 30 seconds. `http` becomes `https`. Refuses local and private addresses, also after a redirect. |
-| `websearch` | Search the web through DuckDuckGo. No API key. | no | 1 to 10 results (5 by default), 20 seconds. |
+| `websearch` | Search with the current model provider's native search when supported, otherwise DuckDuckGo. Reuses the saved connection and key; no separate search settings. | no | 1 to 10 results (5 by default). 60 seconds total: at most 30 for native search and 15 for each DuckDuckGo endpoint. |
+
+`websearch` sends a separate request containing the query and search instructions, rather than the conversation, and returns the search provider and source URLs with the result. The provider's model restrictions, access requirements and search charges still apply. Helper model tokens count toward session usage; a hosted search charge whose price Circle does not know stays unpriced.
+
+Circle selects these adapters by the saved endpoint and protocol, not the model name alone. The table describes supported API contracts, not a guarantee that every model or account at those endpoints can search.
+
+| Provider | Native search contract |
+|---|---|
+| OpenAI, xAI | Responses `web_search`, with a completed search call and structured sources or citations. |
+| Anthropic | Messages server-side `web_search`, with linked search result blocks. Anthropic-compatible routes use the same capability check. |
+| Bailian / Qwen | Supported models use Responses search. Older Chat models use `enable_search`; without structured search evidence, Circle falls back. |
+| Zhipu / GLM | Chat `web_search` with returned search results. |
+| Gemini | Native `google_search` grounding with search queries and grounding sources. |
+| Moonshot / Kimi | The same API account's independent `/tools/search` endpoint. |
+| Volcengine Ark | Responses search on its OpenAI route, Messages search on its Anthropic route. |
+| Groq | `browser_search` on the allow-listed GPT-OSS models, requiring structured executed-tool results. |
+| Mistral | Conversations `web_search`, requiring completed tool execution and source references. |
+
+Other recognized provider/protocol combinations use DuckDuckGo until Circle has an adapter for their search contract. In particular, the DeepSeek OpenAI route does not enable Responses hosted search. Unknown gateway URLs use compatible-protocol detection below, rather than inheriting a vendor adapter from their model ids.
+
+For custom OpenAI-compatible endpoints, Circle tries the same endpoint's Responses search tool on the first search. For Anthropic-compatible endpoints, it first reads the model's search capability when available, then tries Messages search when the capability is unknown. Accepting a parameter or returning links is not proof of search: Circle requires structured search execution results. Explicit lack of support is remembered for ten minutes in this process; temporary failures pause native attempts for thirty seconds. Different endpoints, protocols, models and credentials have separate capability records.
+
+Native search failure falls back automatically to DuckDuckGo's lite and HTML endpoints. A genuine empty result is returned without another search. Challenge pages and unrecognized HTML are errors rather than empty results. Fallback results include the native failure reason; if every route fails, the tool reports their causes. Cancelling a search stops it without starting a fallback.
 
 ## Changing things
 

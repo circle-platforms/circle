@@ -12,6 +12,13 @@ export interface Usage {
   cache_write_tokens?: number;
   cache_write_1h_tokens?: number;
 }
+/** A model request made inside a tool, retained with that tool's result. */
+export interface ToolModelCall {
+  model: string;
+  usage: Usage;
+  cost?: import('./pricing.js').PriceReceipt;
+  search_requests?: number;
+}
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'tool' | 'system';
@@ -31,6 +38,7 @@ export interface Message {
   provider_content?: unknown[];
   usage?: Usage;
   cost?: import('./pricing.js').PriceReceipt;
+  model_calls?: ToolModelCall[];
   internal?: string;
   truncated?: boolean;
   recoverable?: boolean;
@@ -75,6 +83,9 @@ export interface ToolContext {
   emitAttachments?: (attachments: MediaAttachment[]) => void;
   /** Whether the model in use reads images: false when it is known not to. */
   imageInput?: boolean;
+  /** Bound to this harness's model and connection, including child harnesses. */
+  webSearch?: (query: string, numResults: number) => Promise<string>;
+  recordModelCall?: (call: ToolModelCall) => void;
 }
 export interface MediaAttachment {
   kind: 'image' | 'document';

@@ -34,6 +34,8 @@ The [web tools](tools.md#reading-and-searching), `websearch` and `webfetch`, use
 | `HTTPS_PROXY` (or `https_proxy`) | The proxy the web tools use for their https requests. `NO_PROXY` exempts hosts from it.                                                                                                                       | unset   |
 | `NODE_USE_ENV_PROXY`             | Optional for the CLI on Node.js 24.14 and later, because Circle applies the proxy itself. `1` enables Node's startup proxy handling when using `fetch` outside Circle; Node reads it when the process starts. | unset   |
 
+This also applies to `websearch`'s native provider request and DuckDuckGo fallback. Native search uses the current model connection and credentials; there is no search-specific environment variable or API key. A proxy must allow the configured API endpoint and, when fallback is needed, `lite.duckduckgo.com` and `html.duckduckgo.com`.
+
 ## Background jobs
 
 | Variable                     | Effect                                                                                                                                                                                                  | Default |

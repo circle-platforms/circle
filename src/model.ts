@@ -56,6 +56,11 @@ export class GatewayModel implements ChatModel {
   private sentParameters = new Set<string>();
   private readonly guard: ModelGuard;
   readonly catalog: ModelCatalog;
+  private readonly searchConnection: import('./native_websearch.js').NativeSearchConnection;
+  /** A snapshot of the same connection used by the main model client. Never persisted. */
+  webSearchConnection(): import('./native_websearch.js').NativeSearchConnection {
+    return { ...this.searchConnection };
+  }
   constructor(
     readonly settings: CircleSettings,
     home?: string,
@@ -71,6 +76,12 @@ export class GatewayModel implements ChatModel {
     const apiKey =
       credentials[settings.auth.api_key_ref] || credentials.api_key;
     if (!apiKey) throw new Error('missing API key; re-run circle --init');
+    this.searchConnection = Object.freeze({
+      baseUrl: settings.auth.base_url,
+      protocol: settings.auth.protocol === 'anthropic' ? 'anthropic' : 'openai',
+      model: this.model,
+      apiKey,
+    });
     // Whole milliseconds: the SDKs refuse a fractional per-request timeout
     this.timeout = Math.max(
       5000,

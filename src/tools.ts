@@ -464,11 +464,16 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       ['query'],
     ),
     async (args, context) =>
-      webSearch(
-        string(args, 'query'),
-        context.signal,
-        Number(args.num_results) || 5,
-      ),
+      context.webSearch
+        ? context.webSearch(
+            string(args, 'query'),
+            Number(args.num_results) || 5,
+          )
+        : webSearch(
+            string(args, 'query'),
+            context.signal,
+            Number(args.num_results) || 5,
+          ),
   );
   if (hooks.screenshot)
     add(
