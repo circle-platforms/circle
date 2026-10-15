@@ -399,7 +399,7 @@ try {
     'background task startup must retain the developer conversation',
   );
   await page
-    .getByRole('button', { name: 'terminal', exact: true })
+    .getByRole('tab', { name: 'terminal', exact: true })
     .first()
     .click();
   await page
@@ -759,6 +759,7 @@ try {
           );
         },
       });
+      report.clipboardRestored = true;
       if (report.clipboardRecovery)
         report.clipboardRecovery = {
           ...report.clipboardRecovery,
