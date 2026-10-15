@@ -680,16 +680,15 @@ try {
     await page.locator('#dock-tab-debug').click();
     const panel = page.locator('.debug-panel');
     await panel.getByLabel('program path', { exact: true }).fill('debug.cjs');
-    await panel.getByRole('button', { name: 'launch', exact: true }).click();
-    await until(
-      async () => (await query('debug', 'snapshot')).status === 'paused',
-      'Node paused on entry',
-    );
     await panel.getByLabel('breakpoint line', { exact: true }).fill('3');
     await panel
       .getByRole('button', { name: 'set breakpoint', exact: true })
       .click();
-    await panel.getByRole('button', { name: 'continue', exact: true }).click();
+    await panel.getByRole('button', { name: 'launch', exact: true }).click();
+    await until(
+      async () => (await query('debug', 'snapshot')).status === 'paused',
+      'Node hits the breakpoint configured before launch',
+    );
     await until(async () => {
       const r = await query('debug', 'stackTrace');
       return r.stackFrames?.[0]?.line === 3;
