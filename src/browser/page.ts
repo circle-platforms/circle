@@ -4,6 +4,24 @@
  */
 export function browserPage(command: string, args: Record<string, any>) {
   type Target = Element;
+  /** What a screenshot promises: the viewport it shows, and what stood in each of its cells. */
+  type Capture = {
+    id: string;
+    state: {
+      document: string;
+      width: number;
+      height: number;
+      scrollX: number;
+      scrollY: number;
+    };
+    /** The side of one cell in CSS pixels, and the grid of them over the viewport. */
+    cell: number;
+    cols: number;
+    rows: number;
+    cells: string[];
+    /** Every element the picture is made of, by what it is; null when the page was too big. */
+    seen: Map<string, number[][]> | null;
+  };
   type State = {
     refs: Map<string, Target>;
     // A ref stays with its element for the life of the document; numbers are never reused.
@@ -11,11 +29,8 @@ export function browserPage(command: string, args: Record<string, any>) {
     next: number;
     snapshots: number;
     document: string;
-    revision: number;
-    observer?: MutationObserver;
-    observedRoots?: WeakSet<Node>;
-    scrollIds?: WeakMap<Element, number>;
-    nextScroll: number;
+    /** The screenshot this page last agreed to be checked against. */
+    capture?: Capture;
     overlay?: HTMLElement;
     pointer?: HTMLElement;
     bubble?: HTMLElement;
@@ -33,111 +48,21 @@ export function browserPage(command: string, args: Record<string, any>) {
     next: 0,
     snapshots: 0,
     document: `${Date.now()}-${Math.random()}`,
-    revision: 0,
-    nextScroll: 0,
     x: 24,
     y: 24,
   });
-  const observe = (records: MutationRecord[]) => {
-    if (
-      records.some((record) => {
-        const target =
-          record.target.nodeType === Node.ELEMENT_NODE
-            ? (record.target as Element)
-            : record.target.parentElement;
-        if (target?.closest('[data-circle-browser-overlay]')) return false;
-        const changed = [
-          ...Array.from(record.addedNodes),
-          ...Array.from(record.removedNodes),
-        ];
-        return (
-          !changed.length ||
-          changed.some(
-            (node) =>
-              node.nodeType !== Node.ELEMENT_NODE ||
-              !(node as Element).hasAttribute('data-circle-browser-overlay'),
-          )
-        );
-      })
-    )
-      state.revision++;
-  };
-  if (!state.observer) {
-    state.observer = new MutationObserver(observe);
-    state.observer.observe(document, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      characterData: true,
-    });
-    state.observedRoots = new WeakSet([document]);
-    state.scrollIds = new WeakMap();
-    document.addEventListener('visibilitychange', () => state.revision++);
-    document.addEventListener(
-      'scroll',
-      (event) => {
-        // Main viewport offsets are compared directly; late viewport events must not
-        // invalidate an otherwise current capture. Nested containers have no such fields.
-        if (event.target !== document) state.revision++;
-      },
-      true,
-    );
-  }
-  const captureState = () => {
-    const nestedScroll: [number, number, number][] = [];
-    const roots = (root: Document | ShadowRoot, depth = 0) => {
-      if (depth > 20) return;
-      for (const el of Array.from(root.querySelectorAll('*')).slice(0, 15000)) {
-        if (el.hasAttribute('data-circle-browser-overlay')) continue;
-        if (
-          el !== document.scrollingElement &&
-          (el.scrollLeft || el.scrollTop)
-        ) {
-          let id = state.scrollIds!.get(el);
-          if (!id) {
-            id = ++state.nextScroll;
-            state.scrollIds!.set(el, id);
-          }
-          nestedScroll.push([id, el.scrollLeft, el.scrollTop]);
-        }
-        const child =
-          el.shadowRoot ||
-          (['iframe', 'frame'].includes(el.localName)
-            ? (el as HTMLIFrameElement).contentDocument
-            : null);
-        if (!child) continue;
-        if (!state.observedRoots!.has(child)) {
-          state.observedRoots!.add(child);
-          state.observer!.observe(child, {
-            subtree: true,
-            childList: true,
-            attributes: true,
-            characterData: true,
-          });
-          child.addEventListener('scroll', () => state.revision++, true);
-          if (child.nodeType === Node.DOCUMENT_NODE)
-            (child as Document).defaultView?.addEventListener(
-              'resize',
-              () => state.revision++,
-            );
-          state.revision++;
-        }
-        roots(child, depth + 1);
-      }
-    };
-    roots(document);
-    observe(state.observer!.takeRecords());
-    return {
-      document: state.document,
-      revision: state.revision,
-      width: innerWidth,
-      height: innerHeight,
-      scrollX,
-      scrollY,
-      nestedScroll,
-    };
-  };
-  if (command === 'capture-state') return captureState();
+  // What a screenshot is a picture of: this document, at this size, at this scroll.
+  // Everything a page does to itself elsewhere is checked where it matters instead:
+  // at the point that gets clicked. A dashboard that redraws a chart every second can
+  // still be clicked, and a page that moved the picture cannot.
+  const viewportState = () => ({
+    document: state.document,
+    width: innerWidth,
+    height: innerHeight,
+    scrollX,
+    scrollY,
+  });
+  if (command === 'capture-state') return viewportState();
   const deadline = performance.now() + 2000;
   let visited = 0;
   const clean = (value: string | null | undefined) =>
@@ -203,7 +128,8 @@ export function browserPage(command: string, args: Record<string, any>) {
           ? field.value
           : '') ||
         (el as HTMLElement).innerText ||
-        el.textContent,
+        el.textContent ||
+        iconName(el),
     ).slice(0, 500);
   };
   // The name is the field's placeholder, a hint at what to type rather than a label
@@ -217,6 +143,16 @@ export function browserPage(command: string, args: Record<string, any>) {
       !el.getAttribute('alt') &&
       !el.getAttribute('title')
     );
+  };
+  // An icon button often says what it is in its class alone: el-icon-more,
+  // anticon-ellipsis. Name it for that rather than for nothing, so a snapshot line reads
+  // `[e88] i "more"` and the model and the person can both tell which control it is.
+  const iconName = (el: Element) => {
+    for (const token of (el.getAttribute('class') ?? '').split(/\s+/)) {
+      const found = /(?:icon|glyph)[-_.]?([a-z][a-z0-9]*)/i.exec(token);
+      if (found?.[1]) return found[1];
+    }
+    return '';
   };
   const role = (el: Element): string => {
     const explicit = el.getAttribute('role');
@@ -274,6 +210,33 @@ export function browserPage(command: string, args: Record<string, any>) {
       view.getComputedStyle(above).cursor !== 'pointer'
     );
   };
+  // The text an element holds itself, not what its children hold.
+  const ownText = (el: Element) => {
+    let text = '';
+    for (const node of Array.from(el.childNodes))
+      if (node.nodeType === Node.TEXT_NODE) text += node.nodeValue || '';
+    return text;
+  };
+  // Marks, not words: an ellipsis, a plus, an icon font's own code point, or nothing at all.
+  const MARK = /^[\s\p{P}\p{S}\p{Co}]*$/u;
+  // The small pointer element inside a bigger one is what a person aims at: the "…" that
+  // opens a row's menu, not the row whose cursor it inherits. A click on it reaches the
+  // container's own handler, so the container keeps its ref too and nothing is hidden. A
+  // leaf that spells a word is the container's label, and the container is the ref.
+  const pointerLeaf = (el: Element) => {
+    if (
+      (el as SVGElement).ownerSVGElement ||
+      (el.localName !== 'svg' && el.children.length)
+    )
+      return false;
+    if (el.ownerDocument.defaultView!.getComputedStyle(el).cursor !== 'pointer')
+      return false;
+    if (!MARK.test(ownText(el).trim())) return false;
+    const rect = el.getBoundingClientRect();
+    return (
+      rect.width > 0 && rect.width <= 64 && rect.height > 0 && rect.height <= 64
+    );
+  };
   const control = (el: Element) =>
     ['button', 'a', 'input', 'textarea', 'select', 'summary'].includes(
       el.localName,
@@ -285,12 +248,15 @@ export function browserPage(command: string, args: Record<string, any>) {
     el.hasAttribute('onclick') ||
     typeof (el as HTMLElement).onclick === 'function' ||
     (el.hasAttribute('tabindex') && (el as HTMLElement).tabIndex >= 0) ||
-    ownPointer(el);
-  // Inside a link or a button only real controls and explicit handlers act on their own.
+    ownPointer(el) ||
+    pointerLeaf(el);
+  // Inside a link or a button only real controls, explicit handlers and the small pointer
+  // icon of a bigger container act on their own.
   const nestedAction = (el: Element) =>
     control(el) ||
     ROLES.includes(el.getAttribute('role') ?? '') ||
-    el.hasAttribute('onclick');
+    el.hasAttribute('onclick') ||
+    pointerLeaf(el);
   const composedContains = (
     parent: Element,
     child: Element | null,
@@ -369,8 +335,12 @@ export function browserPage(command: string, args: Record<string, any>) {
     let length = 0;
     let truncated = false;
     const lines: string[] = [];
-    const add = (line: string) => {
-      const remaining = 30000 - length;
+    // A ref is what an action needs, so a page too wordy for the snapshot keeps a second
+    // allowance for its controls: what gets dropped is the text, never what can be clicked.
+    const LIMIT = 30000;
+    const CONTROL_LIMIT = LIMIT + 8000;
+    const add = (line: string, control = false) => {
+      const remaining = (control ? CONTROL_LIMIT : LIMIT) - length;
       if (remaining <= 0) {
         truncated = true;
         return;
@@ -389,7 +359,7 @@ export function browserPage(command: string, args: Record<string, any>) {
       if (
         ++visited > 15000 ||
         performance.now() > deadline ||
-        length >= 30000
+        length >= CONTROL_LIMIT
       ) {
         truncated = true;
         return;
@@ -460,6 +430,7 @@ export function browserPage(command: string, args: Record<string, any>) {
         const warning = warningAction(el);
         add(
           `${indent}[${ref}] ${role(el)} ${JSON.stringify(name(el))}${content}${value.disabled ? ' disabled' : ''}${value.checked ? ' checked' : ''}${added ? ' [new]' : ''}${warning === 'advanced' || warning === 'proceed' ? ` [warning: ${warning}]` : ''}`,
+          true,
         );
       } else if (
         isVisible &&
@@ -504,7 +475,8 @@ export function browserPage(command: string, args: Record<string, any>) {
           walk(child, '', false, inAction);
         const cells = lines.splice(start);
         length = before;
-        add(indent + '| ' + cells.join(' | ') + ' |');
+        const row = indent + '| ' + cells.join(' | ') + ' |';
+        add(row, /\[e[0-9]+\]/.test(row));
         return;
       }
       // Interactive nodes already include their name; still visit interactive descendants.
@@ -523,10 +495,144 @@ export function browserPage(command: string, args: Record<string, any>) {
     walk(document.body || document.documentElement);
     return lines.join('\n') + (truncated ? '\n… snapshot truncated' : '');
   }
+  // ---- what a screenshot shows, cell by cell
+  const hash = (value: string) => {
+    let h = 2166136261;
+    for (let index = 0; index < value.length; index++) {
+      h ^= value.charCodeAt(index);
+      h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0).toString(36);
+  };
+  // How far a busy page may nudge a control between the picture and the click: a table that
+  // redraws beside the target moves it by a few pixels, and the click still lands on it.
+  const SHIFT = 12;
+  /** What the picture shows of one element: its kind and its own text. Not which element it
+   * is: a page that builds the same control again, as a component library re-rendering a
+   * table, shows the same picture and stays clickable. */
+  const mark = (el: Element) => {
+    let children = 0;
+    for (const child of Array.from(el.children))
+      if (!child.hasAttribute('data-circle-browser-overlay')) children++;
+    return el.localName + ' ' + children + ' ' + hash(ownText(el));
+  };
+  const box = (rect: DOMRect) =>
+    [rect.x, rect.y, rect.width, rect.height].map((n) => Math.round(n));
+  const stayed = (before: number[], after: number[]) =>
+    before.length === after.length &&
+    before.every(
+      (value, index) => Math.abs(value - (after[index] ?? 1e9)) <= SHIFT,
+    );
+  /** What stands at one point of the picture: what it is, and where it stands. */
+  const look = (x: number, y: number) => {
+    const el = hit(document, x, y);
+    return el
+      ? mark(el) + ' ' + box(el.getBoundingClientRect()).join(',')
+      : 'nothing';
+  };
+  /** Whether two readings of one point show the same thing, allow for a small nudge. */
+  const same = (before: string, after: string) => {
+    if (before === after) return true;
+    const split = (value: string) => {
+      const at = value.lastIndexOf(' ');
+      return [
+        value.slice(0, at),
+        value
+          .slice(at + 1)
+          .split(',')
+          .map(Number),
+      ] as const;
+    };
+    const [one, first] = split(before);
+    const [two, second] = split(after);
+    return (
+      one === two && first.length === second.length && stayed(first, second)
+    );
+  };
+  /**
+   * Every element the picture is made of, by what it is and where it stands. The cells
+   * sample the viewport, so a control smaller than a cell can fall between them: this is
+   * what says whether the thing under a point was drawn there at all. A page too big for
+   * its time budget gives up the extra check rather than refusing every click on it.
+   */
+  const appearances = () => {
+    const seen = new Map<string, number[][]>();
+    let counted = 0;
+    const stop = performance.now() + 600;
+    const walk = (el: Element, depth: number): boolean => {
+      if (depth > 80 || ++counted > 12000 || performance.now() > stop)
+        return false;
+      if (el.hasAttribute('data-circle-browser-overlay')) return true;
+      const style = el.ownerDocument.defaultView!.getComputedStyle(el);
+      if (style.display === 'none') return true;
+      if (style.visibility !== 'hidden' && style.visibility !== 'collapse') {
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          const what = mark(el);
+          const at = seen.get(what);
+          if (at) at.push(box(rect));
+          else seen.set(what, [box(rect)]);
+        }
+      }
+      for (const child of Array.from(el.children))
+        if (!walk(child, depth + 1)) return false;
+      const shadow = el.shadowRoot;
+      if (shadow)
+        for (const child of Array.from(shadow.children))
+          if (!walk(child, depth + 1)) return false;
+      if (['iframe', 'frame'].includes(el.localName)) {
+        const doc = (el as HTMLIFrameElement).contentDocument;
+        if (doc?.documentElement && !walk(doc.documentElement, depth + 1))
+          return false;
+      }
+      return true;
+    };
+    return walk(document.documentElement, 0) ? seen : null;
+  };
+  if (command === 'capture') {
+    // One hit test per cell of the viewport, about 1200 of them and a few milliseconds.
+    // Cells below the time limit simply go unchecked, as on a page that never rests.
+    const cell = Math.max(
+      24,
+      Math.ceil(Math.sqrt((innerWidth * innerHeight) / 1200)),
+    );
+    const cols = Math.max(1, Math.ceil(innerWidth / cell));
+    const cells: string[] = [];
+    const stop = performance.now() + 1000;
+    for (let row = 0; row < Math.ceil(innerHeight / cell); row++) {
+      if (cells.length && performance.now() > stop) break;
+      for (let col = 0; col < cols; col++)
+        cells.push(look((col + 0.5) * cell, (row + 0.5) * cell));
+    }
+    state.capture = {
+      id: String(args.id),
+      state: viewportState(),
+      cell,
+      cols,
+      rows: cells.length / cols,
+      cells,
+      seen: appearances(),
+    };
+    return state.capture.state;
+  }
+  /**
+   * Whether the cell a point falls in still shows what the picture showed there. One cell,
+   * not the page around it: a device WebUI redraws the cell next to the control being
+   * clicked every second, and that says nothing about what stands under the point.
+   */
+  const unchanged = (capture: Capture, x: number, y: number) => {
+    const col = Math.floor(x / capture.cell),
+      row = Math.floor(y / capture.cell),
+      index = row * capture.cols + col;
+    // A cell the capture never reached cannot be checked, as on a page that never rests.
+    const recorded = capture.cells[index];
+    if (col >= capture.cols || recorded === undefined) return true;
+    return same(
+      recorded,
+      look((col + 0.5) * capture.cell, (row + 0.5) * capture.cell),
+    );
+  };
   if (command === 'point') {
-    const current = captureState();
-    if (JSON.stringify(current) !== JSON.stringify(args.capture))
-      throw Error('the screenshot is stale; take a new browser_screenshot');
     const x = Number(args.x),
       y = Number(args.y);
     if (
@@ -538,6 +644,17 @@ export function browserPage(command: string, args: Record<string, any>) {
       y >= innerHeight
     )
       throw Error('click coordinates are outside the viewport');
+    const capture = state.capture;
+    if (!capture || capture.id !== String(args.screenshotId))
+      throw Error('the screenshot is stale; take a new browser_screenshot');
+    if (JSON.stringify(viewportState()) !== JSON.stringify(capture.state))
+      throw Error(
+        'the screenshot is stale: the page scrolled, resized or changed document; take a new browser_screenshot',
+      );
+    if (!unchanged(capture, x, y))
+      throw Error(
+        `the screenshot is stale: the page changed at (${x}, ${y}); take a new browser_screenshot, or act on a ref from browser_snapshot`,
+      );
     let doc = document,
       localX = x,
       localY = y;
@@ -567,6 +684,14 @@ export function browserPage(command: string, args: Record<string, any>) {
     }
     if (!el || hidden(el))
       throw Error('there is no visible element at these coordinates');
+    // The cell says nothing over here moved; this says the thing under the point is what
+    // the picture drew, however small it is.
+    const drawn = capture.seen?.get(mark(el));
+    const here = box(el.getBoundingClientRect());
+    if (!drawn?.some((before) => stayed(before, here)))
+      throw Error(
+        `the screenshot is stale: the page changed at (${x}, ${y}); take a new browser_screenshot, or act on a ref from browser_snapshot`,
+      );
     let target = el;
     for (
       let node: Element | null = el;

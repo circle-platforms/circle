@@ -2,15 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { destructive, shownName, type PageElement } from './format.js';
 import type { BrowserResult } from './protocol.js';
 
+/** The viewport one screenshot is a picture of. What stands inside it is checked at the
+ * point that gets clicked, so a page that redraws another part of itself stays clickable. */
 export interface PageCaptureState {
   document: string;
-  revision: number;
   width: number;
   height: number;
   scrollX: number;
   scrollY: number;
-  /** Nested document/frame/shadow scroll offsets, read synchronously at each hit test. */
-  nestedScroll?: [number, number, number][];
 }
 export interface CoordinateTarget extends PageElement {
   ref: string;
@@ -66,13 +65,16 @@ export function checkScreenshot(
   return capture;
 }
 
-/** Hover can change the action or geometry without replacing the element. */
+/**
+ * Hover can change the action or geometry without replacing the element. What is compared is
+ * what the click will do, not the page's handle for it: a row a framework builds again is the
+ * same control under a new element id, and the click still lands on what the picture showed.
+ */
 export function checkCoordinateTarget(
   before: CoordinateTarget,
   after: CoordinateTarget,
 ): void {
   const fields: (keyof CoordinateTarget)[] = [
-    'ref',
     'origin',
     'role',
     'name',
@@ -94,11 +96,12 @@ export function coordinateApproval(
   mode: string | undefined,
 ): BrowserResult | undefined {
   if (mode === 'auto' || (target.known && !destructive(target.name))) return;
+  // What the person decided about, not the page's internal handle for it: a re-rendered
+  // row is the same control at the same place under a different element id.
   const key = JSON.stringify([
     capture.id,
     args.x,
     args.y,
-    target.ref,
     target.role,
     target.name,
     target.origin,

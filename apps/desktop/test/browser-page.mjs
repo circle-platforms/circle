@@ -644,11 +644,21 @@ try {
     run('guard-key'),
     /a password field takes only a saved secret/,
   );
-  // Coordinates use the same composed DOM hit-test as refs, with the captured layout.
+  // Coordinates use the same composed DOM hit-test as refs, over the cells a screenshot
+  // was taken of: what stands under the point, not what the page does elsewhere.
+  let captures = 0;
+  const shot = async () => {
+    const id = `capture-${++captures}`;
+    await run('capture', { id });
+    return id;
+  };
   for (const name of ['frame submit', 'shadow action', 'slotted action']) {
     const point = await run('prepare', { ref: ref(name) });
-    const capture = await run('capture-state');
-    const target = await run('point', { x: point.x, y: point.y, capture });
+    const target = await run('point', {
+      x: point.x,
+      y: point.y,
+      screenshotId: await shot(),
+    });
     assert.equal(target.name, name);
     assert.equal(target.known, true);
   }
@@ -659,12 +669,12 @@ try {
     run('point', {
       x: foreignRect.x + 10,
       y: foreignRect.y + 10,
-      capture: await run('capture-state'),
+      screenshotId: await shot(),
     }),
     /cross-origin frame/,
   );
   const shadowPoint = await run('prepare', { ref: ref('shadow action') });
-  const oldShadow = await run('capture-state');
+  const oldShadow = await shot();
   await page
     .locator('#shadow')
     .evaluate(
@@ -673,9 +683,36 @@ try {
           'changed action'),
     );
   await assert.rejects(
-    run('point', { x: shadowPoint.x, y: shadowPoint.y, capture: oldShadow }),
+    run('point', {
+      x: shadowPoint.x,
+      y: shadowPoint.y,
+      screenshotId: oldShadow,
+    }),
     /screenshot is stale/,
   );
+  // A panel that rewrites itself, as a device page does with its polling charts, leaves a
+  // screenshot current everywhere else: the same capture still answers a click.
+  await page.evaluate(() => {
+    const panel = document.createElement('div');
+    panel.id = 'polling';
+    panel.style.cssText =
+      'position:fixed;left:0;bottom:0;width:200px;height:40px';
+    document.body.append(panel);
+    window.polling = setInterval(
+      () => (panel.innerHTML = '<b>x</b><i>' + Date.now() + '</i>'),
+      20,
+    );
+  });
+  const fieldPoint = await run('prepare', { ref: ref('username') });
+  const busyShot = await shot();
+  await page.waitForTimeout(150);
+  const busyTarget = await run('point', {
+    x: fieldPoint.x,
+    y: fieldPoint.y,
+    screenshotId: busyShot,
+  });
+  assert.equal(busyTarget.name, 'username');
+  await page.evaluate(() => clearInterval(window.polling));
   await page.evaluate(() => {
     for (let index = 0; index < 400; index++) {
       const long = document.createElement('p');

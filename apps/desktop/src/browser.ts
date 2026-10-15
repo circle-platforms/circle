@@ -2084,6 +2084,7 @@ export class BrowserSessions {
         {},
         signal,
       );
+      const screenshot = screenshotCapture(capturedState);
       const { image, attempts, retryErrors } = await this.limit(
         captureFrame(() =>
           tab.contents.capturePage(undefined, {
@@ -2096,14 +2097,20 @@ export class BrowserSessions {
       );
       if (this.state(id).url !== before.url)
         throw Error('browser changed during capture');
-      if (
-        JSON.stringify(capturedState) !==
-        JSON.stringify(await this.js(tab, 'capture-state', {}, signal))
-      )
+      // What the picture shows, cell by cell, as the page stands now: a coordinate click
+      // later checks the cells under its own point against it. Only the viewport itself may
+      // not have moved while the image was taken; a page that redraws another part of
+      // itself keeps its screenshot, as a device's WebUI with its polling charts does.
+      const captured = await this.js<PageCaptureState>(
+        tab,
+        'capture',
+        { id: screenshot.id },
+        signal,
+      );
+      if (JSON.stringify(capturedState) !== JSON.stringify(captured))
         throw Error(
-          'the page changed during capture; take a new browser_screenshot',
+          'the page scrolled, resized or changed document while it was captured; take a new browser_screenshot',
         );
-      const screenshot = screenshotCapture(capturedState);
       tab.screenshot = screenshot;
       const bytes = image.toPNG();
       return {
@@ -2566,7 +2573,7 @@ export class BrowserSessions {
     const point = await this.js<CoordinateTarget>(
       tab,
       'point',
-      { x: args.x, y: args.y, capture: capture.state },
+      { x: args.x, y: args.y, screenshotId: capture.id },
       signal,
     );
     const approval = coordinateApproval(
@@ -2590,7 +2597,7 @@ export class BrowserSessions {
     const current = await this.js<CoordinateTarget>(
       tab,
       'point',
-      { x: args.x, y: args.y, capture: capture.state },
+      { x: args.x, y: args.y, screenshotId: capture.id },
       signal,
     );
     checkCoordinateTarget(point, current);
@@ -2605,7 +2612,7 @@ export class BrowserSessions {
     const hovered = await this.js<CoordinateTarget>(
       tab,
       'point',
-      { x: args.x, y: args.y, capture: capture.state },
+      { x: args.x, y: args.y, screenshotId: capture.id },
       signal,
     );
     checkCoordinateTarget(point, hovered);

@@ -190,7 +190,7 @@ export const BUILTIN_TOOL_INFO = [
     },
     get detail() {
       return t(
-        'Use CSS coordinates from the latest screenshot. Changed screenshots are refused; unknown or destructive targets ask once. Coordinate clicks are not recorded.',
+        'Use CSS coordinates from the latest screenshot. A screenshot stays current while the spot you click does not change; unknown or destructive targets ask once. Coordinate clicks are not recorded.',
       );
     },
     kind: 'browser',

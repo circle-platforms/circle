@@ -3071,6 +3071,227 @@ test(
     assert.deepEqual(hits, ['/hit-b']);
   },
 );
+test(
+  'a page that redraws another part of itself stays clickable by coordinate, while a change under the point still stops the click',
+  { skip },
+  async (t) => {
+    const temp = made(t, 'circle-busy-coordinate-');
+    const hits: string[] = [];
+    const site = createHttp((req, res) => {
+      if (req.url?.startsWith('/hit')) {
+        hits.push(req.url);
+        res.end('yes');
+        return;
+      }
+      res.setHeader('Content-Type', 'text/html');
+      // A status cell that rewrites itself fifty times a second, as a device WebUI does
+      // with its polling, in the cell right next to the row's "...": what changes beside a
+      // point says nothing about what stands under it, so the click must still go through.
+      res.end(
+        '<!doctype html><title>busy</title><style>body{margin:0}span{display:inline-block;width:80px;height:30px}</style>' +
+          '<table><tr><td>group1</td><td><span id="poll">UP</span></td><td><span id="more">...</span></td></tr></table>' +
+          '<script>document.querySelector("#more").addEventListener("click",()=>fetch("/hit-more"));' +
+          'let n=0;setInterval(()=>{document.querySelector("#poll").innerHTML="<b>UP"+(++n)+"</b><i>"+n+"</i><u>"+n+"</u>"},20);</script>',
+      );
+    });
+    const url = `http://127.0.0.1:${await listen(site)}/`;
+    t.after(() => site.close());
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: join(temp, 'downloads'),
+      mode: () => 'auto',
+    });
+    cleanup(t, () => chrome.close());
+    const signal = new AbortController().signal;
+    const act = (action: BrowserAction, args: Record<string, unknown> = {}) =>
+      chrome.request('c', action, args, signal);
+    const page = <T>(expression: string): Promise<T> => {
+      const internal = chrome as any;
+      return internal.evaluate(
+        internal.conversations.get('c').tabs.get('t1'),
+        expression,
+        signal,
+      );
+    };
+    const at = () =>
+      page<{ x: number; y: number }>(
+        '(()=>{const r=document.querySelector("#more").getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2}})()',
+      );
+    await act('navigate', { url });
+    await page('new Promise((r) => setTimeout(r, 150))');
+    const where = await at();
+    const first = await act('screenshot');
+    assert.ok(first.screenshot?.id);
+    await page('document.querySelector("#more").textContent="menu"');
+    await assert.rejects(
+      act('click_at', { ...where, screenshotId: first.screenshot!.id }),
+      /screenshot is stale/,
+    );
+    assert.deepEqual(hits, []);
+    // The same busy page from a fresh picture: the click goes through.
+    const second = await act('screenshot');
+    const clicked = await act('click_at', {
+      ...where,
+      screenshotId: second.screenshot!.id,
+    });
+    assert.match(clicked.text, /Clicked at.*span "menu"/);
+    assert.deepEqual(hits, ['/hit-more']);
+    // Screenshots keep working while the page polls, so the model can go on clicking.
+    const third = await act('screenshot');
+    await act('click_at', {
+      ...(await at()),
+      screenshotId: third.screenshot!.id,
+    });
+    assert.deepEqual(hits, ['/hit-more', '/hit-more']);
+  },
+);
+
+test(
+  'a coordinate click on a row the page builds again keeps its one approval and its target',
+  { skip },
+  async (t) => {
+    const temp = made(t, 'circle-rebuilt-row-');
+    const hits: string[] = [];
+    const site = createHttp((req, res) => {
+      if (req.url?.startsWith('/hit')) {
+        hits.push(req.url);
+        res.end('yes');
+        return;
+      }
+      res.setHeader('Content-Type', 'text/html');
+      // The control a component library binds itself, rebuilt every beat: the same thing at
+      // the same place under a new element. The one approval must cover the click that
+      // follows it, and the target must not read as changed.
+      res.end(
+        '<!doctype html><title>rebuilt</title><style>span{display:inline-block;width:80px;height:30px}</style>' +
+          '<div id="box"></div><script>' +
+          'var box=document.getElementById("box");' +
+          "function paint(){box.innerHTML='<span>...</span>';}" +
+          'box.addEventListener("click",()=>fetch("/hit-menu"));paint();setInterval(paint,120);</script>',
+      );
+    });
+    const url = `http://127.0.0.1:${await listen(site)}/`;
+    t.after(() => site.close());
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: join(temp, 'downloads'),
+      mode: () => 'manual',
+    });
+    cleanup(t, () => chrome.close());
+    const signal = new AbortController().signal;
+    const act = (action: BrowserAction, args: Record<string, unknown> = {}) =>
+      chrome.request('c', action, args, signal);
+    const internal = chrome as any;
+    const at = async (): Promise<{ x: number; y: number }> =>
+      internal.evaluate(
+        internal.conversations.get('c').tabs.get('t1'),
+        '(()=>{const r=document.querySelector("#box span").getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2}})()',
+        signal,
+      );
+    await act('navigate', { url });
+    const point = await at();
+    const shot = await act('screenshot');
+    const args = { ...point, screenshotId: shot.screenshot!.id };
+    const asked = await act('click_at', args);
+    assert.equal(asked.approval?.kind, 'coordinate');
+    assert.deepEqual(hits, []);
+    const clicked = await act('click_at', {
+      ...args,
+      approval: { token: asked.approval!.token, scope: 'once' },
+    });
+    assert.equal(
+      clicked.approval,
+      undefined,
+      'a rebuilt row asks the person once, not again: ' +
+        clicked.text.slice(0, 160),
+    );
+    assert.match(
+      clicked.text,
+      /Clicked at.*span "\.\.\."/,
+      clicked.text.slice(0, 200),
+    );
+    assert.deepEqual(hits, ['/hit-menu']);
+  },
+);
+
+test(
+  'a snapshot gives the icon inside a pointer-styled row its own ref and name, and a click on it reaches the row handler',
+  { skip },
+  async (t) => {
+    const temp = made(t, 'circle-icon-ref-');
+    const hits: string[] = [];
+    const site = createHttp((req, res) => {
+      if (req.url?.startsWith('/hit')) {
+        hits.push(req.url);
+        res.end('yes');
+        return;
+      }
+      res.setHeader('Content-Type', 'text/html');
+      // The row's "..." as a component library draws it: an empty <i> whose icon font puts
+      // the glyph in a pseudo-element, inside containers that all carry cursor:pointer.
+      res.end(
+        '<!doctype html><title>icons</title><style>td{padding:6px}.el-dropdown,.el-dropdown-link,.el-icon-more{cursor:pointer;display:inline-block;width:16px;height:16px}</style>' +
+          '<table><tr><td>group1</td><td><div class="el-dropdown"><span class="el-dropdown-link"><i class="el-icon-more"></i></span></div></td></tr></table>' +
+          '<script>document.querySelector(".el-dropdown").addEventListener("click",()=>fetch("/hit-menu"));</script>',
+      );
+    });
+    const url = `http://127.0.0.1:${await listen(site)}/`;
+    t.after(() => site.close());
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: join(temp, 'downloads'),
+      mode: () => 'auto',
+    });
+    cleanup(t, () => chrome.close());
+    const signal = new AbortController().signal;
+    const act = (action: BrowserAction, args: Record<string, unknown> = {}) =>
+      chrome.request('c', action, args, signal);
+    const shown = await act('navigate', { url });
+    const found = shown.text.match(/\[(e\d+)\] i "more"/);
+    assert.ok(found, `the icon has no ref of its own:\n${shown.text}`);
+    const clicked = await act('click', {
+      ref: found![1],
+      element: 'the row menu',
+    });
+    assert.match(clicked.text, new RegExp(`Clicked ${found![1]} i "more"`));
+    assert.deepEqual(hits, ['/hit-menu']);
+  },
+);
+
+test(
+  'a snapshot too long for its limit still lists the controls below the text it dropped',
+  { skip },
+  async (t) => {
+    const temp = made(t, 'circle-snapshot-budget-');
+    const site = createHttp((_req, res) => {
+      res.setHeader('Content-Type', 'text/html');
+      res.end(
+        '<!doctype html><title>long</title><div>' +
+          Array.from(
+            { length: 90 },
+            (_p, index) => `<p>${'x'.repeat(700)} ${index}</p>`,
+          ).join('') +
+          '</div><button id="save">Save configuration</button>',
+      );
+    });
+    const url = `http://127.0.0.1:${await listen(site)}/`;
+    t.after(() => site.close());
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: join(temp, 'downloads'),
+      mode: () => 'auto',
+    });
+    cleanup(t, () => chrome.close());
+    const signal = new AbortController().signal;
+    const shown = await chrome.request('c', 'navigate', { url }, signal);
+    assert.match(shown.text, /snapshot truncated/);
+    assert.match(shown.text, /\[e\d+\] button "Save configuration"/);
+  },
+);
 
 test(
   'a page can close its own popup and the terminal browser reports the closed tab and continues',

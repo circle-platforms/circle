@@ -2,8 +2,8 @@
 export const model: Record<string, string> = {
   'Click a visible control without an element ref':
     '点击没有元素引用的可见控件',
-  'Use CSS coordinates from the latest screenshot. Changed screenshots are refused; unknown or destructive targets ask once. Coordinate clicks are not recorded.':
-    '使用最新截图中的 CSS 坐标。页面变化后须重新截图；未知或删除目标需单次确认。坐标点击不加入录制脚本。',
+  'Use CSS coordinates from the latest screenshot. A screenshot stays current while the spot you click does not change; unknown or destructive targets ask once. Coordinate clicks are not recorded.':
+    '使用最新截图中的 CSS 坐标。只要点击处没有变化，截图就一直有效；未知或删除目标需单次确认。坐标点击不加入录制脚本。',
 
   // what the live runtime says
   'UI preferences could not be saved': '无法保存界面偏好',

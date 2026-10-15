@@ -1782,12 +1782,13 @@ export class ChromeBrowser implements BrowserPort {
       );
       try {
         await delay(50, undefined, { signal });
-        const capturedState = await this.js<PageCaptureState>(
+        const before = await this.js<PageCaptureState>(
           tab,
           'capture-state',
           {},
           signal,
         );
+        const capture = screenshotCapture(before);
         const { data } = await this.limit(
           this.send<{ data: string }>(
             'Page.captureScreenshot',
@@ -1798,14 +1799,19 @@ export class ChromeBrowser implements BrowserPort {
           10000,
           'Page.captureScreenshot',
         );
-        if (
-          JSON.stringify(capturedState) !==
-          JSON.stringify(await this.js(tab, 'capture-state', {}, signal))
-        )
+        // What the picture shows, cell by cell, as the page is now: a later coordinate
+        // click checks the cells under its own point against it. The viewport itself must
+        // not have moved while the image was taken.
+        const after = await this.js<PageCaptureState>(
+          tab,
+          'capture',
+          { id: capture.id },
+          signal,
+        );
+        if (JSON.stringify(before) !== JSON.stringify(after))
           throw Error(
-            'the page changed during capture; take a new browser_screenshot',
+            'the page scrolled, resized or changed document while it was captured; take a new browser_screenshot',
           );
-        const capture = screenshotCapture(capturedState);
         tab.screenshot = capture;
         return {
           text: `tab ${tab.id} · ${quote(tab.title)} · ${tab.url}\nbrowser screenshot\n${screenshotDescription(capture)}`,
@@ -2036,7 +2042,7 @@ export class ChromeBrowser implements BrowserPort {
     const point = await this.js<CoordinateTarget>(
       tab,
       'point',
-      { x: args.x, y: args.y, capture: capture.state },
+      { x: args.x, y: args.y, screenshotId: capture.id },
       signal,
     );
     const approval = coordinateApproval(
@@ -2060,7 +2066,7 @@ export class ChromeBrowser implements BrowserPort {
     const current = await this.js<CoordinateTarget>(
       tab,
       'point',
-      { x: args.x, y: args.y, capture: capture.state },
+      { x: args.x, y: args.y, screenshotId: capture.id },
       signal,
     );
     checkCoordinateTarget(point, current);
@@ -2075,7 +2081,7 @@ export class ChromeBrowser implements BrowserPort {
     const hovered = await this.js<CoordinateTarget>(
       tab,
       'point',
-      { x: args.x, y: args.y, capture: capture.state },
+      { x: args.x, y: args.y, screenshotId: capture.id },
       signal,
     );
     checkCoordinateTarget(point, hovered);

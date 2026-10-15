@@ -47,9 +47,9 @@ A click, typing, a choice or a file given to a `ref` names the element it acted 
 | Tool | What it does | Asks | Limits |
 |---|---|---|---|
 | `browser_navigate` | Open `url` in the shown tab, or use `back`, `forward` or `reload`. | yes | HTTP and HTTPS only, including local and private addresses. A site whose certificate is not trusted gets the browser's warning page in the tab, which the result shows; see below. |
-| `browser_snapshot` | Read the shown page and the rest of the result. | no | About 30,000 characters. Password values and Circle's pointer are left out. |
+| `browser_snapshot` | Read the shown page and the rest of the result. | no | About 30,000 characters, with a second allowance for its controls: a page too wordy for the limit still lists what can be clicked. Password values and Circle's pointer are left out. |
 | `browser_click` | Move the pointer to `ref`, described by `element`, and click it with real mouse events. | yes | Refuses a covered element and names what covers it. |
-| `browser_click_at` | Click `x`, `y` in CSS viewport pixels using `screenshotId` from the latest screenshot, for visible controls without a ref. | yes; unknown or destructive targets also ask once in every mode but `auto` | Refuses stale screenshots, cross-origin frames and certificate warning pages. Not recorded into scripts. |
+| `browser_click_at` | Click `x`, `y` in CSS viewport pixels using `screenshotId` from the latest screenshot, for visible controls without a ref. | yes; unknown or destructive targets also ask once in every mode but `auto` | Refuses a screenshot whose clicked spot no longer matches the page, cross-origin frames and certificate warning pages. Not recorded into scripts. |
 | `browser_type` | Replace what `ref` holds with `text`; `submit: true` presses Enter. `%NAME%` in the text puts in a variable or a saved [secret](security.md#secrets-by-name). | yes | A password field takes only text made of secrets' names. |
 | `browser_select` | Choose options of a select element at `ref`, by text or value. | yes | |
 | `browser_press` | Press `key`: Enter, Tab, Escape, Backspace, Delete, Space, an arrow key, Home, End, PageUp or PageDown. | yes | |
