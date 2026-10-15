@@ -29,8 +29,8 @@ export class LanguageService {
   private disposed = false;
   constructor(root: string) {
     const ts = loadTypescript();
-    this.root = fs.realpathSync(root);
-    this.libraryRoot = fs.realpathSync(
+    this.root = fs.realpathSync.native(root);
+    this.libraryRoot = fs.realpathSync.native(
       path.dirname(ts.getDefaultLibFilePath({})),
     );
     this.ensureProject();
@@ -245,7 +245,7 @@ export class LanguageService {
   /** Resolution can read only granted project files and the bundled standard libs. */
   private allowed(file: string): boolean {
     try {
-      const real = fs.realpathSync(file);
+      const real = fs.realpathSync.native(file);
       return [this.root, this.libraryRoot].some((root) => {
         const relative = path.relative(root, real);
         return (
@@ -266,7 +266,7 @@ export class LanguageService {
     let probe = target;
     while (!fs.existsSync(probe) && probe !== this.root)
       probe = path.dirname(probe);
-    const real = fs.realpathSync(probe);
+    const real = fs.realpathSync.native(probe);
     if (real !== this.root && !real.startsWith(this.root + path.sep))
       throw Error('file is outside workspace');
     return target;

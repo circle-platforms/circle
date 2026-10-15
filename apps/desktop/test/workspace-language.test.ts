@@ -7,8 +7,10 @@ import {
   readFileSync,
   rmSync,
   symlinkSync,
+  realpathSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { LanguageService } from '../src/workspace/language.ts';
 function fixture(t: test.TestContext) {
@@ -516,3 +518,33 @@ test('inferred JavaScript projects suppress emit collisions but configured proje
   };
   assert(configured.diagnostics.some((d) => d.code === '5055'));
 });
+
+test(
+  'Windows short-root grants accept native canonical document paths',
+  { skip: process.platform !== 'win32' },
+  (t) => {
+    const { root, service: original } = fixture(t);
+    original.dispose();
+    const shortRoot = execFileSync(
+      'cmd.exe',
+      ['/d', '/c', `for %I in ("${root}") do @echo %~sI`],
+      { encoding: 'utf8' },
+    ).trim();
+    const service = new LanguageService(shortRoot);
+    t.after(() => service.dispose());
+    const main = realpathSync.native(join(root, 'main.ts'));
+    const definition = service.call('request', {
+      method: 'definition',
+      path: main,
+      line: 3,
+      column: 13,
+    }) as { path: string }[];
+    assert.equal(definition[0]?.path, 'lib.ts');
+    const diagnostics = service.call('request', {
+      method: 'diagnostics',
+      path: main,
+      content: 'const value: number = "bad";',
+    }) as { code: string }[];
+    assert(diagnostics.some((d) => d.code === '2322'));
+  },
+);
