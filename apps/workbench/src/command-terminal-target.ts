@@ -30,8 +30,7 @@ export interface CommandTerminalAvailable {
 }
 
 export type CommandTerminalResolution =
-  | CommandTerminalUnavailable
-  | CommandTerminalAvailable;
+  CommandTerminalUnavailable | CommandTerminalAvailable;
 
 /** workspaceCall(viewSessionId, 'terminal', 'resolveCommand', request). */
 export interface CommandTerminalResolveRequest {
@@ -61,5 +60,4 @@ export type CommandTerminalCommandRequest = CommandTerminalAction & {
 
 /** The host rechecks the complete target and current capabilities for every action. */
 export type CommandTerminalCommandReply<T = unknown> =
-  | CommandTerminalUnavailable
-  | (CommandTerminalAvailable & { value: T });
+  CommandTerminalUnavailable | (CommandTerminalAvailable & { value: T });
