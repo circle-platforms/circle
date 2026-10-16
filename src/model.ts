@@ -101,6 +101,11 @@ export class GatewayModel implements ChatModel {
   private readonly rejectedThinking = new Set<string>();
   private readonly guard: ModelGuard;
   readonly catalog: ModelCatalog;
+  private readonly searchConnection: import('./native_websearch.js').NativeSearchConnection;
+  /** A snapshot of the same connection used by the main model client. Never persisted. */
+  webSearchConnection(): import('./native_websearch.js').NativeSearchConnection {
+    return { ...this.searchConnection };
+  }
   constructor(
     readonly settings: CircleSettings,
     home?: string,
@@ -116,6 +121,12 @@ export class GatewayModel implements ChatModel {
     const apiKey =
       credentials[settings.auth.api_key_ref] || credentials.api_key;
     if (!apiKey) throw new Error('missing API key; re-run circle --init');
+    this.searchConnection = Object.freeze({
+      baseUrl: settings.auth.base_url,
+      protocol: settings.auth.protocol === 'anthropic' ? 'anthropic' : 'openai',
+      model: this.model,
+      apiKey,
+    });
     // Keyed identity lets saved history detect account/endpoint/model changes without
     // storing a key or endpoint in the transcript. Rotation conservatively drops replay.
     this.thinkingScope = createHmac('sha256', apiKey)

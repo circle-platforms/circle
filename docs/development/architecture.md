@@ -77,7 +77,9 @@ handled as signature errors, and signature errors do not disable thinking.
 | `apply_patch.ts` | The `apply_patch` tool. |
 | `file_read.ts` | Reads a window of lines without loading a whole file. |
 | `lsp_tool.ts` | The `lsp` tool: language servers over standard input and output. |
-| `websearch.ts` | `webfetch` and `websearch`. |
+| `websearch.ts` | `webfetch`, DuckDuckGo fallback requests and search-result HTML parsing. |
+| `websearch_service.ts` | Runtime-owned native search capability cache, deadlines, normalized results and DuckDuckGo fallback. |
+| `native_websearch.ts` | Provider search protocols, structured execution evidence, citations and auxiliary model usage. |
 | `questions.ts` | The `question` tool and its answers. |
 | `secret_prompt.ts` | Secret requests: the files a task and Circle exchange, and writing the value into its target file. |
 | `approvals.ts` | Sorts commands and tool calls, keeps the session's rules and decides what needs your answer. |

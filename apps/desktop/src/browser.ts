@@ -307,6 +307,20 @@ const promptScript = (path: string) => `(() => {
 })();`;
 
 /**
+ * Chrome's rule for a page that closes itself: only a window a script opened may be closed
+ * by script. Circle adopts a page's popups as tabs, so those keep the leave; a tab the
+ * person or Circle opened stays until they close it. Without this a device WebUI that ends
+ * a side panel with window.close() empties the tab strip under them, which reads as the
+ * browser going blank.
+ */
+const closeGuard = `(() => {
+  const close = function close() {
+    console.warn('Scripts may close only the windows that were opened by them.');
+  };
+  Object.defineProperty(window, 'close', { value: close, writable: true, configurable: true });
+})();`;
+
+/**
  * The browsers of Circle's conversations: tabs of sandboxed, ephemeral pages the person and
  * the model use together. Whatever a page asks for (a dialog, a certificate decision, a new
  * tab) is shown to both, and either can answer it.
@@ -661,6 +675,13 @@ export class BrowserSessions {
         source: promptScript(tab.promptPath),
         runImmediately: true,
       }),
+      // A tab the page did not open is not the page's to close away
+      options.opener
+        ? Promise.resolve()
+        : contents.debugger.sendCommand(
+            'Page.addScriptToEvaluateOnNewDocument',
+            { source: closeGuard, runImmediately: true },
+          ),
     ]).then(() => {});
     tab.ready = options.contents
       ? (void enable.catch(() => {}), Promise.resolve())
@@ -1011,7 +1032,10 @@ export class BrowserSessions {
         conversation.personInput = Date.now();
     });
     contents.on('did-navigate', (_event, url) => {
-      if (url.startsWith(WARNING_SCHEME + ':')) return;
+      if (url.startsWith(WARNING_SCHEME + ':')) {
+        this.dropStaleWarnings(tab);
+        return;
+      }
       tab.requestedUrl = url;
       tab.warning = undefined;
       tab.failure = undefined;
@@ -1023,6 +1047,7 @@ export class BrowserSessions {
         )
       )
         tab.safeUrl = url;
+      this.dropStaleWarnings(tab);
       this.visibility(conversation);
       this.publish(id);
     });
@@ -1365,6 +1390,29 @@ export class BrowserSessions {
       void this.load(conversation, tab, tab.safeUrl || BLANK).catch(() => {});
     }
   }
+  /**
+   * A warning page is served only while a tab shows it, so one left in the back-forward
+   * list answers `not found` to whoever goes back to it and the tab goes blank: a page
+   * that closes its own panel by walking history does exactly that. Once the tab has moved
+   * on, or has a newer warning to show, the warning pages it passed come out of its history
+   * - as Chrome's own warning leaves nothing behind.
+   */
+  private dropStaleWarnings(tab: Tab) {
+    const history = tab.contents.navigationHistory;
+    const active = history.getActiveIndex();
+    for (let index = history.length() - 1; index >= 0; index--) {
+      if (index === active) continue;
+      const entry = history.getEntryAtIndex(index);
+      if (!entry?.url.startsWith(WARNING_SCHEME + '://')) continue;
+      if (
+        tab.warning &&
+        entry.url.startsWith(`${WARNING_SCHEME}://${tab.warning.token}`)
+      )
+        continue;
+      history.removeEntryAtIndex(index);
+    }
+  }
+
   // ---- what the person's panel asks
   /** The window changed theme: a certificate warning on show is drawn again in it. */
   setDark(dark: boolean) {

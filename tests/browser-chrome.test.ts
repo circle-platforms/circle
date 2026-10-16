@@ -2076,7 +2076,18 @@ test(
     });
     const keptName = firstSite === base ? 'mine.bin' : 'theirs.bin';
     const discardedName = firstSite === base ? 'theirs.bin' : 'mine.bin';
+    // Download completion and the move to its final name arrive asynchronously.
+    // Observe the real file under the fixture's existing deadline and 3s download
+    // bound, without assuming that answering the second approval finished it.
+    await fixture.run(
+      { phase: section, action: 'wait for kept download' },
+      async () => {
+        while (!existsSync(join(downloads, keptName))) await pause(25);
+      },
+      3000,
+    );
     assert.equal(existsSync(join(downloads, keptName)), true);
+    assert.equal(readFileSync(join(downloads, keptName), 'utf8'), keptName);
     assert.equal(existsSync(join(downloads, discardedName)), false);
 
     // ---- a dialog in another tab is answered only with that site's allowance

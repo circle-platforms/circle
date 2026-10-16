@@ -198,6 +198,16 @@ function liveChild(): ChildProcess {
   }) as unknown as ChildProcess;
 }
 
+test('a child process error without exit does not confirm browser cleanup', async () => {
+  const child = liveChild();
+  const browser = browserWithChild(child);
+  const waiting: Promise<boolean> = (browser as any).waitForExit(child, 40);
+  child.emit('error', new Error('termination refused'));
+  assert.equal(await waiting, false);
+  assert.equal(child.exitCode, null);
+  assert.equal(child.signalCode, null);
+});
+
 test('browser close escalates a refused graceful termination instead of rejecting before force', async () => {
   const child = liveChild();
   const browser = browserWithChild(child);

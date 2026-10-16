@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import fs, { readFileSync, readdirSync } from 'node:fs';
+import fs, { readFileSync, readdirSync, type PathLike } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test, type TestContext } from 'node:test';
 import { promisify } from 'node:util';
 import { InputHistory } from '../src/tui/input_history.js';
 import { scratch } from './helpers.js';
@@ -338,6 +338,143 @@ async function historyFault(
   ]);
   return JSON.parse(stdout);
 }
+
+function restoreFs(t: TestContext): void {
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+}
+
+test('a transient history rename failure retries publication without dropping the entry', (t) => {
+  const path = join(scratch(t), 'history');
+  const history = new InputHistory(path);
+  history.add('first');
+  const rename = fs.renameSync;
+  let attempts = 0;
+  restoreFs(t);
+  t.mock.method(fs, 'renameSync', (source: PathLike, target: PathLike) => {
+    if (target === path && ++attempts === 1)
+      throw Object.assign(new Error('temporarily busy history'), {
+        code: 'EPERM',
+      });
+    return rename(source, target);
+  });
+  syncBuiltinESMExports();
+  history.add('second');
+  assert.equal(attempts, 2);
+  assert.deepEqual(new InputHistory(path).items, ['first', 'second']);
+  history.add('third');
+  assert.deepEqual(new InputHistory(path).items, ['first', 'second', 'third']);
+});
+
+test('a transient locked history read never overwrites another terminal with a stale snapshot', (t) => {
+  const path = join(scratch(t), 'history');
+  const history = new InputHistory(path);
+  history.add('A first');
+  new InputHistory(path).add('B second');
+  const read = fs.readFileSync;
+  let attempts = 0;
+  restoreFs(t);
+  t.mock.method(fs, 'readFileSync', ((
+    ...args: Parameters<typeof fs.readFileSync>
+  ) => {
+    if (args[0] === path && ++attempts === 1)
+      throw Object.assign(new Error('temporarily busy history'), {
+        code: 'EBUSY',
+      });
+    return read(...args);
+  }) as typeof fs.readFileSync);
+  syncBuiltinESMExports();
+  history.add('A third');
+  assert.equal(attempts, 2);
+  assert.deepEqual(new InputHistory(path).items, [
+    'A first',
+    'B second',
+    'A third',
+  ]);
+});
+
+test('unpublished history entries survive a permission failure and merge with later terminal writes', (t) => {
+  const path = join(scratch(t), 'history');
+  const history = new InputHistory(path);
+  history.add('A first');
+  const rename = fs.renameSync;
+  let denied = true;
+  let refused = 0;
+  restoreFs(t);
+  t.mock.method(fs, 'renameSync', (source: PathLike, target: PathLike) => {
+    if (target === path && denied) {
+      refused++;
+      throw Object.assign(new Error('history is read-only'), {
+        code: 'EACCES',
+      });
+    }
+    return rename(source, target);
+  });
+  syncBuiltinESMExports();
+  history.add('A pending');
+  history.add('A pending');
+  // Windows reports sharing violations as EACCES too, so each publication retries
+  // it within the bounded window before keeping the entry pending.
+  assert.ok(
+    refused > 2,
+    'each refused publication is retried and then given up',
+  );
+  assert.equal(history.up('A draft'), 'A pending');
+  assert.equal(history.down(), 'A draft');
+  assert.deepEqual(new InputHistory(path).items, ['A first']);
+  denied = false;
+  new InputHistory(path).add('B second');
+  history.add('A third');
+  assert.deepEqual(new InputHistory(path).items, [
+    'A first',
+    'B second',
+    'A pending',
+    'A third',
+  ]);
+});
+
+test('a denied locked read leaves the saved history intact and retains the unsaved entry', (t) => {
+  const path = join(scratch(t), 'history');
+  const history = new InputHistory(path);
+  history.add('A first');
+  new InputHistory(path).add('B second');
+  const read = fs.readFileSync;
+  let denied = true;
+  let refused = 0;
+  restoreFs(t);
+  t.mock.method(fs, 'readFileSync', ((
+    ...args: Parameters<typeof fs.readFileSync>
+  ) => {
+    if (args[0] === path && denied) {
+      refused++;
+      throw Object.assign(new Error('history is read-only'), {
+        code: 'EACCES',
+      });
+    }
+    return read(...args);
+  }) as typeof fs.readFileSync);
+  syncBuiltinESMExports();
+  history.add('A pending');
+  assert.ok(
+    refused > 1,
+    'the refused locked read is retried and then given up',
+  );
+  assert.deepEqual(JSON.parse(read(path, 'utf8')).items, [
+    'A first',
+    'B second',
+  ]);
+  assert.deepEqual(history.items, ['A first', 'A pending']);
+  denied = false;
+  history.add('A third');
+  assert.deepEqual(new InputHistory(path).items, [
+    'A first',
+    'B second',
+    'A pending',
+    'A third',
+  ]);
+});
 
 test('separate history views merge writes while retaining their own browsing draft and cursor', (t) => {
   const path = join(scratch(t), 'history');
