@@ -787,7 +787,7 @@ test('explicit untracked previews show real added text without changing index or
       const preview = (await s.call('diff', { paths: [control] })) as {
         text: string;
       };
-      assert(preview.text.includes('\\012') && preview.text.includes('\\011'));
+      assert(preview.text.includes('\\n') && preview.text.includes('\\t'));
       await s.call('applyHunk', {
         revision: (await s.snapshot()).revision,
         patch: preview.text,

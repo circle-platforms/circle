@@ -8,8 +8,12 @@ import {
   readlink,
   open,
   stat,
+  mkdtemp,
+  mkdir,
+  rm,
 } from 'node:fs/promises';
 import { constants } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 const exec = promisify(execFile);
 const locks = new Map<string, Promise<unknown>>();
@@ -325,6 +329,166 @@ export class GitWorkspaceService {
       throw error;
     }
   }
+  private async canonicalNewFileDiff(
+    root: string,
+    relative: string,
+    expected: Buffer,
+    identity: { dev: number; ino: number; mode: number; mtimeMs: number },
+  ) {
+    const attributes = (
+      await this.git([
+        'check-attr',
+        '-z',
+        'filter',
+        'working-tree-encoding',
+        '--',
+        relative,
+      ])
+    ).split('\0');
+    const values = new Map<string, string>();
+    for (let i = 0; i + 2 < attributes.length; i += 3)
+      values.set(attributes[i + 1]!, attributes[i + 2]!);
+    let filterKeys: string[] = [];
+    try {
+      filterKeys = (
+        await this.git(['config', '--name-only', '--get-regexp', '^filter\\.'])
+      )
+        .split('\n')
+        .filter(Boolean);
+    } catch (error) {
+      if ((error as { code?: number }).code !== 1) throw error;
+    }
+    const filter = values.get('filter') ?? 'unspecified';
+    const encoding = values.get('working-tree-encoding') ?? 'unspecified';
+    if (
+      !['unspecified', 'unset'].includes(filter) ||
+      filterKeys.some((key) => key.startsWith('filter.' + filter + '.')) ||
+      !['unspecified', 'unset'].includes(encoding)
+    )
+      return {
+        status: 'unsupported-conversion',
+        text: 'Preview unavailable: custom filter or encoding requires explicit review\n',
+      };
+    const directory = await mkdtemp(path.join(tmpdir(), 'circle-git-preview-'));
+    try {
+      const objects = path.join(directory, 'objects'),
+        hooks = path.join(directory, 'hooks');
+      await mkdir(objects);
+      await mkdir(hooks);
+      const canonical = await realpath(directory),
+        inside = path.relative(root, canonical);
+      if (
+        !path.isAbsolute(inside) &&
+        inside !== '..' &&
+        !inside.startsWith('..' + path.sep)
+      )
+        throw Error(
+          'Git preview temporary files must be outside the repository',
+        );
+      // No custom clean/process/smudge driver may run during a read-only preview.
+      const disabled = filterKeys
+        .filter((key) => /\.(clean|process|smudge|required)$/.test(key))
+        .flatMap((key) => [
+          '-c',
+          key + '=' + (key.endsWith('.required') ? 'false' : ''),
+        ]);
+      const env = {
+        ...process.env,
+        GIT_INDEX_FILE: path.join(directory, 'index'),
+        GIT_OBJECT_DIRECTORY: objects,
+        GIT_OPTIONAL_LOCKS: '0',
+        GIT_TERMINAL_PROMPT: '0',
+      };
+      const run = (args: string[], input?: string | Buffer) =>
+        new Promise<string>((resolve, reject) => {
+          const child = execFile(
+            'git',
+            [
+              '--literal-pathspecs',
+              '-C',
+              root,
+              '-c',
+              'core.fsmonitor=false',
+              '-c',
+              'core.hooksPath=' + hooks,
+              ...disabled,
+              ...args,
+            ],
+            { env, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 },
+            (error, stdout, stderr) =>
+              error ? reject(Error(stderr || error.message)) : resolve(stdout),
+          );
+          child.stdin?.end(input);
+        });
+      const empty = (
+        await run(['hash-object', '-w', '-t', 'tree', '--stdin'], '')
+      ).trim();
+      // Convert the bytes read from the already-validated file descriptor. Git
+      // must not reopen the working-tree path between our identity checks.
+      const blob = (
+        await run(
+          ['hash-object', '-w', '--path=' + relative, '--stdin'],
+          expected,
+        )
+      ).trim();
+      let filemode = true;
+      try {
+        filemode =
+          (await this.git(['config', '--bool', 'core.filemode'])).trim() ===
+          'true';
+      } catch (error) {
+        if ((error as { code?: number }).code !== 1) throw error;
+      }
+      // Git's create_ce_mode uses the owner's execute bit, not any execute bit.
+      const mode = filemode && identity.mode & 0o100 ? '100755' : '100644';
+      await run(['update-index', '--add', '--cacheinfo', mode, blob, relative]);
+      const text = await run([
+        'diff',
+        '--cached',
+        empty,
+        '--no-ext-diff',
+        '--no-color',
+        '--no-textconv',
+        '--',
+        relative,
+      ]);
+      const current = await this.regularFile(root, relative);
+      if (current.kind !== 'file')
+        throw Error('file identity changed during Git preview');
+      try {
+        if (
+          current.info.size !== expected.length ||
+          current.info.dev !== identity.dev ||
+          current.info.ino !== identity.ino ||
+          current.info.mode !== identity.mode ||
+          current.info.mtimeMs !== identity.mtimeMs
+        )
+          throw Error('file content changed during Git preview');
+        const bytes = Buffer.alloc(expected.length + 1);
+        let size = 0;
+        while (size < bytes.length) {
+          const read = await current.handle.read(
+            bytes,
+            size,
+            bytes.length - size,
+            size,
+          );
+          if (!read.bytesRead) break;
+          size += read.bytesRead;
+        }
+        if (
+          size !== expected.length ||
+          !expected.equals(bytes.subarray(0, size))
+        )
+          throw Error('file content changed during Git preview');
+      } finally {
+        await current.handle.close();
+      }
+      return { status: 'text', text };
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
   private async untrackedPreview(root: string, relative: string) {
     const quote = (value: string) =>
       '"' +
@@ -340,9 +504,7 @@ export class GitWorkspaceService {
       '"';
     const label = quote('b/' + relative);
     const opened = await this.regularFile(root, relative);
-    const prefixFor = (mode: string) =>
-      `diff --git ${quote('a/' + relative)} ${label}\nnew file mode ${mode}\n`;
-    let prefix = prefixFor('100644');
+    const prefix = `diff --git ${quote('a/' + relative)} ${label}\n`;
     if (opened.kind !== 'file')
       return {
         path: relative,
@@ -350,17 +512,6 @@ export class GitWorkspaceService {
         text: prefix + `Preview unavailable: ${opened.kind}\n`,
       };
     try {
-      let filemode = true;
-      try {
-        filemode =
-          (await this.git(['config', '--bool', 'core.filemode'])).trim() ===
-          'true';
-      } catch (error) {
-        if ((error as { code?: number }).code !== 1) throw error;
-      }
-      prefix = prefixFor(
-        filemode && opened.info.mode & 0o111 ? '100755' : '100644',
-      );
       if (opened.info.size > 1024 * 1024)
         return {
           path: relative,
@@ -387,10 +538,9 @@ export class GitWorkspaceService {
           text: prefix + 'Preview unavailable: file exceeds 1 MiB\n',
         };
       const content = bytes.subarray(0, bytesRead);
-      let text: string;
       try {
         if (content.includes(0)) throw Error('binary');
-        text = new TextDecoder('utf-8', { fatal: true }).decode(content);
+        new TextDecoder('utf-8', { fatal: true }).decode(content);
       } catch {
         return {
           path: relative,
@@ -398,16 +548,13 @@ export class GitWorkspaceService {
           text: prefix + `Binary files /dev/null and ${label} differ\n`,
         };
       }
-      const lines = text ? text.split('\n') : [];
-      if (text.endsWith('\n')) lines.pop();
-      const header = `--- /dev/null\n+++ ${label}\n`;
-      const body = lines.length
-        ? `@@ -0,0 +1,${lines.length} @@\n` +
-          lines.map((line) => '+' + line).join('\n') +
-          '\n' +
-          (text.endsWith('\n') ? '' : '\\ No newline at end of file\n')
-        : '';
-      return { path: relative, status: 'text', text: prefix + header + body };
+      const result = await this.canonicalNewFileDiff(
+        root,
+        relative,
+        content,
+        opened.info,
+      );
+      return { path: relative, ...result };
     } finally {
       await opened.handle.close();
     }
