@@ -721,3 +721,112 @@ test('repository HTTP credentials are an actual transport override and authentic
     await rm(root, { recursive: true, force: true });
   }
 });
+test('linked worktree pushes use common HTTP configuration until worktreeConfig is explicitly enabled', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-push-linked-config-'));
+  const env = {
+    ...process.env,
+    HOME: root,
+    USERPROFILE: root,
+    GIT_TERMINAL_PROMPT: '0',
+  };
+  const linked = path.join(root, 'linked');
+  const remote = path.join(root, 'remote.git');
+  const url = 'https://github.com/fixture/repo.git';
+  try {
+    await git(['init'], env, root);
+    await git(
+      [
+        '-c',
+        'user.name=Fixture',
+        '-c',
+        'user.email=fixture@example.invalid',
+        'commit',
+        '--allow-empty',
+        '-m',
+        'Seed',
+      ],
+      env,
+      root,
+    );
+    await git(['init', '--bare', remote], env, root);
+    await git(['remote', 'add', 'origin', url], env, root);
+    await git(['worktree', 'add', '-b', 'codex/linked', linked], env, root);
+    await assert.rejects(
+      git(
+        ['config', '--worktree', '--name-only', '--get-regexp', '^http\\.'],
+        env,
+        linked,
+      ),
+      /worktreeConfig|worktree/i,
+    );
+    const service = new GitWorkspaceService(linked, { setUpstream: false });
+    let grants = 0;
+    const invocation = {
+      pushAuthentication: {
+        repository: 'fixture/repo',
+        withCredentials: async (
+          run: (env: NodeJS.ProcessEnv, config: string[]) => Promise<string>,
+        ) => {
+          grants++;
+          return run(env, [
+            '-c',
+            `url.${remote.replaceAll('\\', '/')}.insteadOf=${url}`,
+          ]);
+        },
+      },
+    };
+    await service.call(
+      'push',
+      { revision: (await service.snapshot()).revision },
+      invocation,
+    );
+    assert.equal(grants, 1);
+    assert.equal(
+      (
+        await git(
+          ['--git-dir', remote, 'rev-parse', 'refs/heads/codex/linked'],
+          env,
+          root,
+        )
+      ).trim(),
+      (await service.snapshot()).head,
+    );
+    await git(['config', 'extensions.worktreeConfig', 'true'], env, root);
+    await git(
+      [
+        'config',
+        '--worktree',
+        'http.extraHeader',
+        'Authorization: synthetic-worktree',
+      ],
+      env,
+      linked,
+    );
+    await assert.rejects(
+      service.call(
+        'push',
+        { revision: (await service.snapshot()).revision },
+        invocation,
+      ),
+      /remove repository HTTP credential overrides/,
+    );
+    assert.equal(grants, 1);
+    await git(
+      ['config', '--worktree', '--unset', 'http.extraHeader'],
+      env,
+      linked,
+    );
+    const beforeInvalid = (await service.snapshot()).revision;
+    await git(
+      ['config', 'extensions.worktreeConfig', 'invalid-boolean'],
+      env,
+      root,
+    );
+    await assert.rejects(
+      service.call('push', { revision: beforeInvalid }, invocation),
+    );
+    assert.equal(grants, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

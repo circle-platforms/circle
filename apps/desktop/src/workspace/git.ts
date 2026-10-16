@@ -198,7 +198,27 @@ export class GitWorkspaceService {
     return execute();
   }
   private async assertPushHttpConfiguration() {
-    for (const scope of ['--local', '--worktree']) {
+    let worktreeConfig = false;
+    try {
+      worktreeConfig =
+        (
+          await this.git([
+            'config',
+            '--local',
+            '--includes',
+            '--bool',
+            '--get',
+            'extensions.worktreeConfig',
+          ])
+        ).trim() === 'true';
+    } catch (error) {
+      if ((error as { code?: number }).code !== 1) throw error;
+    }
+    // Git rejects --worktree for linked worktrees until this repository
+    // extension is enabled; absence is a valid common-config-only repository.
+    for (const scope of worktreeConfig
+      ? ['--local', '--worktree']
+      : ['--local']) {
       let unsafeHttp = '';
       try {
         unsafeHttp = await this.git([
