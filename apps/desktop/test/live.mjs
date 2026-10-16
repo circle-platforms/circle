@@ -12,6 +12,11 @@ import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
 import { waitDesktopReady } from './helpers/desktop-readiness.mjs';
 import { readModelRequests } from './helpers/model-requests.mjs';
 import {
+  answerTitle,
+  FIXTURE_TITLE,
+  isTitleRequest,
+} from './helpers/title-requests.mjs';
+import {
   assertViewport,
   readViewport,
   setViewport,
@@ -109,6 +114,7 @@ const errors = [];
 const diagnosticEvents = [];
 const phases = [];
 const gatewayRequests = [];
+const titleRequests = [];
 const gatewayEvents = [];
 let largePicture;
 let lastWait;
@@ -526,8 +532,14 @@ try {
     const data = JSON.parse(body);
     event.parsedAt = new Date().toISOString();
     event.request = requestMetadata(data);
-    gatewayRequests.push(data);
     assert.equal(req.headers.authorization, 'Bearer native-local-key');
+    // The session title is asked after the turn. It is not one of the turns.
+    if (isTitleRequest(data)) {
+      titleRequests.push(data);
+      answerTitle(res, data);
+      return;
+    }
+    gatewayRequests.push(data);
     const last = data.messages.at(-1);
     const said = Array.isArray(last.content)
       ? last.content.find((part) => part.type === 'text')?.text
@@ -770,6 +782,18 @@ try {
   assert.equal(gatewayRequests[0].reasoning_effort, 'high');
   checks.push(
     'normal native GatewayModel sends a real request to the isolated HTTP fixture with selected model and effort',
+  );
+  await waitFor(
+    async () =>
+      titleRequests.length === 1 &&
+      (await state()).sessions[0].title === FIXTURE_TITLE,
+    'session title',
+  );
+  assert.equal(titleRequests[0].model, 'native-fixture-model');
+  assert.equal(titleRequests[0].reasoning_effort, undefined);
+  assert.equal(titleRequests[0].tools, undefined);
+  checks.push(
+    'after the turn a separate request without thinking or tools names the session',
   );
   // Times read as the local clock once the reply is stored; the usage row has no empty part
   await waitFor(
@@ -1037,6 +1061,7 @@ try {
     errors,
     diagnosticEvents,
     gatewayRequests: gatewayRequests.map(requestMetadata),
+    titleRequests: titleRequests.map(requestMetadata),
     gatewayEvents,
   };
   const failurePath = join(output, 'failure.json');

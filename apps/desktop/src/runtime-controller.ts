@@ -1308,7 +1308,11 @@ export class RuntimeController {
       event.kind === 'info' &&
       !event.tags?.subagent &&
       (event.payload.model_notice as { event?: string } | undefined)?.event ===
-        'title_failed'
+        'title_failed' &&
+      // A model without side requests is a scripted one. Every connected
+      // endpoint can be asked, so that skip is nothing a person can act on.
+      (event.payload.model_notice as { message?: string }).message !==
+        'model has no side request'
     ) {
       const notice = event.payload.model_notice as { message?: string };
       const rows = this.notices.get(id) ?? [];

@@ -38,7 +38,7 @@ import {
   defaultSettings,
   isFolderTrusted,
 } from '../../../src/settings.ts';
-import { TITLE_MAX_TOKENS } from '../../../src/session_title.ts';
+import { fallbackTitle, TITLE_MAX_TOKENS } from '../../../src/session_title.ts';
 import { visibleMessages } from '../../workbench/src/model/state.ts';
 import {
   historyMessages,
@@ -4461,6 +4461,28 @@ test('trusting a folder initializes every idle session with its own project cont
       .snapshot()
       .workspaces.find((row) => row.path === realpathSync(f.workspace))!
       .trusted,
+  );
+});
+
+test('a model that cannot be asked for a title keeps the short title quietly', async (t) => {
+  // A scripted model has no side requests. A connected endpoint always has.
+  const f = await setup(t, [{ message: assistant('listed') }]);
+  const prompt = 'please list all the files in the workspace';
+  await f.call('prompt', { text: prompt });
+  const row = () =>
+    f.controller
+      .snapshot()
+      .sessions.find(
+        (session) => session.id === f.controller.snapshot().activeSessionId,
+      )!;
+  await wait(
+    () => row().state === 'idle' && row().messages.length >= 2,
+    'answered',
+  );
+  assert.equal(row().title, fallbackTitle(prompt));
+  assert.equal(
+    row().messages.some((message) => message.text.includes('title failed')),
+    false,
   );
 });
 

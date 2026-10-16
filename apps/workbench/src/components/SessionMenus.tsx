@@ -99,7 +99,8 @@ function Item({
     <DropdownMenu.Item {...props}>
       <Icon size={14} />
       <span>{label}</span>
-      {hint && <kbd>{hint}</kbd>}
+      {/* A visible hint. The item is still named by its words. */}
+      {hint && <kbd aria-hidden="true">{hint}</kbd>}
     </DropdownMenu.Item>
   );
 }

@@ -6,6 +6,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { answerTitle, isTitleRequest } from './helpers/title-requests.mjs';
 import { createRequire } from 'node:module';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -27,6 +28,7 @@ await writeFile(
 );
 const selected = 'claude-page-21';
 const requests = [];
+const titleRequests = [];
 const errors = [];
 const checks = [];
 const stream = (model, text) =>
@@ -68,6 +70,13 @@ const gateway = createServer(async (req, res) => {
   let bytes = '';
   for await (const chunk of req) bytes += chunk;
   const body = bytes ? JSON.parse(bytes) : undefined;
+  // The session title is asked after the turn. It is not one of the turns
+  // whose connection this test follows.
+  if (req.method === 'POST' && isTitleRequest(body)) {
+    titleRequests.push({ url: req.url, headers: req.headers, body });
+    answerTitle(res, body, 'anthropic');
+    return;
+  }
   requests.push({
     method: req.method,
     url: req.url,
@@ -316,6 +325,15 @@ try {
   const actual = requests.at(-1);
   assert.equal(actual.headers['x-api-key'], 'native-saved-key');
   assert.equal(actual.body.model, selected);
+  // The title of the first session went over the same saved connection.
+  assert(
+    titleRequests.every(
+      (request) =>
+        request.url === '/anthropic/v1/messages' &&
+        request.headers['x-api-key'] === 'native-saved-key' &&
+        request.body.model === selected,
+    ),
+  );
   assert.deepEqual(errors, []);
   checks.push(
     'the next actual SDK request after cancellation still uses the saved endpoint, key and model',

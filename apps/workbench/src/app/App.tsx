@@ -813,7 +813,10 @@ export function App() {
                   >
                     <DropdownMenu.Item onSelect={() => setSearchOpen(true)}>
                       <span>{t('search')}</span>
-                      <kbd>{formatChord(DESKTOP_SEARCH_CHORD)}</kbd>
+                      {/* A visible hint. The item is still named by its words. */}
+                      <kbd aria-hidden="true">
+                        {formatChord(DESKTOP_SEARCH_CHORD)}
+                      </kbd>
                     </DropdownMenu.Item>
                     <DropdownMenu.Item
                       onSelect={() =>
