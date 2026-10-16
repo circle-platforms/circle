@@ -5533,7 +5533,7 @@ for (const mode of ['released', 'bounded'] as const)
   );
 // The window names the folder a trust answer is about, by the id its snapshot gave.
 const workspaceId = (path: string) =>
-  createHash("sha256").update(path).digest("hex").slice(0, 24);
+  createHash('sha256').update(path).digest('hex').slice(0, 24);
 
 test('trust is given and taken away for the folder the settings page names', async (t) => {
   const { root, home, workspace, controller, call } = await setup(t, [
@@ -5543,13 +5543,13 @@ test('trust is given and taken away for the folder the settings page names', asy
   assert.equal(controller.snapshot().workspaces[0]!.trusted, true);
   // Revoking is the other half of the same command, and it is kept on disk.
   assert.equal(
-    (await call("trust", { enabled: false, workspaceId: id })).ok,
+    (await call('trust', { enabled: false, workspaceId: id })).ok,
     true,
   );
   assert.equal(isFolderTrusted(loadSettings(home), workspace), false);
   assert.equal(controller.snapshot().workspaces[0]!.trusted, false);
   assert.equal(
-    (await call("trust", { enabled: true, workspaceId: id })).ok,
+    (await call('trust', { enabled: true, workspaceId: id })).ok,
     true,
   );
   assert.equal(isFolderTrusted(loadSettings(home), workspace), true);
@@ -5557,18 +5557,18 @@ test('trust is given and taken away for the folder the settings page names', asy
   // answer is taken without the click that means it.
   assert.equal(
     (
-      await call("trust", {
+      await call('trust', {
         enabled: true,
         workspaceId: workspaceId(join(root, 'elsewhere')),
       })
     ).ok,
     false,
   );
-  assert.equal((await call("trust", { workspaceId: id })).ok, false);
-  assert.equal((await call("trust", { enabled: 'yes' })).ok, false);
+  assert.equal((await call('trust', { workspaceId: id })).ok, false);
+  assert.equal((await call('trust', { enabled: 'yes' })).ok, false);
   // The same guard answers for the archive of a folder nothing ran in.
   assert.equal(
-    (await call("archive-workspace", { workspaceId: "nope" })).ok,
+    (await call('archive-workspace', { workspaceId: 'nope' })).ok,
     false,
   );
 });

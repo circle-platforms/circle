@@ -32,6 +32,7 @@ export const KEY_ACTION_TEXT: Record<KeyAction, () => string> = {
   exit: () => t('close Circle'),
   suspend: () => t('pause Circle and go back to the shell'),
   'model.select': () => t('choose a model'),
+  'session.select': () => t('switch to another conversation'),
   'model.cycle': () => t('switch to the next model'),
   'mode.cycle': () => t('switch to the next approval mode'),
   'thinking.cycle': () => t('switch to the next thinking depth'),

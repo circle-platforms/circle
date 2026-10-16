@@ -2445,9 +2445,7 @@ export class RuntimeController {
         const settings = saveSettingsChange(this.home, (saved) => {
           Object.assign(
             saved,
-            enabled
-              ? trustFolder(saved, folder)
-              : untrustFolder(saved, folder),
+            enabled ? trustFolder(saved, folder) : untrustFolder(saved, folder),
           );
         });
         this.synchronizeSharedSettings(settings);

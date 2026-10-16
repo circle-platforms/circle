@@ -335,6 +335,7 @@ export const pages: Record<string, string> = {
   'stop the current turn': '停止当前这一轮',
   'close Circle': '关闭 Circle',
   'pause Circle and go back to the shell': '暂停 Circle 并返回 shell',
+  'switch to another conversation': '切换到另一个会话',
   'choose a model': '选择模型',
   'switch to the next model': '切换到下一个模型',
   'switch to the next approval mode': '切换到下一个审批模式',
