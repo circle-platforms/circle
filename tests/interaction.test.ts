@@ -27,6 +27,7 @@ import {
   type ModelRequest,
   type ModelResponse,
 } from '../src/types.js';
+import { sessionOccupied } from '../src/session_lock.js';
 import { cleanup, scratch } from './helpers.js';
 
 type Reply =
@@ -1111,6 +1112,45 @@ test('an empty enter and the session list take a released view-only session', as
     ),
     false,
   );
+});
+
+test('switching away releases the lock when the background turn finishes', async (t) => {
+  let finish!: () => void;
+  let started!: () => void;
+  const runningTurn = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const { app, runtime, home } = await session(t, [
+    async (request) => {
+      started();
+      await new Promise<void>((resolve, reject) => {
+        finish = resolve;
+        request.signal.addEventListener(
+          'abort',
+          () => reject(request.signal.reason),
+          {
+            once: true,
+          },
+        );
+      });
+      return {
+        message: { id: 'done', role: 'assistant', content: 'done' },
+        usage: emptyUsage(),
+      };
+    },
+  ]);
+  const first = runtime.session.id;
+  const turn = app.submit('start a turn');
+  await runningTurn;
+  await app.submit('/new');
+  const second = app.runtime!.session.id;
+  assert.notEqual(second, first);
+  assert.equal(sessionOccupied(home, first), true);
+  assert.equal(sessionOccupied(home, second), true);
+  finish();
+  await turn;
+  assert.equal(sessionOccupied(home, first), false);
+  assert.equal(sessionOccupied(home, second), true);
 });
 
 test('the view-only screen takes the lock back without a key', async (t) => {

@@ -25,9 +25,12 @@ import { currentSession } from '../model/state';
 import { hasToolInput } from '../model/browser';
 
 const SEARCH_QUOTA = 'Native search unavailable: search quota exceeded';
-/** The provider's quota error, in the interface language. The stored text stays English. */
+const SEARCH_PROVIDER = 'Provider: DuckDuckGo';
+/** The provider line and its quota error, in the interface language. The stored text stays English. */
 function shownToolOutput(text: string): string {
-  return text.replaceAll(SEARCH_QUOTA, t(SEARCH_QUOTA));
+  return text
+    .replaceAll(SEARCH_PROVIDER, t(SEARCH_PROVIDER))
+    .replaceAll(SEARCH_QUOTA, t(SEARCH_QUOTA));
 }
 export function ToolMessage({
   tool,

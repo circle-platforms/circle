@@ -241,6 +241,8 @@ export class AgentRuntime {
   private ownershipError?: Error;
   private ownershipCleanup?: Promise<void>;
   private deleting = false;
+  /** Left the screen. The lock drops once a background turn, job or queue finishes. */
+  private away = false;
   get isDeleting(): boolean {
     return this.deleting;
   }
@@ -357,6 +359,7 @@ export class AgentRuntime {
         payload: { job },
         tags: { session_id: job.sessionId },
       });
+      if (kind === 'job_ended') this.releaseIfAway();
     });
     // A background command can print a secret: its notice reaches the model and history.
     // Calls and notices share what values each secret had.
@@ -375,7 +378,10 @@ export class AgentRuntime {
         this.busy,
       modelBusy: () => this.harness.busy,
       planMode: () => this.harness.planMode,
-      changed: () => this.bus.emit('info', { payload: { user_shell: true } }),
+      changed: () => {
+        this.bus.emit('info', { payload: { user_shell: true } });
+        this.releaseIfAway();
+      },
     });
     this.mcp = new McpManager(options.workspace);
     this.lsp = new LspManager(this.sandbox);
@@ -802,6 +808,7 @@ export class AgentRuntime {
           this.harness.tools,
           signal,
         ),
+      settled: () => this.releaseIfAway(),
       planFileMutation: (call) => {
         if (['write_file', 'edit_file', 'delete'].includes(call.name)) {
           const path = this.sandbox.resolvePath(
@@ -1382,6 +1389,7 @@ export class AgentRuntime {
     } finally {
       this.activeCompaction = undefined;
       this.compactionController = undefined;
+      this.releaseIfAway();
     }
   }
   /** Another terminal owns this session. History is readable; nothing may write. */
@@ -1396,11 +1404,16 @@ export class AgentRuntime {
     return queued.steering.length > 0 || queued.followUp.length > 0;
   }
   /**
-   * Drop the lease when the session leaves the screen and nothing is running.
-   * Visiting a session must not keep it view-only in every other terminal.
+   * Drop the lease when the session leaves the screen. A turn, a job or a queue
+   * keeps it until that work finishes, then the lock goes.
    */
   yieldLease(): void {
-    if (this.viewOnly || this.retainsLease()) return;
+    if (this.viewOnly) return;
+    this.away = true;
+    this.releaseIfAway();
+  }
+  private releaseIfAway(): void {
+    if (!this.away || this.viewOnly || this.retainsLease()) return;
     this.store.releaseSession(this.session.id);
   }
   /**
@@ -1409,6 +1422,7 @@ export class AgentRuntime {
    */
   resumeLease(): boolean {
     if (this.closing) return false;
+    this.away = false;
     const wasInspect = this.viewOnly;
     try {
       this.store.claimSession(this.session.id, (error) =>

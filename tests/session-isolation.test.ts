@@ -700,6 +700,66 @@ test('an occupied session opens view-only and a turn names how to fork it', asyn
   assert.equal(sessionOccupied(home, owner.session.id), true);
 });
 
+test('a background turn and its queue release the lock after the session leaves the screen', async (t) => {
+  const home = scratch(t),
+    workspace = scratch(t);
+  const first = gate();
+  const queued = gate();
+  const owner = new AgentRuntime({
+    workspace,
+    home,
+    settings: defaultSettings(),
+    model: new ScriptedModel([first.reply, queued.reply]),
+    headless: true,
+  });
+  cleanup(t, () => owner.close());
+  const running = owner.harness.run('hello from the owner');
+  await first.ready;
+  owner.harness.queue('and then', 'followUp');
+  owner.yieldLease();
+  assert.equal(sessionOccupied(home, owner.session.id), true);
+  first.finish();
+  await queued.ready;
+  assert.equal(sessionOccupied(home, owner.session.id), true);
+  queued.finish();
+  await running;
+  assert.equal(sessionOccupied(home, owner.session.id), false);
+  const next = new AgentRuntime({
+    workspace,
+    home,
+    session: owner.session.id,
+    settings: defaultSettings(),
+    model: new ScriptedModel([
+      { message: { id: 'next', role: 'assistant', content: 'taken over' } },
+    ]),
+    headless: true,
+  });
+  cleanup(t, () => next.close());
+  assert.equal(next.viewOnly, false);
+  assert.equal(sessionOccupied(home, owner.session.id), true);
+});
+
+test('coming back before a background turn finishes keeps the lock', async (t) => {
+  const home = scratch(t),
+    workspace = scratch(t);
+  const held = gate();
+  const owner = new AgentRuntime({
+    workspace,
+    home,
+    settings: defaultSettings(),
+    model: new ScriptedModel([held.reply]),
+    headless: true,
+  });
+  cleanup(t, () => owner.close());
+  const running = owner.harness.run('hello from the owner');
+  await held.ready;
+  owner.yieldLease();
+  assert.equal(owner.resumeLease(), true);
+  held.finish();
+  await running;
+  assert.equal(sessionOccupied(home, owner.session.id), true);
+});
+
 test('leaving an idle session releases it for another terminal', async (t) => {
   const home = scratch(t),
     workspace = scratch(t);

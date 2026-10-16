@@ -101,7 +101,9 @@ test('a Chinese locale translates the session list, resume line, view only and s
         { width: 80, expanded: true },
       ).join('\n'),
     );
+    assert.match(quota, /提供方：DuckDuckGo/);
     assert.match(quota, /原生搜索不可用：搜索额度不足/);
+    assert.equal(quota.includes('Provider: DuckDuckGo'), false);
     assert.equal(quota.includes('search quota exceeded'), false);
 
     const screen = {

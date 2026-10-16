@@ -25,7 +25,10 @@ import {
 } from './secrets.js';
 import { httpStatus } from './model_guard.js';
 import { isNetworkFailure } from './net.js';
-import { occupiedSessionMessage } from './session_lock.js';
+import {
+  occupiedSessionMessage,
+  SessionOccupiedError,
+} from './session_lock.js';
 import { validateAttachments } from './media.js';
 import { readPrompt } from './system_prompt.js';
 import {
@@ -103,6 +106,8 @@ export interface HarnessOptions {
   holdTitle?: boolean;
   /** Read stored history without taking the lease or repairing it. */
   inspect?: boolean;
+  /** The turn and its queued follow-ups have finished, whether or not they succeeded. */
+  settled?: () => void;
 }
 /** A message that waits for the model, as the input box showed it. */
 export interface QueuedMessage {
@@ -356,6 +361,7 @@ export class Harness {
     } finally {
       this.active = undefined;
       this.controller = undefined;
+      this.options.settled?.();
     }
   }
   private async runQueued(
@@ -482,7 +488,10 @@ export class Harness {
       try {
         this.options.store.rename(sessionId, title);
       } catch (error) {
-        if (error instanceof Error && /not open/.test(error.message))
+        if (
+          error instanceof SessionOccupiedError ||
+          (error instanceof Error && /not open/.test(error.message))
+        )
           return false;
         throw error;
       }

@@ -20,6 +20,7 @@ const ZH: Record<string, string> = {
   'search quota exceeded': '搜索额度不足',
   'Native search unavailable: search quota exceeded':
     '原生搜索不可用：搜索额度不足',
+  'Provider: DuckDuckGo': '提供方：DuckDuckGo',
 };
 
 /** Chinese when LANG, LC_ALL or LANGUAGE says so; otherwise English. */
@@ -59,6 +60,7 @@ export function uiText(
   if (occupied)
     return `已在另一终端打开 · 只读 · circle --fork ${occupied[1]} 可复制到此处`;
   return text
+    .replaceAll('Provider: DuckDuckGo', ZH['Provider: DuckDuckGo']!)
     .replaceAll(
       'Native search unavailable: search quota exceeded',
       ZH['Native search unavailable: search quota exceeded']!,

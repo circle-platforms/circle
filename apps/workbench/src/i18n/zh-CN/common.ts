@@ -38,6 +38,7 @@ export const common: Record<string, string> = {
   '✖ Interrupted': '✖ 已中断',
   'Native search unavailable: search quota exceeded':
     '原生搜索不可用：搜索额度不足',
+  'Provider: DuckDuckGo': '提供方：DuckDuckGo',
   // why the core asks
   'changes files in the workspace': '修改工作区内的文件',
   'changes files outside the workspace': '修改工作区外的文件',
