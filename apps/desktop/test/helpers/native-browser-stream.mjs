@@ -10,6 +10,25 @@ export async function runNativeBrowserStream({
 }) {
   const panel = page.locator('.browser-diagnostics');
   await panel.getByRole('tab', { name: 'console', exact: true }).click();
+  // Events are measured on the live end of the console. Clicking an older entry
+  // earlier scrolls a short console up and stops it following new output, so
+  // scroll back to the latest entry with the wheel, as a person would.
+  const results = panel.locator('.browser-diagnostic-results');
+  await results.hover();
+  await page.mouse.wheel(0, 100_000);
+  await results.evaluate(
+    (node) =>
+      new Promise((resolve, reject) => {
+        const deadline = Date.now() + 3000;
+        const settled = () =>
+          node.scrollHeight - node.scrollTop - node.clientHeight < 2
+            ? resolve()
+            : Date.now() > deadline
+              ? reject(Error('the console did not scroll to its latest entry'))
+              : requestAnimationFrame(settled);
+        settled();
+      }),
+  );
   await page.evaluate((sessionId) => {
     const events = new Map(),
       samples = [],

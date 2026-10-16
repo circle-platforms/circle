@@ -255,9 +255,10 @@ const check = async (name, action) => {
   const start = Date.now();
   try {
     if (sessionId && page) {
-      const parent = page.locator(
-        `.sidebar .session-link[href="#/session/${sessionId}"]`,
-      );
+      // The sidebar lists a session under recent and under its project.
+      const parent = page
+        .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+        .first();
       if (await parent.isVisible()) await parent.click();
       const quick = page.getByRole('dialog', {
         name: 'quick open',
@@ -407,6 +408,12 @@ const screenshot = async (name) => {
   );
   await page.screenshot({ path: join(output, name + '.png') });
 };
+// The phases use the inspector beside the conversation. A window made on a CI
+// runner's small screen is 1050 pixels or narrower, where the inspector lies
+// over the conversation instead, so size it as on a desktop. The last phase
+// checks the narrow window.
+const desktopViewport = () =>
+  setViewport(app, page, { width: 1400, height: 900 }, { show: true });
 try {
   app = await electron.launch({
     chromiumSandbox: true,
@@ -456,6 +463,7 @@ try {
     errors.push({ phase, error: String(e), stack: e.stack }),
   );
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
+  await desktopViewport();
   const state = async () =>
     (await page.evaluate(() => window.circleDesktop.runtimeState())).snapshot;
   sessionId = (await state()).activeSessionId;
@@ -509,10 +517,13 @@ try {
         .count(),
       0,
     );
+    // A configured app with nothing to resume opens the home composer; the
+    // first message there starts the conversation in the default project.
+    await send('Prepare native journey');
     await page
       .locator('.main-stack .conversation')
       .waitFor({ state: 'visible' });
-    await send('Prepare native journey');
+    sessionId = (await state()).activeSessionId;
     await page
       .getByText('Native journey ready: README.md and debug.cjs', {
         exact: true,
@@ -844,6 +855,7 @@ try {
     async () => {
       await page
         .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+        .first()
         .click();
       const beforeBranch = (await git('branch', '--show-current')).trim();
       const beforeReadme = await readFile(join(repo, 'README.md'), 'utf8');
@@ -1225,6 +1237,7 @@ try {
             .locator(
               `.sidebar .session-link[href="#/session/${record.runtimeSessionId}"]`,
             )
+            .first()
             .click();
           await page
             .getByRole('button', { name: 'allow once', exact: true })
@@ -1232,6 +1245,7 @@ try {
             .waitFor();
           await page
             .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+            .first()
             .click();
           assert(
             (await state()).interactions.some(
@@ -1252,6 +1266,7 @@ try {
             .locator(
               `.sidebar .session-link[href="#/session/${record.runtimeSessionId}"]`,
             )
+            .first()
             .click();
           await page
             .getByRole('button', { name: 'allow once', exact: true })
@@ -1259,6 +1274,7 @@ try {
             .click();
           await page
             .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+            .first()
             .click();
           await until(
             async () =>
@@ -1406,6 +1422,12 @@ try {
           page.on('pageerror', (error) =>
             errors.push({ phase, error: String(error), stack: error.stack }),
           );
+          // Resize the restarted window once it is shown, or showing it later
+          // fits it to a small screen again.
+          await page
+            .getByRole('textbox', { name: 'message', exact: true })
+            .waitFor();
+          await desktopViewport();
         },
       });
     },
@@ -1471,6 +1493,7 @@ try {
           .click();
         await page
           .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+          .first()
           .click();
         await screenshot(`08-${language === 'English' ? 'en' : 'zh'}-${theme}`);
       }

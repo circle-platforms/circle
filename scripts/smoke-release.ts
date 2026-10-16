@@ -24,6 +24,7 @@ import {
   type ReleaseManifest,
 } from '../src/install_layout.js';
 import { VERSION } from '../src/version.js';
+import { verifyRelocatedWindowsQuery } from './verify-windows-query-package.js';
 import {
   defaultSettings,
   saveSettings,
@@ -73,6 +74,7 @@ Object.assign(isolated, {
   LOCALAPPDATA: fakeAppData,
 });
 let server: ReturnType<typeof createServer> | undefined;
+let primarySmokeError: unknown;
 function sync(
   command: string,
   args: string[],
@@ -234,6 +236,9 @@ try {
       bytes: readFileSync(join(home, name)),
     }),
   );
+  const nativeProcessQuery = windows
+    ? await verifyRelocatedWindowsQuery(root, temporary, home, env)
+    : undefined;
   const prefix = join(temporary, 'install space');
   const bin = join(temporary, 'bin space');
   const installEnv = {
@@ -388,12 +393,31 @@ try {
       pythonReplaced: true,
       modelRequests: calls,
       sideEffect: 'receipt.txt',
+      ...(nativeProcessQuery ? { nativeProcessQuery } : {}),
     }) + '\n',
   );
+} catch (error) {
+  primarySmokeError = error;
+  console.error(error);
+  throw error;
 } finally {
-  if (server)
-    await new Promise<void>((resolveClosed) =>
-      server!.close(() => resolveClosed()),
-    );
-  rmSync(temporary, { recursive: true, force: true });
+  const cleanupErrors: unknown[] = [];
+  try {
+    if (server)
+      await new Promise<void>((resolveClosed) =>
+        server!.close(() => resolveClosed()),
+      );
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  try {
+    rmSync(temporary, { recursive: true, force: true });
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  if (cleanupErrors.length) {
+    for (const error of cleanupErrors) console.error(error);
+    if (primarySmokeError === undefined)
+      throw new AggregateError(cleanupErrors, 'release smoke cleanup failed');
+  }
 }

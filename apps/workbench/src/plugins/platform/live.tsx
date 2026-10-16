@@ -9,7 +9,7 @@ import {
   Page,
   Status,
 } from '../../components/common';
-import { hubView } from '../hub';
+import { hubView, HubProjectionNotice } from '../hub';
 import type { WorkbenchPlugin } from '../types';
 
 // The four platform objects as the paired hub extension last read them from the
@@ -132,6 +132,7 @@ function Frame({
             read from {view.url} as {view.username} at{' '}
             {new Date(objects.refreshedAt).toLocaleTimeString()}
           </p>
+          <HubProjectionNotice projection={view?.projection} />
           {children(objects, run)}
         </>
       )}

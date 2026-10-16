@@ -21,14 +21,10 @@ process.stdin.on('data', (chunk) => {
       return;
     }
     if (char === '\r' || char === '\n') {
-      console.log(
-        'CHILD_REPLY:' +
-          pending +
-          ':SIZE:' +
-          process.stdout.columns +
-          ':' +
-          process.stdout.rows,
-      );
+      // Ask the terminal for its size now. process.stdout.columns is refreshed by
+      // a SIGWINCH handler that can run after input sent after the resize.
+      const [columns, rows] = process.stdout.getWindowSize();
+      console.log('CHILD_REPLY:' + pending + ':SIZE:' + columns + ':' + rows);
       pending = '';
     } else pending += char;
   }

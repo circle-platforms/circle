@@ -12,7 +12,10 @@ export interface RuntimeFixtureReply {
   message?: ModelResponse['message'];
   delayMs?: number;
   waitForAbort?: boolean;
-  chunks?: string[];
+  chunks?: (string | { text: string; thinking?: boolean })[];
+  usage?: ModelResponse['usage'];
+  /** Reject this request with the message, after it is journaled. */
+  error?: string;
 }
 export interface RuntimeFixtureIdentity {
   conversationId: string;
@@ -203,6 +206,7 @@ export class RuntimeFixtureModel implements ChatModel {
         { mode: 0o600 },
       );
     if (failure) throw failure;
+    if (entry!.error) throw Error(entry!.error);
     if (entry!.waitForAbort)
       await new Promise<void>((_resolve, reject) => {
         const abort = () => reject(request.signal.reason ?? Error('aborted'));
@@ -210,7 +214,8 @@ export class RuntimeFixtureModel implements ChatModel {
         if (request.signal.aborted) abort();
       });
     for (const chunk of entry!.chunks ?? []) {
-      request.token(chunk);
+      if (typeof chunk === 'string') request.token(chunk);
+      else request.token(chunk.text, chunk.thinking);
       await delay(entry!.delayMs ?? 15, undefined, { signal: request.signal });
     }
     if (entry!.delayMs && !entry!.chunks)
@@ -218,9 +223,12 @@ export class RuntimeFixtureModel implements ChatModel {
     const message = entry!.message ?? {
       id: randomUUID(),
       role: 'assistant' as const,
-      content: (entry!.chunks ?? []).join(''),
+      content: (entry!.chunks ?? [])
+        .filter((chunk) => typeof chunk === 'string' || !chunk.thinking)
+        .map((chunk) => (typeof chunk === 'string' ? chunk : chunk.text))
+        .join(''),
     };
     if (message.content && !entry!.chunks) request.token(message.content);
-    return { message, usage: emptyUsage() };
+    return { message, usage: entry!.usage ?? emptyUsage() };
   }
 }

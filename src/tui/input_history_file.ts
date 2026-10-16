@@ -66,7 +66,12 @@ export function withInputHistoryLock<T>(path: string, operation: () => T): T {
       });
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      if (code !== 'ELOCKED' || Date.now() >= deadline)
+      // A sharing conflict raised by the lock call itself is as transient as one from
+      // the wrapped primitives; those already spent their own bounded retries.
+      const sharing =
+        !(error instanceof InputHistoryIoError) &&
+        ['EPERM', 'EACCES', 'EBUSY'].includes(String(code));
+      if ((code !== 'ELOCKED' && !sharing) || Date.now() >= deadline)
         throw error instanceof InputHistoryIoError
           ? error
           : new InputHistoryIoError('lock', error);

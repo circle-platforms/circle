@@ -19,7 +19,7 @@ import type {
   ToolContext,
 } from './types.js';
 import { isRecord } from './settings.js';
-import { Watch, waitWatch } from './watch.js';
+import { Watch, waitWatch, abortable } from './watch.js';
 import { JobRegistry, jobLine, type JobOwner } from './jobs.js';
 import { ExtensionSecrets, SecretMask } from './extension_secrets.js';
 import { checkedUrl } from './open_url.js';
@@ -191,12 +191,13 @@ export class ExtensionAPI {
   get workspace(): string {
     return this.services?.workspace ?? '';
   }
-  /** A folder of the extension's own for what it keeps that is not secret; made on first use. */
+  /** A folder of the extension's own for what it keeps that is not secret; made on first use.
+   * Closing cleanup may still locate it, but cannot create it after the signal fires. */
   get dataDir(): string {
     if (!this.services?.home)
       throw new ExtensionError('this interface has no data folder');
     const path = join(this.services.home, 'extension_data', this.ext.name);
-    mkdirSync(path, { recursive: true, mode: 0o700 });
+    if (!this.signal.aborted) mkdirSync(path, { recursive: true, mode: 0o700 });
     return path;
   }
   /**
@@ -585,12 +586,14 @@ export class ExtensionHost {
     return [...found.values()];
   }
   async load(): Promise<this> {
+    this.controller.signal.throwIfAborted();
     const loaded: Extension[] = [];
     const tools = (this.toolReservations = new Set(this.options.reservedTools));
     const commands = (this.commandReservations = new Set(
       this.options.reservedCommands,
     ));
     for (const discovered of this.discover()) {
+      this.controller.signal.throwIfAborted();
       const setting = this.options.settings?.[discovered.name]?.enabled;
       const ext: Extension = {
         ...discovered,
@@ -611,6 +614,7 @@ export class ExtensionHost {
       loaded.push(ext);
       if (!ext.enabled) continue;
       await this.activate(ext, tools, commands);
+      this.controller.signal.throwIfAborted();
     }
     this.extensions = loaded;
     return this;
@@ -638,6 +642,8 @@ export class ExtensionHost {
       const module: unknown = await import(
         pathToFileURL(ext.path).href + '?reload=' + randomUUID()
       );
+      this.controller.signal.throwIfAborted();
+      scope.controller.signal.throwIfAborted();
       if (!isRecord(module) || typeof module.register !== 'function')
         throw new ExtensionError('extension defines no register(api)');
       const api = new ExtensionAPI(
@@ -679,7 +685,10 @@ export class ExtensionHost {
       );
       scope.controller.signal.throwIfAborted();
       this.controller.signal.throwIfAborted();
-      await module.register(api);
+      await abortable(
+        Promise.resolve(module.register(api)),
+        AbortSignal.any([this.controller.signal, scope.controller.signal]),
+      );
       scope.controller.signal.throwIfAborted();
       this.controller.signal.throwIfAborted();
       for (const tool of ext.tools) tools.add(tool.name);

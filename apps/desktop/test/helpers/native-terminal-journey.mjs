@@ -235,8 +235,9 @@ export async function runNativeTerminalJourney({
       false,
     );
     await find.press('Escape');
+    // The terminal copies with cmd+c, or ctrl+shift+c where ctrl+c interrupts.
     await page.keyboard.press(
-      process.platform === 'darwin' ? 'Meta+c' : 'Control+c',
+      process.platform === 'darwin' ? 'Meta+c' : 'Control+Shift+c',
     );
     await until(
       async () => (await clipboard.readText()).trim() === line(1),

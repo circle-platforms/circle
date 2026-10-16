@@ -16,6 +16,7 @@ import { isRecord } from './settings.js';
 import type { CompactionEvent } from './compaction.js';
 import { redact } from './redact.js';
 import { summaryMessages } from './media.js';
+import { completionFailure } from './model_completion.js';
 import {
   runningJobReminder,
   pollingJobReminder,
@@ -442,9 +443,6 @@ export class ContextManager {
         notice: this.options.notice,
       });
       signal.throwIfAborted();
-      if (!response.message.content.trim() || response.message.truncated)
-        throw new Error('summary did not complete');
-      emit('summarized', { chunks });
       if (this.store.get(sessionId)?.head !== initialHead)
         throw new Error('conversation changed during compaction');
       const state = this.store.contextState(sessionId);
@@ -464,7 +462,7 @@ export class ContextManager {
               },
             ]
           : []);
-      this.store.setContextState(sessionId, {
+      const chargedState: ContextState = {
         ...state,
         compactionCalls: [
           ...priorCalls,
@@ -475,6 +473,17 @@ export class ContextManager {
             cost: response.message.cost,
           },
         ],
+      };
+      // The provider returned usage even when its summary is incomplete. Charge
+      // it once, but never replace the active projection with that partial text.
+      const incomplete = completionFailure(response.message);
+      if (incomplete || response.message.tool_calls?.length) {
+        this.store.setContextState(sessionId, chargedState);
+        throw incomplete ?? new Error('summary did not complete');
+      }
+      emit('summarized', { chunks });
+      this.store.setContextState(sessionId, {
+        ...chargedState,
         summary: {
           cutoffMessageId: cutoffId!,
           text: response.message.content,

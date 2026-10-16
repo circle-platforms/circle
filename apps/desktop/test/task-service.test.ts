@@ -54,7 +54,10 @@ const task = (id: string) => ({
   resource: 'agent',
 });
 async function until(condition: () => Promise<boolean>): Promise<void> {
-  for (let i = 0; i < 300; i++) {
+  // Tasks create real Git worktrees and runtimes one after another; a Windows
+  // runner needs seconds for each, so wait by time rather than by poll count.
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
     if (await condition()) return;
     await delay(10);
   }

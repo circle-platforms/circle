@@ -51,6 +51,7 @@ test('native Git fixture preserves the primary failure when dirty cleanup cannot
       },
     };
     const navigation: string[] = [];
+    let changesOpen = false;
     const page = {
       getByRole: (role: string, options: { name: string; exact: boolean }) => {
         assert.equal(role, 'button');
@@ -58,10 +59,11 @@ test('native Git fixture preserves the primary failure when dirty cleanup cannot
         return {
           getAttribute: async (name: string) => {
             assert.equal(name, 'aria-pressed');
-            return 'false';
+            return String(changesOpen);
           },
           click: async () => {
             navigation.push('changes panel');
+            changesOpen = !changesOpen;
           },
         };
       },

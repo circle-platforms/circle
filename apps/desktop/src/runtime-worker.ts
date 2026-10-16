@@ -92,3 +92,4 @@ process.on('SIGINT', () => {
   void close();
 });
 controller.publish();
+void controller.initialize();

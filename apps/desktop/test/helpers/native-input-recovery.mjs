@@ -188,6 +188,7 @@ export async function runNativeInputRecovery({
   };
   await page
     .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+    .first()
     .click();
   assert.equal(
     (await current()).state,
@@ -243,6 +244,7 @@ export async function runNativeInputRecovery({
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   await page
     .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+    .first()
     .click();
   const region = page.getByRole('region', {
     name: 'recovered queued inputs',

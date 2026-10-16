@@ -1,14 +1,9 @@
-- Search the web using the session's web search provider - performs real-time web searches and can scrape content from specific URLs
-- Provides up-to-date information for current events and recent data
-- Supports configurable result counts and returns the content from the most relevant websites
-- Use this tool for accessing information beyond knowledge cutoff
-- Searches are performed automatically within a single API call
+Search the web for current information and sources beyond your knowledge cutoff.
 
-Usage notes:
-  - Supports live crawling modes when available: 'fallback' (backup if cached unavailable) or 'preferred' (prioritize live crawling)
-  - Search types when available: 'auto' (balanced), 'fast' (quick results), 'deep' (comprehensive search)
-  - Configurable context length for optimal LLM integration
-  - Domain filtering and advanced search options available
+- Pass a nonempty `query` and optionally `num_results` (1–10, default 5).
+- Results include source links and may include snippets or a summary.
+- Circle automatically uses the session provider's supported search capability and falls back to DuckDuckGo when needed.
+- Use `webfetch` to read a specific URL. This tool does not fetch full pages.
+- Do not treat a search failure as evidence that no results exist.
 
-The current year is {{year}}. You MUST use this year when searching for recent information or current events
-- Example: If the current year is 2026 and the user asks for "latest AI news", search for "AI news 2026", NOT "AI news 2025"
+The current year is {{year}}. Include dates in the query when they help answer the user's request; preserve historical dates when the user asks about the past.

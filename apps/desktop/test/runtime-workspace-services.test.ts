@@ -404,7 +404,10 @@ test('task bridge runs isolated writers and read-only reviewer while task approv
   assert.equal(selected.ok, true, selected.error);
   assert.equal(f.controller.snapshot().activeSessionId, waiting.sessionId);
   await f.call('select-session', { id: parent });
-  const until = Date.now() + 8000;
+  // A wall-clock bound, not a product target: after their last model reply the
+  // three tasks still capture candidates and close runtimes in real worktrees,
+  // which a Windows runner has taken more than the remaining 4 s to finish.
+  const until = Date.now() + 30000;
   let tasks: any[] = [];
   const bridgeTimeline: unknown[] = [];
   while (Date.now() < until) {
@@ -498,7 +501,7 @@ test('task bridge runs isolated writers and read-only reviewer while task approv
 });
 
 test('a replaced trusted root cannot redirect an existing session into another trusted repository', async (t) => {
-  const f = await setup(t);
+  const f = await setup(t, [{ message: assistant('opened') }]);
   await writeFile(join(f.workspace, 'marker.txt'), 'A');
   const first = f.controller.snapshot().activeSessionId;
   const other = join(f.root, 'other');
@@ -544,19 +547,54 @@ test('a replaced trusted root cannot redirect an existing session into another t
     await readFile(join(f.workspace + '.old', 'marker.txt'), 'utf8'),
     'A',
   );
+  // Opening the folder again authorizes its own root. A session in it starts
+  // with the first message from home, as in the application.
   const opened = await f.call('open-workspace', { path: other });
   assert.equal(opened.ok, true, opened.error);
-  const independent = await f.service('documents', 'read', {
-    path: 'marker.txt',
+  const begun = await f.call('begin-session', {
+    workspaceId: (opened.data as { workspaceId: string }).workspaceId,
+    text: 'read the marker',
+    display: 'read the marker',
   });
+  assert.equal(begun.ok, true, begun.error);
+  const reopened = (begun.data as { sessionId: string }).sessionId;
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .sessions.find((session) => session.id === reopened)
+        ?.messages.some((message) => message.role === 'assistant') ?? false,
+  );
+  const independent = await f.service(
+    'documents',
+    'read',
+    { path: 'marker.txt' },
+    reopened,
+  );
   assert.equal(independent.ok, true, independent.error);
   assert.equal((independent.data as any).content, 'B');
   await rename(other, other + '.old');
   await mkdir(other);
   await writeFile(join(other, 'marker.txt'), 'replacement inode');
-  const replaced = await f.service('documents', 'read', { path: 'marker.txt' });
+  const replaced = await f.service(
+    'documents',
+    'read',
+    { path: 'marker.txt' },
+    reopened,
+  );
   assert.equal(replaced.ok, false);
   assert.match(replaced.error!, /workspace root changed/);
+  // A new conversation from home cannot start in the replaced folder either.
+  const sessions = f.controller.snapshot().sessions.length;
+  const refused = await f.call('begin-session', {
+    workspaceId: (opened.data as { workspaceId: string }).workspaceId,
+    text: 'start over',
+    display: 'start over',
+  });
+  assert.equal(refused.ok, false);
+  assert.match(refused.error!, /workspace root changed/);
+  assert.equal(f.controller.snapshot().sessions.length, sessions);
+  assert.equal(f.model.requests.length, 1);
   assert.equal(
     await readFile(join(other, 'marker.txt'), 'utf8'),
     'replacement inode',
@@ -1310,7 +1348,10 @@ if(process.argv[2]==='--ipc'){
       );
       assert.equal(created.ok, true, created.error);
     }
-    const end = Date.now() + 30000;
+    // A wall-clock bound for the whole scenario, not a product target. Two real
+    // cycles take about 6 s on Apple silicon; the work is CPU-bound and the
+    // Intel macOS runner needed 33 s, so the bound leaves room for that runner.
+    const end = Date.now() + 60000;
     const final = new Map<string, any>();
     const observedAt = new Map<string, number>();
     const timeline: unknown[] = [];

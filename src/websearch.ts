@@ -19,31 +19,96 @@ export function parseSearchHtml(
   numResults = 5,
   year = new Date().getUTCFullYear(),
 ): string {
-  const links: { url: string; title: string }[] = [];
-  const snippets = [
-    ...raw.matchAll(
-      /class=(["'])[^"']*result(?:__snippet|-snippet)[^"']*\1[^>]*>([\s\S]*?)<\/(?:a|td|div|tr)>/gi,
-    ),
-  ].map((match) => stripTags(match[2]!));
-  for (const match of raw.matchAll(
-    /<a\b[^>]*\bhref=(["'])([^"']+)\1[^>]*>([\s\S]*?)<\/a>/gi,
-  )) {
-    let href = decodeHTML(match[2]!.trim());
-    if (href.startsWith('//')) href = 'https:' + href;
+  const html = raw.replace(
+    /<!--[\s\S]*?-->|<script\b[^>]*>[\s\S]*?<\/script>|<style\b[^>]*>[\s\S]*?<\/style>/gi,
+    '',
+  );
+  // Search endpoints can answer a challenge with HTTP 200 or 202. Treating
+  // such a page as an empty search would suppress the other endpoint.
+  if (
+    /<(?:form|div|section|input)\b[^>]*(?:action|id|class)\s*=\s*(["'])[^"']*(?:anomaly(?:\.js|-modal)|captcha|challenge-form)[^"']*\1/i.test(
+      html,
+    )
+  )
+    throw new Error('DuckDuckGo returned a CAPTCHA or bot challenge');
+  const attribute = (tag: string, name: string): string | undefined => {
+    const match = tag.match(
+      new RegExp(
+        `(?:^|[\\s<])${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`,
+        'i',
+      ),
+    );
+    const value = match?.[1] ?? match?.[2] ?? match?.[3];
+    return value === undefined ? undefined : decodeHTML(value);
+  };
+  const hasClass = (tag: string, names: string[]): boolean =>
+    (attribute(tag, 'class') ?? '')
+      .split(/\s+/u)
+      .some((value) => names.includes(value));
+  const anchors = [...html.matchAll(/<a\b[^>]*>[\s\S]*?<\/a>/gi)].filter(
+    (match) =>
+      hasClass(match[0].slice(0, match[0].indexOf('>') + 1), [
+        'result__a',
+        'result-link',
+      ]),
+  );
+  const links: { url: string; title: string; snippet?: string }[] = [];
+  for (const [index, match] of anchors.entries()) {
+    const openingEnd = match[0].indexOf('>') + 1;
+    const opening = match[0].slice(0, openingEnd);
+    const href = attribute(opening, 'href')?.trim();
+    if (!href) continue;
     try {
-      const source = new URL(href);
-      if (source.searchParams.has('uddg'))
-        href = source.searchParams.get('uddg')!;
-      else if (source.hostname.endsWith('duckduckgo.com')) continue;
-      const url = new URL(href);
+      let url = new URL(href, 'https://duckduckgo.com');
+      if (
+        (url.hostname === 'duckduckgo.com' ||
+          url.hostname.endsWith('.duckduckgo.com')) &&
+        url.searchParams.has('uddg')
+      )
+        url = new URL(url.searchParams.get('uddg')!);
+      if (
+        url.hostname === 'duckduckgo.com' ||
+        url.hostname.endsWith('.duckduckgo.com')
+      )
+        continue;
       if (!['http:', 'https:'].includes(url.protocol)) continue;
-      links.push({ url: url.toString(), title: stripTags(match[3]!) || href });
+      // Lite puts the snippet in the following table row. HTML puts it in
+      // the same result div. Bound the scan by the next result title so a
+      // missing snippet cannot steal another result's text.
+      const remainder = html.slice(
+        match.index! + match[0].length,
+        anchors[index + 1]?.index ?? html.length,
+      );
+      let snippet: string | undefined;
+      for (const candidate of remainder.matchAll(/<(a|td|div)\b[^>]*>/gi)) {
+        if (hasClass(candidate[0], ['result__snippet', 'result-snippet'])) {
+          const content = remainder.slice(
+            candidate.index! + candidate[0].length,
+          );
+          const end = content.search(new RegExp(`</${candidate[1]}>`, 'i'));
+          if (end >= 0) snippet = stripTags(content.slice(0, end));
+          break;
+        }
+      }
+      links.push({
+        url: url.toString(),
+        title: stripTags(match[0].slice(openingEnd, -4)) || url.toString(),
+        snippet,
+      });
     } catch {
-      /* Ignore navigation and malformed links. */
+      /* Ignore malformed result links, never arbitrary navigation anchors. */
     }
   }
-  if (!links.length)
-    return `No results for ${JSON.stringify(query)} (year hint: ${year}).`;
+  if (!links.length) {
+    const empty = [...html.matchAll(/<[^>]+>/g)].some((match) =>
+      (attribute(match[0], 'class') ?? '')
+        .split(/\s+/u)
+        .some((value) => /^no-results(?:__[-\w]+)?$/i.test(value)),
+    );
+    if (empty && /\bno results(?: found)?\b/i.test(stripTags(html)))
+      return `No results for ${JSON.stringify(query)} (source: DuckDuckGo).`;
+    throw new Error('DuckDuckGo returned an unrecognized search page');
+  }
   const lines = [
     `Web search results for ${JSON.stringify(query)} (as of ${year}):`,
     '',
@@ -52,7 +117,7 @@ export function parseSearchHtml(
     .slice(0, Math.max(1, Math.min(10, numResults)))
     .forEach((link, index) => {
       lines.push(`${index + 1}. ${link.title}`, `   ${link.url}`);
-      if (snippets[index]) lines.push('   ' + snippets[index]);
+      if (link.snippet) lines.push('   ' + link.snippet);
       lines.push('');
     });
   return lines.join('\n').trimEnd();
@@ -118,11 +183,12 @@ export async function webSearch(
     'https://html.duckduckgo.com/html/',
   ]) {
     signal.throwIfAborted();
+    const attemptSignal = AbortSignal.any([signal, AbortSignal.timeout(15000)]);
     try {
       const url = new URL(host);
       url.searchParams.set('q', text);
       const response = await request(url, {
-        signal: AbortSignal.any([signal, AbortSignal.timeout(20000)]),
+        signal: attemptSignal,
         headers: {
           'User-Agent': 'Circle/0.1 (+local coding agent)',
           Accept: 'text/html',
@@ -135,7 +201,9 @@ export async function webSearch(
       throw new Error('empty body');
     } catch (error) {
       signal.throwIfAborted();
-      failures.push(webError(error, host));
+      failures.push(
+        webError(attemptSignal.aborted ? attemptSignal.reason : error, host),
+      );
     }
   }
   throw new Error(

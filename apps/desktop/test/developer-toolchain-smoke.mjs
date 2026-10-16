@@ -59,7 +59,8 @@ assert.equal(fs.realpathSync(npm.stdout.trim()), fs.realpathSync(node));
 
 const pty = load('node-pty');
 const shell = process.platform === 'win32' ? process.env.ComSpec ?? 'cmd.exe' : '/bin/sh';
-const args = process.platform === 'win32' ? ['/d', '/s', '/c', 'set /p value=&call echo PTY:%%value%%'] : ['-c', 'read value; printf "PTY:%s\\n" "$value"'];
+// cmd /c does not collapse %% as a batch file does; read the answer with delayed expansion.
+const args = process.platform === 'win32' ? ['/d', '/v:on', '/s', '/c', 'set /p value=&echo PTY:!value!'] : ['-c', 'read value; printf "PTY:%s\\n" "$value"'];
 const terminal = pty.spawn(shell, args, { cwd: ${JSON.stringify(scratch)}, cols: 80, rows: 24 });
 require(${JSON.stringify(fileURLToPath(new URL('../src/workspace/pty-exit-cleanup.mjs', import.meta.url)))}).installWindowsPtyExitCleanup(terminal, {version: load('node-pty/package.json').version});
 let output = '';

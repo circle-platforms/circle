@@ -1,6 +1,7 @@
 import { matchingAction } from '../model/shortcuts';
 import { planVisible } from '../../../../src/plan_state';
 import { agentActivityText, isAgentActive } from '../model/activity';
+import { completionNoticeText } from '../model/completion';
 import { usePlugins } from '../plugins/context';
 import { PluginBoundary } from '../plugins/Boundary';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -761,7 +762,14 @@ export function Conversation({
                   >
                     {item.message.role === 'notice' ? (
                       <RuntimeNotice
-                        message={item.message}
+                        message={
+                          item.message.id.startsWith('failure-')
+                            ? item.message
+                            : {
+                                ...item.message,
+                                text: completionNoticeText(item.message),
+                              }
+                        }
                         onConnection={() => onDialog('connect')}
                         onMessage={() => input.current?.focus()}
                       />

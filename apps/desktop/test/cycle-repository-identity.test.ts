@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import {
   chmod,
-  open,
   mkdtemp,
   mkdir,
+  open,
   readFile,
   realpath,
   rename,
@@ -27,7 +27,7 @@ async function rewriteMetadata(path: string, content: string) {
   const file = await open(path, 'r+');
   try {
     await file.truncate(0);
-    await file.writeFile(content);
+    await file.write(content, 0, 'utf8');
   } finally {
     await file.close();
   }

@@ -141,6 +141,7 @@ try {
             theme,
         );
         const panel = await openNativeTerminalInspector(page);
+        // Earlier cases retain read-only terminals; bind the new owned PTY only.
         const prior = new Set(
           (await manager.list('session1')).map((item) => item.id),
         );

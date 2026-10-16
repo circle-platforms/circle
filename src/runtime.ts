@@ -4,6 +4,8 @@ import { join, basename } from 'node:path';
 import { readFileSync } from 'node:fs';
 import type { ChatModel, Message, ToolCall } from './types.js';
 import { GatewayModel, EFFORT_LEVELS } from './model.js';
+import { WebSearchService } from './websearch_service.js';
+import type { NativeSearchConnection } from './native_websearch.js';
 import { CheckpointStore, type Session } from './checkpoint_store.js';
 import {
   defaultPolicy,
@@ -30,6 +32,7 @@ import { fromJsonl, toSessionBundle } from './session_export.js';
 import { projectDataDir, circleHome, normalizeWorkspace } from './paths.js';
 import { McpManager } from './mcp_loader.js';
 import { ExtensionHost } from './extensions.js';
+import { abortable } from './watch.js';
 import {
   isFolderTrusted,
   isReady,
@@ -166,6 +169,51 @@ export interface RuntimeOptions {
   ) => Promise<void>;
 }
 export class AgentRuntime {
+  private readonly searches = new WebSearchService();
+  private readonly searchConnections = new WeakMap<
+    ChatModel,
+    NativeSearchConnection
+  >();
+  // Extensions wrap the model first, then the host's wrapper; the harness passes
+  // that outermost model to web search, so its connection is recorded there.
+  private modelWithSearch(base: ChatModel): ChatModel {
+    const wrapped = this.wrapModel(this.extensions.model(base));
+    const connection =
+      base instanceof GatewayModel
+        ? base.webSearchConnection()
+        : this.searchConnections.get(base);
+    if (connection) this.searchConnections.set(wrapped, connection);
+    return wrapped;
+  }
+  private async searchFromModel(
+    model: ChatModel,
+    query: string,
+    numResults: number,
+    context: ToolContext,
+  ): Promise<string> {
+    this.requireCurrentConnection();
+    return this.searches.search(
+      this.searchConnections.get(model),
+      query,
+      numResults,
+      context.signal,
+      (record) =>
+        context.recordModelCall?.({
+          model: record.model,
+          usage: record.usage,
+          cost: {
+            ...priceCall(
+              this.catalog.facts(record.model, this.options.settings),
+              record.usage,
+            ),
+            tool_fee_unknown: true,
+          },
+          ...(record.searchRequests !== undefined
+            ? { search_requests: record.searchRequests }
+            : {}),
+        }),
+    );
+  }
   readonly migration: MigrationReport;
   readonly options: RuntimeOptions;
   readonly store: CheckpointStore;
@@ -206,6 +254,7 @@ export class AgentRuntime {
   private integrationsReady?: Promise<void>;
   private extensionChanges = new Map<string, Promise<void>>();
   private extensionChangeListeners = new Set<() => void>();
+  private readonly integrationLifetime = new AbortController();
   private baseModel?: ChatModel;
   private readonly modelWrappers = new WeakMap<ChatModel, ChatModel>();
   private readonly wrappedModels = new WeakSet<ChatModel>();
@@ -485,13 +534,11 @@ export class AgentRuntime {
           .find((agent) => agent.spec.name === name);
         if (!custom && !['general-purpose', 'explore'].includes(name))
           throw new Error('unknown subagent type');
-        const childModel = this.wrapModel(
-          custom?.spec.model
-            ? this.extensions.model(
-                this.gatewayModel(this.options.settings, custom.spec.model),
-              )
-            : parentHarness.model,
-        );
+        const childModel = custom?.spec.model
+          ? this.modelWithSearch(
+              this.gatewayModel(this.options.settings, custom.spec.model),
+            )
+          : this.wrapModel(parentHarness.model);
         const session = this.store.create(
           this.options.workspace,
           childModel.model,
@@ -670,6 +717,8 @@ export class AgentRuntime {
           parentPlanMode: () => this.harness.planMode,
           toolBoundary: (tool, args, context) =>
             this.extensionToolBoundary(tool, args, context),
+          webSearch: (model, query, count, context) =>
+            this.searchFromModel(model, query, count, context),
           prepareMessages: (signal): Promise<Message[]> =>
             this.context.prepare(
               session.id,
@@ -733,7 +782,7 @@ export class AgentRuntime {
       variables: () => this.options.settings.variables,
       secrets: () => loadSecrets(this.options.home),
       redact: this.redact,
-      model: this.wrapModel(this.extensions.model(model)),
+      model: this.modelWithSearch(model),
       tools,
       store: this.store,
       session: this.session,
@@ -764,6 +813,8 @@ export class AgentRuntime {
       },
       toolBoundary: (tool, args, context) =>
         this.extensionToolBoundary(tool, args, context),
+      webSearch: (model, query, count, context) =>
+        this.searchFromModel(model, query, count, context),
       prepareMessages: (signal) =>
         this.context.prepare(
           this.session.id,
@@ -960,27 +1011,42 @@ export class AgentRuntime {
     if (this.ownershipError) throw this.ownershipError;
     if (this.closing || this.deleting) throw new Error('session is closing');
     if (this.options.headless && !this.options.integrations) return;
+    const active = signal
+      ? AbortSignal.any([signal, this.integrationLifetime.signal])
+      : this.integrationLifetime.signal;
+    active.throwIfAborted();
     if (!this.integrationsReady) {
       this.integrationsReady = (async () => {
         const base = this.coreTools;
         await this.mcp.load(
           this.options.settings.mcp_servers,
           new Set(base.map((tool) => tool.name)),
-          signal,
+          active,
         );
         const host = this.extensionHost(
           new Set([...base, ...this.mcp.tools].map((tool) => tool.name)),
         );
-        await host.load();
-        for (const ext of host.extensions)
-          if (
-            ext.source === 'bundled' &&
-            this.options.settings.extensions[ext.name]?.enabled !== true
-          )
-            await host.disableBundled(ext.name);
-        if (signal?.aborted) {
+        const stop = () => {
+          // This host is not installed yet, but already owns background work.
+          void host.close(2000);
+        };
+        active.addEventListener('abort', stop, { once: true });
+        try {
+          active.throwIfAborted();
+          await abortable(host.load(), active);
+          active.throwIfAborted();
+          for (const ext of host.extensions)
+            if (
+              ext.source === 'bundled' &&
+              this.options.settings.extensions[ext.name]?.enabled !== true
+            )
+              await host.disableBundled(ext.name);
+          active.throwIfAborted();
+        } catch (error) {
           await host.close(2000);
-          signal.throwIfAborted();
+          throw error;
+        } finally {
+          active.removeEventListener('abort', stop);
         }
         const previous = this.extensions;
         this.extensions = host;
@@ -988,7 +1054,7 @@ export class AgentRuntime {
           base.filter((tool) => tool.name !== 'wait_jobs'),
         );
         this.describeSubagents(this.harness.tools);
-        this.harness.model = this.wrapModel(host.model(this.baseModel!));
+        this.harness.model = this.modelWithSearch(this.baseModel!);
         this.refreshSystemPrompt();
         host.emit('session_start', {
           workspace: this.options.workspace,
@@ -1143,7 +1209,7 @@ export class AgentRuntime {
     const nextModel = this.gatewayModel(this.options.settings, model);
     nextModel.effort = effort;
     this.baseModel = nextModel;
-    this.harness.model = this.wrapModel(this.extensions.model(this.baseModel));
+    this.harness.model = this.modelWithSearch(this.baseModel);
     this.refreshSystemPrompt();
   }
   /** An explicit login/logout replaces every cached client, including future sessions. */
@@ -1165,7 +1231,7 @@ export class AgentRuntime {
     this.options.modelOverride = undefined;
     this.options.model = ready ? undefined : nextModel;
     this.baseModel = nextModel;
-    this.harness.model = this.wrapModel(this.extensions.model(nextModel));
+    this.harness.model = this.modelWithSearch(nextModel);
     if (!ready) this.authFingerprint = this.savedConnectionFingerprint();
     this.refreshSystemPrompt();
   }
@@ -1275,7 +1341,9 @@ export class AgentRuntime {
       for (const message of messages)
         if (message.usage) {
           addUsage(usage, message.usage);
-          compactions.add(message.cost);
+          if (message.model_calls?.length)
+            for (const call of message.model_calls) compactions.add(call.cost);
+          else compactions.add(message.cost);
         }
       const childState = this.store.contextState(id);
       const calls =
@@ -1450,6 +1518,7 @@ export class AgentRuntime {
   async close(saveJobNotes = true): Promise<void> {
     if (this.closingPromise) return this.closingPromise;
     this.closing = true;
+    this.integrationLifetime.abort(new Error('runtime closed'));
     this.closingPromise = this.closeResources(saveJobNotes);
     return this.closingPromise;
   }

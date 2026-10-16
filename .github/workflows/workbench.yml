@@ -1,6 +1,7 @@
 name: Desktop workbench
 on:
   push:
+    branches: [main]
     paths:
       - 'apps/**'
       - 'src/**'
@@ -28,22 +29,18 @@ jobs:
   native:
     strategy:
       fail-fast: false
-      # One native runner plus the independent Windows runner: two slots total.
-      max-parallel: 1
       matrix:
-        include:
-          - runner: macos-15
-            target: darwin-arm64
-            app: Circle-darwin-arm64/Circle.app
-            executable: Circle-darwin-arm64/Circle.app/Contents/MacOS/Circle
-          - runner: macos-15-intel
-            target: darwin-x64
-            app: Circle-darwin-x64/Circle.app
-            executable: Circle-darwin-x64/Circle.app/Contents/MacOS/Circle
-          - runner: ubuntu-24.04
-            target: linux-x64
-            app: Circle-linux-x64
-            executable: Circle-linux-x64/Circle
+        # A pull request runs Apple silicon and Linux; main adds Intel macOS. The organization
+        # runs five macOS jobs at a time, shared by every pull request.
+        include: >-
+          ${{ fromJSON(github.event_name == 'pull_request' && '[
+          {"runner": "macos-15", "target": "darwin-arm64", "app": "Circle-darwin-arm64/Circle.app", "executable": "Circle-darwin-arm64/Circle.app/Contents/MacOS/Circle"},
+          {"runner": "ubuntu-24.04", "target": "linux-x64", "app": "Circle-linux-x64", "executable": "Circle-linux-x64/Circle"}
+          ]' || '[
+          {"runner": "macos-15", "target": "darwin-arm64", "app": "Circle-darwin-arm64/Circle.app", "executable": "Circle-darwin-arm64/Circle.app/Contents/MacOS/Circle"},
+          {"runner": "macos-15-intel", "target": "darwin-x64", "app": "Circle-darwin-x64/Circle.app", "executable": "Circle-darwin-x64/Circle.app/Contents/MacOS/Circle"},
+          {"runner": "ubuntu-24.04", "target": "linux-x64", "app": "Circle-linux-x64", "executable": "Circle-linux-x64/Circle"}
+          ]') }}
     runs-on: ${{ matrix.runner }}
     env:
       CIRCLE_NATIVE_JOURNEY_WEB_DEBUG: '1'
@@ -51,8 +48,8 @@ jobs:
       CIRCLE_NATIVE_JOURNEY_DIAGNOSTIC: '1'
       # PUSH measures browser Console/CDP/IPC delivery, not a remote Git push.
       CIRCLE_NATIVE_JOURNEY_PUSH: '1'
-    # Both application modes and both viewport widths run on each native architecture.
-    # Existing two-width live suites plus the full native journey in both modes.
+    # Both application modes and both viewport widths run on each native architecture, and
+    # the native developer journey in development (and, on main, in the packaged application).
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
@@ -134,7 +131,21 @@ jobs:
           cp apps/desktop/artifacts/desktop/receipt.json apps/desktop/artifacts/desktop/packaged-receipt.json
           npm --prefix apps/desktop run test:live
           CIRCLE_DESKTOP_TEST_WIDTH=1024 npm --prefix apps/desktop run test:live
+      # A pull request runs the journey in development above; main repeats it in the packaged
+      # application, before the update replaces it.
+      - name: Exercise the native developer journey in the packaged application
+        if: github.event_name != 'pull_request'
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.app }}"
+          export CIRCLE_DESKTOP_EXECUTABLE="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.executable }}"
           node apps/desktop/test/native-developer-journey.mjs
+      - name: Update the packaged application
+        shell: bash
+        run: |
+          export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.app }}"
+          export CIRCLE_DESKTOP_EXECUTABLE="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.executable }}"
           npm --prefix apps/desktop run test:update
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         if: always()
@@ -150,9 +161,6 @@ jobs:
             ${{ runner.temp }}/circle-xvfb.log
           if-no-files-found: error
   package-other-platforms:
-    # Start Windows independently so slower native platforms cannot prevent
-    # ConPTY and packaged Windows acceptance from ever getting a turn.
-    # The native matrix uses one other slot; at most two builds run together.
     strategy:
       fail-fast: false
       matrix:
@@ -164,8 +172,8 @@ jobs:
       CIRCLE_NATIVE_JOURNEY_DIAGNOSTIC: '1'
       # PUSH measures browser Console/CDP/IPC delivery, not a remote Git push.
       CIRCLE_NATIVE_JOURNEY_PUSH: '1'
-    # Two native journeys (12m each), existing MSI/update budget (15m),
-    # installation, runtime tests, packaging and artifact upload headroom.
+    # Runtime tests, packaging, the native developer journey (12m each; the packaged one on
+    # main only), the MSI update (15m) and artifact upload.
     timeout-minutes: 65
     steps:
       - uses: actions/checkout@v7
@@ -210,8 +218,16 @@ jobs:
           node apps/desktop/test/developer-toolchain-smoke.mjs
           node apps/desktop/test/developer-debug-smoke.mjs
           npm --prefix apps/desktop run test:desktop
-          node apps/desktop/test/native-developer-journey.mjs
           node apps/desktop/test/browser-address.mjs
+      - name: Exercise the native developer journey in the packaged application on Windows
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        timeout-minutes: 12
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $env:CIRCLE_DESKTOP_APP_PATH = Join-Path $env:GITHUB_WORKSPACE 'apps/desktop/out/Circle-win32-x64'
+          $env:CIRCLE_DESKTOP_EXECUTABLE = Join-Path $env:CIRCLE_DESKTOP_APP_PATH 'Circle.exe'
+          node apps/desktop/test/native-developer-journey.mjs
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         if: runner.os == 'Windows' && always()
         with:
