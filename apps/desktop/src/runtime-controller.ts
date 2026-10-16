@@ -112,7 +112,7 @@ import { currentNetworkStatus } from '../../../src/net.js';
 import { SessionMetadata } from './session-metadata';
 import { WorkspaceServices } from './workspace/workspace-services';
 import { OperationLedger } from './workspace/operation-ledger';
-import { TaskService } from './workspace/task-service';
+import { TaskService, readTaskLimits } from './workspace/task-service';
 import {
   readArchivedTaskAttempts,
   taskToolAgentIds,
@@ -378,7 +378,8 @@ export class RuntimeController {
     }
   >();
   private taskProjectionPending = false;
-  private taskResources = new CollaborationResources();
+  private readonly taskResources: CollaborationResources;
+  private readonly taskSettingsPath: string;
   private taskVerifiers = new Map<
     string,
     ReturnType<typeof createTaskVerifier>
@@ -427,6 +428,15 @@ export class RuntimeController {
   constructor(readonly options: ControllerOptions) {
     this.home = options.home;
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
+    this.taskSettingsPath = join(
+      options.dataFolder ?? this.home,
+      'workspace-services',
+      'task-settings.json',
+    );
+    // Ordinary parents use this pool before any task service exists.
+    this.taskResources = new CollaborationResources(
+      readTaskLimits(this.taskSettingsPath),
+    );
     this.metadata = new SessionMetadata(this.home);
     this.store = new CheckpointStore(this.home);
     this.store.repairStaleTitles();
@@ -1136,11 +1146,7 @@ export class RuntimeController {
       service = new TaskService({
         workspace: root,
         resources: this.taskResources,
-        settingsPath: join(
-          this.options.dataFolder ?? this.home,
-          'workspace-services',
-          'task-settings.json',
-        ),
+        settingsPath: this.taskSettingsPath,
         dataDir: join(
           this.options.dataFolder ?? this.home,
           'collaboration',

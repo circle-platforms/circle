@@ -87,6 +87,21 @@ function limits(
       throw new Error(`invalid ${key} concurrency`);
   return next;
 }
+/** Read app limits without opening a scheduler or replaying any task ledger. */
+export function readTaskLimits(
+  settingsPath: string,
+  current: CollaborationLimits = { ...DEFAULT_COLLABORATION_LIMITS },
+): CollaborationLimits {
+  try {
+    return limits(JSON.parse(readFileSync(settingsPath, 'utf8')), current);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
+      throw new Error(
+        `could not load task settings: ${(error as Error).message}`,
+      );
+    return { ...current };
+  }
+}
 /** Narrow trusted-main adapter. Renderer selects task IDs and intent, never paths or executor code. */
 export class TaskService {
   private readonly scheduler: CollaborationScheduler;
@@ -114,20 +129,10 @@ export class TaskService {
     this.settingsPath =
       options.settingsPath ?? join(options.dataDir, 'task-settings.json');
     mkdirSync(dirname(this.settingsPath), { recursive: true, mode: 0o700 });
-    let saved: CollaborationLimits = options.resources?.getLimits() ?? {
-      ...DEFAULT_COLLABORATION_LIMITS,
-    };
-    try {
-      saved = limits(
-        JSON.parse(readFileSync(this.settingsPath, 'utf8')),
-        saved,
-      );
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
-        throw new Error(
-          `could not load task settings: ${(error as Error).message}`,
-        );
-    }
+    const saved = readTaskLimits(
+      this.settingsPath,
+      options.resources?.getLimits(),
+    );
     if (options.resources) options.resources.setLimits(saved);
     this.scheduler = new CollaborationScheduler({
       resources: options.resources,
