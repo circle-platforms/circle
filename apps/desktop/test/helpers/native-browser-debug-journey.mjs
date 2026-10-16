@@ -1,3 +1,4 @@
+import { runActualBridgeDevToolsHandoff } from './native-devtools-bridge-handoff.mjs';
 // Appends controlled page code; all debugger mutations in the journey use visible controls.
 import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
@@ -23,6 +24,8 @@ export function browserDebugFixtureSource(source) {
 }
 export async function runNativeBrowserDebugJourney({
   page,
+  getApp,
+  pageURL,
   sessionId,
   sourceURL,
   fixture,
@@ -132,6 +135,27 @@ export async function runNativeBrowserDebugJourney({
         ),
       'resumed real page function returns4',
     );
+    assert.equal(
+      typeof getApp,
+      'function',
+      'actual Circle owner application is required for DevTools handoff',
+    );
+    observed.devtools = await runActualBridgeDevToolsHandoff({
+      app: getApp(),
+      page,
+      panel,
+      read,
+      sessionId,
+      pageURL,
+      emit,
+      until,
+    });
+    await page.screenshot({
+      path: join(output, 'browser-gui-devtools-reconnected.png'),
+    });
+    observed.checks.push(
+      'actual Circle bridge DevTools handoff, real frontend resume, reconnect and stale scope rejection',
+    );
     await panel
       .getByRole('button', { name: 'remove breakpoint', exact: true })
       .first()
@@ -147,6 +171,7 @@ export async function runNativeBrowserDebugJourney({
   } catch (error) {
     observed.status = 'failed';
     observed.error = String(error);
+    observed.devtools ??= error.actualHandoff;
     observed.actual = await read().catch((error) => ({
       unavailable: String(error),
     }));
