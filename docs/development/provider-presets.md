@@ -5,7 +5,7 @@ nav_order: 8
 
 # Provider choices and model presets
 
-`src/providers.ts` is the shared terminal and desktop provider registry. Its snapshot date is 2026-10-14. Each entry supplies the SDK base URL, protocol and either endpoint discovery or released preset ids. The provider choice is a form choice, not saved account metadata; saved credentials and auth retain the existing Python-readable format. Regional and account-specific URLs can be edited before saving.
+`src/providers.ts` is the shared terminal and desktop provider registry. Its snapshot date is 2026-10-14. Each entry supplies the SDK base URL, protocol and either endpoint discovery or released preset ids. The provider choice is a form choice, not saved account metadata; saved credentials and auth keep their format. Regional and account-specific URLs can be edited before saving.
 
 Endpoint discovery is used for OpenAI, Anthropic, Groq, Gemini's OpenAI compatibility root, xAI, Mistral, Moonshot, MiniMax's two compatible roots, StepFun, SiliconFlow, Qianfan, DeepSeek's OpenAI root and Together. These entries carry no model presets. Discovery failures stay failures; the user may type a model id. See [models](../models.md) for paths and pagination.
 

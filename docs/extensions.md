@@ -112,19 +112,6 @@ It also gives the model tools of its own, so you can ask in words: `hub_packs`, 
 
 Not wired yet: installing modules, registering providers, approving assets and the notification stream are hub-side capabilities the extension does not surface today; they arrive with a later change.
 
-## Coming from 0.5.0
-
-Circle 0.5.0 and older loaded `extension.py`. This version does not run Python, and a folder with only an `extension.py` is skipped. Rewrite the extension as `extension.mjs` or `extension.ts`:
-
-| 0.5.0 | Now |
-|---|---|
-| `register_tool(name, description, parameters, execute, read_only=…, approval=…)` | `registerTool(name, description, parameters, execute, { readOnly, approval })` |
-| `register_command(name, description, handler)` with `ctx.send_user_message` | `registerCommand(name, description, handler)` with `ctx.sendUserMessage` |
-| `register_middleware(middleware, slot)` with LangChain middleware | `registerMiddleware(handler, slot)` with a plain function, see [Middleware](#middleware) |
-| `register_subagent(spec, tools)`, where `tools` named only extra tools | `registerSubagent(spec, tools)`, where `tools` is the whole list |
-| `register_renderer(kind, renderer)` with `update.tool_output`, `update.is_error` | `registerRenderer(kind, renderer)` with `update.output`, `update.status` |
-| `api.Watch(title, poll, interval_s=…, …)` | `new api.Watch(title, poll, { interval_s, … })`, and `poll` gets a cancel signal |
-
 ## The `api` object
 
 | Member | Purpose |

@@ -11,6 +11,8 @@ on:
       - 'docs/workbench/**'
       - '.github/workflows/workbench.yml'
   pull_request:
+    # ready_for_review: a draft runs nothing, and marking it ready runs the jobs
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'apps/**'
       - 'src/**'
@@ -22,19 +24,23 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# A newer push to a pull request replaces the run of the older one. On main a run finishes: macOS
+# runs only there, and a run a later merge cancels leaves that commit's desktop unchecked on macOS.
+# The newest waiting run replaces older waiting ones.
 concurrency:
   group: workbench-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   native:
+    # A draft pull request runs nothing
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     strategy:
       fail-fast: false
       matrix:
-        # A pull request runs Apple silicon and Linux; main adds Intel macOS. The organization
-        # runs five macOS jobs at a time, shared by every pull request.
+        # A pull request runs Linux; main adds Apple silicon and Intel macOS. The organization runs
+        # five macOS jobs at a time, shared with main and releases.
         include: >-
           ${{ fromJSON(github.event_name == 'pull_request' && '[
-          {"runner": "macos-15", "target": "darwin-arm64", "app": "Circle-darwin-arm64/Circle.app", "executable": "Circle-darwin-arm64/Circle.app/Contents/MacOS/Circle"},
           {"runner": "ubuntu-24.04", "target": "linux-x64", "app": "Circle-linux-x64", "executable": "Circle-linux-x64/Circle"}
           ]' || '[
           {"runner": "macos-15", "target": "darwin-arm64", "app": "Circle-darwin-arm64/Circle.app", "executable": "Circle-darwin-arm64/Circle.app/Contents/MacOS/Circle"},
@@ -117,6 +123,7 @@ jobs:
             ${{ runner.temp }}/circle-xvfb.log
           if-no-files-found: error
   package-other-platforms:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     strategy:
       fail-fast: false
       matrix:

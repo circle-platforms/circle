@@ -322,7 +322,7 @@ export class Clipboard {
   }
   private async tmuxLoadBuffer(text: string): Promise<boolean> {
     if (!this.env.TMUX) return false;
-    // -w passes the buffer on to the outer terminal; 0.5.0 left it out under iTerm2
+    // -w passes the buffer on to the outer terminal; it is left out under iTerm2
     const args =
       this.env.LC_TERMINAL === 'iTerm2'
         ? ['load-buffer', '-']

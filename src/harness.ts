@@ -246,8 +246,8 @@ export class Harness {
       this.shown.delete(message);
     return result;
   }
-  // Stop the turn. `keepQueue`, as esc in 0.5.0: the messages it had not read yet stay, each
-  // to be sent as a turn of its own (the steering ones first), and nothing starts them here.
+  // Stop the turn. With `keepQueue`, as esc stops it: the messages it had not read yet stay,
+  // each to be sent as a turn of its own (the steering ones first); nothing here starts them.
   async cancel(options: { keepQueue?: boolean } = {}): Promise<void> {
     if (options.keepQueue) this.followUps.unshift(...this.steering.splice(0));
     else {
@@ -749,7 +749,7 @@ export class Harness {
             this.flushTitle();
             return { answer, usage };
           }
-          // As in 0.5.0, the subagents of task calls next to each other run at the same time;
+          // The subagents of task calls next to each other run at the same time;
           // every other call runs on its own, in order. Results are stored in the order of the
           // calls, each once those before it are in.
           for (let index = 0; index < calls.length;) {

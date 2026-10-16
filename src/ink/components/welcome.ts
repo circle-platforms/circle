@@ -6,7 +6,7 @@
 // Under it what the folder brings, each with a lamp, and the folder's recent sessions.
 //
 // It is drawn, never stored: the session asks for the rows again on every repaint, so no
-// colour outlives a theme change (ported from circle/ink/components/welcome.py).
+// colour outlives a theme change.
 import {
   GRADIENT_STOPS,
   palette,

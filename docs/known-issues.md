@@ -19,7 +19,6 @@ This page lists what does not work as you might expect in the current version, w
 - **`/undo` does not make the model forget, and does not revert files.**
 - **`auto` and `accept edits` turn themselves off** on `/new`, `/fork`, `/clone`, `/import` and restart; the session falls back to the `default_mode` saved in the settings, or asks again (`manual`) without one. `read-only` stays with the conversation.
 - **`projects/` in the data folder is mostly not cleaned up.** It keeps the messages that summaries replaced, very long tool results, pasted pictures and screenshots, for every project; only command and job output is removed, a day after its run ended. Delete old folders by hand.
-- **Circle 0.5.0 cannot import the JSONL exports of this version.** This version imports 0.5.0's.
 - **Every `enter` in the terminal pauses for a second or two when Circle cannot write the input history**, as when `history` in the data folder belongs to another user. Circle tries again for about a second each time, then keeps the history for this run only. Make the file yours again (`sudo chown "$USER" ~/.circle/history`) or delete it.
 
 ## Safety
@@ -34,7 +33,7 @@ These are gaps to know about before you trust Circle with a repository or a mach
 
 ## Subagents and tools
 
-- **Tool calls other than `task` in one reply run one after another.** 0.5.0 asked every approval first and then ran all the calls of a reply at the same time; here only `task` calls next to each other run together. To run subagents side by side, the model can start them with `background: true`.
+- **Tool calls other than `task` in one reply run one after another.** Only `task` calls next to each other run together, and each other call asks for its approval when its turn comes. To run subagents side by side, the model can start them with `background: true`.
 - **The diff on an `edit_file` card assumes its text appears once.** When the text to replace appears more than once, the card shows the change at the first place, but the tool refuses such an edit unless it replaces every one. The model is told and usually tries again with more context.
 - **`grep` searches for literal text, not regular expressions.** Its description says so and points the model to `rg` in the shell for a regular expression, which asks for approval like any command.
 - **Native web search depends on the endpoint and model.** A provider preset is not a guarantee that your model, subscription or gateway supports its search API. Custom compatible endpoints that silently ignore search tools fall back to DuckDuckGo because Circle cannot confirm execution. If native search is unavailable and both DuckDuckGo endpoints are blocked or serving challenges, `websearch` fails; `webfetch` can still read a known URL when that site is reachable. Hosted search fees are not included in known token prices and remain unpriced.

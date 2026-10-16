@@ -538,7 +538,7 @@ test('alt+c copies the last answer with a local tool, or writes it to a file whe
     s.calls.map((call) => [call.command, call.input.toString()]),
     [['pbcopy', 'the answer']],
   );
-  assert.deepEqual(s.writes, [], 'no OSC 52 for /copy, as in 0.5.0');
+  assert.deepEqual(s.writes, [], 'no OSC 52 for /copy');
   assert.equal(s.app.state.flash, 'Copied 10 chars');
 
   const none = fakeRunner({ pbcopy: null, 'wl-copy': null, xclip: null });

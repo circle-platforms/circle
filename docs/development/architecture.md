@@ -100,7 +100,6 @@ handled as signature errors, and signature errors do not disable thinking.
 | `settings.ts` | `settings.json` and `credentials.json`: reading, project overrides in a trusted folder, and saving one change at a time. |
 | `paths.ts` | The data folder and the paths inside it. |
 | `keybindings.ts` | `keybindings.json`: the actions and their default keys. |
-| `migration.ts`, `legacy_sessions.ts`, `legacy_codec.ts`, `legacy_message.ts` | Import of 0.5.0's `sessions.sqlite` and `checkpoints.sqlite`, read-only. See [Session data migration](migration-data.md). |
 | `git_info.ts` | The folder's git branch. |
 
 ## Background work and integrations
@@ -160,17 +159,17 @@ handled as signature errors, and signature errors do not disable thinking.
 |---|---|
 | `install_layout.ts` | Release archives and the install folder: `versions/<version>/`, `current.ref`, `installation.json`, checksums and pruning. |
 | `install_manager.ts` | Installs a release folder; run by `install.sh` and `install.ps1`. |
-| `legacy_install.ts` | Finds and removes the Python circle (0.5.0 and older) before the first install. Held Windows programs are matched by native process name and canonical path; an unidentified busy executable blocks removal. The data folder is left alone. |
+| `install_processes.ts` | The processes running a program of an installation, which `circle uninstall` (`uninstall.ts`) looks for before it removes anything. Held Windows programs are matched by native process name and canonical path; an unidentified busy executable stops the removal. |
 | `update.ts` | The daily update reminder and `circle update`. |
 | `version.ts` | The version and version comparison. |
 
-`install.sh`, `install.ps1` and these modules share one layout; `tests/install-layout.test.ts`, `tests/legacy-install.test.ts` and `npm run release:smoke` pin it. See [Releasing](releasing.md).
+`install.sh`, `install.ps1` and these modules share one layout; `tests/install-layout.test.ts`, `tests/install-manager.test.ts` and `npm run release:smoke` pin it. See [Releasing](releasing.md).
 
 ## Other folders
 
 - `src/prompts/`: the system prompts per model family, the tool descriptions, the subagent and summary prompts, and the `/init` template.
 - `src/data/`: the models.dev snapshot and the provider profiles, compressed.
-- `scripts/`: building and smoke-testing release packages, the release script, copying assets into `dist/`, `update-models-dev.ts` (refreshes `src/data/models_dev.json.gz`; run it before a release), and `port-status.ts` (see [The TypeScript port](migration.md)).
+- `scripts/`: building and smoke-testing release packages, the release script, copying assets into `dist/`, and `update-models-dev.ts` (refreshes `src/data/models_dev.json.gz`; run it before a release).
 - `tests/`: one `*.test.ts` file per area, run with Node's test runner through `tsx`. They drive `ScriptedModel` or a local HTTP gateway and need no network.
 
 ---

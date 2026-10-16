@@ -40,8 +40,6 @@ irm https://raw.githubusercontent.com/circle-platforms/circle/main/install.ps1 |
 
 安装后重新打开终端，再运行 `circle`；以后用 `circle update` 升级，用 `circle uninstall` 卸载（加 `--purge` 会同时删除数据文件夹）。详见[安装与升级](https://circle-platforms.github.io/circle/installation/)和[发布页面](https://github.com/circle-platforms/circle/releases)。
 
-**从 Circle 0.5.0 或更早版本升级？** 那些版本是 Python 写的。运行上面的安装命令即可：它会卸载 Python 版，保留你的设置、密钥、技能和会话，再装上当前版本。旧版的 `circle update` 不能安装 1.0.0 及之后的版本。Python 扩展需要重写，见[扩展](https://circle-platforms.github.io/circle/extensions/)。
-
 ## 桌面应用
 
 每个发布包里还有 Circle 的桌面应用：同一个助手，自己一个窗口，还有一个你和 Circle 共用的浏览器面板。窗口里有什么，见[桌面应用](https://circle-platforms.github.io/circle/desktop/)（英文）。它自带运行所需的全部文件，不使用 `circle` 命令。设置、密钥和会话放在它自己的数据目录里，和 `~/.circle` 分开。
@@ -104,7 +102,7 @@ Circle 工作时可以继续打字：`enter` 会插话给正在进行的回合�
 
 ## 开发
 
-Circle 用 TypeScript 编写，运行在 Node.js 24 或更新版本上。0.5.0 及之前是 Python 写的，代码在 `v0.5.0` 标签。
+Circle 用 TypeScript 编写，运行在 Node.js 24 或更新版本上。
 
 ```bash
 git clone https://github.com/circle-platforms/circle

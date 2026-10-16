@@ -19,7 +19,7 @@ import {
 import type { SessionMode } from './approvals.js';
 
 // Circle signs in only with an API URL and key. A `mode` or `oauth_provider` that older
-// releases wrote is dropped on load; the Python releases read a missing `mode` as `api_key`.
+// releases wrote is dropped on load.
 export interface ModelAuth {
   protocol: string;
   base_url: string;
