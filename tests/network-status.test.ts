@@ -29,13 +29,27 @@ test('the status names what chose the proxy and where it points, and keeps the k
   );
 });
 
-test('a bare host and port is still a host, and a proxy that cannot be read is named', () => {
-  const bare = configureNetwork({
+// A bare host and port is not a URL. A Node that reads the variable itself refuses
+// that value; an older one takes it because NODE_USE_ENV_PROXY asked it to. Either
+// way the status tells the truth: it names a proxy only when one is in use, and a
+// value it could not use is said so out loud.
+test('a proxy is named only when it was applied, and a refused value is explained', () => {
+  const setup = configureNetwork({
     NODE_USE_ENV_PROXY: '1',
     HTTP_PROXY: '127.0.0.1:8899',
   });
   const status = currentNetworkStatus();
-  bare.restore();
-  assert.equal(status.proxyFrom, 'HTTP_PROXY');
-  assert.equal(status.proxyHost, '127.0.0.1:8899');
+  setup.restore();
+  if (status.proxy) {
+    assert.equal(status.proxyFrom, 'HTTP_PROXY');
+    assert.equal(status.proxyHost, '127.0.0.1:8899');
+  } else {
+    assert.equal(status.proxyFrom, undefined);
+    assert.ok(
+      status.problems.some((problem) =>
+        /proxy setting cannot be used/.test(problem),
+      ),
+      'a refused proxy value leaves no word about why',
+    );
+  }
 });
