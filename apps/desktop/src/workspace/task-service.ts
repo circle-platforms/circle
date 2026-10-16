@@ -91,6 +91,7 @@ function limits(
 export class TaskService {
   private readonly scheduler: CollaborationScheduler;
   private readonly workspace: string;
+  private readonly canonicalWorkspace: string;
   private readonly settingsPath: string;
   private readonly pending = new Set<Promise<unknown>>();
   private readonly records = new Map<string, TaskRecord>();
@@ -104,6 +105,7 @@ export class TaskService {
     if (!isAbsolute(options.dataDir))
       throw new Error('task service data directory must be absolute');
     this.workspace = realpathSync(options.workspace);
+    this.canonicalWorkspace = realpathSync.native(options.workspace);
     mkdirSync(options.dataDir, { recursive: true, mode: 0o700 });
     if (options.resources && !options.settingsPath)
       throw new Error('shared task resources require a shared settings path');
@@ -217,6 +219,24 @@ export class TaskService {
   getTask(id: string): TaskRecord | undefined {
     if (this.closed) return undefined;
     return this.scheduler.get(id);
+  }
+  /** Trusted projection only. A parent's records never include a different owner. */
+  taskAttempts(ownerSessionId: string): readonly TaskRecord[] {
+    string(ownerSessionId, 'owner session id');
+    const records = structuredClone(
+      [...this.records.values()].filter(
+        (task) =>
+          task.spec.sessionId === ownerSessionId &&
+          task.spec.workspace === this.canonicalWorkspace,
+      ),
+    );
+    const freeze = (value: unknown): void => {
+      if (!value || typeof value !== 'object' || Object.isFrozen(value)) return;
+      for (const child of Object.values(value)) freeze(child);
+      Object.freeze(value);
+    };
+    freeze(records);
+    return records;
   }
   call(
     sessionId: string,

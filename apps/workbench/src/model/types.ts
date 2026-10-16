@@ -68,6 +68,8 @@ export interface ToolCall {
   before?: string;
   after?: string;
   agentId?: string;
+  /** Main-process ledger links to actual child session identities. */
+  agentIds?: string[];
   diff?: DiffView;
 }
 export interface Message {
@@ -190,6 +192,28 @@ export interface AgentRecord {
   model: string;
   tokens: number;
   messages: Message[];
+  /** Resource access remains owned by this actual child session, not its parent. */
+  workspaceId?: string;
+  resourceSessionId?: string;
+  readOnly?: boolean;
+  task?: {
+    id: string;
+    attempt: number;
+    state:
+      | 'queued'
+      | 'preparing'
+      | 'running'
+      | 'waiting'
+      | 'cancelling'
+      | 'succeeded'
+      | 'failed'
+      | 'blocked'
+      | 'cancelled'
+      | 'interrupted'
+      | 'needs_review';
+    access: 'write' | 'readonly';
+    baseline: string;
+  };
 }
 export interface Job {
   id: string;
