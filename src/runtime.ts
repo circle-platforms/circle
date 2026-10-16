@@ -30,6 +30,7 @@ import { fromJsonl, toSessionBundle } from './session_export.js';
 import { projectDataDir, circleHome, normalizeWorkspace } from './paths.js';
 import { McpManager } from './mcp_loader.js';
 import { ExtensionHost } from './extensions.js';
+import { abortable } from './watch.js';
 import {
   isFolderTrusted,
   isReady,
@@ -199,6 +200,7 @@ export class AgentRuntime {
   private activeCompaction?: Promise<string>;
   extensions: ExtensionHost;
   private integrationsReady?: Promise<void>;
+  private readonly integrationLifetime = new AbortController();
   private baseModel?: ChatModel;
   private authFingerprint?: string;
   private coreTools: Tool[] = [];
@@ -935,21 +937,36 @@ export class AgentRuntime {
     if (this.ownershipError) throw this.ownershipError;
     if (this.closing || this.deleting) throw new Error('session is closing');
     if (this.options.headless && !this.options.integrations) return;
+    const active = signal
+      ? AbortSignal.any([signal, this.integrationLifetime.signal])
+      : this.integrationLifetime.signal;
+    active.throwIfAborted();
     if (!this.integrationsReady) {
       this.integrationsReady = (async () => {
         const base = this.coreTools;
         await this.mcp.load(
           this.options.settings.mcp_servers,
           new Set(base.map((tool) => tool.name)),
-          signal,
+          active,
         );
         const host = this.extensionHost(
           new Set([...base, ...this.mcp.tools].map((tool) => tool.name)),
         );
-        await host.load();
-        if (signal?.aborted) {
+        const stop = () => {
+          // This host is not installed yet, but already owns background work.
+          // Its catch below awaits the same bounded drain before startup ends.
+          void host.close(2000);
+        };
+        active.addEventListener('abort', stop, { once: true });
+        try {
+          active.throwIfAborted();
+          await abortable(host.load(), active);
+          active.throwIfAborted();
+        } catch (error) {
           await host.close(2000);
-          signal.throwIfAborted();
+          throw error;
+        } finally {
+          active.removeEventListener('abort', stop);
         }
         const previous = this.extensions;
         this.extensions = host;
@@ -1455,6 +1472,7 @@ export class AgentRuntime {
   async close(saveJobNotes = true): Promise<void> {
     if (this.closingPromise) return this.closingPromise;
     this.closing = true;
+    this.integrationLifetime.abort(new Error('runtime closed'));
     this.closingPromise = this.closeResources(saveJobNotes);
     return this.closingPromise;
   }
