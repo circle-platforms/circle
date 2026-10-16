@@ -618,6 +618,23 @@ test(
   },
 );
 
+test(
+  'a missing zsh does not get a startup file when bash is installed',
+  { skip: windows },
+  (t) => {
+    const base = scratch(t);
+    const root = fixture(base, '1.0.0');
+    const result = runManager(base, root, [], {
+      SHELL: '/no/such/zsh',
+      BASH: '/bin/bash',
+    });
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    assert.match(result.stdout, /added .* to PATH in .*\.bashrc/);
+    assert.equal(existsSync(join(base, 'home', '.bashrc')), true);
+    assert.equal(existsSync(join(base, 'home', '.zshrc')), false);
+  },
+);
+
 test('installing keeps the newest three versions and the one it replaces', (t) => {
   const base = scratch(t);
   const prefix = join(base, 'prefix');

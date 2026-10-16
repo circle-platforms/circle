@@ -26,8 +26,9 @@ import {
   sealComposerFocus,
   takeComposerText,
 } from '../model/composer-focus';
-import { t } from '../i18n';
-import { FileChip, IconButton } from '../components/common';
+import { t, useLocale } from '../i18n';
+import { Button, FileChip, IconButton } from '../components/common';
+import type { WhatsNewNotice } from '../../../../src/whats_new';
 import { EffortMenu, ModeMenu, ModelMenu } from './Composer';
 import {
   forgetHomeComposer,
@@ -445,6 +446,41 @@ export function Home({
           </div>
         </div>
       </div>
+      {snapshot.whatsNew && (
+        <WhatsNew
+          notice={snapshot.whatsNew}
+          onDismiss={() => {
+            void runtime.request('dismiss-whats-new');
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+function WhatsNew({
+  notice,
+  onDismiss,
+}: {
+  notice: WhatsNewNotice;
+  onDismiss: () => void;
+}) {
+  const locale = useLocale();
+  const openNotes = () => window.open(notice.link, '_blank', 'noopener');
+  return (
+    <div className="whats-new">
+      <div className="whats-new-card">
+        <h3>{notice.title[locale]}</h3>
+        {notice.items.map((item) => (
+          <p key={item.en}>{item[locale]}</p>
+        ))}
+        <div className="whats-new-actions">
+          <Button onClick={openNotes}>{notice.linkLabel[locale]}</Button>
+          <Button className="primary" onClick={onDismiss}>
+            {notice.dismiss[locale]}
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }

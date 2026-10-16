@@ -1,4 +1,5 @@
 import type { ModelCompletionFailureCode } from '../../../../src/model_completion';
+import type { WhatsNewNotice } from '../../../../src/whats_new';
 
 export type Theme = 'auto' | 'light' | 'dark';
 export type TextSize = 'small' | 'default' | 'large' | 'larger';
@@ -361,6 +362,11 @@ export interface WorkbenchSnapshot {
   uiPlugins: string[];
   /** The last link an extension asked to open; the window opens each id once. */
   openUrl?: { id: string; url: string; sessionId: string };
+  /**
+   * The one-time upgrade notice, in both languages. Present only until it is
+   * dismissed, and only drawn on the new-session home page.
+   */
+  whatsNew?: WhatsNewNotice;
 }
 export interface CommandResult {
   openSession?: boolean;

@@ -349,6 +349,9 @@ export class Harness {
     } finally {
       this.active = undefined;
       this.controller = undefined;
+      // A crash skips this. The open-turn row then still names the unanswered
+      // prompt, which is the only case that earns an interrupted marker.
+      this.options.store.clearTurn(this.sessionId);
     }
   }
   private async runQueued(
@@ -661,6 +664,8 @@ export class Harness {
           this.thinkingAt = undefined;
           this.thinkingSeconds = undefined;
           this.bus.emit('llm_start');
+          // After the user message is stored, and not for a title or side request.
+          this.options.store.noteTurn(this.sessionId);
           const response = await this.model.complete({
             system:
               this.system +

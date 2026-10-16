@@ -228,6 +228,17 @@ export const pages: Record<string, string> = {
   'restart to update': '重启以更新',
   'try again': '重试',
   'update to {version}': '更新到 {version}',
+  'opened the release page in your browser': '已在浏览器中打开发布页',
+  'open release page': '打开发布页',
+  'Quit Circle before replacing it.': '替换前先退出 Circle。',
+  'Delete the old folder, then unpack the new archive. Do not unpack it over the old folder.':
+    '先删除旧文件夹，再解压新的压缩包。不要直接覆盖解压。',
+  'Give chrome-sandbox to root again, or Circle will not start:':
+    '需要重新把 chrome-sandbox 交给 root，否则 Circle 无法启动：',
+  'Then start Circle.': '然后再启动 Circle。',
+  'This copy will quit and replace {folder}. It will not start again until chrome-sandbox belongs to root.':
+    'Circle 会退出并替换 {folder}。在 chrome-sandbox 重新属于 root 之前，它不会自己启动。',
+  'quit and replace': '退出并替换',
   'downloading {percent}%': '正在下载 {percent}%',
   'reads only': '只读取',
   'changes files': '修改文件',

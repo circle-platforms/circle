@@ -26,15 +26,15 @@ If `install.sh` runs in a Windows shell (Git Bash, MSYS2, Cygwin), it hands over
 
 The installer downloads the release for your system, checks its sha256, refuses an archive with links, special files or paths that leave it, checks every file against the release's own list, and runs the new program once. Only then does it switch to the new version, so a failed step leaves the installed one as it was. It says each step on a line of its own, starting with `[circle-install]`. On a terminal, `install.sh` also shows curl's bar of how far the download has got; `install.ps1` only says that it is downloading.
 
-| Variable | Effect |
-|---|---|
-| `CIRCLE_VERSION` | Install this version instead of the newest, for example `CIRCLE_VERSION=1.0.0`. |
-| `CIRCLE_REPO` | The GitHub repository to take releases from. Default `circle-platforms/circle`. |
-| `CIRCLE_PREFIX` | Where versions are kept. Default `~/.local/share/circle`, or `%LOCALAPPDATA%\circle` on Windows. |
+| Variable         | Effect                                                                                               |
+| ---------------- | ---------------------------------------------------------------------------------------------------- |
+| `CIRCLE_VERSION` | Install this version instead of the newest, for example `CIRCLE_VERSION=1.0.0`.                      |
+| `CIRCLE_REPO`    | The GitHub repository to take releases from. Default `circle-platforms/circle`.                      |
+| `CIRCLE_PREFIX`  | Where versions are kept. Default `~/.local/share/circle`, or `%LOCALAPPDATA%\circle` on Windows.     |
 | `CIRCLE_BIN_DIR` | Where the `circle` launcher goes. Default `~/.local/bin`, or `%LOCALAPPDATA%\circle\bin` on Windows. |
-| `CIRCLE_NO_PATH` | `1` leaves your `PATH` alone. |
+| `CIRCLE_NO_PATH` | `1` leaves your `PATH` alone.                                                                        |
 
-When the launcher's folder is not on your `PATH`, the installer adds it: on Windows to your user `PATH`, on macOS and Linux as one line marked `# circle path` in `~/.zshrc` (`~/.bashrc` when your shell is bash). Open a new terminal afterwards, or run the `source` command it prints.
+When the launcher's folder is not on your `PATH`, the installer adds it: on Windows to your user `PATH`, on macOS and Linux as one line marked `# circle path` in the startup file of an installed bash or zsh. It tries `$SHELL`, then `$BASH`, then the login shell from the password database, and it writes `~/.bashrc` or `~/.zshrc` only when that shell's program is installed. When none of those is an installed bash or zsh, it leaves the startup files alone and prints the `PATH` line to add by hand. Open a new terminal afterwards, or run the `source` command it prints.
 
 If the installer stops with a certificate error, your network is replacing HTTPS certificates. Export its root certificate as a PEM file and run the installer again with `CURL_CA_BUNDLE=/path/to/ca.pem` (macOS, Linux), or import it into the Windows certificate store, which PowerShell uses. `HTTPS_PROXY` sets a proxy for the download.
 
@@ -82,18 +82,18 @@ The data folder is shared and not touched. Settings, keys, MCP servers, skills, 
 
 Each release also has the Circle desktop application: a window of its own around the same Circle. Take the file for your system from the [Releases page](https://github.com/circle-platforms/circle/releases):
 
-| System | File |
-|---|---|
+| System               | File                                        |
+| -------------------- | ------------------------------------------- |
 | macOS, Apple silicon | `circle-desktop-<version>-darwin-arm64.dmg` |
-| macOS, Intel | `circle-desktop-<version>-darwin-x64.dmg` |
-| Windows x64 | `circle-desktop-<version>-windows-x64.msi` |
-| Linux x64 | `circle-desktop-<version>-linux-x64.tar.gz` |
+| macOS, Intel         | `circle-desktop-<version>-darwin-x64.dmg`   |
+| Windows x64          | `circle-desktop-<version>-windows-x64.msi`  |
+| Linux x64            | `circle-desktop-<version>-linux-x64.tar.gz` |
 
 Each has a `.sha256` file beside it, and the release's `SHA256SUMS` lists them all. The application carries everything it needs; it does not use the `circle` command.
 
 - **macOS:** open the `.dmg` and drag Circle to Applications. Circle is signed ad hoc, not by an Apple developer, so the first time macOS says it cannot check it. Open System Settings → Privacy & Security, click Open Anyway beside the line about Circle, and confirm. In a terminal, `xattr -dr com.apple.quarantine /Applications/Circle.app` does the same.
 - **Windows:** open the `.msi`. Circle is not signed, so if SmartScreen says it protected your PC, click More info, then Run anyway. Windows asks for administrator permission, then installs Circle for all users into `C:\Program Files\Circle` and adds Circle to the Start menu; there are no setup pages. To remove it, open Settings → Apps → Installed apps (Apps & features on Windows 10), choose Circle and Uninstall: that removes the program and its Start menu entry and leaves the data folder `%APPDATA%\Circle` as it is. An older release's `.msi` does not install over a newer one; it stops with "A newer version of Circle is already installed." Quit Circle before you update or remove it.
-- **Linux:** unpack the `.tar.gz` and, once, give Chromium's sandbox helper to root, which Ubuntu 24.04 and later need; without it Circle stops at once with `The SUID sandbox helper binary was found, but is not configured correctly`. Then start `Circle`:
+- **Linux:** quit Circle if it is running. Unpack the `.tar.gz` into a new folder; do not unpack it over the folder you are replacing. Delete the old folder, or move the new one into its place with `mv`. Then give Chromium's sandbox helper to root, which Ubuntu 24.04 and later need. Every new copy needs this again: unpacking and replacing the folder drop the setting, and without it Circle stops at once with `The SUID sandbox helper binary was found, but is not configured correctly`. Then start `Circle`:
 
   ```sh
   tar -xzf circle-desktop-<version>-linux-x64.tar.gz
@@ -102,9 +102,9 @@ Each has a `.sha256` file beside it, and the release's `SHA256SUMS` lists them a
   ./Circle-linux-x64/Circle
   ```
 
-  Move the folder with `mv` afterwards, not `cp`, which drops the setting. Circle refuses `--no-sandbox`.
+  Move the folder with `mv` afterwards, not `cp`, which drops the setting. Circle refuses `--no-sandbox`. The file `CIRCLE_VERSION` in that folder is Circle's version. Electron also writes a `version` file there; that one is Electron's.
 
-The application updates itself on macOS and Windows: settings → about → check now, then update and restart to update ([Updates](desktop.md#updates) has the details). `circle update` updates only the command line. On Linux, take the new release's `.tar.gz` and replace the folder, then give `chrome-sandbox` to root again. Releases up to 1.2.0 do not update themselves: install the newer release over them once by hand (on Windows, open the new `.msi`; it replaces the installed version).
+The application updates itself on macOS and Windows: settings → about → check now, then update and restart to update ([Updates](desktop.md#updates) has the details). `circle update` updates only the command line. On Linux, when the application folder can be written, check now downloads the `.tar.gz`, checks it, and quit and replace swaps the folder. If `chrome-sandbox` is setuid, Circle does not start itself again: the window shows the `chown` and `chmod 4755` commands, and the same lines are in the installer log. Run them, then start Circle. When the folder cannot be written, check now opens the release page and leaves those steps on the about page. Releases up to 1.2.0 do not update themselves: install the newer release over them once by hand (on Windows, open the new `.msi`; it replaces the installed version).
 
 It keeps its settings, key and sessions in a data folder of its own, apart from `~/.circle`: `~/Library/Application Support/Circle` on macOS, `%APPDATA%\Circle` on Windows, `~/.config/Circle` on Linux. The first time, it asks for the API URL, the key and the model. Open a folder and trust it before Circle reads it or runs anything in it. [The desktop application](desktop.md) explains its window.
 

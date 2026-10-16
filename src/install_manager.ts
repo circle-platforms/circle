@@ -11,7 +11,9 @@ import {
   readFileSync,
   writeFileSync,
 } from 'node:fs';
-import { delimiter, join, resolve } from 'node:path';
+import { userInfo } from 'node:os';
+import { delimiter, resolve } from 'node:path';
+import { shellStartupFile } from './shell_rc.js';
 import {
   DEFAULT_REPO,
   activeVersion,
@@ -97,22 +99,35 @@ if (process.platform !== 'win32') {
   else if (process.env.CIRCLE_NO_PATH === '1')
     say(`add ${binDir} to PATH, or run ${binDir}/circle`);
   else {
-    // As the Python installer did: one marked line in the shell's startup file.
-    const rc = join(
-      where.home,
-      (process.env.SHELL || '').includes('bash') ? '.bashrc' : '.zshrc',
-    );
-    const marked =
-      existsSync(rc) && readFileSync(rc, 'utf8').includes('# circle path');
-    if (!marked) {
-      appendFileSync(
-        rc,
-        `\n# circle path\nexport PATH="${binDir.replaceAll('"', '\\"')}:$PATH"\n`,
-      );
-      say(`added ${binDir} to PATH in ${rc}`);
+    // $SHELL, then $BASH, then the login shell. Skip a shell that is not installed,
+    // so a bash-only machine does not grow a ~/.zshrc.
+    let loginShell: string | undefined;
+    try {
+      loginShell = userInfo().shell || undefined;
+    } catch {
+      loginShell = undefined;
     }
-    say(
-      `open a new terminal (or run: source ${rc}), then: cd /path/to/project && circle`,
-    );
+    const startup = shellStartupFile({
+      home: where.home,
+      env: process.env,
+      exists: existsSync,
+      loginShell,
+    });
+    if (!startup) say(`add ${binDir} to PATH, or run ${binDir}/circle`);
+    else {
+      const rc = startup.file;
+      const marked =
+        existsSync(rc) && readFileSync(rc, 'utf8').includes('# circle path');
+      if (!marked) {
+        appendFileSync(
+          rc,
+          `\n# circle path\nexport PATH="${binDir.replaceAll('"', '\\"')}:$PATH"\n`,
+        );
+        say(`added ${binDir} to PATH in ${rc}`);
+      }
+      say(
+        `open a new terminal (or run: source ${rc}), then: cd /path/to/project && circle`,
+      );
+    }
   }
 }

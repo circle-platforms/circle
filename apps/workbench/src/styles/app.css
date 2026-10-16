@@ -1861,6 +1861,34 @@ pre {
 .home-composer .composer textarea {
   min-height: 92px;
 }
+.whats-new {
+  width: min(680px, 100%);
+  margin: 0 auto;
+  padding: 0 28px 28px;
+}
+.whats-new-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 12px 14px 14px;
+}
+.whats-new-card h3 {
+  margin: 0 0 8px;
+  font-size: var(--ui);
+  font-weight: 600;
+}
+.whats-new-card p {
+  margin: 0 0 8px;
+  color: var(--secondary);
+  font-size: var(--ui-small);
+  line-height: 1.45;
+}
+.whats-new-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
 .project-menu {
   min-width: 260px;
   padding-top: 0;
@@ -4823,6 +4851,25 @@ pre {
 .update-chip svg {
   flex-shrink: 0;
   color: var(--accent);
+}
+.linux-update-steps {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--secondary);
+  font-size: var(--ui-small);
+  line-height: 1.45;
+}
+.linux-update-steps p {
+  margin: 0 0 6px;
+}
+.linux-update-steps pre {
+  margin: 6px 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--code, var(--bg));
+  color: var(--fg);
+  white-space: pre-wrap;
 }
 
 /* Variables in settings, as Windows lists environment variables: a framed table of names

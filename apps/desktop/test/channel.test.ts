@@ -53,6 +53,10 @@ test('package:beta packages the beta, which neither updates itself nor shares th
     /\.\.\.\(channel\.beta \? \{ channel: 'beta' \} : \{\}\)/,
   );
   assert.match(script, /name: channel\.name,/);
+  assert.match(
+    script,
+    /writeFile\(join\(path, 'CIRCLE_VERSION'\), `\$\{version\}\\n`\)/,
+  );
   const main = await readFile(join(desktop, 'src/main.ts'), 'utf8');
   assert.match(main, /app\.setName\(channel\.name\)/);
   assert.match(main, /join\(app\.getPath\('appData'\), channel\.folder\)/);

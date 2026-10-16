@@ -548,6 +548,7 @@ export class LiveRuntime implements RuntimePort {
         'clear-queue': 'clear-queue',
         'write-file': 'write-file',
         'check-update': 'check-update',
+        'dismiss-whats-new': 'dismiss-whats-new',
         'discover-models': 'discover-models',
         'launch-options': 'launch-options',
         'trust-workspace': 'trust',

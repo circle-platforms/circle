@@ -35,12 +35,78 @@ export function useUpdate(): {
 
 const percent = (state: { received: number; total: number }) =>
   state.total ? Math.floor((state.received * 100) / state.total) : 0;
-const openPage = (page: string) => window.open(page, '_blank');
+
+/** Which steps the about page offers for this update. */
+export function updateActions(state: UpdateState): {
+  page: boolean;
+  download: boolean;
+  retry: boolean;
+  install: boolean;
+  check: boolean;
+} {
+  return {
+    page:
+      (state.phase === 'available' || state.phase === 'failed') &&
+      Boolean(state.page),
+    download: state.phase === 'available' && !state.page,
+    retry: state.phase === 'failed' && Boolean(state.version) && !state.page,
+    install: state.phase === 'ready',
+    check: ['idle', 'current', 'failed', 'available'].includes(state.phase),
+  };
+}
+
+function LinuxGuide({
+  folder,
+  sandbox,
+  manual,
+}: {
+  folder: string;
+  sandbox: boolean;
+  manual: boolean;
+}) {
+  const path = `${folder}/chrome-sandbox`;
+  const commands = `sudo chown root:root ${path}\nsudo chmod 4755 ${path}`;
+  if (!manual)
+    return sandbox ? (
+      <div className="linux-update-steps">
+        <p>
+          {t(
+            'This copy will quit and replace {folder}. It will not start again until chrome-sandbox belongs to root.',
+            { folder },
+          )}
+        </p>
+        <pre>{commands}</pre>
+      </div>
+    ) : null;
+  return (
+    <ol className="linux-update-steps">
+      <li>{t('Quit Circle before replacing it.')}</li>
+      <li>
+        {t(
+          'Delete the old folder, then unpack the new archive. Do not unpack it over the old folder.',
+        )}
+      </li>
+      {sandbox && (
+        <li>
+          {t('Give chrome-sandbox to root again, or Circle will not start:')}
+          <pre>{commands}</pre>
+        </li>
+      )}
+      <li>{t('Then start Circle.')}</li>
+    </ol>
+  );
+}
 
 /** Settings → about: what the check found and the one step that comes next. */
 export function UpdateControl() {
   const { state, act } = useUpdate();
+  const { notify } = useRuntime();
   if (!state) return null;
+  const actions = updateActions(state);
+  const openPage = (page: string) => {
+    notify(t('opened the release page in your browser'));
+    window.open(page, '_blank');
+  };
   const line =
     state.phase === 'checking'
       ? t('checking…')
@@ -74,24 +140,40 @@ export function UpdateControl() {
       {state.phase === 'downloading' && (
         <progress max={100} value={percent(state)} aria-hidden />
       )}
-      {(state.phase === 'available' || state.phase === 'failed') &&
-        state.page && (
-          <Button onClick={() => openPage(state.page!)}>{t('download')}</Button>
+      {'linux' in state &&
+        state.linux &&
+        (actions.page || state.linux.sandbox) && (
+          <LinuxGuide
+            folder={state.linux.folder}
+            sandbox={state.linux.sandbox}
+            manual={actions.page}
+          />
         )}
-      {state.phase === 'available' && !state.page && (
+      {actions.page && 'page' in state && state.page && (
+        <Button
+          onClick={() => {
+            if ('page' in state && state.page) openPage(state.page);
+          }}
+        >
+          {t('open release page')}
+        </Button>
+      )}
+      {actions.download && (
         <Button className="primary" onClick={() => act('download')}>
           {t('update')}
         </Button>
       )}
-      {state.phase === 'ready' && (
+      {actions.install && (
         <Button className="primary" onClick={() => act('install')}>
-          {t('restart to update')}
+          {'linux' in state && state.linux?.sandbox
+            ? t('quit and replace')
+            : t('restart to update')}
         </Button>
       )}
-      {state.phase === 'failed' && state.version && !state.page && (
+      {actions.retry && (
         <Button onClick={() => act('download')}>{t('try again')}</Button>
       )}
-      {['idle', 'current', 'failed', 'checking'].includes(state.phase) && (
+      {actions.check && (
         <Button
           disabled={state.phase === 'checking'}
           onClick={() => act('check')}
@@ -125,7 +207,9 @@ export function UpdateChip() {
       : state.phase === 'downloading'
         ? t('downloading {percent}%', { percent: percent(state) })
         : state.phase === 'ready'
-          ? t('restart to update')
+          ? state.linux?.sandbox
+            ? t('quit and replace')
+            : t('restart to update')
           : t('restarting…');
   return (
     <button
@@ -133,8 +217,10 @@ export function UpdateChip() {
       data-phase={state.phase}
       disabled={state.phase === 'downloading' || state.phase === 'installing'}
       onClick={() => {
-        if (state.phase === 'available' && state.page) openPage(state.page);
-        else if (state.phase === 'available') act('download');
+        if (state.phase === 'available' && state.page) {
+          notify(t('opened the release page in your browser'));
+          window.open(state.page, '_blank');
+        } else if (state.phase === 'available') act('download');
         else if (state.phase === 'ready') act('install');
       }}
     >

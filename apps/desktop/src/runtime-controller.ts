@@ -84,6 +84,11 @@ import { availableUpdate } from '../../../src/update.js';
 import { BUILTIN_SLASH } from '../../../src/tui/slash_commands.js';
 import { ModelCatalog } from '../../../src/model_catalog.js';
 import { VERSION } from '../../../src/version.js';
+import {
+  dismissWhatsNew,
+  pendingWhatsNew,
+} from '../../../src/whats_new_state.js';
+import type { WhatsNewNotice } from '../../../src/whats_new.js';
 import { isSessionMode } from '../../../src/approvals.js';
 import { currentBranch } from '../../../src/git_info.js';
 import { formatCosts } from '../../../src/pricing.js';
@@ -322,12 +327,15 @@ export class RuntimeController {
   // names it so the user can delete it by hand. Read at most every two seconds
   // like branch(): snapshots follow tokens.
   private defaultFolder?: { folder: string; stale?: string; at: number };
+  /** Upgrade notes still waiting. Cleared when the home page dismisses them. */
+  private whatsNew?: WhatsNewNotice;
   constructor(readonly options: ControllerOptions) {
     this.home = options.home;
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
     this.metadata = new SessionMetadata(this.home);
     this.store = new CheckpointStore(this.home);
     this.store.repairStaleTitles();
+    this.whatsNew = pendingWhatsNew(this.home);
     const saved = this.savedLocation();
     const settings = loadSettings(this.home);
     const workspace =
@@ -1109,6 +1117,7 @@ export class RuntimeController {
           })),
       uiPlugins: ['files', 'activity', 'browser'],
       openUrl: this.openRequest,
+      ...(this.whatsNew ? { whatsNew: this.whatsNew } : {}),
       settings: {
         theme: savedSettings.theme,
         hideThinking: savedSettings.hide_thinking,
@@ -3084,6 +3093,10 @@ export class RuntimeController {
           available: await availableUpdate(this.home),
           automaticInstall: false,
         };
+      case 'dismiss-whats-new':
+        dismissWhatsNew(this.home);
+        this.whatsNew = undefined;
+        return {};
       case 'launch-options':
         throw Error(
           'desktop launch options must be supplied when starting the application; use session controls for model, effort and plan mode',
