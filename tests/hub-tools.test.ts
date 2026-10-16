@@ -543,8 +543,12 @@ test('a trial records which server tools the model used, and /hub skill push sen
     ),
   );
 
-  // A clean trial record (declared tools only) goes through: 201, candidate.
+  // A record that was not pushed is kept, and said so, until --force.
   await command.handler('trial start', context);
+  assert.match(lines.at(-1)!, /2 unpushed trial calls would be dropped/);
+  await command.handler('trial start --force', context);
+  assert.match(lines.at(-1)!, /dropped 2 unpushed trial calls/);
+  // A clean trial record (declared tools only) goes through: 201, candidate.
   await call('hub_tool_docs_list', { folder: 'manuals', depth: 1 });
   await command.handler(
     'skill push skills/mindmap-compile --outputs cases.xlsx',
@@ -555,7 +559,7 @@ test('a trial records which server tools the model used, and /hub skill push sen
   assert.equal(
     sent.scopeHeader,
     'scp_lab',
-    'the project signed in to goes along',
+    'the scope signed in to goes along',
   );
   assert.deepEqual(
     sent.files.map((file: { path: string }) => file.path),
@@ -656,6 +660,21 @@ test('a trial records which server tools the model used, and /hub skill push sen
   );
   const runs = server.packs.length;
   assert.equal(runs, 2, 'a second push without --outputs still submits');
+  await assert.rejects(
+    async () =>
+      command.handler('skill push --outputs skills/mindmap-compile', context),
+    /--outputs needs a comma-separated file list/,
+  );
+  await assert.rejects(
+    async () =>
+      command.handler('skill push skills/mindmap-compile --outputs', context),
+    /--outputs needs a comma-separated file list/,
+  );
+  assert.equal(
+    server.packs.length,
+    runs,
+    '--outputs with no file list does not submit',
+  );
   await delay(300);
 });
 

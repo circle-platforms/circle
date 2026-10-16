@@ -102,7 +102,7 @@ export function HubPage() {
           values={{
             [t('server')]: view.url || t('none'),
             [t('user')]: view.username || t('none'),
-            [t('project')]: view.scopeId || t('none'),
+            [t('scope')]: view.scopeId || t('none'),
             [t('state')]: (
               <Status value={view.signedIn ? 'signed in' : 'signed out'} />
             ),
@@ -198,7 +198,8 @@ export function HubPage() {
                 <div>
                   <h2>{task.title || task.taskId}</h2>
                   <p>
-                    {task.taskId} · {t('seen to {seq}', { seq: task.seq })}
+                    {task.taskId} ·{' '}
+                    {t('events seen to {seq}', { seq: task.seq })}
                     {task.saved ? ' · ' + t('results saved') : ''}
                   </p>
                 </div>

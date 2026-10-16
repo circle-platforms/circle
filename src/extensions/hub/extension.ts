@@ -137,7 +137,10 @@ const USAGE = usage([
     '/hub submit <pack> <file>',
     'hand it work with this file, follow it, save the results (module-execute takes the flow input JSON instead of a file)',
   ],
-  ['/hub tasks', 'the tasks you handed over from here'],
+  [
+    '/hub tasks',
+    'tasks this window handed over, each with its phase. "seen to N" is the last event number shown for that task, not how many tasks /hub refresh counted',
+  ],
   ['/hub task <id>', 'show a task and follow it until it ends'],
   [
     '/hub respond <id> <answer>',
@@ -146,7 +149,7 @@ const USAGE = usage([
   ['/hub get <id>', 'save a delivered task’s results again'],
   [
     '/hub refresh',
-    'read work, execution, knowledge and methods from the server',
+    'how many work tasks the pages just read (at most 20; tool and index tasks are not in that number) and how many capability packs. Not the /hub tasks list',
   ],
   [
     '/hub approve <id> <approval>',
@@ -169,10 +172,13 @@ const USAGE = usage([
     'check an unknown operation; without op the server only explains',
   ],
   ['/hub tools', 'the server’s tools the model can use, read again'],
-  ['/hub trial start', 'record the server tool calls of a trial run from now'],
+  [
+    '/hub trial start',
+    'record server tool calls from now. A non-empty record that was not pushed stays until /hub trial start --force',
+  ],
   [
     '/hub skill push <folder>',
-    'submit a skill pack with the trial record (--outputs a,b defaults to the files the pack declares)',
+    'submit a skill pack. skillpack.json outputs are required; the trial call record may be empty. --outputs a,b names trial files and defaults to that list',
   ],
   ['/hub skill list', 'the skill packs on the server'],
   [
@@ -249,7 +255,7 @@ function explainFailure(error: unknown): string {
     case 'FORBIDDEN_SCOPE':
     case 'FORBIDDEN_ACTION':
     case 'SOURCE_FORBIDDEN':
-      return `the server refused this (${error.code}): ${error.message.replace(/^[^:]+:\s*/, '')}. Sign in to a project that may do it, or ask someone who can.`;
+      return `the server refused this (${error.code}): ${error.message.replace(/^[^:]+:\s*/, '')}. Sign in to a scope that may do it, or ask someone who can.`;
     case 'TARGET_NOT_FOUND':
       return `not found (${error.code}). Check the id and try again.`;
     case 'INVALID_PAYLOAD':
@@ -257,7 +263,7 @@ function explainFailure(error: unknown): string {
         ? `the hub refused the payload (${error.code}). ${detail}. skillpack.json needs outputs (at least one file). --outputs only names the trial files and defaults to that list.`
         : `the hub refused the payload (${error.code}). ${detail || 'Check the fields the command sent.'}`;
     case 'SKILLPACK_CHECK_FAILED':
-      return `${error.message}. Fix skillpack.json so it declares every tool the trial used, then /hub trial start and push again.`;
+      return `${error.message}. Fix skillpack.json so it declares every tool the trial used, then /hub trial start --force and push again.`;
     case 'SOURCE_HASH_MISMATCH':
       return `the file changed while it was sent (${error.code}). Send it again.`;
     case 'BODY_TOO_LARGE':
@@ -784,16 +790,22 @@ export async function register(api: ExtensionAPI): Promise<void> {
               typeof item.approvalTaskId === 'string'
                 ? item.approvalTaskId
                 : '';
-            const asset = assetId
-              ? await optional<unknown>(
-                  `/v1/assets/${encodeURIComponent(assetId)}`,
-                  undefined,
-                )
-              : undefined;
+            const named =
+              typeof item.lifecycle === 'string' ? item.lifecycle : '';
+            const asset =
+              !named && assetId
+                ? await optional<unknown>(
+                    `/v1/assets/${encodeURIComponent(assetId)}`,
+                    undefined,
+                  )
+                : undefined;
             const lifecycle =
-              isRecord(asset) && typeof asset.lifecycle === 'string'
+              named ||
+              (isRecord(asset) && typeof asset.lifecycle === 'string'
                 ? asset.lifecycle
-                : '';
+                : '');
+            const statusLabel =
+              typeof item.statusLabel === 'string' ? item.statusLabel : '';
             const open =
               approvalTaskId && item.status !== 'registered'
                 ? rowsOf(
@@ -808,6 +820,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
               id: item.id ?? manifest.id,
               version: item.version ?? manifest.version,
               status: item.status,
+              ...(statusLabel ? { statusLabel } : {}),
               ...(lifecycle ? { lifecycle } : {}),
               ...(approvalTaskId ? { approvalTaskId } : {}),
               ...(open?.approvalId
@@ -1399,6 +1412,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
   async function upload(
     path: string,
     scopeId: string,
+    capabilityPackId?: string,
   ): Promise<{ id: string; sha256: string; name: string }> {
     if (statSync(path).size > MAX_UPLOAD_BYTES)
       throw new ServerError(`${basename(path)} is larger than 16 MB`);
@@ -1408,6 +1422,11 @@ export async function register(api: ExtensionAPI): Promise<void> {
       headers: {
         'x-scope-id': scopeId,
         'x-file-name': encodeURIComponent(basename(path)),
+        // The hub checks this before it stores the bytes, so an unknown pack
+        // does not leave a source behind. Absent, the upload happens first.
+        ...(capabilityPackId
+          ? { 'x-capability-pack-id': capabilityPackId }
+          : {}),
       },
       timeoutMs: 120_000,
     });
@@ -1439,7 +1458,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     const config = readConfig();
     if (!config?.scopeId)
       throw new ServerError(
-        'no project: sign in again with /hub login <url> <user>',
+        'no scope: sign in again with /hub login <url> <user>',
       );
     // module-execute is the hub's generic execution flow: its input is the frozen
     // FlowSubmission itself (flowId, methodPin, resources, sources, value,
@@ -1464,7 +1483,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     if (!moduleExecute) {
       const path = resolve(context.workspace, file);
       if (!existsSync(path)) throw new ServerError(`no such file: ${path}`);
-      source = await upload(path, config.scopeId);
+      source = await upload(path, config.scopeId, pack);
       context.append(
         `  uploaded ${source.name} · sha256 ${short(source.sha256)} → ${source.id}`,
       );
@@ -1772,6 +1791,30 @@ export async function register(api: ExtensionAPI): Promise<void> {
   const keepTrial = (): void => {
     if (!fromRun) writeJson('trial.json', trial);
   };
+  // Starting again drops calls that were never pushed. Leave them, and say so,
+  // unless the caller asked to drop them.
+  function beginTrial(force: boolean): {
+    recording: boolean;
+    dropped: number;
+    line: string;
+  } {
+    const pending = trial.calls.length;
+    const noun = `${pending} unpushed trial call${pending === 1 ? '' : 's'}`;
+    if (pending && !force)
+      return {
+        recording: false,
+        dropped: 0,
+        line: `  ${noun} would be dropped. /hub skill push <folder> sends them with the pack. /hub trial start --force drops them and records from now.`,
+      };
+    trial.calls = [];
+    trial.startedAt = new Date().toISOString();
+    keepTrial();
+    return {
+      recording: true,
+      dropped: pending,
+      line: `${pending ? `  dropped ${noun}.\n` : ''}  recording the server tool calls of this trial; /hub skill push <folder> sends them with the pack`,
+    };
+  }
   const recordTrial: ToolMiddleware = async (invocation, next) => {
     const held = serverTools.get(invocation.tool.name);
     if (!held) return next(invocation);
@@ -1858,20 +1901,57 @@ export async function register(api: ExtensionAPI): Promise<void> {
       problems.push('outputs (at least one file the pack produces)');
     if (!('model' in manifest)) problems.push('model');
     if (!problems.length) return;
-    return `skillpack.json needs ${problems.join(', ')} before the hub will accept it (client API 1.0.0). --outputs names the trial files; the pack still declares its own outputs.`;
+    return `skillpack.json needs ${problems.join(', ')} before the hub will accept it (client API 1.0.0). outputs is required there (at least one file the pack produces). The trial call record may be empty. --outputs names the trial files and defaults to that list.`;
+  }
+  const SKILL_PUSH_USAGE =
+    'usage: /hub skill push <folder> [--outputs a,b]. skillpack.json outputs are required; the trial call record may be empty.';
+  // `--outputs` with no list must not take the folder (or the next flag) as that list.
+  function skillPushArgs(rest: string[]): {
+    folder: string;
+    explicit: boolean;
+    outputs: string[];
+  } {
+    const flag = rest.indexOf('--outputs');
+    const positional = (skipValue: boolean) =>
+      rest.filter(
+        (word, index) =>
+          !word.startsWith('-') &&
+          index !== flag &&
+          !(skipValue && index === flag + 1),
+      );
+    if (flag < 0) {
+      const folder = positional(false)[0];
+      if (!folder || rest.some((word) => word.startsWith('-')))
+        throw new ServerError(SKILL_PUSH_USAGE);
+      return { folder, explicit: false, outputs: [] };
+    }
+    const value = rest[flag + 1];
+    const others = positional(true);
+    const fileList =
+      typeof value === 'string' &&
+      !value.startsWith('-') &&
+      (value.includes(',') || value.includes('.') || others.length > 0);
+    if (!fileList)
+      throw new ServerError(
+        '--outputs needs a comma-separated file list (a,b). Without that list it does not take the next word. skillpack.json outputs are required (at least one file the pack produces). The trial call record may be empty.',
+      );
+    const outputs = value!
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (!outputs.length)
+      throw new ServerError(
+        '--outputs needs a comma-separated file list (a,b). skillpack.json outputs are required. The trial call record may be empty.',
+      );
+    const folder = others[0];
+    if (!folder) throw new ServerError(SKILL_PUSH_USAGE);
+    return { folder, explicit: true, outputs };
   }
   async function pushSkill(
     rest: string[],
     context: CommandContext,
   ): Promise<void> {
-    const flag = rest.indexOf('--outputs');
-    const outputs =
-      flag >= 0 ? (rest[flag + 1] ?? '').split(',').filter(Boolean) : [];
-    const folder = rest.filter(
-      (_, index) => flag < 0 || (index !== flag && index !== flag + 1),
-    )[0];
-    if (!folder)
-      throw new ServerError('usage: /hub skill push <folder> [--outputs a,b]');
+    const { folder, explicit, outputs } = skillPushArgs(rest);
     const workspace = api.workspace ?? context.workspace;
     const root = resolve(workspace, folder);
     if (!existsSync(root) || !statSync(root).isDirectory())
@@ -1907,8 +1987,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
     const declaredOutputs = Array.isArray(manifest.outputs)
       ? manifest.outputs.map(String)
       : [];
-    const chosen = flag >= 0 ? outputs : declaredOutputs;
-    if (flag < 0) {
+    const chosen = explicit ? outputs : declaredOutputs;
+    if (!explicit) {
       const missing = chosen.filter(
         (output) => !existsSync(resolve(workspace, output)),
       );
@@ -1929,7 +2009,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       produced.push({ path: output, sha256: sha256(readFileSync(path)) });
     }
     const files = packFiles(root);
-    // With more than one project the server needs to know which one the pack is for.
+    // With more than one scope the server needs to know which one the pack is for.
     const scopeId = readConfig()?.scopeId;
     const { data } = await request('POST', '/v1/skillpacks', {
       headers: scopeId ? { 'x-scope-id': scopeId } : {},
@@ -2195,7 +2275,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       const { args, values } = options(rest);
       if (!config?.scopeId)
         throw new ServerError(
-          'no project: sign in again with /hub login <url> <user>',
+          'no scope: sign in again with /hub login <url> <user>',
         );
       if (!config.principalId)
         throw new ServerError(
@@ -2424,26 +2504,30 @@ export async function register(api: ExtensionAPI): Promise<void> {
       )
       .join('\n');
   }
-  // `registered` is the server's word after a skill approval lands. The asset
-  // lifecycle is what moved (draft → approved); show that, and say so.
+  // circle-hub sends statusLabel and lifecycle on the pack (candidate is
+  // "waiting for approval", registered is "approved" or "running"). An older
+  // server sends only status, so the asset lifecycle is read then.
   async function packLine(pack: Record<string, unknown>): Promise<string> {
     const manifest = isRecord(pack.manifest) ? pack.manifest : {};
     const name = String(pack.id ?? manifest.id ?? '');
     const version = String(pack.version ?? manifest.version ?? '');
+    const label = typeof pack.statusLabel === 'string' ? pack.statusLabel : '';
+    let lifecycle = typeof pack.lifecycle === 'string' ? pack.lifecycle : '';
     const assetId = typeof pack.assetId === 'string' ? pack.assetId : '';
-    const asset = assetId
-      ? await optional<unknown>(
-          `/v1/assets/${encodeURIComponent(assetId)}`,
-          undefined,
-        )
-      : undefined;
-    const lifecycle =
-      isRecord(asset) && typeof asset.lifecycle === 'string'
-        ? asset.lifecycle
-        : '';
+    if (!label && !lifecycle && assetId) {
+      const asset = await optional<unknown>(
+        `/v1/assets/${encodeURIComponent(assetId)}`,
+        undefined,
+      );
+      if (isRecord(asset) && typeof asset.lifecycle === 'string')
+        lifecycle = asset.lifecycle;
+    }
     const status = String(pack.status ?? '');
-    const shown =
-      status === 'registered' && lifecycle
+    const shown = label
+      ? lifecycle
+        ? `${label} · lifecycle ${lifecycle}`
+        : label
+      : status === 'registered' && lifecycle
         ? `${lifecycle} (server status registered)`
         : lifecycle
           ? `${status} · asset ${lifecycle}`
@@ -2486,7 +2570,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       await collectObjects().catch(() => {});
       const { data: about } = await request('GET', '/v1/status');
       context.append(
-        `● signed in to ${url} as ${username}${scopes.length ? ` · project ${scopes[0]}` : ''}${
+        `● signed in to ${url} as ${username}${scopes.length ? ` · scope ${scopes[0]}` : ''}${
           isRecord(about) && about.apiVersion
             ? ` · api ${String(about.apiVersion)}`
             : ''
@@ -2639,18 +2723,15 @@ export async function register(api: ExtensionAPI): Promise<void> {
     async refresh(_rest, context) {
       const counts = await collectObjects();
       context.append(
-        `  read ${counts.tasks} tasks and ${counts.packs} capability packs from the server`,
+        `  read ${counts.tasks} tasks and ${counts.packs} capability packs from the server (work tasks for the pages, at most 20, not tool or index tasks). /hub tasks lists only what this window handed over; "seen to N" there is the last event number shown for that task`,
       );
       await announceTools(context);
     },
-    async trial([verb], context) {
-      if (verb !== 'start') throw new ServerError('usage: /hub trial start');
-      trial.calls = [];
-      trial.startedAt = new Date().toISOString();
-      keepTrial();
-      context.append(
-        '  recording the server tool calls of this trial; /hub skill push <folder> sends them with the pack',
-      );
+    async trial(rest, context) {
+      const [verb, flag] = rest;
+      if (verb !== 'start' || (flag && flag !== '--force') || rest.length > 2)
+        throw new ServerError('usage: /hub trial start [--force]');
+      context.append(beginTrial(flag === '--force').line);
     },
     async skill([verb, ...rest], context) {
       if (verb === 'push') return pushSkill(rest, context);
@@ -2970,13 +3051,30 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // Sending is not registering: someone else still approves the new digest on the server.
   api.registerTool(
     'hub_trial_start',
-    'Start recording which hub tools the model calls: the trial record a skill pack is pushed with, as /hub trial start does. Clears the previous record. Start it before the trial run of a new or changed skill pack.',
-    { type: 'object', properties: {} },
-    async () => {
-      trial.calls = [];
-      trial.startedAt = new Date().toISOString();
-      keepTrial();
-      return { recording: true, startedAt: trial.startedAt };
+    'Start recording which hub tools the model calls: the trial record a skill pack is pushed with, as /hub trial start does. If that record already has calls that were not pushed, it stays and the result says so; pass force true to drop them. Start it before the trial run of a new or changed skill pack. skillpack.json outputs are required; the call record may be empty.',
+    {
+      type: 'object',
+      properties: {
+        force: {
+          type: 'boolean',
+          description:
+            'drop unpushed trial calls and record from now. Without it, a non-empty record is left as it is',
+        },
+      },
+    },
+    async (args) => {
+      const started = beginTrial(args.force === true);
+      return started.recording
+        ? {
+            recording: true,
+            startedAt: trial.startedAt,
+            dropped: started.dropped,
+          }
+        : {
+            recording: false,
+            calls: trial.calls.length,
+            warning: started.line.trim(),
+          };
     },
   );
   api.registerTool(
@@ -3068,7 +3166,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       const config = readConfig();
       if (!config?.scopeId)
         throw new api.ToolError(
-          'no project: sign in again with /hub login <url> <user>',
+          'no scope: sign in again with /hub login <url> <user>',
         );
       const name = String(args.name ?? '');
       const version = String(args.version ?? '');
@@ -3274,12 +3372,12 @@ export async function register(api: ExtensionAPI): Promise<void> {
         const url = config?.url || DEFAULT_HUB_URL;
         if (verb === 'help') {
           context.append(
-            `${signedIn ? '●' : '○'} ${url}${config?.username ? ' · ' + config.username : ''}${config?.scopeId ? ' · project ' + config.scopeId : ''}${signedIn ? '' : ' · not signed in'}\n${USAGE}`,
+            `${signedIn ? '●' : '○'} ${url}${config?.username ? ' · ' + config.username : ''}${config?.scopeId ? ' · scope ' + config.scopeId : ''}${signedIn ? '' : ' · not signed in'}\n${USAGE}`,
           );
           return;
         }
         context.append(
-          `${signedIn ? '●' : '○'} ${url}${config?.username ? ' · ' + config.username : ''}${config?.scopeId ? ' · project ' + config.scopeId : ''}${signedIn ? '' : ' · not signed in'}\n/hub help lists the commands`,
+          `${signedIn ? '●' : '○'} ${url}${config?.username ? ' · ' + config.username : ''}${config?.scopeId ? ' · scope ' + config.scopeId : ''}${signedIn ? '' : ' · not signed in'}\n/hub help lists the commands`,
         );
         return;
       }

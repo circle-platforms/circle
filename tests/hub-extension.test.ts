@@ -34,8 +34,13 @@ async function fakeServer(
   beforeDownload?: () => Promise<void>,
 ) {
   const workbook = Buffer.from('PK\u0003\u0004 synthetic workbook bytes');
-  const seen: { method: string; path: string; auth?: string; body: Buffer }[] =
-    [];
+  const seen: {
+    method: string;
+    path: string;
+    auth?: string;
+    body: Buffer;
+    pack?: string | string[];
+  }[] = [];
   const keys = new Map<string, string>();
   let delivered = false;
   let looks = 0;
@@ -48,6 +53,7 @@ async function fakeServer(
       path: url.pathname,
       auth: request.headers.authorization,
       body,
+      pack: request.headers['x-capability-pack-id'],
     });
     const send = (status: number, value: unknown) => {
       response.writeHead(status, { 'content-type': 'application/json' });
@@ -470,12 +476,18 @@ test('the bundled hub connector signs in, uploads, submits, follows and saves a 
   await command.handler(`login ${server.url} tester`, context);
   assert.match(
     lines.at(-1)!,
-    /● signed in to .* as tester · project scp_lab · api 1\.0\.0/,
+    /● signed in to .* as tester · scope scp_lab · api 1\.0\.0/,
   );
   assert.equal(await new ExtensionSecrets(home, 'hub').get('token'), TOKEN);
   assert.equal(
     JSON.parse(readFileSync(join(home, 'settings.json'), 'utf8')).extensions.hub
       .url,
+    server.url,
+  );
+  assert.equal(
+    JSON.parse(
+      readFileSync(join(home, 'extension_data', 'hub', 'config.json'), 'utf8'),
+    ).url,
     server.url,
   );
 
@@ -495,6 +507,7 @@ test('the bundled hub connector signs in, uploads, submits, follows and saves a 
     sourceSha256: createHash('sha256').update(mindmap).digest('hex'),
   });
   assert.equal(upload.auth, `Bearer ${TOKEN}`);
+  assert.equal(upload.pack, 'mindmap-compile');
   assert.deepEqual(
     readFileSync(join(workspace, 'tasks', 'task_one', 'cases.xlsx')),
     server.workbook,
@@ -1309,7 +1322,7 @@ test('a password given with the command is not asked for and does not appear in 
       secret: PASSWORD,
     });
   assert.equal(prompts.length, 0);
-  assert.match(lines.at(-1)!, /project scp_lab/);
+  assert.match(lines.at(-1)!, /scope scp_lab/);
   assert.equal(lines.join('\n').includes(PASSWORD), false);
   assert.equal(JSON.stringify(host.view('hub')).includes(PASSWORD), false);
 });
@@ -1485,8 +1498,16 @@ test('a decision conflict says what collided, and review, audit and modules list
             skillPackId: 'skp_1',
             manifest: { id: 'mindmap-compile', version: '0.1.0' },
             status: 'registered',
+            lifecycle: 'approved',
+            statusLabel: 'approved',
             assetId: 'ast_pack',
             approvalTaskId: 'task_ask',
+          },
+          {
+            skillPackId: 'skp_old',
+            manifest: { id: 'old-pack', version: '0.1.0' },
+            status: 'registered',
+            assetId: 'ast_pack',
           },
         ],
       });
@@ -1543,6 +1564,6 @@ test('a decision conflict says what collided, and review, audit and modules list
   await command.handler('modules', context);
   assert.match(
     lines.at(-1)!,
-    /skp_1 · mindmap-compile 0\.1\.0 · approved \(server status registered\)/,
+    /skp_1 · mindmap-compile 0\.1\.0 · approved · lifecycle approved[\s\S]*skp_old · old-pack 0\.1\.0 · approved \(server status registered\)/,
   );
 });

@@ -76,6 +76,7 @@ interface Objects {
     id?: string;
     version?: string;
     status?: string;
+    statusLabel?: string;
     lifecycle?: string;
     approvalTaskId?: string;
     approvalId?: string;
@@ -539,9 +540,9 @@ function ServerTools({
                     })}
                   </h2>
                   <p>{pack.skillPackId}</p>
-                  {pack.lifecycle &&
-                    pack.status &&
-                    pack.lifecycle !== pack.status && (
+                  {pack.status &&
+                    (pack.statusLabel || pack.lifecycle) &&
+                    pack.status !== (pack.statusLabel || pack.lifecycle) && (
                       <p>
                         {t('server records this as {status}', {
                           status: pack.status,
@@ -556,7 +557,14 @@ function ServerTools({
                     </p>
                   )}
                 </div>
-                <Status value={pack.lifecycle || pack.status || 'unknown'} />
+                <Status
+                  value={
+                    pack.statusLabel ||
+                    pack.lifecycle ||
+                    pack.status ||
+                    'unknown'
+                  }
+                />
               </div>
             </article>
           ))}
