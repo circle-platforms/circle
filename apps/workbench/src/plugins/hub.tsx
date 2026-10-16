@@ -11,6 +11,46 @@ import {
 } from '../components/common';
 import type { RuntimeExtension } from '../model/types';
 import type { WorkbenchPlugin } from './types';
+import { t } from '../i18n';
+
+interface HubProjection {
+  byteLimit: number;
+  shownItems: number;
+  omittedItems: number;
+  shortenedFields: number;
+}
+
+/** A limited projection is still a successful read, with its limits disclosed. */
+export function HubProjectionNotice({
+  projection,
+}: {
+  projection?: HubProjection;
+}) {
+  if (!projection) return null;
+  return (
+    <div className="panel-note" role="status">
+      <p>
+        {t(
+          'limited view: {shown} shown, {omitted} omitted · {bytes} byte budget',
+          {
+            shown: projection.shownItems,
+            omitted: projection.omittedItems,
+            bytes: projection.byteLimit,
+          },
+        )}
+      </p>
+      {projection.shortenedFields > 0 && (
+        <p>
+          {t('{count} text fields shortened', {
+            count: projection.shortenedFields,
+          })}
+        </p>
+      )}
+      <p>{t('full task details and results remain on hub')}</p>
+      <p>{t('counts apply to the records returned by this refresh')}</p>
+    </div>
+  );
+}
 
 // What the bundled hub extension publishes with api.setView.
 interface HubView {
@@ -21,6 +61,7 @@ interface HubView {
   following: string[];
   tasks: { taskId: string; title: string; seq: number; saved?: boolean }[];
   recent: string[];
+  projection?: HubProjection;
 }
 export function hubView(
   extensions: readonly RuntimeExtension[],
@@ -114,6 +155,7 @@ export function HubPage() {
           ))}
         </div>
       ) : null}
+      <HubProjectionNotice projection={view?.projection} />
       {view?.recent.length ? (
         <DataBlock title="recent" value={view.recent.join('\n')} />
       ) : null}
