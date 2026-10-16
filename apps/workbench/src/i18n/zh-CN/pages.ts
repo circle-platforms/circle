@@ -1,5 +1,18 @@
 // Simplified Chinese for the interface words in the pages files. English is the key.
 export const pages: Record<string, string> = {
+  'invalid extension setting': '扩展设置无效',
+  'saving extension enable request': '正在保存启用请求',
+  'saving extension disable request': '正在保存停用请求',
+  'enabling extension': '正在启用扩展',
+  'disabling extension': '正在停用扩展',
+  'extension setting saved; reload required': '扩展设置已保存，需要重新加载',
+  'preview setting updated; no extension code was loaded':
+    '预览设置已更新，未加载扩展代码',
+  'extension setting could not be saved': '无法保存扩展设置',
+  'extension could not be loaded': '无法加载扩展',
+  'extension enabled': '扩展已启用',
+  'extension disabled': '扩展已停用',
+
   'network trust': '网络信任',
   '{n} authority': '{n} 张证书',
   '{n} authorities': '{n} 张证书',

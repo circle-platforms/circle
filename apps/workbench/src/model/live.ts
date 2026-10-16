@@ -293,8 +293,9 @@ export class LiveRuntime implements RuntimePort {
     name: RuntimeCommandName,
     payload: Record<string, unknown> = {},
     sessionId = this.snapshot.activeSessionId,
+    reportFailure = true,
   ): Promise<unknown> {
-    if (this.sessionErrors.delete(sessionId)) {
+    if (reportFailure && this.sessionErrors.delete(sessionId)) {
       this.snapshot = {
         ...this.snapshot,
         sessions: this.snapshot.sessions.map((session) =>
@@ -325,7 +326,8 @@ export class LiveRuntime implements RuntimePort {
         error,
       );
     });
-    void promise.catch((error) => this.report(error, sessionId));
+    if (reportFailure)
+      void promise.catch((error) => this.report(error, sessionId));
     return promise;
   }
   updateSessionView = (sessionId: string, patch: SessionViewPatch): boolean => {
@@ -582,6 +584,22 @@ export class LiveRuntime implements RuntimePort {
     const sessionId = owner ?? sourceSessionId ?? this.snapshot.activeSessionId;
     const operation = async () => {
       await this.changes;
+      if (kind === 'extension.enabled') {
+        if (
+          typeof payload.name !== 'string' ||
+          typeof payload.enabled !== 'boolean'
+        )
+          throw Error(t('invalid extension setting'));
+        return this.native(
+          'save-settings',
+          {
+            settings: {},
+            extensions: [{ name: payload.name, enabled: payload.enabled }],
+          },
+          sessionId,
+          false,
+        );
+      }
       const names: Record<string, RuntimeCommandName> = {
         'configure-connection': 'configure',
         'probe-connection': 'probe-connection',
@@ -642,7 +660,10 @@ export class LiveRuntime implements RuntimePort {
       return this.native(name, payload, sessionId);
     };
     const result = operation();
-    void result.catch((error) => this.report(error, sessionId));
+    // This settings action reports its Promise result in its original row,
+    // including superseded intents; it must not become a conversation failure.
+    if (kind !== 'extension.enabled')
+      void result.catch((error) => this.report(error, sessionId));
     return result;
   };
   send = async (

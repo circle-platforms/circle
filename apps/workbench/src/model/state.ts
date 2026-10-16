@@ -295,6 +295,16 @@ export class PreviewRuntime implements RuntimePort {
         at: new Date().toISOString(),
         status: 'not sent',
       });
+      if (
+        kind === 'extension.enabled' &&
+        typeof payload.name === 'string' &&
+        typeof payload.enabled === 'boolean'
+      ) {
+        const extension = state.extensions.find(
+          (item) => item.name === payload.name,
+        );
+        if (extension) extension.enabled = payload.enabled;
+      }
       if (kind === 'stop-job') {
         const job = state.jobs.find((item) => item.id === payload.id);
         if (job) job.stopRequested = true;
