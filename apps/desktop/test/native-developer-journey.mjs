@@ -491,6 +491,30 @@ try {
         join(output, 'editor-isolation.json'),
         JSON.stringify(result, null, 2),
       );
+      const fonts = await page.evaluate(async () => {
+        await document.fonts.ready;
+        const loaded = await document.fonts.load('16px codicon');
+        return {
+          checked: document.fonts.check('16px codicon'),
+          faces: loaded.map((face) => ({
+            family: face.family,
+            status: face.status,
+          })),
+        };
+      });
+      await writeFile(
+        join(output, 'native-editor-fonts.json'),
+        JSON.stringify(fonts, null, 2),
+      );
+      assert(fonts.checked, 'native editor icon font is available');
+      assert(
+        fonts.faces.some(
+          (face) =>
+            face.family.replace(/["']/g, '') === 'codicon' &&
+            face.status === 'loaded',
+        ),
+        'a real loaded editor icon face is required, not a fallback font',
+      );
       if (
         await page
           .getByRole('button', { name: 'close inspector', exact: true })
