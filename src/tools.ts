@@ -29,6 +29,8 @@ export interface ToolHooks {
   fileMutations?: FileMutations;
   jobs?: JobRegistry;
   jobOwner?: (context: ToolContext) => import('./jobs.js').JobOwner;
+  /** Only the runtime may turn original arguments into public command display. */
+  displayCommand?: (rawCommand: string, context: ToolContext) => string;
   todos?: (todos: Todo[]) => void;
   question?: (
     args: Record<string, unknown>,
@@ -277,17 +279,32 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
     ),
     async (args, context) => {
       if (hooks.jobs) {
-        const owner = hooks.jobOwner?.(context) ?? {
+        const notificationOwner = hooks.jobOwner?.(context) ?? {
           sessionId: context.sessionId,
           startedBy: 'model' as const,
+        };
+        const rawCommand = context.rawArgs?.command;
+        const owner = {
+          ...notificationOwner,
+          origin: {
+            executionSessionId: context.sessionId,
+            toolCallId: context.callId,
+            ...(typeof rawCommand === 'string' && hooks.displayCommand
+              ? { displayCommand: hooks.displayCommand(rawCommand, context) }
+              : {}),
+            ...(context.secretNames
+              ? { secretNames: [...context.secretNames] }
+              : {}),
+          },
         };
         const command = string(args, 'command');
         if (args.background === true) {
           context.signal.throwIfAborted();
-          const job = hooks.jobs.startShell(
+          const job = await hooks.jobs.startShell(
             command,
             owner,
             args.timeout === undefined ? undefined : Number(args.timeout),
+            context.signal,
           );
           return `In background: ${jobLine(job)}. A notice will arrive when it ends; do not poll or sleep.`;
         }

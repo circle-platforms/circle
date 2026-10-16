@@ -319,7 +319,7 @@ test('TUI deleting a background session reaps its real descendant without stoppi
   const { app, ui, workspace, model } = await appFor(t, [bReply.reply]);
   const a = app.runtime!;
   const fixture = await cancellationFixture(t, workspace);
-  const job = a.jobs.startShell(fixture.command, {
+  const job = await a.jobs.startShell(fixture.command, {
     sessionId: a.session.id,
     startedBy: 'user',
   });

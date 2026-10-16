@@ -193,7 +193,7 @@ test('RPC list_jobs and jobId stop the real process before reporting the settled
     await runtime.cancel();
     await runner;
   });
-  const job = runtime.jobs.startShell(
+  const job = await runtime.jobs.startShell(
     `"${process.execPath}" "${join(root, 'job.cjs')}"`,
     { sessionId: runtime.session.id, startedBy: 'user' },
   );

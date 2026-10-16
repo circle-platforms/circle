@@ -53,6 +53,7 @@ import { migrateLegacy } from './migration.js';
 import type { MigrationReport } from './legacy_sessions.js';
 import { askQuestions } from './questions.js';
 import type { SecretRequest } from './secret_prompt.js';
+import type { CommandLauncher, CommandExecution } from './command_process.js';
 import { JobRegistry, jobLine, type Job } from './jobs.js';
 import { ModelCatalog } from './model_catalog.js';
 import {
@@ -108,6 +109,10 @@ export interface InteractionContext {
   agent?: string;
 }
 export interface RuntimeOptions {
+  /** Optional host process transport; the CLI keeps its existing pipe launcher. */
+  commandLauncher?: CommandLauncher;
+  /** Safe process identity projection; never receives expanded command or env. */
+  onCommandExecution?: (execution: CommandExecution) => void;
   /** Native workspace compare-and-save backend; omitted by the CLI. */
   fileMutations?: FileMutations;
   workspace: string;
@@ -278,13 +283,22 @@ export class AgentRuntime {
       (path) => this.sandbox.resolvePath(path),
       options.settings.allowed_commands,
     );
-    this.jobs = new JobRegistry(this.sandbox, (kind, job) => {
-      if (kind === 'job_ended') this.userShells?.ended(job);
-      this.bus.emit(kind, {
-        payload: { job },
-        tags: { session_id: job.sessionId },
-      });
-    });
+    this.jobs = new JobRegistry(
+      this.sandbox,
+      (kind, job) => {
+        if (kind === 'job_ended') this.userShells?.ended(job);
+        this.bus.emit(kind, {
+          payload: { job },
+          tags: { session_id: job.sessionId },
+        });
+      },
+      16,
+      JobRegistry.outputLimit(),
+      {
+        commandLauncher: options.commandLauncher,
+        onExecution: options.onCommandExecution,
+      },
+    );
     // A background command can print a secret: its notice reaches the model and history.
     // Calls and notices share what values each secret had.
     this.redact = secretRedactor(
@@ -382,6 +396,10 @@ export class AgentRuntime {
     let tools = buildTools(this.sandbox, {
       fileMutations: this.options.fileMutations,
       jobs: this.jobs,
+      displayCommand: (raw, context) =>
+        this.redact(raw, {}, () =>
+          written(this.store.messages(context.sessionId)),
+        ),
       screenshot:
         this.options.screenshot === false
           ? undefined
@@ -555,6 +573,10 @@ export class AgentRuntime {
         const jobTools = buildTools(this.sandbox, {
           fileMutations: this.options.fileMutations,
           jobs: this.jobs,
+          displayCommand: (raw, context) =>
+            this.redact(raw, {}, () =>
+              written(this.store.messages(context.sessionId)),
+            ),
           jobOwner: () => ({
             sessionId: parentSessionId,
             parent: backgroundJob?.id ?? session.id,

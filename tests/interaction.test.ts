@@ -194,7 +194,7 @@ test('ctrl+c on an empty prompt says how to leave, and a second press within 1.5
   assert.equal(app.state.draft, '');
   assert.equal(ui.ended, false);
   // With a job running the hint says it will be stopped; its page does not keep the key
-  const job = runtime.jobs.startShell(
+  const job = await runtime.jobs.startShell(
     script('slow.cjs', 'setTimeout(()=>{},30000)'),
     { sessionId: runtime.session.id },
   );
@@ -340,7 +340,7 @@ test('/tree draws the branches as 0.5.0 did: yours ›, answers ●, ├ where a
 
 test('/jobs follows the jobs while it is open: one that starts appears and one that ends says so', async (t) => {
   const { app, ui, runtime, script, workspace } = await session(t);
-  const slow = runtime.jobs.startShell(
+  const slow = await runtime.jobs.startShell(
     script('slow.cjs', 'setTimeout(()=>{},30000)'),
     { sessionId: runtime.session.id },
   );
@@ -350,7 +350,7 @@ test('/jobs follows the jobs while it is open: one that starts appears and one t
     list.items.map((item) => item.key),
     [slow.id],
   );
-  const quick = runtime.jobs.startShell(
+  const quick = await runtime.jobs.startShell(
     script(
       'quick.cjs',
       "setTimeout(() => require('node:fs').writeFileSync('ended', ''), 300)",
