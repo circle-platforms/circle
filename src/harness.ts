@@ -22,6 +22,10 @@ import {
 } from './secrets.js';
 import { httpStatus } from './model_guard.js';
 import { validateAttachments } from './media.js';
+import {
+  commandExecutionReceipt,
+  type CommandExecution,
+} from './command_process.js';
 import type {
   InputPayload,
   StoredInput,
@@ -55,6 +59,14 @@ export type ApprovalDecision =
   // a rejection with the user's reason, which the model reads in the tool result
   | { decision: 'reject'; message: string };
 export interface HarnessOptions {
+  /** Trusted host lookup, never model-supplied execution metadata or authority. */
+  commandExecution?: {
+    epoch: string;
+    forCall: (
+      sessionId: string,
+      callId: string,
+    ) => CommandExecution | undefined;
+  };
   /** The variables, read for each call: %NAME% in arguments becomes the value. */
   variables?: () => Record<string, string>;
   /** The saved secrets, read for each call: variables whose values the model never sees. */
@@ -792,6 +804,15 @@ export class Harness {
     let recoverable = false;
     let attachments: MediaAttachment[] = [];
     let acceptingAttachments = true;
+    let previousExecutionId: string | undefined;
+    try {
+      previousExecutionId = this.options.commandExecution?.forCall(
+        this.sessionId,
+        original.id,
+      )?.executionId;
+    } catch {
+      /* Optional metadata cannot own tool execution. */
+    }
     this.bus.emit('tool_call', { payload: { ...call } });
     try {
       signal.throwIfAborted();
@@ -942,6 +963,22 @@ export class Harness {
     // A command or a page may show a secret back: the model reads its name instead, for the
     // values the call used and the ones saved now, unless the person or the model wrote it
     content = this.redact(content, secrets, () => written(this.messages));
+    let commandExecutions: Message['commandExecutions'];
+    try {
+      const binding = this.options.commandExecution;
+      const execution = binding?.forCall(this.sessionId, call.id);
+      if (
+        execution?.epoch === binding?.epoch &&
+        execution?.executionSessionId === this.sessionId &&
+        execution.toolCallId === call.id &&
+        execution.executionId !== previousExecutionId
+      ) {
+        const receipt = commandExecutionReceipt(execution);
+        if (receipt) commandExecutions = [receipt];
+      }
+    } catch {
+      /* A metadata observer cannot change a real command's result. */
+    }
     return {
       id: randomUUID(),
       role: 'tool',
@@ -951,6 +988,7 @@ export class Harness {
       status,
       ...(attachments.length ? { attachments } : {}),
       ...(recoverable ? { recoverable: true } : {}),
+      ...(commandExecutions ? { commandExecutions } : {}),
     };
   }
   // The result of a call goes into the conversation and onto the bus.
@@ -963,6 +1001,9 @@ export class Harness {
         name: result.name,
         status,
         output: result.content,
+        ...(result.commandExecutions
+          ? { commandExecutions: result.commandExecutions }
+          : {}),
       },
     });
     this.bus.emit('tool_end', { payload: { id: result.tool_call_id, status } });

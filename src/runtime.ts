@@ -631,6 +631,11 @@ export class AgentRuntime {
               : tool,
         );
         const child: Harness = new Harness({
+          commandExecution: {
+            epoch: this.jobs.runName,
+            forCall: (sessionId, callId) =>
+              this.jobs.executionFor(sessionId, callId),
+          },
           variables: () => this.options.settings.variables,
           secrets: () => loadSecrets(this.options.home),
           redact: this.redact,
@@ -720,6 +725,11 @@ export class AgentRuntime {
     // A new or resumed session after the integrations loaded keeps their subagents.
     if (this.integrationsReady) this.describeSubagents(tools);
     const harness = new Harness({
+      commandExecution: {
+        epoch: this.jobs.runName,
+        forCall: (sessionId, callId) =>
+          this.jobs.executionFor(sessionId, callId),
+      },
       variables: () => this.options.settings.variables,
       secrets: () => loadSecrets(this.options.home),
       redact: this.redact,

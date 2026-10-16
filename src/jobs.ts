@@ -24,7 +24,10 @@ import type {
   CommandOrigin,
   CommandProcessHandle,
   CommandProcessOptions,
+  CommandPtyGroupProcessHandle,
+  CommandDescendantCoverage,
 } from './command_process.js';
+import { commandExecutionReceipt } from './command_process.js';
 export function plainJobOutput(text: string): string {
   return text
     .split('\n')
@@ -63,6 +66,8 @@ interface Entry {
   failure?: Promise<never>;
   fail?: (error: unknown) => void;
   process?: CommandProcessHandle;
+  processSettled?: Promise<void>;
+  unsubscribeCoverage?: () => void;
   reserved?: boolean;
   transportFailed?: boolean;
   watch?: Watch;
@@ -422,6 +427,12 @@ export class JobRegistry {
   private finish(entry: Entry): void {
     if (entry.finished) return;
     entry.finished = true;
+    try {
+      entry.unsubscribeCoverage?.();
+    } catch {
+      /* Metadata observers cannot own cleanup. */
+    }
+    entry.unsubscribeCoverage = undefined;
     this.entries.delete(entry);
     const job = entry.job;
     if (entry.execution) {
@@ -465,6 +476,98 @@ export class JobRegistry {
     }
     entry.settle();
     this.changes.emit('change');
+  }
+  private observePtyGroup(
+    entry: Entry,
+    process: CommandPtyGroupProcessHandle,
+    transportError: (error: unknown) => void,
+  ): void {
+    const execution = entry.execution!;
+    const completion = (execution.completion = {
+      kind: 'pty-group' as const,
+      descendantCoverage: {
+        state: 'unknown' as const,
+        reason: 'coverage-unavailable' as const,
+        observedAt: Date.now(),
+      },
+    } as NonNullable<CommandExecution['completion']>);
+    const rootExit = process.rootExit.then((exit) => {
+      if (
+        !Number.isInteger(exit.exitCode) ||
+        (exit.signal !== undefined &&
+          (!Number.isInteger(exit.signal) ||
+            exit.signal < 0 ||
+            exit.signal > 128)) ||
+        !['active', 'empty', 'unknown'].includes(exit.controlledGroupAtExit)
+      )
+        throw Error('invalid PTY command exit evidence');
+      completion.rootExit ??= {
+        exitCode: exit.exitCode,
+        ...(exit.signal === undefined ? {} : { signal: exit.signal }),
+        controlledGroupAtExit: exit.controlledGroupAtExit,
+        observedAt: Date.now(),
+      };
+      entry.shellExited = true;
+      entry.exitCode = exit.exitCode;
+      this.executionChanged(entry);
+      if (
+        !entry.finished &&
+        exit.controlledGroupAtExit === 'active' &&
+        !entry.job &&
+        !entry.stopPromise
+      ) {
+        this.publish(entry, 'adopted', 'controlled PTY group remains active');
+        entry.interrupt?.();
+      }
+    });
+    const ioClosed = process.transportAndLogClosed.then(() => {
+      completion.transportAndLogClosed ??= { observedAt: Date.now() };
+      this.executionChanged(entry);
+    });
+    const groupEmpty = process.controlledGroupEmpty.then(() => {
+      completion.controlledGroupEmpty ??= { observedAt: Date.now() };
+      this.executionChanged(entry);
+    });
+    entry.processSettled = Promise.all([rootExit, ioClosed, groupEmpty]).then(
+      () => {},
+    );
+    void entry.processSettled
+      .then(() => this.finish(entry))
+      .catch(transportError);
+    const coverageChanged = () => {
+      if (entry.finished || entry.process !== process) return;
+      try {
+        const coverage = process.descendantCoverage.snapshot();
+        if (!['unknown', 'unmanaged'].includes(coverage.state))
+          throw Error('invalid PTY descendant coverage evidence');
+        const reason = [
+          'outside-controlled-group',
+          'coverage-unavailable',
+        ].includes(coverage.reason ?? '')
+          ? coverage.reason
+          : undefined;
+        const next: CommandDescendantCoverage = {
+          state: coverage.state,
+          ...(reason ? { reason } : {}),
+        };
+        const previous = completion.descendantCoverage;
+        if (previous.state === 'unmanaged') return;
+        if (previous.state === next.state && previous.reason === next.reason)
+          return;
+        completion.descendantCoverage = { ...next, observedAt: Date.now() };
+        this.executionChanged(entry);
+      } catch (error) {
+        transportError(error);
+      }
+    };
+    try {
+      entry.unsubscribeCoverage =
+        process.descendantCoverage.subscribe(coverageChanged);
+      coverageChanged();
+    } catch (error) {
+      transportError(error);
+    }
+    this.executionChanged(entry);
   }
   private launch(command: string, owner: JobOwner): Entry {
     const verdict = classifyCommand(command, this.sandbox.credentialFiles);
@@ -535,6 +638,11 @@ export class JobRegistry {
               this.executionChanged(entry);
             });
           };
+          if (process.kind === 'pty-group') {
+            this.observePtyGroup(entry, process, transportError);
+            return;
+          }
+          entry.processSettled = process.settled;
           void process.settled
             .then(async () => {
               const exit = await process.shellExit;
@@ -899,13 +1007,17 @@ export class JobRegistry {
         if (process) {
           await process.stop(reason);
           try {
-            await process.settled;
+            await entry.processSettled;
           } catch (error) {
             entry.reason = 'transport error';
-            this.finish(entry);
+            // A bounded group cannot release its reservation without all three
+            // facts. A rejected I/O acknowledgement is never a closed log.
+            if (process.kind !== 'pty-group') this.finish(entry);
             throw error;
           }
-          const exit = await process.shellExit;
+          const exit = await (process.kind === 'pty-group'
+            ? process.rootExit
+            : process.shellExit);
           entry.exitCode = exit.exitCode;
           this.finish(entry);
         }
@@ -925,6 +1037,8 @@ export class JobRegistry {
         this.finish(entry);
       } else await entry.settled;
     })().catch((error: unknown) => {
+      if (entry.process?.kind === 'pty-group' && !entry.finished)
+        entry.reason = 'transport cleanup failed';
       if (entry.execution) {
         entry.execution.status = 'failed';
         entry.execution.reason = 'transport cleanup failed';
@@ -965,6 +1079,10 @@ export class JobRegistry {
       pending.filter((job) => !taken.includes(job)),
     );
     if (!taken.length) return [];
+    const commandExecutions = taken.flatMap((job) => {
+      const receipt = commandExecutionReceipt(job.execution);
+      return receipt ? [receipt] : [];
+    });
     return [
       {
         id: randomUUID(),
@@ -975,6 +1093,7 @@ export class JobRegistry {
         ),
         display: this.redact(taken.map(noticeLine).join('\n'), sessionId),
         internal: 'job_notice',
+        ...(commandExecutions.length ? { commandExecutions } : {}),
       },
     ];
   }

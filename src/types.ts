@@ -34,6 +34,8 @@ export interface Message {
   internal?: string;
   truncated?: boolean;
   recoverable?: boolean;
+  /** Host-recorded bounded command facts; never a claim of arbitrary tree cleanup. */
+  commandExecutions?: import('./command_process.js').CommandExecutionReceipt[];
   legacy_data?: { type: string; data: Record<string, unknown> };
 }
 export type Effect = 'read' | 'write' | 'execute' | 'unknown';
