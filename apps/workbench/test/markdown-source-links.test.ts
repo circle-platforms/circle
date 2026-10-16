@@ -62,3 +62,44 @@ test('parenthesized plain plan file and line references retain surrounding prose
   remarkSourceLinks()(external);
   assert.equal(external.children[0]!.type, 'text');
 });
+
+test('plain Unicode and Windows references retain strict directory and line boundaries', () => {
+  const targets = [
+    'src/功能.ts:2',
+    '功能/模型.ts:3',
+    String.raw`src\file.ts:12`,
+    String.raw`C:\src\file.ts:12`,
+  ];
+  for (const target of targets) {
+    const tree: {
+      type: string;
+      children: { type: string; value?: string; url?: string }[];
+    } = {
+      type: 'root',
+      children: [{ type: 'text', value: `位置 (${target})` }],
+    };
+    remarkSourceLinks()(tree);
+    assert.equal(
+      tree.children.find((node) => node.type === 'link')?.url,
+      target,
+    );
+  }
+  for (const value of [
+    'https://example.com/src/功能.ts:2',
+    String.raw`node src\file.ts:12`,
+    'npm test',
+    '功能.ts:2',
+  ]) {
+    const tree = { type: 'root', children: [{ type: 'text', value }] };
+    remarkSourceLinks()(tree);
+    assert.equal(tree.children[0]!.type, 'text', value);
+  }
+  for (const type of ['inlineCode', 'code']) {
+    const tree = {
+      type: 'root',
+      children: [{ type, value: String.raw`node C:\src\file.ts:12` }],
+    };
+    remarkSourceLinks()(tree);
+    assert.equal(tree.children[0]!.type, type);
+  }
+});

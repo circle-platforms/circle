@@ -145,10 +145,10 @@ export function workspaceRelativePath(
 export function inlineSourceLocation(value: string): SourceLocation | null {
   const text = value.trim().replace(/^\((.*)\)$/, '$1');
   if (
-    !/^(?:file:\/\/|[A-Za-z]:[\\/]|\.?\.?[\\/]|[\\/]|[\w@.-]+[\\/])/.test(
+    !/^(?:file:\/\/|[A-Za-z]:[\\/]|\.?\.?[\\/]|[\\/]|[\p{L}\p{N}_@.-]+[\\/])/u.test(
       text,
     ) &&
-    !/^(?:[\w@.-]+\.[\w-]+|AGENTS|README|LICENSE|Dockerfile|Makefile)(?:#L\d.*|:\d.*)?$/.test(
+    !/^(?:[\p{L}\p{N}_@.-]+\.[\p{L}\p{N}_-]+|AGENTS|README|LICENSE|Dockerfile|Makefile)(?:#L\d.*|:\d.*)?$/u.test(
       text,
     )
   )

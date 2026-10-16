@@ -20,9 +20,15 @@ export function remarkSourceLinks() {
             },
           ];
         if (child.type === 'text' && child.value) {
+          if (
+            /^\s*(?:[$>]\s*|(?:node|npm|npx|pnpm|yarn|git|bun|deno|tsx|ts-node)\s+)/.test(
+              child.value,
+            )
+          )
+            return [child];
           const parts: Node[] = [];
           const reference =
-            /(^|[\s(（])((?:\.{1,2}\/|\/)?(?:[\w@.-]+\/)+[\w@.-]+\.[\w-]+:\d+(?::\d+)?(?:[-–]\d+)?)(?=$|[\s),.;，）])/g;
+            /(^|[\s(（])((?:(?:[A-Za-z]:)?[\\/]|\.{1,2}[\\/])?(?:[\p{L}\p{N}_@.-]+[\\/])+[\p{L}\p{N}_@.-]+\.[\p{L}\p{N}_-]+:\d+(?::\d+)?(?:[-–]\d+)?)(?=$|[\s),.;，）])/gu;
           let end = 0;
           for (const match of child.value.matchAll(reference)) {
             const start = match.index! + match[1]!.length;
