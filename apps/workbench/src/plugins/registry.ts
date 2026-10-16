@@ -1,3 +1,5 @@
+import { t } from '../i18n/index.ts';
+import { platformTitle } from './labels.ts';
 import type { WorkbenchPlugin } from './types.ts';
 export interface PairedExtension {
   name: string;
@@ -11,27 +13,39 @@ export function pairing(
   extensions: readonly PairedExtension[],
 ): { live: boolean; reason: string } {
   if (!plugin.runtimeExtension) return { live: true, reason: '' };
+  const name = platformTitle(plugin.runtimeExtension);
   const row = extensions.find((item) => item.name === plugin.runtimeExtension);
   if (!row)
     return {
       live: false,
-      reason: `runtime extension ${plugin.runtimeExtension} is not installed`,
+      reason: t('runtime extension {name} is not installed', { name }),
     };
   if (row.error)
     return {
       live: false,
-      reason: `runtime extension ${row.name} failed to load`,
+      reason: t('runtime extension {name} failed to load', { name }),
     };
   if (row.version !== plugin.version)
     return {
       live: false,
-      reason: `runtime extension ${row.name} is ${row.version || 'unversioned'}, this interface is ${plugin.version}`,
+      reason: row.version
+        ? t(
+            'runtime extension {name} is {version}, this interface is {interface}',
+            { name, version: row.version, interface: plugin.version },
+          )
+        : t(
+            'runtime extension {name} is unversioned, this interface is {interface}',
+            { name, interface: plugin.version },
+          ),
     };
   if (!row.enabled)
-    return { live: false, reason: `runtime extension ${row.name} is off` };
+    return {
+      live: false,
+      reason: t('runtime extension {name} is off', { name }),
+    };
   return { live: true, reason: '' };
 }
-/** The plugins that show: the chosen ones, and paired ones whose extension is live. */
+/** The plugins that show: chosen plain ones, and chosen paired ones whose extension is live. */
 export function effectivePlugins(
   plugins: readonly WorkbenchPlugin[],
   chosen: readonly string[],
@@ -40,7 +54,7 @@ export function effectivePlugins(
   return plugins
     .filter((plugin) =>
       plugin.runtimeExtension
-        ? pairing(plugin, extensions).live
+        ? chosen.includes(plugin.id) && pairing(plugin, extensions).live
         : chosen.includes(plugin.id),
     )
     .map((plugin) => plugin.id);

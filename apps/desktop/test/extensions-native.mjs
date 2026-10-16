@@ -143,8 +143,26 @@ try {
   );
   assert.equal(saved.extensions['hub'].enabled, true);
   await page.getByRole('link', { name: 'hub', exact: true }).waitFor();
+  for (const id of ['knowledge', 'work', 'execution', 'methods']) {
+    assert.equal(
+      await page
+        .getByRole('checkbox', {
+          name: `enable ${id} interface`,
+          exact: true,
+        })
+        .isChecked(),
+      false,
+    );
+    assert.equal(
+      await page.getByRole('link', { name: id, exact: true }).count(),
+      0,
+    );
+  }
   checks.push(
     'turning the paired interface on turns its runtime extension on, saved, and shows its page',
+  );
+  checks.push(
+    'opening hub does not open knowledge, work, execution or methods',
   );
 
   await page.getByRole('link', { name: 'hub', exact: true }).click();
@@ -154,15 +172,6 @@ try {
   assert.equal(view.signedIn, false);
   assert.deepEqual(view.tasks, []);
   checks.push('the page shows the view the runtime extension published');
-  // The four platform objects come with it, and say they need a signed-in server.
-  for (const id of ['knowledge', 'work', 'execution', 'methods']) {
-    await page.getByRole('link', { name: id, exact: true }).click();
-    await page.getByRole('heading', { name: id, exact: true }).waitFor();
-    await page.getByText('not signed in', { exact: true }).waitFor();
-  }
-  checks.push(
-    'knowledge, work, execution and methods show with it and wait for a sign-in',
-  );
 
   const reply = await command('custom-command', { name: 'openlab' });
   assert.equal(reply.ok, true, JSON.stringify(reply));

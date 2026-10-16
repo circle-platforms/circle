@@ -1,4 +1,12 @@
-import { t } from '../i18n';
+import { t } from '../i18n/index.ts';
+
+/** What a failed extension load says on screen. Paths stay as they are. */
+export function extensionErrorText(error: string): string {
+  const missing = /Cannot find module '([^']+)'/.exec(error);
+  if (missing)
+    return t('cannot find module {module}', { module: missing[1] ?? '' });
+  return t('could not load the extension: {error}', { error });
+}
 
 /** Sidebar and search names for the hub pages. Unknown ids stay as written. */
 export function platformTitle(id: string, fallback = id): string {

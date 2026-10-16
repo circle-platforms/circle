@@ -3,7 +3,11 @@ import { recordedDecision, recordedTitle } from '../model/decisions';
 import { KeybindingsEditor } from './KeybindingsEditor';
 import { usePlugins } from '../plugins/context';
 import { pairing } from '../plugins/registry';
-import { platformDescription, platformTitle } from '../plugins/labels';
+import {
+  extensionErrorText,
+  platformDescription,
+  platformTitle,
+} from '../plugins/labels';
 import { useEffect, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { CUSTOMIZE, NAVIGATION } from '../components/Sidebar';
@@ -1074,6 +1078,21 @@ function ExtensionsPage() {
   const [tab, setTab] = useState<'runtime' | 'interface'>('runtime');
   const { registry, enabled, toggle } = usePlugins();
   const extensionSwitch = useExtensionEnabled();
+  const [pendingPlugins, setPendingPlugins] = useState<Record<string, boolean>>(
+    {},
+  );
+  useEffect(() => {
+    setPendingPlugins((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const [id, value] of Object.entries(current))
+        if (enabled.includes(id) === value) {
+          delete next[id];
+          changed = true;
+        }
+      return changed ? next : current;
+    });
+  }, [enabled]);
   return (
     <Page
       title={t('extensions')}
@@ -1129,13 +1148,15 @@ function ExtensionsPage() {
                   <Blocks size={21} />
                 </span>
                 <div>
-                  <h2>{extension.name}</h2>
+                  <h2>{platformTitle(extension.name)}</h2>
                   <p>
                     {scopeLabel(extension.scope)} · {extension.version}
                   </p>
                 </div>
                 <Switch
-                  label={t('enable {name}', { name: extension.name })}
+                  label={t('enable {name}', {
+                    name: platformTitle(extension.name),
+                  })}
                   checked={extensionSwitch.checked(
                     extension.name,
                     extension.enabled,
@@ -1146,7 +1167,9 @@ function ExtensionsPage() {
                 />
               </div>
               {extension.error && (
-                <div className="inline-error">{extension.error}</div>
+                <div className="inline-error">
+                  {extensionErrorText(extension.error)}
+                </div>
               )}
               <div className="extension-contributions">
                 <span>
@@ -1188,23 +1211,29 @@ function ExtensionsPage() {
                   <p>{platformDescription(plugin.id) ?? plugin.description}</p>
                 </div>
                 <Switch
-                  label={t('enable {name} interface', { name: plugin.id })}
+                  label={t('enable {name} interface', {
+                    name: platformTitle(plugin.id, plugin.title),
+                  })}
                   checked={
-                    plugin.runtimeExtension
-                      ? extensionSwitch.checked(
-                          plugin.runtimeExtension,
-                          enabled.includes(plugin.id),
-                        )
-                      : enabled.includes(plugin.id)
+                    pendingPlugins[plugin.id] ?? enabled.includes(plugin.id)
                   }
                   onChange={(value) => {
-                    if (plugin.runtimeExtension) {
-                      extensionSwitch.setEnabled(
-                        plugin.runtimeExtension,
-                        value,
-                      );
+                    // A paired page that cannot turn on reports the reason and
+                    // leaves the switch where it was.
+                    if (
+                      plugin.runtimeExtension &&
+                      (runtime.mode !== 'live' ||
+                        !snapshot.extensions.some(
+                          (item) => item.name === plugin.runtimeExtension,
+                        ))
+                    ) {
+                      toggle(plugin.id, value);
                       return;
                     }
+                    setPendingPlugins((current) => ({
+                      ...current,
+                      [plugin.id]: value,
+                    }));
                     toggle(plugin.id, value);
                   }}
                 />
@@ -1642,17 +1671,21 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
       <section className="settings-block">
         <h2>{t('extensions')}</h2>
         <p className="panel-note">
-          {t('Turn an extension on here. Hub pages appear once it has loaded.')}
+          {t(
+            'Turn an extension on here. Open its pages under interface components.',
+          )}
         </p>
         {snapshot.extensions.length ? (
           snapshot.extensions.map((extension) => (
             <div className="setting-row" key={extension.id}>
               <span>
-                {extension.name} · {scopeLabel(extension.scope)} ·{' '}
-                {extension.version}
+                {platformTitle(extension.name)} · {scopeLabel(extension.scope)}{' '}
+                · {extension.version}
               </span>
               <Switch
-                label={t('enable {name}', { name: extension.name })}
+                label={t('enable {name}', {
+                  name: platformTitle(extension.name),
+                })}
                 checked={extensionSwitch.checked(
                   extension.name,
                   extension.enabled,

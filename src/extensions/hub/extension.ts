@@ -3,11 +3,13 @@
 // while it runs and saves what the server delivers. The task lives on the server: closing
 // Circle does not stop it, and `/hub task <id>` picks it up where this window left off.
 //
-// This file is loaded as written (Node strips the types), so it uses only syntax that
-// type stripping accepts. The interface words live in the compiled module beside the
-// program (`hub_text.js`); that module has no interface of its own.
+// The terminal loads this file as written (Node strips the types), so it uses only
+// syntax that type stripping accepts. The desktop build compiles it to extension.js.
+// Interface words live in hub_text.js, and ExtensionError in extension_error.js, both
+// beside the program: the extension and the host then share one error class.
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
+import { ExtensionError } from '../../extension_error.js';
 import { hubLocaleChinese, hubText } from '../../hub_text.js';
 import {
   existsSync,
@@ -27,11 +29,10 @@ import {
   resolve,
   sep,
 } from 'node:path';
-import {
-  ExtensionError,
-  type CommandContext,
-  type ExtensionAPI,
-  type ToolMiddleware,
+import type {
+  CommandContext,
+  ExtensionAPI,
+  ToolMiddleware,
 } from '../../extensions.js';
 
 interface Config {

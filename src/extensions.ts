@@ -15,6 +15,7 @@ import { Watch, waitWatch, abortable } from './watch.js';
 import { JobRegistry, jobLine, type JobOwner } from './jobs.js';
 import { ExtensionSecrets, SecretMask } from './extension_secrets.js';
 import { checkedUrl } from './open_url.js';
+import { ExtensionError } from './extension_error.js';
 import {
   SecretPromptError,
   cancelRequest,
@@ -24,7 +25,7 @@ import {
 } from './secret_prompt.js';
 
 export class ToolError extends Error {}
-export class ExtensionError extends Error {}
+export { ExtensionError };
 export interface CommandContext {
   workspace: string;
   toast(message: string): void;
@@ -556,7 +557,31 @@ export class ExtensionHost {
   // handlers, and what they gave api.background.
   private readonly pending = new Set<Promise<unknown>>();
   private closing?: Promise<void>;
-  constructor(readonly options: ExtensionHostOptions) {}
+  constructor(readonly options: ExtensionHostOptions) {
+    // Listed before load, still with nothing registered. The desktop publishes a
+    // snapshot before integrations finish; the bundled hub is on that first frame
+    // instead of an empty page that fills in later.
+    this.extensions = this.discover().map((found) => this.unloaded(found));
+  }
+  private unloaded(
+    discovered: ReturnType<ExtensionHost['discover']>[number],
+  ): Extension {
+    const setting = this.options.settings?.[discovered.name]?.enabled;
+    return {
+      ...discovered,
+      enabled:
+        discovered.source === 'bundled' ? setting === true : setting !== false,
+      error: '',
+      warnings: [],
+      tools: [],
+      commands: [],
+      middleware: [],
+      subagents: [],
+      renderers: new Map(),
+      handlers: new Map(),
+      mask: new SecretMask(),
+    };
+  }
   discover(): Pick<
     Extension,
     'name' | 'source' | 'path' | 'version' | 'description' | 'declaredCommands'
@@ -615,23 +640,7 @@ export class ExtensionHost {
     const commands = new Set(this.options.reservedCommands);
     for (const discovered of this.discover()) {
       this.controller.signal.throwIfAborted();
-      const setting = this.options.settings?.[discovered.name]?.enabled;
-      const ext: Extension = {
-        ...discovered,
-        enabled:
-          discovered.source === 'bundled'
-            ? setting === true
-            : setting !== false,
-        error: '',
-        warnings: [],
-        tools: [],
-        commands: [],
-        middleware: [],
-        subagents: [],
-        renderers: new Map(),
-        handlers: new Map(),
-        mask: new SecretMask(),
-      };
+      const ext: Extension = this.unloaded(discovered);
       loaded.push(ext);
       if (!ext.enabled) continue;
       try {

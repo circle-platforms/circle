@@ -5616,7 +5616,15 @@ test(
     assert.equal(existsSync(join(f.home, 'register-aborted')), true);
     assert.equal(f.updates.length, published);
     assert.ok(
-      f.updates.every((update) => update.snapshot.extensions.length === 0),
+      f.updates.every((update) =>
+        update.snapshot.extensions.every(
+          (extension) =>
+            extension.tools.length === 0 &&
+            extension.commands.length === 0 &&
+            !extension.error,
+        ),
+      ),
+      'a closed registration is not installed; discovery may already list extensions',
     );
     assert.equal(f.model.requests.length, 0);
   },
@@ -5735,7 +5743,15 @@ for (const mode of ['released', 'bounded'] as const)
         );
         assert.equal(f.model.requests.length, 0);
         assert.ok(
-          f.updates.every((update) => update.snapshot.extensions.length === 0),
+          f.updates.every((update) =>
+            update.snapshot.extensions.every(
+              (extension) =>
+                extension.tools.length === 0 &&
+                extension.commands.length === 0 &&
+                !extension.error,
+            ),
+          ),
+          'a closed registration is not installed; discovery may already list extensions',
         );
       } finally {
         release();

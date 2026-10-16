@@ -1222,7 +1222,11 @@ test('/compact, /mcp, /extensions, /trust and /reload report as 0.5.0 did', asyn
   await app.submit('/mcp reload');
   assert.equal(app.state.notices.at(-1), 'MCP reloaded · 0 tools');
   await app.submit('/extensions');
-  assert.match(app.state.notices.at(-1)!, /^No extensions\./);
+  // The bundled hub is listed from its manifest before integrations load.
+  assert.match(
+    app.state.notices.at(-1)!,
+    /^hub 0\.1\.0 \(bundled\) · off · \/extensions enable hub/,
+  );
   await app.submit('/trust');
   assert.equal(app.state.notices.at(-1), `Trusted ${workspace}`);
   assert.equal(loadSettings(home).trusted_folders.length, 1);
