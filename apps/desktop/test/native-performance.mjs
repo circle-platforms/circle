@@ -806,8 +806,7 @@ try {
         .getByRole('button', { name: 'close file', exact: true })
         .click();
     const link = page.locator(`.transcript:visible a[href="${name}#L1"]`);
-    await link.evaluate((node) => (node.dataset.perfTarget = 'file'));
-    await arm('click', '[data-perf-target="file"]', {
+    await arm('click', `.transcript a[href="${name}#L1"]`, {
       selector: '.monaco-editor .view-lines',
       file: { path: name, sourceDirectory },
       text: marker,

@@ -84,11 +84,11 @@ function renderer() {
     get unsubscribed() {
       return unsubscribed;
     },
-    install: (condition) =>
+    install: (condition, selector = '#target') =>
       runInNewContext(
         '(' + armNativeFeedback.toString() + ')',
         context,
-      )({ kind: 'click', selector: '#target', condition }),
+      )({ kind: 'click', selector, condition }),
     click: (target) =>
       inputListener({ target: target ?? { closest: () => true } }),
     timeout: () => timeoutCallback(),
@@ -394,4 +394,51 @@ test('timeout evidence distinguishes a replaced link that opens the file without
   assert.equal(record.clicks[0].dataFlag, null);
   assert.equal(record.clicks[0].matchesSelector, false);
   assert.equal(record.fileState[0].targets[0].text, 'PERF_SECOND');
+});
+
+test('natural source href starts feedback after React replaces the armed anchor', async () => {
+  const r = renderer();
+  const selector = '.transcript a[href="SECOND.md#L1"]';
+  const old = { isConnected: false };
+  const replacement = {
+    isConnected: true,
+    getAttribute: (name) => (name === 'href' ? 'SECOND.md#L1' : null),
+  };
+  const node = {
+    textContent: 'PERF_SECOND',
+    closest: () => null,
+    getBoundingClientRect: () => ({ width: 500, height: 80 }),
+  };
+  const view = {
+    ...node,
+    querySelector: (query) =>
+      query === '.file-view-filename strong'
+        ? { textContent: 'SECOND.md' }
+        : { getAttribute: () => 'workspace source: workspace: /actual-owner' },
+    querySelectorAll: () => [node],
+  };
+  r.document.querySelector = () => old;
+  r.document.querySelectorAll = (query) =>
+    query === '.file-view' ? [view] : [replacement];
+  r.install(
+    {
+      selector: '.monaco-editor .view-lines',
+      file: { path: 'SECOND.md', sourceDirectory: '/actual-owner' },
+      text: 'PERF_SECOND',
+    },
+    selector,
+  );
+  r.click({
+    closest: (query) =>
+      query === selector || query === 'a' ? replacement : null,
+  });
+  r.frame();
+  r.frame();
+  await r.window.__circleNativePerfPending;
+  const record = r.window.__circleNativePerfFeedbackDiagnostics[0];
+  assert.equal(record.started, true);
+  assert.equal(record.clicks[0].sameArmed, false);
+  assert.equal(record.clicks[0].dataFlag, null);
+  assert.equal(record.clicks[0].matchesSelector, true);
+  assert.equal(record.frames, 2);
 });
