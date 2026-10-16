@@ -1,4 +1,11 @@
 export const githubConnection: Record<string, string> = {
+  'Secure credential storage is unavailable.': '安全凭据存储暂不可用。',
+  'GitHub action could not be completed.': '未能完成 GitHub 操作。',
+  'Choose this session only if you want to continue without saving credentials, then start authorization again.':
+    '如需继续且不保存凭据，请自行选择“仅本次会话”，再开始授权。',
+  'Review the connection and try the action again. Your edits are kept.':
+    '请检查连接后重试，已保留你的编辑内容。',
+
   'reset repository edits': '还原仓库编辑',
   'No repositories selected; repository actions are unavailable.':
     '尚未选择仓库，暂不能执行仓库操作。',

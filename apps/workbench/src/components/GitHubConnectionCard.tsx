@@ -37,6 +37,15 @@ export function GitHubConnectionCard() {
   }, [view?.epoch, repositoryDirty]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  useEffect(() => {
+    setError('');
+  }, [view?.epoch, view?.state]);
+  const failure = error || view?.error || extension?.error;
+  const storageUnavailable =
+    !!failure &&
+    /secure (?:credential )?storage.*unavailable|encrypt.*(?:unavailable|not available)/i.test(
+      failure,
+    );
   async function command(verb: string, params?: Record<string, unknown>) {
     setBusy(true);
     setError('');
@@ -197,6 +206,8 @@ export function GitHubConnectionCard() {
                     </Button>
                   </>
                 )}
+              </div>
+              <div className="inline-actions">
                 {view.authorization.url && (
                   <Button
                     disabled={!desktopHost()?.openExternal}
@@ -244,8 +255,30 @@ export function GitHubConnectionCard() {
           )}
         </>
       )}
-      {(error || view?.error || extension?.error) && (
-        <p role="alert">{error || view?.error || extension?.error}</p>
+      {failure && (
+        <div role="alert">
+          <p>
+            {storageUnavailable
+              ? t('Secure credential storage is unavailable.')
+              : t('GitHub action could not be completed.')}
+          </p>
+          <p className="panel-note">
+            {storageUnavailable
+              ? t(
+                  'Choose this session only if you want to continue without saving credentials, then start authorization again.',
+                )
+              : t(
+                  'Review the connection and try the action again. Your edits are kept.',
+                )}
+          </p>
+          <details className="context-source">
+            <summary>{t('technical details')}</summary>
+            <pre tabIndex={0}>{failure}</pre>
+            <Button onClick={() => perform(() => copyText(failure))}>
+              {t('copy error details')}
+            </Button>
+          </details>
+        </div>
       )}
     </section>
   );
