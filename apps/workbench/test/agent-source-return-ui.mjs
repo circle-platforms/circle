@@ -34,6 +34,8 @@ try {
       next = snapshot.sessions.find((s) => s.id !== 'session1').id;
       const agent = snapshot.agents.find((a) => a.sessionId === 'session1');
       agent.name = 'source-child';
+      agent.resourceSessionId = agent.id;
+      agent.readOnly = true;
       agent.workspaceId = snapshot.sessions.find(
         (s) => s.id === 'session1',
       ).workspaceId;
@@ -139,7 +141,7 @@ try {
   await record.getByRole('button', { name: 'main', exact: true }).click();
   for (const [name, notice] of [
     ['unknown-child', 'source workspace is not available'],
-    ['outside-child', 'source is outside the workspace'],
+    ['outside-child', 'source workspace is not available'],
   ]) {
     await page.locator('.activity-row').filter({ hasText: name }).click();
     await page
@@ -153,6 +155,14 @@ try {
       0,
       'unverified child cannot read parent same-name file',
     );
+    await openBySearch();
+    await close();
+    assert.equal(
+      await record.locator('header strong').textContent(),
+      name,
+      'parent quick-open keeps the child return origin but does not use its refused resource owner',
+    );
+
     await page
       .locator('.agent-record')
       .getByRole('button', { name: 'main', exact: true })

@@ -5,7 +5,11 @@ import { useRuntime } from '../app/context';
 import { currentSession } from '../model/state';
 import { Button, IconButton, Status } from '../components/common';
 import { t, tn } from '../i18n';
-import { workspaceCall, subscribeWorkspace } from '../model/workspace-client';
+import {
+  workspaceCall,
+  subscribeWorkspace,
+  connectWorkspaceStreams,
+} from '../model/workspace-client';
 import {
   NativeCodeEditor,
   editorDocuments,
@@ -18,6 +22,7 @@ import {
   setEditorDocument,
 } from './NativeCodeEditor';
 import type { EditorDocument } from './NativeCodeEditor';
+import type { SourceResourceOwner } from '../model/source-resource-owner';
 type SaveFlight = {
   queued?: { all: boolean; restore: boolean };
   writes: Map<string, string>;
@@ -32,12 +37,14 @@ export function FileViewer({
   path: requestedPath,
   line,
   column,
+  resourceOwner,
   onClose,
   onNavigate: onSourceNavigate,
 }: {
   path: string;
   line?: number;
   column?: number;
+  resourceOwner?: SourceResourceOwner;
   onClose: () => void;
   onNavigate?: (
     path: string,
@@ -46,7 +53,15 @@ export function FileViewer({
   ) => void | Promise<void>;
 }) {
   const { snapshot, runtime, perform, notify } = useRuntime();
-  const session = currentSession(snapshot);
+  const parentSession = currentSession(snapshot);
+  const session = resourceOwner
+    ? {
+        ...parentSession,
+        id: resourceOwner.sessionId,
+        workspaceId: resourceOwner.workspaceId,
+        readOnly: resourceOwner.readOnly,
+      }
+    : parentSession;
   const workspaceId = session.workspaceId;
   const [path, setPath] = useState(
     requestedPath.replace(/#L\d+(?:C\d+)?$/, ''),
@@ -85,13 +100,21 @@ export function FileViewer({
   const [moved, setMoved] = useState<EditorDocument | null>(null);
   const [bufferCount, setBufferCount] = useState(0);
   const live = runtime.mode === 'live';
+  useEffect(() => {
+    if (!resourceOwner || !live) return;
+    return connectWorkspaceStreams(workspaceId, session.id, (error) =>
+      setError(String(error)),
+    );
+  }, [workspaceId, session.id, live, !!resourceOwner]);
   const language = /\.[cm]?tsx?$/.test(path)
     ? 'typescript'
     : /\.[cm]?jsx?$/.test(path)
       ? 'javascript'
       : (projected?.language ?? 'plaintext');
-  const readOnly =
-    session.readOnly && !['plan', 'plan.md'].includes(path.split('/').at(-1)!);
+  const readOnly = resourceOwner
+    ? resourceOwner.readOnly
+    : session.readOnly &&
+      !['plan', 'plan.md'].includes(path.split('/').at(-1)!);
   const showDocument = (doc: EditorDocument) => {
     const uri = editorUri(workspaceId, doc.path).toString();
     const model = retainedModel(

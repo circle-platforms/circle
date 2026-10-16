@@ -72,6 +72,10 @@ import {
 } from '../model/workspace-client';
 import { NativeResourceBoundary } from '../components/NativeResourceBoundary';
 import { SourceNavigation } from '../components/SourceNavigation';
+import {
+  agentSourceOwner,
+  type SourceResourceOwner,
+} from '../model/source-resource-owner';
 import { Inspector, PanelButtons } from '../features/Panels';
 const FileViewer = lazy(() =>
   import('../features/FileViewer').then((module) => ({
@@ -136,6 +140,7 @@ export function App() {
   const [panel, setPanel] = useState<PanelId>('files');
   const [selection, setSelection] = useState('');
   const [file, setFile] = useState<string | null>(null);
+  const [fileOwner, setFileOwner] = useState<SourceResourceOwner>();
   const sourceOpener = useRef(
     new SourceOpenCoordinator(() => runtime.getSnapshot().activeSessionId),
   );
@@ -146,6 +151,7 @@ export function App() {
   const selectAgent = (id: string | null) => {
     sourceOpener.current.cancel();
     setFile(null);
+    setFileOwner(undefined);
     setAgent(id);
   };
   const [dialog, setDialog] = useState<DialogId | null>(null);
@@ -184,6 +190,7 @@ export function App() {
           return;
         sourceOpener.current.cancel();
         setFile(null);
+        setFileOwner(undefined);
         setAgent(null);
         navigate(`/session/${id}`);
       });
@@ -193,6 +200,7 @@ export function App() {
   const onSession = () => {
     sourceOpener.current.cancel();
     setFile(null);
+    setFileOwner(undefined);
     setAgent(null);
     navigate(`/session/${runtime.getSnapshot().activeSessionId}`);
   };
@@ -231,23 +239,13 @@ export function App() {
     };
     return host.onBrowserEvent(show);
   }, [session.id, onPage, narrow]);
-  const onFile = async (path: string, line?: number, column?: number) => {
+  const openSource = async (
+    path: string,
+    line?: number,
+    column?: number,
+    sourceOwner?: SourceResourceOwner,
+  ) => {
     const sourceSessionId = session.id;
-    const originAgent = snapshot.agents.find(
-      (item) => item.id === agent && item.sessionId === sourceSessionId,
-    );
-    if (originAgent) {
-      const sourceWorkspace =
-        'workspaceId' in originAgent ? originAgent.workspaceId : undefined;
-      if (typeof sourceWorkspace !== 'string') {
-        notify(t('source workspace is not available'));
-        return;
-      }
-      if (sourceWorkspace !== session.workspaceId) {
-        notify(t('source is outside the workspace'));
-        return;
-      }
-    }
     const result = await sourceOpener.current.open(
       sourceSessionId,
       async () => {
@@ -260,13 +258,20 @@ export function App() {
           runtime.mode === 'live'
             ? (
                 await workspaceCall<{ path: string }>(
-                  sourceSessionId,
+                  sourceOwner?.sessionId ?? sourceSessionId,
                   'documents',
                   'resolveSource',
                   { path: requested },
                 )
               ).path
-            : workspaceRelativePath(requested, workspace.path);
+            : workspaceRelativePath(
+                requested,
+                snapshot.workspaces.find(
+                  (item) =>
+                    item.id ===
+                    (sourceOwner?.workspaceId ?? session.workspaceId),
+                )?.path ?? '',
+              );
         if (runtime.mode !== 'live') await readNativeFile(runtime, relative);
         return {
           path: relative.replaceAll('\\', '/'),
@@ -290,11 +295,26 @@ export function App() {
       );
       return;
     }
+    setFileOwner(sourceOwner ?? undefined);
     setFile(result.source.path);
     setSourceLine(result.source.line);
     setSourceColumn(result.source.column);
     if (narrow) setInspectorOpen(false);
     navigate(`/session/${sourceSessionId}`);
+  };
+
+  const onFile = (path: string, line?: number, column?: number) =>
+    openSource(path, line, column);
+  const onAgentFile = (path: string, line?: number, column?: number) => {
+    const origin = snapshot.agents.find(
+      (item) => item.id === agent && item.sessionId === session.id,
+    );
+    const owner = origin && agentSourceOwner(origin);
+    if (!owner) {
+      notify(t('source workspace is not available'));
+      return;
+    }
+    return openSource(path, line, column, owner);
   };
   const onSessionRoute = () =>
     navigate(`/session/${runtime.getSnapshot().activeSessionId}`);
@@ -333,6 +353,7 @@ export function App() {
   useEffect(() => {
     sourceOpener.current.cancel();
     setFile(null);
+    setFileOwner(undefined);
     setAgent(null);
     const id = location.pathname.startsWith('/session/')
       ? location.pathname.slice(9)
@@ -637,41 +658,44 @@ export function App() {
     <div className="session-resource-stack">
       <div className="session-resource-view" hidden={!!file}>
         {activeAgent ? (
-          <section className="agent-record">
-            <header>
-              <Button onClick={() => selectAgent(null)}>
-                <ChevronLeft size={13} />
-                {t('main')}
-              </Button>
-              <strong>{activeAgent.name}</strong>
-              <Status value={activeAgent.status} />
-            </header>
-            <div className="agent-record-body">
-              <h2>{activeAgent.description}</h2>
-              <Facts
-                values={{
-                  [t('model')]: activeAgent.model,
-                  [t('tokens')]: activeAgent.tokens,
-                  [t('record')]: activeAgent.id,
-                }}
-              />
-              {activeAgent.messages.map((message) =>
-                message.tool ? (
-                  <ToolMessage
-                    key={message.id}
-                    tool={message.tool}
-                    expanded
-                    onAgent={selectAgent}
-                    onFile={onFile}
-                  />
-                ) : (
-                  <div className="message" key={message.id}>
-                    <Markdown text={message.text} />
-                  </div>
-                ),
-              )}
-            </div>
-          </section>
+          <SourceNavigation onFile={onAgentFile}>
+            <section className="agent-record">
+              <header>
+                <Button onClick={() => selectAgent(null)}>
+                  <ChevronLeft size={13} />
+                  {t('main')}
+                </Button>
+                <strong>{activeAgent.name}</strong>
+                <Status value={activeAgent.status} />
+              </header>
+              <div className="agent-record-body">
+                <h2>{activeAgent.description}</h2>
+                <Facts
+                  values={{
+                    [t('model')]: activeAgent.model,
+                    [t('tokens')]: activeAgent.tokens,
+                    [t('record')]: activeAgent.id,
+                  }}
+                />
+                {activeAgent.messages.map((message) =>
+                  message.tool ? (
+                    <ToolMessage
+                      key={message.id}
+                      tool={message.tool}
+                      ownerSessionId={activeAgent.id}
+                      expanded
+                      onAgent={selectAgent}
+                      onFile={onAgentFile}
+                    />
+                  ) : (
+                    <div className="message" key={message.id}>
+                      <Markdown text={message.text} />
+                    </div>
+                  ),
+                )}
+              </div>
+            </section>
+          </SourceNavigation>
         ) : (
           <NativeResourceBoundary
             name={t('conversation')}
@@ -701,10 +725,14 @@ export function App() {
                 path={file}
                 line={sourceLine}
                 column={sourceColumn}
-                onNavigate={onFile}
+                resourceOwner={fileOwner}
+                onNavigate={(path, line, column) =>
+                  openSource(path, line, column, fileOwner)
+                }
                 onClose={() => {
                   sourceOpener.current.cancel();
                   setFile(null);
+                  setFileOwner(undefined);
                 }}
               />
             </Suspense>
