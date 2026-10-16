@@ -4,6 +4,10 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Added
+
+- **`circle uninstall` removes an installed Circle.** It takes out the launcher, every version under the prefix, the receipt and the PATH change the installer made; the data folder stays unless `--purge` deletes it too. On a terminal it lists what goes and asks — `--yes` skips the question and is required without one. See [Uninstalling](docs/cli.md#uninstalling).
+
 ## 1.7.0 - 2026-10-15
 
 ### Changed
