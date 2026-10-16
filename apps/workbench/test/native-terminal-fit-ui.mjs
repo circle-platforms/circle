@@ -141,15 +141,39 @@ try {
             theme,
         );
         const panel = await openNativeTerminalInspector(page);
+        const prior = new Set(
+          (await manager.list('session1')).map((item) => item.id),
+        );
         await panel
+          .locator('.native-terminal-toolbar')
           .getByRole('button', { name: 'new terminal', exact: true })
-          .first()
           .click();
-        await page
-          .locator('.xterm-helper-textarea')
-          .waitFor({ state: 'attached' });
-        const id = (await manager.list('session1')).at(-1).id;
-        const input = page.locator(`#terminal-${id} .xterm-helper-textarea`);
+        await page.waitForFunction(
+          (prior) =>
+            [
+              ...document.querySelectorAll(
+                '#inspector-terminal-terminal .native-terminal-tabs [role="tab"][aria-selected="true"]',
+              ),
+            ].some(
+              (tab) =>
+                !prior.includes(
+                  tab.getAttribute('aria-controls')?.slice('terminal-'.length),
+                ),
+            ),
+          [...prior],
+          { timeout: 5000 },
+        );
+        const created = (await manager.list('session1')).filter(
+          (item) => !prior.has(item.id),
+        );
+        assert.equal(
+          created.length,
+          1,
+          'the original toolbar creates exactly one new owned PTY',
+        );
+        const id = created[0].id;
+        const input = panel.locator(`#terminal-${id} .xterm-helper-textarea`);
+        await input.waitFor({ state: 'attached' });
         const original = await input.elementHandle();
         const samples = [];
         // Observe real rendered frames, rather than fitting a terminal into a fixed-height component fixture.
