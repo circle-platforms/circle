@@ -223,7 +223,7 @@ export function App() {
       const opened = event.state.sessions.length > terminalCount.current;
       terminalCount.current = event.state.sessions.length;
       if (opened && !onPage && !narrow) {
-        setPanel('terminal');
+        setPanel('devices');
         setInspectorOpen(true);
       }
     };

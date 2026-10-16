@@ -2,11 +2,11 @@
 // the model opened, painted here by xterm.js from the raw device bytes. The person attaches
 // to type on a device themselves — the model's actions wait while they hold it — and gives
 // it back. A first host key is answered here, in the panel, as a certificate is.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Terminal, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { RefreshCw, Unplug, Hand, KeyRound } from 'lucide-react';
+import { RefreshCw, Unplug, Hand, KeyRound, Plus, X } from 'lucide-react';
 import { hexToRgb, palette, terminalAnsiHex } from '../../../../src/ink/theme';
 import type { TerminalSessionRow } from '../../../desktop/src/contracts';
 import { desktopHost } from '../host';
@@ -51,6 +51,14 @@ export function TerminalDevice({ sessionId, selection }: PluginPanelProps) {
     (row) => row.state === 'connecting' || row.state === 'ready' || row.held,
   );
   const [chosen, setChosen] = useState('');
+  // A quick connect, SecureCRT-style: reach a device by address with no profile.
+  const [form, setForm] = useState<{
+    transport: 'ssh' | 'telnet';
+    host: string;
+    port: string;
+    user: string;
+  } | null>(null);
+  const [problem, setProblem] = useState('');
   const active =
     live.find((row) => row.id === (selection || chosen)) ?? live[0];
   const activeId = active?.id ?? '';
@@ -166,28 +174,206 @@ export function TerminalDevice({ sessionId, selection }: PluginPanelProps) {
     );
   const asking = state?.pendingKey;
   const handoff = state?.handoff;
+  const refresh = () => {
+    const term = termRef.current;
+    if (!term || !host || !activeId) return;
+    term.reset();
+    void host
+      .terminalSnapshot(sessionId, activeId)
+      .then((raw) => raw && term.write(bytes(raw)))
+      .catch(() => {});
+  };
+  const disconnect = (row: TerminalSessionRow) =>
+    void host.terminalDisconnect(sessionId, row.id).catch(() => {});
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!form || !host) return;
+    const port = form.port.trim() ? Number(form.port.trim()) : undefined;
+    setProblem('');
+    void host
+      .terminalConnectTarget(sessionId, {
+        transport: form.transport,
+        host: form.host.trim(),
+        ...(port ? { port } : {}),
+        ...(form.user.trim() ? { user: form.user.trim() } : {}),
+      })
+      .then((next) => {
+        const last = next.sessions.at(-1);
+        if (last) setChosen(last.id);
+        setForm(null);
+      })
+      .catch((error) =>
+        setProblem(error instanceof Error ? error.message : String(error)),
+      );
+  };
   return (
     <section className="device-terminal">
-      <div className="terminal-sessions">
-        {live.map((row) => (
-          <button
-            key={row.id}
-            className={`terminal-chip ${row.id === activeId ? 'active' : ''}`}
-            onClick={() => setChosen(row.id)}
-          >
-            <i className={`lamp lamp-${row.held ? 'wait' : row.state}`} />
-            <strong>
-              {row.id} {row.name}
-            </strong>
-            <small>
-              {row.transport} {row.target} · {stateWord(row)}
-            </small>
-          </button>
-        ))}
-        {!live.length && (
-          <p className="panel-note">{t('no device terminals yet')}</p>
+      <div className="terminal-toolbar">
+        <Button
+          className={form ? 'primary' : ''}
+          onClick={() => {
+            setProblem('');
+            setForm(
+              form
+                ? null
+                : { transport: 'telnet', host: '', port: '', user: '' },
+            );
+          }}
+        >
+          <Plus size={13} /> {t('new connection')}
+        </Button>
+        {active && (
+          <>
+            <span className="terminal-status muted small">
+              {stateWord(active)} · {active.cols}×{active.rows}
+            </span>
+            <span className="terminal-toolbar-actions">
+              <IconButton label={t('refresh the screen')} onClick={refresh}>
+                <RefreshCw size={13} />
+              </IconButton>
+              {active.held ? (
+                <Button
+                  onClick={() =>
+                    void host
+                      .terminalDetach(sessionId, active.id)
+                      .catch(() => {})
+                  }
+                >
+                  <Hand size={13} /> {t('give back')}
+                </Button>
+              ) : (
+                <Button
+                  disabled={active.state !== 'ready'}
+                  onClick={() =>
+                    void host
+                      .terminalAttach(sessionId, active.id)
+                      .catch(() => {})
+                  }
+                >
+                  <Hand size={13} /> {t('take the terminal')}
+                </Button>
+              )}
+              <Button
+                disabled={active.state === 'closed'}
+                onClick={() => disconnect(active)}
+              >
+                <Unplug size={13} /> {t('disconnect')}
+              </Button>
+            </span>
+          </>
         )}
       </div>
+      {form && (
+        <form className="terminal-connect" onSubmit={submit}>
+          <label>
+            {t('transport')}
+            <select
+              value={form.transport}
+              onChange={(event) =>
+                setForm({
+                  ...form,
+                  transport: event.target.value as 'ssh' | 'telnet',
+                })
+              }
+            >
+              <option value="telnet">telnet</option>
+              <option value="ssh">ssh</option>
+            </select>
+          </label>
+          <label>
+            {t('host')}
+            <input
+              required
+              autoFocus
+              spellCheck={false}
+              placeholder="172.16.6.85"
+              value={form.host}
+              onChange={(event) =>
+                setForm({ ...form, host: event.target.value })
+              }
+            />
+          </label>
+          <label>
+            {t('port')}
+            <input
+              inputMode="numeric"
+              spellCheck={false}
+              placeholder={form.transport === 'ssh' ? '22' : '23'}
+              value={form.port}
+              onChange={(event) =>
+                setForm({
+                  ...form,
+                  port: event.target.value.replace(/[^0-9]/g, ''),
+                })
+              }
+            />
+          </label>
+          <label>
+            {t('user')}
+            <input
+              spellCheck={false}
+              value={form.user}
+              onChange={(event) =>
+                setForm({ ...form, user: event.target.value })
+              }
+            />
+          </label>
+          <p className="panel-note">
+            {t(
+              'ssh signs in from a saved profile; a telnet console answers its own login',
+            )}
+          </p>
+          {problem && (
+            <p className="field-problem" role="status">
+              {problem}
+            </p>
+          )}
+          <div className="dialog-actions">
+            <Button type="button" onClick={() => setForm(null)}>
+              {t('cancel')}
+            </Button>
+            <Button type="submit" className="primary">
+              {t('connect')}
+            </Button>
+          </div>
+        </form>
+      )}
+      {live.length > 0 && (
+        <div
+          className="terminal-tabs"
+          role="tablist"
+          aria-label={t('device terminals')}
+        >
+          {live.map((row) => (
+            <div
+              key={row.id}
+              role="tab"
+              tabIndex={0}
+              aria-selected={row.id === activeId}
+              className={`terminal-tab ${row.id === activeId ? 'active' : ''}`}
+              onClick={() => setChosen(row.id)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') setChosen(row.id);
+              }}
+            >
+              <i className={`lamp lamp-${row.held ? 'wait' : row.state}`} />
+              <span className="terminal-tab-name">
+                {row.id} {row.name}
+              </span>
+              <button
+                className="terminal-tab-close"
+                aria-label={t('disconnect {name}', { name: row.name })}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  disconnect(row);
+                }}
+              >
+                <X size={11} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {asking && (
         <div className="terminal-ask" role="alert">
           <KeyRound size={14} />
@@ -241,61 +427,10 @@ export function TerminalDevice({ sessionId, selection }: PluginPanelProps) {
         </div>
       )}
       <div className="terminal-screen" ref={screenRef} />
-      {active && (
-        <footer className="terminal-actions">
-          <span className="muted small">
-            {stateWord(active)} · {active.cols}×{active.rows}
-          </span>
-          <div>
-            <IconButton
-              label={t('refresh the screen')}
-              onClick={() => {
-                const term = termRef.current;
-                if (!term || !host) return;
-                term.reset();
-                void host
-                  .terminalSnapshot(sessionId, active.id)
-                  .then((raw) => raw && term.write(bytes(raw)))
-                  .catch(() => {});
-              }}
-            >
-              <RefreshCw size={13} />
-            </IconButton>
-            {active.held ? (
-              <Button
-                onClick={() =>
-                  void host.terminalDetach(sessionId, active.id).catch(() => {})
-                }
-              >
-                <Hand size={13} /> {t('give back')}
-              </Button>
-            ) : (
-              <Button
-                disabled={active.state !== 'ready'}
-                onClick={() =>
-                  void host.terminalAttach(sessionId, active.id).catch(() => {})
-                }
-              >
-                <Hand size={13} /> {t('take the terminal')}
-              </Button>
-            )}
-            <Button
-              disabled={active.state === 'closed'}
-              onClick={() =>
-                void host
-                  .terminalDisconnect(sessionId, active.id)
-                  .catch(() => {})
-              }
-            >
-              <Unplug size={13} /> {t('disconnect')}
-            </Button>
-          </div>
-        </footer>
-      )}
-      {!!state?.profiles.length && (
-        <div className="terminal-profiles">
-          <h3>{t('saved profiles')}</h3>
-          {state.profiles.map((profile) => (
+      <div className="terminal-profiles">
+        <h3>{t('saved profiles')}</h3>
+        {state?.profiles.length ? (
+          state.profiles.map((profile) => (
             <button
               key={profile.name}
               className="terminal-profile"
@@ -312,9 +447,15 @@ export function TerminalDevice({ sessionId, selection }: PluginPanelProps) {
                 {profile.user ? ` · ${profile.user}` : ''}
               </small>
             </button>
-          ))}
-        </div>
-      )}
+          ))
+        ) : (
+          <p className="panel-note">
+            {t(
+              'no saved profiles yet; a new connection reaches a device by address',
+            )}
+          </p>
+        )}
+      </div>
     </section>
   );
 }

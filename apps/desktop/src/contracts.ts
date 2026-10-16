@@ -140,6 +140,11 @@ export interface DesktopBridge {
     sessionId: string,
     profile: string,
   ) => Promise<TerminalState>;
+  /** The person connects a device by address, with no saved profile. */
+  terminalConnectTarget: (
+    sessionId: string,
+    target: TerminalTargetRow,
+  ) => Promise<TerminalState>;
   /** The person answers a device's unknown host key for that panel connect. */
   terminalHostKey: (
     sessionId: string,
@@ -313,6 +318,14 @@ export interface TerminalSessionRow {
   quiet: number;
   cols: number;
   rows: number;
+}
+/** A device reached by address from the panel: a telnet console answers its own
+ * login; ssh signs in only where a saved profile says how. */
+export interface TerminalTargetRow {
+  transport: 'ssh' | 'telnet';
+  host: string;
+  port?: number;
+  user?: string;
 }
 export interface TerminalProfileRow {
   name: string;

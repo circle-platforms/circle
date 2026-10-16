@@ -139,7 +139,12 @@ try {
     { id: session, profile: 'rack' },
   );
   assert.equal(state.sessions[0].state, 'ready');
-  // The panel opens from the top bar and paints the device screen
+  // A console that appears opens its own panel; the top-bar button toggles it.
+  await page.locator('.device-terminal').waitFor({ timeout: 15000 });
+  await page
+    .getByRole('button', { name: 'device terminals panel', exact: true })
+    .click();
+  await page.locator('.device-terminal').waitFor({ state: 'hidden' });
   await page
     .getByRole('button', { name: 'device terminals panel', exact: true })
     .click();
@@ -169,6 +174,42 @@ try {
     { id: session, one: 't1' },
   );
   assert.equal(free.sessions[0].held, '');
+  // A person reaches a device by address, with no saved profile: quick connect.
+  const panel = page.locator('.device-terminal');
+  await panel
+    .getByRole('button', { name: 'new connection', exact: true })
+    .click();
+  await panel
+    .getByRole('textbox', { name: 'host', exact: true })
+    .fill('127.0.0.1');
+  await panel
+    .getByRole('textbox', { name: 'port', exact: true })
+    .fill(String(devicePort));
+  await panel.getByRole('button', { name: 'connect', exact: true }).click();
+  // The console the person connected gets its own tab, named by the device.
+  const quick = panel
+    .locator('.terminal-tab')
+    .filter({ hasText: `127.0.0.1:${devicePort}` });
+  await quick.waitFor();
+  // The tabs are the consoles: closing one disconnects only that device.
+  await quick.getByRole('button').click();
+  await quick.waitFor({ state: 'hidden' });
+  const left = await page.evaluate(
+    (id) => window.circleDesktop.terminalState(id),
+    session,
+  );
+  assert.equal(
+    left.sessions.filter((row) => row.state === 'ready').length,
+    1,
+    'closing a tab disconnects only that console',
+  );
+  // A console is worth the whole workspace, as the browser page is.
+  await page.getByRole('button', { name: 'full view', exact: true }).click();
+  await page.locator('.workspace-content.whole').waitFor();
+  await page
+    .getByRole('button', { name: 'exit full view', exact: true })
+    .click();
+  await page.locator('.workspace-content.whole').waitFor({ state: 'hidden' });
   // A disconnect closes the console; its last screen stays readable
   await page.evaluate(
     ({ id, one }) => window.circleDesktop.terminalDisconnect(id, one),

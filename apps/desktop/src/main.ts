@@ -790,6 +790,10 @@ app
       if (!terminals) throw Error('window not ready');
       return terminals.connect(id, profile);
     });
+    handle('circle:terminal-connect-target', (id, target) => {
+      if (!terminals) throw Error('window not ready');
+      return terminals.connectTarget(id, target);
+    });
     handle('circle:terminal-host-key', (id, decision) => {
       if (!terminals) throw Error('window not ready');
       if (!['once', 'always', 'reject'].includes(String(decision)))

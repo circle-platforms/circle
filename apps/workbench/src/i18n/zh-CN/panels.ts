@@ -172,6 +172,14 @@ export const panels: Record<string, string> = {
   'go forward': '前进',
   'certificate error': '证书错误',
   // device terminals
+  'new connection': '新建连接',
+  port: '端口',
+  user: '用户',
+  'ssh signs in from a saved profile; a telnet console answers its own login':
+    'ssh 通过已保存的配置文件登录；telnet 控制台会自己询问登录。',
+  'no saved profiles yet; a new connection reaches a device by address':
+    '还没有保存的配置文件；用“新建连接”按地址连接设备。',
+  'disconnect {name}': '断开 {name}',
   'no device terminals yet': '尚无设备终端',
   'the desktop application shows Circle device terminals here':
     '桌面应用会在这里显示 Circle 的设备终端。',

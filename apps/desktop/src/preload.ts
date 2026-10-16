@@ -92,6 +92,8 @@ const bridge: DesktopBridge = {
     ipcRenderer.invoke('circle:terminal-snapshot', id, session),
   terminalConnect: (id, profile) =>
     ipcRenderer.invoke('circle:terminal-connect', id, profile),
+  terminalConnectTarget: (id, target) =>
+    ipcRenderer.invoke('circle:terminal-connect-target', id, target),
   terminalHostKey: (id, decision) =>
     ipcRenderer.invoke('circle:terminal-host-key', id, decision),
   terminalDisconnect: (id, session) =>

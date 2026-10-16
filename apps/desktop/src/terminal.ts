@@ -48,6 +48,41 @@ const validSession = (value: unknown): string => {
     throw Error('invalid terminal');
   return value;
 };
+// A quick connect names a device, not a profile: the same shape the tools take,
+// checked here because the bridge is not trusted input.
+interface TerminalTargetArgs extends Record<string, unknown> {
+  transport: 'ssh' | 'telnet';
+  host: string;
+  port?: number;
+  user?: string;
+}
+const validTarget = (value: unknown): TerminalTargetArgs => {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw Error('invalid terminal target');
+  const row = value as Record<string, unknown>;
+  if (row.transport !== 'ssh' && row.transport !== 'telnet')
+    throw Error('invalid terminal transport');
+  const host = String(row.host ?? '').trim();
+  if (!/^[a-zA-Z0-9._:-]{1,253}$/.test(host))
+    throw Error('invalid terminal host');
+  const port =
+    row.port === undefined || row.port === '' ? undefined : Number(row.port);
+  if (
+    port !== undefined &&
+    (!Number.isInteger(port) || port < 1 || port > 65535)
+  )
+    throw Error('invalid terminal port');
+  const user =
+    row.user === undefined || row.user === ''
+      ? undefined
+      : String(row.user).slice(0, 100);
+  return {
+    transport: row.transport as 'ssh' | 'telnet',
+    host,
+    ...(port !== undefined ? { port } : {}),
+    ...(user ? { user } : {}),
+  };
+};
 const validText = (value: unknown): string => {
   if (typeof value !== 'string' || value.length > 65536)
     throw Error('invalid terminal input');
@@ -59,7 +94,7 @@ export class TerminalPanelHost {
   // A human connect stopped by an unknown host key: the panel asks, in place
   private pendingKey = new Map<
     string,
-    TerminalHostKeyAsk & { profile: string }
+    TerminalHostKeyAsk & { profile: string; args: Record<string, unknown> }
   >();
   private handoffs = new Map<
     string,
@@ -168,6 +203,7 @@ export class TerminalPanelHost {
       this.pendingKey.set(own, {
         token: approval.token,
         profile: name,
+        args: { profile: name },
         host: approval.host,
         keyType: approval.keyType,
         fingerprint: approval.fingerprint,
@@ -175,6 +211,36 @@ export class TerminalPanelHost {
       });
       this.pushState(own);
       // The answer comes through hostKey(); until then this connect simply stopped
+      return this.state(own);
+    }
+    this.pushState(own);
+    return this.state(own);
+  }
+  /** A person reaches a device by address, as a quick connect does: no profile. */
+  async connectTarget(
+    conversation: unknown,
+    target: unknown,
+  ): Promise<TerminalState> {
+    const own = validConversation(conversation);
+    const args = validTarget(target);
+    const stop = new AbortController();
+    const result = await this.manager.request(
+      own,
+      'connect',
+      args,
+      stop.signal,
+    );
+    if (result.approval) {
+      this.pendingKey.set(own, {
+        token: result.approval.token,
+        profile: result.host ?? args.host,
+        host: result.approval.host,
+        keyType: result.approval.keyType,
+        fingerprint: result.approval.fingerprint,
+        privateHost: result.approval.privateHost,
+        args,
+      });
+      this.pushState(own);
       return this.state(own);
     }
     this.pushState(own);
@@ -197,7 +263,7 @@ export class TerminalPanelHost {
       own,
       'connect',
       {
-        profile: ask.profile,
+        ...ask.args,
         approval: { token: ask.token, scope: decision },
       },
       stop.signal,

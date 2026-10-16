@@ -127,6 +127,7 @@ export const circlePlugins: WorkbenchPlugin[] = [
         },
         icon: SquareTerminal,
         component: TerminalDevice,
+        fullView: true,
       },
     ],
   },
