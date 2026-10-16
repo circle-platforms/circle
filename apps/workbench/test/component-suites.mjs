@@ -26,6 +26,8 @@ export const COMPONENT_SUITES = Object.freeze([
   'response-readability-ui.mjs',
   'inspector-width-ui.mjs',
   'agent-source-return-ui.mjs',
+  'agent-source-owner-ui.mjs',
+  'native-terminal-context-ui.mjs',
 ]);
 
 /** Explicit suites run serially; a failed suite prevents later execution. */
