@@ -3444,10 +3444,16 @@ test(
   { skip },
   async (t) => {
     const temp = made(t, 'circle-snapshot-layers-');
-    const site = createHttp((_req, res) => {
+    const site = createHttp((req, res) => {
       res.setHeader('Content-Type', 'text/html');
+      // The page's own scroll bar takes room from the viewport on every system, as the
+      // system's does where it is always shown; the last page has no doctype
+      const bar =
+        req.url === '/'
+          ? ''
+          : '<style>::-webkit-scrollbar{width:30px;height:30px}</style>';
       res.end(
-        `<!doctype html><title>long</title><main>${'<p>a long row of the list <button>Edit</button></p>'.repeat(1500)}</main><div style="position:fixed;inset:0;background:rgba(0,0,0,.3)"></div><aside role="dialog" aria-label="Health check" style="position:fixed;right:0;top:0;bottom:0;width:300px;background:#fff"><label>Request <select aria-label="Request"><option>GET /</option></select></label><button>Save drawer</button></aside>`,
+        `${req.url === '/quirks' ? '' : '<!doctype html>'}<title>long</title>${bar}<main>${'<p>a long row of the list <button>Edit</button></p>'.repeat(1500)}</main><div style="position:fixed;inset:0;background:rgba(0,0,0,.3)"></div><aside role="dialog" aria-label="Health check" style="position:fixed;right:0;top:0;bottom:0;width:300px;background:#fff"><label>Request <select aria-label="Request"><option>GET /</option></select></label><button>Save drawer</button></aside>`,
       );
     });
     const url = `http://127.0.0.1:${await listen(site)}/`;
@@ -3459,17 +3465,25 @@ test(
     });
     cleanup(t, () => chrome.close());
     const signal = new AbortController().signal;
-    const shown = await chrome.request('c', 'navigate', { url }, signal);
-    assert.match(shown.text, /… snapshot truncated$/);
-    assert.match(
-      shown.text,
-      /… the rest of the page is left out; what lies on top of it follows/,
-    );
-    assert.match(shown.text, /\] button "Save drawer"$/m);
-    assert.match(shown.text, /\] combobox "Request" value="GET \/"/);
-    // The list under the drawer's mask is marked, also where it is out of view
-    assert.match(shown.text, /\] button "Edit" \[covered\]$/m);
-    assert.doesNotMatch(shown.text, /\] button "Edit"$/m);
+    for (const page of ['', 'scroll-bar', 'quirks']) {
+      const shown = await chrome.request(
+        'c',
+        'navigate',
+        { url: url + page },
+        signal,
+      );
+      assert.match(shown.text, /… snapshot truncated$/, page);
+      assert.match(
+        shown.text,
+        /… the rest of the page is left out; what lies on top of it follows/,
+        page,
+      );
+      assert.match(shown.text, /\] button "Save drawer"$/m, page);
+      assert.match(shown.text, /\] combobox "Request" value="GET \/"/, page);
+      // The list under the drawer's mask is marked, also where it is out of view
+      assert.match(shown.text, /\] button "Edit" \[covered\]$/m, page);
+      assert.doesNotMatch(shown.text, /\] button "Edit"$/m, page);
+    }
   },
 );
 

@@ -670,8 +670,14 @@ export function browserPage(command: string, args: Record<string, any>) {
     } catch {
       /* a browser without :modal */
     }
-    const width = innerWidth,
-      height = innerHeight;
+    // The layout viewport that a fixed element fills: innerWidth and innerHeight also count
+    // the scroll bars that take room where the system always shows them
+    const root =
+      document.compatMode === 'BackCompat'
+        ? document.body
+        : document.documentElement;
+    const width = root?.clientWidth || innerWidth,
+      height = root?.clientHeight || innerHeight;
     for (const [fx, fy] of [
       [0.5, 0.5],
       [0.1, 0.1],
