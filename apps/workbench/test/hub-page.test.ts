@@ -11,6 +11,8 @@ import {
   HubPage,
   hubRecentItems,
   hubSignInError,
+  inboxIds,
+  inboxNeedsLoad,
 } from '../src/plugins/hub.tsx';
 import { shellPageTitle } from '../src/plugins/labels.ts';
 
@@ -214,6 +216,25 @@ test('the hub page says an approval in ordinary words and drops a stale sign-out
     assert.deepEqual(hubRecentItems(['已退出'], false), [
       { kind: 'note', text: '已退出' },
     ]);
+    assert.deepEqual(
+      hubRecentItems(
+        ['task_8cbcb082abcd · 待审核 · Review asset change set'],
+        true,
+      ),
+      [{ kind: 'note', text: '待审核，Review asset change set' }],
+    );
+    assert.equal(
+      inboxNeedsLoad({ live: true, signedIn: true, loaded: false }),
+      true,
+    );
+    assert.equal(
+      inboxNeedsLoad({ live: true, signedIn: true, loaded: true }),
+      false,
+    );
+    assert.equal(
+      inboxNeedsLoad({ live: false, signedIn: true, loaded: false }),
+      false,
+    );
     const html = draw(
       hub({
         url: 'http://hub.example:9',
@@ -224,6 +245,7 @@ test('the hub page says an approval in ordinary words and drops a stale sign-out
         tasks: [],
         recent: [
           '已退出',
+          'task_8cbcb082abcd · 待审核 · Review asset change set',
           '  waiting for approval pin_9 in task_ask · someone else approves: /hub approve task_ask pin_9',
         ],
         inbox: [
@@ -245,11 +267,29 @@ test('the hub page says an approval in ordinary words and drops a stale sign-out
     assert.match(html, /class="hub-log"/);
     assert.match(html, /id="hub-inbox"/);
     assert.match(html, /审核资产变更集/);
-    assert.equal(html.includes('Review asset change set'), false);
+    assert.match(html, /待审核，Review asset change set/);
+    assert.match(html, /<p>变更集 · 待审核<\/p>/);
+    assert.match(html, /title="task_ask apr_9"/);
+    assert.match(html, /复制 ID/);
+    assert.match(html, /拒绝…/);
+    assert.equal(html.includes('拒绝理由'), false);
+    assert.equal(/<li>[^<]*task_8cbcb082abcd/.test(html), false);
+    assert.equal(/<p>[^<]*task_ask/.test(html), false);
+    assert.equal(html.includes('Review asset change set</h'), false);
     assert.equal(html.includes('已退出'), false);
     assert.equal(html.includes('/hub approve'), false);
     assert.equal(html.includes('pin_9'), false);
     assert.equal(html.includes('<pre'), false);
+    assert.equal(
+      inboxIds({
+        kind: 'change-set',
+        requestId: 'apr_9',
+        taskId: 'task_ask',
+        approvalId: 'apr_9',
+        title: 'Review asset change set',
+      }),
+      'task_ask apr_9',
+    );
     const onlyOut = draw(
       hub({
         url: 'http://hub.example:9',

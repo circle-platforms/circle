@@ -1736,6 +1736,10 @@ test('inbox, a content view and a rejection reason use the general approval rout
     inbox[1]!.title,
     'Review asset change set · mindmap skill-package',
   );
+  const logged = lines.length;
+  await command.handler('inbox --quiet', context);
+  assert.equal(lines.length, logged);
+  assert.equal((host.view('hub') as { inbox: unknown[] }).inbox.length, 2);
   assert.match(
     lines.at(-1)!,
     /governance aprq_1 · export the register[\s\S]*\/hub show aprq_1[\s\S]*\/hub approve aprq_1[\s\S]*change-set task_ask · apr_9 · Review asset change set · mindmap/,

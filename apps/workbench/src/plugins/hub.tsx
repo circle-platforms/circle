@@ -4,6 +4,7 @@ import { useRuntime } from '../app/context';
 import { Button, EmptyState, Facts, Page, Status } from '../components/common';
 import type { RuntimeExtension } from '../model/types';
 import type { PluginViewProps, WorkbenchPlugin } from './types';
+import { copyText } from '../host';
 import { locale, t } from '../i18n';
 
 interface HubProjection {
@@ -192,8 +193,20 @@ function proseLine(line: string): string {
     .replace(/^[●○]\s*/, '')
     .replace(/\s*·\s*/g, sep);
 }
+const RAW_ID =
+  /^(?:task|apr|aprq|pin|inrev|cst|gov|knr|skp|prn|req)_[A-Za-z0-9._-]+$/i;
+function noteText(line: string): string {
+  const sep = locale() === 'zh-CN' ? '，' : ', ';
+  return proseLine(line)
+    .replace(/^\d+\.\s*/, '')
+    .split(sep)
+    .map((part) => part.trim())
+    .filter((part) => part && !RAW_ID.test(part))
+    .join(sep);
+}
 /** Terminal lines as the hub page shows them. A sign-out is dropped once
- * signed in again. An approval command becomes one plain sentence. */
+ * signed in again. An approval command becomes one plain sentence. Task ids
+ * stay out of the sentence. */
 export function hubRecentItems(
   lines: readonly string[],
   signedIn: boolean,
@@ -208,7 +221,10 @@ export function hubRecentItems(
       approval = true;
       continue;
     }
-    items.push({ kind: 'note', text: proseLine(line) });
+    if (/^\/hub\b/.test(line)) continue;
+    const text = noteText(line);
+    if (!text) continue;
+    items.push({ kind: 'note', text });
   }
   if (approval)
     items.push({
@@ -216,6 +232,24 @@ export function hubRecentItems(
       text: '',
     });
   return items;
+}
+/** Load the inbox once the page is signed in and has not read it yet. */
+export function inboxNeedsLoad(input: {
+  live: boolean;
+  signedIn: boolean;
+  loaded: boolean;
+}): boolean {
+  return input.live && input.signedIn && !input.loaded;
+}
+/** Ids for a hover tip and the clipboard. They are not shown on the card. */
+export function inboxIds(item: HubInboxItem): string {
+  return [
+    ...new Set(
+      [item.taskId, item.requestId, item.approvalId]
+        .map((id) => id.trim())
+        .filter(Boolean),
+    ),
+  ].join(' ');
 }
 function rejectArgs(item: HubInboxItem, reason: string): string {
   if (item.kind === 'governance' || (!item.taskId && item.requestId))
@@ -229,9 +263,13 @@ export function HubPage({
 }: PluginViewProps & {
   storage?: Pick<Storage, 'getItem' | 'setItem'>;
 }) {
-  const { snapshot, runtime, perform } = useRuntime();
+  const { snapshot, runtime, perform, notify } = useRuntime();
   const view = hubView(snapshot.extensions);
-  const recentItems = view ? hubRecentItems(view.recent, view.signedIn) : [];
+  const logged = view ? hubRecentItems(view.recent, view.signedIn) : [];
+  const recentItems =
+    view?.inbox?.length && !logged.some((item) => item.kind === 'approval')
+      ? [...logged, { kind: 'approval' as const, text: '' }]
+      : logged;
   const box = storage ?? loginStorage();
   const [address, setAddress] = useState(() => offeredLogin(view, box).url);
   const [user, setUser] = useState(() => offeredLogin(view, box).username);
@@ -239,8 +277,11 @@ export function HubPage({
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [reasons, setReasons] = useState<Record<string, string>>({});
+  const [rejecting, setRejecting] = useState<string | undefined>();
+  const [flashing, setFlashing] = useState(false);
   const touched = useRef({ address: false, user: false });
   const asked = useRef<string | null>(null);
+  const inboxLoad = useRef<string | null>(null);
   // The open session may only have catalogued hub. Ask that session to load
   // it; the saved sign-in is in the home, and the page reads the view it publishes.
   useEffect(() => {
@@ -257,6 +298,41 @@ export function HubPage({
       asked.current = null;
     });
   }, [view, runtime, snapshot.activeSessionId, snapshot.extensions]);
+  useEffect(() => {
+    if (
+      !inboxNeedsLoad({
+        live: runtime.mode === 'live',
+        signedIn: Boolean(view?.signedIn),
+        loaded: Boolean(view?.inbox),
+      })
+    )
+      return;
+    const key = `${snapshot.activeSessionId}:${view?.url ?? ''}`;
+    if (inboxLoad.current === key) return;
+    inboxLoad.current = key;
+    void Promise.resolve(
+      runtime.request('extension-command', {
+        name: 'hub',
+        args: 'inbox --quiet',
+      }),
+    ).catch(() => {
+      inboxLoad.current = null;
+    });
+  }, [
+    view?.signedIn,
+    view?.inbox,
+    view?.url,
+    runtime,
+    snapshot.activeSessionId,
+  ]);
+  const revealInbox = () => {
+    const node = document.getElementById('hub-inbox');
+    node?.scrollIntoView({ block: 'nearest' });
+    const heading = node?.querySelector('h2');
+    if (heading instanceof HTMLElement) heading.focus();
+    setFlashing(false);
+    requestAnimationFrame(() => setFlashing(true));
+  };
   useEffect(() => {
     if (!view) return;
     const offered = offeredLogin(view, box);
@@ -388,27 +464,31 @@ export function HubPage({
       ) : null}
       {view?.signedIn ? (
         <>
-          <section className="extension-list" id="hub-inbox">
+          <section
+            className={
+              flashing ? 'extension-list hub-inbox-flash' : 'extension-list'
+            }
+            id="hub-inbox"
+            onAnimationEnd={() => setFlashing(false)}
+          >
             <div className="detail-title">
-              <h2>{t('inbox')}</h2>
-              <Button onClick={() => run('inbox')}>
-                {view.inbox ? t('refresh') : t('open inbox')}
+              <h2 tabIndex={-1}>{t('inbox')}</h2>
+              <Button onClick={() => run('inbox --quiet')}>
+                {t('refresh')}
               </Button>
             </div>
             {view.inbox?.length ? (
               view.inbox.map((item, index) => {
                 const id = item.requestId || item.taskId || String(index);
+                const ids = inboxIds(item);
                 return (
                   <article className="extension-card" key={id}>
                     <div className="detail-title">
                       <div>
-                        <h2>{inboxTitle(item) || id}</h2>
+                        <h2>{inboxTitle(item) || t('inbox')}</h2>
                         <p>
                           {hubKind(item.kind)}
                           {item.status ? ' · ' + hubStatus(item.status) : ''}
-                          {' · '}
-                          {item.taskId || item.requestId}
-                          {item.approvalId ? ' · ' + item.approvalId : ''}
                         </p>
                       </div>
                       <Button onClick={() => run(`show ${id}`)}>
@@ -417,32 +497,58 @@ export function HubPage({
                       <Button onClick={() => run(approveArgs(item))}>
                         {t('approve')}
                       </Button>
-                    </div>
-                    <form
-                      className="form-stack"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        const reason = reasons[id]?.trim() ?? '';
-                        if (!reason) {
-                          setError(t('a rejection needs a reason'));
-                          return;
+                      <Button
+                        onClick={() =>
+                          setRejecting(rejecting === id ? undefined : id)
                         }
-                        setError('');
-                        run(rejectArgs(item, reason));
-                      }}
-                    >
-                      <label>
-                        {t('rejection reason')}
-                        <input
-                          aria-label={t('rejection reason')}
-                          value={reasons[id] ?? ''}
-                          onChange={(event) =>
-                            setReasons({ ...reasons, [id]: event.target.value })
+                      >
+                        {t('reject…')}
+                      </Button>
+                      {ids ? (
+                        <Button
+                          title={ids}
+                          onClick={() =>
+                            copyText(ids).then(
+                              () => notify(t('copied')),
+                              () => setError(t('clipboard unavailable')),
+                            )
                           }
-                        />
-                      </label>
-                      <Button type="submit">{t('reject')}</Button>
-                    </form>
+                        >
+                          {t('copy id')}
+                        </Button>
+                      ) : null}
+                    </div>
+                    {rejecting === id ? (
+                      <form
+                        className="form-stack"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          const reason = reasons[id]?.trim() ?? '';
+                          if (!reason) {
+                            setError(t('a rejection needs a reason'));
+                            return;
+                          }
+                          setError('');
+                          run(rejectArgs(item, reason));
+                        }}
+                      >
+                        <label>
+                          {t('rejection reason')}
+                          <input
+                            aria-label={t('rejection reason')}
+                            autoFocus
+                            value={reasons[id] ?? ''}
+                            onChange={(event) =>
+                              setReasons({
+                                ...reasons,
+                                [id]: event.target.value,
+                              })
+                            }
+                          />
+                        </label>
+                        <Button type="submit">{t('reject')}</Button>
+                      </form>
+                    ) : null}
                   </article>
                 );
               })
@@ -532,14 +638,7 @@ export function HubPage({
               item.kind === 'approval' ? (
                 <li key={`approval-${index}`}>
                   <p>{t('Someone else still has to approve this.')}</p>
-                  <Button
-                    onClick={() => {
-                      document.getElementById('hub-inbox')?.scrollIntoView();
-                      run('inbox');
-                    }}
-                  >
-                    {t('open inbox')}
-                  </Button>
+                  <Button onClick={revealInbox}>{t('open inbox')}</Button>
                 </li>
               ) : (
                 <li key={`${index}-${item.text}`}>{item.text}</li>

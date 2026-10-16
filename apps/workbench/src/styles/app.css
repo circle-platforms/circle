@@ -581,6 +581,17 @@ pre {
 .hub-log li p {
   margin: 0 0 6px;
 }
+.hub-inbox-flash {
+  animation: hub-inbox-flash 1.1s ease;
+}
+@keyframes hub-inbox-flash {
+  0% {
+    background: var(--active);
+  }
+  100% {
+    background: transparent;
+  }
+}
 .resize-handle {
   width: 5px;
   flex-shrink: 0;

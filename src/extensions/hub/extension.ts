@@ -3789,6 +3789,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       if (config) writeJson('config.json', { ...config, expiresAt: undefined });
       if (refreshTimer) clearTimeout(refreshTimer);
       dropServerTools();
+      inboxPublished = undefined;
       api.background(showStatus());
       context.append(
         removed ? hubText('Signed out') : hubText('Not signed in'),
@@ -4073,8 +4074,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
     async reject(rest, context) {
       await decide(rest, false, context);
     },
-    async inbox(_rest, context) {
-      await listInbox(context);
+    async inbox(rest, context) {
+      await listInbox(context, rest.includes('--quiet'));
     },
     async show(rest, context) {
       await showApproval(rest, context);
@@ -4517,7 +4518,15 @@ export async function register(api: ExtensionAPI): Promise<void> {
     inboxPublished = inboxItems;
     api.background(showStatus());
   }
-  async function listInbox(context: CommandContext): Promise<void> {
+  async function listInbox(
+    context: CommandContext,
+    quiet = false,
+  ): Promise<void> {
+    // The desktop page reads the view. Printing the list would copy the
+    // terminal lines, including raw task ids, into the recent log.
+    const say = (line: string) => {
+      if (!quiet) context.append(line);
+    };
     let pending: Record<string, unknown>[] | undefined;
     try {
       const { data } = await request('GET', '/v1/approvals/pending');
@@ -4557,7 +4566,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       });
       if (!inboxItems.length) {
         noteInbox();
-        context.append(
+        say(
           hubText(
             'Nothing is waiting for you. /hub inbox lists what you can approve.',
           ),
@@ -4565,7 +4574,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         return;
       }
       noteInbox();
-      context.append(
+      say(
         inboxItems
           .map((item, index) => {
             const n = index + 1;
@@ -4606,7 +4615,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     inboxItems = [];
     if (!tasks.length) {
       noteInbox();
-      context.append(
+      say(
         hubText(
           'Nothing is waiting for your approval. /hub task <id> shows one task. Knowledge claims are reviewed one id at a time (GET /v1/knowledge/reviews/<id>); this server has no page that lists them.',
         ),
@@ -4634,7 +4643,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       });
     }
     noteInbox();
-    context.append(lines.join('\n'));
+    say(lines.join('\n'));
   }
   async function showApproval(
     words: string[],
