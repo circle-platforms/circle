@@ -62,7 +62,8 @@ type Run = (
   command: string,
   args: string[],
   timeout?: number,
-) => Pick<SpawnSyncReturns<string>, 'status' | 'stdout' | 'stderr' | 'error'>;
+) => Pick<SpawnSyncReturns<string>, 'status' | 'stdout' | 'stderr' | 'error'> &
+  Partial<Pick<SpawnSyncReturns<string>, 'pid' | 'signal'>>;
 
 const runCommand: Run = (command, args, timeout = 120_000) =>
   spawnSync(command, args, { encoding: 'utf8', timeout });
