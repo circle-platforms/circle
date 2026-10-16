@@ -237,9 +237,10 @@ const check = async (name, action) => {
   const start = Date.now();
   try {
     if (sessionId && page) {
-      const parent = page.locator(
-        `.sidebar .session-link[href="#/session/${sessionId}"]`,
-      );
+      // The sidebar lists a session under recent and under its project.
+      const parent = page
+        .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+        .first();
       if (await parent.isVisible()) await parent.click();
       const quick = page.getByRole('dialog', {
         name: 'quick open',
@@ -783,6 +784,7 @@ try {
     async () => {
       await page
         .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+        .first()
         .click();
       const beforeBranch = (await git('branch', '--show-current')).trim();
       const beforeReadme = await readFile(join(repo, 'README.md'), 'utf8');
@@ -1164,6 +1166,7 @@ try {
             .locator(
               `.sidebar .session-link[href="#/session/${record.runtimeSessionId}"]`,
             )
+            .first()
             .click();
           await page
             .getByRole('button', { name: 'allow once', exact: true })
@@ -1171,6 +1174,7 @@ try {
             .waitFor();
           await page
             .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+            .first()
             .click();
           assert(
             (await state()).interactions.some(
@@ -1191,6 +1195,7 @@ try {
             .locator(
               `.sidebar .session-link[href="#/session/${record.runtimeSessionId}"]`,
             )
+            .first()
             .click();
           await page
             .getByRole('button', { name: 'allow once', exact: true })
@@ -1198,6 +1203,7 @@ try {
             .click();
           await page
             .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+            .first()
             .click();
           await until(
             async () =>
@@ -1361,6 +1367,7 @@ try {
           .click();
         await page
           .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+          .first()
           .click();
         await screenshot(`08-${language === 'English' ? 'en' : 'zh'}-${theme}`);
       }
