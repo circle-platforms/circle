@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   writeFileSync,
 } from 'node:fs';
@@ -14,7 +15,10 @@ import { test } from 'node:test';
 import { UsageError } from '../src/cli.js';
 import { activateRelease } from '../src/install_layout.js';
 import type { Run } from '../src/legacy_install.js';
-import { uninstallInstalled } from '../src/uninstall.js';
+import {
+  uninstallInstalled,
+  windowsDeferredRemoval,
+} from '../src/uninstall.js';
 import { VERSION } from '../src/version.js';
 import { cleanup, scratch } from './helpers.js';
 import { fixture } from './release-fixture.js';
@@ -34,12 +38,20 @@ function installed(t: Parameters<typeof scratch>[0]) {
   writeFileSync(join(data, 'settings.json'), '{}');
   const real = realpathSync(prefix);
   const receiptPath = join(real, 'installation.json');
-  const binDir = JSON.parse(readFileSync(receiptPath, 'utf8')).binDir as string;
+  const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as {
+    binDir: string;
+    prefix: string;
+  };
+  const binDir = receipt.binDir;
   return {
     base,
     prefix: real,
     bin,
     binDir,
+    launcher: join(
+      binDir,
+      process.platform === 'win32' ? 'circle.cmd' : 'circle',
+    ),
     home,
     data,
     receiptPath,
@@ -49,23 +61,64 @@ function installed(t: Parameters<typeof scratch>[0]) {
       USERPROFILE: home,
       PATH: '',
       CIRCLE_HOME: data,
-      CIRCLE_INSTALL_PREFIX: real,
+      // What the launcher sets: the prefix as the receipt names it, which may pass through
+      // a link (macOS temporary folders do), not its real path.
+      CIRCLE_INSTALL_PREFIX: receipt.prefix,
     },
   };
+}
+// The detached helper that removes the running version on Windows, recorded instead of
+// started: no test leaves a real PowerShell behind.
+function deferral() {
+  const detached: [string, string[]][] = [];
+  return {
+    detached,
+    spawnDetached: (command: string, args: string[]) => {
+      detached.push([command, args]);
+    },
+  };
+}
+// Everything the installer wrote is gone; on Windows the running version's folder stays for
+// the detached helper, which is the only one scheduled.
+function assertRemoved(
+  inst: ReturnType<typeof installed>,
+  detached: [string, string[]][],
+) {
+  assert.equal(existsSync(join(inst.prefix, 'current.ref')), false);
+  assert.equal(existsSync(join(inst.prefix, 'installation.json')), false);
+  if (process.platform === 'win32') {
+    // cmd.exe still reads the launcher: it goes with the helper, after this process.
+    assert.equal(existsSync(inst.launcher), true);
+    assert.deepEqual(readdirSync(join(inst.prefix, 'versions')), [VERSION]);
+    assert.equal(detached.length, 1);
+    assert.ok(
+      detached[0]![1]
+        .at(-1)!
+        .includes(
+          `Remove-Item -LiteralPath '${inst.launcher.replaceAll("'", "''")}' -Force`,
+        ),
+    );
+  } else {
+    assert.equal(existsSync(inst.launcher), false);
+    assert.equal(existsSync(join(inst.prefix, 'versions')), false);
+    assert.equal(detached.length, 0);
+  }
 }
 // A hand-built Windows installation: `circle uninstall` does not check the release, so the
 // version folder only has to exist. The scratch name carries an apostrophe to pin the
 // PowerShell quoting.
 function windowsInstalled(t: Parameters<typeof scratch>[0]) {
-  const base = scratch(t, "circle-'win-");
+  // Its real path, as uninstall resolves the prefix: macOS temporary folders pass through a link.
+  const base = realpathSync(scratch(t, "circle-'win-"));
   const prefix = join(base, 'install');
-  const bin = join(base, 'bin');
+  // install.ps1's default launcher folder, inside the prefix.
+  const bin = join(prefix, 'bin');
   const home = join(base, 'home');
   const data = join(base, 'data');
   const versionRoot = join(prefix, 'versions', VERSION);
   mkdirSync(join(versionRoot, 'app'), { recursive: true });
   mkdirSync(join(prefix, 'versions', '0.9.0'), { recursive: true });
-  mkdirSync(bin);
+  mkdirSync(bin, { recursive: true });
   mkdirSync(home);
   mkdirSync(data);
   writeFileSync(join(data, 'settings.json'), '{}');
@@ -160,7 +213,7 @@ test('circle uninstall stops at an installation receipt it cannot trust', async 
     );
   }
   assert.equal(existsSync(inst.versionRoot), true);
-  assert.equal(existsSync(join(inst.bin, 'circle')), true);
+  assert.equal(existsSync(inst.launcher), true);
   writeFileSync(inst.receiptPath, good);
 });
 
@@ -200,7 +253,7 @@ test('circle uninstall needs --yes without a terminal', async (t) => {
       error instanceof UsageError && /needs --yes/.test(error.message),
   );
   assert.equal(existsSync(join(inst.prefix, 'installation.json')), true);
-  assert.equal(existsSync(join(inst.bin, 'circle')), true);
+  assert.equal(existsSync(inst.launcher), true);
 });
 
 test('a declined question on a terminal keeps the installation', async (t) => {
@@ -222,7 +275,7 @@ test('a declined question on a terminal keeps the installation', async (t) => {
     assert.ok(listed.includes(inst.data), 'the listing names the data folder');
     assert.match(prompted.questions[0]!, /uninstall circle \S\S+ \[y\/N\] $/);
     assert.equal(existsSync(join(inst.prefix, 'installation.json')), true);
-    assert.equal(existsSync(join(inst.bin, 'circle')), true);
+    assert.equal(existsSync(inst.launcher), true);
   }
 });
 
@@ -230,16 +283,19 @@ test('yes on a terminal removes the installation', async (t) => {
   const inst = installed(t);
   const shown = screen();
   const prompted = asker('yes');
+  const deferred = deferral();
   const code = await uninstallInstalled([], {
     root: inst.versionRoot,
     env: inst.env,
     out: shown.out,
     ask: prompted.ask,
     run: okRun,
+    spawnDetached: deferred.spawnDetached,
   });
   assert.equal(code, 0);
-  assert.equal(existsSync(inst.prefix), false);
-  assert.equal(existsSync(join(inst.bin, 'circle')), false);
+  assertRemoved(inst, deferred.detached);
+  if (process.platform !== 'win32')
+    assert.equal(existsSync(inst.prefix), false);
   assert.equal(readFileSync(join(inst.data, 'settings.json'), 'utf8'), '{}');
 });
 
@@ -248,17 +304,20 @@ test('circle uninstall --yes removes the launcher, every version and the receipt
   mkdirSync(join(inst.prefix, 'versions', '0.9.0'));
   const shown = screen();
   const prompted = asker('y');
+  const deferred = deferral();
   const code = await uninstallInstalled(['--yes'], {
     root: inst.versionRoot,
     env: inst.env,
     out: shown.out,
     ask: prompted.ask,
     run: okRun,
+    spawnDetached: deferred.spawnDetached,
   });
   assert.equal(code, 0);
   assert.equal(prompted.questions.length, 0);
-  assert.equal(existsSync(join(inst.bin, 'circle')), false);
-  assert.equal(existsSync(inst.prefix), false);
+  assertRemoved(inst, deferred.detached);
+  if (process.platform !== 'win32')
+    assert.equal(existsSync(inst.prefix), false);
   assert.equal(readFileSync(join(inst.data, 'settings.json'), 'utf8'), '{}');
   const text = shown.writes.join('');
   assert.match(text, new RegExp(`removed circle ${VERSION}`));
@@ -269,14 +328,16 @@ test('circle uninstall --yes removes the launcher, every version and the receipt
 test('circle uninstall --purge also deletes the data folder', async (t) => {
   const inst = installed(t);
   const shown = screen();
+  const deferred = deferral();
   const code = await uninstallInstalled(['--purge', '--yes'], {
     root: inst.versionRoot,
     env: inst.env,
     out: shown.out,
     run: okRun,
+    spawnDetached: deferred.spawnDetached,
   });
   assert.equal(code, 0);
-  assert.equal(existsSync(inst.prefix), false);
+  assertRemoved(inst, deferred.detached);
   assert.equal(existsSync(inst.data), false);
   assert.match(shown.writes.join(''), /removed the data folder/);
 });
@@ -312,6 +373,8 @@ test('circle uninstall removes the marked PATH block from the startup file', asy
     out: shown.out,
     ask: prompted.ask,
     run: okRun,
+    // Only the POSIX installer writes startup files; the edit is checked on every system.
+    platform: 'linux',
   });
   assert.equal(code, 0);
   assert.equal(readFileSync(join(inst.home, '.zshrc'), 'utf8'), userContent);
@@ -345,6 +408,7 @@ test('circle uninstall removes a PATH block whose folder contains quotes', async
     env: inst.env,
     out: screen().out,
     run: okRun,
+    platform: 'linux',
   });
   assert.equal(code, 0);
   assert.equal(readFileSync(join(inst.home, '.zshrc'), 'utf8'), 'x\n');
@@ -353,16 +417,16 @@ test('circle uninstall removes a PATH block whose folder contains quotes', async
 test('circle uninstall leaves other files in the prefix alone', async (t) => {
   const inst = installed(t);
   writeFileSync(join(inst.prefix, 'notes.txt'), 'mine\n');
+  const deferred = deferral();
   const code = await uninstallInstalled(['--yes'], {
     root: inst.versionRoot,
     env: inst.env,
     out: screen().out,
     run: okRun,
+    spawnDetached: deferred.spawnDetached,
   });
   assert.equal(code, 0);
-  assert.equal(existsSync(join(inst.prefix, 'versions')), false);
-  assert.equal(existsSync(join(inst.prefix, 'current.ref')), false);
-  assert.equal(existsSync(join(inst.prefix, 'installation.json')), false);
+  assertRemoved(inst, deferred.detached);
   assert.equal(readFileSync(join(inst.prefix, 'notes.txt'), 'utf8'), 'mine\n');
 });
 
@@ -380,22 +444,23 @@ test('circle uninstall stops while another session runs from the installation', 
     }
   });
   await once(child, 'spawn');
+  // The real process lookup of this system (/proc, lsof or the native Windows query) finds it.
   await assert.rejects(
     uninstallInstalled(['--yes'], {
       root: inst.versionRoot,
       env: inst.env,
       out: screen().out,
-      run: okRun,
+      spawnDetached: deferral().spawnDetached,
     }),
     new RegExp(
       `still running from this installation \\(process ${child.pid}\\)`,
     ),
   );
   assert.equal(existsSync(join(inst.prefix, 'installation.json')), true);
-  assert.equal(existsSync(join(inst.bin, 'circle')), true);
+  assert.equal(existsSync(inst.launcher), true);
 });
 
-test('circle uninstall on Windows removes the launcher, the PATH entry and every version but the running one', async (t) => {
+test('circle uninstall on Windows removes the PATH entry and the other versions, and leaves the launcher and the running version to a helper', async (t) => {
   const inst = windowsInstalled(t);
   const calls: [string, string[]][] = [];
   const run: Run = (command, args) => {
@@ -415,7 +480,9 @@ test('circle uninstall on Windows removes the launcher, the PATH entry and every
     },
   });
   assert.equal(code, 0);
-  assert.equal(existsSync(join(inst.bin, 'circle.cmd')), false);
+  // cmd.exe reads circle.cmd line by line while circle runs: deleting it now would end the
+  // launcher with "The batch file cannot be found."
+  assert.equal(existsSync(join(inst.bin, 'circle.cmd')), true);
   // The user PATH is edited the way install.ps1 wrote it: read unexpanded, written back
   // as ExpandString, broadcast to running programs.
   const registry = calls.find(([, args]) =>
@@ -438,17 +505,16 @@ test('circle uninstall on Windows removes the launcher, the PATH entry and every
   assert.equal(detached.length, 1);
   assert.ok(detached[0]![0].endsWith('powershell.exe'));
   const deferred = detached[0]![1].at(-1)!;
-  assert.ok(deferred.includes(`Get-Process -Id ${process.pid}`));
-  assert.ok(
-    deferred.includes(
-      `Remove-Item -LiteralPath '${inst.versionRoot.replaceAll("'", "''")}' -Recurse -Force`,
-    ),
-  );
-  assert.ok(
-    deferred.includes(
-      `Remove-Item -LiteralPath '${join(inst.prefix, 'versions').replaceAll("'", "''")}' -Force`,
-    ),
-  );
+  const quoted = (path: string) => path.replaceAll("'", "''");
+  // It waits for this process and the launcher's cmd.exe, its parent.
+  assert.ok(deferred.includes(`$holders = @(${process.pid}, ${process.ppid})`));
+  assert.deepEqual(deferred.split('\n').slice(3), [
+    `Remove-Item -LiteralPath '${quoted(join(inst.bin, 'circle.cmd'))}' -Force`,
+    `Remove-Item -LiteralPath '${quoted(inst.versionRoot)}' -Recurse -Force`,
+    `try { [System.IO.Directory]::Delete('${quoted(join(inst.prefix, 'versions'))}') } catch {}`,
+    `try { [System.IO.Directory]::Delete('${quoted(inst.bin)}') } catch {}`,
+    `try { [System.IO.Directory]::Delete('${quoted(inst.prefix)}') } catch {}`,
+  ]);
   assert.match(
     shown.writes.join(''),
     /the last files go when this session ends/,
@@ -457,8 +523,8 @@ test('circle uninstall on Windows removes the launcher, the PATH entry and every
 
 test('a user PATH entry that cannot be removed on Windows is a warning, not a failure', async (t) => {
   const inst = windowsInstalled(t);
-  const run: Run = (_command, args) =>
-    args.some((arg) => arg.includes('Get-Process | Where-Object'))
+  const run: Run = (command) =>
+    command === process.execPath
       ? { status: 0, stdout: '', stderr: '' }
       : { status: 1, stdout: '', stderr: 'denied' };
   const shown = screen();
@@ -471,10 +537,61 @@ test('a user PATH entry that cannot be removed on Windows is a warning, not a fa
     spawnDetached: () => {},
   });
   assert.equal(code, 0);
-  assert.equal(existsSync(join(inst.bin, 'circle.cmd')), false);
   assert.equal(existsSync(join(inst.prefix, 'versions', '0.9.0')), false);
+  assert.equal(existsSync(join(inst.prefix, 'installation.json')), false);
   assert.match(
     shown.writes.join(''),
     /warning: could not remove .* from your PATH/,
   );
 });
+
+test(
+  'the Windows helper removes the launcher and the running version once their processes end, and keeps a folder that is not empty',
+  {
+    skip:
+      process.platform !== 'win32' && 'runs the script in Windows PowerShell',
+  },
+  (t) => {
+    const ended = spawnSync(process.execPath, ['-e', '']).pid!;
+    const quoted = (text: string) => text.replaceAll("'", "''");
+    for (const stranger of [false, true]) {
+      const base = realpathSync(scratch(t, "circle-'helper-"));
+      const prefix = join(base, 'install');
+      const bin = join(prefix, 'bin');
+      const launcher = join(bin, 'circle.cmd');
+      const running = join(prefix, 'versions', VERSION);
+      mkdirSync(join(running, 'runtime'), { recursive: true });
+      mkdirSync(bin);
+      writeFileSync(join(running, 'runtime', 'node.exe'), 'synthetic');
+      writeFileSync(launcher, '@echo off\r\n');
+      if (stranger) writeFileSync(join(prefix, 'notes.txt'), 'mine\n');
+      const script = windowsDeferredRemoval({
+        wait: [ended],
+        files: [launcher],
+        trees: [running],
+        emptyFolders: [join(prefix, 'versions'), bin, prefix],
+      });
+      assert.ok(script.includes(`'${quoted(launcher)}'`));
+      const result = spawnSync(
+        join(
+          process.env.SystemRoot || 'C:\\Windows',
+          'System32',
+          'WindowsPowerShell',
+          'v1.0',
+          'powershell.exe',
+        ),
+        ['-NoProfile', '-NonInteractive', '-Command', script],
+        { encoding: 'utf8', timeout: 60_000, windowsHide: true },
+      );
+      assert.ifError(result.error);
+      // The effects are the result: the helper's own exit code is never read.
+      const output = result.stderr + result.stdout;
+      assert.equal(existsSync(launcher), false, output);
+      assert.equal(existsSync(join(prefix, 'versions')), false, output);
+      assert.equal(existsSync(bin), false, output);
+      if (stranger)
+        assert.equal(readFileSync(join(prefix, 'notes.txt'), 'utf8'), 'mine\n');
+      else assert.equal(existsSync(prefix), false, output);
+    }
+  },
+);

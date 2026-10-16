@@ -64,6 +64,33 @@ const powershell = (env: NodeJS.ProcessEnv): string =>
 // A PowerShell single-quoted literal: only ' needs doubling, and nothing else is special.
 const psLiteral = (text: string): string => text.replaceAll("'", "''");
 
+// The script of the detached Windows helper: it waits up to 20 s for the processes that hold
+// files open to end, then removes the files, the folder trees and, only when empty, the
+// folders. Folder deletion goes through .NET so a folder that still has children stays
+// without a confirmation prompt.
+export function windowsDeferredRemoval(removal: {
+  wait: number[];
+  files: string[];
+  trees: string[];
+  emptyFolders: string[];
+}): string {
+  return [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    `$holders = @(${removal.wait.join(', ')})`,
+    'foreach ($attempt in 1..100) { if (-not (Get-Process -Id $holders)) { break }; Start-Sleep -Milliseconds 200 }',
+    ...removal.files.map(
+      (file) => `Remove-Item -LiteralPath '${psLiteral(file)}' -Force`,
+    ),
+    ...removal.trees.map(
+      (tree) => `Remove-Item -LiteralPath '${psLiteral(tree)}' -Recurse -Force`,
+    ),
+    ...removal.emptyFolders.map(
+      (folder) =>
+        `try { [System.IO.Directory]::Delete('${psLiteral(folder)}') } catch {}`,
+    ),
+  ].join('\n');
+}
+
 // The reverse of the block install_manager.ts appends to the shell startup file: the marker
 // line plus the export naming this binDir. A block for another folder, or one edited by
 // hand, stays as it is.
@@ -255,9 +282,12 @@ export async function uninstallInstalled(
       if (!/^y(es)?$/i.test((answer ?? '').trim())) return 1;
     }
     const warnings: string[] = [];
-    rmSync(launcher, { force: true });
     let runningFolder: string | undefined;
+    // An installer default puts the launcher folder inside the prefix (Windows: <prefix>\bin).
+    const ownBin = inside(binDir, realPrefix) ? [binDir] : [];
     if (platform === 'win32') {
+      // cmd.exe reads circle.cmd line by line while this program runs, so the launcher goes
+      // with the deferred helper below, after the launcher's own process has ended.
       const warning = removeWindowsPathEntry(binDir, env, run);
       if (warning) warnings.push(warning);
       for (const name of versions) {
@@ -274,6 +304,7 @@ export async function uninstallInstalled(
         else rmSync(folder, { recursive: true, force: true });
       }
     } else {
+      rmSync(launcher, { force: true });
       for (const path of rcBlocks)
         writeFileSync(path, stripRcBlock(readFileSync(path, 'utf8'), binDir));
       // After this line the running program's own files are gone; nothing below may import
@@ -282,22 +313,21 @@ export async function uninstallInstalled(
     }
     rmSync(join(realPrefix, 'current.ref'), { force: true });
     rmSync(join(realPrefix, 'installation.json'), { force: true });
-    for (const folder of [join(realPrefix, 'versions'), realPrefix])
+    for (const folder of [join(realPrefix, 'versions'), ...ownBin, realPrefix])
       try {
         rmdirSync(folder);
       } catch {
-        // Not empty, or already gone: on Windows the running version's folder is still
-        // there, and files of other programs in the prefix stay.
+        // Not empty, or already gone: on Windows the running version's folder and the
+        // launcher are still there, and files of other programs in the prefix stay.
       }
     if (purge) rmSync(dataHome, { recursive: true, force: true });
-    if (runningFolder) {
-      const script = [
-        "$ErrorActionPreference = 'SilentlyContinue'",
-        `foreach ($attempt in 1..100) { if (-not (Get-Process -Id ${process.pid})) { break }; Start-Sleep -Milliseconds 200 }`,
-        `Remove-Item -LiteralPath '${psLiteral(runningFolder)}' -Recurse -Force`,
-        `Remove-Item -LiteralPath '${psLiteral(join(realPrefix, 'versions'))}' -Force`,
-        `Remove-Item -LiteralPath '${psLiteral(realPrefix)}' -Force`,
-      ].join('\n');
+    if (platform === 'win32') {
+      const script = windowsDeferredRemoval({
+        wait: [process.pid, process.ppid],
+        files: [launcher],
+        trees: runningFolder ? [runningFolder] : [],
+        emptyFolders: [join(realPrefix, 'versions'), ...ownBin, realPrefix],
+      });
       try {
         spawnDetached(powershell(env), [
           '-NoProfile',
@@ -307,9 +337,9 @@ export async function uninstallInstalled(
         ]);
       } catch (error) {
         warnings.push(
-          `could not schedule the removal of ${runningFolder}: ${
+          `could not schedule the removal of ${[launcher, ...(runningFolder ? [runningFolder] : [])].join(' and ')}: ${
             error instanceof Error ? error.message : String(error)
-          }; delete the folder by hand after this session ends`,
+          }; delete ${runningFolder ? 'them' : 'it'} by hand after this session ends`,
         );
       }
     }
@@ -319,7 +349,8 @@ export async function uninstallInstalled(
       out.write(
         `kept the data folder ${dataHome}; circle uninstall --purge removes it too\n`,
       );
-    if (runningFolder) out.write('the last files go when this session ends\n');
+    if (platform === 'win32')
+      out.write('the last files go when this session ends\n');
     for (const warning of warnings) out.write(`warning: ${warning}\n`);
     return 0;
   } finally {

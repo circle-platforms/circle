@@ -173,7 +173,7 @@ circle uninstall [--purge] [--yes]
 
 `circle uninstall` removes what the installer put on the machine: the `circle` launcher, every version under the prefix with `current.ref` and `installation.json`, and the PATH change — the lines marked `# circle path` in `~/.zshrc` or `~/.bashrc`, or on Windows the launcher's folder in your user `PATH`. The data folder stays unless `--purge` deletes it too. On a terminal it lists what goes and asks; anywhere else it needs `--yes`. Files of other programs in the prefix folder, and a startup-file block for another folder, are left alone.
 
-Like `circle update`, it works on a copy that `install.sh` or `install.ps1` put in place: a git checkout is not touched, and the command stops with `circle uninstall requires an installer-managed installation`. It also stops, changing nothing, while another circle session runs from the same installation. On Windows the running version's own files cannot be deleted while they run; a small helper removes them a moment after this session ends. To open a folder that is called `uninstall`, write `./uninstall`.
+Like `circle update`, it works on a copy that `install.sh` or `install.ps1` put in place: a git checkout is not touched, and the command stops with `circle uninstall requires an installer-managed installation`. It also stops, changing nothing, while another circle session runs from the same installation. On Windows the launcher and the running version's own files are still in use while circle runs; a small helper removes them, and the launcher folder and prefix when nothing else is left in them, a moment after this session ends. To open a folder that is called `uninstall`, write `./uninstall`.
 
 | Code | When |
 |---|---|
