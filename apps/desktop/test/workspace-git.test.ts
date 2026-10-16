@@ -809,3 +809,101 @@ test('explicit untracked previews show real added text without changing index or
     await rm(outside, { recursive: true, force: true });
   }
 });
+
+test('untracked previews enforce parent boundaries and preserve the Git executable mode policy', async () => {
+  const root = await mkdtemp(
+    path.join(tmpdir(), 'circle-git-preview-boundary-'),
+  );
+  const outside = await mkdtemp(
+    path.join(tmpdir(), 'circle-git-preview-secret-'),
+  );
+  const s = new ObservedGit(root);
+  try {
+    await s.git(['init']);
+    await s.git(['config', 'core.autocrlf', 'false']);
+    const { symlink, chmod } = await import('node:fs/promises');
+    await symlink(
+      outside,
+      path.join(root, 'outside-parent'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    await writeFile(path.join(outside, 'regular'), 'OUTSIDE_BYTES');
+    const preview = s as unknown as {
+      untrackedPreview(
+        root: string,
+        path: string,
+      ): Promise<{ status: string; text: string }>;
+      fileFingerprint(root: string, path: string): Promise<Buffer>;
+    };
+    assert.equal(
+      (await preview.untrackedPreview(root, 'outside-parent/regular')).status,
+      'outside',
+    );
+    assert.equal(
+      (
+        await preview.fileFingerprint(root, 'outside-parent/regular')
+      ).toString(),
+      'unreadable:outside',
+    );
+    if (process.platform !== 'win32') {
+      await symlink('PRIVATE_TARGET_TEXT', path.join(outside, 'link'));
+      const result = await preview.untrackedPreview(
+        root,
+        'outside-parent/link',
+      );
+      assert.equal(result.status, 'outside');
+      assert(!result.text.includes('PRIVATE_TARGET_TEXT'));
+      assert.equal(
+        (await preview.fileFingerprint(root, 'outside-parent/link')).toString(),
+        'unreadable:outside',
+      );
+    }
+    await writeFile(
+      path.join(root, 'script.sh'),
+      '#!/bin/sh\necho first\necho second\n',
+    );
+    await chmod(path.join(root, 'script.sh'), 0o755);
+    await s.git(['config', 'core.filemode', 'true']);
+    let diff = (await s.call('diff', { paths: ['script.sh'] })) as {
+      text: string;
+    };
+    if (process.platform !== 'win32')
+      assert.match(diff.text, /new file mode 100755/);
+    else assert.match(diff.text, /new file mode 100(?:644|755)/);
+    await s.call('applyHunk', {
+      revision: (await s.snapshot()).revision,
+      patch: diff.text
+        .replace('@@ -0,0 +1,3 @@', '@@ -0,0 +1,2 @@')
+        .replace('+echo second\n', ''),
+      action: 'stage',
+    });
+    assert.equal(
+      await s.git(['show', ':script.sh']),
+      '#!/bin/sh\necho first\n',
+    );
+    const nativeMode = (
+      await s.git(['ls-files', '--stage', '--', 'script.sh'])
+    ).split(' ')[0];
+    if (process.platform !== 'win32') assert.equal(nativeMode, '100755');
+    await s.git(['rm', '--cached', '-f', '--', 'script.sh']);
+    await s.git(['config', 'core.filemode', 'false']);
+    diff = (await s.call('diff', { paths: ['script.sh'] })) as { text: string };
+    assert.match(diff.text, /new file mode 100644/);
+    await s.call('applyHunk', {
+      revision: (await s.snapshot()).revision,
+      patch: diff.text,
+      action: 'stage',
+    });
+    assert.equal(
+      (await s.git(['ls-files', '--stage', '--', 'script.sh'])).split(' ')[0],
+      '100644',
+    );
+    assert.equal(
+      await readFile(path.join(root, 'script.sh'), 'utf8'),
+      '#!/bin/sh\necho first\necho second\n',
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});

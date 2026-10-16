@@ -233,7 +233,16 @@ export class GitWorkspaceService {
     };
   }
   private async regularFile(root: string, relative: string) {
-    const target = path.resolve(root, relative);
+    const original = path.resolve(root, relative);
+    const parent = await realpath(path.dirname(original)),
+      parentLocal = path.relative(root, parent);
+    if (
+      path.isAbsolute(parentLocal) ||
+      parentLocal === '..' ||
+      parentLocal.startsWith('..' + path.sep)
+    )
+      return { kind: 'outside', target: original } as const;
+    const target = path.join(parent, path.basename(original));
     const info = await lstat(target);
     if (!info.isFile())
       return {
@@ -278,8 +287,18 @@ export class GitWorkspaceService {
   ): Promise<Buffer> {
     try {
       const opened = await this.regularFile(root, relative);
-      if (opened.kind === 'symlink')
-        return Buffer.from('symlink:' + (await readlink(opened.target)));
+      if (opened.kind === 'symlink') {
+        const link = await readlink(opened.target);
+        const parent = await realpath(path.dirname(opened.target)),
+          local = path.relative(root, parent);
+        if (
+          path.isAbsolute(local) ||
+          local === '..' ||
+          local.startsWith('..' + path.sep)
+        )
+          throw Error('file identity changed while reading Git link');
+        return Buffer.from('symlink:' + link);
+      }
       if (opened.kind !== 'file')
         return Buffer.from('unreadable:' + opened.kind);
       try {
@@ -306,9 +325,11 @@ export class GitWorkspaceService {
               : String.fromCharCode(byte),
       ).join('') +
       '"';
-    const label = quote('b/' + relative),
-      prefix = `diff --git ${quote('a/' + relative)} ${label}\nnew file mode 100644\n`;
+    const label = quote('b/' + relative);
     const opened = await this.regularFile(root, relative);
+    const prefixFor = (mode: string) =>
+      `diff --git ${quote('a/' + relative)} ${label}\nnew file mode ${mode}\n`;
+    let prefix = prefixFor('100644');
     if (opened.kind !== 'file')
       return {
         path: relative,
@@ -316,6 +337,17 @@ export class GitWorkspaceService {
         text: prefix + `Preview unavailable: ${opened.kind}\n`,
       };
     try {
+      let filemode = true;
+      try {
+        filemode =
+          (await this.git(['config', '--bool', 'core.filemode'])).trim() ===
+          'true';
+      } catch (error) {
+        if ((error as { code?: number }).code !== 1) throw error;
+      }
+      prefix = prefixFor(
+        filemode && opened.info.mode & 0o111 ? '100755' : '100644',
+      );
       if (opened.info.size > 1024 * 1024)
         return {
           path: relative,
