@@ -1,3 +1,4 @@
+import { runNativeGitHubSettingsJourney } from './helpers/native-github-settings-journey.mjs';
 import {
   createNativeContinuityFixture,
   runNativeTerminalContextJourney,
@@ -226,6 +227,12 @@ const dependencies = {
     ['native identity and original panels'],
   'real child source ownership and return to child while parent saves another file':
     ['two isolated write agents and readonly agent with pending Git approval'],
+  'original settings enable and disable the native GitHub extension without authorization':
+    [
+      'native identity and original panels',
+      'draft survives original inspector switches',
+      'two isolated write agents and readonly agent with pending Git approval',
+    ],
 };
 const check = async (name, action) => {
   phase = name;
@@ -349,6 +356,7 @@ for (const file of [
     'native-editor-semantics',
     'native-terminal-journey',
     'native-continuity-journey',
+    'native-github-settings-journey',
     'native-debug-journey',
     'native-keyboard-journey',
     'native-git-journey',
@@ -1333,6 +1341,25 @@ try {
         until,
         output,
         entry: 'activity',
+      });
+    },
+  );
+  await check(
+    'original settings enable and disable the native GitHub extension without authorization',
+    async () => {
+      await closeFile();
+      const main = page
+        .locator('.agent-record:visible')
+        .getByRole('button', { name: 'main', exact: true });
+      if (await main.isVisible()) await main.click();
+      return runNativeGitHubSettingsJourney({
+        page,
+        sessionId,
+        state,
+        until,
+        output,
+        settingsFile: join(data, 'runtime-home', 'settings.json'),
+        requestsPath,
       });
     },
   );
