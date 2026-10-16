@@ -1,5 +1,6 @@
 // Observation only: reaching a marker does not identify a stalled native operation.
 import { randomBytes } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 export const queryStages = [
   'DECODE',
@@ -18,34 +19,50 @@ export function windowsProcessQuery(
 ) {
   if (!/^[a-f0-9]{32}$/.test(nonce))
     throw new Error('invalid query observation nonce');
-  // Windows image filenames cannot contain the payload's NUL separator.
   if (names.some((name) => name.includes('\0')))
     throw new Error('Windows process image names cannot contain NUL');
-  const mark = (stage: Stage): string =>
-    `try { $circleQueryCounts['${stage}'] = 1 + $circleQueryCounts['${stage}']; if ($circleQueryCounts['${stage}'] -le ${markerLimit}) { [Console]::Error.WriteLine('CIRCLE_QUERY_${nonce} ${stage}'); [Console]::Error.Flush() } } catch {}; `;
-  const encoded = Buffer.from(names.join('\0'), 'utf8').toString('base64');
-  const decodedNames = names.length
-    ? `@([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')).Split([char[]]@([char]0)))`
-    : '@()';
-  const lookup = all
-    ? `${mark('LOOKUP')}[Diagnostics.Process]::GetProcesses()`
-    : `foreach ($circleName in $circleNames) { ${mark('LOOKUP')}[Diagnostics.Process]::GetProcessesByName($circleName) }`;
-  const script =
-    '$circleQueryCounts = @{}; ' +
-    mark('DECODE') +
-    `$circleNames = ${decodedNames}; ` +
-    `$circleProcesses = @(${lookup}); ` +
-    'foreach ($circleProcess in $circleProcesses) { try { ' +
-    mark('MODULE') +
-    '$circlePath = $circleProcess.MainModule.FileName; if ($circlePath) { ' +
-    '"$($circleProcess.Id) $([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($circlePath)))" ' +
-    '} } catch {} finally { ' +
-    mark('DISPOSE') +
-    '$circleProcess.Dispose() } }' +
-    '; $circleQuerySuccess = $?; ' +
-    mark('COMPLETE') +
-    'if ($circleQuerySuccess) { exit 0 } else { exit 1 }';
-  return { script, nonce };
+  const extension = import.meta.url.endsWith('.ts') ? '.ts' : '.js';
+  const worker = fileURLToPath(
+    new URL(`./windows_process_native${extension}`, import.meta.url),
+  );
+  return {
+    args: [
+      worker,
+      Buffer.from(JSON.stringify(names), 'utf8').toString('base64'),
+      all ? 'all' : 'names',
+      nonce,
+    ],
+    nonce,
+  };
+}
+
+export function readWindowsProcessRecords(stdout: string) {
+  const lines = stdout.split('\n');
+  const tail = lines.pop()!;
+  let invalidRecords = 0;
+  const incompleteRecords = tail.length ? 1 : 0;
+  const entries: { pid: number; path: string }[] = [];
+  const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+  for (const line of lines) {
+    const match = /^(\d+) ([A-Za-z0-9+/]+={0,2})\r?$/.exec(line);
+    if (!match) {
+      invalidRecords++;
+      continue;
+    }
+    const bytes = Buffer.from(match[2]!, 'base64');
+    if (bytes.toString('base64') !== match[2]) {
+      invalidRecords++;
+      continue;
+    }
+    try {
+      const path = decoder.decode(bytes);
+      if (!path || path.includes('\0')) throw new Error('invalid image path');
+      entries.push({ pid: Number(match[1]), path });
+    } catch {
+      invalidRecords++;
+    }
+  }
+  return { entries, invalidRecords, incompleteRecords };
 }
 
 export function readWindowsQueryMarkers(stderr: string, nonce: string) {
@@ -88,6 +105,7 @@ export class WindowsProcessQueryObservation extends Error {
     markers: Markers,
     elapsedMs: number,
     outcome: { status: number | null; error?: Error },
+    records?: { invalidRecords: number; incompleteRecords: number },
   ) {
     const nativeCode = (outcome.error as NodeJS.ErrnoException | undefined)
       ?.code;
@@ -100,8 +118,14 @@ export class WindowsProcessQueryObservation extends Error {
       .map((stage) => `${stage}=${markers.counts[stage]}`)
       .join(',');
     const capped = markers.possiblyCappedStages.join(',') || 'none';
+    const outputProblem = !!(
+      records?.invalidRecords || records?.incompleteRecords
+    );
+    const output = outputProblem
+      ? `; stdout records invalid=${records!.invalidRecords}, incomplete=${records!.incompleteRecords}; absence unknown`
+      : '';
     super(
-      `Windows process query observation: last captured stage: ${markers.lastCapturedStage}; captured counts: ${counts}; possibly capped stages: ${capped}; elapsed ms: ${Math.round(elapsedMs)}; status: ${outcome.status}; error code: ${errorCode}. Markers show reached boundaries, not the stalled operation`,
+      `Windows process query observation: last captured stage: ${markers.lastCapturedStage}; captured counts: ${counts}; possibly capped stages: ${capped}; elapsed ms: ${Math.round(elapsedMs)}; status: ${outcome.status}; error code: ${errorCode}. Markers show reached boundaries, not the stalled operation${output}`,
     );
     this.details = {
       lastCapturedStage: markers.lastCapturedStage,
@@ -110,6 +134,12 @@ export class WindowsProcessQueryObservation extends Error {
       elapsedMs: Math.round(elapsedMs),
       status: outcome.status,
       errorCode,
+      ...(outputProblem
+        ? {
+            invalidRecords: records!.invalidRecords,
+            incompleteRecords: records!.incompleteRecords,
+          }
+        : {}),
     };
   }
 }

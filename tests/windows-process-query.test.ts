@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
@@ -34,6 +40,149 @@ function heldCopy(t: TestContext) {
   };
 }
 
+test('a held Windows copy is identified through one owned Node worker when PowerShell is unavailable', (t) => {
+  const { copy, program, where } = heldCopy(t);
+  let calls = 0;
+  const pids = runningCopies(
+    [copy],
+    where,
+    (command, _args, timeout) => {
+      calls++;
+      assert.equal(command, process.execPath, 'PowerShell is unavailable');
+      assert.equal(timeout, 30_000);
+      return {
+        status: 0,
+        stdout: `41 ${Buffer.from(program).toString('base64')}\r\n`,
+        stderr: '',
+      };
+    },
+    () => 'EBUSY',
+  );
+  assert.deepEqual(pids, [41]);
+  assert.equal(calls, 1);
+});
+
+test('an unreadable Windows copy fails closed when its all-process query fails without held images', (t) => {
+  const { copy, program, where } = heldCopy(t);
+  copy.versions = [join(where.home, 'unavailable-version')];
+  let calls = 0;
+  assert.throws(
+    () =>
+      runningCopies(
+        [copy],
+        where,
+        (_command, _args, timeout) => {
+          calls++;
+          assert.equal(timeout, 30_000);
+          return {
+            status: 1,
+            stdout: '',
+            stderr: 'Windows native process query unavailable',
+          };
+        },
+        () => undefined,
+      ),
+    /could not be inspected.*could not be listed/,
+  );
+  assert.equal(calls, 1);
+  assert.equal(readFileSync(program, 'utf8'), 'synthetic held image');
+});
+
+test('an unterminated PID record cannot turn an outside image path prefix into ownership', (t) => {
+  const { copy, where } = heldCopy(t);
+  let folder = copy.versions[0]!;
+  folder += 'x'.repeat((3 - (Buffer.byteLength(folder) % 3)) % 3);
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'circle.exe'), 'synthetic held image');
+  copy.versions = [folder];
+  const full = Buffer.from(folder + '-other/circle.exe').toString('base64');
+  const partial = full.slice(0, (Buffer.byteLength(folder) / 3) * 4);
+  assert.equal(Buffer.from(partial, 'base64').toString('utf8'), folder);
+  assert.throws(
+    () =>
+      runningCopies(
+        [copy],
+        where,
+        () => ({
+          status: null,
+          stdout: `41 ${partial}`,
+          stderr: '',
+          error: Object.assign(new Error('native timeout'), {
+            code: 'ETIMEDOUT',
+          }),
+        }),
+        () => 'EBUSY',
+        () => {},
+      ),
+    /could not be listed \(no answer in 30 s\)/,
+  );
+});
+
+for (const kind of ['base64', 'utf8'] as const) {
+  test(`a complete PID record with invalid ${kind} cannot establish image ownership`, (t) => {
+    const { copy, program, where } = heldCopy(t);
+    const encoded =
+      kind === 'base64'
+        ? Buffer.from(program).toString('base64') + '!'
+        : Buffer.concat([Buffer.from(program), Buffer.from([0xff])]).toString(
+            'base64',
+          );
+    assert.throws(
+      () =>
+        runningCopies(
+          [copy],
+          where,
+          () => ({
+            status: 0,
+            stdout: `41 ${encoded}\n`,
+            stderr: '',
+          }),
+          () => 'EBUSY',
+          () => {},
+        ),
+      /unknown.*invalid.*1/,
+    );
+  });
+}
+
+test('an unread copy with malformed successful output is unknown rather than an empty process list', (t) => {
+  const { copy, where } = heldCopy(t);
+  copy.versions = [join(where.home, 'unavailable-version')];
+  assert.throws(
+    () =>
+      runningCopies(
+        [copy],
+        where,
+        () => ({
+          status: 0,
+          stdout: '41 truncated',
+          stderr: '',
+        }),
+        () => undefined,
+        () => {},
+      ),
+    /could not be inspected.*unknown.*incomplete.*1/,
+  );
+});
+
+test('complete valid LF and CRLF PID records retain exact image ownership', (t) => {
+  const { copy, program, where } = heldCopy(t);
+  for (const newline of ['\n', '\r\n'])
+    assert.deepEqual(
+      runningCopies(
+        [copy],
+        where,
+        () => ({
+          status: 0,
+          stdout: `41 ${Buffer.from(program).toString('base64')}${newline}`,
+          stderr: '',
+        }),
+        () => 'EBUSY',
+      ),
+      [41],
+    );
+});
+
 test('a timed out Windows query keeps its original error message and attaches the last captured stage', (t) => {
   const { copy, program, where } = heldCopy(t);
   const nativeError = Object.assign(new Error('native timeout'), {
@@ -48,9 +197,7 @@ test('a timed out Windows query keeps its original error message and attaches th
         (_command, args, timeout) => {
           calls++;
           assert.equal(timeout, 30_000);
-          const nonce =
-            /CIRCLE_QUERY_([a-f0-9]{32})/.exec(args.at(-1)!)?.[1] ??
-            'f'.repeat(32);
+          const nonce = args.at(-1)!;
           return {
             status: null,
             stdout: '',
@@ -92,21 +239,14 @@ for (const [description, names] of [
 ] satisfies [string, string[]][]) {
   test(`image name payload preserves ${description} without JSON cmdlets`, () => {
     for (const all of [false, true]) {
-      const { script } = windowsProcessQuery(names, all, nonce);
-      assert.doesNotMatch(script, /ConvertFrom-Json/i);
-      if (!names.length) {
-        assert.match(script, /\$circleNames = @\(\); /);
-        assert.doesNotMatch(script, /FromBase64String/);
-        continue;
-      }
-      const encoded = script.match(
-        /FromBase64String\('([A-Za-z0-9+/=]*)'\)/,
-      )?.[1];
-      assert.notEqual(encoded, undefined);
-      const decoded = Buffer.from(encoded!, 'base64').toString('utf8');
-      assert.equal(decoded, names.join('\0'));
-      assert.deepEqual(decoded.split('\0'), names);
-      assert.match(script, /\)\.Split\(\[char\[\]\]@\(\[char\]0\)\)\); /);
+      const { args } = windowsProcessQuery(names, all, nonce);
+      assert.match(args[0]!, /windows_process_native\.[jt]s$/);
+      assert.deepEqual(
+        JSON.parse(Buffer.from(args[1]!, 'base64').toString('utf8')),
+        names,
+      );
+      assert.equal(args[2], all ? 'all' : 'names');
+      assert.equal(args[3], nonce);
     }
   });
 }
@@ -189,40 +329,19 @@ test('only own complete valid lines are stripped and all other stderr characters
   assert.equal(markers.lastCapturedStage, 'LOOKUP');
 });
 
-test('both query bodies preserve the process statements and immediately save the final status', () => {
+test('both query modes use one explicit Node worker with lossless names and a bounded observation nonce', () => {
   for (const all of [false, true]) {
     const names = ['circle', '用户 image'];
-    const { script } = windowsProcessQuery(names, all, nonce);
-    const stripped = script
-      .replace(
-        /try \{ \$circleQueryCounts\['(?:DECODE|LOOKUP|MODULE|DISPOSE|COMPLETE)'\] = 1 \+ \$circleQueryCounts\['(?:DECODE|LOOKUP|MODULE|DISPOSE|COMPLETE)'\]; if \(\$circleQueryCounts\['(?:DECODE|LOOKUP|MODULE|DISPOSE|COMPLETE)'\] -le 32\) \{ \[Console\]::Error.WriteLine\('CIRCLE_QUERY_[a-f0-9]{32} (?:DECODE|LOOKUP|MODULE|DISPOSE|COMPLETE)'\); \[Console\]::Error.Flush\(\) \} \} catch \{\}; /g,
-        '',
-      )
-      .replace(/^\$circleQueryCounts = @\{\}; /, '')
-      .replace(
-        /; \$circleQuerySuccess = \$\?; if \(\$circleQuerySuccess\) \{ exit 0 \} else \{ exit 1 \}$/,
-        '',
-      );
-    const encoded = Buffer.from(names.join('\0')).toString('base64');
-    const lookup = all
-      ? '[Diagnostics.Process]::GetProcesses()'
-      : 'foreach ($circleName in $circleNames) { [Diagnostics.Process]::GetProcessesByName($circleName) }';
-    assert.equal(
-      stripped,
-      `$circleNames = @([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')).Split([char[]]@([char]0))); ` +
-        `$circleProcesses = @(${lookup}); ` +
-        'foreach ($circleProcess in $circleProcesses) { try { ' +
-        '$circlePath = $circleProcess.MainModule.FileName; if ($circlePath) { ' +
-        '"$($circleProcess.Id) $([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($circlePath)))" ' +
-        '} } catch {} finally { $circleProcess.Dispose() } }',
+    const { args, nonce: own } = windowsProcessQuery(names, all, nonce);
+    assert.equal(args.length, 4);
+    assert.match(args[0]!, /windows_process_native\.[jt]s$/);
+    assert.deepEqual(
+      JSON.parse(Buffer.from(args[1]!, 'base64').toString('utf8')),
+      names,
     );
-    assert.match(
-      script,
-      /\$circleProcess.Dispose\(\) \} \}; \$circleQuerySuccess = \$\?;/,
-    );
-    assert.ok(
-      script.indexOf('COMPLETE') > script.indexOf('$circleQuerySuccess = $?'),
-    );
+    assert.equal(args[2], all ? 'all' : 'names');
+    assert.equal(own, nonce);
+    assert.equal(args[3], nonce);
   }
 });
 
@@ -241,7 +360,7 @@ test('nonzero exits preserve non-marker stderr in the primary message and leave 
         where,
         (_command, args, timeout) => {
           assert.equal(timeout, 30_000);
-          const own = /CIRCLE_QUERY_([a-f0-9]{32})/.exec(args.at(-1)!)![1];
+          const own = args.at(-1)!;
           native = {
             status: 7,
             stdout: '',
@@ -401,7 +520,7 @@ test('the actual TAP reporter shows a direct caller failure observation while re
     fixture,
     `import { test } from 'node:test'; import { runningCopies } from ${JSON.stringify(source)};\n` +
       `test('direct timeout', () => runningCopies(${JSON.stringify([copy])}, ${JSON.stringify(where)}, (_command, args) => {\n` +
-      `const nonce = /CIRCLE_QUERY_([a-f0-9]{32})/.exec(args.at(-1))[1];\n` +
+      `const nonce = args.at(-1);\n` +
       `return { status: null, stdout: '', stderr: 'CIRCLE_QUERY_' + nonce + ' LOOKUP\\r\\n', error: Object.assign(new Error('native timeout'), { code: 'ETIMEDOUT' }) };\n` +
       `}, () => 'EBUSY'));\n` +
       `test('synthetic Windows primary', () => { throw new Error(${JSON.stringify(windowsPrimary)}); });\n`,

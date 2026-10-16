@@ -494,14 +494,11 @@ test('on Windows a held program is looked up, and the list names the processes r
   assert.deepEqual(running, [41, 57]);
   assert.deepEqual(probed.sort(), [frozen, script].sort());
   assert.equal(asked.length, 1);
-  assert.match(asked[0]!.command, /powershell\.exe$/);
-  const query = asked[0]!.args.at(-1)!;
-  assert.match(query, /\[Diagnostics\.Process\]::GetProcessesByName/);
-  assert.doesNotMatch(query, /Get-CimInstance/);
-  const encoded = query.match(/FromBase64String\('([A-Za-z0-9+/=]+)'\)/)?.[1];
-  assert.ok(encoded);
+  assert.equal(asked[0]!.command, process.execPath);
+  assert.match(asked[0]!.args[0]!, /windows_process_native\.[jt]s$/);
+  assert.equal(asked[0]!.args[2], 'names');
   assert.deepEqual(
-    Buffer.from(encoded, 'base64').toString('utf8').split('\0'),
+    JSON.parse(Buffer.from(asked[0]!.args[1]!, 'base64').toString('utf8')),
     ['circle'],
   );
   assert.equal(asked[0]!.timeout, 30_000);
