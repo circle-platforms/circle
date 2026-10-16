@@ -141,6 +141,8 @@ export interface RuntimeOptions {
   bundledExtensions?: string | false;
   /** An extension's status line changed. */
   onExtensionStatus?: () => void;
+  /** The shared database is locked and startup is about to wait. */
+  onStoreBusy?: () => void;
   /** Opens a link an extension asked for (api.openUrl); the URL is already checked. */
   openUrl?: (url: string) => Promise<void>;
   /** External session resources must be gone before history and ownership are removed. */
@@ -287,6 +289,7 @@ export class AgentRuntime {
     this.catalog = options.catalog ?? new ModelCatalog(options.home);
     this.store = new CheckpointStore(
       this.runOptions.no_session ? undefined : options.home,
+      options.onStoreBusy ? { onBusy: options.onStoreBusy } : undefined,
     );
     this.migration = this.runOptions.no_session
       ? { imported: [], skipped: [], errors: [] }

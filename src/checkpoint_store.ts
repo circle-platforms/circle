@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
+import { DATABASE_BUSY_MESSAGE, uiText } from './locale.js';
 import { ensureHome, normalizeWorkspace } from './paths.js';
 import type { Message } from './types.js';
 import type { LegacyImportPlan } from './legacy_sessions.js';
@@ -93,23 +94,25 @@ function isDatabaseLocked(error: unknown): boolean {
 export function databaseOpenError(error: unknown): Error {
   if (!isDatabaseLocked(error))
     return error instanceof Error ? error : new Error(String(error));
-  const friendly = new Error(
-    'the database is busy · another Circle is using this data folder. Wait a moment and start again',
-  );
+  const friendly = new Error(uiText(DATABASE_BUSY_MESSAGE));
   friendly.cause = error;
   return friendly;
 }
 
-function openDatabase(path: string): DatabaseSync {
+function openDatabase(path: string, onBusy?: () => void): DatabaseSync {
   let last: unknown;
+  let told = false;
   for (let attempt = 0; attempt < STORE_OPEN_ATTEMPTS; attempt++) {
     let db: DatabaseSync | undefined;
+    // The first try returns at once, so a held lock can say it is waiting
+    // before the longer tries. A free database never takes that pause.
+    const timeout = told ? STORE_BUSY_MS : 0;
     try {
       // `timeout` applies before the first statement. `journal_mode` can still
       // return busy at once, so a locked open is tried again.
-      db = new DatabaseSync(path, { timeout: STORE_BUSY_MS });
+      db = new DatabaseSync(path, { timeout });
       db.exec(
-        `PRAGMA busy_timeout = ${STORE_BUSY_MS}; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;
+        `PRAGMA busy_timeout = ${timeout}; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;
       CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, title TEXT NOT NULL, model TEXT NOT NULL, head TEXT, created REAL NOT NULL, updated REAL NOT NULL);
       CREATE TABLE IF NOT EXISTS checkpoints (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, parent TEXT REFERENCES checkpoints(id), message TEXT NOT NULL, created REAL NOT NULL);
       CREATE INDEX IF NOT EXISTS checkpoints_session ON checkpoints(session_id);
@@ -159,6 +162,11 @@ function openDatabase(path: string): DatabaseSync {
         }
         throw error;
       }
+      if (timeout !== STORE_BUSY_MS)
+        db.exec(`PRAGMA busy_timeout = ${STORE_BUSY_MS}`);
+      // When #154 merges, create `open_turns` and call sweepStaleSessionLocks
+      // here, before this return. Both belong inside this retry: outside it, a
+      // held lock exits with "database is locked" again.
       return db;
     } catch (error) {
       try {
@@ -169,6 +177,10 @@ function openDatabase(path: string): DatabaseSync {
       last = error;
       if (!isDatabaseLocked(error) || attempt === STORE_OPEN_ATTEMPTS - 1)
         throw databaseOpenError(error);
+      if (!told) {
+        told = true;
+        onBusy?.();
+      }
       pause(40 * (attempt + 1));
     }
   }
@@ -197,10 +209,11 @@ export class CheckpointStore {
   get version(): number {
     return this.writeVersion;
   }
-  constructor(home?: string) {
+  constructor(home?: string, hooks?: { onBusy?: () => void }) {
     this.home = home;
     this.db = openDatabase(
       home ? join(ensureHome(home), 'circle.sqlite') : ':memory:',
+      hooks?.onBusy,
     );
   }
   /** Sessions kept in memory until the first message, so an unused /new leaves no row. */

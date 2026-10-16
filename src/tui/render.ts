@@ -1,5 +1,5 @@
 import { palette, sgrJoin, statusLight } from '../ink/theme.js';
-import { uiText } from '../locale.js';
+import { DATABASE_WAIT_STATUS, uiText } from '../locale.js';
 import type { LampState } from '../ink/theme.js';
 import { wrap, pad, truncate, truncateStyled } from '../ink/string_width.js';
 import type { Message, Usage } from '../types.js';
@@ -150,6 +150,8 @@ export interface ScreenState {
   branch?: string;
   gate?: boolean;
   connected?: boolean;
+  /** Startup is waiting out a held database lock. */
+  storeWait?: boolean;
 }
 // Blocks are separated by exactly one blank row; inside a block there is none. An answer is
 // its thinking rows plus the text after them, a tool group is consecutive tool rows.
@@ -636,18 +638,23 @@ export function renderScreen(
   else {
     // The frame says whose turn it is: the rainbow runs while the model works.
     const seconds = (Date.now() - state.started) / 1000;
-    const label = state.busy
-      ? busyLabel(
-          state.busyRetry ? 'Retrying' : (state.busyVerb ?? 'Brewing'),
-          seconds,
-          state.busyTokens ?? 0,
-          state.busyRetry,
-        )
-      : '';
+    const waiting = state.storeWait ? uiText(DATABASE_WAIT_STATUS) : '';
+    const label = waiting
+      ? waiting
+      : state.busy
+        ? busyLabel(
+            state.busyRetry ? 'Retrying' : (state.busyVerb ?? 'Brewing'),
+            seconds,
+            state.busyTokens ?? 0,
+            state.busyRetry,
+          )
+        : '';
+    if (waiting)
+      bottom.push(p.yellow + pad(truncate(waiting, width), width) + p.reset);
     if (state.completion && !state.picker)
       bottom.push(...completionRows(state.completion, width));
     const frame = loopFrame(width, {
-      elapsed: state.busy ? seconds : undefined,
+      elapsed: waiting ? undefined : state.busy ? seconds : undefined,
       label,
       mode,
       modeSgr,

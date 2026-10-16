@@ -1092,12 +1092,20 @@ export class SessionApp {
       },
       ...this.cardHooks(view),
       onExtensionStatus: () => this.inView(view, () => this.requestRender()),
+      onStoreBusy: () => {
+        this.state.storeWait = true;
+        this.repaint();
+      },
       openUrl: async (url) => {
         await openInBrowser(url);
         this.inView(view, () => this.flash('Opened in the browser'));
       },
     });
     view.runtime = runtime;
+    if (this.state.storeWait) {
+      this.state.storeWait = false;
+      this.repaint();
+    }
     this.views.set(runtime, view);
     if (browser) this.browsers.set(runtime, browser);
     this.subscriptions.set(

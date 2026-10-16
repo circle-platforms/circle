@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { CheckpointStore, databaseOpenError } from '../src/checkpoint_store.js';
+import { DATABASE_BUSY_MESSAGE, uiText } from '../src/locale.js';
 import { cleanup, scratch } from './helpers.js';
 
 const moduleUrl = (name: string) =>
@@ -61,7 +62,9 @@ test('a locked database waits and then opens', async (t) => {
       import { writeSync } from 'node:fs';
       import { CheckpointStore } from ${moduleUrl('checkpoint_store')};
       writeSync(1, 'starting\\n');
-      const store = new CheckpointStore(process.env.TEST_HOME);
+      const store = new CheckpointStore(process.env.TEST_HOME, {
+        onBusy() { writeSync(1, 'waiting\\n'); },
+      });
       writeSync(1, 'opened\\n');
       store.close();
     `,
@@ -102,6 +105,11 @@ test('a locked database waits and then opens', async (t) => {
     false,
     `opened while the database was locked\n${text.out()}\n${text.err()}`,
   );
+  assert.equal(
+    text.out().includes('waiting'),
+    true,
+    `no waiting status while the database was locked\n${text.out()}\n${text.err()}`,
+  );
   db.exec('COMMIT');
   await until(
     () => text.out().includes('opened'),
@@ -124,4 +132,28 @@ test('a database lock that outlasts the wait says another Circle is using the fo
   );
   const other = new Error('unable to open database file');
   assert.equal(databaseOpenError(other), other);
+  const saved = {
+    LANG: process.env.LANG,
+    LC_ALL: process.env.LC_ALL,
+    LANGUAGE: process.env.LANGUAGE,
+  };
+  process.env.LANG = 'zh_CN.UTF-8';
+  process.env.LC_ALL = 'zh_CN.UTF-8';
+  delete process.env.LANGUAGE;
+  try {
+    assert.equal(
+      databaseOpenError(locked).message,
+      uiText(DATABASE_BUSY_MESSAGE, 'zh-CN'),
+    );
+    assert.match(databaseOpenError(locked).message, /另一个 Circle/);
+    assert.equal(
+      databaseOpenError(locked).message.includes('database is busy'),
+      false,
+    );
+  } finally {
+    process.env.LANG = saved.LANG;
+    process.env.LC_ALL = saved.LC_ALL;
+    if (saved.LANGUAGE === undefined) delete process.env.LANGUAGE;
+    else process.env.LANGUAGE = saved.LANGUAGE;
+  }
 });

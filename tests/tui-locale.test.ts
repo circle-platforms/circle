@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Picker } from '../src/ink/components/picker.js';
 import { stripAnsi } from '../src/ink/string_width.js';
-import { interfaceLocale, uiText } from '../src/locale.js';
+import {
+  DATABASE_BUSY_MESSAGE,
+  DATABASE_WAIT_STATUS,
+  interfaceLocale,
+  uiText,
+} from '../src/locale.js';
 import {
   renderScreen,
   transcriptRows,
@@ -102,6 +107,15 @@ test('a Chinese locale translates the session list, resume line, view only and s
       ).join('\n'),
     );
     assert.match(quota, /提供方：DuckDuckGo/);
+    assert.equal(
+      uiText(DATABASE_BUSY_MESSAGE, 'zh-CN'),
+      '数据库正忙 · 另一个 Circle 正在使用此数据文件夹。请稍候再启动',
+    );
+    assert.equal(uiText(DATABASE_WAIT_STATUS, 'zh-CN'), '正在等待数据库…');
+    assert.equal(
+      uiText(DATABASE_WAIT_STATUS, 'en'),
+      'waiting for the database…',
+    );
     assert.match(quota, /原生搜索不可用：搜索额度不足/);
     assert.equal(quota.includes('Provider: DuckDuckGo'), false);
     assert.equal(quota.includes('search quota exceeded'), false);
@@ -134,6 +148,7 @@ test('a Chinese locale translates the session list, resume line, view only and s
       flash: '',
       started: 0,
       scroll: 0,
+      storeWait: true,
     } as ScreenState;
     const transcript = stripAnsi(transcriptRows(screen, 80).join('\n'));
     assert.match(transcript, /已恢复 circle-abc · title/);
@@ -143,7 +158,60 @@ test('a Chinese locale translates the session list, resume line, view only and s
     assert.equal(transcript.includes('Resumed'), false);
     const frame = stripAnsi(renderScreen(screen, 80, 24).join('\n'));
     assert.match(frame, /只读/);
+    assert.match(frame, /正在等待数据库…/);
     assert.equal(frame.includes('view only'), false);
+    assert.equal(frame.includes('waiting for the database'), false);
+  } finally {
+    process.env.LANG = saved.LANG;
+    process.env.LC_ALL = saved.LC_ALL;
+    if (saved.LANGUAGE === undefined) delete process.env.LANGUAGE;
+    else process.env.LANGUAGE = saved.LANGUAGE;
+  }
+});
+
+test('an English screen says it is waiting for the database', () => {
+  const saved = {
+    LANG: process.env.LANG,
+    LC_ALL: process.env.LC_ALL,
+    LANGUAGE: process.env.LANGUAGE,
+  };
+  process.env.LANG = 'en_US.UTF-8';
+  process.env.LC_ALL = 'en_US.UTF-8';
+  delete process.env.LANGUAGE;
+  try {
+    const frame = stripAnsi(
+      renderScreen(
+        {
+          welcome: [],
+          messages: [],
+          notices: [],
+          hiddenTurns: 0,
+          showThinking: false,
+          showTools: false,
+          streaming: '',
+          thinking: '',
+          draft: '',
+          draftCursor: 0,
+          model: 'test',
+          workspace: '/tmp',
+          version: '0',
+          busy: false,
+          waiting: false,
+          planMode: false,
+          autoMode: false,
+          todos: [],
+          usage: emptyUsage(),
+          flash: '',
+          started: 0,
+          scroll: 0,
+          storeWait: true,
+        } as ScreenState,
+        80,
+        24,
+      ).join('\n'),
+    );
+    assert.match(frame, /waiting for the database…/);
+    assert.equal(frame.includes('正在等待数据库'), false);
   } finally {
     process.env.LANG = saved.LANG;
     process.env.LC_ALL = saved.LC_ALL;

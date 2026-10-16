@@ -3,6 +3,10 @@
 
 export type InterfaceLocale = 'en' | 'zh-CN';
 
+export const DATABASE_BUSY_MESSAGE =
+  'the database is busy · another Circle is using this data folder. Wait a moment and start again';
+export const DATABASE_WAIT_STATUS = 'waiting for the database…';
+
 const ZH: Record<string, string> = {
   'view only': '只读',
   current: '当前',
@@ -21,6 +25,9 @@ const ZH: Record<string, string> = {
   'Native search unavailable: search quota exceeded':
     '原生搜索不可用：搜索额度不足',
   'Provider: DuckDuckGo': '提供方：DuckDuckGo',
+  [DATABASE_BUSY_MESSAGE]:
+    '数据库正忙 · 另一个 Circle 正在使用此数据文件夹。请稍候再启动',
+  [DATABASE_WAIT_STATUS]: '正在等待数据库…',
 };
 
 /** Chinese when LANG, LC_ALL or LANGUAGE says so; otherwise English. */
