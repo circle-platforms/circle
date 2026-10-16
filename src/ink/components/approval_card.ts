@@ -73,13 +73,18 @@ const PASS = new Set(['pageup', 'pagedown', 'home', 'end']);
  * session` (when the policy lets the call be remembered), `Allow "<words> …" for this
  * session` (a simple command) and `Reject and explain`. Digits pick and confirm; `y` / `a` /
  * `n` do the same without being shown; arrows, tab and `hjkl` move; `enter` confirms;
- * `esc` and `n` reject at once. `Reject and explain` turns the last row into an input:
- * `enter` sends the text with the rejection (empty is a plain rejection), `esc` goes back.
- * Every other printable key is swallowed, so a key typed for the draft cannot answer.
+ * `esc` and `n` reject at once. `Reject and explain` turns the last row into an input.
+ * The session routes that row through the composer: `enter` sends the text with the
+ * rejection (empty is a plain rejection), a `/command` runs and the card stays, and
+ * `esc` goes back to the options and keeps what was typed. Every other printable key
+ * is swallowed while the options are up, so a key typed for the draft cannot answer.
  */
 export class ApprovalCard implements Card<ApprovalAnswer> {
   focus = 0;
-  reason: string | undefined;
+  /** The reason row is open. The session owns its keys; this only remembers the mode. */
+  explaining = false;
+  /** What was typed in the reason row. `esc` leaves the row and keeps this. */
+  draft = '';
   readonly options: [Kind, string][];
   constructor(readonly request: ApprovalRequest) {
     this.options = [['approve', 'Allow once']];
@@ -117,29 +122,25 @@ export class ApprovalCard implements Card<ApprovalAnswer> {
       options: this.options.map(([, label]) => label),
       focus: this.focus,
       ...(tint ? { tint } : {}),
-      ...(this.reason !== undefined ? { input: this.reason } : {}),
+      ...(this.explaining
+        ? {
+            input: this.draft,
+            placeholder: 'empty enter rejects · esc returns',
+          }
+        : {}),
     };
   }
   private submit(index: number): CardResult<ApprovalAnswer> {
     const kind = this.options[index]![0];
     if (kind !== 'explain') return { answer: kind };
     this.focus = index;
-    this.reason = '';
+    this.explaining = true;
     return undefined;
   }
   handle(key: string, char: string): CardResult<ApprovalAnswer> {
-    if (this.reason !== undefined) {
-      if (key === 'enter') {
-        const message = this.reason.trim();
-        return { answer: message ? { decision: 'reject', message } : 'reject' };
-      }
-      if (key === 'escape') this.reason = undefined;
-      else if (key === 'backspace')
-        this.reason = Array.from(this.reason).slice(0, -1).join('');
-      else if (key.startsWith('ctrl+')) return 'pass';
-      else this.reason += printable(key, char);
-      return undefined;
-    }
+    // The reason row is the composer. SessionApp reads these keys; a second pass here
+    // would approve, reject, or throw away the draft.
+    if (this.explaining) return undefined;
     const count = this.options.length;
     if (['up', 'left', 'ctrl+p', 'k', 'h'].includes(key)) {
       this.focus = (this.focus - 1 + count) % count;
@@ -163,7 +164,7 @@ export class ApprovalCard implements Card<ApprovalAnswer> {
     return undefined; // printable and everything else: swallowed
   }
   paste(text: string): void {
-    if (this.reason !== undefined)
-      this.reason += printable('paste', text.replace(/\s*\n\s*/g, ' '));
+    if (this.explaining)
+      this.draft += printable('paste', text.replace(/\s*\n\s*/g, ' '));
   }
 }

@@ -1,6 +1,14 @@
 import { existsSync, statSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+/** Instruction and memory files stop here, with a note when the rest was left out. */
+export const CONTEXT_FILE_CAP = 24_000;
+export function readCappedText(path: string): string {
+  const raw = readFileSync(path);
+  const text = raw.subarray(0, CONTEXT_FILE_CAP).toString('utf8').trim();
+  if (raw.length <= CONTEXT_FILE_CAP) return text;
+  return `${text}\n\n[truncated: instruction file exceeds ${CONTEXT_FILE_CAP} bytes]`;
+}
 // As bigints: a Windows file id is 64 bits, and as a number neighbouring files' ids can round
 // to the same value, so one would be taken for a copy of the other
 export function fileIdentity(path: string): string | undefined {
@@ -66,7 +74,7 @@ export function formatMemorySources(
     seen.add(identity);
     try {
       blocks.push(
-        `<memory_file path="${path}">\n${readFileSync(path).subarray(0, 120000).toString('utf8').trim()}\n</memory_file>`,
+        `<memory_file path="${path}">\n${readCappedText(path)}\n</memory_file>`,
       );
     } catch {
       /* A removed memory file must not break the request. */

@@ -19,10 +19,12 @@ import {
   lazy,
   Suspense,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Group, Panel, Separator } from 'react-resizable-panels';
 import { DropdownMenu, Tooltip } from 'radix-ui';
@@ -154,6 +156,8 @@ export function App() {
     if (narrow) setInspectorOpen(false);
   }, [narrow]);
   const [panel, setPanel] = useState<PanelId>('files');
+  // A panel the person wants to see whole, for as long as they want it there.
+  const [fullView, setFullView] = useState(false);
   const [selection, setSelection] = useState('');
   const [file, setFile] = useState<string | null>(null);
   const [fileOwner, setFileOwner] = useState<SourceResourceOwner>();
@@ -247,6 +251,40 @@ export function App() {
     ? (homeQuery.get('workspace') ?? '')
     : null;
   const inspectorVisible = inspectorOpen && !page;
+  // Only a panel worth the whole workspace offers it: the browser's page and the shell,
+  // plus any component that says so on its own panel.
+  const canBeWhole =
+    !narrow &&
+    (panel === 'terminal' ||
+      registry
+        .active(enabled)
+        .flatMap((plugin) => plugin.panels ?? [])
+        .some((item) => item.id === panel && item.fullView));
+  const whole = inspectorVisible && canBeWhole && fullView;
+  // A panel that cannot fill the workspace, or a panel that is gone, ends the view.
+  useEffect(() => {
+    if (!canBeWhole || !inspectorVisible) setFullView(false);
+  }, [canBeWhole, inspectorVisible]);
+  // The view takes the focus when it opens, so Escape is one keystroke away, and the way
+  // out is always in its own header as well.
+  const wholeBox = useRef<HTMLDivElement>(null);
+  const splitInspectorBox = useRef<HTMLDivElement>(null);
+  // One original resource host moves between the split and the full-view surface.
+  // The portal target stays identical, so native sessions and panel drafts stay mounted.
+  const [inspectorHost] = useState(() => {
+    const host = document.createElement('div');
+    host.className = 'inspector-resource-host';
+    return host;
+  });
+  useLayoutEffect(() => {
+    const destination = whole ? wholeBox.current : splitInspectorBox.current;
+    if (destination && inspectorHost.parentElement !== destination)
+      destination.appendChild(inspectorHost);
+  }, [whole, inspectorHost]);
+  useEffect(() => () => inspectorHost.remove(), [inspectorHost]);
+  useEffect(() => {
+    if (whole) wholeBox.current?.focus();
+  }, [whole]);
   const sessionSelection = useRef({ revision: 0, pending: Promise.resolve() });
   const selectSessionAndNavigate = (id: string) => {
     const revision = ++sessionSelection.current.revision;
@@ -915,6 +953,9 @@ export function App() {
         onSession={(id) => {
           perform(() => selectSessionAndNavigate(id));
         }}
+        whole={whole}
+        canBeWhole={canBeWhole}
+        onWhole={() => setFullView((on) => !on)}
         selection={selection}
         onPanel={onPanel}
         onClose={() => {
@@ -1147,46 +1188,70 @@ export function App() {
                 </DropdownMenu.Root>
               </div>
             </header>
-            <div className="workspace-content">
-              <Group
-                orientation="horizontal"
-                id="workbench-columns"
-                data-inspector-mode={
-                  inspectorVisible ? (narrow ? 'overlay' : 'split') : 'closed'
+            <div
+              className={
+                whole ? 'workspace-content whole' : 'workspace-content'
+              }
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  if (whole) setFullView(false);
+                  else if (inspectorVisible) setInspectorOpen(false);
                 }
-              >
-                <Panel id="main" defaultSize="68%" minSize="38%">
-                  <div className="main-stack">{content}</div>
-                </Panel>
-                <Separator
-                  className="resize-handle"
-                  style={{
-                    display: inspectorVisible && !narrow ? undefined : 'none',
-                  }}
-                  aria-label={t('resize inspector')}
-                />
-                <Panel
-                  id="inspector"
-                  minSize={narrow ? 0 : 290}
-                  maxSize={narrow ? '100%' : '50%'}
-                  defaultSize="32%"
-                  className={
-                    narrow
-                      ? 'inspector-column inspector-overlay'
-                      : 'inspector-column'
+              }}
+            >
+              {whole && (
+                <div className="inspector-full" ref={wholeBox} tabIndex={-1} />
+              )}
+              <div className={whole ? 'columns whole-under' : 'columns'}>
+                <Group
+                  orientation="horizontal"
+                  id="workbench-columns"
+                  data-inspector-mode={
+                    inspectorVisible && !whole
+                      ? narrow
+                        ? 'overlay'
+                        : 'split'
+                      : 'closed'
                   }
-                  style={{ display: inspectorVisible ? undefined : 'none' }}
                 >
-                  <div
-                    className="inspector-resource-host"
-                    onKeyDown={(event) => {
-                      if (event.key === 'Escape') setInspectorOpen(false);
+                  <Panel id="main" defaultSize="68%" minSize="38%">
+                    <div className="main-stack">{content}</div>
+                  </Panel>
+                  <Separator
+                    className="resize-handle"
+                    style={{
+                      display:
+                        inspectorVisible && !narrow && !whole
+                          ? undefined
+                          : 'none',
+                    }}
+                    aria-label={t('resize inspector')}
+                  />
+                  <Panel
+                    id="inspector"
+                    minSize={narrow ? 0 : 290}
+                    maxSize={narrow ? '100%' : '50%'}
+                    defaultSize="32%"
+                    className={
+                      narrow
+                        ? 'inspector-column inspector-overlay'
+                        : 'inspector-column'
+                    }
+                    style={{
+                      display: inspectorVisible && !whole ? undefined : 'none',
                     }}
                   >
-                    {inspector}
-                  </div>
-                </Panel>
-              </Group>
+                    <div
+                      ref={splitInspectorBox}
+                      className="inspector-resource-host"
+                      onKeyDown={(event) => {
+                        if (event.key === 'Escape') setInspectorOpen(false);
+                      }}
+                    />
+                  </Panel>
+                </Group>
+              </div>
+              {createPortal(inspector, inspectorHost)}
             </div>
           </main>
           <Modal

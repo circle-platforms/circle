@@ -182,6 +182,24 @@ export interface BrowserToolOptions {
   secrets?: () => Record<string, string>;
 }
 /**
+ * Browser tool schemas are large. Send them once this session has used the browser,
+ * or the new message asks for one (a URL, or the word browser). A plain greeting does not.
+ */
+export function browserToolsWanted(messages: Message[], prompt = ''): boolean {
+  if (
+    messages.some(
+      (message) =>
+        (message.tool_calls ?? []).some((call) =>
+          call.name.startsWith('browser_'),
+        ) ||
+        (message.role === 'tool' && message.name?.startsWith('browser_')),
+    )
+  )
+    return true;
+  return /https?:\/\/\S|\bbrowser\b|浏览器/i.test(prompt);
+}
+
+/**
  * What the tools take of a runtime: paths as the file tools take them, its stored
  * conversations, its variables and its secrets. `runtime` is read when a tool runs.
  */

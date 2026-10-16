@@ -1,23 +1,22 @@
 import { spawn, execFile } from 'node:child_process';
-import { relative, resolve, sep } from 'node:path';
+import { posix, relative, resolve, sep, win32 } from 'node:path';
 import { canonicalPath, expandUser } from './paths.js';
 import {
   classifyCommand,
   DEFAULT_CREDENTIAL_FILES,
   wildcard,
 } from './approvals.js';
-const HOST_TOP = new Set(
-  'Users home private Volumes tmp var opt Library System Applications usr etc bin sbin dev mnt media root proc run boot'.split(
-    ' ',
-  ),
-);
-export function isHostAbsolutePath(path: string): boolean {
-  return (
-    path.startsWith('~') ||
-    /^[A-Za-z]:[\\/]/.test(path) ||
-    (path.startsWith('/') &&
-      HOST_TOP.has(path.replace(/^\/+/, '').split('/')[0]!))
-  );
+/**
+ * A path the operating system already anchors. On POSIX every leading `/` is absolute,
+ * including `/workspace`, `/srv`, `/data` and `/code`. On Windows a drive (`C:\`, `C:/`),
+ * a UNC share (`\\server\share`) and a root (`\foo`) are absolute. `~` is the home folder.
+ */
+export function isHostAbsolutePath(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (path.startsWith('~')) return true;
+  return (platform === 'win32' ? win32 : posix).isAbsolute(path);
 }
 export function shellEnvironment(
   source: NodeJS.ProcessEnv = process.env,

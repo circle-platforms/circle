@@ -1,24 +1,3 @@
-Interact with Language Server Protocol (LSP) servers to get code intelligence features.
+Ask a configured language server about a file. Operations: `goToDefinition`, `findReferences`, `hover`, `documentSymbol`, `workspaceSymbol`, `goToImplementation`, `prepareCallHierarchy`, `incomingCalls`, `outgoingCalls`.
 
-Supported operations:
-- goToDefinition: Find where a symbol is defined
-- findReferences: Find all references to a symbol
-- hover: Get hover information (documentation, type info) for a symbol
-- documentSymbol: Get all symbols (functions, classes, variables) in a document
-- workspaceSymbol: List project-wide symbols matching a query string
-- goToImplementation: Find implementations of an interface or abstract method
-- prepareCallHierarchy: Get call hierarchy item at a position (functions/methods)
-- incomingCalls: Find all functions/methods that call the function at a position
-- outgoingCalls: Find all functions/methods called by the function at a position
-
-All operations require:
-- filePath: The file to operate on
-- line: The line number (1-based, as shown in editors)
-- character: The character offset (1-based, as shown in editors)
-
-workspaceSymbol also accepts:
-- query: A query string to filter symbols by. Empty string requests all symbols.
-
-For workspaceSymbol, filePath is not sent in the LSP workspace/symbol request. It is used by Circle to select and start the matching LSP server.
-
-Note: LSP servers must be configured for the file type. If no server is available, an error will be returned.
+Pass `filePath`, `line` and `character` (both 1-based, as an editor shows them). `workspaceSymbol` also takes `query` (empty lists every symbol) and uses `filePath` only to choose which server to start. If no server is configured for the file, the tool returns an error.

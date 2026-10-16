@@ -1,3 +1,4 @@
+import { cleanupNativeTest } from './helpers/native-failure.mjs';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
@@ -7,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { _electron as electron } from 'playwright';
 import { captureFailure } from './helpers/diagnostics.mjs';
+import { answerTitle, isTitleRequest } from './helpers/title-requests.mjs';
 
 // A local model gateway reads the real preceding screenshot result. It never calls a model.
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -57,6 +59,11 @@ const server = createServer(async (req, res) => {
   let body = '';
   for await (const chunk of req) body += chunk;
   const request = JSON.parse(body);
+  // The session title is asked after the turn. It is not one of the scripted steps.
+  if (isTitleRequest(request)) {
+    answerTitle(res, request);
+    return;
+  }
   requests.push(request);
   const tool = (id, name, args) => ({
     role: 'assistant',
@@ -332,8 +339,18 @@ try {
   await captureFailure(page, error, errors, output);
   throw error;
 } finally {
-  if (app) await app.close();
-  server.closeAllConnections();
-  await new Promise((resolve) => server.close(resolve));
-  await rm(temp, { recursive: true, force: true });
+  if (
+    !(await cleanupNativeTest([
+      async () => {
+        if (app) await app.close();
+      },
+      () => server.closeAllConnections(),
+      () =>
+        new Promise((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        ),
+      () => rm(temp, { recursive: true, force: true }),
+    ]))
+  )
+    process.exitCode = 1;
 }

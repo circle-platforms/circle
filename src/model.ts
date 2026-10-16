@@ -89,15 +89,34 @@ function completion(
     ...(repetition ? { client_stop: 'repetition' as const } : {}),
   };
 }
+/** Depth when the user has not chosen one. Anthropic used to fall back to `xhigh`. */
+export function defaultEffort(
+  protocol: string,
+  saved = '',
+  env = process.env.CIRCLE_REASONING_EFFORT || '',
+): string {
+  const fallback = protocol === 'anthropic' ? 'medium' : '';
+  const chosen = (env || saved || fallback).trim();
+  if (chosen && !(EFFORT_LEVELS as readonly string[]).includes(chosen))
+    return fallback;
+  return chosen;
+}
 export class GatewayModel implements ChatModel {
   readonly model: string;
+  /** A title request may call `complete` while a turn is in flight. */
+  readonly sideRequests = true;
   private openai?: OpenAI;
   private anthropic?: Anthropic;
   // How long a request waits for the answer to start (`CIRCLE_LLM_TIMEOUT`)
   private readonly timeout: number;
   effort: string;
   private readonly dropped = new Set<string>();
-  private sentParameters = new Set<string>();
+  /**
+   * Parameters the latest requests sent, newest last. Each request keeps its own set:
+   * a title request beside the turn must not replace the turn's, or a 400 would drop
+   * the wrong field. The guard drops a field after its request returned.
+   */
+  private readonly sentRecent: Set<string>[] = [];
   private readonly thinkingScope: string;
   private readonly rejectedThinking = new Set<string>();
   private readonly guard: ModelGuard;
@@ -153,15 +172,10 @@ export class GatewayModel implements ChatModel {
     if (settings.auth.protocol === 'anthropic')
       this.anthropic = new Anthropic(options);
     else this.openai = new OpenAI(options);
-    this.effort =
-      process.env.CIRCLE_REASONING_EFFORT ||
-      settings.default_thinking ||
-      (this.anthropic ? 'xhigh' : '');
-    if (
-      this.effort &&
-      !(EFFORT_LEVELS as readonly string[]).includes(this.effort)
-    )
-      this.effort = this.anthropic ? 'xhigh' : '';
+    this.effort = defaultEffort(
+      this.anthropic ? 'anthropic' : 'openai',
+      settings.default_thinking,
+    );
     this.guard = new ModelGuard(
       (parameter) => this.dropParameter(parameter),
       guardOptions,
@@ -235,6 +249,15 @@ export class GatewayModel implements ChatModel {
       ),
     );
   }
+  private effortFor(request: ModelRequest): string {
+    const chosen = request.effort ?? this.effort;
+    if (chosen && !(EFFORT_LEVELS as readonly string[]).includes(chosen))
+      return this.effort;
+    return chosen;
+  }
+  private sent(parameter: string): boolean {
+    return this.sentRecent.some((sent) => sent.has(parameter));
+  }
   get downgrades(): Record<string, string> {
     return Object.fromEntries(this.guard.downgrades);
   }
@@ -242,7 +265,7 @@ export class GatewayModel implements ChatModel {
     if (parameter === 'thinking.display') {
       if (
         !this.anthropic ||
-        !this.sentParameters.has(parameter) ||
+        !this.sent(parameter) ||
         this.dropped.has(parameter)
       )
         return false;
@@ -263,7 +286,7 @@ export class GatewayModel implements ChatModel {
         'parallel_tool_calls',
         'betas',
       ].includes(root) ||
-      !this.sentParameters.has(root) ||
+      !this.sent(root) ||
       this.dropped.has(root)
     )
       return false;
@@ -276,9 +299,11 @@ export class GatewayModel implements ChatModel {
         if (isRecord(body.thinking)) delete body.thinking.display;
       } else delete body[field];
     }
-    this.sentParameters = new Set(Object.keys(body));
+    const sent = new Set(Object.keys(body));
     if (isRecord(body.thinking) && body.thinking.display !== undefined)
-      this.sentParameters.add('thinking.display');
+      sent.add('thinking.display');
+    this.sentRecent.push(sent);
+    if (this.sentRecent.length > 8) this.sentRecent.shift();
   }
   private async completeOpenAI(request: ModelRequest): Promise<ModelResponse> {
     const messages: ChatCompletionMessageParam[] = [
@@ -353,9 +378,11 @@ export class GatewayModel implements ChatModel {
           parameters: tool.parameters,
         },
       }));
-    if (this.effort)
-      body.reasoning_effort = this
-        .effort as ChatCompletionCreateParamsStreaming['reasoning_effort'];
+    const effort = this.effortFor(request);
+    if (effort)
+      body.reasoning_effort =
+        effort as ChatCompletionCreateParamsStreaming['reasoning_effort'];
+    if (request.maxTokens) body.max_tokens = request.maxTokens;
     this.configureBody(body as unknown as Record<string, unknown>);
     const stream = await this.openai!.chat.completions.create(body, {
       signal: request.signal,
@@ -368,6 +395,7 @@ export class GatewayModel implements ChatModel {
     let servedModel = this.model;
     const calls = new Map<number, { id: string; name: string; args: string }>();
     const usage = emptyUsage();
+    let cacheReported = false;
     let guardedStop = false;
     try {
       for await (const chunk of stream) {
@@ -381,10 +409,11 @@ export class GatewayModel implements ChatModel {
             usage.output_tokens,
             chunk.usage.completion_tokens || 0,
           );
-          usage.cache_read_tokens = Math.max(
-            usage.cache_read_tokens,
-            chunk.usage.prompt_tokens_details?.cached_tokens ?? 0,
-          );
+          const cached = chunk.usage.prompt_tokens_details?.cached_tokens;
+          if (typeof cached === 'number') {
+            cacheReported = true;
+            usage.cache_read_tokens = Math.max(usage.cache_read_tokens, cached);
+          }
           request.progress?.('usage');
         }
         const choice = chunk.choices[0];
@@ -451,6 +480,7 @@ export class GatewayModel implements ChatModel {
         content,
         thinking,
         tool_calls,
+        ...(cacheReported ? {} : { cache_reported: false }),
         completion: completion('openai', finish, undefined, guardedStop),
         ...(guardedStop || !finish || finish === 'length'
           ? { truncated: true }
@@ -591,7 +621,7 @@ export class GatewayModel implements ChatModel {
       model: this.model,
       system,
       messages,
-      max_tokens: this.outputBudget ?? 32000,
+      max_tokens: request.maxTokens ?? this.outputBudget ?? 32000,
     };
     if (request.tools.length)
       body.tools = request.tools.map((tool) => ({
@@ -599,7 +629,12 @@ export class GatewayModel implements ChatModel {
         description: tool.description,
         input_schema: { ...tool.parameters, type: 'object' },
       }));
-    if (this.effort) {
+    const effort = this.effortFor(request);
+    if (request.effort === '') {
+      // Omitting `thinking` leaves glm-5.3 free to reason until max_tokens.
+      // `{type: 'disabled'}` is the switch it accepts.
+      body.thinking = { type: 'disabled' };
+    } else if (effort) {
       const profile = modelProfile('anthropic', this.model);
       const claude = this.model
         .toLowerCase()
@@ -607,7 +642,7 @@ export class GatewayModel implements ChatModel {
         .at(-1)
         ?.startsWith('claude');
       if (claude && profile && !profile.reasoning_effort_levels?.length) {
-        const requested = THINKING_BUDGET[this.effort] ?? 16000;
+        const requested = THINKING_BUDGET[effort] ?? 16000;
         const budget =
           requested >= body.max_tokens
             ? Math.max(1024, Math.floor(body.max_tokens / 2))
@@ -618,8 +653,8 @@ export class GatewayModel implements ChatModel {
         if (claude) body.thinking = { type: 'adaptive' };
         body.output_config = {
           effort: (profile?.reasoning_effort_levels?.length
-            ? fitEffort(this.effort, profile.reasoning_effort_levels)
-            : this.effort) as NonNullable<
+            ? fitEffort(effort, profile.reasoning_effort_levels)
+            : effort) as NonNullable<
             MessageCreateParamsNonStreaming['output_config']
           >['effort'],
         };
@@ -790,6 +825,10 @@ export class GatewayModel implements ChatModel {
         thinking,
         tool_calls,
         provider_content: final.content,
+        ...(typeof final.usage.cache_read_input_tokens === 'number' ||
+        typeof final.usage.cache_creation_input_tokens === 'number'
+          ? {}
+          : { cache_reported: false }),
         completion: {
           ...completion(
             'anthropic',

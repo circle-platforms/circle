@@ -1,12 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  existsSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { assertViewport, setViewport } from './helpers/viewport.mjs';
 import './model-request-frames.test.mjs';
+import './native-failure.test.mjs';
 
 for (const { entryName, overridden } of [
   'browser-coordinate-live.mjs',
@@ -19,6 +28,20 @@ for (const { entryName, overridden } of [
     t.after(() => rmSync(temp, { recursive: true, force: true }));
     const capture = join(temp, 'launch.json');
     const hook = join(temp, 'launch-hook.mjs');
+    const sharedEvidence = fileURLToPath(
+      new URL('../artifacts/browser-coordinate-live', import.meta.url),
+    );
+    const sharedFiles = existsSync(sharedEvidence)
+      ? readdirSync(sharedEvidence).sort()
+      : [];
+    const privateEvidence = join(temp, 'failure-evidence');
+    mkdirSync(privateEvidence);
+    const filesystem = `
+      import * as fs from 'node:fs/promises'; import { join, basename } from 'node:path';
+      export * from 'node:fs/promises';
+      export const mkdir = (path, options) => fs.mkdir(path === ${JSON.stringify(sharedEvidence)} ? ${JSON.stringify(privateEvidence)} : path, options);
+      export const writeFile = (path, ...args) => fs.writeFile(typeof path === 'string' && path.startsWith(${JSON.stringify(sharedEvidence)}) ? join(${JSON.stringify(privateEvidence)}, basename(path)) : path, ...args);
+    `;
     const native = `
       import { writeFileSync } from 'node:fs';
       export const _electron = { async launch(options) {
@@ -32,6 +55,9 @@ for (const { entryName, overridden } of [
        registerHooks({ resolve(specifier, context, nextResolve) {
          if (specifier === 'playwright') return {
            url: 'data:text/javascript,' + encodeURIComponent(${JSON.stringify(native)}), shortCircuit: true
+         };
+         if (${JSON.stringify(entryName === 'browser-coordinate-live.mjs')} && specifier === 'node:fs/promises' && !context.parentURL?.startsWith('data:')) return {
+           url: 'data:text/javascript,' + encodeURIComponent(${JSON.stringify(filesystem)}), shortCircuit: true
          };
          return nextResolve(specifier, context);
        } });`,
@@ -59,6 +85,16 @@ for (const { entryName, overridden } of [
       args: [overridden ? resolve(override) : root],
       cwd: root,
     });
+    assert.deepEqual(
+      existsSync(sharedEvidence) ? readdirSync(sharedEvidence).sort() : [],
+      sharedFiles,
+    );
+    if (entryName === 'browser-coordinate-live.mjs')
+      assert.ok(
+        readdirSync(privateEvidence).some((name) =>
+          name.endsWith('-primary.json'),
+        ),
+      );
   });
 }
 

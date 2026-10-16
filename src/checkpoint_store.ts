@@ -5,7 +5,11 @@ import { ensureHome, normalizeWorkspace } from './paths.js';
 import type { Message } from './types.js';
 import type { LegacyImportPlan } from './legacy_sessions.js';
 import { createHash } from 'node:crypto';
-import { acquireSessionLease, type SessionLease } from './session_lock.js';
+import {
+  acquireSessionLease,
+  sessionOccupied,
+  type SessionLease,
+} from './session_lock.js';
 import { InputOutbox } from './input_outbox.js';
 import {
   validateSessionGraph,
@@ -13,6 +17,11 @@ import {
   type SessionGraph,
   type SessionGraphNode,
 } from './session_graph.js';
+import {
+  firstUserSource,
+  mightBeStaleTitle,
+  repairedTitle,
+} from './session_title.js';
 export interface Session {
   id: string;
   workspace: string;
@@ -21,7 +30,14 @@ export interface Session {
   head: string | null;
   created: number;
   updated: number;
+  /**
+   * When the last user or assistant message was written. `list` fills this in.
+   * Opening a session, a title repair and an internal marker do not move it.
+   */
+  activity?: number;
   parent_id: string | null;
+  /** 1 after /name or /rename. Automatic titles stay unset and can be replaced. */
+  title_locked?: number;
 }
 export interface Checkpoint {
   id: string;
@@ -105,6 +121,10 @@ export class CheckpointStore {
       const columns = this.db.prepare('PRAGMA table_info(sessions)').all();
       if (!columns.some((row) => row.name === 'parent_id'))
         this.db.exec('ALTER TABLE sessions ADD COLUMN parent_id TEXT');
+      if (!columns.some((row) => row.name === 'title_locked'))
+        this.db.exec(
+          'ALTER TABLE sessions ADD COLUMN title_locked INTEGER NOT NULL DEFAULT 0',
+        );
       this.db.exec(
         'CREATE INDEX IF NOT EXISTS sessions_parent ON sessions(parent_id);',
       );
@@ -129,9 +149,81 @@ export class CheckpointStore {
       this.db.exec('ROLLBACK');
       throw error;
     }
-    this.inputs = new InputOutbox(this.db, (id, action) =>
-      this.writing([id], action),
+    this.inputs = new InputOutbox(
+      this.db,
+      (id, action) => this.writing([id], action),
+      {
+        deferred: (id) => this.deferred.has(id) && !this.row(id),
+        materialize: (id) => this.materialize(id, true),
+        committed: (id) => {
+          if (this.deferred.delete(id)) this.writeVersion++;
+        },
+      },
     );
+  }
+  /** Sessions kept in memory until the first message, so an unused /new leaves no row. */
+  private deferred = new Map<string, Session>();
+  /**
+   * Delete untitled sessions that never received a message. A live runtime still
+   * holds the lease, so opening another store does not remove a conversation
+   * that simply has not been written yet. The terminal calls this on startup.
+   */
+  purgeEmptySessions(): void {
+    const ids = (
+      this.db
+        .prepare(
+          `SELECT id FROM sessions WHERE parent_id IS NULL AND head IS NULL AND title = '' AND NOT EXISTS (SELECT 1 FROM input_outbox WHERE session_id = sessions.id AND state IN ('queued','recovery_pending'))`,
+        )
+        .all() as { id: string }[]
+    ).filter(({ id }) => !this.home || !sessionOccupied(this.home, id));
+    if (!ids.length) return;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const { id } of ids)
+        this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
+      this.db.exec('COMMIT');
+      this.writeVersion++;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+  /** Drop a session that was never written, or one whose only turn failed before a reply. */
+  abandonUnanswered(sessionId: string): boolean {
+    const session = this.get(sessionId);
+    if (!session) return false;
+    const messages = session.head ? this.messages(sessionId) : [];
+    if (
+      messages.some(
+        (message) =>
+          message.role === 'assistant' ||
+          message.role === 'tool' ||
+          Boolean(message.tool_calls?.length),
+      )
+    )
+      return false;
+    this.writing([sessionId], () => {
+      this.db.exec('BEGIN IMMEDIATE');
+      try {
+        this.db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
+        this.db.exec('COMMIT');
+      } catch (error) {
+        this.db.exec('ROLLBACK');
+        throw error;
+      }
+      this.messageCache.delete(sessionId);
+      this.deferred.set(sessionId, {
+        ...session,
+        title: '',
+        head: null,
+        updated: Date.now(),
+      });
+      this.writeVersion++;
+    });
+    return true;
+  }
+  dropDeferred(sessionId: string): void {
+    this.deferred.delete(sessionId);
   }
   /** Hold execution ownership through turns, background tasks and shutdown. */
   claimSession(
@@ -172,12 +264,55 @@ export class CheckpointStore {
     title = '',
     id = 'circle-' + randomUUID().slice(0, 8),
     parentId: string | null = null,
+    defer = false,
   ): Session {
+    if (defer && !parentId && !this.row(id)) {
+      const now = Date.now();
+      const session: Session = {
+        id,
+        workspace: normalizeWorkspace(workspace),
+        title,
+        model,
+        head: null,
+        created: now,
+        updated: now,
+        parent_id: null,
+        title_locked: 0,
+      };
+      this.deferred.set(id, session);
+      return { ...session };
+    }
     if (parentId && this.ownership.has(parentId))
       this.claimSession(id, this.ownershipHandlers.get(parentId));
     return this.writing(parentId ? [parentId, id] : [id], () =>
       this.createOwned(workspace, model, title, id, parentId),
     );
+  }
+  private row(id: string): Session | undefined {
+    return this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as
+      Session | undefined;
+  }
+  private materialize(sessionId: string, retainUntilCommit = false): void {
+    const pending = this.deferred.get(sessionId);
+    if (!pending || this.row(sessionId)) {
+      if (!retainUntilCommit) this.deferred.delete(sessionId);
+      return;
+    }
+    this.db
+      .prepare(
+        'INSERT INTO sessions (id,workspace,title,model,head,created,updated,parent_id,title_locked) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+      )
+      .run(
+        pending.id,
+        pending.workspace,
+        pending.title,
+        pending.model,
+        pending.created,
+        Date.now(),
+        pending.parent_id,
+        pending.title_locked ? 1 : 0,
+      );
+    if (!retainUntilCommit) this.deferred.delete(sessionId);
   }
   private createOwned(
     workspace: string,
@@ -205,27 +340,50 @@ export class CheckpointStore {
     return this.get(id)!;
   }
   get(id: string): Session | undefined {
-    return this.db
-      .prepare('SELECT * FROM sessions WHERE id = ?')
-      .get(id) as unknown as Session | undefined;
+    const stored = this.row(id);
+    if (stored) return stored;
+    const pending = this.deferred.get(id);
+    return pending ? { ...pending } : undefined;
   }
   find(suffix: string): Session | undefined {
-    const sessions = this.list().filter(
-      (session) => session.id === suffix || session.id.endsWith(suffix),
-    );
-    if (sessions.length > 1) throw new Error('session id is ambiguous');
-    return sessions[0];
+    // list() hides an untitled session with no messages. Opening one by id,
+    // including a live empty session another process still leases, must see it.
+    // Child sessions stay out of discovery; children() is how a parent finds them.
+    const sessions = [
+      ...(this.db
+        .prepare('SELECT * FROM sessions WHERE parent_id IS NULL')
+        .all() as unknown as Session[]),
+      ...[...this.deferred.values()].filter((session) => !session.parent_id),
+    ].filter((session) => session.id === suffix || session.id.endsWith(suffix));
+    const unique = [
+      ...new Map(sessions.map((session) => [session.id, session])).values(),
+    ];
+    if (unique.length > 1) throw new Error('session id is ambiguous');
+    return unique[0];
   }
-  list(workspace?: string, includeChildren = false): Session[] {
+  /**
+   * Root sessions, newest message first. An untitled session with no message is
+   * left out unless `empty` is set: the terminal never lists one, while the
+   * desktop shows the open conversation before its first message.
+   */
+  list(workspace?: string, includeChildren = false, empty = false): Session[] {
+    // Last message, not last open. A mode boundary or an interrupted marker
+    // written while opening must not jump the row to the top.
+    const activity = `COALESCE((SELECT MAX(c.created) FROM checkpoints c WHERE c.session_id = sessions.id AND json_extract(c.message, '$.role') IN ('user', 'assistant') AND IFNULL(json_extract(c.message, '$.internal'), '') = ''), sessions.created)`;
+    const hidden = includeChildren
+      ? ''
+      : empty
+        ? 'AND parent_id IS NULL'
+        : "AND parent_id IS NULL AND NOT (head IS NULL AND title = '' AND NOT EXISTS (SELECT 1 FROM input_outbox WHERE session_id = sessions.id AND state IN ('queued','recovery_pending')))";
     return (workspace
       ? this.db
           .prepare(
-            `SELECT * FROM sessions WHERE workspace = ? ${includeChildren ? '' : 'AND parent_id IS NULL'} ORDER BY updated DESC`,
+            `SELECT sessions.*, ${activity} AS activity FROM sessions WHERE workspace = ? ${hidden} ORDER BY activity DESC, sessions.created DESC`,
           )
           .all(normalizeWorkspace(workspace))
       : this.db
           .prepare(
-            `SELECT * FROM sessions ${includeChildren ? '' : 'WHERE parent_id IS NULL'} ORDER BY updated DESC`,
+            `SELECT sessions.*, ${activity} AS activity FROM sessions WHERE 1 = 1 ${hidden} ORDER BY activity DESC, sessions.created DESC`,
           )
           .all()) as unknown as Session[];
   }
@@ -234,11 +392,38 @@ export class CheckpointStore {
       .prepare('SELECT * FROM sessions WHERE parent_id=? ORDER BY created,id')
       .all(parentId) as unknown as Session[];
   }
-  rename(id: string, title: string): void {
-    // A new name is not new work. Recency stays the last message.
+  /**
+   * Replace a title saved by an older build (reasoning text, or `150` cut from
+   * `1500`) with the short title of the first message. A rename is not
+   * activity, so the row stays where it was.
+   */
+  repairStaleTitles(): void {
+    for (const session of this.list()) {
+      if (
+        !session.head ||
+        session.title_locked ||
+        !mightBeStaleTitle(session.title)
+      )
+        continue;
+      const source = firstUserSource(this.messages(session.id));
+      const next = source ? repairedTitle(session.title, source) : undefined;
+      if (next) this.rename(session.id, next);
+    }
+  }
+  rename(id: string, title: string, locked = false): void {
+    const pending = this.deferred.get(id);
+    if (pending && !this.row(id)) {
+      pending.title = title;
+      pending.title_locked = locked ? 1 : 0;
+      return;
+    }
+    // Leave `updated` alone. The session list is newest-activity first, and a
+    // rename is not activity: bumping it jumped the row to the top.
+    // `locked` is set when the person chose the name. A generated title stays
+    // unlocked so a later open can replace a bad one.
     this.db
-      .prepare('UPDATE sessions SET title = ? WHERE id = ?')
-      .run(title, id);
+      .prepare('UPDATE sessions SET title = ?, title_locked = ? WHERE id = ?')
+      .run(title, locked ? 1 : 0, id);
     this.writeVersion++;
   }
   private decode(row: Record<string, unknown>): Checkpoint {
@@ -272,6 +457,7 @@ export class CheckpointStore {
     messages: Message[],
     expectedHead?: string | null,
   ): string | null {
+    if (!messages.length) return this.get(sessionId)?.head ?? null;
     return this.writing([sessionId], () =>
       this.appendOwned(sessionId, messages, expectedHead),
     );
@@ -297,6 +483,7 @@ export class CheckpointStore {
   ): string | null {
     this.db.exec('BEGIN IMMEDIATE');
     try {
+      this.materialize(sessionId, true);
       const session = this.get(sessionId);
       if (!session) throw new Error('unknown session');
       if (expectedHead !== undefined && expectedHead !== session.head)
@@ -316,6 +503,7 @@ export class CheckpointStore {
         .prepare('UPDATE sessions SET head = ?, updated = ? WHERE id = ?')
         .run(head, Date.now(), sessionId);
       this.db.exec('COMMIT');
+      this.deferred.delete(sessionId);
       // When the cache holds the head this append started from, the new messages extend
       // it; otherwise the chain is walked again on the next read. It extends with what was
       // written, decoded, not the caller's objects: a read returns what the database holds.
@@ -401,6 +589,7 @@ export class CheckpointStore {
       seen.add(id);
       for (const child of this.children(id)) visit(child.id, seen);
       this.messageCache.delete(id);
+      this.deferred.delete(id);
       this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
     };
     this.db.exec('BEGIN IMMEDIATE');
@@ -807,18 +996,39 @@ export class CheckpointStore {
         pending.set(call.id, call.name);
       if (message.role === 'tool') pending.delete(message.tool_call_id!);
     }
-    this.append(
-      sessionId,
-      [...pending].map(([id, name]) => ({
+    if (pending.size) {
+      this.append(
+        sessionId,
+        [...pending].map(([id, name]) => ({
+          id: randomUUID(),
+          role: 'tool',
+          tool_call_id: id,
+          name,
+          status: 'error',
+          content:
+            'Interrupted before a tool result was saved. The tool is not replayed.',
+        })),
+      );
+      return;
+    }
+    if (messages.some((message) => message.internal === 'interrupted')) return;
+    const last = messages.filter((message) => !message.internal).at(-1);
+    // A turn stopped while the assistant was still streaming saves that partial
+    // reply. The last message is then the assistant, and the marker was skipped.
+    const stopped =
+      last?.role === 'user' ||
+      (last?.role === 'assistant' && last.interrupted === true);
+    if (!stopped) return;
+    this.append(sessionId, [
+      {
         id: randomUUID(),
-        role: 'tool',
-        tool_call_id: id,
-        name,
-        status: 'error',
+        role: 'user',
         content:
-          'Interrupted before a tool result was saved. The tool is not replayed.',
-      })),
-    );
+          'The previous turn was interrupted before a reply was saved. Continue from the last user message if they ask again.',
+        display: 'Interrupted',
+        internal: 'interrupted',
+      },
+    ]);
   }
   setSummary(sessionId: string, at: string, summary: string): void {
     const checkpoint = this.checkpoint(at);

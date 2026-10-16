@@ -6,7 +6,7 @@ nav_order: 4
 # Register Circle in skills.sh / `npx skills`
 
 Circle already **consumes** the universal Agent Skills layout (`.agents/skills` in
-the folder and its parents up to the git root, and `~/.agents/skills`), same as Amp /
+the workspace folder, and `~/.agents/skills`), same as Amp /
 Cursor / Codex / Cline. `src/skills.ts` lists every folder it reads. Until Circle is listed
 as its own agent in [vercel-labs/skills](https://github.com/vercel-labs/skills),
 install with any agent that writes that layout:

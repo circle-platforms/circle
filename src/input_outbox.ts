@@ -57,6 +57,11 @@ export class InputOutbox {
   constructor(
     private readonly db: DatabaseSync,
     private readonly writing: <T>(sessionId: string, action: () => T) => T,
+    private readonly sessions?: {
+      deferred(id: string): boolean;
+      materialize(id: string): void;
+      committed(id: string): void;
+    },
   ) {
     db.exec(`
       CREATE TABLE IF NOT EXISTS input_outbox (
@@ -75,16 +80,22 @@ export class InputOutbox {
         signature TEXT NOT NULL);
     `);
   }
-  private transaction<T>(sessionId: string, action: () => T): T {
+  private transaction<T>(
+    sessionId: string,
+    action: () => T,
+    materialize = false,
+  ): T {
     return this.writing(sessionId, () => {
       this.db.exec('BEGIN IMMEDIATE');
       try {
+        if (materialize) this.sessions?.materialize(sessionId);
         if (
           !this.db.prepare('SELECT id FROM sessions WHERE id=?').get(sessionId)
         )
           throw new Error('unknown session');
         const result = action();
         this.db.exec('COMMIT');
+        if (materialize) this.sessions?.committed(sessionId);
         return result;
       } catch (error) {
         this.db.exec('ROLLBACK');
@@ -134,6 +145,9 @@ export class InputOutbox {
       .map((row) => this.decode(row));
   }
   recover(sessionId: string, epoch: string): void {
+    // An untouched deferred conversation has no persisted queue to recover.
+    // Unknown IDs still reach the transaction and are rejected.
+    if (this.sessions?.deferred(sessionId)) return;
     this.transaction(sessionId, () => {
       const result = this.db
         .prepare(
@@ -167,38 +181,53 @@ export class InputOutbox {
     const signature = createHash('sha256')
       .update(JSON.stringify({ sessionId, kind, payload: safe }))
       .digest('hex');
-    return this.transaction(sessionId, () => {
-      const id = inputId ?? randomUUID(),
-        now = Date.now();
-      const previous = this.db
-        .prepare(
-          'SELECT signature FROM input_outbox_identities WHERE input_id=?',
-        )
-        .get(id);
-      if (previous) {
-        if (previous.signature !== signature)
-          throw new Error('queued input identity reused with different input');
-        const stored = this.get(sessionId, id);
-        if (!stored) throw new Error('queued input identity owner changed');
-        return stored;
-      }
-      const order =
-        Number(
-          this.db
-            .prepare(
-              'SELECT MAX(ordinal) AS latest FROM input_outbox WHERE session_id=?',
-            )
-            .get(sessionId)?.latest ?? 0,
-        ) + 1;
-      this.db
-        .prepare("INSERT INTO input_outbox VALUES (?,?,?,?,'queued',?,?,?,?)")
-        .run(id, sessionId, epoch, kind, order, JSON.stringify(safe), now, now);
-      this.db
-        .prepare('INSERT INTO input_outbox_identities VALUES (?,?)')
-        .run(id, signature);
-      this.bump(sessionId);
-      return this.get(sessionId, id)!;
-    });
+    return this.transaction(
+      sessionId,
+      () => {
+        const id = inputId ?? randomUUID(),
+          now = Date.now();
+        const previous = this.db
+          .prepare(
+            'SELECT signature FROM input_outbox_identities WHERE input_id=?',
+          )
+          .get(id);
+        if (previous) {
+          if (previous.signature !== signature)
+            throw new Error(
+              'queued input identity reused with different input',
+            );
+          const stored = this.get(sessionId, id);
+          if (!stored) throw new Error('queued input identity owner changed');
+          return stored;
+        }
+        const order =
+          Number(
+            this.db
+              .prepare(
+                'SELECT MAX(ordinal) AS latest FROM input_outbox WHERE session_id=?',
+              )
+              .get(sessionId)?.latest ?? 0,
+          ) + 1;
+        this.db
+          .prepare("INSERT INTO input_outbox VALUES (?,?,?,?,'queued',?,?,?,?)")
+          .run(
+            id,
+            sessionId,
+            epoch,
+            kind,
+            order,
+            JSON.stringify(safe),
+            now,
+            now,
+          );
+        this.db
+          .prepare('INSERT INTO input_outbox_identities VALUES (?,?)')
+          .run(id, signature);
+        this.bump(sessionId);
+        return this.get(sessionId, id)!;
+      },
+      true,
+    );
   }
   update(
     sessionId: string,

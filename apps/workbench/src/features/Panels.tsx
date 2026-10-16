@@ -24,6 +24,8 @@ import {
   Plus,
   RotateCcw,
   ExternalLink,
+  Maximize2,
+  Minimize2,
   Search,
   Play,
   Users,
@@ -76,6 +78,10 @@ interface Props {
   onFile: (path: string, line?: number, column?: number) => void;
   visible?: boolean;
   onSession?: (id: string) => void;
+  /** The panel across the whole workspace, and the way back to the split. */
+  whole: boolean;
+  canBeWhole: boolean;
+  onWhole: () => void;
   onAgent: (id: string) => void;
   onInteraction: (item: Interaction) => void;
   onDialog: (dialog: DialogId, selection?: string) => void;
@@ -159,9 +165,21 @@ export function Inspector(props: Props) {
               ? selected.panel.title
               : t('context')}
         </h2>
-        <IconButton label={t('close inspector')} onClick={props.onClose}>
-          <X size={15} />
-        </IconButton>
+        <span className="inspector-actions">
+          {props.canBeWhole && (
+            <IconButton
+              label={props.whole ? t('exit full view') : t('full view')}
+              aria-pressed={props.whole}
+              className={`icon-button ${props.whole ? 'active' : ''}`}
+              onClick={props.onWhole}
+            >
+              {props.whole ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            </IconButton>
+          )}
+          <IconButton label={t('close inspector')} onClick={props.onClose}>
+            <X size={15} />
+          </IconButton>
+        </span>
       </header>
       <div className={`inspector-body ${terminal ? 'flush' : ''}`}>
         <InspectorResources {...props} sessionId={session.id} panels={panels} />

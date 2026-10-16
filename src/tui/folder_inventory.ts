@@ -1,7 +1,7 @@
 // What trusting a folder loads from the folder itself, found by the same loaders the session
-// uses: its instruction files, skills (up to the git root, as `.agents/skills` is looked
-// for), custom commands, extensions and project settings. Your own skills, commands and
-// extensions are not the folder's and are left out (ported from circle/trust.py).
+// uses: its instruction files, skills, custom commands, extensions and project settings.
+// A parent folder's files are not this folder's. Your own skills, commands and extensions
+// are not the folder's and are left out (ported from circle/trust.py).
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve, isAbsolute } from 'node:path';
 import { discoverCustomCommands } from '../commands.js';

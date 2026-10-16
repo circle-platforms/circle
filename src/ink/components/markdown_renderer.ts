@@ -2,6 +2,7 @@ import { Lexer, type Token, type Tokens } from 'marked';
 import { decodeHTML } from 'entities';
 import { palette, sgrJoin } from '../theme.js';
 import { stringWidth, stripAnsi, wrap } from '../string_width.js';
+import { highlightLine } from '../highlight.js';
 export interface MarkdownStyle {
   base?: string;
   background?: string;
@@ -96,6 +97,12 @@ function inline(tokens: Token[], style = ''): Span[] {
   }
   return result;
 }
+// Closing marks, including ” ’ 」 』, do not start a line. Opening marks do not end one.
+const NO_LINE_START = new Set(
+  Array.from(')）]】〕〉》」』、。．，,！？!?：；;:…·”’＂＇»›〞〟}｝'),
+);
+const NO_LINE_END = new Set(Array.from('(（[【〔〈《「『“‘«‹{｛'));
+const isDigitGlyph = (text: string): boolean => /^\d$/.test(text);
 function rowsFor(
   spans: Span[],
   width = 80,
@@ -123,6 +130,23 @@ function rowsFor(
     line = [];
     used = 0;
   };
+  // An opening mark that would end the previous line stays with this one, when it fits.
+  const pullOpening = (incoming = 0): void => {
+    const prev = rows.at(-1);
+    const ending = prev?.at(-1);
+    if (
+      prev &&
+      prev.length > 1 &&
+      ending &&
+      NO_LINE_END.has(ending.text) &&
+      used + ending.width + incoming <= width
+    ) {
+      prev.pop();
+      line.unshift(ending);
+      used += ending.width;
+      if (!prev.length) rows.pop();
+    }
+  };
   for (const glyph of glyphs) {
     if (glyph.width > width) {
       glyph.text = '�';
@@ -133,17 +157,74 @@ function rowsFor(
       continue;
     }
     if (used + glyph.width > width && line.length) {
-      const space = wordWrap
-        ? line.map((item) => item.text).lastIndexOf(' ')
-        : -1;
-      if (space > 0) {
-        const tail = line.slice(space + 1);
-        line = line.slice(0, space);
-        flush();
-        line = tail;
-        used = tail.reduce((sum, item) => sum + item.width, 0);
-      } else flush();
-      if (glyph.text === ' ' && wordWrap) continue;
+      // `395` stays on one line when the whole run fits the next line.
+      let movedDigits = false;
+      if (isDigitGlyph(glyph.text) && isDigitGlyph(line.at(-1)?.text ?? '')) {
+        let start = line.length - 1;
+        while (start > 0 && isDigitGlyph(line[start - 1]!.text)) start--;
+        const run = line.slice(start);
+        const runWidth =
+          run.reduce((sum, item) => sum + item.width, 0) + glyph.width;
+        if (start > 0 && runWidth <= width) {
+          line = line.slice(0, start);
+          if (line.at(-1)?.text === ' ') line.pop();
+          if (line.length) flush();
+          else used = 0;
+          line = [...run];
+          used = runWidth - glyph.width;
+          pullOpening(glyph.width);
+          movedDigits = true;
+        }
+      }
+      if (!movedDigits) {
+        const space = wordWrap
+          ? line.map((item) => item.text).lastIndexOf(' ')
+          : -1;
+        if (space > 0) {
+          const tail = line.slice(space + 1);
+          line = line.slice(0, space);
+          flush();
+          line = tail;
+          used = tail.reduce((sum, item) => sum + item.width, 0);
+        } else flush();
+        // The overflowing space is the wrap. When an earlier space already broke
+        // the line and this space still fits, keep it: an em dash often lands the
+        // previous word on the boundary, and dropping the space glues the next word.
+        if (
+          glyph.text === ' ' &&
+          wordWrap &&
+          (used === 0 || used + glyph.width > width)
+        )
+          continue;
+        // Opening punctuation stays with what follows it, so a line does not end on （.
+        pullOpening(glyph.width);
+      }
+    }
+    // Closing punctuation stays with the word before it, so a line does not start on ）.
+    // If that leaves an opening mark at the end of the previous line, take it too.
+    if (
+      used === 0 &&
+      line.length === 0 &&
+      rows.length > 0 &&
+      NO_LINE_START.has(glyph.text)
+    ) {
+      const prev = rows[rows.length - 1]!;
+      if (prev.length > 1) {
+        const moved = prev.pop()!;
+        line.push(moved);
+        used += moved.width;
+        const ending = prev.at(-1);
+        if (
+          ending &&
+          NO_LINE_END.has(ending.text) &&
+          used + ending.width + glyph.width <= width
+        ) {
+          prev.pop();
+          line.unshift(ending);
+          used += ending.width;
+          if (!prev.length) rows.pop();
+        }
+      }
     }
     line.push(glyph);
     used += glyph.width;
@@ -194,16 +275,24 @@ function blocks(
     else if (token.type === 'code') {
       const code = token as Tokens.Code;
       const room = Math.max(1, width - 2);
-      const content = wrap(code.text, room);
+      const lang = (code.lang || '').trim();
+      const paint = (line: string, shown: string): string =>
+        p.panel_bg +
+        p.text +
+        ' ' +
+        shown +
+        ' '.repeat(Math.max(0, width - 1 - stringWidth(line))) +
+        p.reset;
+      if (lang)
+        rows.push(
+          paint(
+            lang,
+            p.faint + lang.slice(0, room) + p.reset + p.panel_bg + p.text,
+          ),
+        );
       rows.push(
-        ...content.map(
-          (line) =>
-            p.panel_bg +
-            p.text +
-            ' ' +
-            line +
-            ' '.repeat(Math.max(0, width - 1 - stringWidth(line))) +
-            p.reset,
+        ...wrap(code.text.replace(/\n$/, ''), room).map((line) =>
+          paint(line, lang ? highlightLine(lang, line) : line),
         ),
       );
     } else if (token.type === 'blockquote')
