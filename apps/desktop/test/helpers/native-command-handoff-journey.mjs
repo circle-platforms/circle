@@ -96,10 +96,15 @@ export async function runNativeCommandHandoffJourney({
       .locator('.sidebar')
       .getByRole('button', { name: 'new session', exact: true })
       .click();
-    await page
-      .getByRole('textbox', { name: 'message', exact: true })
-      .fill(commandHandoffPrompt);
-    await page
+    const home = page.locator('.home:visible');
+    await home.waitFor();
+    const homeMessage = home.getByRole('textbox', {
+      name: 'message',
+      exact: true,
+    });
+    await homeMessage.fill(commandHandoffPrompt);
+    assert.equal(await homeMessage.inputValue(), commandHandoffPrompt);
+    await home
       .getByRole('button', { name: 'send message', exact: true })
       .click();
     await until(async () => {
@@ -145,13 +150,11 @@ export async function runNativeCommandHandoffJourney({
     target = resolved.target;
     assert.equal(target.executionSessionId, owner);
     assert.equal(target.toolCallId, 'native-handoff-execute');
-    const card = page
-      .locator('.tool-call')
-      .filter({
-        has: page
-          .locator('.tool-target')
-          .filter({ hasText: 'native-command-handoff.cjs' }),
-      });
+    const card = page.locator('.tool-call').filter({
+      has: page
+        .locator('.tool-target')
+        .filter({ hasText: 'native-command-handoff.cjs' }),
+    });
     assert.equal(await card.count(), 1);
     const head = card.locator('.tool-head');
     if ((await head.getAttribute('aria-expanded')) !== 'true')
@@ -265,8 +268,16 @@ export async function runNativeCommandHandoffJourney({
       await page
         .locator(`.sidebar .session-link[href="#/session/${parentSessionId}"]`)
         .click();
+      await page.waitForFunction(
+        (id) => location.hash === '#/session/' + id,
+        parentSessionId,
+      );
+      const parentConversation = page.locator(
+        '.main-stack .conversation:visible',
+      );
+      await parentConversation.waitFor();
       assert.equal(
-        await page
+        await parentConversation
           .getByRole('textbox', { name: 'message', exact: true })
           .inputValue(),
         draft,
