@@ -500,12 +500,6 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       const { toHtml, toSessionBundle } = await import('./session_export.js');
       const store = new CheckpointStore(home);
       try {
-        const { migrateLegacy } = await import('./migration.js');
-        const migration = migrateLegacy(home, store);
-        for (const error of migration.errors)
-          process.stderr.write(
-            `Could not migrate ${error.thread || 'legacy data'}: ${error.message}\n`,
-          );
         const session = store.find(options.export[0]!);
         if (!session) throw new UsageError('unknown session');
         const path = options.export[1] || session.id + '.html';
@@ -615,10 +609,6 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     // full-screen interface; their tools reach the model from the first turn.
     if (options.extensions) await runtime.initialize();
     offSignals = installExitGuard(runtime);
-    for (const error of runtime.migration.errors)
-      process.stderr.write(
-        `Could not migrate ${error.thread || 'legacy data'}: ${error.message}\n`,
-      );
     // Only --yolo turns auto on here; without it a saved default_mode stays.
     if (options.yolo) runtime.policy.setYolo(runtime.session.id, true);
     if (options.mode === 'rpc') {

@@ -1008,10 +1008,6 @@ export class SessionApp {
     } finally {
       this.connecting = false;
     }
-    for (const error of runtime.migration.errors)
-      this.fail(
-        `Could not migrate ${error.thread || 'legacy data'}: ${error.message}`,
-      );
     runtime.repairRecentTitles();
     this.repaint();
   }

@@ -496,31 +496,6 @@ test('a background job is one faint line under its call and a notice row whose g
     );
     coloursFrom(p, rows.join('\n'));
   }
-  // A session of the Python releases: the job is in `circle_job`, the output before it stays.
-  const state = screen();
-  state.messages = [
-    reply('a', '', [{ id: 'old', name: 'execute', args: { command: 'make' } }])
-      .message,
-    {
-      id: 'r',
-      role: 'tool',
-      tool_call_id: 'old',
-      name: 'execute',
-      status: 'success',
-      content:
-        'compiling\nlinking\n\n[The command was still running after 120 seconds. It continues as job j7; stop it with stop_job.]\n[Command succeeded with exit code 0]',
-      legacy_data: {
-        type: 'tool',
-        data: { additional_kwargs: { circle_job: { id: 'j7', how: 'moved' } } },
-      },
-    },
-  ];
-  const plain = renderScreen(state, 100, 30).map(stripAnsi);
-  const make = plain.findIndex((row) => row.startsWith(' ● Bash(make)'));
-  assert.deepEqual(
-    plain.slice(make + 1, make + 4).map((row) => row.trimEnd()),
-    ['   ⎿ compiling', '     linking', '     moved to background · j7'],
-  );
 });
 
 test("an extension's result lines fold like a built-in result, and a renderer that fails or returns nothing gives the built-in lines", async (t) => {

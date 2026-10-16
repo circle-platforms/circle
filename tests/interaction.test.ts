@@ -1,10 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DatabaseSync } from 'node:sqlite';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { encode, ExtData } from '@msgpack/msgpack';
 import { SessionApp } from '../src/tui/session_app.js';
 import { ScreenRenderer } from '../src/ink/screen.js';
 import { editorCommand } from '../src/tui/external_editor.js';
@@ -597,99 +595,6 @@ test('ctrl+l redraws the screen; alt+l opens the model list; ctrl+b says when th
   key('ctrl+b');
   assert.equal(app.state.flash, 'Moved to the background');
   assert.ok((await command).job);
-});
-
-test('a session from 0.5.0 keeps its pastes: /fork and /tree put them back and the model reads them whole', async (t) => {
-  const home = scratch(t);
-  const workspace = scratch(t);
-  const paste = 'alpha\nbeta\ngamma\ndelta';
-  const legacy = (module: string, name: string, data: object): ExtData =>
-    new ExtData(5, encode([module, name, data, 'model_validate_json']));
-  const messages = [
-    legacy('langchain_core.messages.human', 'HumanMessage', {
-      id: 'u1',
-      type: 'human',
-      content: `${paste} explain`,
-      additional_kwargs: {
-        circle_shown: '[Pasted text #2 +3 lines] explain',
-        circle_pastes: { '2': paste, x: 'not a number' },
-      },
-    }),
-    legacy('langchain_core.messages.ai', 'AIMessage', {
-      id: 'a1',
-      type: 'ai',
-      content: 'explained',
-      additional_kwargs: {},
-      tool_calls: [],
-    }),
-  ];
-  const sessions = new DatabaseSync(join(home, 'sessions.sqlite'));
-  sessions.exec(
-    "CREATE TABLE sessions (thread_id TEXT PRIMARY KEY, workspace TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', created REAL NOT NULL, updated REAL NOT NULL, leaf TEXT NOT NULL DEFAULT '')",
-  );
-  sessions
-    .prepare('INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(
-      'circle-pastes',
-      workspace,
-      'pasted',
-      'old',
-      1791463528,
-      1791463528,
-      '',
-    );
-  sessions.close();
-  const checkpoints = new DatabaseSync(join(home, 'checkpoints.sqlite'));
-  checkpoints.exec(
-    "CREATE TABLE checkpoints (thread_id TEXT NOT NULL, checkpoint_ns TEXT NOT NULL DEFAULT '', checkpoint_id TEXT NOT NULL, parent_checkpoint_id TEXT, type TEXT, checkpoint BLOB, metadata BLOB, PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id))",
-  );
-  checkpoints.exec(
-    "CREATE TABLE writes (thread_id TEXT NOT NULL, checkpoint_ns TEXT NOT NULL DEFAULT '', checkpoint_id TEXT NOT NULL, task_id TEXT NOT NULL, idx INTEGER NOT NULL, channel TEXT NOT NULL, type TEXT, value BLOB, PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx))",
-  );
-  checkpoints
-    .prepare('INSERT INTO checkpoints VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(
-      'circle-pastes',
-      '',
-      '1',
-      null,
-      'msgpack',
-      encode({
-        channel_values: { messages },
-        ts: '2026-10-08T00:00:00Z',
-      }),
-      null,
-    );
-  checkpoints.close();
-  const { app, ui, runtime, model } = await session(t, [answer('again')], {
-    home,
-    workspace,
-    session: 'circle-pastes',
-  });
-  assert.deepEqual(runtime.migration.errors, []);
-  const sent = runtime.harness.messages[0]!;
-  assert.equal(sent.display, '[Pasted text #2 +3 lines] explain');
-  assert.deepEqual(sent.pastes, { '2': paste });
-  // /tree: back before the message, which comes back folded with its paste
-  await app.submit('/tree');
-  const tree = app.state.picker!;
-  tree.focus = tree
-    .matches()
-    .findIndex((item) => item.label === '› [Pasted text #2 +3 lines] explain');
-  ui.handle({ type: 'key', key: 'enter', char: '' });
-  await until(() => app.state.draft === '[Pasted text #2 +3 lines] explain');
-  assert.equal(ui.composer.modelText(app.state.draft), `${paste} explain`);
-  ui.composer.clear();
-  // /fork: the same, in a new session; sending it again sends the paste
-  await app.submit('/fork');
-  ui.handle({ type: 'key', key: 'enter', char: '' });
-  await until(() => app.state.draft === '[Pasted text #2 +3 lines] explain');
-  ui.handle({ type: 'key', key: 'enter', char: '' });
-  await until(() => model.requests.length === 1 && !app.runtime!.busy);
-  assert.equal(model.requests[0]!.messages.at(-1)!.content, `${paste} explain`);
-  assert.deepEqual(app.runtime!.harness.messages.at(-2)!.pastes, {
-    '2': paste,
-  });
 });
 
 test('esc on the /tree label line leaves the label as it was; enter on an empty one removes it', async (t) => {

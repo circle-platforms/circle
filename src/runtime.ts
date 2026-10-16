@@ -52,8 +52,6 @@ import {
   restoredTodos,
   restoredPlanMode,
 } from './context_middleware.js';
-import { migrateLegacy } from './migration.js';
-import type { MigrationReport } from './legacy_sessions.js';
 import { askQuestions } from './questions.js';
 import type { SecretRequest } from './secret_prompt.js';
 import { JobRegistry, jobLine, type Job } from './jobs.js';
@@ -218,7 +216,6 @@ export class AgentRuntime {
         }),
     );
   }
-  readonly migration: MigrationReport;
   readonly options: RuntimeOptions;
   readonly store: CheckpointStore;
   readonly bus = new EventBus();
@@ -277,9 +274,6 @@ export class AgentRuntime {
     this.store = new CheckpointStore(
       this.runOptions.no_session ? undefined : options.home,
     );
-    this.migration = this.runOptions.no_session
-      ? { imported: [], skipped: [], errors: [] }
-      : migrateLegacy(options.home, this.store);
     try {
       let session: Session | undefined;
       if (options.session) {
