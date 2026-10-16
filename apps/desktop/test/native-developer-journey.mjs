@@ -361,6 +361,15 @@ for (const file of [
 const screenshot = async (name) => {
   await page.screenshot({ path: join(output, name + '.png') });
 };
+// The phases use the inspector beside the conversation. A window made on a CI
+// runner's small screen is 1050 pixels or narrower, where the inspector lies
+// over the conversation instead, so size it as on a desktop. The last phase
+// checks the narrow window.
+const desktopViewport = () =>
+  setViewport(app, page, {
+    width: 1400,
+    height: 900,
+  });
 try {
   app = await electron.launch({
     chromiumSandbox: true,
@@ -410,6 +419,7 @@ try {
     errors.push({ phase, error: String(e), stack: e.stack }),
   );
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
+  await desktopViewport();
   const state = async () =>
     (await page.evaluate(() => window.circleDesktop.runtimeState())).snapshot;
   sessionId = (await state()).activeSessionId;
@@ -1302,6 +1312,7 @@ try {
           page.on('pageerror', (error) =>
             errors.push({ phase, error: String(error), stack: error.stack }),
           );
+          await desktopViewport();
         },
       });
     },
