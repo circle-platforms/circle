@@ -1,3 +1,7 @@
+import {
+  createNativeTerminalShortcutsFixture,
+  runNativeTerminalShortcutsJourney,
+} from './helpers/native-terminal-shortcuts-journey.mjs';
 import { runNativePanelAcceptance } from './helpers/native-panel-acceptance.mjs';
 import {
   createNativeCommandHandoffFixture,
@@ -123,6 +127,8 @@ await createNativeEditorFixture(repo);
 await createNativeEditorInteractionsFixture(repo);
 await createNativeEditorSemanticsFixture(repo);
 const terminalFixture = await createNativeTerminalFixture(repo);
+const terminalShortcutsFixture =
+  await createNativeTerminalShortcutsFixture(repo);
 const continuityFixture = await createNativeContinuityFixture(repo);
 const commandHandoffFixture = await createNativeCommandHandoffFixture(
   repo,
@@ -146,6 +152,7 @@ await git(
   ...isolationFiles,
   '.circle-editor-isolation-fixture.json',
   ...terminalFixture.files,
+  ...terminalShortcutsFixture.files,
   ...continuityFixture.files,
   ...commandHandoffFixture.files,
   ...childCommandFixture.files,
@@ -379,6 +386,7 @@ const buildIdentity = {
   fixtureFiles: {},
 };
 for (const file of [
+  ...terminalShortcutsFixture.files,
   ...continuityFixture.files,
   ...commandHandoffFixture.files,
   ...childCommandFixture.files,
@@ -396,6 +404,7 @@ for (const file of [
     'native-editor-semantics',
     'native-editor-interactions',
     'native-terminal-journey',
+    'native-terminal-shortcuts-journey',
     'native-continuity-journey',
     'native-command-handoff-journey',
     'native-child-command-handoff-journey',
@@ -865,6 +874,23 @@ try {
       } finally {
         await restoreNativeClipboard(app, clipboardKey);
       }
+    },
+  );
+  await check(
+    'original terminal keyboard paste and Control C preserve the existing shell',
+    async () => {
+      await closeFile();
+      return runNativeTerminalShortcutsJourney({
+        page,
+        getApp: () => app,
+        workspace: repo,
+        sessionId,
+        fixture: terminalShortcutsFixture,
+        nodePath: buildIdentity.bundledNode.path,
+        query,
+        until,
+        output,
+      });
     },
   );
   await check('Git working diff stage and unstage hunk', async () => {
@@ -1841,6 +1867,7 @@ try {
     'git-probe.txt',
     'debug.cjs',
     'browser-source.js',
+    ...terminalShortcutsFixture.files,
     ...continuityFixture.files,
     ...commandHandoffFixture.files,
     ...childCommandFixture.files,
