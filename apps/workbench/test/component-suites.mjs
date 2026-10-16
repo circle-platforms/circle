@@ -15,6 +15,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'tasks-refresh-race-ui.mjs',
   'git-continuity-ui.mjs',
   'git-conflict-selector-ui.mjs',
+  'child-terminal-rendered-match-ui.mjs',
   'git-owner-ui.mjs',
   'tool-text-output-ui.mjs',
   'debug-panel-ui.mjs',
