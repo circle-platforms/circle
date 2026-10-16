@@ -76,12 +76,17 @@ test('only actual projected IDs create links, preserving legacy and deduplicatin
     output: '{"agentIds":["untrusted-text"]}',
   });
   assert.deepEqual(
-    mappedToolAgents(tool, agents).map((a) => a.id),
+    mappedToolAgents(tool, agents, 'parent').map((a) => a.id),
     ['a', 'b'],
   );
-  assert.deepEqual(mappedToolAgents(call('native_tasks_enqueue'), agents), []);
   assert.deepEqual(
-    mappedToolAgents(call('task', { agentId: 'b' }), agents).map((a) => a.id),
+    mappedToolAgents(call('native_tasks_enqueue'), agents, 'parent'),
+    [],
+  );
+  assert.deepEqual(
+    mappedToolAgents(call('task', { agentId: 'b' }), agents, 'parent').map(
+      (a) => a.id,
+    ),
     ['b'],
   );
 });
@@ -116,4 +121,34 @@ test('new agent card words include Chinese translations', () => {
     'updated agent scheduling',
   ])
     assert.match(agentTools[key]!, /[\u3400-\u9fff]/);
+});
+
+test('matching trusted IDs cannot link a different parent owner, including duplicated legacy IDs', () => {
+  const own = child('same-child-id', 'running');
+  const foreign = {
+    ...own,
+    sessionId: 'foreign-parent',
+    name: 'foreign child',
+  };
+  const tool = call('native_tasks_enqueue', {
+    agentIds: ['same-child-id'],
+    agentId: 'same-child-id',
+  });
+  assert.deepEqual(mappedToolAgents(tool, [foreign], 'parent'), []);
+  const selected: string[] = [];
+  const deniedLinks = AgentToolLinks({
+    agents: mappedToolAgents(tool, [foreign], 'parent'),
+    onAgent: (id) => selected.push(id),
+  });
+  assert.doesNotMatch(
+    renderToStaticMarkup(deniedLinks),
+    /button|foreign child/,
+  );
+  for (const button of deniedLinks.props.children) button.props.onClick();
+  assert.deepEqual(selected, []);
+  assert.deepEqual(mappedToolAgents(tool, [foreign, own], 'parent'), [own]);
+  assert.deepEqual(mappedToolAgents(tool, [foreign, own], 'foreign-parent'), [
+    foreign,
+  ]);
+  assert.deepEqual(mappedToolAgents(tool, [foreign, own], ''), []);
 });

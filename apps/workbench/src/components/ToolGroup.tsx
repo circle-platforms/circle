@@ -126,6 +126,7 @@ export function toolSummary(rows: Message[]): {
  */
 export function ToolGroup({
   rows,
+  ownerSessionId,
   expanded,
   onFile,
   onAgent,
@@ -133,6 +134,7 @@ export function ToolGroup({
   children,
 }: {
   rows: Message[];
+  ownerSessionId?: string;
   expanded: boolean;
   onFile: (path: string) => void;
   onAgent: (id: string) => void;
@@ -204,6 +206,7 @@ export function ToolGroup({
               <div key={row.id} data-message-id={row.id}>
                 <ToolMessage
                   tool={row.tool}
+                  ownerSessionId={ownerSessionId}
                   expanded={expanded}
                   onAgent={onAgent}
                   onFile={onFile}

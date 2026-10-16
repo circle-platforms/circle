@@ -55,12 +55,15 @@ export function agentToolTitle(name: string): string {
 export function mappedToolAgents(
   tool: ToolCall,
   agents: AgentRecord[],
+  ownerSessionId: string,
 ): AgentRecord[] {
   const ids = new Set([
     ...(tool.agentIds ?? []),
     ...(tool.agentId ? [tool.agentId] : []),
   ]);
-  return agents.filter((agent) => ids.has(agent.id));
+  return agents.filter(
+    (agent) => agent.sessionId === ownerSessionId && ids.has(agent.id),
+  );
 }
 export function AgentToolLinks({
   agents,
@@ -88,11 +91,13 @@ export function AgentToolLinks({
 }
 export function ToolMessage({
   tool,
+  ownerSessionId,
   expanded,
   onFile,
   onAgent,
 }: {
   tool: ToolCall;
+  ownerSessionId?: string;
   expanded: boolean;
   onFile: (path: string) => void;
   onAgent: (id: string) => void;
@@ -108,7 +113,11 @@ export function ToolMessage({
       (target.toolTabs ??= {})[tool.id] = value;
     });
   const { notify, runtime, snapshot } = useRuntime();
-  const childAgents = mappedToolAgents(tool, snapshot.agents);
+  const childAgents = mappedToolAgents(
+    tool,
+    snapshot.agents,
+    ownerSessionId ?? currentSession(snapshot).id,
+  );
   const root = snapshot.workspaces.find(
     (workspace) => workspace.id === currentSession(snapshot).workspaceId,
   )?.path;
