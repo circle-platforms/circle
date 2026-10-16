@@ -181,7 +181,7 @@ export async function runNativeTerminalContextJourney({
       .locator('.inspector .context-source')
       .filter({ has: page.locator('summary', { hasText: attachment.name }) });
     if (!(await original.evaluate((node) => node.open)))
-      await original.locator('summary').click();
+      await original.locator(':scope > summary').click();
     assert.equal(
       await original.locator('.terminal-selection-text').textContent(),
       fixture.selectedText,
@@ -209,7 +209,7 @@ export async function runNativeTerminalContextJourney({
       'default preview does not expose JSON metadata',
     );
     await originalDetails
-      .locator('summary')
+      .locator(':scope > summary')
       .filter({ hasText: 'original attachment and source details' })
       .click();
     assert.equal(
