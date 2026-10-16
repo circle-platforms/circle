@@ -1,7 +1,13 @@
 import { scratch, cleanup } from './helpers.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  writeFileSync,
+  rmSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ExtensionHost } from '../src/extensions.js';
@@ -205,6 +211,43 @@ test('deletion retains history and its lease until slow extension cleanup finish
   assert.equal(externalCleanup, true);
   assert.equal(reader.get(id), undefined);
   assert.equal(sessionOccupied(home, id), false);
+});
+
+test('a closed extension can locate its cleanup directory without recreating a removed directory', async (t) => {
+  const root = scratch(t),
+    home = join(root, 'home');
+  extension(
+    join(home, 'extensions'),
+    'paths',
+    `export function register(api){api.registerTool('path','path',${schema},()=>({path:api.dataDir}),{readOnly:true});}`,
+  );
+  const host = await new ExtensionHost({
+    home,
+    workspace: root,
+    trusted: true,
+    bundledRoot: false,
+  }).load();
+  const read = async () =>
+    JSON.parse(String(await host.tools()[0]!.run({}, context()))).path;
+  const path = await read();
+  assert.ok(existsSync(path));
+  await host.close();
+  assert.equal(
+    await read(),
+    path,
+    'cleanup may still locate an existing directory',
+  );
+  rmSync(path, { recursive: true, force: true });
+  assert.equal(
+    await read(),
+    path,
+    'cleanup may locate the same path after removal',
+  );
+  assert.equal(
+    existsSync(path),
+    false,
+    'the closed API must not create the directory again',
+  );
 });
 
 test('a secret card that is up when the host closes goes down and leaves no request behind', async (t) => {

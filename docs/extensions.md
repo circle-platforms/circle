@@ -62,6 +62,8 @@ A folder may have an `extension.json` beside the entry file, `{ "version": "1.2.
 
 An extension shipped with Circle can have an interface half in the desktop application: a page or panel built into the application under the same name and version. The two are one plugin. The interface shows only while its extension is installed, loaded without error, of the same version and turned on; turning it on or off under **extensions → interface components** turns the extension on or off, saved in `settings.json`, and the card says why it is off. The extension feeds it with `api.setView(data)`, and the page acts by running the extension's own commands, whose lines go to the conversation.
 
+The desktop starts loading integrations for its trusted startup workspace without a prompt or a manual reload. The first window remains available while configured MCP servers connect; discovery failures appear in the runtime status and an explicit reload can retry. An untrusted workspace is not initialized until you trust it. Closing the application cancels pending integration startup, including an extension still registering.
+
 Interfaces are built into the application; an extension cannot add one by itself. The hub extension has five, all paired with it:
 
 | Page | What it shows | What it does |
