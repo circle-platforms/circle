@@ -93,6 +93,7 @@ export class DeliveryLogin {
       BROWSER: 'false',
       GH_BROWSER: 'false',
       GH_NO_UPDATE_NOTIFIER: '1',
+      GH_ACCESSIBLE_PROMPTER: '1',
     };
     delete env.GH_TOKEN;
     delete env.GITHUB_TOKEN;
@@ -120,6 +121,7 @@ export class DeliveryLogin {
     }
     let buffer = '';
     let advanced = false;
+    let declinedGitCredentialSetup = false;
     const timer = setTimeout(() => {
       void this.cancel(id);
     }, 300_000);
@@ -141,6 +143,18 @@ export class DeliveryLogin {
       buffer = (buffer + data.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')).slice(
         -16000,
       );
+      // The bundled CLI asks this even with --web/--git-protocol. Circle
+      // supplies credentials per native operation and must never configure the
+      // user's Git helper. Answer only this specific, known confirmation.
+      if (
+        !declinedGitCredentialSetup &&
+        /Authenticate Git with your GitHub credentials\?\s*(?:\([Yy]\/[Nn]\)|\(default: yes\)\s*\[[Yy]\/[Nn]\])/i.test(
+          buffer,
+        )
+      ) {
+        declinedGitCredentialSetup = true;
+        child.write('n\n');
+      }
       const code = buffer.match(
         /(?:one-time code|code:)\s*:?\s*([A-Z0-9]{4}-[A-Z0-9]{4})/i,
       )?.[1];
@@ -149,7 +163,7 @@ export class DeliveryLogin {
         state.url = 'https://github.com/login/device';
         state.status = 'waiting';
       }
-      if (!advanced && /press enter.*browser/i.test(buffer)) {
+      if (state.code && !advanced && /press enter.*browser/i.test(buffer)) {
         advanced = true;
         child.write('\r');
       }

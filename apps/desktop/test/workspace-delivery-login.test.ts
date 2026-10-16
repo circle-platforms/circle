@@ -355,3 +355,43 @@ test('failed encrypted persistence never silently becomes a session grant and ex
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('known Git credential prompts decline helper configuration once; unknown prompts receive no input', async () => {
+  for (const prompt of [
+    '? Authenticate Git with your GitHub credentials? (Y/n) ',
+    'Authenticate Git with your GitHub credentials? (default: yes) [Y/n] ',
+    '\u001b[32m? Authenticate Git with your GitHub credentials?\u001b[0m (y/N) ',
+  ]) {
+    const child = fake();
+    const login = new DeliveryLogin(
+      (_file, _args, options) => {
+        assert.equal(
+          (options.env as NodeJS.ProcessEnv).GH_ACCESSIBLE_PROMPTER,
+          '1',
+        );
+        return child.pty;
+      },
+      'unused',
+      tmpdir(),
+    );
+    try {
+      const started = await login.start({ storage: 'session' });
+      child.emit('Unknown confirmation? (Y/n)\nPress Enter to open browser');
+      assert.deepEqual(child.writes, []);
+      for (const chunk of [prompt.slice(0, 18), prompt.slice(18)])
+        child.emit(chunk);
+      assert.deepEqual(child.writes, ['n\n']);
+      child.emit(prompt);
+      assert.deepEqual(child.writes, ['n\n']);
+      child.emit(
+        '\n! First copy your one-time code: ABCD-1234\nPress Enter to open https://github.com/login/device in your browser...',
+      );
+      assert.equal(login.poll(started.id).code, 'ABCD-1234');
+      assert.deepEqual(child.writes, ['n\n', '\r']);
+      child.emit('Press Enter to open browser');
+      assert.deepEqual(child.writes, ['n\n', '\r']);
+    } finally {
+      await login.dispose();
+    }
+  }
+});
