@@ -1,18 +1,15 @@
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { chromium } from 'playwright';
+import { testBrowserOptions } from './helpers/test-browser.ts';
 
-const chrome = [
-  '/usr/bin/google-chrome-stable',
-  '/usr/bin/google-chrome',
-  '/usr/local/bin/google-chrome',
-].find((path) => existsSync(path));
+const browserOptions = testBrowserOptions(chromium.executablePath());
 
 test(
   'the composer stays inside the window after several new sessions',
-  { skip: chrome ? false : 'chrome is not installed' },
+  { skip: browserOptions ? false : 'no supported test browser is installed' },
   async () => {
     const root = fileURLToPath(new URL('..', import.meta.url));
     const port = 4217;
@@ -68,15 +65,15 @@ test(
         });
       });
     };
-    const { chromium } = await import('playwright');
     const browser = await chromium.launch({
-      executablePath: chrome,
+      ...browserOptions,
       headless: true,
       args: ['--no-sandbox'],
     });
     try {
       await ready;
       const page = await browser.newPage({
+        locale: 'en-US',
         viewport: { width: 1000, height: 520 },
       });
       await page.goto(`http://127.0.0.1:${port}/`);
