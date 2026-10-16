@@ -42,6 +42,32 @@ export type LoginState = {
   error?: string;
   storage?: 'encrypted' | 'session';
 };
+/** Windows treats environment names case-insensitively, even when a copied JS
+ * object contains differently cased aliases. Never inherit a host credential or
+ * competing configuration/browser override into this explicit device grant. */
+export function githubLoginEnvironment(
+  inherited: NodeJS.ProcessEnv,
+  directory: string,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...inherited };
+  for (const key of Object.keys(env)) {
+    if (
+      /^(GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN|GH_CONFIG_DIR|GH_HOST|GH_REPO|GH_DEBUG|BROWSER|GH_BROWSER|GH_NO_UPDATE_NOTIFIER|GH_ACCESSIBLE_PROMPTER)$/i.test(
+        key,
+      )
+    )
+      delete env[key];
+  }
+  return {
+    ...env,
+    GH_CONFIG_DIR: directory,
+    BROWSER: 'false',
+    GH_BROWSER: 'false',
+    GH_NO_UPDATE_NOTIFIER: '1',
+    GH_ACCESSIBLE_PROMPTER: '1',
+  };
+}
+
 /** Only sanitized device flow state crosses the bridge. Dedicated 0700 temp configs are removed before completion. */
 export class DeliveryLogin {
   private entries = new Map<
@@ -87,16 +113,7 @@ export class DeliveryLogin {
     const state: LoginState = { id, status: 'starting' };
     const directory = await mkdtemp(path.join(tmpdir(), 'circle-gh-auth-'));
     await chmod(directory, 0o700);
-    const env: Record<string, string | undefined> = {
-      ...process.env,
-      GH_CONFIG_DIR: directory,
-      BROWSER: 'false',
-      GH_BROWSER: 'false',
-      GH_NO_UPDATE_NOTIFIER: '1',
-      GH_ACCESSIBLE_PROMPTER: '1',
-    };
-    delete env.GH_TOKEN;
-    delete env.GITHUB_TOKEN;
+    const env = githubLoginEnvironment(process.env, directory);
     let child: LoginPty;
     try {
       child = this.spawn(

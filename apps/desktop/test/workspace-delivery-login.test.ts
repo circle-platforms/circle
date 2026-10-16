@@ -1,6 +1,6 @@
 import fsPromises from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
-import { execFile, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   DeliveryLogin,
+  githubLoginEnvironment,
   type LoginPty,
 } from '../src/workspace/delivery-login.ts';
 function fake() {
@@ -410,4 +411,75 @@ test('a known credential prompt remains recognizable when ANSI and prompt bytes 
   } finally {
     await login.dispose();
   }
+});
+
+test('explicit device authorization removes Windows credential and configuration aliases without mutating its synthetic parent environment', () => {
+  const inherited: NodeJS.ProcessEnv = {
+    Path: 'synthetic-path',
+    HOME: 'synthetic-isolated-home',
+    LANG: 'en_US.UTF-8',
+    GH_TOKEN: 'synthetic-upper-secret',
+    Gh_Token: 'synthetic-mixed-secret',
+    github_token: 'synthetic-lower-secret',
+    gH_EnTeRpRiSe_ToKeN: 'synthetic-enterprise-secret',
+    GiThUb_EnTeRpRiSe_ToKeN: 'synthetic-other-secret',
+    gh_config_dir: 'synthetic-host-cache',
+    Gh_Host: 'untrusted.invalid',
+    gh_repo: 'foreign/repo',
+    Gh_Debug: 'api',
+    browser: 'untrusted-browser',
+    gh_browser: 'untrusted-gh-browser',
+    gh_accessible_prompter: '0',
+    gh_no_update_notifier: '0',
+  };
+  const before = { ...inherited };
+  const result = githubLoginEnvironment(inherited, 'synthetic-owned-config');
+  const windows = new Map(
+    Object.entries(result).map(([key, value]) => [key.toUpperCase(), value]),
+  );
+  for (const name of [
+    'GH_TOKEN',
+    'GITHUB_TOKEN',
+    'GH_ENTERPRISE_TOKEN',
+    'GITHUB_ENTERPRISE_TOKEN',
+    'GH_HOST',
+    'GH_REPO',
+    'GH_DEBUG',
+  ])
+    assert.equal(windows.has(name), false, name + ' must not be inherited');
+  for (const [name, value] of Object.entries({
+    GH_CONFIG_DIR: 'synthetic-owned-config',
+    BROWSER: 'false',
+    GH_BROWSER: 'false',
+    GH_ACCESSIBLE_PROMPTER: '1',
+    GH_NO_UPDATE_NOTIFIER: '1',
+  })) {
+    assert.equal(windows.get(name), value);
+    assert.deepEqual(
+      Object.keys(result).filter((key) => key.toUpperCase() === name),
+      [name],
+      'only the canonical owned key may reach CreateProcess',
+    );
+  }
+  assert.equal(result.Path, 'synthetic-path');
+  assert.equal(result.HOME, 'synthetic-isolated-home');
+  assert.equal(result.LANG, 'en_US.UTF-8');
+  assert(!JSON.stringify(result).includes('secret'));
+  assert(!JSON.stringify(result).includes('synthetic-host-cache'));
+  const child = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [
+        '-e',
+        `console.log(JSON.stringify({credentialAliases:Object.keys(process.env).filter(key=>/^(GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN)$/i.test(key)),config:process.env.GH_CONFIG_DIR,browser:process.env.BROWSER}))`,
+      ],
+      { env: result, encoding: 'utf8' },
+    ),
+  );
+  assert.deepEqual(child, {
+    credentialAliases: [],
+    config: 'synthetic-owned-config',
+    browser: 'false',
+  });
+  assert.deepEqual(inherited, before);
 });
