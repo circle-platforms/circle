@@ -16,7 +16,7 @@ export function normalizeBaseUrl(baseUrl: string, protocol: string): string {
   try {
     url = new URL(baseUrl.trim());
   } catch {
-    // Not a URL at all: the same words as a URL of the wrong kind, as 0.5.0 said it
+    // Not a URL at all: the same words as a URL of the wrong kind
     throw new Error(BAD_URL);
   }
   if (
@@ -34,7 +34,7 @@ export function normalizeBaseUrl(baseUrl: string, protocol: string): string {
     url.pathname = url.pathname.replace(/\/v1$/, '');
   return url.toString().replace(/\/+$/, '');
 }
-// What setup says the endpoint answered (0.5.0's ProbeResult.summary).
+// What setup says the endpoint answered.
 export function probeSummary(found: ProbeResult): string {
   if (found.status === 'failed' || found.inferred)
     return (

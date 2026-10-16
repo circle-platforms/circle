@@ -1,3 +1,42 @@
+/** The session ⋯ tip. Keyboard focus shows it, including after the pointer
+ * has left the sidebar. A scroll dismisses it (`scrollClosed`). */
+export function sessionMenuTipOpen(input: {
+  keyboardOwns: boolean;
+  menuFocused: boolean;
+  editing: boolean;
+  menuOpen: boolean;
+  scrollClosed: boolean;
+  inView: boolean;
+}): boolean {
+  return (
+    input.keyboardOwns &&
+    input.menuFocused &&
+    !input.editing &&
+    !input.menuOpen &&
+    !input.scrollClosed &&
+    input.inView
+  );
+}
+
+/** Leaving the sidebar closes the hover card. It is not a scroll, so the
+ * focused ⋯ tip stays open. */
+export function afterSidebarPointerLeave(scrollClosed: boolean): {
+  suppressCard: true;
+  scrollClosed: boolean;
+} {
+  return { suppressCard: true, scrollClosed };
+}
+
+/** Moving onto the controls above the session list closes the hover card.
+ * It is not a scroll and does not blur the row, so a focused ⋯ tip stays open. */
+export function afterSidebarChromeMove(scrollClosed: boolean): {
+  suppressCard: true;
+  scrollClosed: boolean;
+  blurRow: false;
+} {
+  return { suppressCard: true, scrollClosed, blurRow: false };
+}
+
 /** Whether the session card may cover the page. A page change or a press
  * outside the sidebar sets `suppressed` until the pointer actually moves. */
 export function sessionCardVisible(input: {

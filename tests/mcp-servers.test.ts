@@ -66,7 +66,7 @@ test('an MCP server named with a dot and a space starts, and the model gets and 
   assert.match(result.content, /"pid":\d+/);
 });
 
-test('MCP tool names keep 0.5.0 names when valid and stay distinct when shortened', () => {
+test('MCP tool names stay <server>_<tool> when valid and stay distinct when shortened', () => {
   assert.equal(
     mcpToolName('memory', 'create_entities'),
     'memory_create_entities',

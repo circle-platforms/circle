@@ -549,6 +549,15 @@ export interface ExtensionHostOptions {
   jobs?: JobRegistry;
   jobOwner?: (context: ToolContext) => JobOwner;
 }
+function isEnotdir(error: unknown): boolean {
+  return (
+    !!error &&
+    typeof error === 'object' &&
+    'code' in error &&
+    (error as { code: unknown }).code === 'ENOTDIR'
+  );
+}
+
 export class ExtensionHost {
   extensions: Extension[] = [];
   // Fired by close(); every extension's api.signal.
@@ -558,10 +567,18 @@ export class ExtensionHost {
   private readonly pending = new Set<Promise<unknown>>();
   private closing?: Promise<void>;
   constructor(readonly options: ExtensionHostOptions) {
-    // Listed before load, still with nothing registered. The desktop publishes a
-    // snapshot before integrations finish; the bundled hub is on that first frame
-    // instead of an empty page that fills in later.
-    this.extensions = this.discover().map((found) => this.unloaded(found));
+    // Listed before load, still with nothing registered, once the folder is
+    // trusted. The desktop publishes a snapshot before integrations finish;
+    // the bundled hub is on that first frame instead of an empty page that
+    // fills in later. An untrusted workspace is not scanned. A root that is
+    // not a directory fails the same way from load(), which is what
+    // initialize() reports.
+    if (!options.trusted) return;
+    try {
+      this.extensions = this.discover().map((found) => this.unloaded(found));
+    } catch (error) {
+      if (!isEnotdir(error)) throw error;
+    }
   }
   private unloaded(
     discovered: ReturnType<ExtensionHost['discover']>[number],

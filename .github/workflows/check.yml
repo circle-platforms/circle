@@ -3,6 +3,8 @@ name: Check
 # the same check on all six release targets, so it is not repeated here.
 on:
   pull_request:
+    # ready_for_review: a draft runs nothing, and marking it ready runs the check
+    types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
   workflow_dispatch:
 permissions:
@@ -13,12 +15,14 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   check:
+    # A draft pull request is not checked; a skipped job counts as passed, and a draft cannot merge
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     strategy:
       fail-fast: false
       matrix:
-        # One macOS runner: the organization runs five macOS jobs at a time, shared by every pull
-        # request. Intel macOS, Arm Linux and Arm Windows are checked on main by the release workflow.
-        os: [ubuntu-24.04, macos-15, windows-latest]
+        # macOS is the job below. Intel macOS, Arm Linux and Arm Windows are checked on main by the
+        # release workflow.
+        os: [ubuntu-24.04, windows-latest]
     runs-on: ${{ matrix.os }}
     # A few minutes normally; a test that waits for good fails here rather than in six hours
     timeout-minutes: 20
@@ -38,3 +42,22 @@ jobs:
         run: npm run release:build
       - if: runner.os == 'Linux'
         run: npm run release:smoke
+  check-macos:
+    # The organization runs five macOS jobs at a time, shared with main and releases. A pull
+    # request leaves this one to the merge queue, which runs it on the commit that becomes main;
+    # skipped on the pull request, the required check counts as passed there.
+    name: check (macos-15)
+    if: github.event_name != 'pull_request'
+    runs-on: macos-15
+    timeout-minutes: 20
+    # The same steps as check above
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.21.0'
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run format:check
+      - run: node dist/cli.js --version

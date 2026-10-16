@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  afterSidebarChromeMove,
+  afterSidebarPointerLeave,
   pointerOnSidebarChrome,
   runControlAction,
   selectRenameText,
   sessionCardVisible,
+  sessionMenuTipOpen,
   shouldOpenSession,
 } from '../src/model/session-row.ts';
 
@@ -61,6 +64,82 @@ test('a control runs on the press and skips the click that follows it', () => {
     true,
   );
   assert.equal(pointerOnSidebarChrome(null), false);
+});
+
+test('leaving the sidebar hides the session card and keeps a focused menu tip', () => {
+  const left = afterSidebarPointerLeave(false);
+  assert.equal(left.suppressCard, true);
+  assert.equal(left.scrollClosed, false);
+  const focused = {
+    renaming: false,
+    editing: false,
+    menuOpen: false,
+    keyboardOwns: false,
+    suppressed: left.suppressCard,
+    hovered: false,
+    focused: true,
+    pointerIdle: true,
+  };
+  assert.equal(sessionCardVisible(focused), false);
+  assert.equal(
+    sessionMenuTipOpen({
+      keyboardOwns: true,
+      menuFocused: true,
+      editing: false,
+      menuOpen: false,
+      scrollClosed: left.scrollClosed,
+      inView: true,
+    }),
+    true,
+  );
+  // A scroll still closes the tip. Leaving does not turn into one.
+  const scrolled = afterSidebarPointerLeave(true);
+  assert.equal(scrolled.scrollClosed, true);
+  assert.equal(
+    sessionMenuTipOpen({
+      keyboardOwns: true,
+      menuFocused: true,
+      editing: false,
+      menuOpen: false,
+      scrollClosed: scrolled.scrollClosed,
+      inView: true,
+    }),
+    false,
+  );
+});
+
+test('moving onto sidebar chrome hides the session card and keeps a focused menu tip', () => {
+  const moved = afterSidebarChromeMove(false);
+  assert.equal(moved.suppressCard, true);
+  assert.equal(moved.scrollClosed, false);
+  assert.equal(moved.blurRow, false);
+  assert.equal(
+    sessionCardVisible({
+      renaming: false,
+      editing: false,
+      menuOpen: false,
+      keyboardOwns: false,
+      suppressed: moved.suppressCard,
+      hovered: false,
+      focused: true,
+      pointerIdle: true,
+    }),
+    false,
+  );
+  assert.equal(
+    sessionMenuTipOpen({
+      keyboardOwns: true,
+      menuFocused: true,
+      editing: false,
+      menuOpen: false,
+      scrollClosed: moved.scrollClosed,
+      inView: true,
+    }),
+    true,
+  );
+  const scrolled = afterSidebarChromeMove(true);
+  assert.equal(scrolled.scrollClosed, true);
+  assert.equal(scrolled.blurRow, false);
 });
 
 test('a press opens a session only when it lands on that row', () => {

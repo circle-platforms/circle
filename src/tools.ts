@@ -400,7 +400,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
     add(
       'task',
       'read',
-      // As in the Python releases (deepagents' task schema): both fields are required.
+      // As in deepagents' task schema, both fields are required.
       schema(
         {
           description: text(

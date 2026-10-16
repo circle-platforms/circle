@@ -561,8 +561,9 @@ export class ApprovalStore {
       const raw = readJson(this.path(thread));
       if (isRecord(raw))
         return {
-          // Python 0.5.0 revoked a rule by marking it instead of removing
-          // it; a marked rule stays revoked here, and the next save drops it.
+          // The Python releases revoked a rule by marking it instead of removing
+          // it. A conversation of theirs may still have such a file: a marked rule
+          // stays revoked, and the next save drops it.
           rules: (Array.isArray(raw.rules) ? (raw.rules as Rule[]) : []).filter(
             (rule) =>
               isRecord(rule) && !(rule as { revoked?: unknown }).revoked,

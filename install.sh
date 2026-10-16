@@ -60,6 +60,6 @@ tar -xzf "$archive" -C "$temporary"
 root="$temporary/circle"
 [[ -x "$root/runtime/node" && -f "$root/app/dist/install_manager.js" ]] || fail 'Incomplete release'
 "$root/runtime/node" --input-type=module -e 'import fs from "node:fs"; const m=JSON.parse(fs.readFileSync(process.argv[1])); if(m.version!==process.argv[2])throw Error("Release version mismatch");' "$root/release.json" "$version"
-# Installs into CIRCLE_PREFIX and CIRCLE_BIN_DIR when they are set, otherwise where the Python
-# circle was installed, otherwise ~/.local/share/circle and ~/.local/bin. Removes the Python circle.
+# Installs into CIRCLE_PREFIX and CIRCLE_BIN_DIR when they are set, otherwise into
+# ~/.local/share/circle and ~/.local/bin.
 CIRCLE_REPO="$repo" "$root/runtime/node" "$root/app/dist/install_manager.js" "$root"

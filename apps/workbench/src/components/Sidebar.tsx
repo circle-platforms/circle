@@ -21,6 +21,8 @@ import {
   MessagesSquare,
   Terminal,
   FolderPlus,
+  Folder,
+  FolderOpen,
   SlidersHorizontal,
 } from 'lucide-react';
 import { Tooltip } from 'radix-ui';
@@ -30,6 +32,7 @@ import { currentSession, sessionTitle } from '../model/state';
 import {
   disambiguatedSessionTitle,
   orderedProjects,
+  projectFolders,
   RECENT_SHOWN,
   recentDetails,
   recentSessions,
@@ -37,15 +40,19 @@ import {
   visibleSessions,
   type ActivityAge,
 } from '../model/session-management';
+import { selectedHomeProject } from '../features/home-selection';
 import type { DialogId, Session } from '../model/types';
 import { workspaceLabel } from '../model/workspace-label';
 import { platformTitle } from '../plugins/labels';
 import { armComposerFocus } from '../model/composer-focus';
 import {
+  afterSidebarChromeMove,
+  afterSidebarPointerLeave,
   pointerOnSidebarChrome,
   runControlAction,
   selectRenameText,
   sessionCardVisible,
+  sessionMenuTipOpen,
   shouldOpenSession,
 } from '../model/session-row';
 import { IconButton } from './common';
@@ -173,6 +180,10 @@ export function Sidebar({
   const pressOutside = useRef(false);
   const pointerOpening = useRef(false);
   const openedOnPress = useRef(false);
+  // Pointer leave, and moving onto the controls above the list, hide the
+  // hover card without counting as a scroll, so a focused session ⋯ button
+  // can still show its tip.
+  const [cardSuppressed, setCardSuppressed] = useState(false);
   const path = `${location.pathname}${location.search}`;
   const pathRef = useRef(path);
   useEffect(() => {
@@ -275,7 +286,29 @@ export function Sidebar({
   };
   const activityAt = (session: Session) =>
     Date.parse(sessionActivityAt(session)) || 0;
-  const projects = orderedProjects(snapshot.workspaces, snapshot.sessions);
+  // A home composer open for a project is that project's pending new session:
+  // its folder stays on the bar, and wears the highlight until the first
+  // message creates the session, which then carries it.
+  const onHome = location.pathname === '/home';
+  const homeParams = new URLSearchParams(location.search);
+  const homeRequested = onHome
+    ? homeParams.has('workspace')
+      ? (homeParams.get('workspace') ?? '')
+      : null
+    : null;
+  const aimed = onHome
+    ? selectedHomeProject(
+        snapshot.workspaces,
+        snapshot.sessions,
+        current.id,
+        homeRequested,
+      )
+    : undefined;
+  const projects = projectFolders(
+    snapshot.workspaces,
+    snapshot.sessions,
+    aimed?.id ?? null,
+  );
   const recent = recentSessions(snapshot.sessions);
   const recentShown = collapsed.includes(RECENT)
     ? []
@@ -394,6 +427,7 @@ export function Sidebar({
     scrollClosedRef.current = false;
     routeHold.current = false;
     setScrollClosed(false);
+    setCardSuppressed(false);
     setHoveredKey(key);
   };
   const leaveRow = (key: string) => {
@@ -409,6 +443,7 @@ export function Sidebar({
     pointerAtScroll.current = null;
     scrollClosedRef.current = false;
     setScrollClosed(false);
+    setCardSuppressed(false);
   };
   // The pointer is still on a row after a click. Put that row's card back if
   // the click's render dropped it.
@@ -470,6 +505,7 @@ export function Sidebar({
             routeHold.current = false;
             scrollClosedRef.current = false;
             setScrollClosed(false);
+            setCardSuppressed(false);
           }}
           pressOutside={pressOutside}
           pointerOpening={pointerOpening}
@@ -477,6 +513,7 @@ export function Sidebar({
           hoveredKey={hoveredKey}
           menuFocus={menuFocus}
           scrollClosed={scrollClosed}
+          cardSuppressed={cardSuppressed}
           listRef={listRef}
           onPoint={(point) => pointRow(rowKey, point)}
           onPointerLeave={() => leaveRow(rowKey)}
@@ -507,28 +544,32 @@ export function Sidebar({
       className="sidebar"
       onPointerMove={(event) => {
         // Moving onto 新会话 while a session card is open used to spend the
-        // first click closing that card. Fold it before the press.
+        // first click closing that card. Fold the card before the press.
+        // This is not a scroll, and it does not blur the row: a focused ⋯
+        // tip stays open.
         if (!pointerOnSidebarChrome(event.target)) return;
-        if (scrollClosedRef.current && hoveredKey === null) return;
-        scrollClosedRef.current = true;
-        pointerAtScroll.current = { x: event.clientX, y: event.clientY };
+        const next = afterSidebarChromeMove(scrollClosedRef.current);
+        if (next.scrollClosed !== scrollClosedRef.current) {
+          scrollClosedRef.current = next.scrollClosed;
+          setScrollClosed(next.scrollClosed);
+        }
+        if (hoveredKey === null && cardSuppressed) return;
         setHoveredKey(null);
-        setScrollClosed(true);
-        const active = document.activeElement;
-        if (
-          active instanceof HTMLElement &&
-          active.closest('.session-link, .session-row')
-        )
-          active.blur();
+        setCardSuppressed(next.suppressCard);
       }}
       onPointerLeave={() => {
         // The card is drawn over the page. Leaving the sidebar drops it,
-        // including when the row stays focused.
+        // including when the row stays focused. This is not a scroll: a
+        // focused ⋯ button keeps its tip.
+        const next = afterSidebarPointerLeave(scrollClosedRef.current);
         routeHold.current = true;
         setHoveredKey(null);
         if (lastPointer.current) pointerAtScroll.current = lastPointer.current;
-        scrollClosedRef.current = true;
-        setScrollClosed(true);
+        setCardSuppressed(next.suppressCard);
+        if (next.scrollClosed !== scrollClosedRef.current) {
+          scrollClosedRef.current = next.scrollClosed;
+          setScrollClosed(next.scrollClosed);
+        }
       }}
     >
       <header className="brand">
@@ -664,10 +705,12 @@ export function Sidebar({
         )}
         {groups.map(({ workspace, sessions, shown }) => {
           const open = all.includes(workspace.id);
+          const isAimed = aimed?.id === workspace.id;
+          const folded = collapsed.includes(workspace.id);
           return (
             <section className="project" key={workspace.id}>
               <div
-                className="project-header"
+                className={`project-header${isAimed ? ' aimed' : ''}`}
                 title={workspace.path}
                 onPointerMove={(event) =>
                   pointRow('header', { x: event.clientX, y: event.clientY })
@@ -676,10 +719,12 @@ export function Sidebar({
               >
                 <button
                   className="project-name"
-                  aria-expanded={!collapsed.includes(workspace.id)}
+                  aria-expanded={!folded}
                   onClick={() => toggle(workspace.id, collapsed, setCollapsed)}
                 >
-                  {workspaceLabel(workspace)}
+                  {/* The folder opens with the group, the way a file list does. */}
+                  {folded ? <Folder size={13} /> : <FolderOpen size={13} />}
+                  <span>{workspaceLabel(workspace)}</span>
                 </button>
                 <div className="project-actions">
                   <IconButton
@@ -816,6 +861,7 @@ function SessionRow({
   hoveredKey,
   menuFocus,
   scrollClosed,
+  cardSuppressed,
   listRef,
   onPoint,
   onPointerLeave,
@@ -846,6 +892,7 @@ function SessionRow({
   hoveredKey: string | null;
   menuFocus: string | null;
   scrollClosed: boolean;
+  cardSuppressed: boolean;
   listRef: { current: HTMLDivElement | null };
   onPoint: (point: { x: number; y: number }) => void;
   onPointerLeave: () => void;
@@ -885,7 +932,7 @@ function SessionRow({
     editing,
     menuOpen,
     keyboardOwns,
-    suppressed: scrollClosed,
+    suppressed: scrollClosed || cardSuppressed,
     hovered,
     focused: linkFocused,
     pointerIdle: hoveredKey === null,
@@ -909,13 +956,14 @@ function SessionRow({
         event.currentTarget.contains(event.target),
       rect: event.currentTarget.getBoundingClientRect(),
     });
-  const tipOpen =
-    keyboardOwns &&
-    menuFocus === rowKey &&
-    !editing &&
-    !menuOpen &&
-    !scrollClosed &&
-    inView;
+  const tipOpen = sessionMenuTipOpen({
+    keyboardOwns,
+    menuFocused: menuFocus === rowKey,
+    editing,
+    menuOpen,
+    scrollClosed,
+    inView,
+  });
   const row = (
     <div
       className="session-row"

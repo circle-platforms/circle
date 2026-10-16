@@ -56,8 +56,6 @@ import {
   restoredTodos,
   restoredPlanMode,
 } from './context_middleware.js';
-import { migrateLegacy } from './migration.js';
-import type { MigrationReport } from './legacy_sessions.js';
 import { askQuestions } from './questions.js';
 import type { SecretRequest } from './secret_prompt.js';
 import { JobRegistry, jobLine, type Job } from './jobs.js';
@@ -229,7 +227,6 @@ export class AgentRuntime {
         }),
     );
   }
-  readonly migration: MigrationReport;
   readonly options: RuntimeOptions;
   readonly store: CheckpointStore;
   readonly bus = new EventBus();
@@ -291,9 +288,6 @@ export class AgentRuntime {
       this.runOptions.no_session ? undefined : options.home,
       options.onStoreBusy ? { onBusy: options.onStoreBusy } : undefined,
     );
-    this.migration = this.runOptions.no_session
-      ? { imported: [], skipped: [], errors: [] }
-      : migrateLegacy(options.home, this.store);
     try {
       let session: Session | undefined;
       if (options.session) {
@@ -878,8 +872,8 @@ export class AgentRuntime {
   }
   /** The main system prompt. Every rebuild goes through here: start, a new or resumed
    * session, a model switch, /reload, /mcp reload, /extensions reload, /plan and a change
-   * of thinking depth. Skills are read again each time, as 0.5.0 read them whenever it
-   * rebuilt its agent, so the list and the `skill` tool see the same skills. */
+   * of thinking depth. Skills are read again each time, so the list and the `skill` tool
+   * see the same skills. */
   private systemPrompt(model: string): string {
     this.skills =
       this.options.localContext === false
@@ -1103,7 +1097,8 @@ export class AgentRuntime {
     if (this.viewOnly) throw new Error(occupiedSessionMessage(this.session.id));
     if (this.harness.planMode === enabled) return;
     this.harness.planMode = enabled;
-    // /plan between turns rebuilt the agent in 0.5.0; plan_enter and plan_exit run mid-turn.
+    // /plan between turns builds the system prompt again at once; plan_enter and plan_exit
+    // run mid-turn.
     if (!this.busy) this.refreshSystemPrompt();
     this.store.append(this.session.id, [
       {

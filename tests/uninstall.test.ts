@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { UsageError } from '../src/cli.js';
 import { activateRelease } from '../src/install_layout.js';
-import type { Run } from '../src/legacy_install.js';
+import type { Run } from '../src/install_processes.js';
 import {
   uninstallInstalled,
   windowsDeferredRemoval,

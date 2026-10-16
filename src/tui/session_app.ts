@@ -276,7 +276,7 @@ export class SessionApp {
   private set jobWakeSnoozed(value: boolean) {
     this.view.jobWakeSnoozed = value;
   }
-  // As in 0.5.0, a background agent's card shows whether a turn runs or not: after the
+  // A background agent's card shows whether a turn runs or not: after the
   // turn's own cards (the queue takes those first) and once typing pauses.
   // The conversation browser, when a Chrome or Edge is installed
   private get interactions() {
@@ -581,7 +581,7 @@ export class SessionApp {
         lastAnswer,
         this.runtime.harness.model.model,
       );
-      // After /undo or /redo the meter is unknown until the next answer, as in 0.5.0.
+      // After /undo or /redo the meter is unknown until the next answer.
       if (this.meterCleared !== undefined) {
         if ((lastAnswer?.id ?? '') === this.meterCleared)
           this.state.contextInput = undefined;
@@ -913,7 +913,7 @@ export class SessionApp {
   }
   async initialize(force = false): Promise<boolean> {
     // Set up, but with no URL or model (an older release's OAuth sign-in): ask again, as
-    // print mode does and 0.5.0 did
+    // print mode does
     if (force || !isReady(this.settings)) {
       this.settingUp = !this.runtime;
       // One card, a step at a time; it says what Circle is doing while the endpoint lists
@@ -941,8 +941,8 @@ export class SessionApp {
     }
     return !this.ended;
   }
-  // The URL that answered (`<url>/v1` when only that lists models), as line-mode setup and
-  // 0.5.0 save it; the typed one when nothing answered.
+  // The URL that answered (`<url>/v1` when only that lists models), as line-mode setup
+  // saves it; the typed one when nothing answered.
   private saveConnection(flow: SetupFlow): void {
     const auth = flow.auth();
     withConnectionLock(this.home, () => {
@@ -974,7 +974,7 @@ export class SessionApp {
     if (found && !this.ended) this.notice(updateNotice(found));
   }
   // The project's .circle/settings.json and `--model` over the saved settings, in memory only.
-  // Runs once the folder is trusted, as the Python releases did.
+  // Runs once the folder is trusted.
   applyRunSettings(modelOverride?: string): void {
     const { problems } = applyProjectSettings(
       this.settings,
@@ -1039,10 +1039,6 @@ export class SessionApp {
     } finally {
       this.connecting = false;
     }
-    for (const error of runtime.migration.errors)
-      this.fail(
-        `Could not migrate ${error.thread || 'legacy data'}: ${error.message}`,
-      );
     runtime.repairRecentTitles();
     this.repaint();
   }
@@ -1225,7 +1221,7 @@ export class SessionApp {
               this.state.usage[key] += event.usage?.[key] ?? 0;
           } else if (event.kind === 'run_error') {
             // A stop is a dim marker. A key the endpoint turned down (401, 403)
-            // says where to change it, as in 0.5.0.
+            // says where to change it.
             this.state.streaming = '';
             this.state.thinking = '';
             const assistant = event.payload.completion_message_id
@@ -2392,7 +2388,7 @@ export class SessionApp {
       this.flash(`${model.model} does not read images`);
     this.repaint();
   }
-  // ctrl+c with nothing typed, as in 0.5.0: it stops a running turn; otherwise the first press
+  // ctrl+c with nothing typed: it stops a running turn; otherwise the first press
   // says how to leave and a second within 1.5 s leaves (so does one just after a stop).
   private ctrlC(): void {
     this.jobWakeSnoozed = true;
@@ -2413,7 +2409,7 @@ export class SessionApp {
       );
     }
   }
-  // esc or ctrl+c during a turn, as in 0.5.0: the turn stops, and the messages it had not read
+  // esc or ctrl+c during a turn: the turn stops, and the messages it had not read
   // yet are sent next, one turn each, the steering ones first.
   private interrupt(): void {
     const runtime = this.runtime;
@@ -2439,7 +2435,7 @@ export class SessionApp {
     });
   }
   // ctrl+z: the shell gets the terminal back and `fg` brings Circle back with the screen drawn
-  // again (0.5.0's _suspend). Windows has no job control.
+  // again. Windows has no job control.
   private suspend(): void {
     if (this.terminal.platform === 'win32') {
       this.flash('Suspending is not supported here');
@@ -2478,7 +2474,7 @@ export class SessionApp {
     this.screen.invalidate();
     this.repaint();
   }
-  // The open /jobs list takes the jobs as they are now (0.5.0's _refresh_jobs_picker). While
+  // The open /jobs list takes the jobs as they are now. While
   // it asks something (stop this job?) it is put aside and keeps following.
   private refreshJobsList(): void {
     const open = this.jobsList;
@@ -3228,9 +3224,8 @@ export class SessionApp {
     this.flash(`Unknown command /${name} · try /help`);
   }
   // /login: setup's questions asked in a list, the URL and the key (as dots) on its search
-  // line (0.5.0's _open_login_picker, without its first choice between an API key and OAuth:
-  // Circle signs in only with an API URL and key). Nothing is saved before a model is chosen;
-  // esc on the key goes back to the URL, esc on the URL leaves.
+  // line; Circle signs in only with an API URL and key. Nothing is saved before a model is
+  // chosen; esc on the key goes back to the URL, esc on the URL leaves.
   private login(): void {
     const view = this.view;
     const flow = new SetupFlow(this.home);
@@ -3305,7 +3300,7 @@ export class SessionApp {
             return;
           }
           this.saveConnection(flow);
-          // The model chosen here wins over `--model` and the project's, as in 0.5.0
+          // The model chosen here wins over `--model` and the project's
           const chosen = this.settings.auth.model;
           this.applyRunSettings();
           this.settings.auth.model = this.state.model = chosen;
@@ -3417,7 +3412,7 @@ export class SessionApp {
     this.repaint();
     return true;
   }
-  /** A press on a subagent's row in the strip opens its page, as in 0.5.0. */
+  /** A press on a subagent's row in the strip opens its page. */
   private stripClick(event: Extract<InputEvent, { type: 'mouse' }>): boolean {
     const strip = this.state.stripAgents;
     if (!strip || event.action !== 'press' || event.button !== 0) return false;
@@ -3499,7 +3494,7 @@ export class SessionApp {
     );
   }
   // $VISUAL, $EDITOR, or nvim, vim or nano (notepad on Windows), on the draft in full; what
-  // it leaves in the file comes back to the box, whatever the editor exits with (0.5.0).
+  // it leaves in the file comes back to the box, whatever the editor exits with.
   private async editor(): Promise<boolean> {
     if (this.externalEditor) throw new Error('an editor is already running');
     const words = editorCommand(process.env, this.terminal.platform);
@@ -3599,7 +3594,7 @@ export class SessionApp {
     this.terminal.write(
       '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?25h\x1b[?1049l\x1b[23;0t',
     );
-    // As 0.5.0 did once the screen was gone: the jobs that leaving stopped, then the
+    // Once the screen is gone: the jobs that leaving stopped, then the
     // command that opens this conversation again.
     const runtime = this.runtime;
     const jobs = [...this.views.keys()].reduce(

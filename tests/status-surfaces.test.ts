@@ -194,7 +194,7 @@ test('the header shows thinking depth and branch, hands off to the welcome block
   assert.equal(stripAnsi(renderScreen(state, 90, 40)[0]!).trim(), '');
 });
 
-test('the busy word is a Python verb with the turn time and written tokens, and the rainbow travels round the frame', () => {
+test('the busy word is a verb from the list with the turn time and written tokens, and the rainbow travels round the frame', () => {
   assert.equal(
     pickBusyVerb(() => 0),
     'Thinking',
@@ -573,7 +573,7 @@ test('the welcome lists what the folder brings, unlit until trusted, blinking wh
     untrusted.items.map((item) => [item.kind, item.text, item.state]),
     [
       ['instructions', 'AGENTS.md', 'none'],
-      // paths in the system's own separator, as 0.5.0 wrote them
+      // paths in the system's own separator
       ['skills', `1 in ${join('.circle', 'skills')}`, 'none'],
       ['commands', `1 in ${join('.circle', 'commands')}`, 'none'],
       ['settings', join('.circle', 'settings.json'), 'none'],

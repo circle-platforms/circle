@@ -27,9 +27,9 @@ export interface McpStatus {
   tools: string[];
   error: string;
 }
-// Model APIs take tool names of letters, digits, `_` and `-`, at most 64 characters. 0.5.0
-// offered `<server>_<tool>` for any server name; the same name, with every other character
-// turned into `_`, keeps that and lets the request through. A name that would be longer is
+// Model APIs take tool names of letters, digits, `_` and `-`, at most 64 characters. A tool
+// is offered as `<server>_<tool>` for any server name, with every other character turned
+// into `_`, so the request goes through. A name that would be longer is
 // shortened and given a hash of the original, so two long names stay apart.
 export function mcpToolName(server: string, tool: string): string {
   const part = (value: string): string =>
@@ -93,7 +93,7 @@ export function buildMcpConnections(
         );
     }
     if (!connection) continue;
-    // As in 0.5.0 the later of two servers with one name is used; the earlier is reported.
+    // The later of two servers with one name is used; the earlier is reported.
     const earlier = connections.get(name);
     if (earlier) {
       connections.delete(name);
@@ -173,7 +173,7 @@ export class McpManager {
   status: McpStatus[] = [];
   private clients: Client[] = [];
   // `timeout` bounds connecting and listing tools. A tool call has no limit unless `callTimeout`
-  // is given, as in 0.5.0: a tool may wait minutes (a login), and an interrupt cancels it.
+  // is given: a tool may wait minutes (a login), and an interrupt cancels it.
   constructor(
     readonly workspace: string,
     readonly timeout = 30000,

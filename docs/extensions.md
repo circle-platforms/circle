@@ -141,19 +141,6 @@ It also gives the model tools of its own, so you can ask in words: `hub_packs`, 
 
 Not wired yet: installing modules (`POST /v1/modules/install`), registering providers, and the notification stream. `/hub request` submits a general approval (`POST /v1/approval-requests`). `/hub roles` submits an approval-role change. `/hub inbox`, `/hub show`, `/hub approve` and `/hub reject` use the general queue, content and decision routes when the server has them, and the task approval routes on circle-hub 0.2.0. `/hub knowledge` searches, shares an ACL revision, reviews a claim and publishes a snapshot. `/hub search` prints `snapshotId` from knowledge retrieval. `/hub audit` export, `/hub login --sso` and `/hub submit hub-task` call those routes when they exist. The server's MCP tools `hub_task` and `hub_packs` are not in `GET /v1/tools`; Circle's own `hub_task` still looks a task up by id. circle-hub 0.2.0 does not serve a browser page for the queues.
 
-## Coming from 0.5.0
-
-Circle 0.5.0 and older loaded `extension.py`. This version does not run Python, and a folder with only an `extension.py` is skipped. Rewrite the extension as `extension.mjs` or `extension.ts`:
-
-| 0.5.0 | Now |
-|---|---|
-| `register_tool(name, description, parameters, execute, read_only=…, approval=…)` | `registerTool(name, description, parameters, execute, { readOnly, approval })` |
-| `register_command(name, description, handler)` with `ctx.send_user_message` | `registerCommand(name, description, handler)` with `ctx.sendUserMessage` |
-| `register_middleware(middleware, slot)` with LangChain middleware | `registerMiddleware(handler, slot)` with a plain function, see [Middleware](#middleware) |
-| `register_subagent(spec, tools)`, where `tools` named only extra tools | `registerSubagent(spec, tools)`, where `tools` is the whole list |
-| `register_renderer(kind, renderer)` with `update.tool_output`, `update.is_error` | `registerRenderer(kind, renderer)` with `update.output`, `update.status` |
-| `api.Watch(title, poll, interval_s=…, …)` | `new api.Watch(title, poll, { interval_s, … })`, and `poll` gets a cancel signal |
-
 ## The `api` object
 
 | Member | Purpose |

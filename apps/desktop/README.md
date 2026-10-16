@@ -68,6 +68,15 @@ plan-to-manual/auto changes and restart, and checks original checkpoint JSON.
 `CIRCLE_DESKTOP_EXECUTABLE` selects the packaged executable. The check is also
 part of `test:desktop`; it never uses real application data or a paid endpoint.
 
+A shown window whose controls are laid out and enabled still cannot be clicked
+until it runs animation frames, and on a runner's first launch the GPU process
+can take seconds to start before it does. `test:desktop` therefore waits for the
+first frames during startup, before its first click. `test/frame-readiness.mjs`,
+also part of `test:desktop`, pauses the running GPU process for five seconds
+(`SIGSTOP`, then `SIGCONT`). It checks that the browser panel button cannot be
+clicked until frames arrive and that the click then opens the panel. Windows has
+no such signal, so the check reports a skip there.
+
 ## Check
 
 ```sh

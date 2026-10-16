@@ -472,7 +472,7 @@ test('rules a Python release revoked stay revoked, and the tombstones go on the 
   const thread = 's';
   const name =
     createHash('sha256').update(thread).digest('hex').slice(0, 32) + '.json';
-  // what Python 0.5.0 leaves behind: the revoked rule kept with its mark
+  // what a Python release left behind: the revoked rule kept with its mark
   writeFileSync(
     join(root, 'approvals', name),
     JSON.stringify({

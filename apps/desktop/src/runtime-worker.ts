@@ -1,4 +1,4 @@
-import { readFileSync, appendFileSync } from 'node:fs';
+import { readFileSync, appendFileSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -31,7 +31,12 @@ if (fixturePath) {
         message?: ModelResponse['message'];
         delayMs?: number;
         waitForAbort?: boolean;
-        chunks?: (string | { text: string; thinking?: boolean })[];
+        // `waitForFile` keeps the stream open until a check has seen it and creates the file.
+        chunks?: (
+          | string
+          | { text: string; thinking?: boolean }
+          | { waitForFile: string }
+        )[];
         usage?: ModelResponse['usage'];
         error?: string;
       }) =>
@@ -57,6 +62,11 @@ if (fixturePath) {
               if (request.signal.aborted) abort();
             });
           for (const chunk of entry.chunks ?? []) {
+            if (typeof chunk !== 'string' && 'waitForFile' in chunk) {
+              while (!existsSync(chunk.waitForFile))
+                await delay(20, undefined, { signal: request.signal });
+              continue;
+            }
             if (typeof chunk === 'string') request.token(chunk);
             else request.token(chunk.text, chunk.thinking);
             await delay(entry.delayMs ?? 15, undefined, {
@@ -69,8 +79,13 @@ if (fixturePath) {
             id: randomUUID(),
             role: 'assistant',
             content: (entry.chunks ?? [])
-              .filter((chunk) => typeof chunk === 'string' || !chunk.thinking)
-              .map((chunk) => (typeof chunk === 'string' ? chunk : chunk.text))
+              .flatMap((chunk) =>
+                typeof chunk === 'string'
+                  ? [chunk]
+                  : 'text' in chunk && !chunk.thinking
+                    ? [chunk.text]
+                    : [],
+              )
               .join(''),
           };
           if (message.content && !entry.chunks) request.token(message.content);
