@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   enumerateWindowsProcesses,
+  writeWindowsProcessEntry,
   WindowsProcessApiError,
   type NativeProcessEntry,
   type WindowsProcessApi,
@@ -142,4 +143,81 @@ test('a successful empty snapshot is distinct from a failed enumeration', () => 
   assert.equal(result.issueCount, 0);
   assert.deepEqual(result.entries, []);
   assert.deepEqual(f.closed, [1n]);
+});
+
+test('a verified PID is published before the next native call and its later failure', () => {
+  const f = fixture([{ pid: 41, name: 'circle.exe' }]);
+  const events: string[] = [];
+  const path = 'C:\\用户 folder\\41\\circle.exe';
+  const expected = `41 ${Buffer.from(path, 'utf8').toString('base64')}\n`;
+  let output = '';
+  f.api.next = () => {
+    events.push('next');
+    assert.equal(output, expected);
+    throw new WindowsProcessApiError('enumerate', 87);
+  };
+  f.api.close = (handle) => {
+    f.closed.push(handle);
+    events.push(`close ${handle}`);
+  };
+  const result = enumerateWindowsProcesses(
+    f.api,
+    ['circle'],
+    false,
+    undefined,
+    (entry) => {
+      events.push('publish');
+      output += `${entry.pid} ${Buffer.from(entry.path, 'utf8').toString('base64')}\n`;
+    },
+  );
+  assert.equal(output, expected);
+  assert.deepEqual(events, ['publish', 'close 41', 'next', 'close 1']);
+  assert.deepEqual(result.entries, [{ pid: 41, path }]);
+  assert.equal(result.complete, false);
+  assert.deepEqual(result.issues, [{ stage: 'enumerate', code: 87 }]);
+});
+
+test('a publishing failure remains unknown and cannot prevent owned handle cleanup', () => {
+  const f = fixture([{ pid: 41, name: 'circle.exe' }]);
+  const result = enumerateWindowsProcesses(
+    f.api,
+    ['circle'],
+    false,
+    undefined,
+    () => {
+      throw new Error('private output failure');
+    },
+  );
+  assert.equal(result.complete, false);
+  assert.equal(result.entries[0]!.pid, 41);
+  assert.equal(result.issueCount, 1);
+  assert.deepEqual(result.issues, [{ stage: 'unknown' }]);
+  assert.deepEqual(f.closed, [41n, 1n]);
+});
+
+test('partial output writes finish the same complete LF record in order', () => {
+  const entry = { pid: 41, path: 'C:\\用户 folder\\circle.exe' };
+  const chunks: Buffer[] = [];
+  writeWindowsProcessEntry(entry, (bytes, offset, length) => {
+    const progress = Math.min(3, length);
+    chunks.push(Buffer.from(bytes.subarray(offset, offset + progress)));
+    return progress;
+  });
+  assert.equal(
+    Buffer.concat(chunks).toString('utf8'),
+    `41 ${Buffer.from(entry.path).toString('base64')}\n`,
+  );
+  assert.ok(chunks.length > 1);
+});
+
+test('zero or invalid output progress fails rather than claiming a record was written', () => {
+  for (const result of [0, -1, NaN, 100000])
+    assert.throws(
+      () =>
+        writeWindowsProcessEntry(
+          { pid: 41, path: 'C:\\circle.exe' },
+          () => result,
+        ),
+      /failed at output/,
+    );
 });

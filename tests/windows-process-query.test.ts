@@ -88,6 +88,101 @@ test('an unreadable Windows copy fails closed when its all-process query fails w
   assert.equal(readFileSync(program, 'utf8'), 'synthetic held image');
 });
 
+test('an unterminated PID record cannot turn an outside image path prefix into ownership', (t) => {
+  const { copy, where } = heldCopy(t);
+  let folder = copy.versions[0]!;
+  folder += 'x'.repeat((3 - (Buffer.byteLength(folder) % 3)) % 3);
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'circle.exe'), 'synthetic held image');
+  copy.versions = [folder];
+  const full = Buffer.from(folder + '-other/circle.exe').toString('base64');
+  const partial = full.slice(0, (Buffer.byteLength(folder) / 3) * 4);
+  assert.equal(Buffer.from(partial, 'base64').toString('utf8'), folder);
+  assert.throws(
+    () =>
+      runningCopies(
+        [copy],
+        where,
+        () => ({
+          status: null,
+          stdout: `41 ${partial}`,
+          stderr: '',
+          error: Object.assign(new Error('native timeout'), {
+            code: 'ETIMEDOUT',
+          }),
+        }),
+        () => 'EBUSY',
+        () => {},
+      ),
+    /could not be listed \(no answer in 30 s\)/,
+  );
+});
+
+for (const kind of ['base64', 'utf8'] as const) {
+  test(`a complete PID record with invalid ${kind} cannot establish image ownership`, (t) => {
+    const { copy, program, where } = heldCopy(t);
+    const encoded =
+      kind === 'base64'
+        ? Buffer.from(program).toString('base64') + '!'
+        : Buffer.concat([Buffer.from(program), Buffer.from([0xff])]).toString(
+            'base64',
+          );
+    assert.throws(
+      () =>
+        runningCopies(
+          [copy],
+          where,
+          () => ({
+            status: 0,
+            stdout: `41 ${encoded}\n`,
+            stderr: '',
+          }),
+          () => 'EBUSY',
+          () => {},
+        ),
+      /unknown.*invalid.*1/,
+    );
+  });
+}
+
+test('an unread copy with malformed successful output is unknown rather than an empty process list', (t) => {
+  const { copy, where } = heldCopy(t);
+  copy.versions = [join(where.home, 'unavailable-version')];
+  assert.throws(
+    () =>
+      runningCopies(
+        [copy],
+        where,
+        () => ({
+          status: 0,
+          stdout: '41 truncated',
+          stderr: '',
+        }),
+        () => undefined,
+        () => {},
+      ),
+    /could not be inspected.*unknown.*incomplete.*1/,
+  );
+});
+
+test('complete valid LF and CRLF PID records retain exact image ownership', (t) => {
+  const { copy, program, where } = heldCopy(t);
+  for (const newline of ['\n', '\r\n'])
+    assert.deepEqual(
+      runningCopies(
+        [copy],
+        where,
+        () => ({
+          status: 0,
+          stdout: `41 ${Buffer.from(program).toString('base64')}${newline}`,
+          stderr: '',
+        }),
+        () => 'EBUSY',
+      ),
+      [41],
+    );
+});
+
 test('a timed out Windows query keeps its original error message and attaches the last captured stage', (t) => {
   const { copy, program, where } = heldCopy(t);
   const nativeError = Object.assign(new Error('native timeout'), {

@@ -33,6 +33,7 @@ export function enumerateWindowsProcesses(
   names: string[],
   all: boolean,
   mark: (stage: Stage) => void = () => {},
+  onEntry: (entry: { pid: number; path: string }) => void = () => {},
 ) {
   const entries: { pid: number; path: string }[] = [];
   const emit = (stage: Stage) => {
@@ -86,7 +87,9 @@ export function enumerateWindowsProcesses(
         const path = api.image(process);
         if (!path || path.includes('\0'))
           throw new WindowsProcessApiError('image');
-        entries.push({ pid: entry.pid, path });
+        const verified = { pid: entry.pid, path };
+        entries.push(verified);
+        onEntry(verified);
       } catch (error) {
         note(error);
       } finally {
@@ -197,6 +200,31 @@ export async function loadWindowsProcessApi(): Promise<WindowsProcessApi> {
   };
 }
 
+export function writeWindowsProcessEntry(
+  entry: { pid: number; path: string },
+  write: (bytes: Buffer, offset: number, length: number) => number = (
+    bytes,
+    offset,
+    length,
+  ) => writeSync(1, bytes, offset, length),
+) {
+  const bytes = Buffer.from(
+    `${entry.pid} ${Buffer.from(entry.path, 'utf8').toString('base64')}\n`,
+    'utf8',
+  );
+  let offset = 0;
+  while (offset < bytes.length) {
+    const written = write(bytes, offset, bytes.length - offset);
+    if (
+      !Number.isInteger(written) ||
+      written <= 0 ||
+      written > bytes.length - offset
+    )
+      throw new WindowsProcessApiError('output');
+    offset += written;
+  }
+}
+
 async function runWorker() {
   if (process.argv[2] === '--load-only') {
     const api = await loadWindowsProcessApi();
@@ -237,12 +265,13 @@ async function runWorker() {
   )
     throw new WindowsProcessApiError('input');
   const api = await loadWindowsProcessApi();
-  const outcome = enumerateWindowsProcesses(api, names, mode === 'all', mark);
-  for (const entry of outcome.entries)
-    writeSync(
-      1,
-      `${entry.pid} ${Buffer.from(entry.path, 'utf8').toString('base64')}\n`,
-    );
+  const outcome = enumerateWindowsProcesses(
+    api,
+    names,
+    mode === 'all',
+    mark,
+    writeWindowsProcessEntry,
+  );
   if (!outcome.complete) {
     const first = outcome.issues[0];
     writeSync(

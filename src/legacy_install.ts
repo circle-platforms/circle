@@ -31,6 +31,7 @@ import {
 } from 'node:path';
 import {
   readWindowsQueryMarkers,
+  readWindowsProcessRecords,
   windowsProcessQuery,
   WindowsProcessQueryObservation,
 } from './windows_process_query.js';
@@ -377,10 +378,10 @@ export function runningCopies(
       const result = run(process.execPath, query.args, LIST_TIMEOUT);
       const queryElapsedMs = performance.now() - queryStarted;
       const markers = readWindowsQueryMarkers(result.stderr || '', query.nonce);
-      for (const line of (result.stdout || '').split(/\r?\n/)) {
-        const [pid = '', encoded] = line.trim().split(' ');
-        if (!/^\d+$/.test(pid) || !encoded) continue;
-        const path = Buffer.from(encoded, 'base64').toString('utf8');
+      const records = readWindowsProcessRecords(result.stdout || '');
+      const outputProblem =
+        records.invalidRecords > 0 || records.incompleteRecords > 0;
+      for (const { pid, path } of records.entries) {
         if (
           folders.some((folder) =>
             inside(real(path) ?? path, real(folder) ?? folder),
@@ -391,7 +392,7 @@ export function runningCopies(
               resolve(real(script) ?? script).toLowerCase(),
           )
         )
-          pids.add(Number(pid));
+          pids.add(pid);
       }
       // A program in use that no listed process runs: removing it would fail halfway, after
       // the new release is staged.
@@ -400,7 +401,8 @@ export function runningCopies(
         .map((entry) => entry.path);
       if (
         !pids.size &&
-        (busy.length || (unread && (result.error || result.status !== 0)))
+        (busy.length ||
+          (unread && (result.error || result.status !== 0 || outputProblem)))
       ) {
         const timedOut =
           (result.error as NodeJS.ErrnoException | undefined)?.code ===
@@ -411,7 +413,9 @@ export function runningCopies(
             ? result.error.message
             : result.status !== 0
               ? markers.cleaned.trim() || `exit status ${result.status}`
-              : undefined;
+              : outputProblem
+                ? `unknown process output: invalid ${records.invalidRecords}, incomplete ${records.incompleteRecords}`
+                : undefined;
         const files = busy.length
           ? `${busy.join(', ')} ${busy.length > 1 ? 'are' : 'is'} in use`
           : 'The existing installation could not be inspected';
@@ -419,6 +423,7 @@ export function runningCopies(
           markers,
           queryElapsedMs,
           result,
+          records,
         );
         const error = new Error(
           reason
