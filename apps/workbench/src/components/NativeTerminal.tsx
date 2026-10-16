@@ -11,6 +11,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import {
   ArrowDown,
+  ArrowLeft,
   ArrowUp,
   Copy,
   MessageSquarePlus,
@@ -115,6 +116,16 @@ function recordTerminalTiming(
 }
 
 function status(snapshot: TerminalSnapshot): string {
+  if (snapshot.managedCommand) {
+    const root = snapshot.managedCommand.completion.rootExit;
+    if (root)
+      return root.signal
+        ? t('ended by signal {signal}', { signal: root.signal })
+        : t('exit {code}', { code: root.exitCode });
+    if (!['running', 'stopping'].includes(snapshot.status))
+      return t('terminal closed');
+  }
+
   if (snapshot.kind === 'service') {
     if (snapshot.serviceState === 'starting') return t('service starting');
     if (snapshot.serviceState === 'ready') return t('service ready');
@@ -161,6 +172,7 @@ export function NativeTerminal({
   const commandKey = commandTerminal
     ? JSON.stringify([
         commandTerminal.viewSessionId,
+        commandTerminal.requestId,
         commandTerminal.resolved.target,
       ])
     : '';
@@ -178,7 +190,15 @@ export function NativeTerminal({
         ? commandTerminalRequest(
             commandTerminal.viewSessionId,
             commandTerminal.resolved.target,
-            (value) => setCommandCapabilities({ key: commandKey, value }),
+            (value) =>
+              setCommandCapabilities((previous) =>
+                previous?.key === commandKey &&
+                previous.value.input === value.input &&
+                previous.value.stop === value.stop &&
+                previous.value.addToDraft === value.addToDraft
+                  ? previous
+                  : { key: commandKey, value },
+              ),
           )
         : <T,>(method: string, params: Record<string, unknown> = {}) =>
             workspaceCall<T>(sessionId, 'terminal', method, params),
@@ -296,6 +316,17 @@ export function NativeTerminal({
     void terminalRequest<TerminalSnapshot[]>('list')
       .then((items) => {
         if (cancelled) return;
+        if (commandTerminal) {
+          const target = commandTerminal.resolved.target;
+          if (
+            items.length !== 1 ||
+            items[0].id !== target.terminal.id ||
+            items[0].epoch !== target.terminal.epoch ||
+            items[0].sessionId !== target.executionSessionId
+          )
+            throw Error(t('command terminal source changed; open it again'));
+          focusTarget.current = target.terminal.id;
+        }
         setTerminals((previous) => [
           ...previous.filter((item) => item.sessionId !== sessionId),
           ...items,
@@ -507,9 +538,12 @@ export function NativeTerminal({
     >
       <div className="native-terminal-toolbar">
         {commandTerminal && onExitCommandTerminal && (
-          <Button onClick={onExitCommandTerminal}>
-            {t('session terminals')}
-          </Button>
+          <IconButton
+            label={t('session terminals')}
+            onClick={onExitCommandTerminal}
+          >
+            <ArrowLeft size={14} />
+          </IconButton>
         )}
         <div
           className="native-terminal-tabs segmented"
@@ -588,7 +622,7 @@ export function NativeTerminal({
         </IconButton>
         <IconButton
           label={
-            selected?.kind === 'service'
+            selected?.kind === 'service' && !selected.managedCommand
               ? t('restart service')
               : t('restart terminal')
           }
@@ -626,7 +660,7 @@ export function NativeTerminal({
         </IconButton>
         <IconButton
           label={
-            selected?.kind === 'service'
+            selected?.kind === 'service' && !selected.managedCommand
               ? t('stop service')
               : t('stop terminal')
           }
@@ -941,7 +975,9 @@ export function NativeTerminal({
           <span title={selected.cwd}>{selected.cwd}</span>
           <span title={selected.exitReason}>
             <Status value={status(selected)} />
-            {selected.exitReason && selected.exitReason !== status(selected)
+            {!selected.managedCommand &&
+            selected.exitReason &&
+            selected.exitReason !== status(selected)
               ? ` · ${selected.exitReason}`
               : ''}
           </span>

@@ -1,4 +1,6 @@
 export const terminal: Record<string, string> = {
+  'terminal closed': '终端已关闭',
+
   'session terminals': '会话终端',
 
   'this command has no interactive terminal': '此命令没有交互终端',

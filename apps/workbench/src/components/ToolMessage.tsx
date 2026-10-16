@@ -209,13 +209,15 @@ export function ToolMessage({
               <button
                 className="text-button"
                 disabled={terminalBusy}
-                onClick={async () => {
+                onClick={async (event) => {
+                  const trigger = event.currentTarget;
                   setTerminalBusy(true);
                   setTerminalError('');
                   try {
                     await openCommandTerminal(
                       ownerSessionId ?? currentSession(snapshot).id,
                       tool.id,
+                      trigger,
                     );
                   } catch (error) {
                     setTerminalError(

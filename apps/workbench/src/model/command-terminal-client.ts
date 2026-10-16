@@ -10,6 +10,7 @@ import { workspaceCall } from './workspace-client';
 import { t } from '../i18n';
 export interface CommandTerminalView {
   viewSessionId: string;
+  requestId: number;
   resolved: CommandTerminalAvailable;
 }
 export function commandTerminalUnavailable(

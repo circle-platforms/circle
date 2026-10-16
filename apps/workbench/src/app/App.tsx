@@ -166,8 +166,16 @@ export function App() {
   const [agent, setAgent] = useState<string | null>(null);
   const [commandTerminal, setCommandTerminal] = useState<CommandTerminalView>();
   const commandRequest = useRef(0);
+  const commandReturnFocus = useRef<
+    { origin: string; trigger: HTMLElement } | undefined
+  >(undefined);
   const commandOrigin = useRef('');
-  commandOrigin.current = JSON.stringify([session.id, agent]);
+  commandOrigin.current = JSON.stringify([
+    session.id,
+    agent,
+    location.pathname,
+    file,
+  ]);
   useEffect(() => {
     commandRequest.current++;
     setCommandTerminal(undefined);
@@ -175,6 +183,7 @@ export function App() {
   const openCommandTerminal = async (
     sourceSessionId: string,
     toolCallId: string,
+    trigger?: HTMLElement,
   ) => {
     const request = ++commandRequest.current;
     const origin = commandOrigin.current;
@@ -203,13 +212,15 @@ export function App() {
       reply.target.toolCallId !== toolCallId
     )
       throw Error(t('command terminal source changed; open it again'));
-    setCommandTerminal({ viewSessionId, resolved: reply });
+    commandReturnFocus.current = trigger ? { origin, trigger } : undefined;
+    setCommandTerminal({ viewSessionId, requestId: request, resolved: reply });
     setPanel('terminal');
     setSelection('');
     setInspectorOpen(true);
   };
 
   const selectAgent = (id: string | null) => {
+    commandRequest.current++;
     sourceOpener.current.cancel();
     setFile(null);
     setFileOwner(undefined);
@@ -313,6 +324,7 @@ export function App() {
     column?: number,
     sourceOwner?: SourceResourceOwner,
   ) => {
+    commandRequest.current++;
     const sourceSessionId = session.id;
     const result = await sourceOpener.current.open(
       sourceSessionId,
@@ -884,13 +896,28 @@ export function App() {
         panel={panel}
         visible={inspectorVisible}
         commandTerminal={commandTerminal}
-        onExitCommandTerminal={() => setCommandTerminal(undefined)}
+        onExitCommandTerminal={() => {
+          commandRequest.current++;
+          commandReturnFocus.current = undefined;
+          setCommandTerminal(undefined);
+        }}
         onSession={(id) => {
           perform(() => selectSessionAndNavigate(id));
         }}
         selection={selection}
         onPanel={onPanel}
-        onClose={() => setInspectorOpen(false)}
+        onClose={() => {
+          commandRequest.current++;
+          setInspectorOpen(false);
+          const previous = commandReturnFocus.current;
+          if (
+            panel === 'terminal' &&
+            commandTerminal &&
+            previous?.origin === commandOrigin.current &&
+            previous.trigger.isConnected
+          )
+            previous.trigger.focus({ preventScroll: true });
+        }}
         onFile={onFile}
         onAgent={selectAgent}
         onDialog={onDialog}
