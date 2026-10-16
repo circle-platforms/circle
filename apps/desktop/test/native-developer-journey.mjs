@@ -375,6 +375,28 @@ for (const file of [
   } catch {}
 }
 const screenshot = async (name) => {
+  const navigation = await page.evaluate(async () => {
+    const { snapshot } = await window.circleDesktop.runtimeState();
+    return {
+      hash: location.hash,
+      activeSessionId: snapshot.activeSessionId,
+      focusedHref: document.activeElement?.closest('a')?.getAttribute('href'),
+      links: [...document.querySelectorAll('.sidebar .session-link')].map(
+        (link) => ({
+          href: link.getAttribute('href'),
+          className: link.className,
+          ariaCurrent: link.getAttribute('aria-current'),
+          hovered: link.matches(':hover'),
+          focusWithin: link.matches(':focus-within'),
+          background: getComputedStyle(link).backgroundColor,
+        }),
+      ),
+    };
+  });
+  await writeFile(
+    join(output, name + '-navigation.json'),
+    JSON.stringify(navigation, null, 2) + '\n',
+  );
   await page.screenshot({ path: join(output, name + '.png') });
 };
 try {

@@ -30,6 +30,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'native-terminal-context-ui.mjs',
   'terminal-selection-preview-ui.mjs',
   'file-source-heading-ui.mjs',
+  'sidebar-workspace-label-ui.mjs',
 ]);
 
 /** Explicit suites run serially; a failed suite prevents later execution. */
