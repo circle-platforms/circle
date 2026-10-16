@@ -19,6 +19,7 @@ import type { TaskRecord } from './collaboration.js';
 import type { CyclePorts, CycleRecord, CycleCheck } from './delivery-cycle.js';
 import { DeliveryService } from './delivery.js';
 import { GitWorkspaceService } from './git.js';
+import { cycleRepositoryIdentity } from './cycle-repository-identity.js';
 import {
   captureTaskChanges,
   type TaskVerificationCheck,
@@ -188,32 +189,16 @@ export function createWorkspaceCyclePorts(
       manifest.baseline !== owner.integration.baseline
     )
       throw Error('integration ownership changed');
-    const common = async (path: string) =>
-      realpath(
-        resolve(
-          path,
-          (
-            await (await git(path)).git(['rev-parse', '--git-common-dir'])
-          ).trim(),
-        ),
-      );
-    const [sourceCommon, targetCommon] = await Promise.all([
-      common(original),
-      common(target),
+    const [sourceRepository, targetRepository] = await Promise.all([
+      cycleRepositoryIdentity(original),
+      cycleRepositoryIdentity(target),
     ]);
-    if (sourceCommon !== targetCommon)
+    if (sourceRepository.common !== targetRepository.common)
       throw Error('cycle integration belongs to another repository');
-    const branch = (
-      await (
-        await git(target)
-      )
-        .git(['symbolic-ref', '--short', '-q', 'HEAD'])
-        .catch((error: unknown) => {
-          if ((error as { code?: number }).code === 1) return 'detached';
-          throw error;
-        })
-    ).trim();
-    if (branch !== owner.branch || !owner.branch.startsWith('codex/'))
+    if (
+      !owner.branch.startsWith('codex/') ||
+      targetRepository.head !== `ref: refs/heads/${owner.branch}`
+    )
       throw Error(
         'cycle integration branch changed; inspect before continuing',
       );
@@ -312,6 +297,11 @@ export function createWorkspaceCyclePorts(
     const owner = await owned(cycle),
       service = await git(owner.integration.path),
       snapshot = await service.snapshot();
+    if (
+      (await realpath(snapshot.root)) !==
+      (await realpath(owner.integration.path))
+    )
+      throw Error('cycle Git worktree root changed; inspect before continuing');
     if (snapshot.branch !== owner.branch)
       throw Error(
         'cycle integration branch changed; inspect before continuing',
