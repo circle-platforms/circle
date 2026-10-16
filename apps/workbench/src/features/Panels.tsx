@@ -196,6 +196,7 @@ function InspectorResources(
             key={id}
             hidden={id !== props.panel}
             className="inspector-resource-view"
+            data-inspector-resource={id}
           >
             {id === 'terminal' || id === 'changes' || id === 'activity' ? (
               <WorkspacePanelContents
