@@ -80,10 +80,26 @@ try {
             'representative wide table is contained in a scroll region',
           );
           await table.focus();
-          await page.keyboard.press('ArrowRight');
-          await page.waitForFunction(
-            () =>
-              document.querySelector('.markdown-table-scroll').scrollLeft > 0,
+          for (let step = 0; step < 4; step++)
+            await page.keyboard.press('ArrowRight');
+          await page.waitForFunction(() => {
+            const el = document.querySelector('.markdown-table-scroll');
+            return el.scrollLeft >= el.scrollWidth - el.clientWidth - 1;
+          });
+          const visibleResult = await resultHeading.evaluate((el) => {
+            const bounds = el.getBoundingClientRect();
+            const container = el
+              .closest('.markdown-table-scroll')
+              .getBoundingClientRect();
+            return (
+              bounds.left >= container.left - 1 &&
+              bounds.right <= container.right + 1
+            );
+          });
+          assert.equal(
+            visibleResult,
+            true,
+            'keyboard can reveal the entire short result column',
           );
         }
         const summary = page.locator('.thinking summary');
