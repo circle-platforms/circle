@@ -1,3 +1,4 @@
+import { commandExecutionReceipt } from '../../../src/command_process.js';
 import { canonicalPath } from '../../../src/paths.js';
 import type { ResolveInputsRequest } from '../../../src/input_outbox.js';
 import { spawnPty } from './workspace/native-pty.js';
@@ -1419,12 +1420,12 @@ export class RuntimeController {
     if (
       !view ||
       !source ||
-      !runtime ||
-      runtime.options.workspace !== source.workspace
+      (runtime && runtime.options.workspace !== source.workspace)
     )
       return;
     const root = this.workspaceRoots.get(source.workspace)?.canonical;
     if (!root) return;
+    let allowLive = sourceSessionId === viewSessionId;
     if (sourceSessionId !== viewSessionId) {
       // Notification ownership is deliberately irrelevant. Only the actual
       // TaskService ledger may grant a parent access to an execution session.
@@ -1438,7 +1439,30 @@ export class RuntimeController {
               this.workspaceRoots.get(child.worktree)?.canonical === root,
           ),
       );
-      if (!owned) return;
+      if (!owned && !emergency) this.sourceTask(viewSessionId);
+      const archivedOwned =
+        !owned &&
+        !emergency &&
+        this.taskAgentAttempts(viewSessionId).records.some((task) =>
+          [
+            { sessionId: task.runtimeSessionId, worktree: task.worktree },
+            ...(task.reviewers ?? []).map((reviewer) => ({
+              sessionId: reviewer.sessionId,
+              worktree: reviewer.workspace,
+            })),
+          ].some(
+            (child) =>
+              child.sessionId === sourceSessionId &&
+              child.worktree !== undefined &&
+              this.workspaceRoots.get(child.worktree)?.canonical === root,
+          ),
+        );
+      if (!owned && !archivedOwned) return;
+      // Archived provenance grants reading only. A manually reopened old child
+      // must not acquire input/stop authority from its previous parent ledger.
+      allowLive =
+        owned &&
+        [...this.taskRuntimes.values()].some((child) => child === runtime);
     }
     if (!emergency) {
       if (
@@ -1446,17 +1470,47 @@ export class RuntimeController {
         this.metadata.archivedAt(sourceSessionId)
       )
         throw Error('restore this session before continuing');
-      this.trustedWorkspace(view.workspace);
-      this.trustedWorkspace(source.workspace);
+      for (const [id, workspace] of [
+        [viewSessionId, view.workspace],
+        [sourceSessionId, source.workspace],
+      ]) {
+        try {
+          this.trustedWorkspace(workspace);
+        } catch {
+          // Restore only a proved ledger origin; this never resumes the child.
+          this.sourceTask(id);
+          this.trustedWorkspace(workspace);
+        }
+      }
     }
-    const services = this.workspaceServices.get(root);
-    if (!services) return { jobs: runtime.jobs };
+    const receipts = () =>
+      this.store.tree(sourceSessionId).flatMap(({ message }) => {
+        if (message.role !== 'tool' || !message.tool_call_id) return [];
+        return (message.commandExecutions ?? []).flatMap((receipt) => {
+          if (
+            receipt.executionSessionId !== sourceSessionId ||
+            receipt.toolCallId !== message.tool_call_id
+          )
+            return [];
+          const safe = commandExecutionReceipt({ ...receipt, outputPath: '' });
+          return safe ? [safe] : [];
+        });
+      });
+    // Loading an existing terminal journal never opens a runtime or executes a command.
+    const services =
+      this.workspaceServices.get(root) ??
+      (!emergency && receipts().length
+        ? this.services(source.workspace)
+        : undefined);
     return {
-      jobs: runtime.jobs,
-      terminals: services.terminals,
-      workspaceId: services.id,
+      jobs: allowLive ? runtime?.jobs : undefined,
+      receipts,
+      ...(services
+        ? { terminals: services.terminals, workspaceId: services.id }
+        : {}),
     };
   }
+
   private async workspaceCommand(command: RuntimeCommand): Promise<unknown> {
     this.metadata.refresh();
     const id = text(command.sessionId, 'session', 200);
@@ -1645,6 +1699,7 @@ export class RuntimeController {
                   this.options.workspaceTools!.runtimeExecutable,
                 supervisorPath:
                   this.options.workspaceTools!.commandSupervisorPath!,
+                executionEpoch: runtime.jobs.runName,
                 stopExecution: (actualSessionId, executionId, reason) =>
                   runtime.jobs.stopExecution(
                     actualSessionId,

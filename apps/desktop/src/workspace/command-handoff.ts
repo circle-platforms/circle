@@ -1,5 +1,8 @@
 import type { JobRegistry } from '../../../../src/jobs.js';
-import type { CommandExecution } from '../../../../src/command_process.js';
+import type {
+  CommandExecution,
+  CommandExecutionReceipt,
+} from '../../../../src/command_process.js';
 import type {
   CommandTerminalAvailable,
   CommandTerminalCommandReply,
@@ -13,7 +16,8 @@ import type {
 } from './terminal.js';
 
 export interface CommandTerminalSource {
-  jobs: JobRegistry;
+  jobs?: JobRegistry;
+  receipts?: () => readonly CommandExecutionReceipt[];
   terminals?: TerminalManager;
   workspaceId?: string;
 }
@@ -89,6 +93,41 @@ function sameTarget(left: CommandTerminalTarget, right: CommandTerminalTarget) {
     left.terminal.epoch === right.terminal.epoch
   );
 }
+interface ExecutionSource {
+  execution: CommandExecution;
+  current: boolean;
+}
+function originalExecution(
+  source: CommandTerminalSource,
+  sessionId: string,
+  callId: string,
+): ExecutionSource | undefined {
+  const current = source.jobs?.executionFor(sessionId, callId);
+  const candidates = new Map<string, CommandExecution>();
+  for (const receipt of source.receipts?.() ?? []) {
+    if (
+      receipt.executionSessionId !== sessionId ||
+      receipt.toolCallId !== callId
+    )
+      continue;
+    candidates.set(`${receipt.epoch}\0${receipt.executionId}`, {
+      ...receipt,
+      outputPath: '',
+    });
+  }
+  if (current)
+    candidates.set(`${current.epoch}\0${current.executionId}`, current);
+  // Reused provider call IDs across stored executions are never guessed.
+  if (candidates.size !== 1) return;
+  const execution = [...candidates.values()][0]!;
+  return {
+    execution,
+    current:
+      !!current &&
+      current.executionId === execution.executionId &&
+      current.epoch === execution.epoch,
+  };
+}
 interface Binding {
   source: CommandTerminalSource & {
     terminals: TerminalManager;
@@ -97,16 +136,18 @@ interface Binding {
   execution: CommandExecution;
   snapshot: TerminalSnapshot;
   resolution: CommandTerminalAvailable;
+  current: boolean;
 }
 async function bind(
   source: CommandTerminalSource,
   viewSessionId: string,
   execution: CommandExecution,
+  current: boolean,
 ): Promise<Binding | undefined> {
   if (
     !source.terminals ||
     !source.workspaceId ||
-    execution.epoch !== source.jobs.runName ||
+    (current && execution.epoch !== source.jobs?.runName) ||
     !execution.terminal ||
     !execution.toolCallId ||
     execution.completion?.kind !== 'pty-group'
@@ -122,7 +163,11 @@ async function bind(
     snapshot.sessionId !== execution.executionSessionId ||
     snapshot.managedCommand?.executionId !== execution.executionId ||
     snapshot.managedCommand.toolCallId !== execution.toolCallId ||
-    snapshot.managedCommand.ownership !== 'pty-group'
+    snapshot.managedCommand.ownership !== 'pty-group' ||
+    (current
+      ? snapshot.managedCommand.executionEpoch !== undefined &&
+        snapshot.managedCommand.executionEpoch !== execution.epoch
+      : snapshot.managedCommand.executionEpoch !== execution.epoch)
   )
     return;
   if (
@@ -140,6 +185,7 @@ async function bind(
       workspaceId: source.workspaceId,
     },
     execution,
+    current,
     snapshot,
     resolution: {
       available: true,
@@ -148,10 +194,11 @@ async function bind(
       capabilities: {
         read: true,
         input:
+          current &&
           live &&
           snapshot.status === 'running' &&
           !execution.completion.controlledGroupEmpty,
-        stop: live,
+        stop: current && live,
         addToDraft: viewSessionId === execution.executionSessionId,
       },
     },
@@ -173,11 +220,12 @@ export async function resolveCommandTerminal(
     callId = identity(request.toolCallId, 'tool call');
   const source = access.sourceFor(viewSessionId, sourceId);
   if (!source) return { available: false, reason: 'not-found' };
-  const execution = source.jobs.executionFor(sourceId, callId);
-  if (!execution) return { available: false, reason: 'unavailable' }; // missing or ambiguous remains unbound
+  const original = originalExecution(source, sourceId, callId);
+  if (!original) return { available: false, reason: 'unavailable' }; // missing or ambiguous remains unbound
+  const { execution, current } = original;
   if (!execution.terminal || execution.completion?.kind !== 'pty-group')
     return { available: false, reason: 'not-native' };
-  const binding = await bind(source, viewSessionId, execution);
+  const binding = await bind(source, viewSessionId, execution, current);
   return binding?.resolution ?? { available: false, reason: 'stale' };
 }
 
@@ -202,18 +250,26 @@ export async function commandTerminalAction(
     );
   const source = access.sourceFor(viewSessionId, target.executionSessionId);
   if (!source) return { available: false, reason: 'not-found' };
-  const execution = source.jobs.executionFor(
-    target.executionSessionId,
-    target.toolCallId,
-  );
+  // A complete target can recheck its exact live Registry entry directly. Do
+  // not walk a long stored conversation for every PTY replay/input message.
+  const exact = source.jobs?.execution(target.executionId);
+  const original =
+    exact?.terminal &&
+    exact.epoch === source.jobs?.runName &&
+    sameTarget(target, targetFor(exact))
+      ? { execution: exact, current: true }
+      : originalExecution(source, target.executionSessionId, target.toolCallId);
   if (
-    !execution ||
-    !execution.terminal ||
-    !sameTarget(target, targetFor(execution))
+    !original ||
+    !original.execution.terminal ||
+    !sameTarget(target, targetFor(original.execution))
   )
     return { available: false, reason: 'stale' };
-  const binding = await bind(source, viewSessionId, execution);
+  const { execution, current } = original;
+  const binding = await bind(source, viewSessionId, execution, current);
   if (!binding) return { available: false, reason: 'stale' };
+  if (!current && action !== 'list' && action !== 'replay')
+    throw Error('historical original command terminals are read-only');
   const params = request.params ?? {};
   const owner = target.executionSessionId,
     id = target.terminal.id;
@@ -294,8 +350,10 @@ export async function commandTerminalAction(
       result = await binding.source.terminals.close(owner, id);
       break;
   }
-  const current = source.jobs.execution(target.executionId);
-  const after = current && (await bind(source, viewSessionId, current));
+  const latest = current
+    ? source.jobs?.execution(target.executionId)
+    : execution;
+  const after = latest && (await bind(source, viewSessionId, latest, current));
   return after
     ? { ...after.resolution, value: result }
     : { available: false, reason: 'stale' };

@@ -28,6 +28,8 @@ export interface TerminalCommandLauncherOptions {
   terminals: TerminalManager;
   runtimeExecutable: string;
   supervisorPath: string;
+  /** Trusted Registry epoch; never supplied by terminal RPC parameters. */
+  executionEpoch?: string;
   /** Strict actual-session Registry control; no renderer-selected owner enters here. */
   stopExecution: (
     sessionId: string,
@@ -282,6 +284,7 @@ export function createTerminalCommandLauncher(
         owner,
         sessionId: owner,
         executionId,
+        executionEpoch: options.executionEpoch,
         toolCallId: request.origin.toolCallId,
         displayCommand: request.origin.displayCommand,
         completion,

@@ -95,6 +95,8 @@ export interface TerminalSnapshot {
   /** Host-owned command identity. Expanded launch arguments are never retained. */
   managedCommand?: {
     executionId: string;
+    /** Original Registry identity, required for read-only historical handoff. */
+    executionEpoch?: string;
     toolCallId?: string;
     displayCommand?: string;
     ownership: 'pty-group';
@@ -168,6 +170,7 @@ export interface ManagedTerminalCommandOptions {
   owner: string;
   sessionId: string;
   executionId: string;
+  executionEpoch?: string;
   toolCallId?: string;
   displayCommand?: string;
   completion: CommandPtyCompletion;
@@ -270,6 +273,8 @@ export class TerminalManager {
   ): Promise<ManagedTerminalCommandHandle> {
     options.signal.throwIfAborted();
     identity(options.executionId, 'execution');
+    if (options.executionEpoch !== undefined)
+      identity(options.executionEpoch, 'execution epoch');
     if (options.toolCallId !== undefined)
       identity(options.toolCallId, 'tool call');
     if (
@@ -304,6 +309,7 @@ export class TerminalManager {
     void failure.catch(() => {});
     const source: ManagedCommand['source'] = {
       executionId: options.executionId,
+      executionEpoch: options.executionEpoch,
       toolCallId: options.toolCallId,
       displayCommand: options.displayCommand,
       ownership: 'pty-group',

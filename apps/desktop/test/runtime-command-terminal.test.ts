@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
+import { readFile, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { loadSettings, saveSettings } from '../../../src/settings.ts';
 import { createCommandTerminalControllerFixture } from './helpers/command-terminal-controller-fixture.ts';
 import type {
@@ -411,5 +413,393 @@ test(
     available(retained);
     assert.equal(retained.capabilities.input, true);
     assert.equal(await f.read(f.workspace, f.files.starts), 'once\n');
+  },
+);
+
+test(
+  'stored command receipt and persisted double-epoch terminal restore read-only without replaying any process',
+  native,
+  async (t) => {
+    const f = await createCommandTerminalControllerFixture(t);
+    const started = await f.startParent();
+    const original = await f.service<CommandTerminalResolution>(
+      'terminal',
+      'resolveCommand',
+      { sourceSessionId: f.parentId, toolCallId: f.toolCallId },
+    );
+    available(original);
+    await f.service('terminal', 'command', {
+      target: original.target,
+      action: 'write',
+      params: { data: 'saved history 原文\n' },
+    });
+    await f.until(
+      async () =>
+        (await f.read(f.workspace, f.files.input)) === 'saved history 原文\n',
+      'real history input',
+    );
+    const stopped = await f.service<
+      CommandTerminalCommandReply<TerminalSnapshot>
+    >('terminal', 'command', { target: original.target, action: 'close' });
+    available(stopped);
+    assert.equal(
+      stopped.value.managedCommand?.executionEpoch,
+      original.target.epoch,
+    );
+    await f.until(
+      () =>
+        f.model.requests.some((request) =>
+          request.messages.some(
+            (message) =>
+              message.role === 'tool' &&
+              message.commandExecutions?.some(
+                (receipt) =>
+                  receipt.executionId === original.target.executionId,
+              ),
+          ),
+        ),
+      'durable command receipt enters actual next model request',
+    );
+    const beforeReplay = await f.service<
+      CommandTerminalCommandReply<TerminalReplay>
+    >('terminal', 'command', {
+      target: original.target,
+      action: 'replay',
+      params: { limit: 2000 },
+    });
+    available(beforeReplay);
+    const raw = beforeReplay.value.events
+      .filter((event) => event.kind === 'data')
+      .map((event) => event.data)
+      .join('');
+    const requestCount = f.model.requests.length;
+    await f.restart();
+    const restored = await f.service<CommandTerminalResolution>(
+      'terminal',
+      'resolveCommand',
+      { sourceSessionId: f.parentId, toolCallId: f.toolCallId },
+    );
+    available(restored);
+    assert.deepEqual(restored.target, original.target);
+    assert.deepEqual(restored.capabilities, {
+      read: true,
+      input: false,
+      stop: false,
+      addToDraft: true,
+    });
+    const replay = await f.service<CommandTerminalCommandReply<TerminalReplay>>(
+      'terminal',
+      'command',
+      { target: restored.target, action: 'replay', params: { limit: 2000 } },
+    );
+    available(replay);
+    assert.equal(
+      replay.value.events
+        .filter((event) => event.kind === 'data')
+        .map((event) => event.data)
+        .join(''),
+      raw,
+    );
+    assert.equal(replay.value.snapshot.managedCommand?.commandPid, started.pid);
+    for (const action of [
+      { action: 'write', params: { data: 'must not execute' } },
+      { action: 'resize', params: { cols: 42, rows: 15 } },
+      { action: 'signal', params: { signal: 'SIGINT' } },
+      { action: 'signal', params: { signal: 'SIGTERM' } },
+      { action: 'close' },
+      { action: 'restart' },
+    ]) {
+      const reply = await f.serviceReply('terminal', 'command', {
+        target: restored.target,
+        ...action,
+      });
+      assert.equal(reply.ok, false, action.action);
+    }
+    const wrongEpoch = await f.service<CommandTerminalCommandReply>(
+      'terminal',
+      'command',
+      { target: { ...restored.target, epoch: randomUUID() }, action: 'replay' },
+    );
+    assert.equal(wrongEpoch.available, false);
+    assert.equal(await f.read(f.workspace, f.files.starts), 'once\n');
+    assert.equal(
+      await f.read(f.workspace, f.files.input),
+      'saved history 原文\n',
+    );
+    assert.equal(f.model.requests.length, requestCount);
+  },
+);
+
+test(
+  'an archived real child ledger grants only read-only original output after a controller restart',
+  native,
+  async (t) => {
+    const f = await createCommandTerminalControllerFixture(t);
+    await f.enqueueChild();
+    const child = await f.startChild();
+    const original = await f.service<CommandTerminalResolution>(
+      'terminal',
+      'resolveCommand',
+      { sourceSessionId: child.sessionId, toolCallId: f.toolCallId },
+    );
+    available(original);
+    await f.service('terminal', 'command', {
+      target: original.target,
+      action: 'close',
+    });
+    await f.until(
+      () =>
+        f.model.requests.some((request) =>
+          request.messages.some(
+            (message) =>
+              message.role === 'tool' &&
+              message.commandExecutions?.some(
+                (receipt) =>
+                  receipt.executionId === original.target.executionId,
+              ),
+          ),
+        ),
+      'actual child durable receipt',
+    );
+    await f.restart();
+    const restored = await f.service<CommandTerminalResolution>(
+      'terminal',
+      'resolveCommand',
+      { sourceSessionId: child.sessionId, toolCallId: f.toolCallId },
+    );
+    available(restored);
+    assert.deepEqual(restored.target, original.target);
+    assert.deepEqual(restored.capabilities, {
+      read: true,
+      input: false,
+      stop: false,
+      addToDraft: false,
+    });
+    const replay = await f.service<CommandTerminalCommandReply<TerminalReplay>>(
+      'terminal',
+      'command',
+      { target: restored.target, action: 'replay' },
+    );
+    available(replay);
+    assert.ok(
+      replay.value.events
+        .filter((event) => event.kind === 'data')
+        .map((event) => event.data)
+        .join('')
+        .includes('READY'),
+    );
+    const stopped = await f.serviceReply('terminal', 'command', {
+      target: restored.target,
+      action: 'close',
+    });
+    assert.equal(stopped.ok, true);
+    assert.equal((stopped.data as CommandTerminalResolution).available, false);
+    assert.equal(await f.read(child.workspace, f.files.starts), 'once\n');
+    assert.equal(f.controller.snapshot().activeSessionId, f.parentId);
+    const selected = await f.call('select-session', { id: child.sessionId });
+    assert.equal(selected.ok, true, selected.error);
+    const trusted = await f.call('trust', { enabled: true }, child.sessionId);
+    assert.equal(trusted.ok, true, trusted.error);
+    const prompted = await f.call(
+      'prompt',
+      { text: 'command terminal fixture: start the parent command' },
+      child.sessionId,
+    );
+    assert.equal(prompted.ok, true, prompted.error);
+    await f.approve(child.sessionId);
+    await f.until(
+      async () =>
+        (await f.read(child.workspace, f.files.starts)) === 'once\nonce\n' &&
+        Number(await f.read(child.workspace, f.files.pid)) !== child.pid,
+      'manually reopened actual child starts a new approved process',
+    );
+    const snapshots = await f.service<TerminalSnapshot[]>(
+      'terminal',
+      'list',
+      {},
+      child.sessionId,
+    );
+    const newSnapshot = snapshots.find(
+      (snapshot) =>
+        snapshot.managedCommand?.executionId !== original.target.executionId &&
+        snapshot.managedCommand?.toolCallId === f.toolCallId,
+    )!;
+    assert.ok(newSnapshot?.managedCommand?.executionEpoch);
+    const newTarget: CommandTerminalTarget = {
+      executionId: newSnapshot.managedCommand.executionId,
+      epoch: newSnapshot.managedCommand.executionEpoch,
+      executionSessionId: child.sessionId,
+      toolCallId: f.toolCallId,
+      terminal: { id: newSnapshot.id, epoch: newSnapshot.epoch },
+    };
+    const parentWrite = await f.service<CommandTerminalCommandReply>(
+      'terminal',
+      'command',
+      {
+        target: newTarget,
+        action: 'write',
+        params: { data: 'old parent cannot control the reopened child' },
+      },
+    );
+    assert.equal(parentWrite.available, false);
+    assert.equal(await f.read(child.workspace, f.files.input), '');
+    const selfWrite = await f.service<CommandTerminalCommandReply>(
+      'terminal',
+      'command',
+      {
+        target: newTarget,
+        action: 'write',
+        params: { data: 'new actual child owner' },
+      },
+      child.sessionId,
+    );
+    available(selfWrite);
+    await f.until(
+      async () =>
+        (await f.read(child.workspace, f.files.input)) ===
+        'new actual child owner',
+      'reopened child self controls its exact new process',
+    );
+    await f.service(
+      'terminal',
+      'command',
+      { target: newTarget, action: 'close' },
+      child.sessionId,
+    );
+  },
+);
+
+test(
+  'history refuses missing or changed Registry epoch and terminal identity instead of granting live control',
+  native,
+  async (t) => {
+    const f = await createCommandTerminalControllerFixture(t);
+    await f.startParent();
+    const original = await f.service<CommandTerminalResolution>(
+      'terminal',
+      'resolveCommand',
+      { sourceSessionId: f.parentId, toolCallId: f.toolCallId },
+    );
+    available(original);
+    const stopped = await f.service<
+      CommandTerminalCommandReply<TerminalSnapshot>
+    >('terminal', 'command', { target: original.target, action: 'close' });
+    available(stopped);
+    await f.until(
+      () =>
+        f.model.requests.some((request) =>
+          request.messages.some(
+            (message) =>
+              message.role === 'tool' &&
+              message.commandExecutions?.some(
+                (receipt) =>
+                  receipt.executionId === original.target.executionId,
+              ),
+          ),
+        ),
+      'stored original receipt',
+    );
+    await f.controller.close();
+    const metadataPath = join(dirname(stopped.value.logPath), 'metadata.json');
+    const metadata = JSON.parse(
+      await readFile(metadataPath, 'utf8'),
+    ) as TerminalSnapshot;
+    const missing = structuredClone(metadata);
+    delete missing.managedCommand!.executionEpoch;
+    const wrongRegistry = structuredClone(metadata);
+    wrongRegistry.managedCommand!.executionEpoch = randomUUID();
+    const wrongTerminal = structuredClone(metadata);
+    wrongTerminal.epoch = randomUUID();
+    const wrongOwner = structuredClone(metadata);
+    wrongOwner.managedCommand!.toolCallId = 'another-call';
+    for (const changed of [missing, wrongRegistry, wrongTerminal, wrongOwner]) {
+      await f.controller.close();
+      await writeFile(metadataPath, JSON.stringify(changed));
+      await f.restart();
+      const resolved = await f.service<CommandTerminalResolution>(
+        'terminal',
+        'resolveCommand',
+        { sourceSessionId: f.parentId, toolCallId: f.toolCallId },
+      );
+      assert.equal(resolved.available, false);
+      const replay: CommandTerminalCommandReply =
+        await f.service<CommandTerminalCommandReply>('terminal', 'command', {
+          target: original.target,
+          action: 'replay',
+        });
+      assert.equal(replay.available, false);
+      assert.equal(await f.read(f.workspace, f.files.starts), 'once\n');
+    }
+    await f.controller.close();
+    await writeFile(metadataPath, JSON.stringify(metadata));
+    await f.restart();
+    const restored = await f.service<CommandTerminalResolution>(
+      'terminal',
+      'resolveCommand',
+      { sourceSessionId: f.parentId, toolCallId: f.toolCallId },
+    );
+    available(restored);
+    assert.equal(restored.capabilities.input, false);
+    assert.equal(restored.capabilities.stop, false);
+    assert.deepEqual(restored.target, original.target);
+  },
+);
+
+test(
+  'a reused provider call ID after restart cannot rebind an old command card to a new live process',
+  native,
+  async (t) => {
+    const f = await createCommandTerminalControllerFixture(t);
+    const first = await f.startParent();
+    const original = await f.service<CommandTerminalResolution>(
+      'terminal',
+      'resolveCommand',
+      { sourceSessionId: f.parentId, toolCallId: f.toolCallId },
+    );
+    available(original);
+    await f.service('terminal', 'command', {
+      target: original.target,
+      action: 'close',
+    });
+    await f.until(
+      () =>
+        f.model.requests.some((request) =>
+          request.messages.some(
+            (message) =>
+              message.role === 'tool' &&
+              message.commandExecutions?.some(
+                (receipt) =>
+                  receipt.executionId === original.target.executionId,
+              ),
+          ),
+        ),
+      'first stored execution',
+    );
+    await f.restart();
+    await f.startParent();
+    await f.until(
+      async () =>
+        (await f.read(f.workspace, f.files.starts)) === 'once\nonce\n' &&
+        Number(await f.read(f.workspace, f.files.pid)) !== first.pid,
+      'second actual process with a reused provider call ID',
+    );
+    const resolve = await f.service<CommandTerminalResolution>(
+      'terminal',
+      'resolveCommand',
+      { sourceSessionId: f.parentId, toolCallId: f.toolCallId },
+    );
+    assert.equal(resolve.available, false);
+    const oldTarget = await f.service<CommandTerminalCommandReply>(
+      'terminal',
+      'command',
+      {
+        target: original.target,
+        action: 'write',
+        params: { data: 'must not reach the newer process' },
+      },
+    );
+    assert.equal(oldTarget.available, false);
+    assert.equal(await f.read(f.workspace, f.files.input), '');
+    assert.equal(await f.read(f.workspace, f.files.starts), 'once\nonce\n');
   },
 );

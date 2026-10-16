@@ -154,16 +154,18 @@ setInterval(() => {}, 1000);
     });
   const route = async (request: ModelRequest): Promise<ModelResponse> => {
     request.signal.throwIfAborted();
-    const prompt = request.messages.find(
-      (message) => message.role === 'user',
-    )?.content;
+    const turnIndex = request.messages.findLastIndex(
+      (message) => message.role === 'user' && !message.internal,
+    );
+    const turn = request.messages.slice(turnIndex);
+    const prompt = turn[0]?.content;
     assert.ok(
       prompt === parentPrompt ||
         (prompt?.startsWith('Task ') && prompt.includes(childPrompt)),
       'only the explicit parent prompt or actual TaskService worker may run',
     );
     if (
-      request.messages.some(
+      turn.some(
         (message) =>
           message.role === 'tool' && message.tool_call_id === toolCallId,
       )
@@ -188,7 +190,7 @@ setInterval(() => {}, 1000);
   const model = new ScriptedModel(Array.from({ length: 64 }, () => route));
   const events: WorkspaceServiceEvent[] = [],
     updates: RuntimeUpdate[] = [];
-  const owner = new RuntimeController({
+  const controllerOptions = {
     home,
     userHome: home,
     workspace,
@@ -203,9 +205,10 @@ setInterval(() => {}, 1000);
       adapterPath: 'unused',
       ghPath: 'unused',
     },
-    emit: (update) => updates.push(update),
-    emitWorkspaceEvent: (event) => events.push(event),
-  });
+    emit: (update: RuntimeUpdate) => updates.push(update),
+    emitWorkspaceEvent: (event: WorkspaceServiceEvent) => events.push(event),
+  };
+  let owner = new RuntimeController(controllerOptions);
   controller = owner;
   const parentId = owner.snapshot().activeSessionId;
   const call = (
@@ -329,8 +332,17 @@ setInterval(() => {}, 1000);
       pid,
     };
   };
+  const restart = async () => {
+    await owner.close();
+    owner = new RuntimeController(controllerOptions);
+    controller = owner;
+    return owner;
+  };
   return {
-    controller: owner,
+    get controller() {
+      return owner;
+    },
+    restart,
     model,
     root,
     home,
