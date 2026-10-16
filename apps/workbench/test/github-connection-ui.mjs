@@ -230,7 +230,7 @@ try {
         await delivery.locator(':scope > summary').click();
         assert.equal(
           await delivery.locator('a').getAttribute('href'),
-          '/page/settings',
+          '/page/extensions?plugin=github',
         );
         assert.equal(
           await delivery

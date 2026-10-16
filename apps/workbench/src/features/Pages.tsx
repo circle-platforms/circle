@@ -67,7 +67,6 @@ import {
 } from '../components/common';
 import { Markdown } from '../components/Markdown';
 import { UpdateControl } from './Update';
-import { GitHubConnectionCard } from '../components/GitHubConnectionCard';
 import { VariablesSettings } from './VariablesSettings';
 import { SessionMenu } from '../components/SessionMenus';
 import {
@@ -914,6 +913,8 @@ function McpPage() {
 }
 function ExtensionsPage() {
   const { snapshot, runtime, notify } = useRuntime();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [tab, setTab] = useState<'runtime' | 'interface'>('runtime');
   const { registry, enabled, toggle } = usePlugins();
   type ExtensionAction = {
@@ -1095,6 +1096,44 @@ function ExtensionsPage() {
     }
   }
 
+  const detailId = new URLSearchParams(location.search).get('plugin');
+  const detailPlugin = registry.plugins.find(
+    (plugin) => plugin.id === detailId && plugin.detail,
+  );
+  if (detailPlugin?.detail) {
+    const Detail = detailPlugin.detail;
+    const name = detailPlugin.runtimeExtension;
+    return (
+      <Page
+        title={detailPlugin.title}
+        description={detailPlugin.description}
+        action={
+          <Button onClick={() => navigate('/page/extensions')}>
+            {t('back to plugins')}
+          </Button>
+        }
+      >
+        <Detail
+          enabled={
+            name
+              ? checkedExtension(
+                  name,
+                  snapshot.extensions.find(
+                    (item) => item.name === name && item.scope === 'bundled',
+                  )?.enabled ?? false,
+                )
+              : enabled.includes(detailPlugin.id)
+          }
+          onToggle={(value) =>
+            name
+              ? void setExtension(name, value)
+              : toggle(detailPlugin.id, value)
+          }
+          feedback={name ? feedback(name) : undefined}
+        />
+      </Page>
+    );
+  }
   return (
     <Page
       title={t('extensions')}
@@ -1158,6 +1197,23 @@ function ExtensionsPage() {
                   onChange={(value) => void setExtension(extension.name, value)}
                 />
               </div>
+              {registry.plugins.find(
+                (plugin) =>
+                  plugin.runtimeExtension === extension.name && plugin.detail,
+              ) && (
+                <NavLink
+                  to={
+                    '/page/extensions?plugin=' +
+                    registry.plugins.find(
+                      (plugin) =>
+                        plugin.runtimeExtension === extension.name &&
+                        plugin.detail,
+                    )!.id
+                  }
+                >
+                  {t('plugin details')}
+                </NavLink>
+              )}
               {feedback(extension.name)}
               {extension.error && !actions[extension.name] && (
                 <div role="alert">
@@ -1224,6 +1280,11 @@ function ExtensionsPage() {
                   }
                 />
               </div>
+              {plugin.detail && (
+                <NavLink to={'/page/extensions?plugin=' + plugin.id}>
+                  {t('plugin details')}
+                </NavLink>
+              )}
               {plugin.runtimeExtension && feedback(plugin.runtimeExtension)}
               <p className="panel-note">
                 {plugin.runtimeExtension
@@ -1479,7 +1540,12 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
           }
         />
       </section>
-      <GitHubConnectionCard />
+      <section className="settings-block">
+        <h2>GitHub</h2>
+        <NavLink to="/page/extensions?plugin=github">
+          {t('manage GitHub plugin')}
+        </NavLink>
+      </section>
       <section className="settings-block">
         <h2>{t('session defaults')}</h2>
         <div className="setting-row">

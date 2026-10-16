@@ -6,7 +6,11 @@ import { copyText, desktopHost } from '../host';
 import { t } from '../i18n';
 import { Button } from './common';
 
-export function GitHubConnectionCard() {
+export function GitHubConnectionCard({
+  embedded = false,
+}: {
+  embedded?: boolean;
+}) {
   const { snapshot, runtime, perform } = useRuntime();
   const extension = snapshot.extensions.find(
     (item) => item.name === 'github' && item.scope === 'bundled',
@@ -75,11 +79,13 @@ export function GitHubConnectionCard() {
   const valid = allowed.every((item) => /^[\w.-]+\/[\w.-]+$/.test(item));
   return (
     <section
-      className="settings-block"
+      className={embedded ? 'panel-section' : 'settings-block'}
       id="github-connection"
       aria-labelledby="github-connection-title"
     >
-      <h2 id="github-connection-title">GitHub</h2>
+      <h2 id="github-connection-title">
+        {embedded ? t('connected account') : 'GitHub'}
+      </h2>
       {!available ? (
         <>
           {!loadFailed && (
@@ -107,6 +113,13 @@ export function GitHubConnectionCard() {
                 ? t('waiting for GitHub authorization')
                 : t('GitHub login required')}
           </p>
+          {view.repositories.length === 0 && (
+            <p className="panel-note">
+              {t(
+                'No repositories selected; repository actions are unavailable.',
+              )}
+            </p>
+          )}
           {view.repositories.length > 0 && (
             <p>
               {t('Circle allowed repositories')}: {view.repositories.join(', ')}
@@ -118,7 +131,11 @@ export function GitHubConnectionCard() {
             </p>
           )}
           {view.state !== 'authorizing' && (
-            <>
+            <details
+              className="context-source"
+              open={embedded ? undefined : true}
+            >
+              <summary>{t('connection options')}</summary>
               <label className="field-label">
                 {t('Circle allowed repositories (optional)')}
                 <textarea
@@ -139,13 +156,6 @@ export function GitHubConnectionCard() {
               </p>
               {view.state === 'connected' && (
                 <>
-                  {view.repositories.length === 0 && (
-                    <p className="panel-note">
-                      {t(
-                        'No repositories selected; repository actions are unavailable.',
-                      )}
-                    </p>
-                  )}
                   <Button
                     disabled={busy || !valid || !repositoryDirty}
                     onClick={() => {
@@ -173,22 +183,28 @@ export function GitHubConnectionCard() {
                   )}
                 </>
               )}
-            </>
+            </details>
           )}
           {view.state !== 'connected' && view.state !== 'authorizing' && (
             <>
-              <label className="field-label">
-                {t('credential storage')}
-                <select
-                  value={storage}
-                  onChange={(event) =>
-                    setStorage(event.target.value as typeof storage)
-                  }
-                >
-                  <option value="encrypted">{t('secure storage')}</option>
-                  <option value="session">{t('this session only')}</option>
-                </select>
-              </label>
+              <details
+                className="context-source"
+                open={embedded ? undefined : true}
+              >
+                <summary>{t('credential storage')}</summary>
+                <label className="field-label">
+                  {t('credential storage')}
+                  <select
+                    value={storage}
+                    onChange={(event) =>
+                      setStorage(event.target.value as typeof storage)
+                    }
+                  >
+                    <option value="encrypted">{t('secure storage')}</option>
+                    <option value="session">{t('this session only')}</option>
+                  </select>
+                </label>
+              </details>
               <Button
                 disabled={busy || !valid}
                 onClick={() => {

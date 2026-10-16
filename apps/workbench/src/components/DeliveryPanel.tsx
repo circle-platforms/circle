@@ -108,8 +108,8 @@ export function DeliveryPanel({
       <summary>{t('GitHub delivery')}</summary>
       {error && <WorkspaceServiceError key={sessionId} error={error} />}
       <p>{auth ? t('GitHub connected') : t('GitHub login required')}</p>
-      <NavLink to="/page/settings">
-        {t('manage GitHub connection in settings')}
+      <NavLink to="/page/extensions?plugin=github">
+        {t('manage GitHub plugin')}
       </NavLink>
       <Button
         disabled={busy}
