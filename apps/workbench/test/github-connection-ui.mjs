@@ -1,7 +1,9 @@
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import { fileURLToPath } from 'node:url';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import assert from 'node:assert/strict';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const server = await createServer({
@@ -11,13 +13,17 @@ const server = await createServer({
 });
 await server.listen();
 const out =
-  process.env.CIRCLE_GITHUB_UI_EVIDENCE || '/tmp/circle-github-connection-ui';
+  process.env.CIRCLE_GITHUB_UI_EVIDENCE ??
+  process.env.CIRCLE_COMPONENT_UI_EVIDENCE ??
+  (await mkdtemp(join(tmpdir(), 'circle-github-ui-')));
 await mkdir(out, { recursive: true });
 let browser;
 try {
   browser = await chromium.launch({
     headless: true,
-    channel: process.env.CIRCLE_TEST_BROWSER_CHANNEL || 'chrome',
+    ...(process.env.CIRCLE_TEST_BROWSER_CHANNEL
+      ? { channel: process.env.CIRCLE_TEST_BROWSER_CHANNEL }
+      : {}),
   });
   for (const language of ['en', 'zh-CN'])
     for (const theme of ['light', 'dark']) {
