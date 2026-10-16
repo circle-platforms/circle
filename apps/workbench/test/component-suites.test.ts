@@ -60,6 +60,9 @@ test('the component gate preserves prior journeys and includes each native regre
       (name) =>
         ![
           'tasks-panel-ui.mjs',
+          'task-config-recovery-ui.mjs',
+          'paste-default-ui.mjs',
+          'native-editable-shortcuts-ui.mjs',
           'tasks-refresh-race-ui.mjs',
           'windowed-mount-ui.mjs',
           'native-terminal-search-ui.mjs',
@@ -112,6 +115,8 @@ test('the component gate preserves prior journeys and includes each native regre
   );
   for (const name of [
     'tasks-refresh-race-ui.mjs',
+    'paste-default-ui.mjs',
+    'native-editable-shortcuts-ui.mjs',
     'original-shell-ui.mjs',
     'debug-panel-embedded.mjs',
     'original-browser-shell-ui.mjs',
@@ -144,5 +149,13 @@ test('the component gate preserves prior journeys and includes each native regre
     'tool-text-output-ui.mjs',
   ])
     assert.equal(COMPONENT_SUITES.filter((item) => item === name).length, 1);
-  assert.equal(new Set(COMPONENT_SUITES).size, 42);
+  assert.equal(new Set(COMPONENT_SUITES).size, 45);
+});
+
+test('task configuration recovery remains a required component journey', () => {
+  assert.equal(
+    COMPONENT_SUITES.filter((name) => name === 'task-config-recovery-ui.mjs')
+      .length,
+    1,
+  );
 });

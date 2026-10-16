@@ -11,6 +11,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'pending-operations-ui.mjs',
   'recovered-input-ui.mjs',
   'tasks-panel-ui.mjs',
+  'task-config-recovery-ui.mjs',
   'tasks-refresh-race-ui.mjs',
   'git-continuity-ui.mjs',
   'git-owner-ui.mjs',
