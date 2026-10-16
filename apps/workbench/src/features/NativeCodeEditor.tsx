@@ -14,6 +14,7 @@ import 'monaco-editor/editor/contrib/rename/browser/rename';
 import 'monaco-editor/editor/contrib/wordHighlighter/browser/wordHighlighter';
 import 'monaco-editor/editor/contrib/find/browser/findController';
 import 'monaco-editor/editor/contrib/gotoSymbol/browser/goToCommands';
+import 'monaco-editor/editor/standalone/browser/referenceSearch/standaloneReferenceSearch';
 import 'monaco-editor/editor/contrib/suggest/browser/suggestController';
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker';
 import 'monaco-editor/languages/definitions/typescript/register';

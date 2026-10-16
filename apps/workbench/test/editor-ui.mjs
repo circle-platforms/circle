@@ -243,6 +243,95 @@ try {
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
+  const referencesPage = await browser.newPage();
+  referencesPage.on('pageerror', (error) => errors.push(error.message));
+  await referencesPage.goto(
+    `${server.resolvedUrls.local[0]}test/editor-ui.html?viewer=1`,
+  );
+  await referencesPage
+    .getByRole('button', { name: 'edit', exact: true })
+    .click();
+  const referenceLines = referencesPage
+    .locator('.native-code-editor .view-lines')
+    .first();
+  await referencesPage.waitForFunction(() =>
+    document
+      .querySelector('.native-code-editor .view-lines')
+      ?.textContent.includes('console.log'),
+  );
+  await referenceLines.click();
+  const referenceModifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+  await referencesPage.keyboard.press(`${referenceModifier}+a`);
+  await referencesPage.keyboard.press('ArrowLeft');
+  for (let index = 0; index < 10; index++)
+    await referencesPage.keyboard.press('ArrowRight');
+  await referencesPage.keyboard.press('Shift+F12');
+  const referenceWidget = referencesPage.locator('.reference-zone-widget');
+  await referenceWidget.waitFor({ state: 'visible', timeout: 10000 });
+  await referenceWidget
+    .locator('.monaco-list-row')
+    .filter({ hasText: 'import { amount }' })
+    .waitFor();
+  await referenceWidget
+    .locator('.monaco-list-row')
+    .filter({ hasText: 'console.log(amount, label);' })
+    .waitFor();
+  console.log('Keyboard references widget shows actual import and usage rows');
+  if (process.env.CIRCLE_EDITOR_EVIDENCE_DIR) {
+    mkdirSync(process.env.CIRCLE_EDITOR_EVIDENCE_DIR, { recursive: true });
+    await referencesPage.screenshot({
+      path: join(
+        process.env.CIRCLE_EDITOR_EVIDENCE_DIR,
+        'editor-keyboard-references.png',
+      ),
+    });
+  }
+  await referencesPage.keyboard.press('Escape');
+  await referenceLines.click();
+  await referencesPage.keyboard.press(`${referenceModifier}+a`);
+  await referencesPage.keyboard.insertText(
+    'const object = { uniqueMember: 42 };\nobject.uni',
+  );
+  await referencesPage.keyboard.press('Control+Space');
+  await referencesPage
+    .locator('.suggest-widget.visible .monaco-list-row')
+    .filter({ hasText: 'uniqueMember' })
+    .waitFor();
+  if (process.env.CIRCLE_EDITOR_EVIDENCE_DIR)
+    await referencesPage.screenshot({
+      path: join(
+        process.env.CIRCLE_EDITOR_EVIDENCE_DIR,
+        'editor-keyboard-completion.png',
+      ),
+    });
+  await referencesPage.keyboard.press('Enter');
+  await referencesPage.waitForFunction(() =>
+    document
+      .querySelector('.native-code-editor .view-lines')
+      ?.textContent.replaceAll('\u00a0', ' ')
+      .includes('object.uniqueMember'),
+  );
+  assert.equal(
+    readFileSync(join(workspace, 'main.ts'), 'utf8'),
+    initial,
+    'keyboard completion remains unsaved',
+  );
+  await referencesPage.keyboard.press(`${referenceModifier}+s`);
+  for (
+    let tries = 0;
+    tries < 100 &&
+    readFileSync(join(workspace, 'main.ts'), 'utf8') !==
+      'const object = { uniqueMember: 42 };\nobject.uniqueMember';
+    tries++
+  )
+    await referencesPage.waitForTimeout(30);
+  assert.equal(
+    readFileSync(join(workspace, 'main.ts'), 'utf8'),
+    'const object = { uniqueMember: 42 };\nobject.uniqueMember',
+  );
+  console.log('Keyboard completion accepts uniqueMember with exact disk save');
+  await referencesPage.close();
+  writeFileSync(join(workspace, 'main.ts'), initial);
   await page.goto(`${server.resolvedUrls.local[0]}test/editor-ui.html`);
   await page.locator('.monaco-editor').waitFor();
   await page
