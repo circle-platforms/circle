@@ -155,9 +155,6 @@ export function FileViewer({
               }
             >
               {sourceLabel}
-              {resourceOwner && sourceWorkspace
-                ? ` · ${sourceWorkspace.name}`
-                : ''}
             </span>
           </Tooltip.Trigger>
           <Tooltip.Portal>

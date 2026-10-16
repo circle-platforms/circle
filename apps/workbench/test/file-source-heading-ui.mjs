@@ -37,11 +37,14 @@ try {
           const heading = page.locator('.file-view-heading');
           await heading.getByText('README.md', { exact: true }).waitFor();
           const origin = heading.locator('.file-source-origin');
+          assert.doesNotMatch(
+            await heading.innerText(),
+            /a0b1c2d3e4f5678901234567|task-worktrees/,
+            'internal generated directory is never default heading text',
+          );
           assert.match(
             await origin.textContent(),
-            source === 'child'
-              ? /Login agent.*child-feature/
-              : /parent-project/,
+            source === 'child' ? /Login agent/ : /parent-project/,
           );
           assert.match(
             await origin.textContent(),
@@ -82,7 +85,7 @@ try {
           assert.match(
             await tooltip.textContent(),
             new RegExp(
-              `/isolated/${source === 'child' ? 'child-feature' : 'parent-project'}`,
+              `/isolated/${source === 'child' ? 'task-worktrees/a0b1c2d3e4f5678901234567-2' : 'parent-project'}`,
             ),
           );
           assert(

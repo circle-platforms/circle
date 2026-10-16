@@ -23,8 +23,8 @@ runtime.change((snapshot) => {
   snapshot.workspaces.push({
     ...parent,
     id: 'child-workspace',
-    name: 'child-feature',
-    path: '/isolated/child-feature',
+    name: 'a0b1c2d3e4f5678901234567-2',
+    path: '/isolated/task-worktrees/a0b1c2d3e4f5678901234567-2',
   });
   const agent = snapshot.agents[0];
   Object.assign(agent, {
