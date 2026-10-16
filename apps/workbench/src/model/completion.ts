@@ -1,6 +1,15 @@
 import type { ModelCompletionFailureCode } from '../../../../src/model_completion';
 import type { Message } from './types';
-import { t } from '../i18n/index.ts';
+import { locale, t } from '../i18n/index.ts';
+
+/**
+ * English is the sentence the terminal stores. Chinese uses the shared word
+ * `interrupted`, not a second `✖ Interrupted` entry: another branch adds that
+ * key, and two copies of it fail the desktop typecheck.
+ */
+export function interruptedLabel(): string {
+  return locale() === 'zh-CN' ? `✖ ${t('interrupted')}` : '✖ Interrupted';
+}
 
 export function completionFailureText(
   code: ModelCompletionFailureCode,
@@ -29,7 +38,7 @@ export function completionNoticeText(
     'text' | 'planCompleted' | 'completionFailure' | 'interrupted'
   >,
 ): string {
-  if (message.interrupted) return t('✖ Interrupted');
+  if (message.interrupted) return interruptedLabel();
   if (message.planCompleted !== undefined)
     return t('plan completed · {n} steps', { n: message.planCompleted });
   const failure =

@@ -1,4 +1,5 @@
 import { palette, sgrJoin, statusLight } from '../ink/theme.js';
+import { interruptedMark } from '../whats_new.js';
 import type { LampState } from '../ink/theme.js';
 import { wrap, pad, truncate, truncateStyled } from '../ink/string_width.js';
 import type { Message, Usage } from '../types.js';
@@ -285,10 +286,12 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
     else placed.set(anchor, [...(placed.get(anchor) ?? []), note]);
   });
   const noticeBlock = (note: string): void => {
-    const failed = note.startsWith('✖') && !note.startsWith('✖ Interrupted');
+    const stop = note === '✖ Interrupted' || note === '✖ 已中断';
+    const shown = stop ? interruptedMark() : note;
+    const failed = shown.startsWith('✖') && !stop;
     block(
-      note.startsWith('✖') ? '✖' : ' ',
-      note.replace(/^✖\s*/, ''),
+      shown.startsWith('✖') ? '✖' : ' ',
+      shown.replace(/^✖\s*/, ''),
       '',
       failed ? p.red : p.dim,
     );
@@ -339,6 +342,7 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
       state.thinkingSeconds?.[message.id] ?? '',
       state.turnUsage?.[message.id]?.seconds ?? '',
       message.interrupted ? 1 : 0,
+      interruptedMark(),
       inKind,
       lead,
     ].join('|');

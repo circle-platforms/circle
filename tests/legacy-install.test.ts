@@ -635,6 +635,30 @@ test(
   },
 );
 
+test(
+  'an otherwise empty zshrc is deleted when the installer PATH block is removed',
+  { skip: windows },
+  (t) => {
+    const base = scratch(t);
+    const root = fixture(base, '1.0.0');
+    const home = join(base, 'home');
+    mkdirSync(home, { recursive: true });
+    const zshrc = join(home, '.zshrc');
+    writeFileSync(zshrc, '# circle path\nexport PATH="/usr/local/bin:$PATH"\n');
+    const emptied = runManager(base, root, [], { SHELL: '/bin/bash' });
+    assert.equal(emptied.status, 0, emptied.stderr + emptied.stdout);
+    assert.equal(existsSync(zshrc), false);
+    assert.match(emptied.stdout, /removed .*zshrc/);
+    writeFileSync(
+      zshrc,
+      'export EDITOR=vi\n\n# circle path\nexport PATH="/usr/local/bin:$PATH"\n',
+    );
+    const kept = runManager(base, root, [], { SHELL: '/bin/bash' });
+    assert.equal(kept.status, 0, kept.stderr + kept.stdout);
+    assert.equal(readFileSync(zshrc, 'utf8'), 'export EDITOR=vi\n');
+  },
+);
+
 test('installing keeps the newest three versions and the one it replaces', (t) => {
   const base = scratch(t);
   const prefix = join(base, 'prefix');

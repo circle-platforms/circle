@@ -71,6 +71,10 @@ test('a stray circle PATH block is removed only when zsh is not installed', () =
     'export EDITOR=vi\n\n# circle path\nexport PATH="/usr/local/bin:$PATH"\n';
   assert.equal(withoutStrayZshrc(text), 'export EDITOR=vi\n');
   assert.equal(
+    withoutStrayZshrc('# circle path\nexport PATH="/usr/local/bin:$PATH"\n'),
+    '',
+  );
+  assert.equal(
     withoutStrayZshrc(
       '# circle path\nexport PATH="$HOME/bin:$PATH" # edited\n',
     ),

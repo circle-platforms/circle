@@ -72,6 +72,16 @@ test('only typed completion diagnostics translate; model and provider text stay 
   setLanguage('zh-CN');
   for (const [code, , chinese] of failures)
     assert.equal(completionFailureText(code), chinese);
+  setLanguage('en');
+  assert.equal(
+    completionNoticeText({ text: 'partial', interrupted: true }),
+    '✖ Interrupted',
+  );
+  setLanguage('zh-CN');
+  assert.equal(
+    completionNoticeText({ text: 'partial', interrupted: true }),
+    '✖ 已中断',
+  );
   const text = '✖ model returned an empty response';
   assert.equal(completionNoticeText({ text }), text);
   assert.equal(

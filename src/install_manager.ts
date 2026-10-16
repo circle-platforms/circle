@@ -9,6 +9,7 @@ import {
   appendFileSync,
   existsSync,
   readFileSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { userInfo } from 'node:os';
@@ -140,8 +141,15 @@ if (process.platform !== 'win32') {
       if (existsSync(zshrc)) {
         const next = withoutStrayZshrc(readFileSync(zshrc, 'utf8'));
         if (next !== undefined) {
-          writeFileSync(zshrc, next);
-          say(`removed a circle PATH line from ${zshrc}; zsh is not installed`);
+          // The old installer created this file for the block. Nothing else
+          // was in it, so an empty file would only be ours.
+          if (next.trim() === '') unlinkSync(zshrc);
+          else writeFileSync(zshrc, next);
+          say(
+            next.trim() === ''
+              ? `removed ${zshrc}; it only had a circle PATH line and zsh is not installed`
+              : `removed a circle PATH line from ${zshrc}; zsh is not installed`,
+          );
         }
       }
     }

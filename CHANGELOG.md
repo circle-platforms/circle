@@ -14,7 +14,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ### Fixed
 
-- **Stopping a reply shows that it was interrupted after the session is opened again**, in the terminal and the desktop application. The mark is on the saved reply. A crash still marks a turn that saved no reply. A finished session is not marked.
+- **Stopping a reply shows that it was interrupted after the session is opened again**, in the terminal and the desktop application. The mark is on the saved reply, and a stop mid-reply shows it once, including after switching back to that session. A stop before any text still uses the notice, which leaves when the next turn starts. A crash still marks a turn that saved no reply. A finished session is not marked. In Chinese the terminal says 已中断, as the desktop does.
+- **Removing the installer's PATH line from an otherwise empty `~/.zshrc` deletes that file** when zsh is not installed.
 - **Check now does not offer the version you already have.** A checkout's package version is not Circle's version, so a local build of 1.7.4 no longer offers an update to 1.7.4. A newer local build is not offered an older release either.
 
 ## 1.7.4 - 2026-10-16

@@ -6,6 +6,7 @@ import { fullTime, shownTime } from '../model/time';
 import { FileChip, IconButton } from './common';
 import { Markdown } from './Markdown';
 import { t } from '../i18n';
+import { interruptedLabel } from '../model/completion';
 import { useSessionDisclosure } from '../model/presentation';
 
 /**
@@ -54,7 +55,7 @@ export function MessageView({
         ) : null}
       </div>
       {message.interrupted && (
-        <div className="transcript-notice">{t('✖ Interrupted')}</div>
+        <div className="transcript-notice">{interruptedLabel()}</div>
       )}
       <div className="message-meta">
         {message.label && <span className="label">{message.label}</span>}

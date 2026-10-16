@@ -1230,8 +1230,16 @@ export class SessionApp {
               assistant && (assistant.completion || assistant.truncated)
                 ? completionFailure(assistant)
                 : undefined;
-            if (event.payload.interrupted) this.addNotice('✖ Interrupted');
-            else if (
+            if (event.payload.interrupted) {
+              const saved = this.runtime?.harness.messages.findLast(
+                (message) => !message.internal,
+              );
+              // The saved reply draws this mark itself. A second live notice
+              // shows it twice, and again after switching back to the session.
+              // A stop before any text has no reply, so the notice is the mark.
+              if (!(saved?.role === 'assistant' && saved.interrupted))
+                this.addNotice('✖ Interrupted');
+            } else if (
               !event.payload.completion_failure ||
               persisted?.code !== event.payload.completion_failure
             ) {

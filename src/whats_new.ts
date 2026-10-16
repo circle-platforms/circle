@@ -23,9 +23,9 @@ export function releaseNotesUrl(version: string): string {
 }
 
 // Short enough to scan. The release notes carry the full key list.
-// alt+L is the alt+l model binding (`model.select`). A capital L, so the
-// letter is not read as alt+i. alt+k and alt+d both used to be ctrl+s, for
-// a secret and for saving a list default; the release notes say which.
+// alt+l (L) is the model binding (`model.select`). The capital is named so
+// a lowercase L is not read as i. alt+k and alt+d both used to be ctrl+s,
+// for a secret and for saving a list default; the release notes say which.
 export const WHATS_NEW_ITEMS: WhatsNewItem[] = [
   {
     id: 'hub',
@@ -41,8 +41,9 @@ export const WHATS_NEW_ITEMS: WhatsNewItem[] = [
     id: 'keys',
     since: '1.7.4',
     text: {
-      en: 'Some keys moved. The model list is alt+L. Every change is in the release notes.',
-      'zh-CN': '部分快捷键已更换。模型列表是 alt+L。每一项都写在发布说明里。',
+      en: 'Some keys moved. The model list is alt+l (L). Every change is in the release notes.',
+      'zh-CN':
+        '部分快捷键已更换。模型列表是 alt+l (L)。每一项都写在发布说明里。',
     },
   },
   {
@@ -51,7 +52,7 @@ export const WHATS_NEW_ITEMS: WhatsNewItem[] = [
     text: {
       en: 'Anthropic models think at medium by default. A depth you never saved no longer stays at xhigh.',
       'zh-CN':
-        'Anthropic 模型默认以 medium 思考。没有保存过的深度不再停留在 xhigh。',
+        'Anthropic 模型默认以 medium 思考。没有保存过自己的深度时，不再默认使用 xhigh。',
     },
   },
 ];
@@ -63,6 +64,19 @@ export interface WhatsNewNotice {
   linkLabel: Localized;
   link: string;
   dismiss: Localized;
+}
+
+const INTERRUPTED_MARK = {
+  en: '✖ Interrupted',
+  'zh-CN': '✖ 已中断',
+} as const;
+
+/**
+ * The stop mark. The terminal keeps the English line in its notice list and
+ * translates it when drawing, the same words the desktop uses.
+ */
+export function interruptedMark(locale: NoticeLocale = noticeLocale()): string {
+  return INTERRUPTED_MARK[locale];
 }
 
 /** Chinese when LANG, LC_ALL or LANGUAGE says so; otherwise English. */

@@ -45,10 +45,19 @@ test('notes cover the releases after the one last seen', () => {
   assert.match(notice!.title.en, /1\.7\.0–1\.7\.4/);
   assert.match(notice!.items[0]!.en, /circle-server/);
   assert.match(notice!.items[0]!['zh-CN'], /原先的 circle-server/);
-  assert.match(notice!.items[1]!.en, /alt\+L/);
+  assert.match(notice!.items[1]!.en, /alt\+l \(L\)/);
   assert.equal(notice!.items[1]!.en.includes('alt+i'), false);
+  assert.equal(notice!.items[1]!['zh-CN'].includes('alt+L'), false);
   assert.match(notice!.items[2]!.en, /medium/);
+  assert.match(
+    notice!.items[2]!['zh-CN'],
+    /没有保存过自己的深度时，不再默认使用 xhigh/,
+  );
   assert.equal(notice!.items[2]!['zh-CN'].includes('那个 xhigh'), false);
+  assert.equal(
+    notice!.items[2]!['zh-CN'].includes('没有保存过的深度不再停留'),
+    false,
+  );
   assert.equal(noticeLocale({ LANG: 'zh_CN.UTF-8' }), 'zh-CN');
   assert.equal(noticeLocale({ LANGUAGE: 'zh_CN:en' }), 'zh-CN');
   assert.equal(noticeLocale({ LANG: 'en_US.UTF-8' }), 'en');
@@ -73,7 +82,7 @@ test('a later version shows only the releases that were skipped', (t) => {
   writeFileSync(join(older, 'credentials.json'), '{}\n');
   const notice = pendingWhatsNew(older, '1.8.0', from16);
   assert.match(notice!.title.en, /what's new in 1\.7\.4/);
-  assert.match(notice!.items.map((item) => item.en).join('\n'), /alt\+L/);
+  assert.match(notice!.items.map((item) => item.en).join('\n'), /alt\+l \(L\)/);
   assert.equal(
     notice!.items.some((item) => /circle-server/.test(item.en)),
     false,
@@ -113,7 +122,7 @@ test('a first run records the version and an upgrade shows the notice once', (t)
     false,
   );
   const rows = stripAnsi(whatsNewRows(notice!, 'zh-CN', 72).join('\n'));
-  assert.match(rows, /alt\+L/);
+  assert.match(rows, /alt\+l \(L\)/);
   assert.match(rows, /完整的发布说明/);
   assert.match(rows, /releases\/tag\/v/);
   assert.match(rows, /esc/);
