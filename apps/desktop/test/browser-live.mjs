@@ -557,10 +557,25 @@ try {
       .click();
     const certificate = approval('trusts an untrusted certificate');
     await certificate.waitFor();
-    assert.equal(await page.locator('.inspector-overlay').count(), 0);
-    await certificate
-      .getByRole('button', { name: 'allow once', exact: true })
-      .click();
+    assert.equal(await page.locator('.inspector-overlay:visible').count(), 0);
+    const allowCertificate = certificate.getByRole('button', {
+      name: 'allow once',
+      exact: true,
+    });
+    await allowCertificate.scrollIntoViewIfNeeded();
+    assert.equal(
+      await allowCertificate.evaluate((button) => {
+        const rect = button.getBoundingClientRect();
+        const target = document.elementFromPoint(
+          rect.x + rect.width / 2,
+          rect.y + rect.height / 2,
+        );
+        return !!target && button.contains(target);
+      }),
+      true,
+      'the actual certificate approval is reachable without an inspector overlay',
+    );
+    await allowCertificate.click();
     await page
       .getByText('browser navigation completed', { exact: true })
       .waitFor();

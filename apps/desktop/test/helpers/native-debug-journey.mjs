@@ -61,6 +61,27 @@ async function portIsClosed(port) {
     });
   });
 }
+/** Uses the existing Inspector and returns from the main file viewer first. */
+export async function openNativeDebugInspector(
+  page,
+  kind = 'activity',
+  tab = 'debug',
+) {
+  const closeFile = page.getByRole('button', {
+    name: 'close file',
+    exact: true,
+  });
+  if (await closeFile.isVisible()) await closeFile.click();
+  const toggle = page.getByRole('button', {
+    name: `${kind} panel`,
+    exact: true,
+  });
+  if ((await toggle.getAttribute('aria-pressed')) !== 'true')
+    await toggle.click();
+  await page.locator(`#inspector-${kind}-tab-${tab}`).click();
+  await page.locator(`#inspector-${kind}-${tab}`).waitFor({ state: 'visible' });
+}
+
 export async function runNativeDebugJourney({
   page,
   workspace,
@@ -116,18 +137,13 @@ export async function runNativeDebugJourney({
       await page.screenshot({ path: join(output, `${name}.png`) });
     }
   };
-  const showDebug = async () => page.locator('#dock-tab-debug').click();
+  const showDebug = () => openNativeDebugInspector(page);
   const panel = page.locator('.debug-panel');
   const button = (name) => panel.getByRole('button', { name, exact: true });
   const stack = () => observe('debug', 'stackTrace');
   let launched = false;
   let terminal, inspectorPort;
   try {
-    const layout = page.getByRole('button', {
-      name: 'developer layout',
-      exact: true,
-    });
-    if (await layout.count()) await layout.click();
     await showDebug();
     const previous = await observe('debug', 'snapshot');
     if (!['idle', 'stopped', 'failed'].includes(previous.status))
@@ -253,7 +269,7 @@ export async function runNativeDebugJourney({
       replay.includes('NATIVE_DEBUG_ANSWER:15'),
       'changed live value affects actual program output',
     );
-    await page.locator('#dock-tab-terminal').click();
+    await openNativeDebugInspector(page, 'terminal', 'terminal');
     await page
       .locator(
         `.native-terminal-tabs [aria-controls="terminal-${terminal.id}"]`,

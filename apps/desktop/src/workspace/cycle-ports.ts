@@ -18,7 +18,7 @@ import {
 import type { TaskRecord } from './collaboration.js';
 import type { CyclePorts, CycleRecord, CycleCheck } from './delivery-cycle.js';
 import { DeliveryService } from './delivery.js';
-import { GitWorkspaceService } from './git.js';
+import { GitWorkspaceService, type GitSnapshot } from './git.js';
 import { cycleRepositoryIdentity } from './cycle-repository-identity.js';
 import {
   captureTaskChanges,
@@ -560,10 +560,10 @@ export function createWorkspaceCyclePorts(
             snapshot.entries.some((entry) => !input.paths.includes(entry.path))
           )
             throw Error('cycle commit must select every verified changed path');
-          await service.call('stage', {
+          const stagedState = (await service.call('stage', {
             revision: snapshot.revision,
             paths: input.paths,
-          });
+          })) as GitSnapshot;
           const staged = (
             await service.git(['diff', '--cached', '--name-only', '-z'])
           )
@@ -577,13 +577,15 @@ export function createWorkspaceCyclePorts(
             throw Error(
               'cycle commit index differs from the verified path selection',
             );
-          const stagedState = await service.snapshot();
-          await service.call('commit', {
+          // The mutation already returns its fresh snapshot under the common
+          // repository lock. Commit independently checks this expected revision.
+          const committed = (await service.call('commit', {
             revision: stagedState.revision,
             paths: input.paths,
             message: input.message,
-          });
-          return { head: (await service.snapshot()).head };
+          })) as GitSnapshot;
+          // The runner still re-reads the repository before accepting this HEAD.
+          return { head: committed.head };
         }),
       push: (cycle, input) =>
         serial(cycle, async () => {

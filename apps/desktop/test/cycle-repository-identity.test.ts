@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import {
+  chmod,
   mkdtemp,
   mkdir,
   readFile,
@@ -65,7 +66,15 @@ test('fresh repository identity handles real linked worktrees and rejects dangli
   assert.equal(source.common, target.common);
   assert.equal(target.head, 'ref: refs/heads/codex/identity');
   const marker = join(f.target, '.git');
+  await chmod(marker, 0o400);
+  assert.equal(
+    (await cycleRepositoryIdentity(f.target)).directory,
+    target.directory,
+  );
   const originalMarker = await readFile(marker, 'utf8');
+  // Git marks linked-worktree .git metadata read-only on Windows. This owned
+  // corruption fixture must explicitly make its test file writable first.
+  await chmod(marker, 0o600);
   await writeFile(
     marker,
     `gitdir: ${relative(f.target, target.directory)}\r\n`,
@@ -215,4 +224,125 @@ test('cycle task polling launches no Git processes but still detects live branch
     await realpath(foreign),
   );
   await assert.rejects(ports.git.snapshot(cycle), /worktree root changed/);
+});
+
+test('cycle commit reuses locked mutation snapshots and rejects a real edit between stage and commit', async (t) => {
+  const f = await fixture(t);
+  const tasks = new TaskService({
+    workspace: f.workspace,
+    dataDir: join(f.root, 'tasks'),
+    identity: { name: 'Fixture', email: 'fixture@example.invalid' },
+    autoStart: false,
+    emit: () => {},
+    createRuntime: () => {
+      throw Error('must not run');
+    },
+  });
+  f.own(tasks);
+  const ports = createWorkspaceCyclePorts({
+    workspace: f.workspace,
+    dataDir: join(f.root, 'ports'),
+    sessionId: 'owner',
+    identity: { name: 'Fixture', email: 'fixture@example.invalid' },
+    getTaskService: () => tasks,
+    withResource: async (_resource, run) => run(),
+    verify: async () => [],
+  });
+  const cycle: CycleRecord = {
+    id: 'commit-cas',
+    workspace: f.workspace,
+    title: 'Implement',
+    body: 'Real CAS',
+    acceptanceCriteria: ['works'],
+    state: 'queued',
+    attempt: 0,
+    taskIds: [],
+    failureCounts: {},
+    updatedAt: new Date().toISOString(),
+  };
+  await ports.tasks.create(
+    cycle,
+    { kind: 'implementation', prompt: 'Implement' },
+    { operationId: 'create' },
+  );
+  const listing = await f.git(f.workspace, 'worktree', 'list', '--porcelain');
+  const entry = listing
+    .split('\n\n')
+    .find((e) => e.includes('branch refs/heads/codex/cycle-'));
+  assert.ok(entry);
+  const path = entry.split('\n')[0].slice('worktree '.length),
+    file = join(path, 'readme');
+  await writeFile(file, 'accepted manual change\n');
+  const before = await ports.git.snapshot(cycle),
+    head = await f.git(path, 'rev-parse', 'HEAD');
+  const actualGit = GitWorkspaceService.prototype.git;
+  let race = true;
+  t.mock.method(
+    GitWorkspaceService.prototype,
+    'git',
+    async function (
+      this: GitWorkspaceService,
+      ...args: Parameters<GitWorkspaceService['git']>
+    ) {
+      const result = await actualGit.apply(this, args);
+      if (race && args[0].join(' ') === 'diff --cached --name-only -z') {
+        race = false;
+        await writeFile(file, 'external after stage\n');
+      }
+      return result;
+    },
+  );
+  await assert.rejects(
+    ports.git.commit(
+      cycle,
+      {
+        revision: before.revision,
+        paths: ['readme'],
+        message: 'Must reject stale stage',
+      },
+      { operationId: 'raced' },
+    ),
+    /changed/,
+  );
+  assert.equal(await readFile(file, 'utf8'), 'external after stage\n');
+  assert.equal(
+    await f.git(path, 'rev-parse', 'HEAD'),
+    head,
+    'stale revision never commits',
+  );
+  const next = await ports.git.snapshot(cycle);
+  let scans = 0;
+  const actualSnapshot = GitWorkspaceService.prototype.snapshot;
+  t.mock.method(
+    GitWorkspaceService.prototype,
+    'snapshot',
+    function (this: GitWorkspaceService) {
+      scans++;
+      return actualSnapshot.call(this);
+    },
+  );
+  const committed = await ports.git.commit(
+    cycle,
+    {
+      revision: next.revision,
+      paths: ['readme'],
+      message: 'Commit actual external edit',
+    },
+    { operationId: 'accepted' },
+  );
+  assert.equal(
+    scans,
+    5,
+    'state plus pre/post stage and pre/post commit; no duplicate post-mutation scans',
+  );
+  assert.notEqual(committed.head, head);
+  assert.equal(committed.head, await f.git(path, 'rev-parse', 'HEAD'));
+  assert.equal(
+    await f.git(path, 'show', 'HEAD:readme'),
+    'external after stage',
+  );
+  assert.match(
+    await f.git(path, 'show', '-s', '--format=%B'),
+    /Signed-off-by: Fixture <fixture@example.invalid>/,
+  );
 });

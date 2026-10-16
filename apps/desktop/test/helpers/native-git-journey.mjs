@@ -229,7 +229,13 @@ export async function runNativeGitJourney({
       path.join(root, names.unselected),
       'UNSELECTED_MUST_NOT_COMMIT\n',
     );
-    await page.locator('#dock-tab-git').click();
+    const changesToggle = page.getByRole('button', {
+      name: 'changes panel',
+      exact: true,
+    });
+    if ((await changesToggle.getAttribute('aria-pressed')) !== 'true')
+      await changesToggle.click();
+    await page.locator('#inspector-changes-tab-git').click();
     await panel.waitFor();
     await select(names.first);
     await panel
