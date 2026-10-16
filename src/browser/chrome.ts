@@ -511,13 +511,29 @@ export class ChromeBrowser implements BrowserPort {
       );
       return;
     }
+    // This process group was created by launch; never target the person's browser.
+    if (await this.signalGroup(child.pid!, force ? 'SIGKILL' : 'SIGTERM'))
+      return;
+    // Fixtures/embedders may supply a child without its own process group.
+    if (!this.exited(child)) child.kill(force ? 'SIGKILL' : 'SIGTERM');
+  }
+  /**
+   * Signals a process group launch created; false when none of its members runs. macOS
+   * refuses (EPERM) to signal a group whose members have all exited but are not reaped yet,
+   * as when the browser exits just as it is stopped: that group has stopped.
+   */
+  private async signalGroup(
+    pid: number,
+    signal: NodeJS.Signals,
+  ): Promise<boolean> {
     try {
-      // This process group was created by launch; never target the person's browser.
-      process.kill(-child.pid!, force ? 'SIGKILL' : 'SIGTERM');
+      process.kill(-pid, signal);
+      return true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
-      // Fixtures/embedders may supply a child without its own process group.
-      if (!this.exited(child)) child.kill(force ? 'SIGKILL' : 'SIGTERM');
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ESRCH') return false;
+      if (code === 'EPERM' && !(await this.groupRunning(pid))) return false;
+      throw error;
     }
   }
   private async groupRunning(pid: number): Promise<boolean> {
@@ -595,11 +611,7 @@ export class ChromeBrowser implements BrowserPort {
       if (failedRoot && !this.exited(failedRoot)) continue;
       try {
         if (await this.groupRunning(pid)) {
-          try {
-            process.kill(-pid, 'SIGKILL');
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
-          }
+          await this.signalGroup(pid, 'SIGKILL');
           const deadline = Date.now() + timeout;
           while (await this.groupRunning(pid)) {
             if (Date.now() >= deadline)
