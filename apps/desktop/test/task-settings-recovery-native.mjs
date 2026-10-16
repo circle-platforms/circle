@@ -13,6 +13,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { execFileSync } from 'node:child_process';
 import {
   defaultSettings,
@@ -231,11 +232,26 @@ try {
     [bad.agents, bad.builds, bad.ui, bad.browsers],
     [1, 1, 1, 1],
   );
-  assert.equal(
-    (await call('list')).find((t) => t.spec.id === 'cold-settings-queued')
-      .state,
-    'queued',
+  await assert.rejects(call('list'), /could not load task settings/);
+  // Read the pre-existing ledger without creating a scheduler or writing/migrating it.
+  const ledger = new DatabaseSync(
+    join(
+      data,
+      'collaboration',
+      createHash('sha256').update(repo).digest('hex').slice(0, 24),
+      'collaboration.sqlite',
+    ),
+    { readOnly: true },
   );
+  try {
+    const row = ledger
+      .prepare('SELECT record FROM tasks WHERE id=?')
+      .get('cold-settings-queued');
+    assert.ok(row, 'cold startup retains the queued task record');
+    assert.equal(JSON.parse(String(row.record)).state, 'queued');
+  } finally {
+    ledger.close();
+  }
   assert.equal((await requests()).length, 1);
   assert.equal(
     await panel
@@ -261,6 +277,11 @@ try {
   assert.equal(repaired.error, undefined);
   assert.equal(repaired.agents, 2);
   assert.equal(repaired.requiresStart, true);
+  assert.equal(
+    (await call('list')).find((t) => t.spec.id === 'cold-settings-queued')
+      .state,
+    'queued',
+  );
   assert.equal((await requests()).length, 1);
   assert.equal(
     JSON.parse(await readFile(receipt.settingsPath, 'utf8')).agents,
