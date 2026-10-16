@@ -1,3 +1,4 @@
+import { runNativePanelAcceptance } from './helpers/native-panel-acceptance.mjs';
 import {
   createNativeCommandHandoffFixture,
   runNativeCommandHandoffJourney,
@@ -401,6 +402,7 @@ for (const file of [
     'native-paste-cleanup',
     'native-github-settings-journey',
     'native-debug-journey',
+    'native-panel-acceptance',
     'native-keyboard-journey',
     'native-git-journey',
     'native-journey-platform',
@@ -1590,6 +1592,114 @@ try {
         });
       },
     );
+  await check(
+    'original inspector controls in both languages themes and narrow window',
+    async () => {
+      const originalDraft = await page
+        .getByRole('textbox', { name: 'message', exact: true })
+        .inputValue();
+      let currentLocale = 'en';
+      const closeServiceForm = async () => {
+        if (await page.locator('.native-service-form').isVisible()) {
+          await page.keyboard.press('Escape');
+          await page
+            .locator('.native-service-form')
+            .waitFor({ state: 'hidden' });
+        }
+      };
+      const appearance = async ({ locale, theme }) => {
+        await closeServiceForm();
+        const close = page.getByRole('button', {
+          name: /^(close inspector|关闭检查器)$/,
+          exact: true,
+        });
+        if (await close.isVisible()) await close.click();
+        await page
+          .getByRole('button', { name: /^(settings|设置)$/ })
+          .last()
+          .click();
+        await page
+          .getByRole('button', {
+            name: locale === 'en' ? 'English' : '简体中文',
+            exact: true,
+          })
+          .click();
+        await page
+          .getByRole('button', {
+            name: theme === 'dark' ? /^(dark|深色)$/ : /^(light|浅色)$/,
+            exact: true,
+          })
+          .click();
+        await page
+          .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
+          .first()
+          .click();
+        currentLocale = locale;
+      };
+      await runNativePanelAcceptance({
+        page,
+        output,
+        configureAppearance: appearance,
+        resize: (size) => setViewport(app, page, size),
+        openPanel: async (kind) => {
+          await closeServiceForm();
+          const zh = currentLocale === 'zh-CN';
+          const toggle = page.getByRole('button', {
+            name:
+              kind === 'debug'
+                ? zh
+                  ? '活动面板'
+                  : 'activity panel'
+                : kind === 'service'
+                  ? zh
+                    ? '终端面板'
+                    : 'terminal panel'
+                  : zh
+                    ? '浏览器面板'
+                    : 'browser panel',
+            exact: true,
+          });
+          if ((await toggle.getAttribute('aria-pressed')) !== 'true')
+            await toggle.click();
+          if (kind === 'debug')
+            await page.locator('#inspector-activity-tab-debug').click();
+          else if (kind === 'service') {
+            await page.locator('#inspector-terminal-tab-terminal').click();
+            await page
+              .locator('.native-terminal')
+              .getByRole('button', {
+                name: zh ? '启动服务' : 'start service',
+                exact: true,
+              })
+              .click();
+          } else {
+            const diagnostics = page.getByRole('button', {
+              name: zh ? '页面诊断' : 'page diagnostics',
+              exact: true,
+            });
+            if ((await diagnostics.getAttribute('aria-expanded')) !== 'true')
+              await diagnostics.click();
+            await page
+              .locator('.browser-diagnostics')
+              .getByRole('tab', { name: zh ? '存储' : 'storage', exact: true })
+              .click();
+          }
+        },
+        restore: async () => {
+          await closeServiceForm();
+          await setViewport(app, page, { width: 1400, height: 900 });
+          await appearance({ locale: 'en', theme: 'dark' });
+          assert.equal(
+            await page
+              .getByRole('textbox', { name: 'message', exact: true })
+              .inputValue(),
+            originalDraft,
+            'appearance and original panel controls preserve the original task draft',
+          );
+        },
+      });
+    },
+  );
   await check('English Chinese dark light and narrow UI', async () => {
     if (
       await page
