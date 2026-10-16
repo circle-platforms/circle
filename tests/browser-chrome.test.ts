@@ -1924,10 +1924,12 @@ test(
           res,
           `<title>Blob</title><button onclick="const a = document.createElement('a'); a.href = window.URL.createObjectURL(new Blob(['made here'])); a.download = 'made.txt'; document.body.append(a); a.click()">Make</button>`,
         );
+      // The other site's file by navigation, then the page's own by a download link: a second
+      // navigation would cancel the first while the other site has not answered yet (#134)
       if (req.url === '/two')
         return page(
           res,
-          `<title>Two</title><button onclick="location = '${otherBase}/download'; setTimeout(() => location = '/download', 400)">Both</button>`,
+          `<title>Two</title><button onclick="location = '${otherBase}/download'; setTimeout(() => { const a = document.createElement('a'); a.href = '/download'; a.download = ''; document.body.append(a); a.click() }, 400)">Both</button>`,
         );
       if (req.url === '/alert')
         return page(
@@ -2056,7 +2058,7 @@ test(
       ref: ref(two.text, /\[(e\d+)\] button "Both"/),
       element: 'both',
     });
-    // The second starts 400 ms after the first
+    // The second starts 400 ms after the first; either site's answer can come first
     const first = await held(both);
     assert.equal(first.approval?.kind, 'download');
     const firstSite = (first.approval as { site: string }).site;
