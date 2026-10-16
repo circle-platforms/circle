@@ -107,7 +107,9 @@ export function KeybindingsEditor() {
   }, [bindings, capturing, notify, perform, runtime, saved]);
   const fixed = [
     [t('search'), DESKTOP_SEARCH_CHORD],
-    [t('rename session'), 'f2'],
+    // The menu hint is F2. formatChord leaves that spelling alone; a captured
+    // function key such as f3 stays lowercase, which is what was saved.
+    [t('rename session'), 'F2'],
     [t('settings'), DESKTOP_SETTINGS_CHORD],
   ] as const;
   return (
