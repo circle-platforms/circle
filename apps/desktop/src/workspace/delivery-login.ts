@@ -140,9 +140,9 @@ export class DeliveryLogin {
     };
     this.entries.set(id, entry);
     child.onData((data) => {
-      buffer = (buffer + data.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')).slice(
-        -16000,
-      );
+      buffer = (buffer + data)
+        .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+        .slice(-16000);
       // The bundled CLI asks this even with --web/--git-protocol. Circle
       // supplies credentials per native operation and must never configure the
       // user's Git helper. Answer only this specific, known confirmation.

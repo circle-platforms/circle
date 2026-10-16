@@ -1579,7 +1579,9 @@ test('cancellation drains a held connection startup and a failed startup release
         await delay(10);
         assert.equal(settled, false);
         release();
-        await first;
+        const late = await first;
+        assert.equal(late.state, 'disconnected');
+        assert.equal(late.lastAuthorizationOutcome, 'cancelled-before-code');
         await cleanup;
         assert.equal(f.connection.snapshot().state, 'disconnected');
         assert(f.helpers.every((helper) => helper.killed));

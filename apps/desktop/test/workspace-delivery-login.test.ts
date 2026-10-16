@@ -395,3 +395,19 @@ test('known Git credential prompts decline helper configuration once; unknown pr
     }
   }
 });
+
+test('a known credential prompt remains recognizable when ANSI and prompt bytes arrive separately', async () => {
+  const child = fake();
+  const login = new DeliveryLogin(() => child.pty, 'unused', tmpdir());
+  try {
+    await login.start({ storage: 'session' });
+    for (const byte of 'Authenticate Git with your GitHub credentials?\x1b[0m (default: yes) [Y/n] ')
+      child.emit(byte);
+    assert.deepEqual(child.writes, ['n\n']);
+    for (const byte of '\nFirst copy your one-time code: \x1b[32mABCD-1234\x1b[0m\nPress Enter to open browser')
+      child.emit(byte);
+    assert.deepEqual(child.writes, ['n\n', '\r']);
+  } finally {
+    await login.dispose();
+  }
+});
