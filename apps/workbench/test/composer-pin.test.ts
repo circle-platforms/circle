@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { previewPort } from './preview-port.ts';
 
 const chrome = [
   '/usr/bin/google-chrome-stable',
@@ -15,7 +16,7 @@ test(
   { skip: chrome ? false : 'chrome is not installed' },
   async () => {
     const root = fileURLToPath(new URL('..', import.meta.url));
-    const port = 4217;
+    const port = await previewPort(process.env.CIRCLE_WORKBENCH_TEST_PORT);
     const server: ChildProcess = spawn(
       'npx',
       ['vite', '--host', '127.0.0.1', '--port', String(port), '--strictPort'],
@@ -76,8 +77,10 @@ test(
     });
     try {
       await ready;
+      // The preview follows the browser language. These steps use the English names.
       const page = await browser.newPage({
         viewport: { width: 1000, height: 520 },
+        locale: 'en-US',
       });
       await page.goto(`http://127.0.0.1:${port}/`);
       await page.evaluate(() => localStorage.clear());
