@@ -373,6 +373,13 @@ test('a session row appears on the first message, and an empty or unanswered one
     legacy.list().some((session) => session.id === 'circle-empty'),
     false,
   );
+  // The desktop lists the conversation it has open before the first message.
+  assert.equal(
+    legacy
+      .list(workspace, false, true)
+      .some((session) => session.id === 'circle-empty'),
+    true,
+  );
   legacy.close();
   const held = new CheckpointStore(home);
   cleanup(t, () => held.close());

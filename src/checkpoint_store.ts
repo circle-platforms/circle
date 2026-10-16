@@ -348,13 +348,20 @@ export class CheckpointStore {
     if (unique.length > 1) throw new Error('session id is ambiguous');
     return unique[0];
   }
-  list(workspace?: string, includeChildren = false): Session[] {
+  /**
+   * Root sessions, newest message first. An untitled session with no message is
+   * left out unless `empty` is set: the terminal never lists one, while the
+   * desktop shows the open conversation before its first message.
+   */
+  list(workspace?: string, includeChildren = false, empty = false): Session[] {
     // Last message, not last open. A mode boundary or an interrupted marker
     // written while opening must not jump the row to the top.
     const activity = `COALESCE((SELECT MAX(c.created) FROM checkpoints c WHERE c.session_id = sessions.id AND json_extract(c.message, '$.role') IN ('user', 'assistant') AND IFNULL(json_extract(c.message, '$.internal'), '') = ''), sessions.created)`;
     const hidden = includeChildren
       ? ''
-      : "AND parent_id IS NULL AND NOT (head IS NULL AND title = '')";
+      : empty
+        ? 'AND parent_id IS NULL'
+        : "AND parent_id IS NULL AND NOT (head IS NULL AND title = '')";
     return (workspace
       ? this.db
           .prepare(
