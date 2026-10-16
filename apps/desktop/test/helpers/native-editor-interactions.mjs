@@ -82,7 +82,8 @@ export async function runNativeEditorInteractions({ page, workspace, output }) {
     );
     await lines.click();
     await page.keyboard.press(`${modifier}+a`);
-    const draft = 'const object = { uniqueMember: 42 };\nobject.uni';
+    const draft =
+      'const object = { uniqueMember: 42, uniqueOther: 7 };\nobject.uni';
     await page.keyboard.insertText(draft);
     await until(
       async () => (await text()).includes('object.uni'),
@@ -94,11 +95,30 @@ export async function runNativeEditorInteractions({ page, workspace, output }) {
       .locator('.suggest-widget.visible .monaco-list-row')
       .filter({ hasText: 'uniqueMember' });
     await suggestion.waitFor({ state: 'visible' });
+    await page
+      .locator('.suggest-widget.visible .monaco-list-row')
+      .filter({ hasText: 'uniqueOther' })
+      .waitFor({ state: 'visible' });
+    assert.equal(
+      await page.locator('.suggest-widget.visible .monaco-list-row').count(),
+      2,
+      'arrow selection requires multiple actual offers',
+    );
     observed.suggestion = await suggestion.innerText();
     await frame('native-editor-completion-widget');
-    // Keyboard selection and acceptance; never insert the expected completion.
+    // Monaco intentionally lets arrows move the editor for one focused offer.
+    // Two real prefix matches exercise suggestion navigation before acceptance.
+    // Never insert the expected completion.
     await page.keyboard.press('ArrowDown');
+    await page
+      .locator('.suggest-widget.visible .monaco-list-row.focused')
+      .filter({ hasText: 'uniqueOther' })
+      .waitFor({ state: 'visible' });
     await page.keyboard.press('ArrowUp');
+    await page
+      .locator('.suggest-widget.visible .monaco-list-row.focused')
+      .filter({ hasText: 'uniqueMember' })
+      .waitFor({ state: 'visible' });
     await page.keyboard.press('Enter');
     await until(
       async () => (await text()).includes('object.uniqueMember'),
@@ -111,7 +131,7 @@ export async function runNativeEditorInteractions({ page, workspace, output }) {
     );
     await page.keyboard.press(`${modifier}+s`);
     const expected =
-      'const object = { uniqueMember: 42 };\nobject.uniqueMember';
+      'const object = { uniqueMember: 42, uniqueOther: 7 };\nobject.uniqueMember';
     await until(
       async () => (await disk()) === expected,
       'accepted completion must save exact disk bytes',

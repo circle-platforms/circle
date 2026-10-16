@@ -290,7 +290,7 @@ try {
   await referenceLines.click();
   await referencesPage.keyboard.press(`${referenceModifier}+a`);
   await referencesPage.keyboard.insertText(
-    'const object = { uniqueMember: 42 };\nobject.uni',
+    'const object = { uniqueMember: 42, uniqueOther: 7 };\nobject.uni',
   );
   await referencesPage.keyboard.press('Control+Space');
   await referencesPage
@@ -304,6 +304,26 @@ try {
         'editor-keyboard-completion.png',
       ),
     });
+  await referencesPage
+    .locator('.suggest-widget.visible .monaco-list-row')
+    .filter({ hasText: 'uniqueOther' })
+    .waitFor();
+  assert.equal(
+    await referencesPage
+      .locator('.suggest-widget.visible .monaco-list-row')
+      .count(),
+    2,
+  );
+  await referencesPage.keyboard.press('ArrowDown');
+  await referencesPage
+    .locator('.suggest-widget.visible .monaco-list-row.focused')
+    .filter({ hasText: 'uniqueOther' })
+    .waitFor({ state: 'visible' });
+  await referencesPage.keyboard.press('ArrowUp');
+  await referencesPage
+    .locator('.suggest-widget.visible .monaco-list-row.focused')
+    .filter({ hasText: 'uniqueMember' })
+    .waitFor({ state: 'visible' });
   await referencesPage.keyboard.press('Enter');
   await referencesPage.waitForFunction(() =>
     document
@@ -321,13 +341,13 @@ try {
     let tries = 0;
     tries < 100 &&
     readFileSync(join(workspace, 'main.ts'), 'utf8') !==
-      'const object = { uniqueMember: 42 };\nobject.uniqueMember';
+      'const object = { uniqueMember: 42, uniqueOther: 7 };\nobject.uniqueMember';
     tries++
   )
     await referencesPage.waitForTimeout(30);
   assert.equal(
     readFileSync(join(workspace, 'main.ts'), 'utf8'),
-    'const object = { uniqueMember: 42 };\nobject.uniqueMember',
+    'const object = { uniqueMember: 42, uniqueOther: 7 };\nobject.uniqueMember',
   );
   console.log('Keyboard completion accepts uniqueMember with exact disk save');
   await referencesPage.close();
