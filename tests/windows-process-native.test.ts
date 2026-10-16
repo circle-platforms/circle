@@ -143,3 +143,53 @@ test('a successful empty snapshot is distinct from a failed enumeration', () => 
   assert.deepEqual(result.entries, []);
   assert.deepEqual(f.closed, [1n]);
 });
+
+test('a verified PID is published before the next native call and its later failure', () => {
+  const f = fixture([{ pid: 41, name: 'circle.exe' }]);
+  const events: string[] = [];
+  const path = 'C:\\用户 folder\\41\\circle.exe';
+  const expected = `41 ${Buffer.from(path, 'utf8').toString('base64')}\n`;
+  let output = '';
+  f.api.next = () => {
+    events.push('next');
+    assert.equal(output, expected);
+    throw new WindowsProcessApiError('enumerate', 87);
+  };
+  f.api.close = (handle) => {
+    f.closed.push(handle);
+    events.push(`close ${handle}`);
+  };
+  const result = enumerateWindowsProcesses(
+    f.api,
+    ['circle'],
+    false,
+    undefined,
+    (entry) => {
+      events.push('publish');
+      output += `${entry.pid} ${Buffer.from(entry.path, 'utf8').toString('base64')}\n`;
+    },
+  );
+  assert.equal(output, expected);
+  assert.deepEqual(events, ['publish', 'close 41', 'next', 'close 1']);
+  assert.deepEqual(result.entries, [{ pid: 41, path }]);
+  assert.equal(result.complete, false);
+  assert.deepEqual(result.issues, [{ stage: 'enumerate', code: 87 }]);
+});
+
+test('a publishing failure remains unknown and cannot prevent owned handle cleanup', () => {
+  const f = fixture([{ pid: 41, name: 'circle.exe' }]);
+  const result = enumerateWindowsProcesses(
+    f.api,
+    ['circle'],
+    false,
+    undefined,
+    () => {
+      throw new Error('private output failure');
+    },
+  );
+  assert.equal(result.complete, false);
+  assert.equal(result.entries[0]!.pid, 41);
+  assert.equal(result.issueCount, 1);
+  assert.deepEqual(result.issues, [{ stage: 'unknown' }]);
+  assert.deepEqual(f.closed, [41n, 1n]);
+});
