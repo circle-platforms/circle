@@ -18,7 +18,7 @@ async function until(fn: () => Promise<boolean>, label: string) {
     await delay(20);
   }
 }
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, supervisorOverride?: string) {
   const root = await mkdtemp(join(tmpdir(), 'circle-win-job-')),
     workspace = join(root, 'workspace'),
     home = join(root, 'home');
@@ -41,9 +41,11 @@ async function fixture(t: TestContext) {
   const launcher = createTerminalCommandLauncher({
     terminals,
     runtimeExecutable: process.execPath,
-    supervisorPath: fileURLToPath(
-      new URL('../src/workspace/command-supervisor.mjs', import.meta.url),
-    ),
+    supervisorPath:
+      supervisorOverride ??
+      fileURLToPath(
+        new URL('../src/workspace/command-supervisor.mjs', import.meta.url),
+      ),
     executionEpoch: 'windows-real-job-test',
     windowsJobObject: true,
     stopExecution: async () => {
@@ -204,5 +206,41 @@ test(
       false,
       'quiescent supervisor did not execute the command preload',
     );
+  },
+);
+
+test(
+  'Windows invalid supervisor authentication never starts a command and the quiescent original PTY closes',
+  win,
+  async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), 'circle-win-denied-')),
+      path = join(directory, 'supervisor.mjs');
+    const source = await readFile(
+      new URL('../src/workspace/command-supervisor.mjs', import.meta.url),
+      'utf8',
+    );
+    const altered = source.replace(
+      "JSON.stringify({ kind: 'hello', token, pid: process.pid })",
+      "JSON.stringify({ kind: 'invalid-auth', token, pid: process.pid })",
+    );
+    assert.notEqual(
+      altered,
+      source,
+      'negative fixture changes only actual authentication',
+    );
+    await writeFile(path, altered);
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const f = await fixture(t, path);
+    await assert.rejects(
+      f.run("require('fs').writeFileSync('must-not-start','bad');"),
+      /Windows actual command exit was not observed/,
+    );
+    await assert.rejects(readFile(join(f.workspace, 'must-not-start')), {
+      code: 'ENOENT',
+    });
+    const entries = await f.terminals.list('owner');
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]!.status, 'exited');
+    assert.equal(entries[0]!.managedCommand!.completion.rootExit, undefined);
   },
 );

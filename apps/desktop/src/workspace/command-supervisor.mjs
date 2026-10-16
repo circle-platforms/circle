@@ -332,6 +332,14 @@ async function windowsSupervisor() {
     started = false,
     exited = false,
     acknowledged = false;
+  // Without a command grant this fixed supervisor remains quiescent and exits
+  // itself on lost authentication. No unverified PID needs signalling.
+  const startupWatchdog = setTimeout(() => {
+    if (!started) {
+      socket.destroy();
+      process.exitCode = 1;
+    }
+  }, 5000);
   socket.on('connect', () =>
     socket.write(
       JSON.stringify({ kind: 'hello', token, pid: process.pid }) + '\n',
@@ -359,6 +367,7 @@ async function windowsSupervisor() {
         typeof message.command === 'string'
       ) {
         started = true;
+        clearTimeout(startupWatchdog);
         const env = { ...message.env };
         delete env.CIRCLE_COMMAND_CONTROL_TOKEN;
         child = spawn(message.command, {
@@ -404,6 +413,7 @@ async function windowsSupervisor() {
   socket.on('error', () => {});
   // On control loss the host-owned kill-on-close Job remains cleanup authority.
   socket.on('close', () => {
+    clearTimeout(startupWatchdog);
     process.exitCode = exited && acknowledged ? 0 : 1;
   });
 }

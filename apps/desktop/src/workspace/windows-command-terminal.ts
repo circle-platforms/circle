@@ -143,7 +143,7 @@ export function createWindowsTerminalCommandLauncher(
               // Wait for the actual ConPTY identity, never trust a renderer PID.
               void terminalReady.promise
                 .then((current) => {
-                  if (request.signal.aborted)
+                  if (failed || request.signal.aborted)
                     throw Error(
                       'Windows command cancelled before Job assignment',
                     );
@@ -153,7 +153,7 @@ export function createWindowsTerminalCommandLauncher(
                     executable: options.runtimeExecutable,
                     launchedAfter,
                   });
-                  if (request.signal.aborted)
+                  if (failed || request.signal.aborted)
                     throw Error(
                       'Windows command cancelled before command start',
                     );
@@ -385,12 +385,34 @@ export function createWindowsTerminalCommandLauncher(
             ? error.message
             : 'Windows command startup failed',
         );
-        try {
-          await stop();
-        } catch {}
-        if (!initialized && wrapperExited) {
-          await finishControl();
-          throw error;
+        if (!initialized) {
+          // No command was granted. The fixed supervisor exits itself on control
+          // loss/watchdog; never signal a PID whose identity was not authenticated.
+          try {
+            send({ kind: 'abort-before-start' });
+          } catch {}
+          try {
+            await bounded(
+              io,
+              options.stopTimeoutMs ?? 5000,
+              'unassigned Windows supervisor closure was not confirmed',
+            );
+            if (wrapperExited) {
+              await finishControl();
+              throw error;
+            }
+          } catch (cleanupError) {
+            if (disposed && wrapperExited) throw error;
+            fail(
+              cleanupError instanceof Error
+                ? cleanupError.message
+                : 'unassigned supervisor state unknown',
+            );
+          }
+        } else {
+          try {
+            await stop();
+          } catch {}
         }
         // Return failed allocated handle: Registry must retain unknown resources.
       }
