@@ -1162,3 +1162,25 @@ test('the view-only screen takes the lock back without a key', async (t) => {
   assert.equal(runtime.viewOnly, false);
   assert.ok(app.state.notices.includes('this session is writable again'));
 });
+
+test('a view-only screen refreshes footer totals while the other terminal writes', async (t) => {
+  const { app, owner, runtime, ui } = await occupiedPair(t);
+  ui.watchLease();
+  assert.equal(runtime.viewOnly, true);
+  const beforeIn = app.state.usage.input_tokens;
+  const beforeOut = app.state.usage.output_tokens;
+  owner.store.append(owner.session.id, [
+    {
+      id: 'later',
+      role: 'assistant',
+      content: 'more',
+      usage: { ...emptyUsage(), input_tokens: 40, output_tokens: 8 },
+    },
+  ]);
+  ui.watchLease();
+  assert.equal(runtime.viewOnly, true);
+  assert.equal(app.state.usage.input_tokens, beforeIn + 40);
+  assert.equal(app.state.usage.output_tokens, beforeOut + 8);
+  ui.watchLease();
+  assert.equal(app.state.usage.input_tokens, beforeIn + 40);
+});

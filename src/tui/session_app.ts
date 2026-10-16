@@ -214,6 +214,8 @@ export class SessionApp {
     this.view.secretReady = value;
   }
   private ended = false;
+  /** Head last drawn for a view-only session, so the lock poll can refresh totals. */
+  private watchedHead = '';
   /** /exit during a turn: keys stop here while the turn is cancelled. */
   private leaving = false;
   private closing?: Promise<void>;
@@ -1295,6 +1297,21 @@ export class SessionApp {
     );
     return runtime;
   }
+  /** Redraw footer totals when the other terminal has saved messages. */
+  private refreshWatchedFooter(): void {
+    const runtime = this.runtime;
+    if (!runtime) return;
+    let stamp = '';
+    try {
+      const session = runtime.store.get(runtime.session.id);
+      stamp = `${session?.head ?? ''}:${session?.updated ?? 0}`;
+    } catch {
+      return;
+    }
+    if (stamp === this.watchedHead) return;
+    this.watchedHead = stamp;
+    this.repaint();
+  }
   /**
    * A view-only session stays that way until something asks again. The screen
    * asks on its timer, and enter and picking the session ask at once.
@@ -1302,7 +1319,10 @@ export class SessionApp {
   private watchLease(): void {
     const runtime = this.runtime;
     if (this.ended || !runtime?.viewOnly || runtime.isClosing) return;
-    if (sessionOccupied(this.home, runtime.session.id)) return;
+    if (sessionOccupied(this.home, runtime.session.id)) {
+      this.refreshWatchedFooter();
+      return;
+    }
     if (!runtime.resumeLease()) return;
     const text = 'this session is writable again';
     if (this.state.notices.at(-1) !== text) this.notice(text);
