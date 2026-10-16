@@ -198,26 +198,28 @@ export class GitWorkspaceService {
     return execute();
   }
   private async assertPushHttpConfiguration() {
-    let unsafeHttp = '';
-    try {
-      unsafeHttp = await this.git([
-        'config',
-        '--local',
-        '--includes',
-        '--name-only',
-        '--get-regexp',
-        '^http\\.(.*\\.)?(extraheader|cookiefile|savecookies|sslcert|sslkey|sslcertpasswordprotected)$',
-      ]);
-    } catch (error) {
-      if ((error as { code?: number }).code !== 1) throw error;
+    for (const scope of ['--local', '--worktree']) {
+      let unsafeHttp = '';
+      try {
+        unsafeHttp = await this.git([
+          'config',
+          scope,
+          '--includes',
+          '--name-only',
+          '--get-regexp',
+          '^http\\.(.*\\.)?(extraheader|cookiefile|savecookies|sslcert|sslkey|sslcertpasswordprotected)$',
+        ]);
+      } catch (error) {
+        if ((error as { code?: number }).code !== 1) throw error;
+      }
+      if (unsafeHttp.trim())
+        throw Object.assign(
+          Error(
+            'remove repository HTTP credential overrides before using the Circle GitHub connection',
+          ),
+          { code: 'CIRCLE_GIT_HTTP_AUTH_OVERRIDE' },
+        );
     }
-    if (unsafeHttp.trim())
-      throw Object.assign(
-        Error(
-          'remove repository HTTP credential overrides before using the Circle GitHub connection',
-        ),
-        { code: 'CIRCLE_GIT_HTTP_AUTH_OVERRIDE' },
-      );
   }
   async snapshot(): Promise<GitSnapshot> {
     let previous = await this.readSnapshot();

@@ -665,6 +665,56 @@ test('repository HTTP credentials are an actual transport override and authentic
       );
       await git(['config', '--unset', key], env, root);
     }
+    await git(['config', 'extensions.worktreeConfig', 'true'], env, root);
+    await git(
+      [
+        'config',
+        '--worktree',
+        'http.extraHeader',
+        'Authorization: synthetic-worktree-header',
+      ],
+      env,
+      root,
+    );
+    await assert.rejects(
+      git(
+        [
+          'config',
+          '--local',
+          '--includes',
+          '--name-only',
+          '--get-regexp',
+          '^http\\.extraheader$',
+        ],
+        env,
+        root,
+      ),
+    );
+    assert.equal(
+      (
+        await git(
+          [
+            'config',
+            '--worktree',
+            '--includes',
+            '--name-only',
+            '--get-regexp',
+            '^http\\.extraheader$',
+          ],
+          env,
+          root,
+        )
+      ).trim(),
+      'http.extraheader',
+    );
+    await assert.rejects(
+      service.call(
+        'push',
+        { revision: (await service.snapshot()).revision },
+        invocation,
+      ),
+      /remove repository HTTP credential overrides/,
+    );
     assert.equal(grants, 0);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
