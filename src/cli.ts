@@ -31,8 +31,9 @@ import { installExitGuard } from './exit_guard.js';
 import { initializeNetwork } from './network_bootstrap.js';
 import { networkSummary } from './net.js';
 import { VERSION } from './version.js';
+import { UsageError } from './usage_error.js';
 export { VERSION } from './version.js';
-export class UsageError extends Error {}
+export { UsageError };
 export interface CliOptions {
   version: boolean;
   help: boolean;
@@ -473,6 +474,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     if (argv[0] === 'update') {
       const { updateInstalled } = await import('./update.js');
       return await updateInstalled(argv.slice(1));
+    }
+    if (argv[0] === 'uninstall') {
+      const { uninstallInstalled } = await import('./uninstall.js');
+      return await uninstallInstalled(argv.slice(1));
     }
     const options = parseCli(argv);
     if (options.version) {

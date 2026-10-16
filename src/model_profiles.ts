@@ -13,6 +13,34 @@ export interface ModelProfile {
   tool_calling?: boolean;
 }
 let profiles: Record<string, Record<string, ModelProfile>> | undefined;
+// Explicit capabilities, rather than assuming that an arbitrary gateway alias
+// understands new request fields. Older models already return summaries by default.
+// https://platform.claude.com/docs/en/build-with-claude/thinking#controlling-thinking-display
+const THINKING_DISPLAY_MODELS = new Set([
+  'claude-opus-4-6',
+  'claude-opus-4-7',
+  'claude-opus-4-8',
+  'claude-opus-5',
+  'claude-opus-5-5',
+  'claude-sonnet-4-6',
+  'claude-sonnet-5',
+  'claude-sonnet-5-5',
+  'claude-haiku-5-5',
+  'claude-fable-5',
+  'claude-fable-5-1',
+  'claude-mythos-preview',
+  'claude-mythos-5',
+  'claude-mythos-5-1',
+]);
+export function supportsThinkingDisplay(
+  protocol: string,
+  name: string,
+): boolean {
+  return (
+    protocol === 'anthropic' &&
+    THINKING_DISPLAY_MODELS.has(name.toLowerCase().split('/').at(-1) ?? '')
+  );
+}
 export function modelProfile(
   protocol: string,
   name: string,

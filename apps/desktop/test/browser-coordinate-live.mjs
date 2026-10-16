@@ -1,3 +1,4 @@
+import { cleanupNativeTest } from './helpers/native-failure.mjs';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
@@ -338,8 +339,18 @@ try {
   await captureFailure(page, error, errors, output);
   throw error;
 } finally {
-  if (app) await app.close();
-  server.closeAllConnections();
-  await new Promise((resolve) => server.close(resolve));
-  await rm(temp, { recursive: true, force: true });
+  if (
+    !(await cleanupNativeTest([
+      async () => {
+        if (app) await app.close();
+      },
+      () => server.closeAllConnections(),
+      () =>
+        new Promise((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        ),
+      () => rm(temp, { recursive: true, force: true }),
+    ]))
+  )
+    process.exitCode = 1;
 }

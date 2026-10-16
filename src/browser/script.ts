@@ -493,7 +493,7 @@ export function snapshotElements(snapshot: string): SnapshotElement[] {
       const rest = line.slice(match.index! + match[0].length);
       const marked = warning
         ? rest.match(
-            /^(?: disabled| checked| \[new\])* \[warning: (advanced|proceed)\]/,
+            /^(?: icon=\S+)?(?: (?:disabled|checked|unchecked|mixed|pressed|not pressed|selected|expanded|collapsed|required|invalid|\[new\]|\[covered\]))* \[warning: (advanced|proceed)\]/,
           )?.[1]
         : undefined;
       elements.push({
@@ -523,14 +523,18 @@ export function findElement(
   ];
 }
 /** Whether a snapshot's text holds a text, spaces aside. */
+// What a snapshot says of an element after its name: its icon and state, not page text
+const MARKS =
+  /(\[e[1-9][0-9]*\] [^"\n]*?"(?:[^"\\]|\\.)*")(?: (?:icon=\S+|disabled|checked|unchecked|mixed|pressed|not pressed|selected|expanded|collapsed|required|invalid|\[new\]|\[covered\]))+/g;
 /**
  * Whether a page shows the text: its words and its elements' names, not what its fields hold
- * (`value="…"`), so that text the script typed is not taken for the page's answer.
+ * (`value="…"`), so that text the script typed is not taken for the page's answer, nor what
+ * the snapshot says of an element (its state, `icon=…`), which the page does not show.
  */
 export const snapshotHas = (snapshot: string, wanted: string): boolean =>
-  collapse(snapshot.replace(/ value="(?:[^"\\]|\\.)*"/g, '')).includes(
-    collapse(wanted),
-  );
+  collapse(
+    snapshot.replace(/ value="(?:[^"\\]|\\.)*"/g, '').replace(MARKS, '$1'),
+  ).includes(collapse(wanted));
 /** The tab a result shows, by its id, from the Page line. */
 export const shownTab = (text: string): string | undefined =>
   resultSections(text)

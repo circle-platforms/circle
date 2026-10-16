@@ -30,7 +30,7 @@ Verify:
 circle --version
 ```
 
-To upgrade later, run `circle update`.
+To upgrade later, run `circle update`; to remove Circle again, run `circle uninstall` (add `--purge` to delete the data folder too).
 
 ### Upgrading from 0.5.0
 
