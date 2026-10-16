@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join, posix, win32 } from 'node:path';
 import { writePerformanceEvidence } from './native-performance-diagnostics.mjs';
 
 /** Only attach to the Playwright-owned renderer; never connect an arbitrary browser. */
@@ -114,4 +114,16 @@ export function captureNativeReadingTrace({ phase, expected, capturedAnchor }) {
     rows,
     storedScrolls: stored,
   };
+}
+
+/** Reuse hashes already verified from the actual owned app, including ASAR and cross-platform paths. */
+export function executedRendererArtifactEvidence(executed) {
+  const paths = executed.platform === 'win32' ? win32 : posix;
+  const root = paths.dirname(executed.rendererPath);
+  return executed.artifacts.flatMap((entry) => {
+    const path = paths.relative(root, entry.path);
+    return path && !path.startsWith('..') && !paths.isAbsolute(path)
+      ? [{ path: path.split(paths.sep).join('/'), sha256: entry.sha256 }]
+      : [];
+  });
 }

@@ -2,6 +2,7 @@ import {
   startNativePerformanceCpuProfile,
   stopNativePerformanceCpuProfile,
   captureNativeReadingTrace,
+  executedRendererArtifactEvidence,
 } from './helpers/native-performance-cpu-profile.mjs';
 import {
   installRendererPerformanceDiagnostics,
@@ -50,7 +51,7 @@ import {
   saveSettings,
   trustFolder,
 } from '../../../src/settings.ts';
-import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
+import { sourceEvidence } from './helpers/evidence.mjs';
 import {
   journeyBundledNodeFromApp,
   assertBundledJourneyNode,
@@ -294,7 +295,9 @@ try {
   report.sourceBuildHead = report.executedBuild.sourceBuildHead;
   report.buildManifestPath = manifestPath;
   report.source = await sourceEvidence();
-  report.renderer = await rendererEvidence(desktopRoot);
+  report.renderer = executedRendererArtifactEvidence(report.executedBuild);
+  report.rendererEvidenceSource =
+    'actual owned application artifacts already hash-verified against frozen manifest; never driver checkout dist';
   report.appInfo = await page.evaluate(() => window.circleDesktop.info());
   await waitFor(
     async () => {
