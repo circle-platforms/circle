@@ -9,6 +9,7 @@ import type { Tool, MediaAttachment } from './types.js';
 import { attachmentFromBase64 } from './media.js';
 import { isRecord } from './settings.js';
 import { shellEnvironment } from './sandbox.js';
+import { abortable } from './watch.js';
 
 export interface McpConnection {
   name: string;
@@ -205,14 +206,22 @@ export class McpManager {
         let transport: Transport | undefined;
         const timeout = AbortSignal.timeout(this.timeout);
         const combined = signal ? AbortSignal.any([timeout, signal]) : timeout;
+        const stop = () => {
+          void client.close().catch(() => {});
+          void transport?.close().catch(() => {});
+        };
+        combined.addEventListener('abort', stop, { once: true });
         try {
           transport = transportFor(connection, this.workspace);
           if (transport instanceof StdioClientTransport)
             transport.stderr?.on('data', () => {});
-          await client.connect(transport, {
-            signal: combined,
-            timeout: this.timeout,
-          });
+          await abortable(
+            client.connect(transport, {
+              signal: combined,
+              timeout: this.timeout,
+            }),
+            combined,
+          );
           const registered: Tool[] = [];
           let cursor: string | undefined;
           const cursors = new Set<string>();
@@ -304,6 +313,7 @@ export class McpManager {
               cursors.add(cursor);
             }
           } while (cursor);
+          combined.throwIfAborted();
           clients.push(client);
           tools.push(...registered);
           state.tools = registered.map((tool) => tool.name);
@@ -312,8 +322,11 @@ export class McpManager {
           await client.close().catch(() => {});
           await transport?.close().catch(() => {});
           if (signal?.aborted) throw signal.reason;
+        } finally {
+          combined.removeEventListener('abort', stop);
         }
       }
+      signal?.throwIfAborted();
       const previous = this.clients;
       this.clients = clients;
       this.tools = tools;
