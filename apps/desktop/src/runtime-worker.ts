@@ -1,4 +1,7 @@
-import { createRuntimePerformanceDiagnostics } from './runtime-performance-diagnostics.js';
+import {
+  createRuntimePerformanceDiagnostics,
+  runtimeCommandDiagnosticMetadata,
+} from './runtime-performance-diagnostics.js';
 import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { RuntimeController } from './runtime-controller';
@@ -86,19 +89,12 @@ port.on('message', ({ data }) => {
     browser.receive(message.reply);
     return;
   }
-  const command = data as {
-    id?: string;
-    name?: string;
-    payload?: { service?: string; method?: string };
-  };
-  diagnostics?.record('command-start', {
-    id: command.id,
-    name: command.name,
-    service: command.payload?.service,
-    method: command.payload?.method,
-  });
+  const metadata = diagnostics
+    ? runtimeCommandDiagnosticMetadata(data)
+    : undefined;
+  if (metadata) diagnostics?.record('command-start', metadata);
   void controller.dispatch(data).then((reply) => {
-    diagnostics?.record('command-end', { id: command.id, name: command.name });
+    if (metadata) diagnostics?.record('command-end', metadata);
     port.postMessage({ type: 'reply', reply });
   });
 });

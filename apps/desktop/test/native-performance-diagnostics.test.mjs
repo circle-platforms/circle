@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import {
   installRendererPerformanceDiagnostics,
   installMainPerformanceDiagnostics,
+  writePerformanceEvidence,
 } from './helpers/native-performance-diagnostics.mjs';
 
 test('renderer records metadata receive/longtask/frame/state, bounds evidence and cleans every subscription', () => {
@@ -114,5 +118,52 @@ test('main foreground flags remain documented observations and occlusion stays u
   assert.equal(
     result.records[0].occluded,
     'unknown-no-documented-BrowserWindow-query',
+  );
+});
+
+test('real failed evidence write and ENOSPC cannot bypass clipboard restoration or owned cleanup', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'circle-diagnostic-write-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const report = {},
+    calls = [];
+  try {
+  } finally {
+    assert.equal(
+      await writePerformanceEvidence(report, directory, 'real EISDIR'),
+      false,
+    );
+    assert.equal(
+      await writePerformanceEvidence(
+        report,
+        join(directory, 'full'),
+        'payload',
+        async () => {
+          throw Object.assign(Error('full'), { code: 'ENOSPC' });
+        },
+      ),
+      false,
+    );
+    // Spies own synthetic state, never the actual OS clipboard.
+    await (async () => calls.push('clipboard-restored'))();
+    await (async () => calls.push('owned-app-closed'))();
+  }
+  assert.deepEqual(calls, ['clipboard-restored', 'owned-app-closed']);
+  assert.deepEqual(
+    report.diagnosticWriteErrors.map((e) => e.code),
+    ['EISDIR', 'ENOSPC'],
+  );
+  const driver = await readFile(
+    new URL('./native-performance.mjs', import.meta.url),
+    'utf8',
+  );
+  const cleanup = driver.slice(
+    driver.indexOf(
+      '} finally {\n  if (process.env.CIRCLE_NATIVE_PERF_DIAGNOSTICS',
+    ),
+  );
+  assert.ok(cleanup.includes('restoreNativeClipboardWithRecovery'));
+  assert.ok(
+    !cleanup.includes('await writeFile('),
+    'every pre-restoration/final evidence write is guarded',
   );
 });

@@ -1,6 +1,8 @@
 import {
   installRendererPerformanceDiagnostics,
   installMainPerformanceDiagnostics,
+  writePerformanceEvidence,
+  readWorkerPerformanceDiagnostics,
 } from './helpers/native-performance-diagnostics.mjs';
 /** Run serially after build, in both development and packaged app paths.
  * node --import tsx apps/desktop/test/native-performance.mjs
@@ -931,17 +933,12 @@ try {
       report.diagnostics.mainError = String(error);
     }
     try {
-      report.diagnostics.worker = (
-        await readFile(join(data, 'performance-worker-events.jsonl'), 'utf8')
-      )
-        .trim()
-        .split('\n')
-        .filter(Boolean)
-        .map((line) => JSON.parse(line));
+      report.diagnostics.worker = await readWorkerPerformanceDiagnostics(data);
     } catch (error) {
       report.diagnostics.workerUnavailable = String(error);
     }
-    await writeFile(
+    await writePerformanceEvidence(
+      report,
       join(output, 'stage-diagnostics.json'),
       JSON.stringify(report.diagnostics, null, 2),
     );
@@ -953,7 +950,8 @@ try {
       );
     } catch {}
   }
-  await writeFile(
+  await writePerformanceEvidence(
+    report,
     join(output, 'samples-before-cleanup.json'),
     JSON.stringify(
       {
@@ -998,7 +996,8 @@ try {
           };
           report.passed = false;
           process.exitCode = 1;
-          await writeFile(
+          await writePerformanceEvidence(
+            report,
             join(output, 'report.json'),
             JSON.stringify(report, null, 2),
           );
@@ -1019,17 +1018,13 @@ try {
     await app.close().catch(() => {});
     if (process.env.CIRCLE_NATIVE_PERF_DIAGNOSTICS === '1') {
       try {
-        report.diagnostics.workerAfterAppClose = (
-          await readFile(join(data, 'performance-worker-events.jsonl'), 'utf8')
-        )
-          .trim()
-          .split('\n')
-          .filter(Boolean)
-          .map((line) => JSON.parse(line));
+        report.diagnostics.workerAfterAppClose =
+          await readWorkerPerformanceDiagnostics(data);
       } catch (error) {
         report.diagnostics.workerAfterCloseError = String(error);
       }
-      await writeFile(
+      await writePerformanceEvidence(
+        report,
         join(output, 'stage-diagnostics.json'),
         JSON.stringify(report.diagnostics, null, 2),
       );
@@ -1054,7 +1049,11 @@ try {
       };
   }
   report.finishedAt = new Date().toISOString();
-  await writeFile(join(output, 'report.json'), JSON.stringify(report, null, 2));
+  await writePerformanceEvidence(
+    report,
+    join(output, 'report.json'),
+    JSON.stringify(report, null, 2),
+  );
   console.log(
     JSON.stringify(
       {
@@ -1063,6 +1062,7 @@ try {
         passed: report.passed ?? false,
         metrics: report.metrics,
         failure: report.failure,
+        diagnosticWriteErrors: report.diagnosticWriteErrors,
       },
       null,
       2,

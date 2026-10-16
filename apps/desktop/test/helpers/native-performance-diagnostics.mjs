@@ -1,3 +1,5 @@
+import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 /** Serialized into the owned test renderer. Metadata only; never edits metric eligibility. */
 export function installRendererPerformanceDiagnostics({ limit = 20000 } = {}) {
   const records = [];
@@ -125,4 +127,55 @@ export function installMainPerformanceDiagnostics({ BrowserWindow }) {
       return { records, dropped, intervalMs: 250 };
     },
   };
+}
+
+/** Diagnostic evidence must never skip clipboard restoration or owned cleanup. */
+export async function writePerformanceEvidence(
+  report,
+  path,
+  value,
+  writer = writeFile,
+) {
+  try {
+    await writer(path, value);
+    return true;
+  } catch (error) {
+    (report.diagnosticWriteErrors ??= []).push({
+      file: path,
+      code: String(error?.code ?? 'EVIDENCE_WRITE_FAILED'),
+    });
+    return false;
+  }
+}
+export async function readWorkerPerformanceDiagnostics(data) {
+  const names = (await readdir(data))
+    .filter((name) =>
+      /^performance-worker-events-[a-f0-9-]{36}\.jsonl$/.test(name),
+    )
+    .sort();
+  if (!names.length)
+    return {
+      unavailable:
+        'no worker epoch log; unsupported build or diagnostic open failure',
+      epochs: [],
+    };
+  const epochs = [];
+  for (const file of names) {
+    try {
+      epochs.push({
+        file,
+        records: (await readFile(join(data, file), 'utf8'))
+          .trim()
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => JSON.parse(line)),
+      });
+    } catch (error) {
+      epochs.push({
+        file,
+        unavailable: String(error?.code ?? 'DIAGNOSTIC_READ_FAILED'),
+      });
+    }
+  }
+  return { epochs };
 }
