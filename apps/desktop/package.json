@@ -6,23 +6,26 @@
   "description": "Circle desktop application with its bundled agent runtime",
   "main": "dist/main.cjs",
   "scripts": {
+    "test:mode-tools": "node ../../node_modules/tsx/dist/cli.mjs test/mode-tool-pairing.mjs",
     "build": "npm run typecheck && npm --prefix ../workbench run build && node scripts/build.mjs",
     "start": "electron .",
     "dev": "npm run build && npm start",
     "package": "npm run build && node scripts/package.mjs",
     "package:beta": "npm run build && node scripts/package.mjs --beta",
     "package:msi": "node scripts/msi.ts",
-    "test": "node --test test/policy.test.ts test/capture.test.ts test/sandbox-guard.test.ts test/msi.test.ts test/channel.test.ts test/attention.test.ts test/harness.test.mjs test/update-harness.test.mjs",
-    "test:runtime": "node ../../node_modules/tsx/dist/cli.mjs --test test/runtime.test.ts test/updater.test.ts test/browser-warning.test.ts",
-    "test:live": "node test/live.mjs && node test/browser-live.mjs && node test/browser-coordinate-live.mjs && node test/ui-issues.mjs && node test/session-management.mjs && node test/network-native.mjs && node test/connection-issues.mjs",
+    "test": "node --test test/policy.test.ts test/folder-dialog.test.ts test/capture.test.ts test/sandbox-guard.test.ts test/msi.test.ts test/channel.test.ts test/attention.test.ts test/harness.test.mjs test/update-harness.test.mjs",
+    "test:runtime": "node ../../node_modules/tsx/dist/cli.mjs --test test/runtime.test.ts test/updater.test.ts test/browser-warning.test.ts test/session-metadata.test.ts",
+    "test:live": "node test/live.mjs && node test/browser-live.mjs && node test/browser-coordinate-live.mjs && node test/ui-issues.mjs && node test/session-management.mjs && node test/parallel-sessions.mjs && node test/network-native.mjs && node test/connection-issues.mjs && npm run test:thinking",
+    "test:sessions": "node test/session-management.mjs && node test/parallel-sessions.mjs",
     "test:clipboard": "node test/system-clipboard.mjs",
-    "test:desktop": "node --test test/browser-state.test.mjs test/desktop-readiness.test.mjs && node test/desktop.mjs && node test/browser-page.mjs && node test/browser-lifecycle.mjs && node test/browser-address.mjs",
+    "test:desktop": "node --test test/browser-state.test.mjs test/desktop-readiness.test.mjs test/session-failure.test.mjs && node test/desktop.mjs && node test/browser-page.mjs && node test/browser-lifecycle.mjs && node test/browser-address.mjs && npm run test:mode-tools",
     "format:check": "prettier --check src test scripts package.json tsconfig.json",
     "typecheck": "tsc --noEmit",
     "test:interface": "node test/interface.mjs",
     "test:update": "node test/update.mjs",
     "test:msi": "node test/msi-package.mjs",
-    "test:extensions": "node test/extensions-native.mjs"
+    "test:extensions": "node test/extensions-native.mjs",
+    "test:thinking": "node ../../node_modules/tsx/dist/cli.mjs test/thinking-switch.mjs"
   },
   "engines": {
     "node": ">=24"

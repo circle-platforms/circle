@@ -10,6 +10,7 @@ import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
 import { waitDesktopReady } from './helpers/desktop-readiness.mjs';
+import { readModelRequests } from './helpers/model-requests.mjs';
 import {
   assertViewport,
   readViewport,
@@ -223,6 +224,12 @@ try {
   page = await app.firstWindow();
   observe(page);
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
+  await page
+    .getByRole('heading', {
+      name: 'what should we build in circle?',
+      exact: true,
+    })
+    .waitFor();
   if (process.env.CIRCLE_DESKTOP_TEST_WIDTH) {
     viewportSizing = await setViewport(
       app,
@@ -294,10 +301,9 @@ try {
     await readFile(join(workspace, 'native.txt'), 'utf8'),
     'native runtime bytes\n',
   );
-  const requests = (await readFile(requestsPath, 'utf8'))
-    .trim()
-    .split('\n')
-    .map(JSON.parse);
+  const requests = await readModelRequests(requestsPath, {
+    requireComplete: true,
+  });
   assert(
     requests[1].messages.some(
       (row) => row.role === 'tool' && row.content.includes('native.txt'),
@@ -323,10 +329,9 @@ try {
     .getByRole('button', { name: 'send answer', exact: true })
     .click();
   await page.getByText('staging target received', { exact: true }).waitFor();
-  const afterQuestion = (await readFile(requestsPath, 'utf8'))
-    .trim()
-    .split('\n')
-    .map(JSON.parse);
+  const afterQuestion = await readModelRequests(requestsPath, {
+    requireComplete: true,
+  });
   assert(
     afterQuestion[3].messages.some(
       (row) => row.role === 'tool' && row.content.includes('staging'),
@@ -355,16 +360,36 @@ try {
     'cancel',
   );
   checks.push('native stop awaits the actual model abort');
+  const beforeNew = await state();
+  const countBeforeNew = beforeNew.sessions.length;
+  const active = beforeNew.sessions.find(
+    (session) => session.id === beforeNew.activeSessionId,
+  );
+  const currentProject = beforeNew.workspaces.find(
+    (row) => row.id === active.workspaceId,
+  );
   await page
     .getByRole('button', { name: 'new session', exact: true })
     .first()
     .click();
-  await waitFor(
-    async () => (await state()).activeSessionId !== sessionId,
-    'new session',
-  );
+  await page
+    .getByRole('heading', {
+      name:
+        currentProject && currentProject.kind !== 'scratch'
+          ? `what should we build in ${currentProject.name}?`
+          : 'what are we working on?',
+      exact: true,
+    })
+    .waitFor();
+  assert.equal((await state()).sessions.length, countBeforeNew);
+  assert.equal((await state()).activeSessionId, sessionId);
+  checks.push('new session opens home without creating an empty session');
+  assert.equal((await command('new-session')).ok, true);
   const created = (await state()).activeSessionId;
   assert.notEqual(created, sessionId);
+  await page.evaluate((id) => {
+    location.hash = '/session/' + id;
+  }, sessionId);
   assert.equal((await command('select-session', { id: sessionId })).ok, true);
   await page.getByText('native answer completed', { exact: true }).waitFor();
   const exported = await command('export');
@@ -957,6 +982,7 @@ try {
   checks.push(
     'the default workspace moves through the settings page and the native dialog grant, keeps the old folder and needs trust',
   );
+  await readModelRequests(requestsPath, { requireComplete: true });
   await writeFile(
     join(
       output,

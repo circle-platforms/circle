@@ -216,7 +216,7 @@ test('a streaming turn keeps the loop responsive: a key works right away and fra
   );
 });
 
-test('/logout and /skill run during a turn instead of waiting for it', async (t) => {
+test('/logout waits for running sessions while read-only /skill remains available', async (t) => {
   const root = scratch(t);
   // A skill of the run's own, so the list does not depend on the machine's ~/.agents.
   mkdirSync(join(root, 'skills', 'demo'), { recursive: true });
@@ -250,8 +250,13 @@ test('/logout and /skill run during a turn instead of waiting for it', async (t)
   assert.equal(loadCredentials(root).api_key, 'sk-live');
   await app.command('logout', '');
   assert.equal(app.state.busy, true, 'the turn still runs');
-  assert.equal(loadCredentials(root).api_key, undefined);
-  assert.ok(app.state.notices.some((note) => note.includes('Signed out')));
+  assert.equal(
+    loadCredentials(root).api_key,
+    'sk-live',
+    'busy logout cannot replace credentials used by an in-flight session',
+  );
+  assert.match(app.state.flash!, /wait for all sessions to finish/);
+  assert.ok(!app.state.notices.some((note) => note.includes('Signed out')));
   await app.command('skill', '');
   assert.ok(
     app.state.notices.some(
@@ -279,4 +284,7 @@ test('/logout and /skill run during a turn instead of waiting for it', async (t)
   );
   await runtime.cancel();
   await turn;
+  await app.command('logout', '');
+  assert.equal(loadCredentials(root).api_key, undefined);
+  assert.ok(app.state.notices.some((note) => note.includes('Signed out')));
 });

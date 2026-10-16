@@ -5,10 +5,22 @@ import type {
 } from '../../desktop/src/contracts';
 import type { Attachment, RuntimePort } from './model/types';
 import { currentSession } from './model/state';
+import { t } from './i18n';
 declare global {
   interface Window {
     circleDesktop?: DesktopBridge;
   }
+}
+/** A failed folder open, in the interface language when the cause is the chooser. */
+export function folderOpenMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  if (
+    !message ||
+    message === 'folder could not be opened' ||
+    message === 'workspace is not a folder'
+  )
+    return t('folder could not be opened');
+  return message;
 }
 export function desktopHost() {
   return typeof window !== 'undefined' ? window.circleDesktop : undefined;
@@ -67,9 +79,10 @@ function adoptSelectedFiles(
     );
   });
 }
+/** Opens a folder and returns its workspace id. Does not create a session. */
 export async function openNativeWorkspace(
   runtime: RuntimePort,
-): Promise<NativeWorkspace | null> {
+): Promise<string | null> {
   const host = desktopHost();
   if (!host) return null;
   const selected = await host.chooseWorkspace();
@@ -79,7 +92,7 @@ export async function openNativeWorkspace(
       workspaceGrant: selected.id,
     })) as { workspaceId: string };
     adoptSelectedFiles(runtime, selected, result.workspaceId);
-    return selected;
+    return result.workspaceId;
   }
   const existing = runtime
     .getSnapshot()
@@ -93,6 +106,7 @@ export async function openNativeWorkspace(
         path: selected.path,
         branch: 'local workspace',
         trusted: false,
+        kind: 'project',
         instructions: [],
         origin: 'native',
       });
@@ -108,12 +122,7 @@ export async function openNativeWorkspace(
       })),
     );
   });
-  const session = runtime
-    .getSnapshot()
-    .sessions.find((session) => session.workspaceId === id);
-  if (session) await runtime.selectSession(session.id);
-  else await runtime.newSession(id);
-  return selected;
+  return id;
 }
 // Change where the default workspace lives. The folder comes from the same native
 // dialog and grant indirection as openNativeWorkspace: the window never names a

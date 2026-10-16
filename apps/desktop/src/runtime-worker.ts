@@ -79,6 +79,7 @@ const controller = new RuntimeController({
   dataFolder: dirname(home),
   model,
   browser,
+  beforeDelete: (sessionId) => browser.releaseSession(sessionId),
   userHome: home,
   catalog: process.env.CIRCLE_WORKBENCH_TEST_PROFILE
     ? (path) =>

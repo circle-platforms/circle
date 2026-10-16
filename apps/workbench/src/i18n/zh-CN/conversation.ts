@@ -1,5 +1,7 @@
 // Simplified Chinese for the interface words in the conversation files. English is the key.
 export const conversation: Record<string, string> = {
+  'stopping work before deletion…': '停止任务后删除中…',
+  'open in another terminal; view only': '已在其他终端打开，仅可查看',
   'no model connected': '未连接模型',
   // the heading and the session actions
   'find in conversation': '在对话中查找',
@@ -20,6 +22,11 @@ export const conversation: Record<string, string> = {
   'close find': '关闭查找',
   // the transcript
   'what are we working on?': '我们要做什么？',
+  'what should we build in {name}?': '你想让我们在 {name} 中构建什么？',
+  'search projects': '搜索项目',
+  'no matching projects': '没有匹配的项目',
+  'no project': '不选择项目',
+  'choose a project': '选择项目',
   'Start with a message, a file, or a question about your project.':
     '从一条消息、一个文件或一个关于项目的问题开始。',
   you: '你',
