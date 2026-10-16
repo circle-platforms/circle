@@ -537,7 +537,27 @@ try {
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
-  assert.equal(await page.getByRole('checkbox').count(), 8);
+  const expectedInterfaces = [
+    'github',
+    'files',
+    'activity',
+    'browser',
+    'hub',
+    'knowledge',
+    'work',
+    'execution',
+    'methods',
+  ].map((id) => `enable ${id} interface`);
+  assert.equal(
+    await page.getByRole('checkbox').count(),
+    expectedInterfaces.length,
+  );
+  for (const name of expectedInterfaces)
+    assert.equal(
+      await page.getByRole('checkbox', { name, exact: true }).count(),
+      1,
+      `the interface list contains exactly one ${name} checkbox`,
+    );
   for (const id of ['knowledge', 'work', 'execution', 'methods'])
     assert.equal(
       await page
