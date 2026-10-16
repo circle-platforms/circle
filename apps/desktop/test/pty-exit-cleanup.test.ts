@@ -24,11 +24,72 @@ const vt = fileURLToPath(new URL('./helpers/terminal-vt.mjs', import.meta.url));
 const native = fileURLToPath(
   new URL('../src/workspace/native-pty.ts', import.meta.url),
 );
+const terminalSource = new URL('../src/workspace/terminal.ts', import.meta.url)
+  .href;
+// Scratch fixture files have no node_modules beside them. Resolve the source
+// loader here and pass its absolute URL only to children importing TS sources.
+const sourceLoader = pathToFileURL(require.resolve('tsx')).href;
+const sourceFixtureArgs = (fixture: string) => [
+  '--import',
+  sourceLoader,
+  fixture,
+];
 const packageRoot = dirname(require.resolve('node-pty/package.json'));
 const { EventEmitter2 } = require(join(packageRoot, 'lib', 'eventEmitter2.js'));
 const { WindowsPtyAgent } = require(
   join(packageRoot, 'lib', 'windowsPtyAgent.js'),
 );
+
+test('a scratch TerminalManager source fixture resolves compiled suffix imports only with its explicit loader', async (t) => {
+  const root = scratch(t, 'circle-pty-source-'),
+    evidence = process.env.CIRCLE_NATIVE_TEST_PROGRESS_DIR ?? root;
+  await mkdir(evidence, { recursive: true });
+  const fixture = join(root, 'source.mjs'),
+    marker = join(root, 'loaded.json'),
+    negative = join(evidence, `terminal-source-negative-${randomUUID()}.log`);
+  await writeFile(
+    fixture,
+    `import assert from 'node:assert/strict';import fs from 'node:fs';import {TerminalManager} from ${JSON.stringify(terminalSource)};
+const manager=new TerminalManager({workspaceRoot:${JSON.stringify(root)},logRoot:${JSON.stringify(join(root, 'logs'))}},()=>{});
+try{const terminals=await manager.list('source-fixture-owner');assert.deepEqual(terminals,[]);fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({name:TerminalManager.name,terminals}));}finally{await manager.dispose()}
+console.log('SOURCE_FIXTURE_COMPLETE');`,
+  );
+  const run = (args: string[]) =>
+    exec(process.execPath, args, {
+      cwd: root,
+      timeout: 5000,
+      killSignal: 'SIGKILL',
+      env: {
+        ...process.env,
+        NODE_OPTIONS: '',
+        CIRCLE_HOME: join(root, 'home'),
+        CIRCLE_WORKBENCH_DATA_DIR: join(root, 'data'),
+      },
+    });
+  let negativeStderr = '';
+  await assert.rejects(run([fixture]), (error: Error & { stderr?: string }) => {
+    const stderr = error.stderr ?? '';
+    negativeStderr = stderr;
+    assert.match(stderr, /ERR_MODULE_NOT_FOUND/);
+    assert.match(stderr, /command_process\.js/);
+    return true;
+  });
+  await writeFile(negative, negativeStderr);
+  const result = await run(sourceFixtureArgs(fixture));
+  assert.match(result.stdout, /SOURCE_FIXTURE_COMPLETE/);
+  assert.deepEqual(JSON.parse(await readFile(marker, 'utf8')), {
+    name: 'TerminalManager',
+    terminals: [],
+  });
+  t.diagnostic(
+    JSON.stringify({
+      kind: 'actual source-loader child negative and positive control',
+      negative,
+      sourceLoader,
+      platform: process.platform,
+    }),
+  );
+});
 
 test('Windows compatibility guard releases only the exited instance worker and input socket, never a PID', () => {
   assert.throws(
@@ -362,14 +423,11 @@ test(
     await mkdir(evidence, { recursive: true });
     const progress = join(evidence, `conpty-flush-close-${randomUUID()}.jsonl`),
       fixture = join(root, 'flush-close.mjs');
-    const manager = fileURLToPath(
-      new URL('../src/workspace/terminal.ts', import.meta.url),
-    );
     const program =
       "setTimeout(()=>{process.stdout.write('CONPTY_TAIL_'+ 'x'.repeat(32768)+'_END\\n');process.exitCode=0},25);";
     await writeFile(
       fixture,
-      `import assert from 'node:assert/strict';import fs from 'node:fs';import path from 'node:path';import {createHash} from 'node:crypto';import {createRequire} from 'node:module';import {TerminalManager} from ${JSON.stringify(pathToFileURL(manager).href)};import {hasNativePtyProcessExited} from ${JSON.stringify(pathToFileURL(native).href)};import {renderTerminalOutput} from ${JSON.stringify(pathToFileURL(vt).href)};\n` +
+      `import assert from 'node:assert/strict';import fs from 'node:fs';import path from 'node:path';import {createHash} from 'node:crypto';import {createRequire} from 'node:module';import {TerminalManager} from ${JSON.stringify(terminalSource)};import {hasNativePtyProcessExited} from ${JSON.stringify(pathToFileURL(native).href)};import {renderTerminalOutput} from ${JSON.stringify(pathToFileURL(vt).href)};\n` +
         String.raw`
 const progress=(step,detail={})=>{fs.appendFileSync(PROGRESS,JSON.stringify({step,at:Date.now(),resources:process.getActiveResourcesInfo(),...detail})+'\n');console.log(step)};
 const workspace=path.join(ROOT,'workspace');fs.mkdirSync(workspace);
@@ -400,7 +458,7 @@ process.once('beforeExit',()=>{progress('node-beforeExit-after-close',{closed});
           .replaceAll('PROGRAM', JSON.stringify(program))
           .replaceAll('ROOT', JSON.stringify(root)),
     );
-    const result = await exec(process.execPath, [fixture], {
+    const result = await exec(process.execPath, sourceFixtureArgs(fixture), {
       cwd: root,
       timeout: 12000,
       killSignal: 'SIGKILL',
