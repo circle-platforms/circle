@@ -332,7 +332,7 @@ try {
       .locator('#inspector-terminal-terminal')
       .waitFor({ state: 'visible' });
     await page
-      .getByRole('button', { name: 'new terminal', exact: true })
+      .locator('#inspector-terminal-terminal button[aria-label="new terminal"]')
       .click();
     await page
       .locator('#inspector-terminal-terminal .xterm-screen')
