@@ -20,6 +20,8 @@ export interface DialogState {
   options: string[];
   focus: number;
   input?: string;
+  /** Grapheme index of the cursor in `input`. Omitted: the cursor sits at the end. */
+  inputCursor?: number;
   masked?: boolean;
   /** Dim in the empty input row: what an empty enter does (`enter keeps …`). */
   placeholder?: string;
@@ -260,9 +262,19 @@ export function cardRows(
   // "Reject and explain", is the last option, so it stays right under it)
   const input: string[] = [];
   if (dialog.input !== undefined) {
-    const value = dialog.masked
-      ? '•'.repeat(graphemes(dialog.input).length)
-      : terminalText(dialog.input).replace(/\n/g, ' ');
+    const glyphs = graphemes(
+      dialog.masked
+        ? '•'.repeat(graphemes(dialog.input).length)
+        : terminalText(dialog.input).replace(/\n/g, ' '),
+    );
+    const at = dialog.masked
+      ? glyphs.length
+      : Math.max(
+          0,
+          Math.min(dialog.inputCursor ?? glyphs.length, glyphs.length),
+        );
+    const shown =
+      glyphs.slice(0, at).join('') + '▏' + glyphs.slice(at).join('');
     // the input row under the body or a searched list, one blank row apart
     if (!dialog.options.length || dialog.keyless) menu.push(compose(width, []));
     input.push(
@@ -270,8 +282,8 @@ export function cardRows(
         [' ', ''],
         ['›', p.blue],
         [' ', ''],
-        [truncate(value + '▏', width - 4, true), p.text],
-        [value ? '' : terminalText(dialog.placeholder ?? ''), p.dim],
+        [truncate(shown, width - 4, true), p.text],
+        [glyphs.length ? '' : terminalText(dialog.placeholder ?? ''), p.dim],
       ]),
     );
   }

@@ -11,6 +11,15 @@ export interface Usage {
   cache_read_tokens: number;
   cache_write_tokens?: number;
   cache_write_1h_tokens?: number;
+  /**
+   * Input tokens included above that a stopped turn estimated. Not stored on a
+   * message: `stats` fills it when it adds an interrupted reply.
+   */
+  estimated_input_tokens?: number;
+  /** Output tokens included above that a stopped turn estimated. */
+  estimated_output_tokens?: number;
+  /** Input tokens whose endpoint omitted cache fields. Filled by `stats`. */
+  cache_unreported_input?: number;
 }
 export interface Message {
   id: string;
@@ -33,6 +42,15 @@ export interface Message {
   thinking_scope?: string;
   usage?: Usage;
   cost?: import('./pricing.js').PriceReceipt;
+  /** Seconds the model spent thinking before the answer text, kept across a restart. */
+  thinking_seconds?: number;
+  /** This assistant message is the partial reply saved when the turn was stopped. */
+  interrupted?: boolean;
+  /**
+   * False when this call's endpoint omitted cache fields. A reported zero stays
+   * `cache 0.0%`; a missing field is `cache N/A`, the same as a stop.
+   */
+  cache_reported?: boolean;
   internal?: string;
   truncated?: boolean;
   recoverable?: boolean;
@@ -100,8 +118,7 @@ export interface ModelRequest {
   timeoutScale?: number;
   /**
    * Thinking depth for this request only. A side request (a session title) uses it so the
-   * turn's depth stays put. `''` asks for no thinking: the Anthropic body sends
-   * `thinking: { type: 'disabled' }`.
+   * turn's depth stays put. `''` asks for no thinking on this request.
    */
   effort?: string;
   /** Output cap for this request only. A session title asks for a short reply. */

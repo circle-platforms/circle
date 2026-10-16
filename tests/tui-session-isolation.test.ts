@@ -243,7 +243,7 @@ test('TUI confirmed deletion stops only the selected owner and selects the lates
   await app.command('resume', '');
   const picker = app.state.picker!;
   picker.focus = picker.matches().findIndex((item) => item.key === deletedId);
-  key('ctrl+d');
+  key('ctrl+k');
   await until(() => Boolean(app.state.picker?.asking));
   assert(deleted.busy, 'asking does not stop the session');
   key('enter');
@@ -621,7 +621,7 @@ test('TUI sign in updates every idle runtime and sign out prevents cached SDK re
       a.options.settings.auth.model === 'new-model' &&
       b.options.settings.auth.model === 'new-model',
   );
-  await app.submit('A new connection');
+  await app.submit('connect A');
   await ui.changeSession(b.session.id);
   await app.submit('B new connection');
   const turns = (rows: { title?: true }[]) => rows.filter((row) => !row.title);
@@ -684,12 +684,17 @@ test('TUI sign in completion rechecks other running conversations before replaci
 });
 
 test('TUI failed pre-delete cleanup retains the selected history and supports a confirmed retry', async (t) => {
-  const { app, ui, key } = await appFor(t, [answer('keep history')]);
+  const { app, ui, key } = await appFor(t, [
+    answer('keep history'),
+    answer('other history'),
+  ]);
   const runtime = app.runtime!;
   const id = runtime.session.id;
   await app.submit('must survive failed cleanup');
   await app.command('new', '');
   const other = app.runtime!;
+  // An unused /new is not a saved session, so resume cannot select it.
+  await app.submit('the other conversation');
   await ui.changeSession(id);
   let painted = 0;
   ui.screen.render = () => {
@@ -700,7 +705,7 @@ test('TUI failed pre-delete cleanup retains the selected history and supports a 
     throw new Error('browser cleanup failed');
   };
   await app.command('resume', '');
-  key('ctrl+d');
+  key('ctrl+k');
   await until(() => Boolean(app.state.picker?.asking));
   const beforeFailure = painted;
   key('enter');
@@ -733,7 +738,7 @@ test('TUI failed pre-delete cleanup retains the selected history and supports a 
   app.state.picker!.focus = app.state
     .picker!.matches()
     .findIndex((item) => item.key === id);
-  key('ctrl+d');
+  key('ctrl+k');
   await until(() => Boolean(app.state.picker?.asking));
   key('enter');
   await until(() => other.store.get(id) === undefined);
@@ -781,7 +786,7 @@ test('TUI saved thinking depth starts future sessions without changing other liv
   app.state.picker!.focus = app.state
     .picker!.matches()
     .findIndex((item) => item.key === 'high');
-  key('ctrl+s');
+  key('alt+d');
   await until(() => b.thinkingLevel === 'high');
   assert.equal(loadSettings(home).default_thinking, 'high');
   assert.equal(a.thinkingLevel, 'low');
@@ -846,7 +851,7 @@ for (const outcome of ['success', 'failure', 'deleted'] as const)
         ),
       );
       if (outcome === 'success') {
-        await app.submit('source after reload');
+        await app.submit('reloaded source');
         await ui.changeSession(b.session.id);
         await app.submit('other remains unchanged');
         assert.deepEqual(

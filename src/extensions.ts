@@ -675,6 +675,9 @@ export class ExtensionHost {
     const middleware = this.loaded().flatMap((ext) => ext.middleware);
     return {
       model: base.model,
+      // A session title is a second complete() beside the turn. Dropping this made every
+      // terminal session keep the fallback: the wrapper was what the harness called.
+      sideRequests: base.sideRequests,
       get contextWindow() {
         return base.contextWindow;
       },
@@ -687,9 +690,6 @@ export class ExtensionHost {
       get imageInput() {
         return base.imageInput;
       },
-      // The harness asks for a session title only when this is set. Dropping it here
-      // leaves every desktop and terminal session on the fallback title.
-      sideRequests: base.sideRequests,
       complete: async (request) => {
         let next = (request: ModelRequest) => base.complete(request);
         for (const item of middleware

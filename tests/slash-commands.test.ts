@@ -12,7 +12,7 @@ import type { AddressInfo } from 'node:net';
 import { homedir } from 'node:os';
 import { join, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { stripAnsi } from '../src/ink/string_width.js';
+import { stringWidth, stripAnsi } from '../src/ink/string_width.js';
 import type { Picker } from '../src/ink/components/picker.js';
 import { SessionApp } from '../src/tui/session_app.js';
 import { renderScreen } from '../src/tui/render.js';
@@ -244,6 +244,11 @@ test('a mistyped command stays in the box with a suggestion; a space or a path s
     rawName: 'tasks',
     args: '',
   });
+  assert.deepEqual(parseSlash('/rename my work'), {
+    name: 'name',
+    rawName: 'rename',
+    args: 'my work',
+  });
   assert.deepEqual(parseSlash('/skill:review src'), {
     name: 'skill',
     rawName: 'skill:review',
@@ -392,7 +397,10 @@ test('/help lists custom and extension commands; /hotkeys shows what each key do
   const keys = app.state.notices.at(-1)!;
   assert.match(keys, /^Keyboard shortcuts:/);
   assert.match(keys, /ctrl\+q {10}queue a follow-up: sent when the turn ends/);
-  assert.match(keys, /esc esc {9}the session tree \(\/tree\)/);
+  assert.match(keys, /esc esc +clear a draft/);
+  assert.match(keys, /session tree \(\/tree\)/);
+  assert.match(keys, /ctrl\+l +redraw the screen/);
+  assert.match(keys, /alt\+l +choose a model/);
 });
 
 test('/init sends the initialize template with the focus; a custom command replaces a built-in one', async (t) => {
@@ -424,7 +432,7 @@ test('/init sends the initialize template with the focus; a custom command repla
   );
 });
 
-test('/jobs lists running jobs first; ctrl+d stops one after asking in the list or removes one that ended', async (t) => {
+test('/jobs lists running jobs first; ctrl+k stops one after asking in the list or removes one that ended', async (t) => {
   const { app, runtime, key, workspace } = await session(t);
   const script = (name: string, code: string): string => {
     writeFileSync(join(workspace, name), code);
@@ -448,7 +456,7 @@ test('/jobs lists running jobs first; ctrl+d stops one after asking in the list 
   assert.match(picker.items[0]!.meta!, /^running · \d+s · other session$/);
   assert.match(picker.items[1]!.meta!, /^done · \d+s$/);
   // The question is asked in the list, as 0.5.0 did; esc keeps the job running.
-  await key('ctrl+d');
+  await key('ctrl+k');
   assert.equal(app.state.dialog, undefined);
   assert.equal(app.state.picker, picker);
   assert.ok(picker.asking);
@@ -464,7 +472,7 @@ test('/jobs lists running jobs first; ctrl+d stops one after asking in the list 
   await key('escape');
   assert.ok(!picker.asking);
   assert.equal(runtime.jobs.get(running.id)?.status, 'running');
-  await key('ctrl+d');
+  await key('ctrl+k');
   await key('enter');
   await until(() => runtime.jobs.get(running.id)?.status === 'stopped');
   assert.equal((app as any).ended, false);
@@ -472,7 +480,7 @@ test('/jobs lists running jobs first; ctrl+d stops one after asking in the list 
     () => app.state.picker?.items[0]?.meta?.startsWith('stopped') === true,
   );
   app.state.picker!.focus = 1;
-  await key('ctrl+d');
+  await key('ctrl+k');
   assert.equal(runtime.jobs.get(ended.id), undefined);
   assert.deepEqual(
     app.state.picker!.items.map((item) => item.key),
@@ -613,7 +621,8 @@ test('/copy copies the last answer, or writes it to a file when there is no clip
   await app.submit('/copy');
   const path = join(home, 'exports', 'last-copy.txt');
   assert.equal(readFileSync(path, 'utf8'), 'copy me\n');
-  assert.equal(app.state.notices.at(-1), `No clipboard tool · wrote ${path}`);
+  assert.equal(app.state.flash, 'Saved to file');
+  assert.equal(app.state.notices.at(-1), `Saved to file · ${path}`);
 });
 
 test('/import of a text file starts a session that gives the model its start', async (t) => {
@@ -683,9 +692,12 @@ test('/name, /session, /approvals, /themes and /effort answer as 0.5.0 did', asy
   await app.submit('/name  my   work ');
   assert.equal(runtime.store.get(runtime.session.id)!.title, 'my work');
   assert.equal(app.state.notices.at(-1), 'Session name → my work');
+  await app.submit('/rename  other   name ');
+  assert.equal(runtime.store.get(runtime.session.id)!.title, 'other name');
+  assert.equal(app.state.notices.at(-1), 'Session name → other name');
   await app.submit('/session');
   const facts = app.state.notices.at(-1)!.split('\n');
-  assert.equal(facts[0], `session  ${runtime.session.id} · my work`);
+  assert.equal(facts[0], `session  ${runtime.session.id} · other name`);
   assert.equal(facts[2], 'model    scripted');
   assert.match(facts[4]!, /^messages 0 · 0 yours · 0 from the model/);
   runtime.policy.store.record(
@@ -856,7 +868,7 @@ test("/approvals remove keeps a trusted project's copy of the same pattern", asy
   );
 });
 
-test('/settings picks the mode new sessions start in, and ctrl+s saves it', async (t) => {
+test('/settings picks the mode new sessions start in, and alt+d saves it', async (t) => {
   const home = scratch(t);
   const workspace = scratch(t);
   const saved = trustFolder(defaultSettings(), workspace);
@@ -896,12 +908,12 @@ test('/settings picks the mode new sessions start in, and ctrl+s saves it', asyn
     app.state.notices.at(-1),
     'Accept edits · workspace file edits run without asking, commands and deletes still ask',
   );
-  // ctrl+s writes default_mode and takes the session with it
+  // alt+d writes default_mode and takes the session with it
   await app.submit('/settings');
   await choose('default mode');
   const list = app.state.picker!;
   list.focus = list.items.findIndex((item) => item.label === 'auto');
-  await key('ctrl+s');
+  await key('alt+d');
   assert.equal(loadSettings(home).default_mode, 'auto');
   assert.equal(runtime.mode, 'auto');
   assert.equal(
@@ -953,6 +965,50 @@ test('/logout clears the key and the connection and keeps the session open', asy
   ]);
   await key('escape');
   assert.equal(app.state.picker, undefined);
+});
+
+test('/resume tells identical titles apart and lines the times up', async (t) => {
+  const { app, key } = await session(t, [
+    answer('hello there'),
+    answer('ready now'),
+  ]);
+  await app.submit('hi');
+  await app.submit('/new');
+  await app.submit('hi');
+  await app.submit('/resume');
+  const picker = app.state.picker!;
+  const labels = picker.items.map((item) => item.label).sort();
+  assert.deepEqual(labels, ['hi · hello there', 'hi · ready now']);
+  picker.query = 'hello';
+  assert.deepEqual(
+    picker.matches().map((item) => item.label),
+    ['hi · hello there'],
+  );
+  picker.query = '';
+  await key('escape');
+  await app.submit('/name 尾递归解释');
+  await app.submit('/resume');
+  const rows = app.state
+    .picker!.rows(80)
+    .map((row) => stripAnsi(row))
+    .filter((row) => row.includes('尾递归解释') || /\bhi\b/.test(row));
+  const ages = rows.map((row) =>
+    stringWidth(row.slice(0, row.lastIndexOf('now'))),
+  );
+  assert.equal(ages.length, 2);
+  assert.equal(ages[0], ages[1]);
+});
+
+test('/continue after a restart opens the latest saved session', async (t) => {
+  const { app, runtime } = await session(t, [answer('saved answer')]);
+  await app.submit('remember this');
+  const saved = runtime.session.id;
+  await app.submit('/new');
+  assert.notEqual(app.runtime!.session.id, saved);
+  (app as unknown as { previousSession: string }).previousSession = '';
+  await app.submit('/continue');
+  assert.equal(app.runtime!.session.id, saved);
+  assert.match(app.state.notices.at(-1) ?? '', new RegExp(`^Resumed ${saved}`));
 });
 
 test('/tree, /fork, /clone, /new, /continue and /resume move between branches and sessions', async (t) => {
@@ -1048,15 +1104,22 @@ test('/tree, /fork, /clone, /new, /continue and /resume move between branches an
     app.state.notices.at(-1),
     "✖ No session 'nothing' in this folder · /resume lists them",
   );
-  // The list: ctrl+r renames and ctrl+d always asks, including the open session.
+  // The list: ctrl+r renames (the old name is selected) and ctrl+k always asks.
   await app.submit('/resume');
   assert.equal(app.state.picker!.title, 'Sessions · this folder');
+  assert.match(
+    app.state
+      .picker!.rows(160)
+      .map((row) => stripAnsi(row))
+      .join('\n'),
+    /tab every folder/,
+  );
   const focus = (id: string): void => {
     const picker = app.state.picker!;
     picker.focus = picker.matches().findIndex((item) => item.key === id);
   };
   focus(first);
-  await key('ctrl+d');
+  await key('ctrl+k');
   assert.ok(app.state.picker!.asking);
   await key('escape');
   assert.ok(app.runtime!.store.get(first));
@@ -1064,12 +1127,26 @@ test('/tree, /fork, /clone, /new, /continue and /resume move between branches an
   await key('ctrl+r');
   assert.equal(app.state.dialog, undefined);
   assert.ok(app.state.picker!.asking);
+  const asked = stripAnsi(app.state.picker!.rows(200).join('\n'));
+  assert.match(asked, /Rename:/);
+  assert.match(asked, /typing replaces the name/);
+  await key('Z', 'Z');
+  const replaced = stripAnsi(app.state.picker!.rows(200).join('\n'));
+  assert.match(replaced, /Rename: Z/);
+  assert.doesNotMatch(replaced, /Rename:.*question/);
+  await key('escape');
+  focus(cloned);
+  await key('ctrl+r');
   await key('ctrl+u');
   for (const char of '  the   clone ') await key(char, char);
   await key('enter');
   assert.equal(app.runtime!.store.get(cloned)!.title, 'the clone');
+  assert.equal(
+    app.state.picker!.matches()[app.state.picker!.focus]?.key,
+    cloned,
+  );
   focus(cloned);
-  await key('ctrl+d');
+  await key('ctrl+k');
   assert.equal(app.state.dialog, undefined);
   assert.ok(app.state.picker!.asking);
   await key('enter');
@@ -1077,6 +1154,31 @@ test('/tree, /fork, /clone, /new, /continue and /resume move between branches an
   assert.ok(app.state.picker!.items.every((item) => item.key !== cloned));
   await key('tab');
   assert.equal(app.state.picker!.title, 'Sessions · every folder');
+  assert.match(
+    app.state
+      .picker!.rows(200)
+      .map((row) => stripAnsi(row))
+      .join('\n'),
+    /tab this folder/,
+  );
+  const folder = app
+    .runtime!.session.workspace.split(/[\\/]/)
+    .filter(Boolean)
+    .at(-1)!;
+  assert.ok(
+    app.state.picker!.items.some((item) => (item.meta ?? '').includes(folder)),
+  );
+  assert.equal(
+    app.state.picker!.items.some((item) =>
+      (item.meta ?? '').includes(app.runtime!.session.workspace),
+    ),
+    false,
+  );
+  app.state.picker!.query = 'answer one';
+  assert.ok(app.state.picker!.matches().some((item) => item.key === first));
+  app.state.picker!.query = 'no-such-word-zz';
+  assert.equal(app.state.picker!.matches().length, 0);
+  assert.match(stripAnsi(app.state.picker!.rows(80).join('\n')), /No matches/);
 });
 
 test('/compact, /mcp, /extensions, /trust and /reload report as 0.5.0 did', async (t) => {
@@ -1294,7 +1396,7 @@ test("/login asks for the URL and the key on its list, lists the endpoint's mode
   assert.ok(!seen.some((line) => line.includes('old-key')), seen.join('\n'));
 });
 
-test('/variables and /secrets keep values as Windows writes them, and the model is told the names', async (t) => {
+test('/variables and /secrets keep named values, and the model is told the names', async (t) => {
   const { app, model, home, key, screen } = await session(t, [answer('noted')]);
   await app.submit('/variables base_url=https://example.test');
   assert.deepEqual(loadSettings(home).variables, {
@@ -1302,7 +1404,7 @@ test('/variables and /secrets keep values as Windows writes them, and the model 
   });
   assert.match(
     screen(),
-    /BASE_URL=https:\/\/example\.test · the model writes %BASE_URL% to use it/,
+    /BASE_URL=https:\/\/example\.test · Circle fills BASE_URL in when a tool runs/,
   );
   await app.submit('/variables 1BAD=x');
   assert.match(screen(), /Usage: \/variables NAME=value/);
@@ -1318,7 +1420,7 @@ test('/variables and /secrets keep values as Windows writes them, and the model 
   await saving;
   assert.match(
     screen(),
-    /Saved secret API_TOKEN · the model writes %API_TOKEN% to use it/,
+    /Saved secret API_TOKEN · Circle fills API_TOKEN in when a tool runs/,
   );
   assert.deepEqual(
     JSON.parse(readFileSync(join(home, 'secrets.json'), 'utf8')),

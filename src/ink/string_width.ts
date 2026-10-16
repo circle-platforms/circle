@@ -37,9 +37,23 @@ export function wrap(text: string, width: number): string[] {
     }).segment(source)) {
       const count = stringWidth(segment);
       if (used + count > columns && line) {
-        result.push(line);
-        line = '';
-        used = 0;
+        // Prefer a space so a word such as "page" is not cut into "pa" / "ge".
+        const space = line.lastIndexOf(' ');
+        if (space > 0) {
+          result.push(line.slice(0, space));
+          const rest = line.slice(space + 1);
+          line = rest;
+          used = stringWidth(rest);
+        } else {
+          result.push(line);
+          line = '';
+          used = 0;
+        }
+        if (used + count > columns && line) {
+          result.push(line);
+          line = '';
+          used = 0;
+        }
       }
       line += segment;
       used += count;

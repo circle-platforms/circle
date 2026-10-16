@@ -45,7 +45,14 @@ const key = (name: string, char = ''): InputEvent => ({
   key: name,
   char,
 });
-const SS3: Record<string, string> = { P: 'f1', Q: 'f2', R: 'f3', S: 'f4' };
+const SS3: Record<string, string> = {
+  P: 'f1',
+  Q: 'f2',
+  R: 'f3',
+  S: 'f4',
+  // Application keypad Enter (`\x1bOM`). Without this the key is eaten.
+  M: 'enter',
+};
 // The key a CSI body (`A`, `1;5A`, `5~`) or an SS3 letter names, with alt added: what an
 // esc in front of it means. Undefined for what is not a key (a paste, a mouse report).
 function altKey(body: string): string | undefined {
@@ -217,6 +224,16 @@ export class InputParser {
         }
         if (/^13;(?:2|3|4)u$/.test(body)) {
           events.push(key('shift+enter'));
+          continue;
+        }
+        // Kitty keyboard protocol: Enter and Esc with no modifier. Anything else
+        // in this form used to be dropped, so the reason row never saw them.
+        if (/^13(?:;1)?u$/.test(body)) {
+          events.push(key('enter'));
+          continue;
+        }
+        if (/^27(?:;1)?u$/.test(body)) {
+          events.push(key('escape'));
           continue;
         }
         const modified = body.match(/^(\d+);(\d+)([A-Za-z~])$/);

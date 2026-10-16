@@ -503,6 +503,8 @@ export class RuntimeController {
       new AgentRuntime({
         workspace,
         home: this.home,
+        // A sentence shows as a new session until its summary title arrives.
+        holdTitle: true,
         beforeDelete: () =>
           this.options.beforeDelete?.(runtime.session.id) ?? Promise.resolve(),
         userHome: this.options.userHome,
@@ -724,7 +726,8 @@ export class RuntimeController {
     const savedSettings = loadSettings(this.home);
     const inspecting = !!this.viewedSessionId;
     const defaultFolder = this.defaultWorkspace(savedSettings);
-    const rows = this.store.list();
+    // The open conversation is listed before its first message.
+    const rows = this.store.list(undefined, false, true);
     const paths = [
       ...new Set([
         ...rows.map((row) => row.workspace),
@@ -1845,7 +1848,7 @@ export class RuntimeController {
   // does not sit beside it. Opening a folder does not create one.
   private conversationRuntime(workspace: string): AgentRuntime {
     const empty = this.store
-      .list(workspace)
+      .list(workspace, false, true)
       .find(
         (row) =>
           !row.parent_id &&
@@ -2142,7 +2145,7 @@ export class RuntimeController {
         this.pendingTrustReloads.delete(owner);
         if (!this.closing && this.active === owner) {
           const fallback = this.store
-            .list(row.workspace)
+            .list(row.workspace, false, true)
             .find(
               (item) =>
                 !this.metadata.archivedAt(item.id) &&
@@ -2168,7 +2171,7 @@ export class RuntimeController {
       case 'archive-workspace': {
         const workspaceId = text(p.workspaceId, 'workspace', 200);
         const rows = this.store
-          .list()
+          .list(undefined, false, true)
           .filter((row) => identity(row.workspace) === workspaceId);
         if (!rows.length) throw Error('workspace not found');
         for (const row of rows) this.assertArchivable(row.id, row.workspace);
@@ -2181,9 +2184,12 @@ export class RuntimeController {
       case 'rename-session':
         if (!this.store.get(String(p.id ?? command.sessionId)))
           throw Error('session not found');
+        // The person chose this name. A later open, here or in the terminal,
+        // does not replace it with a generated title.
         this.store.rename(
           String(p.id ?? command.sessionId),
           text(p.title, 'title', 500),
+          true,
         );
         return {};
       case 'fork':

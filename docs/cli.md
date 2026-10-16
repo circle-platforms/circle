@@ -40,7 +40,7 @@ circle -p "review this" @src/app.ts "now list the risks"
 | `--fork ID` | Start a new conversation in this folder with a copy of a saved one, from any folder. The original is not changed. Combine with `--session-id` to choose the new id. |
 | `--no-session` | Keep the conversation in memory only. It is not saved and not listed in `/resume`. |
 | `-n`, `--name NAME` | Give the conversation a title, as `/name` does. |
-| `-m`, `--model NAME` | Use this model id for this run. It is not saved; `ctrl+s` in `/models` inside a session saves one. |
+| `-m`, `--model NAME` | Use this model id for this run. It is not saved; `alt+d` in `/models` inside a session saves one. |
 | `--thinking LEVEL` | The thinking depth for this run: `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. It is not saved. See [Models](models.md#thinking-depth). |
 | `--models PATTERNS` | The models `ctrl+p` switches between in this run, comma-separated, such as `step-3.7-flash,step-5-*`. In place of `enabled_models` in [settings](settings.md). |
 | `--export ID [FILE]` | Write a saved conversation as HTML, or as a JSONL bundle when `FILE` ends in `.jsonl`, and exit. `FILE` defaults to `<id>.html` in the current folder. See [Sessions](sessions.md#export-and-import). |
@@ -189,4 +189,4 @@ It replaces only the connection, `auth` in `settings.json`: endpoint, protocol a
 
 Inside a session, `/login` asks the same questions and switches the session without a restart. See [Change the endpoint or the key](models.md#change-the-endpoint-or-the-key).
 
-To change only the model, pick it in `/models` inside a session and press `ctrl+s` instead. See [Settings](settings.md).
+To change only the model, pick it in `/models` inside a session and press `alt+d` instead. See [Settings](settings.md).

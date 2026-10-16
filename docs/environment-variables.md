@@ -75,6 +75,7 @@ While background jobs the model started are running, two calls that only wait fo
 | Variable             | Effect                                                                         | Default     |
 | -------------------- | ------------------------------------------------------------------------------ | ----------- |
 | `CIRCLE_TUI_SHIMMER` | `0` turns off the rainbow animation.                                           | on          |
+| `CIRCLE_DEBUG`       | When set, a session-title request logs one line to stderr: `[circle] title:` and whether it was skipped, sent, renamed, discarded or why it failed. | unset       |
 | `COLORFGBG`          | Light or dark fallback when the terminal does not answer the colour query.     | unset       |
 | `TMUX`               | Selection copy also goes into tmux's buffer, and through tmux to the terminal. | set by tmux |
 | `SSH_CONNECTION`     | Selection copy uses OSC 52 only, not a local clipboard tool.                   | set by SSH  |

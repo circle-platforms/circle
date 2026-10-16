@@ -38,31 +38,20 @@ export const GREP_SCHEMA: Record<string, unknown> = {
     glob: {
       type: 'string',
       description:
-        "Glob pattern (NOT regex) limiting which files are searched (e.g. '*.py', " +
-        "'*.ts'). A pattern without '/' matches the file name at any depth; a pattern " +
-        "containing '/' matches the search-root-relative path (e.g. 'src/**/*.py'). " +
-        'This is an in-tool file filter, not a call to the separate glob tool. Brace ' +
-        "expansion (e.g. '*.{ts,tsx}') is not supported on all backends; run a " +
-        'separate search per extension for reliable results.',
+        "File filter, not a regex and not the glob tool. No '/' matches the file name at any depth; '/' matches the path from the search root. Brace expansion is not reliable.",
     },
     output_mode: {
       type: 'string',
       enum: [...OUTPUT_MODES],
       default: 'files_with_matches',
       description:
-        "Shape of the returned text. 'files_with_matches' (default): newline-separated " +
-        "matching file paths. 'content': matching lines grouped by file under a " +
-        "'<path>:' header, each line indented and formatted '<line_number>: <line text>' " +
-        "(only the matched line, no surrounding context). 'count': one " +
-        "'<path>: <match_count>' line per file.",
+        "files_with_matches (default): file paths. content: matching lines as '<line>: <text>'. count: '<path>: <n>'.",
     },
     max_count: {
       type: 'integer',
       minimum: 1,
       description:
-        'Optional cap on the total number of matches returned across all files. ' +
-        'Leave unset to use the configured default. When the cap is hit, results ' +
-        'are truncated and a note says so; narrow the pattern or path to see the rest.',
+        'Cap on matches across all files. Unset uses the default. A hit cap truncates and says so.',
     },
   },
   required: ['pattern'],

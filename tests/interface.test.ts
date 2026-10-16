@@ -94,6 +94,13 @@ test('an esc in front of an arrow or page key is that key with alt, not esc and 
   assert.deepEqual(keys('quick'), ['escape', 'q', 'u', 'i', 'c', 'k']);
   // option+letter sent as esc and the letter in one read stays alt+letter
   assert.deepEqual(keys('\x1bv'), ['alt+v']);
+  // keypad Enter and kitty Enter / Esc used to be dropped, so a reason row
+  // never saw them
+  assert.deepEqual(keys('\x1bOM'), ['enter']);
+  assert.deepEqual(keys('\x1b[13u'), ['enter']);
+  assert.deepEqual(keys('\x1b[13;1u'), ['enter']);
+  assert.deepEqual(keys('\x1b[27u'), ['escape']);
+  assert.deepEqual(keys('\x1b[27;1u'), ['escape']);
 });
 test('Chinese and graphemes occupy terminal cells, and truncation preserves filename tails', () => {
   assert.equal(stringWidth('中文'), 4);

@@ -39,12 +39,12 @@ Instruction files tell Circle how to work: build commands, conventions, things t
 
 | Where | Which files |
 |---|---|
-| The workspace, then each parent folder up to the git root | `AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md` (each up to 120,000 bytes) |
+| The workspace folder | `AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md` (each up to 120,000 bytes) |
 | The data folder | `AGENTS.md`, `CLAUDE.md`, `MEMORY.md`, `agents.md`, `memory/AGENTS.md` |
 | Your home | `~/.agents/AGENTS.md`, `CLAUDE.md`, `MEMORY.md`, `agents.md`, and `~/.deepagents/AGENTS.md` |
 | The workspace | `MEMORY.md`, `agents.md`, `.agent/AGENTS.md`, `.circle/AGENTS.md`, `.deepagents/AGENTS.md` |
 
-If your workspace is itself the git root, or there is no git root above it, Circle keeps looking in the folders above it as far as the root of the disk, so a `CLAUDE.md` in your home folder can apply. Each file goes into the prompt once: a file reached under two names (as `AGENTS.md` and `agents.md` are on macOS) is read once.
+Project instruction files come from the workspace folder only. A parent checkout's `AGENTS.md` is not applied to a session opened in a subdirectory. Your personal files, in the data folder and under your home directory, still apply in every folder. Each file goes into the prompt once: a file reached under two names (as `AGENTS.md` and `agents.md` are on macOS) is read once.
 
 Circle reads them again when you start a new session, open another one, or switch models. The prompt then tells the model that any of those files that exist are already included, and not to call `read_file` to look for one that is not.
 
