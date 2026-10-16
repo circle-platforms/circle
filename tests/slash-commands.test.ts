@@ -16,7 +16,11 @@ import { stringWidth, stripAnsi } from '../src/ink/string_width.js';
 import type { Picker } from '../src/ink/components/picker.js';
 import { SessionApp } from '../src/tui/session_app.js';
 import { renderScreen } from '../src/tui/render.js';
-import { parseSlash, closeMatch } from '../src/tui/slash_commands.js';
+import {
+  parseSlash,
+  closeMatch,
+  variableCopy,
+} from '../src/tui/slash_commands.js';
 import { ScriptedModel } from '../src/testing.js';
 import {
   defaultSettings,
@@ -1402,9 +1406,14 @@ test('/variables and /secrets keep named values, and the model is told the names
   assert.deepEqual(loadSettings(home).variables, {
     BASE_URL: 'https://example.test',
   });
+  // The wording names this system's form: %NAME% on Windows.
+  const literal = (text: string) =>
+    new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   assert.match(
     screen(),
-    /BASE_URL=https:\/\/example\.test · Circle fills BASE_URL in when a tool runs/,
+    literal(
+      `BASE_URL=https://example.test · ${variableCopy().saved('BASE_URL')}`,
+    ),
   );
   await app.submit('/variables 1BAD=x');
   assert.match(screen(), /Usage: \/variables NAME=value/);
@@ -1420,7 +1429,7 @@ test('/variables and /secrets keep named values, and the model is told the names
   await saving;
   assert.match(
     screen(),
-    /Saved secret API_TOKEN · Circle fills API_TOKEN in when a tool runs/,
+    literal(`Saved secret API_TOKEN · ${variableCopy().saved('API_TOKEN')}`),
   );
   assert.deepEqual(
     JSON.parse(readFileSync(join(home, 'secrets.json'), 'utf8')),
