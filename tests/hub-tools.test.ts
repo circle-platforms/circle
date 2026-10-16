@@ -73,6 +73,16 @@ async function toolServer(t: Parameters<typeof scratch>[0]) {
       effect: 'write',
       mode: 'sync',
       permission: 'knowledge.write',
+      approval: true,
+    },
+    {
+      name: 'notes.save',
+      description: 'Save a note on the server.',
+      inputSchema: { type: 'object', properties: {} },
+      effect: 'write',
+      mode: 'sync',
+      permission: 'notes.write',
+      approval: false,
     },
     {
       name: 'env.inventory',
@@ -330,13 +340,14 @@ test('after signing in, the connector offers the server tools to the model, runs
   await command.handler(`login ${server.url} tester`, context);
   assert.equal(
     lines.at(-1),
-    '  4 server tools available to the model from its next turn',
+    '  5 server tools available to the model from its next turn',
   );
   assert.deepEqual(names(), [
     'hub_tool_buildsite_command_tree',
     'hub_tool_docs_list',
     'hub_tool_env_inventory',
     'hub_tool_knowledge_claim_submit',
+    'hub_tool_notes_save',
   ]);
   assert.ok(
     toolChanges >= 4,
@@ -348,6 +359,16 @@ test('after signing in, the connector offers the server tools to the model, runs
   assert.equal(tool('hub_tool_docs_list').effect, 'read');
   assert.equal(tool('hub_tool_docs_list').approval, false);
   assert.equal(tool('hub_tool_knowledge_claim_submit').approval, true);
+  assert.equal(tool('hub_tool_notes_save').effect, 'unknown');
+  assert.equal(tool('hub_tool_notes_save').approval, false);
+  assert.match(
+    tool('hub_tool_notes_save').description,
+    /It changes something on the server\./,
+  );
+  assert.equal(
+    tool('hub_tool_notes_save').description.includes('asks first'),
+    false,
+  );
   assert.deepEqual(tool('hub_tool_docs_list').parameters.required, ['folder']);
   assert.match(
     tool('hub_tool_docs_list').description,

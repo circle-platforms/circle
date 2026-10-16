@@ -14,6 +14,8 @@ import {
   isReady,
   loadCredentials,
   loadSettings,
+  saveSettings,
+  trustFolder,
   applyProjectSettings,
   type CircleSettings,
 } from './settings.js';
@@ -43,6 +45,8 @@ export interface CliOptions {
   init: boolean;
   mode: string;
   yolo: boolean;
+  /** Trust this folder for this run and remember it, including when nobody is at a terminal. */
+  trust: boolean;
   extensions: boolean;
   verbose: boolean;
   continue: boolean;
@@ -76,6 +80,7 @@ const FLAGS: Record<
   '--line': 'line',
   '--init': 'init',
   '--yolo': 'yolo',
+  '--trust': 'trust',
   '--extensions': 'extensions',
   '--verbose': 'verbose',
   '--no-session': 'no-session',
@@ -112,6 +117,7 @@ export function parseCli(argv: string[], cwd = process.cwd()): CliOptions {
     init: false,
     mode: 'text',
     yolo: false,
+    trust: false,
     extensions: false,
     verbose: false,
     continue: false,
@@ -284,7 +290,7 @@ function conflict(
   return '';
 }
 export function helpText(): string {
-  return `usage: circle [options] [folder] [@file ...] [message ...]\n\nA terminal coding agent for your own model endpoint.\n\n  -p, --print [PROMPT]  Print the answer and exit\n  --mode text|json|rpc  Output mode\n  -c, --continue       Continue the last session\n  -r, --resume         Choose a saved session\n  --session ID         Resume by ID\n  --session-id ID      Open or create this ID\n  --fork ID            Copy a saved session\n  --no-session         In-memory conversation\n  -m, --model ID       Model for this run\n  --thinking LEVEL     Thinking depth\n  --list-models [TEXT] List endpoint models\n  --export ID [OUT]    Export a saved session\n  --system-prompt TEXT|FILE\n  --append-system-prompt TEXT|FILE\n  --no-context-files   Skip instruction files\n  --tools LIST         Limit tools\n  --exclude-tools LIST Exclude tools\n  --no-tools           No tools except compaction\n  --yolo               Auto mode for print or line\n  --extensions         Load extensions and MCP servers in print, line or rpc mode\n  --line               Plain line mode\n  --init               Model setup\n  --print-home         Print the data directory\n  -v, --version        Print version\n  -h, --help           Show help\n`;
+  return `usage: circle [options] [folder] [@file ...] [message ...]\n\nA terminal coding agent for your own model endpoint.\n\n  -p, --print [PROMPT]  Print the answer and exit\n  --mode text|json|rpc  Output mode\n  -c, --continue       Continue the last session\n  -r, --resume         Choose a saved session\n  --session ID         Resume by ID\n  --session-id ID      Open or create this ID\n  --fork ID            Copy a saved session\n  --no-session         In-memory conversation\n  -m, --model ID       Model for this run\n  --thinking LEVEL     Thinking depth\n  --list-models [TEXT] List endpoint models\n  --export ID [OUT]    Export a saved session\n  --system-prompt TEXT|FILE\n  --append-system-prompt TEXT|FILE\n  --no-context-files   Skip instruction files\n  --tools LIST         Limit tools\n  --exclude-tools LIST Exclude tools\n  --no-tools           No tools except compaction\n  --yolo               Auto mode for print or line\n  --trust              Trust this folder and remember it\n  --extensions         Load extensions and MCP servers in print, line or rpc mode\n  --line               Plain line mode\n  --init               Model setup\n  --print-home         Print the data directory\n  -v, --version        Print version\n  -h, --help           Show help\n`;
 }
 // How long `-p PROMPT` waits for piped input to start before going on without it.
 const STDIN_WAIT_MS = 3000;
@@ -442,9 +448,12 @@ async function headlessSettings(
   )
     throw new UsageError(`No such folder: ${options.workspace}`);
   if (!isFolderTrusted(settings, options.workspace)) {
-    if (!process.stdin.isTTY)
+    if (options.trust) {
+      settings = trustFolder(settings, options.workspace);
+      saveSettings(settings, home);
+    } else if (!process.stdin.isTTY)
       throw new UsageError(
-        `This folder is not trusted yet: ${options.workspace}\nRun \`circle\` there once in a terminal and trust it.`,
+        `This folder is not trusted yet: ${options.workspace}\nRun \`circle\` there once in a terminal and trust it, or pass --trust to trust it and remember it.`,
       );
     const { runLineTrust } = await import('./line_setup.js');
     const trusted = await runLineTrust(settings, options.workspace, home);

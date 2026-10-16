@@ -713,6 +713,22 @@ test('approval previews: a patch names its files, an edit the file cannot confir
     .join('\n');
   assert.match(wrapped.replace(/\s+/g, ' '), new RegExp(title));
   assert.equal(wrapped.includes('…'), false);
+  const command = 'BEGIN ' + 'x'.repeat(800) + ' ENDMARK';
+  const crowded = dialogRows(
+    new ApprovalCard(
+      approvalRequest(
+        { id: 'long', name: 'execute', args: { command } },
+        policy.review('execute', { command }),
+      ),
+    ).state(),
+    40,
+    12,
+  )
+    .map(stripAnsi)
+    .join('\n');
+  assert.match(crowded, /BEGIN/);
+  assert.match(crowded, /ENDMARK/);
+  assert.match(crowded, /… \+\d+ lines/);
 });
 
 test('a background agent asks while the turn that started it is still running, as 0.5.0 did', async (t) => {

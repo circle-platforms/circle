@@ -288,7 +288,7 @@ export class ExtensionAPI {
    */
   async askSecret(
     question: string,
-    options: { mask?: boolean; signal?: AbortSignal } = {},
+    options: { mask?: boolean; conceal?: boolean; signal?: AbortSignal } = {},
   ): Promise<string | null> {
     if (typeof question !== 'string' || !question.trim())
       throw new ExtensionError('askSecret needs a question');
@@ -320,7 +320,8 @@ export class ExtensionAPI {
     });
     try {
       const [value] = await Promise.all([answering, presenting]);
-      this.ext.mask.remember(value);
+      // A user name is asked on the same card and must stay visible afterwards.
+      if (options.conceal !== false) this.ext.mask.remember(value);
       return value;
     } catch (error) {
       options.signal?.throwIfAborted();

@@ -1567,3 +1567,198 @@ test('a decision conflict says what collided, and review, audit and modules list
     /skp_1 · mindmap-compile 0\.1\.0 · approved · lifecycle approved[\s\S]*skp_old · old-pack 0\.1\.0 · approved \(server status registered\)/,
   );
 });
+
+test('inbox, a content view and a rejection reason use the general approval route when the server has it', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const posts: { path: string; body: string }[] = [];
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? '/', 'http://x');
+    const body = await read(request);
+    const send = (status: number, value: unknown) => {
+      response.writeHead(status, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(value));
+    };
+    if (request.method === 'POST')
+      posts.push({ path: url.pathname, body: body.toString() });
+    if (url.pathname === '/v1/auth/dev-login')
+      return send(200, {
+        data: { token: TOKEN, tokenType: 'Bearer', scopes: ['scp_lab'] },
+      });
+    if (request.headers.authorization !== `Bearer ${TOKEN}`)
+      return send(401, {
+        status: 'failed',
+        error: { code: 'UNAUTHENTICATED', message: 'expired' },
+      });
+    if (url.pathname === '/v1/status')
+      return send(200, { data: { apiVersion: '1.0.0' } });
+    if (url.pathname === '/v1/tools') return send(200, { data: [] });
+    if (url.pathname === '/v1/approvals/pending')
+      return send(200, {
+        data: [
+          {
+            kind: 'governance',
+            requestId: 'aprq_1',
+            title: 'export the register',
+          },
+          {
+            kind: 'change-set',
+            requestId: 'apr_9',
+            taskId: 'task_ask',
+            approvalId: 'apr_9',
+            asset: { name: 'mindmap', kind: 'skill-package' },
+          },
+        ],
+      });
+    if (url.pathname === '/v1/approval-requests/aprq_1')
+      return send(200, {
+        data: {
+          requestId: 'aprq_1',
+          status: 'open',
+          title: 'export the register',
+        },
+      });
+    if (url.pathname === '/v1/approval-requests/aprq_1/content') {
+      response.writeHead(200, { 'content-type': 'text/plain' });
+      response.end('the register itself');
+      return;
+    }
+    if (url.pathname === '/v1/approval-requests/aprq_1/decisions')
+      return send(200, {
+        data: {
+          requestId: 'aprq_1',
+          status: body.toString().includes('"approve":false')
+            ? 'declined'
+            : 'approved',
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_ask/status')
+      return send(200, {
+        data: {
+          taskId: 'task_ask',
+          phase: 'waiting-review',
+          title: 'approve skill pack',
+          inputRevisionId: 'inrev_1',
+          pendingInputs: [
+            {
+              requestId: 'pin_decision',
+              inputRevisionId: 'inrev_1',
+              status: 'open',
+              kind: 'decision',
+            },
+          ],
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_ask/approvals')
+      return send(200, {
+        data: [
+          {
+            approvalId: 'apr_9',
+            status: 'open',
+            inputRevisionId: 'inrev_1',
+            targetIdentity: 'SHA256:target',
+            actionDigest: 'd'.repeat(64),
+            action: { name: 'changesets.apply', target: 'ast_pack' },
+          },
+        ],
+      });
+    if (url.pathname === '/v1/tasks/task_ask/approvals/apr_9')
+      return send(200, { data: { status: 'declined' } });
+    if (url.pathname === '/v1/tasks/task_ask/input')
+      return send(409, {
+        status: 'failed',
+        error: { code: 'DECISION_CONFLICT', message: 'should not be posted' },
+      });
+    if (url.pathname === '/v1/skillpacks') return send(200, { data: [] });
+    send(404, {
+      status: 'failed',
+      error: { code: 'TARGET_NOT_FOUND', message: 'missing' },
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  cleanup(
+    t,
+    () => new Promise<void>((resolve) => server.close(() => resolve())),
+  );
+  const port = (server.address() as AddressInfo).port;
+  const prompts: string[] = [];
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+    secret: async (request) => {
+      prompts.push(`${request.mask ? 'masked' : 'open'}:${request.question}`);
+      await submitAnswer(
+        home,
+        request.id,
+        request.mask === false ? 'ada' : PASSWORD,
+      );
+    },
+  }).load();
+  cleanup(t, () => host.close());
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('hub')!;
+  await command.handler(`login http://127.0.0.1:${port}`, context);
+  assert.match(prompts.join('\n'), /open:User on http:\/\/127\.0\.0\.1:\d+/);
+  assert.match(prompts.join('\n'), /masked:Password for ada/);
+  assert.match(
+    lines.join('\n'),
+    /signed in to http:\/\/127\.0\.0\.1:\d+ as ada/,
+  );
+  await command.handler('approve', context);
+  assert.match(
+    lines.at(-1)!,
+    /governance aprq_1 · export the register[\s\S]*\/hub show aprq_1[\s\S]*\/hub approve aprq_1[\s\S]*change-set task_ask · apr_9 · mindmap/,
+  );
+  await command.handler('show 1', context);
+  assert.match(
+    lines.slice(-4).join('\n'),
+    /the register itself[\s\S]*\/hub approve aprq_1/,
+  );
+  await assert.rejects(
+    async () => command.handler('reject aprq_1', context),
+    /a rejection needs a reason/,
+  );
+  assert.equal(
+    posts.some((post) => post.path.endsWith('/decisions')),
+    false,
+  );
+  await command.handler('reject aprq_1 out of scope', context);
+  assert.match(lines.at(-1)!, /rejected aprq_1 · declined · out of scope/);
+  assert.deepEqual(
+    JSON.parse(posts.find((post) => post.path.endsWith('/decisions'))!.body),
+    { approve: false, reason: 'out of scope' },
+  );
+  await command.handler('approve aprq_1', context);
+  const approved = posts.filter((post) => post.path.endsWith('/decisions'));
+  assert.deepEqual(JSON.parse(approved.at(-1)!.body), { approve: true });
+  await assert.rejects(
+    async () => command.handler('respond task_ask yes', context),
+    /not waiting for a text answer \(decision\)/,
+  );
+  assert.equal(
+    posts.some((post) => post.path.endsWith('/input')),
+    false,
+  );
+  await assert.rejects(
+    async () => command.handler('reject task_ask apr_9', context),
+    /a rejection needs a reason: \/hub reject task_ask apr_9/,
+  );
+  await command.handler('reject task_ask apr_9 need more material', context);
+  const classic = JSON.parse(
+    posts.find((post) => post.path.endsWith('/approvals/apr_9'))!.body,
+  );
+  assert.equal(classic.approve, false);
+  assert.equal(classic.reason, 'need more material');
+  assert.match(lines.at(-1)!, /rejected apr_9 for task_ask/);
+});

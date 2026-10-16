@@ -346,6 +346,72 @@ export const HUB_ZH: Record<string, string> = {
   'save_as {path} is outside the workspace': 'save_as {path} 在工作区之外',
   "the bytes (sha256 {actual}) do not match the server's SHA-256 ({expected}); not saved":
     '字节（sha256 {actual}）与服务器的 SHA-256（{expected}）不一致，未保存',
+  'sign in. With no user, the saved one is used or you are asked. The password is a masked card':
+    '登录。不写用户时用已保存的，或询问你。密码在一张遮住的卡片上',
+  'answer a clarification or a repair. An approval is /hub approve, not this':
+    '回答澄清或修复。审批用 /hub approve，不是这条',
+  'approvals waiting for you, and the command that decides each':
+    '等你处理的审批，以及决定每一条的命令',
+  'one approval and its content, before you approve it':
+    '一条审批和它的正文，批准之前先看',
+  'approve one. With no ids, list them. A governance request is /hub approve <id>':
+    '批准一条。不写 id 就列出。治理申请是 /hub approve <id>',
+  'decline one and say why. A governance request is /hub reject <id> <reason>':
+    '拒绝一条并写明原因。治理申请是 /hub reject <id> <reason>',
+  'the same list as /hub inbox': '和 /hub inbox 是同一份列表',
+  'recent audit rows (needs admin.manage). --format json|csv exports when the server can':
+    '最近的审计行（需要 admin.manage）。服务器支持时 --format json|csv 可导出',
+  '{code}: {said}': '{code}：{said}',
+  ' It changes something on the server.': ' 它会在服务器上改动东西。',
+  'writes on the server': '在服务器上写入',
+  'usage: /hub login [url] [user]': '用法：/hub login [url] [user]',
+  'User on {url}': '{url} 上的用户',
+  'this window cannot ask; /hub login [url] <user>':
+    '这个窗口不能询问；/hub login [url] <user>',
+  '{task} is waiting for a decision, not a text answer ({request}). Someone else runs /hub approve {task} {request}. /hub inbox lists what is waiting for you.':
+    '{task} 在等一个决定，不是文字回答（{request}）。别人运行 /hub approve {task} {request}。/hub inbox 列出等你处理的。',
+  '{task} is not waiting for a text answer ({kind}). /hub inbox lists approvals; /hub approve records one. Only a clarification or a repair takes /hub respond.':
+    '{task} 不是在等文字回答（{kind}）。/hub inbox 列出审批；/hub approve 记下一条。只有澄清或修复才用 /hub respond。',
+  '{task} is not waiting for an answer. /hub task {task} shows its phase; an approval is /hub approve, and /hub inbox lists those.':
+    '{task} 没有在等回答。/hub task {task} 显示阶段；审批用 /hub approve，/hub inbox 列出那些。',
+  'usage: /hub audit [--format json|csv] [--timezone <tz>] [--action <action>] [--principal <id>] [--since <time>] [--until <time>]':
+    '用法：/hub audit [--format json|csv] [--timezone <tz>] [--action <action>] [--principal <id>] [--since <time>] [--until <time>]',
+  'No audit rows in that export.': '这次导出没有审计行。',
+  'audit export {format} · {n} row(s){cut}': '审计导出 {format} · {n} 行{cut}',
+  ' · truncated': ' · 已截断',
+  'this server has no audit export. /hub audit lists the recent rows.':
+    '这台服务器没有审计导出。/hub audit 列出最近的行。',
+  'Nothing is waiting for you. /hub inbox lists what you can approve.':
+    '没有等你处理的。/hub inbox 列出你可以批准的。',
+  '  {n}. governance {id} · {title}\n    /hub show {id}\n    /hub approve {id}\n    /hub reject {id} <reason>':
+    '  {n}. 治理 {id} · {title}\n    /hub show {id}\n    /hub approve {id}\n    /hub reject {id} <reason>',
+  '  {n}. {kind} {task} · {approval} · {title}\n    /hub show {task}\n    /hub approve {task} {approval}\n    /hub reject {task} {approval} <reason>':
+    '  {n}. {kind} {task} · {approval} · {title}\n    /hub show {task}\n    /hub approve {task} {approval}\n    /hub reject {task} {approval} <reason>',
+  'usage: /hub show <id>': '用法：/hub show <id>',
+  '  governance {id} · {status} · {title}': '  治理 {id} · {status} · {title}',
+  '  declined: {reason}': '  已拒绝：{reason}',
+  '  /hub approve {id}\n  /hub reject {id} <reason>':
+    '  /hub approve {id}\n  /hub reject {id} <reason>',
+  '  {approval} · {name} · {target}': '  {approval} · {name} · {target}',
+  '  result {status}': '  结果 {status}',
+  '{head}… ({n} more characters)': '{head}…（还有 {n} 个字符）',
+  '{n} bytes ({type}); no workspace to save them':
+    '{n} 字节（{type}）；没有可保存的工作区',
+  'saved {n} bytes ({type}) as {path}': '已把 {n} 字节（{type}）存为 {path}',
+  'usage: /hub approve <id> [approval]': '用法：/hub approve <id> [approval]',
+  'usage: /hub reject <id> <approval> <reason>':
+    '用法：/hub reject <id> <approval> <reason>',
+  'a rejection needs a reason: /hub reject {task} {approval} <reason>':
+    '拒绝需要原因：/hub reject {task} {approval} <reason>',
+  ' · {reason}': ' · {reason}',
+  'a rejection needs a reason: /hub reject {id} <reason>':
+    '拒绝需要原因：/hub reject {id} <reason>',
+  'Work with a hub: /hub [help | login | logout | packs | submit | tasks | task | respond | get | refresh | inbox | show | approve | reject | review | audit | modules | tools | skill | bot]':
+    '使用枢纽：/hub [help | login | logout | packs | submit | tasks | task | respond | get | refresh | inbox | show | approve | reject | review | audit | modules | tools | skill | bot]',
+  '✓ rejected {approval} for {task} (input {input}){because}':
+    '✓ 已拒绝 {task} 的 {approval}（输入 {input}）{because}',
+  '✓ approved {id} · {status}': '✓ 已批准 {id} · {status}',
+  '✓ rejected {id} · {status}{because}': '✓ 已拒绝 {id} · {status}{because}',
 };
 
 const C_LOCALE = /^(c|posix)(\.|$)/i;

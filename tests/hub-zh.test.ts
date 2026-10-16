@@ -100,9 +100,20 @@ test('hub interface words follow a Chinese process language', async (t) => {
         response.writeHead(status, { 'content-type': 'application/json' });
         response.end(JSON.stringify(value));
       };
-      if (url.pathname === '/v1/auth/dev-login')
+      if (url.pathname === '/v1/auth/dev-login') {
+        assert.equal(request.headers['accept-language'], 'zh');
         return send(200, {
           data: { token: 'tok-zh', tokenType: 'Bearer', scopes: ['scp_lab'] },
+        });
+      }
+      if (url.pathname === '/v1/packs')
+        return send(403, {
+          status: 'failed',
+          error: {
+            code: 'FORBIDDEN_ACTION',
+            message: 'English refusal',
+            messageZh: '中文拒绝',
+          },
         });
       if (url.pathname === '/v1/status')
         return send(200, { data: { apiVersion: '1.0.0' } });
@@ -168,4 +179,12 @@ test('hub interface words follow a Chinese process language', async (t) => {
   );
   await command.handler('reconcile task_one op_9', context);
   assert.match(lines.at(-1)!, /^✓ 核对 task_one · accepted/);
+  await assert.rejects(
+    async () => command.handler('packs', context),
+    (error: Error) => {
+      assert.match(error.message, /中文拒绝/);
+      assert.equal(error.message.includes('English refusal'), false);
+      return true;
+    },
+  );
 });

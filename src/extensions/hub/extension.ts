@@ -26,10 +26,11 @@ import {
   resolve,
   sep,
 } from 'node:path';
-import type {
-  CommandContext,
-  ExtensionAPI,
-  ToolMiddleware,
+import {
+  ExtensionError,
+  type CommandContext,
+  type ExtensionAPI,
+  type ToolMiddleware,
 } from '../../extensions.js';
 
 interface Config {
@@ -91,6 +92,10 @@ class ServerError extends Error {
   status = 0;
   code = '';
   details: Record<string, unknown> = {};
+  /** The server's Chinese sentence, when it sent one. */
+  messageZh = '';
+  /** The English sentence, when Accept-Language already made `message` Chinese. */
+  messageEn = '';
 }
 // What a refusal names besides its message (the rows, tools or limits it is about), kept
 // short so a model reads it beside the code instead of a whole response.
@@ -133,9 +138,9 @@ function usageText(): string {
     ['/hub', hubText('where you are signed in')],
     ['/hub help', hubText('every command')],
     [
-      '/hub login [url] <user>',
+      '/hub login [url] [user]',
       hubText(
-        'sign in; the password is asked on a masked card unless this window already has it',
+        'sign in. With no user, the saved one is used or you are asked. The password is a masked card',
       ),
     ],
     ['/hub logout', hubText('revoke the token at the server, then forget it')],
@@ -155,7 +160,9 @@ function usageText(): string {
     ['/hub task <id>', hubText('show a task and follow it until it ends')],
     [
       '/hub respond <id> <answer>',
-      hubText('answer what a task is waiting on (text, key=value or JSON)'),
+      hubText(
+        'answer a clarification or a repair. An approval is /hub approve, not this',
+      ),
     ],
     ['/hub get <id>', hubText('save a delivered task’s results again')],
     [
@@ -165,17 +172,30 @@ function usageText(): string {
       ),
     ],
     [
-      '/hub approve <id> <approval>',
-      hubText('approve an action a task waits on (reject: /hub reject …)'),
+      '/hub inbox',
+      hubText('approvals waiting for you, and the command that decides each'),
     ],
     [
-      '/hub review',
-      hubText('open approvals you may decide, each with its /hub approve line'),
+      '/hub show <id>',
+      hubText('one approval and its content, before you approve it'),
     ],
+    [
+      '/hub approve <id> <approval>',
+      hubText(
+        'approve one. With no ids, list them. A governance request is /hub approve <id>',
+      ),
+    ],
+    [
+      '/hub reject <id> <approval> <reason>',
+      hubText(
+        'decline one and say why. A governance request is /hub reject <id> <reason>',
+      ),
+    ],
+    ['/hub review', hubText('the same list as /hub inbox')],
     [
       '/hub audit',
       hubText(
-        'recent audit rows (needs admin.manage; there is no browser page)',
+        'recent audit rows (needs admin.manage). --format json|csv exports when the server can',
       ),
     ],
     [
@@ -269,6 +289,17 @@ function rowsOf(data: unknown): Record<string, unknown>[] {
 }
 const reason = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+// The server's sentence, without the code or the JSON detail blob. Chinese uses
+// messageZh when the server sent it; with Accept-Language the message itself is Chinese.
+function serverSentence(error: ServerError): string {
+  const english = error.message
+    .replace(/^[A-Z0-9_]+:\s*/, '')
+    .replace(/\s·\s\{[\s\S]*$/, '');
+  if (!hubLocaleChinese()) return english;
+  if (error.messageZh) return error.messageZh;
+  if (error.messageEn) return english;
+  return english;
+}
 // A refusal the server named, said so a person can act on it. A usage line has no code
 // and is already the whole explanation.
 function explainFailure(error: unknown): string {
@@ -298,7 +329,9 @@ function explainFailure(error: unknown): string {
         'the server refused this ({code}): {detail}. Sign in to a scope that may do it, or ask someone who can.',
         {
           code: error.code,
-          detail: error.message.replace(/^[^:]+:\s*/, ''),
+          detail: hubLocaleChinese()
+            ? serverSentence(error)
+            : error.message.replace(/^[^:]+:\s*/, ''),
         },
       );
     case 'TARGET_NOT_FOUND':
@@ -318,7 +351,9 @@ function explainFailure(error: unknown): string {
     case 'SKILLPACK_CHECK_FAILED':
       return hubText(
         '{message}. Fix skillpack.json so it declares every tool the trial used, then /hub trial start --force and push again.',
-        { message: error.message },
+        {
+          message: hubLocaleChinese() ? serverSentence(error) : error.message,
+        },
       );
     case 'SOURCE_HASH_MISMATCH':
       return hubText(
@@ -334,9 +369,7 @@ function explainFailure(error: unknown): string {
       // The code alone does not say which request collided. The server's outcome does:
       // a text answer sent where an approval is open, or a decision already recorded.
       const outcome = String(error.details.outcome ?? '');
-      const said = error.message
-        .replace(/^[A-Z0-9_]+:\s*/, '')
-        .replace(/\s·\s\{[\s\S]*$/, '');
+      const said = serverSentence(error);
       const named = outcome || said || hubText('the request no longer matches');
       if (
         outcome === 'missing-request' ||
@@ -362,6 +395,11 @@ function explainFailure(error: unknown): string {
       );
     }
     default:
+      if (hubLocaleChinese() && error.messageZh)
+        return hubText('{code}: {said}', {
+          code: error.code || error.status,
+          said: error.messageZh,
+        });
       return error.message;
   }
 }
@@ -848,6 +886,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         name,
         remote: held.remote,
         write: held.write,
+        ask: held.ask,
       })),
       skillPacks: await Promise.all(
         (Array.isArray(pushed) ? pushed : [])
@@ -1031,6 +1070,13 @@ export async function register(api: ExtensionAPI): Promise<void> {
     if (!config)
       throw new ServerError(hubText('not signed in: /hub login <url> <user>'));
     const headers: Record<string, string> = { ...options.headers };
+    // Chinese errors come back as message, with messageEn beside them.
+    if (
+      hubLocaleChinese() &&
+      !headers['accept-language'] &&
+      !headers['Accept-Language']
+    )
+      headers['accept-language'] = 'zh';
     if (!options.anonymous) {
       const token = await currentToken();
       if (!token)
@@ -1110,6 +1156,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
       failed.status = response.status;
       failed.code = typeof error.code === 'string' ? error.code : '';
       failed.details = isRecord(error.details) ? error.details : {};
+      failed.messageZh =
+        typeof error.messageZh === 'string' ? error.messageZh : '';
+      failed.messageEn =
+        typeof error.messageEn === 'string' ? error.messageEn : '';
       throw failed;
     }
     return {
@@ -1748,7 +1798,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // Signing out removes them. Read tools run at once; the others ask first.
   const serverTools = new Map<
     string,
-    { remote: string; fingerprint: string; write: boolean }
+    { remote: string; fingerprint: string; write: boolean; ask: boolean }
   >();
   let catalogTag = '';
   let syncing: Promise<boolean> | undefined;
@@ -1807,6 +1857,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
   ): boolean {
     const remote = String(tool.name);
     const write = tool.effect !== 'read';
+    // The catalog's own approval flag is the human gate. A write the server
+    // marks approval:false still runs as the signed-in person, without a card
+    // for every call. A catalog that omits the flag keeps the old ask.
+    const ask = tool.approval === true || (write && tool.approval !== false);
     const schema =
       isRecord(tool.inputSchema) && tool.inputSchema.type === 'object'
         ? tool.inputSchema
@@ -1820,9 +1874,11 @@ export async function register(api: ExtensionAPI): Promise<void> {
             ? hubText(' ({title})', { title: String(tool.title) })
             : '',
           description: String(tool.description ?? ''),
-          write: write
+          write: ask
             ? hubText(' It changes something, so it asks first.')
-            : '',
+            : write
+              ? hubText(' It changes something on the server.')
+              : '',
           tail:
             tool.mode === 'task'
               ? hubText(
@@ -1876,7 +1932,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
             },
           );
         },
-        { readOnly: !write, approval: write },
+        { readOnly: !write, approval: ask },
       );
       return true;
     } catch {
@@ -1929,6 +1985,9 @@ export async function register(api: ExtensionAPI): Promise<void> {
             remote: String(tool.name),
             fingerprint: JSON.stringify(tool),
             write: tool.effect !== 'read',
+            ask:
+              tool.approval === true ||
+              (tool.effect !== 'read' && tool.approval !== false),
           });
       return true;
     })().finally(() => {
@@ -1975,7 +2034,11 @@ export async function register(api: ExtensionAPI): Promise<void> {
           hubText('    {name} ← {remote} · {mode}', {
             name,
             remote: held.remote,
-            mode: held.write ? hubText('asks first') : hubText('read-only'),
+            mode: held.ask
+              ? hubText('asks first')
+              : held.write
+                ? hubText('writes on the server')
+                : hubText('read-only'),
           }),
         );
   }
@@ -2978,14 +3041,38 @@ export async function register(api: ExtensionAPI): Promise<void> {
             'Circle runs with a token from hub here; there is no sign-in',
           ),
         );
+      if (args.length > 2)
+        throw new ServerError(hubText('usage: /hub login [url] [user]'));
       let address = args[0];
       let username = args[1];
       if (args.length === 1 && !/^https?:\/\//i.test(args[0] ?? '')) {
         username = args[0];
         address = knownUrl();
       }
-      if (!address || !username || args.length > 2)
-        throw new ServerError(hubText('usage: /hub login [url] <user>'));
+      if (!address) address = knownUrl();
+      if (!username && args.length === 0) username = readConfig()?.username;
+      if (!username) {
+        let asked: string | null;
+        try {
+          asked = await api.askSecret(
+            hubText('User on {url}', { url: address }),
+            { mask: false, conceal: false },
+          );
+        } catch (error) {
+          if (error instanceof ExtensionError)
+            throw new ServerError(
+              hubText('this window cannot ask; /hub login [url] <user>'),
+            );
+          throw error;
+        }
+        if (asked === null) {
+          context.append(hubText('Sign-in cancelled'));
+          return;
+        }
+        username = asked.trim();
+      }
+      if (!username)
+        throw new ServerError(hubText('usage: /hub login [url] [user]'));
       const url = serverUrl(address);
       rememberAddress(url, username);
       const given = context.secret;
@@ -3136,51 +3223,79 @@ export async function register(api: ExtensionAPI): Promise<void> {
       if (!taskId || !answer.length)
         throw new ServerError(hubText('usage: /hub respond <id> <answer>'));
       const current = await status(taskId);
-      const open = (
+      const pending = (
         Array.isArray(current.pendingInputs) ? current.pendingInputs : []
-      ).find(
+      ).filter(isRecord);
+      const open = pending.find(
         (item) =>
-          isRecord(item) &&
           item.status === 'open' &&
           item.inputRevisionId === current.inputRevisionId,
       );
-      if (!isRecord(open))
-        throw new ServerError(
-          hubText(
-            '{task} is not waiting for an answer. /hub task {task} shows its phase; an approval is /hub approve, and /hub review lists those.',
-            { task: taskId },
-          ),
-        );
-      if (open.kind === 'approval')
-        throw new ServerError(
-          hubText(
-            '{task} is waiting for a decision, not a text answer ({request}). Someone else runs /hub approve {task} {request}. /hub review lists open approvals.',
-            { task: taskId, request: String(open.requestId) },
-          ),
-        );
-      // A repair input is a replacement of the bound input; anything else is a response.
-      const repair = open.kind === 'repair';
-      await request('POST', `/v1/tasks/${encodeURIComponent(taskId)}/input`, {
-        json: {
-          inputRevisionId: current.inputRevisionId,
-          requestId: open.requestId,
-          ...(repair
-            ? { replacement: answerOf(answer.join(' ')) }
-            : { response: answerOf(answer.join(' ')) }),
-        },
-      });
-      context.append(
-        repair
-          ? hubText('✓ replaced the input of {task} ({request})', {
-              task: taskId,
-              request: String(open.requestId),
-            })
-          : hubText('✓ answered {task} ({request})', {
-              task: taskId,
-              request: String(open.requestId),
-            }),
+      const approval = pending.find(
+        (item) => item.status === 'open' && item.kind === 'approval',
       );
-      api.background(follow(taskId, context));
+      // The server accepts a text answer only for a clarification, and a
+      // replacement only for a repair. Anything else, including an approval,
+      // is a decision: posting it comes back DECISION_CONFLICT.
+      if (isRecord(open) && open.kind === 'clarification') {
+        await request('POST', `/v1/tasks/${encodeURIComponent(taskId)}/input`, {
+          json: {
+            inputRevisionId: current.inputRevisionId,
+            requestId: open.requestId,
+            response: answerOf(answer.join(' ')),
+          },
+        });
+        context.append(
+          hubText('✓ answered {task} ({request})', {
+            task: taskId,
+            request: String(open.requestId),
+          }),
+        );
+        api.background(follow(taskId, context));
+        return;
+      }
+      if (isRecord(open) && open.kind === 'repair') {
+        await request('POST', `/v1/tasks/${encodeURIComponent(taskId)}/input`, {
+          json: {
+            inputRevisionId: current.inputRevisionId,
+            requestId: open.requestId,
+            replacement: answerOf(answer.join(' ')),
+          },
+        });
+        context.append(
+          hubText('✓ replaced the input of {task} ({request})', {
+            task: taskId,
+            request: String(open.requestId),
+          }),
+        );
+        api.background(follow(taskId, context));
+        return;
+      }
+      const requestId = isRecord(approval)
+        ? String(approval.requestId ?? '')
+        : isRecord(open) && open.kind === 'approval'
+          ? String(open.requestId ?? '')
+          : '';
+      if (requestId)
+        throw new ServerError(
+          hubText(
+            '{task} is waiting for a decision, not a text answer ({request}). Someone else runs /hub approve {task} {request}. /hub inbox lists what is waiting for you.',
+            { task: taskId, request: requestId },
+          ),
+        );
+      if (isRecord(open))
+        throw new ServerError(
+          hubText(
+            '{task} is not waiting for a text answer ({kind}). /hub inbox lists approvals; /hub approve records one. Only a clarification or a repair takes /hub respond.',
+            { task: taskId, kind: String(open.kind ?? '') },
+          ),
+        );
+      throw new ServerError(
+        hubText(
+          '{task} is not waiting for an answer. /hub task {task} shows its phase; an approval is /hub approve, and /hub inbox lists those.',
+          { task: taskId },
+        ),
+      );
     },
     async get([taskId], context) {
       if (!taskId) throw new ServerError(hubText('usage: /hub get <id>'));
@@ -3260,10 +3375,20 @@ export async function register(api: ExtensionAPI): Promise<void> {
     },
     bot,
     async approve(rest, context) {
+      if (!rest.length) {
+        await listInbox(context);
+        return;
+      }
       await decide(rest, true, context);
     },
     async reject(rest, context) {
       await decide(rest, false, context);
+    },
+    async inbox(_rest, context) {
+      await listInbox(context);
+    },
+    async show(rest, context) {
+      await showApproval(rest, context);
     },
     async reconcile([taskId, operationId], context) {
       if (!taskId)
@@ -3300,32 +3425,83 @@ export async function register(api: ExtensionAPI): Promise<void> {
       await collectObjects().catch(() => {});
     },
     async review(_rest, context) {
-      // circle-hub 0.2.0 has no browser page. The queue is the paged task list.
-      const { data } = await request(
-        'GET',
-        '/v1/tasks?view=page&queue=awaitingMyApproval&limit=20',
-      );
-      const tasks = rowsOf(data);
-      if (!tasks.length) {
-        context.append(
-          hubText(
-            'Nothing is waiting for your approval. /hub task <id> shows one task. Knowledge claims are reviewed one id at a time (GET /v1/knowledge/reviews/<id>); this server has no page that lists them.',
-          ),
-        );
-        return;
-      }
-      const lines: string[] = [];
-      for (const task of tasks) {
-        const taskId = String(task.taskId ?? '');
-        if (!taskId) continue;
-        lines.push(
-          `  ${taskId} · ${String(task.phase ?? '')} · ${String(task.title ?? '')}`,
-        );
-        lines.push(await approvalNotice(taskId));
-      }
-      context.append(lines.join('\n'));
+      await listInbox(context);
     },
-    async audit(_rest, context) {
+    async audit(rest, context) {
+      const { values } = options(rest);
+      const format = values.format?.at(-1) ?? '';
+      const exporting =
+        Boolean(format) ||
+        Boolean(
+          values.timezone ||
+          values.action ||
+          values.principal ||
+          values.since ||
+          values.until,
+        );
+      if (exporting) {
+        if (format && format !== 'json' && format !== 'csv')
+          throw new ServerError(
+            hubText(
+              'usage: /hub audit [--format json|csv] [--timezone <tz>] [--action <action>] [--principal <id>] [--since <time>] [--until <time>]',
+            ),
+          );
+        const params = new URLSearchParams();
+        if (format) params.set('format', format);
+        const copy = (flag: string, name: string) => {
+          const value = values[flag]?.at(-1);
+          if (value) params.set(name, value);
+        };
+        copy('timezone', 'timezone');
+        copy('action', 'action');
+        copy('principal', 'principalId');
+        copy('since', 'since');
+        copy('until', 'until');
+        const path = `/v1/admin/audit/export?${params.toString()}`;
+        try {
+          if (format === 'csv') {
+            const { bytes } = await request('GET', path, { raw: true });
+            const text = bytes.toString('utf8');
+            context.append(
+              text.trimEnd() || hubText('No audit rows in that export.'),
+            );
+            return;
+          }
+          const { data } = await request('GET', path);
+          const payload = isRecord(data) ? data : {};
+          const rows = rowsOf(payload.items ?? data);
+          context.append(
+            rows.length
+              ? hubText('audit export {format} · {n} row(s){cut}', {
+                  format: String((payload.format ?? format) || 'json'),
+                  n: rows.length,
+                  cut:
+                    payload.truncated === true ? hubText(' · truncated') : '',
+                }) +
+                  '\n' +
+                  auditLines(rows)
+              : hubText('No audit rows in that export.'),
+          );
+          return;
+        } catch (error) {
+          if (error instanceof ServerError && error.status === 404)
+            throw new ServerError(
+              hubText(
+                'this server has no audit export. /hub audit lists the recent rows.',
+              ),
+            );
+          if (
+            error instanceof ServerError &&
+            (error.code === 'FORBIDDEN_ACTION' || error.status === 403)
+          )
+            throw new ServerError(
+              hubText(
+                'audit needs admin.manage on this server. There is no browser page; GET /v1/admin/audit is the list.',
+              ),
+            );
+          throw error;
+        }
+      }
       let data: unknown;
       try {
         ({ data } = await request('GET', '/v1/admin/audit'));
@@ -3344,14 +3520,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       const rows = rowsOf(data).slice(0, 20);
       context.append(
         rows.length
-          ? rows
-              .map((row) => {
-                const detail = isRecord(row.detail)
-                  ? Object.keys(row.detail).slice(0, 4).join(', ')
-                  : '';
-                return `  ${String(row.id ?? '')} · ${String(row.action ?? '')} · ${String(row.principalId ?? '')}${row.scopeId ? ' · ' + String(row.scopeId) : ''}${detail ? ' · ' + detail : ''}`;
-              })
-              .join('\n')
+          ? auditLines(rows)
           : hubText(
               'No audit rows. GET /v1/admin/audit is the list; this server has no browser page for it.',
             ),
@@ -3395,51 +3564,374 @@ export async function register(api: ExtensionAPI): Promise<void> {
       );
     },
   };
+  function auditLines(rows: Record<string, unknown>[]): string {
+    return rows
+      .map((row) => {
+        const detail = isRecord(row.detail)
+          ? Object.keys(row.detail).slice(0, 4).join(', ')
+          : '';
+        return `  ${String(row.id ?? '')} · ${String(row.action ?? '')} · ${String(row.principalId ?? '')}${row.scopeId ? ' · ' + String(row.scopeId) : ''}${detail ? ' · ' + detail : ''}`;
+      })
+      .join('\n');
+  }
+  function isMissing(error: unknown): boolean {
+    return (
+      error instanceof ServerError &&
+      (error.status === 404 || error.code === 'TARGET_NOT_FOUND')
+    );
+  }
+  // What /hub inbox last printed, so /hub show 1 opens that row.
+  interface InboxItem {
+    kind: string;
+    requestId: string;
+    taskId: string;
+    approvalId: string;
+    title: string;
+  }
+  let inboxItems: InboxItem[] = [];
+  async function listInbox(context: CommandContext): Promise<void> {
+    let pending: Record<string, unknown>[] | undefined;
+    try {
+      const { data } = await request('GET', '/v1/approvals/pending');
+      pending = rowsOf(data);
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+    }
+    if (pending) {
+      inboxItems = pending.slice(0, 20).map((item) => {
+        const asset = isRecord(item.asset) ? item.asset : {};
+        const kind = String(item.kind ?? 'change-set');
+        return {
+          kind,
+          requestId: String(item.requestId ?? ''),
+          taskId: String(item.taskId ?? ''),
+          approvalId: String(item.approvalId ?? item.requestId ?? ''),
+          title: String(
+            item.title ?? item.name ?? asset.name ?? item.summary ?? '',
+          ),
+        };
+      });
+      if (!inboxItems.length) {
+        context.append(
+          hubText(
+            'Nothing is waiting for you. /hub inbox lists what you can approve.',
+          ),
+        );
+        return;
+      }
+      context.append(
+        inboxItems
+          .map((item, index) => {
+            const n = index + 1;
+            if (item.kind === 'governance' || (!item.taskId && item.requestId))
+              return hubText(
+                '  {n}. governance {id} · {title}\n    /hub show {id}\n    /hub approve {id}\n    /hub reject {id} <reason>',
+                {
+                  n,
+                  id: item.requestId,
+                  title: item.title,
+                },
+              );
+            const approval = item.approvalId || item.requestId;
+            return hubText(
+              '  {n}. {kind} {task} · {approval} · {title}\n    /hub show {task}\n    /hub approve {task} {approval}\n    /hub reject {task} {approval} <reason>',
+              {
+                n,
+                kind: item.kind,
+                task: item.taskId || item.requestId,
+                approval,
+                title: item.title,
+              },
+            );
+          })
+          .join('\n'),
+      );
+      return;
+    }
+    // circle-hub 0.2.0 has no general queue. The task queue is the list.
+    const { data } = await request(
+      'GET',
+      '/v1/tasks?view=page&queue=awaitingMyApproval&limit=20',
+    );
+    const tasks = rowsOf(data);
+    inboxItems = [];
+    if (!tasks.length) {
+      context.append(
+        hubText(
+          'Nothing is waiting for your approval. /hub task <id> shows one task. Knowledge claims are reviewed one id at a time (GET /v1/knowledge/reviews/<id>); this server has no page that lists them.',
+        ),
+      );
+      return;
+    }
+    const lines: string[] = [];
+    for (const task of tasks) {
+      const taskId = String(task.taskId ?? '');
+      if (!taskId) continue;
+      lines.push(
+        `  ${taskId} · ${String(task.phase ?? '')} · ${String(task.title ?? '')}`,
+      );
+      lines.push(await approvalNotice(taskId));
+      inboxItems.push({
+        kind: 'change-set',
+        requestId: '',
+        taskId,
+        approvalId: '',
+        title: String(task.title ?? ''),
+      });
+    }
+    context.append(lines.join('\n'));
+  }
+  async function showApproval(
+    words: string[],
+    context: CommandContext,
+  ): Promise<void> {
+    const token = words[0];
+    if (!token) throw new ServerError(hubText('usage: /hub show <id>'));
+    const picked = /^\d+$/.test(token)
+      ? inboxItems[Number(token) - 1]
+      : undefined;
+    const id = picked?.requestId || picked?.taskId || token;
+    try {
+      const { data } = await request(
+        'GET',
+        `/v1/approval-requests/${encodeURIComponent(picked?.requestId || id)}`,
+      );
+      const record = isRecord(data) ? data : {};
+      const requestId = String(record.requestId ?? picked?.requestId ?? id);
+      context.append(
+        hubText('  governance {id} · {status} · {title}', {
+          id: requestId,
+          status: String(record.status ?? ''),
+          title: String(record.title ?? record.summary ?? ''),
+        }),
+      );
+      if (typeof record.declineReason === 'string' && record.declineReason)
+        context.append(
+          hubText('  declined: {reason}', { reason: record.declineReason }),
+        );
+      await printContent(
+        `/v1/approval-requests/${encodeURIComponent(requestId)}/content`,
+        requestId,
+        context,
+      );
+      context.append(
+        hubText('  /hub approve {id}\n  /hub reject {id} <reason>', {
+          id: requestId,
+        }),
+      );
+      return;
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+    }
+    const taskId = picked?.taskId || id;
+    const current = await status(taskId);
+    context.append(
+      hubText('  {task} · {phase} · {title} · input {input}', {
+        task: taskId,
+        phase: String(current.phase),
+        title: String(current.title ?? ''),
+        input: String(current.inputRevisionId),
+      }),
+    );
+    context.append(await approvalNotice(taskId));
+    const approvals = rowsOf(
+      await optional<unknown>(
+        `/v1/tasks/${encodeURIComponent(taskId)}/approvals`,
+        [],
+      ),
+    );
+    for (const item of approvals
+      .filter((item) => item.status === 'open')
+      .slice(0, 5)) {
+      const action = isRecord(item.action) ? item.action : {};
+      const name = String(action.name ?? item.approvalId ?? '');
+      const target = String(action.target ?? item.target ?? '');
+      context.append(
+        hubText('  {approval} · {name} · {target}', {
+          approval: String(item.approvalId ?? ''),
+          name,
+          target,
+        }),
+      );
+    }
+    if (TERMINAL.has(String(current.phase))) {
+      const result = await optional<unknown>(
+        `/v1/tasks/${encodeURIComponent(taskId)}/result`,
+        undefined,
+      );
+      if (isRecord(result))
+        context.append(
+          hubText('  result {status}', { status: String(result.status ?? '') }),
+        );
+    }
+  }
+  async function printContent(
+    path: string,
+    label: string,
+    context: CommandContext,
+  ): Promise<void> {
+    let bytes: Buffer;
+    let headers: Headers;
+    try {
+      ({ bytes, headers } = await request('GET', path, { raw: true }));
+    } catch (error) {
+      if (isMissing(error)) return;
+      throw error;
+    }
+    const type = (headers.get('content-type') ?? '')
+      .split(';')[0]!
+      .trim()
+      .toLowerCase();
+    const textLike =
+      !type ||
+      type.startsWith('text/') ||
+      type === 'application/json' ||
+      type === 'application/xml' ||
+      type.endsWith('+json');
+    if (textLike && !bytes.includes(0)) {
+      const text = bytes.toString('utf8');
+      const limit = 4000;
+      context.append(
+        text.length <= limit
+          ? text
+          : hubText('{head}… ({n} more characters)', {
+              head: text.slice(0, limit),
+              n: text.length - limit,
+            }),
+      );
+      return;
+    }
+    if (!api.workspace) {
+      context.append(
+        hubText('{n} bytes ({type}); no workspace to save them', {
+          n: bytes.byteLength,
+          type: type || 'application/octet-stream',
+        }),
+      );
+      return;
+    }
+    const folder = join(api.workspace, '.circle', 'hub-approvals');
+    mkdirSync(folder, { recursive: true });
+    const file = join(folder, `${label.replace(/[^\w.-]+/g, '_')}.bin`);
+    writeFileSync(file, bytes);
+    context.append(
+      hubText('saved {n} bytes ({type}) as {path}', {
+        n: bytes.byteLength,
+        type: type || 'application/octet-stream',
+        path: relative(api.workspace, file).split(sep).join('/'),
+      }),
+    );
+  }
   // A decision on an action a task waits on, bound to what the server says it is: the
-  // input revision, the target's identity and the action's digest.
+  // input revision, the target's identity and the action's digest. A governance
+  // request id is decided on the general route when the server has one.
   async function decide(
-    [taskId, approvalId]: string[],
+    words: string[],
     approve: boolean,
     context: CommandContext,
   ): Promise<void> {
-    if (!taskId || !approvalId)
+    const [taskId, approvalId, ...rest] = words;
+    if (!taskId)
       throw new ServerError(
         approve
-          ? hubText('usage: /hub approve <id> <approval>')
-          : hubText('usage: /hub reject <id> <approval>'),
+          ? hubText('usage: /hub approve <id> [approval]')
+          : hubText('usage: /hub reject <id> <approval> <reason>'),
       );
-    const path = `/v1/tasks/${encodeURIComponent(taskId)}/approvals`;
-    const { data } = await request('GET', path);
-    const found = (Array.isArray(data) ? data : []).find(
-      (item) => isRecord(item) && item.approvalId === approvalId,
-    );
-    if (!isRecord(found))
+    if (approvalId) {
+      const path = `/v1/tasks/${encodeURIComponent(taskId)}/approvals`;
+      let data: unknown = [];
+      try {
+        ({ data } = await request('GET', path));
+      } catch (error) {
+        if (!isMissing(error)) throw error;
+      }
+      const found = (Array.isArray(data) ? data : []).find(
+        (item) => isRecord(item) && item.approvalId === approvalId,
+      );
+      if (isRecord(found)) {
+        const because = rest.join(' ').trim();
+        if (!approve && !because)
+          throw new ServerError(
+            hubText(
+              'a rejection needs a reason: /hub reject {task} {approval} <reason>',
+              { task: taskId, approval: approvalId },
+            ),
+          );
+        await request('POST', `${path}/${encodeURIComponent(approvalId)}`, {
+          json: {
+            inputRevisionId: found.inputRevisionId,
+            targetIdentity: found.targetIdentity,
+            actionDigest: found.actionDigest,
+            approve,
+            ...(because ? { reason: because } : {}),
+          },
+        });
+        context.append(
+          hubText(
+            approve
+              ? '✓ approved {approval} for {task} (input {input})'
+              : '✓ rejected {approval} for {task} (input {input}){because}',
+            {
+              approval: approvalId,
+              task: taskId,
+              input: String(found.inputRevisionId),
+              because: because
+                ? hubText(' · {reason}', { reason: because })
+                : '',
+            },
+          ),
+        );
+        await decidedAsset(taskId, found, context);
+        return;
+      }
+    }
+    const because = [approvalId, ...rest]
+      .filter((word): word is string => Boolean(word))
+      .join(' ')
+      .trim();
+    if (!approve && !because)
       throw new ServerError(
-        hubText('{task} has no approval {approval}', {
-          task: taskId,
-          approval: approvalId,
+        hubText('a rejection needs a reason: /hub reject {id} <reason>', {
+          id: taskId,
         }),
       );
-    await request('POST', `${path}/${encodeURIComponent(approvalId)}`, {
-      json: {
-        inputRevisionId: found.inputRevisionId,
-        targetIdentity: found.targetIdentity,
-        actionDigest: found.actionDigest,
-        approve,
-      },
-    });
-    context.append(
-      hubText(
-        approve
-          ? '✓ approved {approval} for {task} (input {input})'
-          : '✓ rejected {approval} for {task} (input {input})',
-        {
-          approval: approvalId,
-          task: taskId,
-          input: String(found.inputRevisionId),
-        },
-      ),
+    try {
+      const { data } = await request(
+        'POST',
+        `/v1/approval-requests/${encodeURIComponent(taskId)}/decisions`,
+        { json: { approve, ...(because ? { reason: because } : {}) } },
+      );
+      const record = isRecord(data) ? data : {};
+      context.append(
+        hubText(
+          approve
+            ? '✓ approved {id} · {status}'
+            : '✓ rejected {id} · {status}{because}',
+          {
+            id: taskId,
+            status: String(
+              record.status ?? (approve ? 'approved' : 'declined'),
+            ),
+            because: because ? hubText(' · {reason}', { reason: because }) : '',
+          },
+        ),
+      );
+      return;
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+    }
+    throw new ServerError(
+      hubText('{task} has no approval {approval}', {
+        task: taskId,
+        approval: approvalId ?? '',
+      }),
     );
+  }
+  async function decidedAsset(
+    taskId: string,
+    found: Record<string, unknown>,
+    context: CommandContext,
+  ): Promise<void> {
     // The pack status word stays `registered` after approval. Re-read the asset
     // lifecycle so the line shows what actually changed.
     const packs = rowsOf(await optional<unknown>('/v1/skillpacks', []));
@@ -3903,7 +4395,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
   api.registerCommand(
     'hub',
     hubText(
-      'Work with a hub: /hub [help | login | logout | packs | submit | tasks | task | respond | get | refresh | review | audit | modules | tools | skill | bot]',
+      'Work with a hub: /hub [help | login | logout | packs | submit | tasks | task | respond | get | refresh | inbox | show | approve | reject | review | audit | modules | tools | skill | bot]',
     ),
     async (args, context) => {
       const [verb, ...rest] = words(args);
