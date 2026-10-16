@@ -40,6 +40,8 @@ import {
   verifyNativeBuildManifest,
 } from './helpers/native-build-manifest.mjs';
 import {
+  appendNativeEditorText,
+  captureNativeEditorInput,
   armNativeFeedback,
   captureNativeTranscriptAnchor,
   terminalObservationRows,
@@ -825,15 +827,20 @@ try {
     'README.md',
   );
   await activeFile.getByRole('button', { name: 'edit', exact: true }).click();
-  const editor = activeFile.locator('.monaco-editor:visible textarea');
-  await editor.waitFor({ state: 'attached' });
+  await activeFile.locator('.monaco-editor:visible .view-lines').waitFor();
+  report.editorInputDiagnostics = [];
   for (let index = 0; index < 24; index++) {
-    await editor.focus();
-    await editor.press(
-      process.platform === 'darwin' ? 'Meta+End' : 'Control+End',
+    report.editorInputDiagnostics.push(
+      await page.evaluate(captureNativeEditorInput, `before-input-${index}`),
     );
-    await editor.press('Enter');
-    await editor.type(`saved performance ${index}`);
+    await appendNativeEditorText(
+      page,
+      activeFile,
+      `saved performance ${index}`,
+    );
+    report.editorInputDiagnostics.push(
+      await page.evaluate(captureNativeEditorInput, `after-input-${index}`),
+    );
     await waitFor(
       async () =>
         await page
@@ -980,6 +987,13 @@ try {
   process.exitCode = 1;
 } finally {
   if (page) {
+    try {
+      (report.editorInputDiagnostics ??= []).push(
+        await page.evaluate(captureNativeEditorInput, 'finally'),
+      );
+    } catch (error) {
+      report.editorInputDiagnosticError = String(error);
+    }
     try {
       report.feedbackDiagnostics = await page.evaluate(() => ({
         records: window.__circleNativePerfFeedbackDiagnostics ?? [],

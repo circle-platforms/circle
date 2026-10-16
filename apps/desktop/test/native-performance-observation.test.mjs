@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runInNewContext } from 'node:vm';
 import {
+  appendNativeEditorText,
   armNativeFeedback,
   captureNativeTranscriptAnchor,
   terminalObservationRows,
@@ -441,4 +442,35 @@ test('natural source href starts feedback after React replaces the armed anchor'
   assert.equal(record.clicks[0].dataFlag, null);
   assert.equal(record.clicks[0].matchesSelector, true);
   assert.equal(record.frames, 2);
+});
+
+test('editor append clicks the visible Monaco surface and uses native keyboard input, never a readonly IME textarea', async () => {
+  const calls = [];
+  const file = {
+    locator: (selector) => {
+      assert.equal(selector, '.monaco-editor:visible .view-lines');
+      return { click: async () => calls.push('surface-click') };
+    },
+  };
+  const page = {
+    keyboard: {
+      press: async (key) => calls.push(key),
+      insertText: async (text) => calls.push(['insert', text]),
+    },
+  };
+  await appendNativeEditorText(page, file, 'saved performance 0', 'darwin');
+  assert.deepEqual(calls, [
+    'surface-click',
+    'Meta+End',
+    'Enter',
+    ['insert', 'saved performance 0'],
+  ]);
+  calls.length = 0;
+  await appendNativeEditorText(page, file, 'saved performance 1', 'win32');
+  assert.deepEqual(calls, [
+    'surface-click',
+    'Control+End',
+    'Enter',
+    ['insert', 'saved performance 1'],
+  ]);
 });

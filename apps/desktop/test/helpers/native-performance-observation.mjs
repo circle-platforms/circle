@@ -290,3 +290,54 @@ export function terminalVisibilityCohorts(rows, timing) {
     return { ...row, visibilityCohort: 'not-continuously-visible' };
   });
 }
+
+/** Use Monaco's pointer input surface, including native EditContext builds. */
+export async function appendNativeEditorText(
+  page,
+  file,
+  text,
+  platform = process.platform,
+) {
+  await file.locator('.monaco-editor:visible .view-lines').click();
+  await page.keyboard.press(platform === 'darwin' ? 'Meta+End' : 'Control+End');
+  await page.keyboard.press('Enter');
+  await page.keyboard.insertText(text);
+}
+
+export function captureNativeEditorInput(phase) {
+  const active = document.activeElement;
+  const describe = (node) =>
+    node
+      ? {
+          tag: node.tagName,
+          className: node.className,
+          ariaLabel: node.getAttribute('aria-label'),
+          readOnly: node.readOnly ?? null,
+          editContext: Boolean(node.editContext),
+          rect: node.getBoundingClientRect().toJSON(),
+        }
+      : null;
+  return {
+    phase,
+    at: Date.now(),
+    active: describe(active),
+    files: [...document.querySelectorAll('.file-view')]
+      .filter(
+        (node) =>
+          !node.closest('[hidden]') && node.getBoundingClientRect().height > 0,
+      )
+      .map((file) => ({
+        heading: file.querySelector('.file-view-filename strong')?.textContent,
+        source: file
+          .querySelector('.source-directory')
+          ?.getAttribute('aria-label'),
+        toolbar: file.querySelector('.file-view-toolbar')?.textContent,
+        inputs: [...file.querySelectorAll('.native-edit-context,textarea')].map(
+          describe,
+        ),
+        visibleText: [...file.querySelectorAll('.view-lines')]
+          .filter((node) => node.getBoundingClientRect().height > 0)
+          .map((node) => node.textContent?.slice(0, 4096)),
+      })),
+  };
+}
