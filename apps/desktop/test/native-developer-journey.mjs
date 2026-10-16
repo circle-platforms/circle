@@ -1451,6 +1451,37 @@ try {
     await screenshot('09-zh-light-narrow');
   });
   assert.deepEqual(errors, []);
+  if (process.env.CIRCLE_NATIVE_JOURNEY_MANUAL_CHECKPOINT === '1') {
+    const resumeFile = join(output, 'manual-continue');
+    await writeFile(
+      join(output, 'manual-ready.json'),
+      JSON.stringify(
+        {
+          pid: app.process().pid,
+          sessionId,
+          appPath: launchRoot,
+          executablePath: app.process().spawnfile,
+          sourceBuildHead: buildIdentity.sourceBuildHead,
+          resumeFile,
+          scope:
+            'isolated native journey only; automated checks precede manual use',
+        },
+        null,
+        2,
+      ) + '\n',
+    );
+    console.log('native journey: isolated manual checkpoint ready');
+    const deadline = Date.now() + 600_000;
+    while (
+      !(await readFile(resumeFile).then(
+        () => true,
+        () => false,
+      ))
+    ) {
+      assert(Date.now() < deadline, 'manual checkpoint timed out');
+      await new Promise((done) => setTimeout(done, 250));
+    }
+  }
   phase = 'final verification';
   assert.equal(
     checks.filter((c) => c.status !== 'passed').length,
