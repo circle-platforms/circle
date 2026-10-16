@@ -34,11 +34,7 @@ import {
 } from 'lucide-react';
 import { useRuntime } from './context';
 import { currentSession, sessionText, sessionTitle } from '../model/state';
-import {
-  historyMessages,
-  sessionHasContent,
-  visibleSessions,
-} from '../model/session-management';
+import { historyMessages, visibleSessions } from '../model/session-management';
 import { workspaceLabel } from '../model/workspace-label';
 import type {
   Attachment,
@@ -62,7 +58,7 @@ import { Markdown } from '../components/Markdown';
 import { ToolMessage } from '../components/ToolMessage';
 import { Conversation } from '../features/Conversation';
 import { Home } from '../features/Home';
-import { homePath, openHome } from '../features/home-selection';
+import { homePath, openHome, startPath } from '../features/home-selection';
 import { Inspector, PanelButtons } from '../features/Panels';
 import { FileViewer } from '../features/FileViewer';
 import { ManagementPage } from '../features/Pages';
@@ -143,7 +139,11 @@ export function App() {
   const page = location.pathname.startsWith('/page/')
     ? (location.pathname.slice(6) as PageId)
     : null;
-  const home = location.pathname === '/home';
+  // The first route, `/`, already shows the view it is about to become. Its
+  // redirect then keeps that same view, and so whatever was typed into it.
+  const home =
+    location.pathname === '/home' ||
+    (location.pathname === '/' && startPath(snapshot) === homePath());
   const homeQuery = new URLSearchParams(location.search);
   // No query keeps the current project. An empty value is "work without a project".
   const homeRequested = homeQuery.has('workspace')
@@ -266,17 +266,7 @@ export function App() {
   }, [snapshot.openUrl?.id, session.id]);
   useEffect(() => {
     if (location.pathname === '/') {
-      const active = snapshot.sessions.find((item) => item.id === session.id);
-      // A configured app with nothing to resume opens the same home as new
-      // session, aimed at this project. Before a model is connected, stay on
-      // the conversation so setup and its commands have the composer.
-      const configured = snapshot.runtime?.configured !== false;
-      navigate(
-        !configured || (active && sessionHasContent(active))
-          ? `/session/${session.id}`
-          : homePath(),
-        { replace: true },
-      );
+      navigate(startPath(snapshot), { replace: true });
       return;
     }
     if (location.pathname === '/home') return;

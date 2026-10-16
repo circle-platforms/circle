@@ -109,6 +109,23 @@ try {
     cwd: root,
     env,
   });
+  // Each message box the window mounts, from its first frame. Playwright holds
+  // the app's ready event until launch returns, and the window opens only after
+  // the runtime has started, so this is in place before the page exists.
+  await app.context().addInitScript(() => {
+    const boxes = (window.__circleMessageBoxes = []);
+    new MutationObserver((records) => {
+      for (const record of records)
+        for (const node of record.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          const found = node.matches('textarea[aria-label="message"]')
+            ? [node]
+            : node.querySelectorAll('textarea[aria-label="message"]');
+          for (const box of found)
+            boxes.push({ home: !!box.closest('.home'), hash: location.hash });
+        }
+    }).observe(document, { childList: true, subtree: true });
+  });
   let page = await app.firstWindow();
   page.setDefaultTimeout(12000);
   page.on('pageerror', (error) => errors.push(String(error)));
@@ -153,6 +170,26 @@ try {
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   await send('first managed fixture');
   await page.getByText('saved fixture answer', { exact: true }).waitFor();
+  // The window opens with the home composer and keeps it until the send. Its
+  // start route once showed a conversation box first and swapped it for home,
+  // dropping what had been typed into the first one (#145).
+  const boxes = await page.evaluate(() => window.__circleMessageBoxes);
+  assert.ok(boxes, 'message boxes are recorded from the first frame');
+  assert.equal(boxes[0]?.home, true, JSON.stringify(boxes));
+  assert.equal(
+    boxes.filter((box) => box.home).length,
+    1,
+    JSON.stringify(boxes),
+  );
+  assert.deepEqual(
+    (await readModelRequests(requests, { requireComplete: true }))[0].messages
+      .filter((message) => message.role === 'user')
+      .map((message) => message.content),
+    ['first managed fixture'],
+  );
+  checks.push(
+    'the composer the window opens with is the one that sends the first request',
+  );
   const a = (await state()).activeSessionId;
   assert.equal((await command('new-session')).ok, true);
   const b = (await state()).activeSessionId;
