@@ -69,6 +69,7 @@ const REQUEST_KIND: Record<string, () => string> = {
   'plan-exit': () => t('plan exit'),
 };
 interface Props {
+  resourcesPaused?: boolean;
   commandTerminal?: CommandTerminalView;
   onExitCommandTerminal?: () => void;
   panel: PanelId;
@@ -182,6 +183,23 @@ export function Inspector(props: Props) {
         </span>
       </header>
       <div className={`inspector-body ${terminal ? 'flush' : ''}`}>
+        {props.resourcesPaused && (
+          <p
+            className="panel-note"
+            role="status"
+            style={{ overflowWrap: 'anywhere' }}
+          >
+            {t(
+              'Resources belong to {name}. Start a conversation in the selected project to make changes.',
+              {
+                name:
+                  snapshot.workspaces.find(
+                    (item) => item.id === session.workspaceId,
+                  )?.path ?? session.title,
+              },
+            )}
+          </p>
+        )}
         <InspectorResources {...props} sessionId={session.id} panels={panels} />
       </div>
     </aside>
@@ -223,6 +241,7 @@ function InspectorResources(
             {id === 'terminal' || id === 'changes' || id === 'activity' ? (
               <WorkspacePanelContents
                 kind={id}
+                resourcesPaused={props.resourcesPaused}
                 commandTerminal={
                   id === 'terminal' ? props.commandTerminal : undefined
                 }

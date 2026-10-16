@@ -27,6 +27,7 @@ const DebugPanel = lazy(() =>
 /** Native resources use the existing inspector's tabs and lifetime, without another workbench. */
 export function WorkspacePanelContents({
   kind,
+  resourcesPaused = false,
   commandTerminal,
   onExitCommandTerminal,
   sessionId,
@@ -38,6 +39,7 @@ export function WorkspacePanelContents({
   onTask,
 }: {
   kind: 'terminal' | 'changes' | 'activity';
+  resourcesPaused?: boolean;
   commandTerminal?: CommandTerminalView;
   onExitCommandTerminal?: () => void;
   sessionId: string;
@@ -142,85 +144,96 @@ export function WorkspacePanelContents({
           </button>
         ))}
       </div>
-      <Suspense fallback={<p role="status">{t('loading developer tools…')}</p>}>
-        {tabs
-          .filter((item) => visited.has(item.id))
-          .map((item) => (
-            <div
-              key={item.id}
-              id={`inspector-${kind}-${item.id}`}
-              role="tabpanel"
-              aria-labelledby={`inspector-${kind}-tab-${item.id}`}
-              className="inspector-resource-view"
-              hidden={tab !== item.id}
-            >
-              <NativeResourceBoundary name={item.label} resetKey={sessionId}>
-                {item.id === 'original' ? (
-                  children
-                ) : item.id === 'terminal' ? (
-                  <NativeTerminal
-                    embedded
-                    sessionId={sessionId}
-                    commandTerminal={commandTerminal}
-                    onExitCommandTerminal={onExitCommandTerminal}
-                    active={visible && tab === 'terminal'}
-                    onAddToDraft={(capture) =>
-                      appendTerminalSelection(runtime, capture, () =>
-                        commandTerminal
-                          ? commandTerminalRequest(
-                              commandTerminal.viewSessionId,
-                              commandTerminal.resolved.target,
-                              () => {},
-                            )<TerminalReplay>('replay', {
-                              id: capture.terminalId,
-                              afterSequence: capture.outputSequence,
-                              limit: 1,
-                            })
-                          : workspaceCall<TerminalReplay>(
-                              capture.sourceSessionId,
-                              'terminal',
-                              'replay',
-                              {
+      <fieldset
+        disabled={resourcesPaused && kind === 'changes'}
+        style={{ display: 'contents' }}
+      >
+        <Suspense
+          fallback={<p role="status">{t('loading developer tools…')}</p>}
+        >
+          {tabs
+            .filter((item) => visited.has(item.id))
+            .map((item) => (
+              <div
+                key={item.id}
+                id={`inspector-${kind}-${item.id}`}
+                role="tabpanel"
+                aria-labelledby={`inspector-${kind}-tab-${item.id}`}
+                className="inspector-resource-view"
+                hidden={tab !== item.id}
+              >
+                <NativeResourceBoundary name={item.label} resetKey={sessionId}>
+                  {item.id === 'original' ? (
+                    children
+                  ) : item.id === 'terminal' ? (
+                    <NativeTerminal
+                      embedded
+                      sessionId={sessionId}
+                      commandTerminal={commandTerminal}
+                      onExitCommandTerminal={onExitCommandTerminal}
+                      active={visible && tab === 'terminal'}
+                      onAddToDraft={(capture) =>
+                        appendTerminalSelection(runtime, capture, () =>
+                          commandTerminal
+                            ? commandTerminalRequest(
+                                commandTerminal.viewSessionId,
+                                commandTerminal.resolved.target,
+                                () => {},
+                              )<TerminalReplay>('replay', {
                                 id: capture.terminalId,
                                 afterSequence: capture.outputSequence,
                                 limit: 1,
-                              },
-                            ),
-                      )
-                    }
-                  />
-                ) : item.id === 'git' ? (
-                  <GitPanel
-                    sessionId={sessionId}
-                    embedded
-                    onFile={onFile}
-                    onOpenExternal={openExternal}
-                  />
-                ) : item.id === 'debug' ? (
-                  <DebugPanel sessionId={sessionId} embedded onFile={onFile} />
-                ) : item.id === 'tasks' ? (
-                  <TasksPanel
-                    embedded
-                    sessionId={sessionId}
-                    onSession={onSession}
-                    focusTaskId={
-                      selection.startsWith('task:')
-                        ? selection.slice(5)
-                        : undefined
-                    }
-                  />
-                ) : (
-                  <DeliveryCyclePanel
-                    sessionId={sessionId}
-                    active={visible && tab === 'delivery'}
-                    onTask={onTask}
-                    onOpenExternal={openExternal}
-                  />
-                )}
-              </NativeResourceBoundary>
-            </div>
-          ))}
-      </Suspense>
+                              })
+                            : workspaceCall<TerminalReplay>(
+                                capture.sourceSessionId,
+                                'terminal',
+                                'replay',
+                                {
+                                  id: capture.terminalId,
+                                  afterSequence: capture.outputSequence,
+                                  limit: 1,
+                                },
+                              ),
+                        )
+                      }
+                    />
+                  ) : item.id === 'git' ? (
+                    <GitPanel
+                      sessionId={sessionId}
+                      embedded
+                      onFile={onFile}
+                      onOpenExternal={openExternal}
+                    />
+                  ) : item.id === 'debug' ? (
+                    <DebugPanel
+                      sessionId={sessionId}
+                      embedded
+                      onFile={onFile}
+                    />
+                  ) : item.id === 'tasks' ? (
+                    <TasksPanel
+                      embedded
+                      sessionId={sessionId}
+                      onSession={onSession}
+                      focusTaskId={
+                        selection.startsWith('task:')
+                          ? selection.slice(5)
+                          : undefined
+                      }
+                    />
+                  ) : (
+                    <DeliveryCyclePanel
+                      sessionId={sessionId}
+                      active={visible && tab === 'delivery'}
+                      onTask={onTask}
+                      onOpenExternal={openExternal}
+                    />
+                  )}
+                </NativeResourceBoundary>
+              </div>
+            ))}
+        </Suspense>
+      </fieldset>
     </div>
   );
 }

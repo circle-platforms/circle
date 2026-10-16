@@ -12,6 +12,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'recovered-input-ui.mjs',
   'tasks-panel-ui.mjs',
   'git-continuity-ui.mjs',
+  'git-owner-ui.mjs',
   'debug-panel-ui.mjs',
   'browser-diagnostics-ui.mjs',
   'keyboard-navigation-ui.mjs',

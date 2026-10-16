@@ -990,6 +990,7 @@ export function App() {
   const inspector = (
     <NativeResourceBoundary name={t('inspector')} resetKey={panel}>
       <Inspector
+        resourcesPaused={home}
         panel={panel}
         visible={inspectorVisible}
         commandTerminal={commandTerminal}

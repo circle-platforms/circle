@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useOwnerState } from '../model/owner-state';
+import { useEffect, useRef } from 'react';
 import { workspaceCall } from '../model/workspace-client';
 import { t } from '../i18n';
 import './GitPanel.css';
@@ -46,14 +47,14 @@ export function GitPanel({
   onFile?: (path: string) => void;
   onOpenExternal?: (url: string) => void;
 }) {
-  const [state, setState] = useState<GitSnapshot | null>(null);
-  const [scope, setScope] = useState('working');
-  const [base, setBase] = useState('origin/main');
-  const [selected, setSelected] = useState<string[]>([]);
-  const [diff, setDiff] = useState('');
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [state, setState] = useOwnerState<GitSnapshot | null>(sessionId, null);
+  const [scope, setScope] = useOwnerState(sessionId, 'working');
+  const [base, setBase] = useOwnerState(sessionId, 'origin/main');
+  const [selected, setSelected] = useOwnerState<string[]>(sessionId, []);
+  const [diff, setDiff] = useOwnerState(sessionId, '');
+  const [message, setMessage] = useOwnerState(sessionId, '');
+  const [error, setError] = useOwnerState(sessionId, '');
+  const [busy, setBusy] = useOwnerState(sessionId, false);
   const generation = useRef(0);
   const owner = useRef(sessionId);
   if (owner.current !== sessionId) {
@@ -88,9 +89,7 @@ export function GitPanel({
     }
   };
   useEffect(() => {
-    setState(null);
-    setSelected([]);
-    setDiff('');
+    setBusy(false);
     void refresh();
     return () => {
       generation.current++;

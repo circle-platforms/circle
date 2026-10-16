@@ -1,6 +1,14 @@
 export const githubConnection: Record<string, string> = {
   'GitHub disconnected': 'GitHub 已断开连接',
   'GitHub authorization in progress': '正在进行 GitHub 授权',
+  'commit remaining workspace changes or move them to another branch, then refresh before publishing; nothing was pushed':
+    '请提交剩余工作区修改，或将其移到其他分支，再刷新并发布；尚未推送任何内容。',
+  'repository changed; refresh and review the current changes before publishing; nothing was pushed':
+    '仓库已更改；请刷新并审阅当前修改后再发布；尚未推送任何内容。',
+  'switch to a feature branch before publishing; nothing was pushed':
+    '请切换到功能分支后再发布；尚未推送任何内容。',
+  'Resources belong to {name}. Start a conversation in the selected project to make changes.':
+    '这些资源属于 {name}。在所选项目中开始会话后即可修改。',
   'verifying GitHub account': '正在核验 GitHub 账户…',
   'GitHub authorization was cancelled before a code was ready. No new connection was established.':
     'GitHub 授权已在授权码生成前取消，尚未建立新连接。',

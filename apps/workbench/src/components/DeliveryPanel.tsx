@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react';
+import { deliveryPreflightText } from '../model/delivery-preflight-text';
+import { useOwnerState } from '../model/owner-state';
+import { useEffect, useRef } from 'react';
 import { useRuntime } from '../app/context';
 import type { GitHubConnectionState } from '../../../../src/github_connection';
 import { NavLink } from 'react-router-dom';
@@ -15,7 +17,7 @@ type Check = {
 };
 export function WorkspaceServiceError({ error }: { error: string }) {
   if (!error.includes('native workspace services are not connected'))
-    return <p role="alert">{error}</p>;
+    return <p role="alert">{deliveryPreflightText(error)}</p>;
   return (
     <div role="alert">
       <p>{t('open this workspace in Circle desktop, then refresh')}</p>
@@ -37,9 +39,9 @@ export function DeliveryPanel({
   revision?: string;
   onOpenExternal?: (url: string) => void;
 }) {
-  const [opened, setOpened] = useState(false);
-  const [pr, setPR] = useState<PR | null>(null);
-  const [checks, setChecks] = useState<Check[]>([]);
+  const [opened, setOpened] = useOwnerState(sessionId, false);
+  const [pr, setPR] = useOwnerState<PR | null>(sessionId, null);
+  const [checks, setChecks] = useOwnerState<Check[]>(sessionId, []);
   const { snapshot } = useRuntime();
   const extension = snapshot.extensions.find(
     (item) => item.name === 'github' && item.scope === 'bundled',
@@ -49,12 +51,23 @@ export function DeliveryPanel({
     extension?.enabled &&
     connection?.provider === 'github' &&
     connection.state === 'connected';
-  const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
-  const [runId, setRunId] = useState('');
-  const [logs, setLogs] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [title, setTitle] = useOwnerState(sessionId, '');
+  const [body, setBody] = useOwnerState(sessionId, '');
+  const [runId, setRunId] = useOwnerState(sessionId, '');
+  const [logs, setLogs] = useOwnerState(sessionId, '');
+  const [busy, setBusy] = useOwnerState(sessionId, false);
+  const [error, setError] = useOwnerState(sessionId, '');
+  const owner = useRef(sessionId);
+  const generation = useRef(0);
+  if (owner.current !== sessionId) {
+    owner.current = sessionId;
+    generation.current++;
+  }
+  const current = (epoch: number, session: string) =>
+    generation.current === epoch && owner.current === session;
+  useEffect(() => {
+    setBusy(false);
+  }, [sessionId]);
   async function call(method: string, extra: Record<string, unknown> = {}) {
     return workspaceCall<any>(sessionId, 'delivery', method, {
       revision,
@@ -62,9 +75,18 @@ export function DeliveryPanel({
     });
   }
   async function refresh() {
-    const result = await call('status');
-    setPR(result.pullRequest);
-    if (result.pullRequest) setChecks(await call('checks'));
+    const epoch = generation.current,
+      session = sessionId;
+    try {
+      const result = await call('status');
+      if (!current(epoch, session)) return;
+      const nextChecks = result.pullRequest ? await call('checks') : [];
+      if (!current(epoch, session)) return;
+      setPR(result.pullRequest);
+      setChecks(nextChecks);
+    } catch (error) {
+      if (current(epoch, session)) throw error;
+    }
   }
   useEffect(() => {
     if (!opened) return;
@@ -81,16 +103,19 @@ export function DeliveryPanel({
     };
   }, [sessionId, opened]);
   async function action(method: string, extra: Record<string, unknown> = {}) {
+    const epoch = generation.current,
+      session = sessionId;
     setBusy(true);
     setError('');
     try {
       const result = await call(method, extra);
+      if (!current(epoch, session)) return;
       if (method === 'logs') setLogs(result.text);
       else await refresh();
     } catch (e) {
-      setError(String(e));
+      if (current(epoch, session)) setError(String(e));
     } finally {
-      setBusy(false);
+      if (current(epoch, session)) setBusy(false);
     }
   }
   function open(url: string) {
