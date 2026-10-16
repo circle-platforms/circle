@@ -10,7 +10,9 @@ const server = await createServer({
   logLevel: 'error',
 });
 await server.listen();
-const evidence = process.env.CIRCLE_SOURCE_HEADER_EVIDENCE;
+const evidence =
+  process.env.CIRCLE_SOURCE_HEADER_EVIDENCE ??
+  process.env.CIRCLE_COMPONENT_UI_EVIDENCE;
 if (evidence) await mkdir(evidence, { recursive: true });
 let browser;
 try {

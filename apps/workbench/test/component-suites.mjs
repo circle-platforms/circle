@@ -29,6 +29,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'agent-source-owner-ui.mjs',
   'native-terminal-context-ui.mjs',
   'terminal-selection-preview-ui.mjs',
+  'file-source-heading-ui.mjs',
 ]);
 
 /** Explicit suites run serially; a failed suite prevents later execution. */
