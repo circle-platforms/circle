@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
+import { DatabaseSync } from 'node:sqlite';
 import { RuntimeController } from '../src/runtime-controller';
 import { ScriptedModel } from '../../../src/testing';
 import {
@@ -64,6 +65,8 @@ test('native delegation reuses real agent sessions, retains child approval owner
     'Create fixture',
   );
   saveSettings(trustFolder(defaultSettings(), workspace), home);
+  const modelTrace: unknown[] = [];
+  const workspaceEvents: unknown[] = [];
   const handler = async (request: ModelRequest): Promise<ModelResponse> => {
     const user =
       request.messages.find((message) => message.role === 'user')?.content ??
@@ -131,10 +134,26 @@ test('native delegation reuses real agent sessions, retains child approval owner
               },
             },
           ]);
+    modelTrace.push({
+      at: Date.now(),
+      firstUser: user,
+      lastUser: request.messages.findLast((row) => row.role === 'user')
+        ?.content,
+      toolResults: request.messages.filter((row) => row.role === 'tool'),
+      response: message,
+    });
     return { message, usage: emptyUsage() };
   };
   const model = new ScriptedModel(Array(40).fill(handler));
-  const options = { home, workspace, userHome: home, model, emit() {} };
+  const options = {
+    home,
+    workspace,
+    userHome: home,
+    model,
+    emit() {},
+    emitWorkspaceEvent: (event: unknown) =>
+      workspaceEvents.push({ observedAt: Date.now(), event }),
+  };
   let controller = new RuntimeController(options);
   t.after(async () => {
     await controller.close();
@@ -414,17 +433,85 @@ test('native delegation reuses real agent sessions, retains child approval owner
     ).ok,
     true,
   );
-  await wait(
-    () =>
-      controller
-        .snapshot()
-        .agents.some(
-          (agent) =>
-            agent.sessionId === foreignParent &&
-            agent.task?.state === 'needs_review',
+  const foreignWaitStartedAt = Date.now();
+  try {
+    await wait(
+      () =>
+        controller
+          .snapshot()
+          .agents.some(
+            (agent) =>
+              agent.sessionId === foreignParent &&
+              agent.task?.state === 'needs_review',
+          ),
+      'foreign owner child completes',
+    );
+  } catch (error) {
+    // Preserve actual ledger/model/approval ownership before controller cleanup
+    // removes the fixture. A timeout alone cannot identify a runtime or UI bug.
+    try {
+      const path = join(
+        import.meta.dirname,
+        '../artifacts/runtime',
+        `task-agent-projection-failure-${randomUUID()}.json`,
+      );
+      let db: DatabaseSync | undefined;
+      let ledger: unknown;
+      try {
+        db = new DatabaseSync(
+          join(
+            home,
+            'collaboration',
+            createHash('sha256').update(workspace).digest('hex').slice(0, 24),
+            'collaboration.sqlite',
+          ),
+          { readOnly: true },
+        );
+        ledger = Object.fromEntries(
+          ['tasks', 'attempts', 'operations', 'events'].map((table) => [
+            table,
+            db!
+              .prepare(`SELECT record FROM ${table}`)
+              .all()
+              .map((row) => JSON.parse(String(row.record))),
+          ]),
+        );
+      } catch (readError) {
+        ledger = { error: String(readError) };
+      } finally {
+        db?.close();
+      }
+      await mkdir(join(import.meta.dirname, '../artifacts/runtime'), {
+        recursive: true,
+      });
+      await writeFile(
+        path,
+        JSON.stringify(
+          {
+            phase: 'foreign owner child completes',
+            foreignWaitStartedAt,
+            observedAt: Date.now(),
+            error: String(error),
+            root,
+            workspace,
+            parent,
+            foreignParent,
+            snapshot: controller.snapshot(),
+            ledger,
+            actualModelRequestCount: model.requests.length,
+            modelTrace,
+            workspaceEvents,
+          },
+          null,
+          2,
         ),
-    'foreign owner child completes',
-  );
+      );
+      t.diagnostic(`Actual foreign-owner failure receipt: ${path}`);
+    } catch (receiptError) {
+      t.diagnostic(`Foreign-owner receipt failed: ${String(receiptError)}`);
+    }
+    throw error;
+  }
   const foreignChild = controller
     .snapshot()
     .agents.find((agent) => agent.sessionId === foreignParent)!;
