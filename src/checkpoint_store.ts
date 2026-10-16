@@ -235,9 +235,10 @@ export class CheckpointStore {
       .all(parentId) as unknown as Session[];
   }
   rename(id: string, title: string): void {
+    // A new name is not new work. Recency stays the last message.
     this.db
-      .prepare('UPDATE sessions SET title = ?, updated = ? WHERE id = ?')
-      .run(title, Date.now(), id);
+      .prepare('UPDATE sessions SET title = ? WHERE id = ?')
+      .run(title, id);
     this.writeVersion++;
   }
   private decode(row: Record<string, unknown>): Checkpoint {
@@ -359,9 +360,10 @@ export class CheckpointStore {
   private selectOwned(sessionId: string, head: string | null): void {
     const messages = this.messages(sessionId, head);
     this.requireBalancedTools(messages);
+    // Choosing an earlier head is not a new message.
     this.db
-      .prepare('UPDATE sessions SET head = ?, updated = ? WHERE id = ?')
-      .run(head, Date.now(), sessionId);
+      .prepare('UPDATE sessions SET head = ? WHERE id = ?')
+      .run(head, sessionId);
     this.writeVersion++;
   }
   fork(sessionId: string, workspace: string, head?: string | null): Session {

@@ -260,8 +260,12 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // window has not shown yet; and whether the last look found the token expired.
   let botNews: { bot: Asset; run: BotRun }[] = [];
   let expired = false;
-  // The four platform objects as the server last reported them (/hub refresh).
+  // The four platform objects as the server last reported them (/hub refresh). Reads of
+  // them overlap (a refresh, a decision, a followed task ending) and are numbered as they
+  // start, so one that started earlier and finished later does not replace a newer one.
   let objects: Record<string, unknown> | undefined;
+  let objectsStarted = 0;
+  let objectsShown = 0;
   function publishView(signedIn: boolean): void {
     const config = readConfig();
     const view = {
@@ -307,6 +311,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // artifacts, evidence and the server's own check; E: the capability packs. Read from the
   // server for the most recent tasks you may read; the server decides what you may see.
   async function collectObjects(): Promise<{ tasks: number; packs: number }> {
+    const run = ++objectsStarted;
     // Each server tool call, and the knowledge indexing of what it read, is a task of its
     // own: the server lists them apart (kind=tool, kind=index) and they are counted here
     // rather than listed among the work. A server without that filter sends every task, so
@@ -470,7 +475,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         ).length,
       });
     }
-    objects = {
+    const found = {
       refreshedAt: new Date().toISOString(),
       work,
       execution,
@@ -495,6 +500,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
       bots: botViews,
       background,
     };
+    if (run > objectsShown) {
+      objectsShown = run;
+      objects = found;
+    }
     // A command that read them (/hub refresh) returns once the view shows them: the
     // desktop's pages read the view, not the command's lines.
     await showStatus();

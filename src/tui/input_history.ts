@@ -85,9 +85,10 @@ export class InputHistory {
   add(text: string): boolean {
     text = text.trimEnd();
     if (!text.trim()) return true;
+    if (this.pending.at(-1) !== text)
+      this.pending = [...this.pending, text].slice(-this.maximum);
     if (this.values.at(-1) !== text)
       this.values = [...this.values, text].slice(-this.maximum);
-    if (this.pending.at(-1) !== text) this.pending.push(text);
     this.reset();
     return this.flush();
   }

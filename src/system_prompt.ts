@@ -188,6 +188,13 @@ export function buildSystemPrompt(
           catalog.userHome,
         );
   if (memory) sections.push(memory);
+  // The model otherwise probes for AGENTS.md beside a README read, and the
+  // missing file shows up as a failed read_file. These files are already in
+  // the prompt when they exist.
+  if (!options.no_context_files && catalog.localContext !== false)
+    sections.push(
+      'Do not call read_file to discover instruction files (AGENTS.md, CLAUDE.md, AGENTS.override.md, MEMORY.md). Any of those that exist are already included in this prompt.',
+    );
   sections.push(
     `<env>\n  Working directory: ${workspace}\n  Platform: ${platform()}\n  Today's date: ${new Date().toISOString().slice(0, 10)}\n  Is directory a git repo: ${currentBranch(workspace) ? 'yes' : 'no'}\n  Model: ${model}\n  Protocol: ${protocol}\n</env>`,
   );

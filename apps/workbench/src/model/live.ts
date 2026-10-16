@@ -6,8 +6,12 @@ import type {
 } from '../../../desktop/src/runtime-protocol';
 import { RuntimeTokenBuffer } from '../../../desktop/src/runtime-token-stream';
 import type {
+  Attachment,
+  BeginResult,
   CommandResult,
+  Effort,
   RuntimePort,
+  SessionMode,
   WorkbenchSnapshot,
   Session,
   SessionViewPatch,
@@ -17,6 +21,7 @@ import {
   visibleMessages,
   EFFORTS,
   parseMode,
+  promptAttachments,
   sessionMode,
 } from './state';
 import {
@@ -28,6 +33,7 @@ import { saveExport } from '../host';
 import { MAX_PROMPT_PAYLOAD } from '../../../desktop/src/runtime-protocol';
 import { t } from '../i18n/index.ts';
 import { SessionActionError } from './action-error';
+import { sessionHasContent } from './session-management';
 
 const LOCAL_SESSION = [
   'draft',
@@ -536,6 +542,43 @@ export class LiveRuntime implements RuntimePort {
     const result = (await this.native('new-session')) as { sessionId: string };
     return result.sessionId;
   };
+  beginConversation = async (input: {
+    workspaceId?: string | null;
+    text: string;
+    model?: string;
+    effort?: Effort;
+    mode?: SessionMode;
+    attachments?: Attachment[];
+  }): Promise<BeginResult> => {
+    const text = input.text.trim();
+    if (!text) throw Error(t('prompt is empty'));
+    if (
+      input.attachments !== undefined &&
+      (!Array.isArray(input.attachments) || input.attachments.length > 16)
+    )
+      throw Error('invalid attachments');
+    await this.changes;
+    const workspaceId = input.workspaceId || undefined;
+    if (workspaceId) {
+      const workspace = this.snapshot.workspaces.find(
+        (item) => item.id === workspaceId,
+      );
+      if (!workspace)
+        throw Error(t('open the workspace through the native folder dialog'));
+      if (!workspace.trusted) return { dialog: 'trust' };
+    }
+    const folded = promptAttachments(text, input.attachments ?? []);
+    const result = (await this.native('begin-session', {
+      ...(workspaceId ? { workspaceId } : {}),
+      text: folded.text,
+      display: folded.display,
+      ...(folded.attachments.length ? { attachments: folded.attachments } : {}),
+      ...(input.model ? { modelId: input.model } : {}),
+      ...(input.effort ? { effort: input.effort } : {}),
+      ...(input.mode ? { mode: input.mode } : {}),
+    })) as { sessionId: string };
+    return { sessionId: result.sessionId };
+  };
   selectSession = async (id: string) => {
     await this.changes;
     await this.native('select-session', { id });
@@ -686,25 +729,12 @@ export class LiveRuntime implements RuntimePort {
         notice: t('unknown command /{name}', { name: commandWord(raw) }),
       };
     if (!raw && !session.attachments.length) return {};
-    const textAttachments = session.attachments.filter(
-      (a) => !['image', 'document'].includes(a.kind),
-    );
-    const prompt =
-      raw +
-      textAttachments
-        .map(
-          (a) =>
-            `\n\n<attachment name=${JSON.stringify(a.name)}>\n${a.content}\n</attachment>`,
-        )
-        .join('');
-    const media = session.attachments.filter((a) =>
-      ['image', 'document'].includes(a.kind),
-    );
+    const folded = promptAttachments(raw, session.attachments);
     const payload = {
-      text: prompt || 'See the attached files.',
-      display: raw,
+      text: folded.text,
+      display: folded.display,
       kind,
-      attachments: media,
+      attachments: folded.attachments,
     };
     // Said here, with the message left in the box, rather than as a refused command
     if (JSON.stringify(payload).length > MAX_PROMPT_PAYLOAD)
@@ -747,10 +777,10 @@ export class LiveRuntime implements RuntimePort {
       return { openSession: true };
     }
     if (name === 'resume' && args) {
+      const visible = this.snapshot.sessions.filter(sessionHasContent);
       const target =
-        this.snapshot.sessions.find(
-          (s) => s.id === args || s.id.endsWith(args),
-        ) ?? this.snapshot.sessions[Number(args) - 1];
+        visible.find((s) => s.id === args || s.id.endsWith(args)) ??
+        visible[Number(args) - 1];
       if (!target) throw Error(t('session not found'));
       await this.selectSession(target.id);
       return { openSession: true };

@@ -8,6 +8,7 @@ export type RuntimeCommandName =
   | 'clear-queue'
   | 'background'
   | 'new-session'
+  | 'begin-session'
   | 'select-session'
   | 'delete-session'
   | 'rename-session'
@@ -103,6 +104,7 @@ export const runtimeCommands = new Set<RuntimeCommandName>([
   'clear-queue',
   'background',
   'new-session',
+  'begin-session',
   'select-session',
   'delete-session',
   'rename-session',

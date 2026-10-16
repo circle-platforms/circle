@@ -134,7 +134,11 @@ export interface ChromeOptions {
   handoff?: (reason: string, signal: AbortSignal) => Promise<void>;
   /** How long the browser has to start, in milliseconds: a minute unless given. */
   startTimeout?: number;
-  /** Bounded process shutdown, in milliseconds per phase; three seconds unless given. */
+  /**
+   * Process exit waits, in milliseconds per phase; three seconds unless given.
+   * Also caps the shutdown response. Windows taskkill commands have a separate
+   * fixed three-second execution deadline.
+   */
   closeTimeout?: number;
   /** Each owned-process inspection is bounded separately from the exit grace period. */
   processInspectionTimeout?: number;
@@ -180,6 +184,8 @@ interface Tab {
   title: string;
   /** The main frame's own address: an error page's is chrome-error://. */
   frameUrl: string;
+  /** Main-frame documents committed during the current explicit navigation. */
+  navigation?: Set<string>;
   /** The main frame's last document request, and why it failed if it did. */
   document?: { id: string; url: string };
   documentResponse?: { status: number; statusText: string };
@@ -249,6 +255,7 @@ interface Hold {
 const LATE_DOWNLOAD = 10_000;
 /** How long the browser has to start: a new profile on a busy Windows machine has taken 20 s. */
 const START_TIMEOUT = 60_000;
+const TASKKILL_TIMEOUT = 3000;
 const BLANK = 'about:blank';
 const CERTIFICATE_ERROR = /^ERR_(CERT_|SSL_PINNED|BAD_SSL)/;
 const originOf = (url: string) => {
@@ -262,6 +269,8 @@ const originOf = (url: string) => {
 
 export class ChromeBrowser implements BrowserPort {
   private child?: ChildProcess;
+  /** Spawn ownership outlives a lost protocol connection or a later launch. */
+  private ownedRoots = new Set<ChildProcess>();
   private processGroups = new Set<number>();
   private cdp?: CdpPipe;
   private stderr: string[] = [];
@@ -320,19 +329,20 @@ export class ChromeBrowser implements BrowserPort {
         detached: process.platform !== 'win32',
       },
     );
+    this.ownedRoots.add(child);
     // The browser's last words, for a start that fails. A message it repeats (a headless
     // browser's display errors, many a second) is kept once.
-    this.stderr = [];
+    const stderr: string[] = [];
+    this.stderr = stderr;
     const plain = (line: string) => line.replace(/^\[[\d:./]+/, '');
     child.stderr?.on('data', (chunk: Buffer) => {
       for (const line of chunk.toString('utf8').split('\n')) {
         if (!line.trim()) continue;
-        const last = this.stderr.at(-1);
+        const last = stderr.at(-1);
         if (last && plain(last) === plain(line)) continue;
-        this.stderr.push(line.slice(0, 300));
+        stderr.push(line.slice(0, 300));
       }
-      if (this.stderr.length > 40)
-        this.stderr.splice(0, this.stderr.length - 40);
+      if (stderr.length > 40) stderr.splice(0, stderr.length - 40);
     });
     const cdp = new CdpPipe(
       child.stdio[3] as Writable,
@@ -344,17 +354,24 @@ export class ChromeBrowser implements BrowserPort {
     this.cdp = cdp;
     this.staging = join(profile, 'downloads');
     const failed = new Promise<never>((_resolve, reject) =>
-      child.once('error', (error) =>
-        reject(Error(`the browser could not start: ${error.message}`)),
-      ),
+      child.once('error', (error) => {
+        if (child.pid === undefined) this.ownedRoots.delete(child);
+        reject(Error(`the browser could not start: ${error.message}`));
+      }),
     );
     failed.catch(() => {});
     child.once('exit', () => {
+      this.ownedRoots.delete(child);
       cdp.close();
+      // An auxiliary service can inherit these pipe descriptors and outlive the
+      // browser. Release our ends once the browser exits so they cannot keep Circle
+      // alive; stopping the owned browser process group is still awaited by close().
+      for (const stream of child.stdio) stream?.destroy();
       this.gone(cdp);
       void removeProfile(profile);
     });
     cdp.on((event) => this.event(cdp, event));
+    let phase = 'Browser.getVersion';
     try {
       const limit = this.options.startTimeout ?? START_TIMEOUT;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -369,18 +386,50 @@ export class ChromeBrowser implements BrowserPort {
           );
         }),
       ]).finally(() => clearTimeout(timer));
-      await cdp.send('Target.setDiscoverTargets', { discover: true });
+      phase = 'Target.setDiscoverTargets';
+      await cdp.send(phase, { discover: true });
       // Downloads arrive under the browser's own id, and Circle names them when they are done
-      await cdp.send('Browser.setDownloadBehavior', {
+      phase = 'Browser.setDownloadBehavior';
+      await cdp.send(phase, {
         behavior: 'allowAndName',
         downloadPath: this.staging,
         eventsEnabled: true,
       });
     } catch (error) {
-      child.kill();
-      const said = this.stderr.slice(-3).join(' / ');
-      throw Error(
-        `${error instanceof Error ? error.message : String(error)}${said ? ` (the browser said: ${said})` : ''}`,
+      // Freeze what was actually observed before our cleanup signal changes it.
+      // A closed protocol pipe alone does not establish that the process exited.
+      const processAtFailure = {
+        observedExit: child.exitCode !== null || child.signalCode !== null,
+        exitCode: child.exitCode ?? 'unknown',
+        signal: child.signalCode ?? 'unknown',
+      };
+      const received = stderr.slice(-3);
+      const stderrComplete = child.stderr?.readableEnded ?? false;
+      const cleanupTerminationRequested = child.kill();
+      const message = error instanceof Error ? error.message : String(error);
+      // Existing startup timeout text is a public error contract. A closed start
+      // needs metadata in its message too: tool consumers may discard Error fields.
+      const context =
+        message === 'the browser was closed'
+          ? ` (startup ${phase}; exitCode=${processAtFailure.exitCode}; signal=${processAtFailure.signal}; stderrComplete=${stderrComplete})`
+          : '';
+      const said = received.join(' / ');
+      throw Object.assign(
+        Error(
+          `${message}${context}${said ? ` (the browser said: ${said})` : ''}`,
+          {
+            cause: error,
+          },
+        ),
+        {
+          browserStartup: {
+            phase,
+            processAtFailure,
+            stderr: received,
+            stderrComplete,
+            cleanupTerminationRequested,
+          },
+        },
       );
     }
     return cdp;
@@ -433,10 +482,12 @@ export class ChromeBrowser implements BrowserPort {
         child.off('error', done);
         resolve(exited);
       };
-      const done = (): void => finish(true);
+      const done = (): void => {
+        if (this.exited(child)) finish(true);
+      };
       const timer = setTimeout(() => finish(this.exited(child)), timeout);
       child.once('exit', done);
-      child.once('error', done);
+      child.on('error', done);
     });
   }
   private async stopProcess(
@@ -449,6 +500,10 @@ export class ChromeBrowser implements BrowserPort {
         execFile(
           'taskkill',
           ['/PID', String(child.pid), '/T', ...(force ? ['/F'] : [])],
+          {
+            timeout: TASKKILL_TIMEOUT,
+            killSignal: 'SIGKILL',
+          },
           (error) => {
             if (error && !this.exited(child)) reject(error);
             else resolve();
@@ -467,15 +522,9 @@ export class ChromeBrowser implements BrowserPort {
     }
   }
   private async groupRunning(pid: number): Promise<boolean> {
-    try {
-      process.kill(-pid, 0);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
-      // Darwin may deny a group probe after termination. EPERM proves neither
-      // exit nor liveness: inspect actual members below, and fail if ps fails.
-      if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
-    }
-    // An exited grandchild can remain a zombie until the OS reaps it; it cannot run or write.
+    // Signal 0 checks permission too; a refused probe does not tell us whether
+    // live owned descendants remain. Read actual process state instead: a zombie
+    // cannot run or write. Failure to read state or stop a live member still rejects.
     const output = await new Promise<string>((resolve, reject) =>
       execFile(
         'ps',
@@ -494,48 +543,88 @@ export class ChromeBrowser implements BrowserPort {
     });
   }
   private async closeProcess(): Promise<void> {
-    const child = this.child;
     const timeout = Math.max(1, this.options.closeTimeout ?? 3000);
-    if (child) {
-      if (process.platform !== 'win32' && child.pid)
-        this.processGroups.add(child.pid);
+    if (this.child) this.ownedRoots.add(this.child);
+    const failures: unknown[] = [];
+    const failedRoots = new Map<number, ChildProcess>();
+    if (this.ownedRoots.size)
       await this.limit(
         this.send('Browser.close'),
         undefined,
         Math.min(timeout, 2000),
       ).catch(() => {});
-      if (!(await this.waitForExit(child, timeout))) {
-        // Windows taskkill can refuse a graceful stop and require /F. Still give the
-        // process its bounded grace period, then escalate; a forced-stop failure rejects.
-        await this.stopProcess(child, false).catch(() => {});
-        if (!(await this.waitForExit(child, Math.min(timeout, 1000)))) {
-          await this.stopProcess(child, true);
-          if (!(await this.waitForExit(child, timeout)))
-            throw new Error(
-              'the browser process did not stop; retry closing the session',
-            );
+    for (const child of [...this.ownedRoots]) {
+      try {
+        if (process.platform !== 'win32' && child.pid)
+          this.processGroups.add(child.pid);
+        if (!(await this.waitForExit(child, timeout))) {
+          // Windows taskkill can refuse a graceful stop and require /F. Keep its
+          // bounded grace period and observe the owned root after escalation.
+          await this.stopProcess(child, false).catch(() => {});
+          if (!(await this.waitForExit(child, Math.min(timeout, 1000)))) {
+            let forceFailed = false;
+            let forceError: unknown;
+            try {
+              await this.stopProcess(child, true);
+            } catch (error) {
+              if (process.platform !== 'win32') throw error;
+              forceFailed = true;
+              forceError = error;
+            }
+            // A successful tree command is not an observed root exit. Stop the
+            // same owned handle once, then retain the existing exit verification.
+            if (
+              !forceFailed &&
+              process.platform === 'win32' &&
+              !this.exited(child)
+            )
+              child.kill('SIGKILL');
+            // A failed taskkill callback can precede the owned root's exit.
+            // Observe the same bounded exit phase before retaining its error.
+            if (!(await this.waitForExit(child, timeout))) {
+              if (forceFailed) throw forceError;
+              throw new Error(
+                'the browser process did not stop; retry closing the session',
+              );
+            }
+          }
         }
+        this.ownedRoots.delete(child);
+      } catch (error) {
+        if (child.pid && !this.exited(child)) failedRoots.set(child.pid, child);
+        failures.push(error);
       }
     }
     // A root can exit before a renderer. Keep group ownership through failed cleanup/retry.
     for (const pid of this.processGroups) {
-      if (await this.groupRunning(pid)) {
-        try {
-          process.kill(-pid, 'SIGKILL');
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+      // A failed live root remains owned for a later explicit close. Do not
+      // repeat its failed group signal in this same cleanup attempt.
+      const failedRoot = failedRoots.get(pid);
+      if (failedRoot && !this.exited(failedRoot)) continue;
+      try {
+        if (await this.groupRunning(pid)) {
+          try {
+            process.kill(-pid, 'SIGKILL');
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+          }
+          const deadline = Date.now() + timeout;
+          while (await this.groupRunning(pid)) {
+            if (Date.now() >= deadline)
+              throw new Error(
+                'the browser child processes did not stop; retry closing the session',
+              );
+            await delay(20);
+          }
         }
-        const deadline = Date.now() + timeout;
-        while (await this.groupRunning(pid)) {
-          if (Date.now() >= deadline)
-            throw new Error(
-              'the browser child processes did not stop; retry closing the session',
-            );
-          await delay(20);
-        }
+        this.processGroups.delete(pid);
+      } catch (error) {
+        failures.push(error);
       }
-      this.processGroups.delete(pid);
     }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length)
+      throw new AggregateError(failures, 'browser cleanup failed');
     this.cdp?.close();
   }
   // ---- tabs
@@ -849,6 +938,7 @@ export class ChromeBrowser implements BrowserPort {
       case 'Page.frameNavigated':
         if (!params.frame.parentId) {
           tab.frameUrl = params.frame.url;
+          if (params.frame.loaderId) tab.navigation?.add(params.frame.loaderId);
           tab.world = undefined;
           // Past the warning to its site, wherever on that host it went on to (a site that
           // sends / to /login): by whom, for the model's next result
@@ -1118,13 +1208,26 @@ export class ChromeBrowser implements BrowserPort {
     return { opened, stop: () => tab.wake.delete(wake) };
   }
   /** Until the page has loaded and its network has been quiet for a moment. */
-  private async idle(tab: Tab, signal?: AbortSignal, ms = 15000) {
+  private async idle(
+    tab: Tab,
+    signal?: AbortSignal,
+    committed?: () => boolean,
+    ms = 15000,
+  ) {
     const end = Date.now() + ms;
     await delay(60, undefined, { signal });
     while (Date.now() < end) {
       signal?.throwIfAborted();
-      if (tab.closed || tab.dialogs.length) return;
+      if (tab.closed) {
+        if (committed && !committed())
+          throw Error(
+            'the tab closed before its navigation document committed',
+          );
+        return;
+      }
+      if (tab.dialogs.length) return;
       if (
+        (!committed || committed()) &&
         !tab.loading &&
         !tab.network.size &&
         Date.now() - tab.lastNetwork >= 400
@@ -1132,6 +1235,10 @@ export class ChromeBrowser implements BrowserPort {
         return;
       await delay(50, undefined, { signal });
     }
+    if (committed && !committed())
+      throw Error(
+        'the navigation document did not commit before the browser action timed out',
+      );
   }
   // ---- reaching into the page
   private async world(tab: Tab): Promise<number> {
@@ -1362,34 +1469,51 @@ export class ChromeBrowser implements BrowserPort {
     const dialog = this.dialogOpens(tab);
     let error = '';
     let downloaded = false;
+    let committed: (() => boolean) | undefined;
+    const loaders = new Set<string>();
+    tab.navigation = loaders;
     try {
-      const result = await this.limit(
-        Promise.race([
-          this.send<{ errorText?: string; isDownload?: boolean }>(
-            'Page.navigate',
-            { url },
-            tab.session,
-          ),
-          dialog.opened.then(
-            () => ({}) as { errorText?: string; isDownload?: boolean },
-          ),
-        ]),
-        signal,
-        30000,
-      );
-      error = result.errorText ?? '';
-      downloaded = result.isDownload === true;
-    } catch (cause) {
-      signal?.throwIfAborted();
-      if (!tab.dialogs.length) {
-        error = 'ERR_TIMED_OUT';
-        await this.send('Page.stopLoading', {}, tab.session).catch(() => {});
+      try {
+        const result = await this.limit(
+          Promise.race([
+            this.send<{
+              errorText?: string;
+              isDownload?: boolean;
+              loaderId?: string;
+            }>('Page.navigate', { url }, tab.session),
+            dialog.opened.then(
+              () =>
+                ({}) as {
+                  errorText?: string;
+                  isDownload?: boolean;
+                  loaderId?: string;
+                },
+            ),
+          ]),
+          signal,
+          30000,
+        );
+        error = result.errorText ?? '';
+        downloaded = result.isDownload === true;
+        // A response (including a certificate error) can precede the new document.
+        // Remember a commit even if that document immediately redirects again.
+        const loaderId = result.loaderId;
+        if (!downloaded && !error.includes('ERR_ABORTED') && loaderId)
+          committed = () => loaders.has(loaderId);
+      } catch (cause) {
+        signal?.throwIfAborted();
+        if (!tab.dialogs.length) {
+          error = 'ERR_TIMED_OUT';
+          await this.send('Page.stopLoading', {}, tab.session).catch(() => {});
+        }
+      } finally {
+        dialog.stop();
       }
+      tab.lastNetwork = Date.now();
+      await this.idle(tab, signal, committed);
     } finally {
-      dialog.stop();
+      if (tab.navigation === loaders) tab.navigation = undefined;
     }
-    tab.lastNetwork = Date.now();
-    await this.idle(tab, signal);
     await this.notice(tab, signal);
     // A load that failed without the browser's own error page, as one that timed out; one
     // that went on (a certificate trusted for good) has failed no more
@@ -1749,6 +1873,8 @@ export class ChromeBrowser implements BrowserPort {
       conversation.tabsChanged = true;
       return { text: await this.result(conversation, text, signal) };
     }
+    if (action === 'handoff' && !this.options.handoff)
+      throw Error('there is no one to hand the browser to here');
     const tab = await this.activeTab(conversation);
     await this.onScreen(tab, signal);
     if (action === 'handoff') {
