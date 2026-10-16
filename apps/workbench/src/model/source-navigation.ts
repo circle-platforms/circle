@@ -11,7 +11,7 @@ export function sourceLocation(href: string): SourceLocation | null {
     (/^[a-z][a-z\d+.-]*:/i.test(href) &&
       !/^file:/i.test(href) &&
       !/^[A-Za-z]:[\\/]/.test(href) &&
-      !/^[^:/]+\.[^:/]+:\d+(?::\d+)?$/.test(href))
+      !/^[^:/]+\.[^:/]+:\d+(?::\d+)?(?:[-–]L?\d+)?$/.test(href))
   )
     return null;
   let value = href;
@@ -25,7 +25,7 @@ export function sourceLocation(href: string): SourceLocation | null {
     }
   }
   const anchor = value.match(
-    /(?:#L(\d+)(?:[C:](\d+))?(?:-L?\d+)?|:(\d+)(?::(\d+))?)$/,
+    /(?:#L(\d+)(?:[C:](\d+))?(?:-L?\d+)?|:(\d+)(?::(\d+))?(?:[-–]L?\d+)?)$/,
   );
   let path = anchor ? value.slice(0, anchor.index) : value;
   // Reject URI fragments/queries before decoding: encoded # and ? can be real
@@ -138,4 +138,21 @@ export function workspaceRelativePath(
   )
     throw Error('source is outside the workspace');
   return relative;
+}
+
+/** Only standalone inline-code file references become source links. Commands
+ * and fenced code remain literal code; resolution still enforces the grant. */
+export function inlineSourceLocation(value: string): SourceLocation | null {
+  const text = value.trim().replace(/^\((.*)\)$/, '$1');
+  if (
+    !/^(?:file:\/\/|[A-Za-z]:[\\/]|\.?\.?[\\/]|[\\/]|[\w@.-]+[\\/])/.test(
+      text,
+    ) &&
+    !/^(?:[\w@.-]+\.[\w-]+|AGENTS|README|LICENSE|Dockerfile|Makefile)(?:#L\d.*|:\d.*)?$/.test(
+      text,
+    )
+  )
+    return null;
+  if (/[\n\r`<>]/.test(text) || /[();={}]/.test(text)) return null;
+  return sourceLocation(text);
 }

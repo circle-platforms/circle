@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   sourceLocation,
   attachmentImage,
+  inlineSourceLocation,
 } from '../src/model/source-navigation.ts';
 
 test('source links resolve the actual local file and requested line without opening an external page', () => {
@@ -129,4 +130,30 @@ test('outside-root, sibling prefix, traversal and different-drive source paths a
     ['C:\\Work\\Other\\a.ts', 'C:\\Work\\App'],
   ])
     assert.throws(() => workspaceRelativePath(source, root), source);
+});
+
+test('real planning references open the start of colon line ranges', () => {
+  for (const suffix of [':2–5', ':2-5', ':2:3–5']) {
+    const target = sourceLocation('public/task-model.mjs' + suffix);
+    assert.equal(target?.path, 'public/task-model.mjs');
+    assert.equal(target?.line, 2);
+    assert.equal(target?.column, suffix.includes(':3') ? 3 : undefined);
+  }
+});
+
+test('inline source references retain parentheses, ranges and native file targets without treating commands as files', () => {
+  assert.deepEqual(inlineSourceLocation('(test/task-model.test.mjs:7)'), {
+    path: 'test/task-model.test.mjs',
+    line: 7,
+    column: undefined,
+  });
+  assert.equal(inlineSourceLocation('public/task-model.mjs:2–5')?.line, 2);
+  for (const text of [
+    'npm test',
+    'node public/task-model.mjs',
+    'console.log()',
+    'value = 1;',
+    'https://example.com/a.ts',
+  ])
+    assert.equal(inlineSourceLocation(text), null, text);
 });

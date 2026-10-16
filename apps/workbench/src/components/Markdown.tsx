@@ -1,12 +1,13 @@
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useSources, sourceLocation } from './SourceNavigation';
+import { remarkSourceLinks } from '../model/markdown-source-links';
 export function Markdown({ text }: { text: string }) {
   const sources = useSources();
   return (
     <div className="markdown">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={sources ? [remarkGfm, remarkSourceLinks] : [remarkGfm]}
         urlTransform={(url) =>
           sourceLocation(url) ? url : defaultUrlTransform(url)
         }
