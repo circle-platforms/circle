@@ -13,11 +13,19 @@ applyTheme(query.get('theme') === 'dark' ? 'dark' : 'light');
 const runtime = new PreviewRuntime();
 Object.defineProperty(runtime, 'mode', { value: 'live' });
 const calls: Array<{ name: string; args?: string }> = [];
+const copies: string[] = [];
+Object.defineProperty(navigator, 'clipboard', {
+  value: {
+    writeText: async (value: string) => {
+      copies.push(value);
+    },
+  },
+});
 runtime.command = (name, args) => {
   calls.push({ name, args });
   throw Error('secure credential storage is unavailable');
 };
-function setView(state = 'disconnected') {
+function setView(state = 'disconnected', epoch = 7) {
   runtime.change((snapshot) => {
     snapshot.extensions = [
       {
@@ -32,7 +40,7 @@ function setView(state = 'disconnected') {
         view: {
           provider: 'github',
           client: 'GitHub CLI',
-          epoch: 7,
+          epoch,
           state,
           repositories: [],
           remoteRevocation: 'not-requested',
@@ -53,6 +61,7 @@ function setView(state = 'disconnected') {
 Object.assign(window, {
   githubFixture: {
     calls,
+    copies,
     setView,
     unavailable: () =>
       runtime.change((s) => {

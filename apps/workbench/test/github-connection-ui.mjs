@@ -33,10 +33,10 @@ try {
       const card = page.locator('#github-connection');
       await card.waitFor({ state: 'visible' });
       const connect = card.getByRole('button', {
-        name: language === 'en' ? 'sign in with browser' : '使用浏览器登录',
+        name:
+          language === 'en' ? 'start GitHub authorization' : '开始 GitHub 授权',
         exact: true,
       });
-      await card.locator('textarea').fill('circle-platforms/circle');
       assert.equal(await card.locator('select').inputValue(), 'encrypted');
       assert.deepEqual(
         await page.evaluate(() => window.githubFixture.calls),
@@ -52,9 +52,10 @@ try {
       assert.deepEqual(await page.evaluate(() => window.githubFixture.calls), [
         {
           name: 'github',
-          args: 'connect {"storage":"encrypted","repositories":["circle-platforms/circle"]}',
+          args: 'connect {"storage":"encrypted","repositories":[]}',
         },
       ]);
+      await card.locator('textarea').fill('circle-platforms/circle');
       await card.locator('select').selectOption('session');
       await connect.click();
       await page.waitForFunction(() => window.githubFixture.calls.length === 2);
@@ -64,6 +65,16 @@ try {
       );
       await page.evaluate(() => window.githubFixture.setView('authorizing'));
       await card.getByText('CODE-TEST').waitFor();
+      await card
+        .getByRole('button', {
+          name: language === 'en' ? 'copy authorization code' : '复制授权码',
+          exact: true,
+        })
+        .click();
+      assert.deepEqual(await page.evaluate(() => window.githubFixture.copies), [
+        'CODE-TEST',
+      ]);
+      assert.match(await card.textContent(), /GitHub CLI/);
       await card
         .getByRole('button', {
           name: language === 'en' ? 'cancel login' : '取消登录',
@@ -79,7 +90,10 @@ try {
         await page
           .locator('.native-delivery')
           .getByRole('button', {
-            name: language === 'en' ? 'sign in with browser' : '使用浏览器登录',
+            name:
+              language === 'en'
+                ? 'start GitHub authorization'
+                : '开始 GitHub 授权',
             exact: true,
           })
           .count(),
@@ -93,6 +107,49 @@ try {
       await page.screenshot({
         path: `${out}/${language}-${theme}-authorization.png`,
       });
+      // A separately supplied connected snapshot exercises editing only; no
+      // authentication command is converted into a successful connection.
+      await page.evaluate(() => window.githubFixture.setView('connected'));
+      await card.locator('textarea').fill('circle-platforms/other');
+      await page.evaluate(() => window.githubFixture.setView('connected', 8));
+      await card
+        .getByRole('button', {
+          name:
+            language === 'en'
+              ? 'save allowed repositories'
+              : '保存允许访问的仓库',
+          exact: true,
+        })
+        .click();
+      await page.waitForFunction(() => window.githubFixture.calls.length === 4);
+      assert.equal(
+        (await page.evaluate(() => window.githubFixture.calls))[3].args,
+        'configure {"epoch":7,"repositories":["circle-platforms/other"]}',
+      );
+      assert.equal(
+        await card.locator('textarea').inputValue(),
+        'circle-platforms/other',
+        'failed configuration preserves draft',
+      );
+      await card
+        .getByRole('button', {
+          name: language === 'en' ? 'reset repository edits' : '还原仓库编辑',
+          exact: true,
+        })
+        .click();
+      assert.equal(await card.locator('textarea').inputValue(), '');
+      assert.equal(
+        await card
+          .getByRole('button', {
+            name:
+              language === 'en'
+                ? 'save allowed repositories'
+                : '保存允许访问的仓库',
+            exact: true,
+          })
+          .isDisabled(),
+        true,
+      );
       await page.evaluate(() => window.githubFixture.unavailable());
       await card.getByRole('link').waitFor();
       assert.equal(await card.getByRole('button').count(), 0);

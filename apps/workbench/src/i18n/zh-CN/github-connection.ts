@@ -1,4 +1,12 @@
 export const githubConnection: Record<string, string> = {
+  'reset repository edits': '还原仓库编辑',
+  'No repositories selected; repository actions are unavailable.':
+    '尚未选择仓库，暂不能执行仓库操作。',
+  'save allowed repositories': '保存允许访问的仓库',
+  'authorization application': '授权应用',
+  'Circle allowed repositories (optional)': 'Circle 允许访问的仓库（可选）',
+  'start GitHub authorization': '开始 GitHub 授权',
+  'copy authorization code': '复制授权码',
   'GitHub connection': 'GitHub 连接',
   'Connect GitHub in settings for repository delivery.':
     '在设置中连接 GitHub，以交付仓库更改。',
