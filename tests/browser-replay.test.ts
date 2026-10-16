@@ -534,6 +534,28 @@ test('snapshot elements are read from any place on a line, and a warning control
       { ref: 'e8', role: 'link', name: 'Proceed' },
     ],
   );
+  // The state words and marks a snapshot gives an element come before the warning's
+  assert.deepEqual(
+    snapshotElements(
+      'This is Circle\'s certificate warning, shown in the tab in place of https://nas.lan/ (ERR_CERT_AUTHORITY_INVALID).\n[e1] button "Advanced" expanded [warning: advanced]\n[e2] link "" icon=arrow-right [new] [covered] [warning: proceed]\n[e3] switch "Remember" not pressed unchecked',
+    ),
+    [
+      { ref: 'e1', role: 'button', name: 'Advanced', warning: 'advanced' },
+      { ref: 'e2', role: 'link', name: '', warning: 'proceed' },
+      { ref: 'e3', role: 'switch', name: 'Remember' },
+    ],
+  );
+});
+
+test('expect and absent do not take what a snapshot says of an element for text the page shows', () => {
+  const snapshot =
+    '[e1] button "" icon=delete [covered]\n| [e2] textbox "Name" value="" required invalid | [e3] checkbox "Agree" value="on" checked |\nThe name is required';
+  assert.equal(snapshotHas(snapshot, 'delete'), false);
+  assert.equal(snapshotHas(snapshot, 'covered'), false);
+  assert.equal(snapshotHas(snapshot, 'invalid'), false);
+  assert.equal(snapshotHas(snapshot, 'checked'), false);
+  assert.equal(snapshotHas(snapshot, 'Agree'), true);
+  assert.equal(snapshotHas(snapshot, 'is required'), true);
 });
 
 // ---- replaying against a browser that answers as the real ones do

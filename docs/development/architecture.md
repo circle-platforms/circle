@@ -25,6 +25,7 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 | Module | What it does |
 |---|---|
 | `runtime.ts` | Puts a session together: the model, tools, MCP servers, extensions, policy, system prompt and session store. Switches, forks and imports sessions, and reloads integrations. |
+| `session_manager.ts`, `session_lock.ts` | Keep independent runtimes per conversation, coordinate deletion and shutdown, and hold heartbeat leases against concurrent writers in other Circle processes. UI selection does not own execution. |
 | `harness.ts` | The loop: one model request, then the tool calls it asked for, until the model stops. Steering messages are read before the next request; follow-ups start a new turn when one ends. `task` calls next to each other run together, other calls one after another. |
 | `system_prompt.ts` | Builds the system prompt from `prompts/`, the instruction files, skills, `SYSTEM.md` and `APPEND_SYSTEM.md`. |
 | `memory_sources.ts` | Finds the instruction files (`AGENTS.md`, `CLAUDE.md` and the like) for a folder. |
@@ -40,6 +41,7 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 | Module | What it does |
 |---|---|
 | `model.ts` | Talks to OpenAI-compatible and Anthropic-compatible endpoints and turns text, thinking, tool calls and usage into one form. |
+| `tool_history.ts` | Keeps complete tool-result batches before internal mode transitions in outbound requests. Original checkpoints stay unchanged; missing or duplicate results and ordinary user input are not hidden or fabricated. |
 | `model_guard.ts` | Retries by kind of failure, drops parameters an endpoint rejects, and catches stalled streams, repetition and a missing finish. |
 | `text_repetition.ts` | Notices output that repeats itself, for `model_guard.ts`. |
 | `tool_call_compat.ts` | Repairs tool names and arguments when the repair is unambiguous, and validates arguments before anything runs. |
@@ -55,6 +57,17 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 | `context_middleware.ts` | What the model sees of a long session: large results kept in files, older messages summarized, older images left out, and the originals read back when needed. |
 | `middleware/` | Reminders added to a request: running and polled jobs (`job_notice.ts`), repeated tool calls (`loop_guard.ts`), the plan (`plan_tail.ts`), and pruning of old tool results (`tool_result_prune.ts`). |
 
+Anthropic responses carry an opaque `thinking_scope` derived from the API URL,
+key and requested model. When that identity changes, `model.ts` leaves historical
+`thinking` and `redacted_thinking` blocks out of the outbound request, keeping
+text, tool calls and results. Original checkpoint messages are unchanged. For
+older or imported messages without a scope, an explicit HTTP 400 error rejecting
+a thinking signature triggers one retry without historical thinking. The model instance
+remembers fingerprints of the rejected signed payloads, so reused message ids do
+not suppress different valid thinking. A
+restart can need that recovery again for unscoped history. Other errors are not
+handled as signature errors, and signature errors do not disable thinking.
+
 ## Tools and safety
 
 | Module | What it does |
@@ -64,7 +77,9 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 | `apply_patch.ts` | The `apply_patch` tool. |
 | `file_read.ts` | Reads a window of lines without loading a whole file. |
 | `lsp_tool.ts` | The `lsp` tool: language servers over standard input and output. |
-| `websearch.ts` | `webfetch` and `websearch`. |
+| `websearch.ts` | `webfetch`, DuckDuckGo fallback requests and search-result HTML parsing. |
+| `websearch_service.ts` | Runtime-owned native search capability cache, deadlines, normalized results and DuckDuckGo fallback. |
+| `native_websearch.ts` | Provider search protocols, structured execution evidence, citations and auxiliary model usage. |
 | `questions.ts` | The `question` tool and its answers. |
 | `secret_prompt.ts` | Secret requests: the files a task and Circle exchange, and writing the value into its target file. |
 | `approvals.ts` | Sorts commands and tool calls, keeps the session's rules and decides what needs your answer. |
@@ -144,7 +159,7 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 |---|---|
 | `install_layout.ts` | Release archives and the install folder: `versions/<version>/`, `current.ref`, `installation.json`, checksums and pruning. |
 | `install_manager.ts` | Installs a release folder; run by `install.sh` and `install.ps1`. |
-| `legacy_install.ts` | Finds and removes the Python circle (0.5.0 and older) before the first install. The data folder is left alone. |
+| `legacy_install.ts` | Finds and removes the Python circle (0.5.0 and older) before the first install. Held Windows programs are matched by native process name and canonical path; an unidentified busy executable blocks removal. The data folder is left alone. |
 | `update.ts` | The daily update reminder and `circle update`. |
 | `version.ts` | The version and version comparison. |
 

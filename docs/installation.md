@@ -42,7 +42,7 @@ If the installer stops with a certificate error, your network is replacing HTTPS
 
 Each version lives in its own folder, `versions/<version>/`, under the prefix. `current.ref` names the version the launcher runs, and `installation.json` records the folders and the repository for `circle update`. An installation keeps the newest three versions and the one it replaced, so a session started from an older one goes on running; other versions are removed.
 
-Your settings, keys, sessions, skills and the rest stay in the data folder, `~/.circle` (or `CIRCLE_HOME`), which installing and updating never touch. See [Configuration](configuration.md#where-circle-keeps-things).
+Your settings, keys, sessions, skills and the rest stay in the data folder, `~/.circle` (or `CIRCLE_HOME`), which installing and updating never touch and `circle uninstall` keeps unless `--purge` deletes it. See [Configuration](configuration.md#where-circle-keeps-things).
 
 ## Updates
 
@@ -54,6 +54,15 @@ circle update 1.0.0        # install this one, also an older one
 
 `circle update` downloads the release it found itself, on one line that shows how far it has got (percent, megabytes and speed), then runs the installer on that file with the same folders, and the installer says each step. `ctrl+c` during the download stops it and changes nothing. See [Updating](cli.md#updating) for its options and exit codes, and [The reminder](cli.md#the-reminder) for the daily check.
 
+## Uninstall
+
+```sh
+circle uninstall           # remove the program, keep the data folder
+circle uninstall --purge   # remove the program and the data folder
+```
+
+`circle uninstall` removes the launcher, every version under the prefix and the PATH change the installer made. On a terminal it lists what goes and asks first; `--yes` skips the question and is required without one. The data folder, `~/.circle`, stays unless `--purge` deletes it too. See [Uninstalling](cli.md#uninstalling). The desktop application is removed separately: on Windows through Settings → Apps, on macOS and Linux by deleting the application; its own data folder stays in place.
+
 ## Replacing the Python circle
 
 Circle 0.5.0 and older were written in Python. Running the one-command installer above is how you upgrade: it removes the Python version before it switches to the new one.
@@ -61,7 +70,9 @@ Circle 0.5.0 and older were written in Python. Running the one-command installer
 - A copy installed by the old installer: its `versions/` folders, its `current` link and the `circle` link in the launcher folder. On Windows it also takes `<prefix>\current\circle` off your user `PATH`. Unless `CIRCLE_PREFIX` or `CIRCLE_BIN_DIR` say otherwise, the new version goes into the same folders.
 - A copy installed with pip whose `circle` command is on your `PATH`, including pipx and `pip install -e` checkouts: the installer runs `<that command's python> -m pip uninstall -y circle`. A checkout itself stays.
 
-The installer first downloads and checks the new release, so a failed download leaves the old copy in place. If a Python circle is still running, it stops before changing anything; close those sessions and run it again. If a pip uninstall fails, it stops and names the command that failed.
+The installer first downloads and checks the new release, so a failed download leaves the old copy in place. If a Python circle is still running, it stops before changing anything; close those sessions and run it again. On Windows it lists the running programs only when a program of the old copy is in use. If that list takes longer than 30 seconds, or no process in it runs the program in use, it names the program and stops the same way. If a pip uninstall fails, it stops and names the command that failed.
+
+When the Windows process check stops because an executable is in use and no process was identified, its error includes the last captured query boundary, bounded marker counts, the native exit or timeout code, the signal and process ID the query runner reported, and how much output it returned, in UTF-16 code units and lines; the output itself is not shown. A missing marker or runner value is `unknown`; a count of 32 may be capped. These observations do not identify the operation that stalled: reaching `COMPLETE` does not establish a successful query, a reported process ID does not establish that the query started, and a reported signal does not establish what stopped it.
 
 The data folder is shared and not touched. Settings, keys, MCP servers, skills, custom commands, prompt history and trusted folders carry over; saved sessions are imported on the first start (see [Sessions from 0.5.0](sessions.md#sessions-from-050)). Python extensions do not load in this version and have to be rewritten; see [Coming from 0.5.0](extensions.md#coming-from-050).
 

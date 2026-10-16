@@ -13,6 +13,8 @@ export interface PriceReceipt {
   };
   rates: Rates;
   provider: string;
+  /** Token prices do not include the provider's hosted search charge. */
+  tool_fee_unknown?: boolean;
 }
 const count = (n: unknown): number =>
   typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : 0;
@@ -76,6 +78,7 @@ export class UsageCostTotals {
     }
     this.summary.amounts[r.currency!] =
       (this.summary.amounts[r.currency!] ?? 0) + r.amount;
+    if (r.tool_fee_unknown) this.summary.unpriced_calls++;
   }
   snapshot(): CostSummary {
     return structuredClone(this.summary);
@@ -83,7 +86,11 @@ export class UsageCostTotals {
 }
 export function messageCosts(messages: Message[]): CostSummary {
   const total = new UsageCostTotals();
-  for (const message of messages) if (message.usage) total.add(message.cost);
+  for (const message of messages) {
+    if (message.model_calls?.length)
+      for (const call of message.model_calls) total.add(call.cost);
+    else if (message.usage) total.add(message.cost);
+  }
   return total.snapshot();
 }
 export function formatCosts(

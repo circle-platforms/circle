@@ -79,7 +79,11 @@ async function session(
     ui.offSignals?.();
     if (ui.flashTimer) clearTimeout(ui.flashTimer);
     ui.input.close();
-    await runtime.close();
+    for (const view of ui.views.values()) view.interactions.close();
+    await (ui.sessions?.close() ?? runtime.close());
+    await Promise.all(
+      [...ui.browsers.values()].map((browser: any) => browser.close()),
+    );
   });
   const key = async (name: string, char = ''): Promise<void> => {
     ui.handle({ type: 'key', key: name, char });
@@ -91,7 +95,7 @@ async function session(
   };
   return { app, ui, runtime, model, home, workspace, copied, key, screen };
 }
-test('TUI resume and continue refuse a waiting approval without losing it (#57)', async (t) => {
+test('TUI resume and continue preserve a waiting approval on its source session (#57)', async (t) => {
   const { app, runtime, model, workspace, key } = await session(t, [
     answer('original conversation'),
     {
@@ -113,16 +117,18 @@ test('TUI resume and continue refuse a waiting approval without losing it (#57)'
   await app.submit('save the original conversation');
   const previous = runtime.session.id;
   await app.submit('/new');
-  const current = runtime.session.id;
+  const waitingRuntime = app.runtime!;
+  const current = waitingRuntime.session.id;
   const running = app.submit('write after permission');
   await until(() => Boolean(app.state.dialog));
   const approval = app.state.dialog;
   assert(approval);
   await app.submit(`/resume ${previous}`);
-  assert.equal(runtime.session.id, current);
-  assert.equal(app.state.dialog, approval);
+  assert.equal(app.runtime, runtime);
+  assert.equal(app.state.dialog, undefined);
+  assert(waitingRuntime.busy);
   await app.submit('/continue');
-  assert.equal(runtime.session.id, current);
+  assert.equal(app.runtime!.session.id, current);
   assert.equal(app.state.dialog, approval);
   assert.equal(existsSync(join(workspace, 'approved.txt')), false);
   await key('enter');
@@ -139,7 +145,7 @@ test('TUI resume and continue refuse a waiting approval without losing it (#57)'
     'success',
   );
   await app.submit(`/resume ${previous}`);
-  assert.equal(runtime.session.id, previous);
+  assert.equal(app.runtime!.session.id, previous);
   assert(
     runtime.harness.messages.some(
       (message) => message.content === 'original conversation',
@@ -192,12 +198,16 @@ test('/undo and /redo put the screen back; the model keeps every turn, as in 0.5
   );
   await app.submit('/redo');
   assert.equal(app.state.flash, 'Nothing to redo');
-  // As in 0.5.0 the history spans sessions: /undo after /new goes back to the old one.
+  // Undo belongs to its session; a new conversation cannot hide another one's turn.
   const first = runtime.session.id;
   await app.submit('/new');
-  assert.notEqual(runtime.session.id, first);
+  assert.notEqual(app.runtime!.session.id, first);
   await app.submit('/undo');
-  assert.equal(runtime.session.id, first);
+  assert.equal(app.state.flash, 'Nothing to undo');
+  assert.notEqual(app.runtime!.session.id, first);
+  await app.submit('/continue');
+  await app.submit('/undo');
+  assert.equal(app.runtime!.session.id, first);
   assert.ok(!screen().includes('third question'));
   assert.ok(screen().includes('answer one'));
 });
@@ -256,8 +266,10 @@ test('while a turn runs, commands that change it wait; the listed ones still wor
   await until(() => runtime.busy);
   const id = runtime.session.id;
   await app.submit('/new');
-  assert.equal(app.state.flash, 'Busy · wait for the current turn to finish');
-  assert.equal(runtime.session.id, id);
+  assert.notEqual(app.runtime, runtime);
+  assert(runtime.busy);
+  await app.submit(`/resume ${id}`);
+  assert.equal(app.runtime, runtime);
   await app.submit('/models other');
   assert.equal(
     app.state.flash,
@@ -615,8 +627,8 @@ test('/import of a text file starts a session that gives the model its start', a
   await app.submit('/import missing.md');
   assert.equal(app.state.notices.at(-1), '✖ No such file: missing.md');
   await app.submit('/import notes.md');
-  assert.notEqual(runtime.session.id, previous);
-  assert.equal(runtime.store.get(runtime.session.id)!.title, 'notes');
+  assert.notEqual(app.runtime!.session.id, previous);
+  assert.equal(app.runtime!.store.get(app.runtime!.session.id)!.title, 'notes');
   assert.equal(
     app.state.notices.at(-1),
     `Imported ${join(workspace, 'notes.md')}`,
@@ -627,7 +639,7 @@ test('/import of a text file starts a session that gives the model its start', a
     'Imported prior transcript for continuity.\n# earlier chat\nwe chose B\n',
   );
   await app.submit('/continue');
-  assert.equal(runtime.session.id, previous);
+  assert.equal(app.runtime!.session.id, previous);
 });
 
 test('/skill loads a skill into the conversation without starting a turn', async (t) => {
@@ -979,9 +991,10 @@ test('/tree, /fork, /clone, /new, /continue and /resume move between branches an
     app.state.picker!.items.find((item) => item.label.includes('['))!.label,
     '● [start] answer two',
   );
-  assert.deepEqual(Object.values(runtime.store.labels(runtime.session.id)), [
-    'start',
-  ]);
+  assert.deepEqual(
+    Object.values(app.runtime!.store.labels(app.runtime!.session.id)),
+    ['start'],
+  );
   await key('escape');
   await app.submit('/tree two');
   assert.equal(app.state.picker!.query, 'two');
@@ -997,33 +1010,36 @@ test('/tree, /fork, /clone, /new, /continue and /resume move between branches an
     'answer one',
     'question changed',
   ]);
-  const first = runtime.session.id;
+  const first = app.runtime!.session.id;
   await app.submit('/fork');
   assert.equal(app.state.picker!.title, 'Fork from a message');
   await pick('question one');
-  assert.notEqual(runtime.session.id, first);
+  assert.notEqual(app.runtime!.session.id, first);
   assert.equal(app.state.draft, 'question one');
   assert.equal(
     app.state.notices.at(-1),
-    `Forked → ${runtime.session.id} · your message is back in the box`,
+    `Forked → ${app.runtime!.session.id} · your message is back in the box`,
   );
-  assert.deepEqual(runtime.harness.messages, []);
+  assert.deepEqual(app.runtime!.harness.messages, []);
   await app.submit('/continue');
-  assert.equal(runtime.session.id, first);
+  assert.equal(app.runtime!.session.id, first);
   assert.match(app.state.notices.at(-1)!, new RegExp(`^Continued ${first} · `));
   await app.submit('/clone');
-  const cloned = runtime.session.id;
+  const cloned = app.runtime!.session.id;
   assert.equal(app.state.notices.at(-1), `Cloned this branch → ${cloned}`);
-  assert.deepEqual(said({ messages: runtime.harness.messages }), [
+  assert.deepEqual(said({ messages: app.runtime!.harness.messages }), [
     'question one',
     'answer one',
     'question changed',
     'answer changed',
   ]);
   await app.submit('/new');
-  assert.equal(app.state.notices.at(-1), `New session ${runtime.session.id}`);
+  assert.equal(
+    app.state.notices.at(-1),
+    `New session ${app.runtime!.session.id}`,
+  );
   await app.submit(`/resume ${first.slice(-4)}`);
-  assert.equal(runtime.session.id, first);
+  assert.equal(app.runtime!.session.id, first);
   assert.equal(app.state.notices.at(-1), `Resumed ${first} · question one`);
   await app.submit(`/resume ${first}`);
   assert.equal(app.state.flash, 'Already in that session');
@@ -1032,7 +1048,7 @@ test('/tree, /fork, /clone, /new, /continue and /resume move between branches an
     app.state.notices.at(-1),
     "✖ No session 'nothing' in this folder · /resume lists them",
   );
-  // The list: ctrl+r renames, ctrl+d deletes after asking, never the open session.
+  // The list: ctrl+r renames and ctrl+d always asks, including the open session.
   await app.submit('/resume');
   assert.equal(app.state.picker!.title, 'Sessions · this folder');
   const focus = (id: string): void => {
@@ -1041,7 +1057,9 @@ test('/tree, /fork, /clone, /new, /continue and /resume move between branches an
   };
   focus(first);
   await key('ctrl+d');
-  assert.equal(app.state.flash, 'The session you are in cannot be deleted');
+  assert.ok(app.state.picker!.asking);
+  await key('escape');
+  assert.ok(app.runtime!.store.get(first));
   focus(cloned);
   await key('ctrl+r');
   assert.equal(app.state.dialog, undefined);
@@ -1049,13 +1067,13 @@ test('/tree, /fork, /clone, /new, /continue and /resume move between branches an
   await key('ctrl+u');
   for (const char of '  the   clone ') await key(char, char);
   await key('enter');
-  assert.equal(runtime.store.get(cloned)!.title, 'the clone');
+  assert.equal(app.runtime!.store.get(cloned)!.title, 'the clone');
   focus(cloned);
   await key('ctrl+d');
   assert.equal(app.state.dialog, undefined);
   assert.ok(app.state.picker!.asking);
   await key('enter');
-  assert.equal(runtime.store.get(cloned), undefined);
+  assert.equal(app.runtime!.store.get(cloned), undefined);
   assert.ok(app.state.picker!.items.every((item) => item.key !== cloned));
   await key('tab');
   assert.equal(app.state.picker!.title, 'Sessions · every folder');

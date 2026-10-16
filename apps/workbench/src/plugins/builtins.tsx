@@ -24,7 +24,7 @@ import {
   KnowledgeAction,
 } from './platform/views';
 import type { WorkbenchPlugin } from './types';
-import { serverPlugin } from './server';
+import { hubPlugin } from './hub';
 import { livePlatformPlugins } from './platform/live';
 import { t } from '../i18n';
 // Titles and descriptions are getters so they follow the interface language when it changes.
@@ -106,8 +106,8 @@ export const circlePlugins: WorkbenchPlugin[] = [
       },
     ],
   },
-  serverPlugin,
-  // B, C, D and E as circle-server holds them, shown while its extension is on.
+  hubPlugin,
+  // B, C, D and E as hub holds them, shown while its extension is on.
   ...livePlatformPlugins,
 ];
 // The earlier local previews of B, C, D and E, kept for the preview store's tests and as

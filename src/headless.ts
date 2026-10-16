@@ -3,6 +3,7 @@ import type { AgentRuntime } from './runtime.js';
 import type { CircleEvent } from './events.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { rpcJob } from './rpc_codec.js';
+import type { Message } from './types.js';
 export function jsonEvent(
   event: CircleEvent,
 ): Record<string, unknown> | undefined {
@@ -25,17 +26,17 @@ export function jsonEvent(
   if (event.kind === 'run_start')
     return { type: 'turn_start', message: data.message };
   if (event.kind === 'llm_end') {
-    const message = data.message as {
-      id: string;
-      content: string;
-      tool_calls?: unknown[];
-    };
+    const message = data.message as Message;
     return {
       type: 'assistant',
       id: message.id,
       text: message.content,
       tool_calls: message.tool_calls ?? [],
       usage: event.usage,
+      ...(message.completion ? { completion: message.completion } : {}),
+      ...(message.truncated !== undefined
+        ? { truncated: message.truncated }
+        : {}),
     };
   }
   if (event.kind === 'tool_result') return { type: 'tool_result', ...data };
@@ -49,7 +50,16 @@ export function jsonEvent(
   if (event.kind === 'run_end')
     return { type: 'turn_end', answer: data.answer, usage: event.usage };
   if (event.kind === 'run_error')
-    return { type: 'error', message: data.message };
+    return {
+      type: 'error',
+      message: data.message,
+      ...(data.completion_failure
+        ? { completion_failure: data.completion_failure }
+        : {}),
+      ...(data.completion_message_id
+        ? { completion_message_id: data.completion_message_id }
+        : {}),
+    };
   if (event.kind === 'steer') return { type: 'steer', message: data.message };
   return undefined;
 }
@@ -221,6 +231,7 @@ export class HeadlessProgress {
   tokensIn = 0;
   tokensOut = 0;
   notRun = 0;
+  private needsYolo = false;
   private calls = new Map<string, { name: string; args: unknown }>();
   constructor(
     readonly verbose = false,
@@ -235,9 +246,16 @@ export class HeadlessProgress {
     const data = event.payload;
     const subagent = event.tags.subagent ? String(event.tags.subagent) : '';
     const key = `${subagent}:${String(data.id ?? '')}`;
-    if (event.kind === 'llm_end' && !subagent) {
-      this.tokensIn += Number(event.usage?.input_tokens ?? 0) || 0;
-      this.tokensOut += Number(event.usage?.output_tokens ?? 0) || 0;
+    if (event.kind === 'llm_end') {
+      if (!subagent) {
+        this.tokensIn += Number(event.usage?.input_tokens ?? 0) || 0;
+        this.tokensOut += Number(event.usage?.output_tokens ?? 0) || 0;
+      }
+      // Incomplete responses block calls before tool_call. Their saved message
+      // still provides the name and arguments for the eventual failed result.
+      for (const call of (data.message as Message | undefined)?.tool_calls ??
+        [])
+        this.calls.set(`${subagent}:${call.id}`, call);
     } else if (event.kind === 'tool_call') {
       const call = { name: String(data.name ?? ''), args: data.args };
       this.calls.set(key, call);
@@ -251,9 +269,13 @@ export class HeadlessProgress {
       if (output.startsWith('not run: ')) {
         this.notRun++;
         const job = event.tags.job_id ? `${String(event.tags.job_id)} · ` : '';
-        const reason = output.includes('always asks')
-          ? 'always asks'
-          : 'needs --yolo';
+        const reason =
+          output === 'not run: this operation always asks'
+            ? 'always asks'
+            : output === 'not run: needs --yolo or approval'
+              ? 'needs --yolo'
+              : output.slice('not run: '.length).split('\n')[0];
+        if (reason === 'needs --yolo') this.needsYolo = true;
         this.say(
           `  ⎿ ${job}${toolCallLine(call.name, call.args)} not run · ${reason}`,
         );
@@ -287,7 +309,7 @@ export class HeadlessProgress {
     const parts = [`↑ ${short(this.tokensIn)} · ↓ ${short(this.tokensOut)}`];
     if (this.notRun)
       parts.push(
-        `${this.notRun} ${this.notRun === 1 ? 'call' : 'calls'} not run${this.yolo ? '' : ' (use --yolo to allow commands and edits)'}`,
+        `${this.notRun} ${this.notRun === 1 ? 'call' : 'calls'} not run${!this.yolo && this.needsYolo ? ' (use --yolo to allow commands and edits)' : ''}`,
       );
     return parts.join(' · ');
   }

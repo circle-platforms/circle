@@ -62,7 +62,7 @@ export const dialogs: Record<string, string> = {
   'export session': '导出会话',
   'draft editor': '草稿编辑器',
   connection: '连接',
-  'workspace trust': '工作区信任',
+  'workspace trust': '项目信任',
   'keyboard shortcuts': '快捷键',
   'compact context': '压缩上下文',
   'close session': '关闭会话',
@@ -77,6 +77,9 @@ export const dialogs: Record<string, string> = {
     '要从这个浏览器预览中删除“{title}”吗？',
   'keep session': '保留会话',
   'delete local session': '删除本地会话',
+  'stop work and delete session': '停止任务并删除会话',
+  'Stop all work in “{title}”, then delete its saved conversation?':
+    '停止“{title}”中的所有任务，然后删除已保存的对话？',
   // the session tree and fork
   'search session tree': '搜索会话树',
   'user messages only': '仅用户消息',
@@ -115,11 +118,11 @@ export const dialogs: Record<string, string> = {
   'export cancelled': '已取消导出',
   // workspace trust
   "Circle can load this workspace's instructions, skills, commands, settings and extensions after you trust it. Extensions run code in the runtime.":
-    '信任这个工作区后，Circle 才能加载它的指令、技能、命令、设置和扩展。扩展会在运行时中执行代码。',
+    '信任这个项目后，Circle 才能加载它的指令、技能、命令、设置和扩展。扩展会在运行时中执行代码。',
   'This choice is kept locally. The connected Circle runtime must enforce workspace trust before loading project code.':
-    '这个选择保存在本地。已连接的 Circle 运行时必须先确认工作区已信任，才能加载项目代码。',
-  'trust workspace': '信任工作区',
-  'workspace trusted': '工作区已信任',
+    '这个选择保存在本地。已连接的 Circle 运行时必须先确认项目已信任，才能加载项目代码。',
+  'trust workspace': '信任项目',
+  'workspace trusted': '项目已信任',
   // compact
   'A connected Circle runtime summarizes older context. The full record is kept.':
     '已连接的 Circle 运行时会总结较早的上下文。完整记录会保留。',

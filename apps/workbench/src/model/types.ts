@@ -1,3 +1,5 @@
+import type { ModelCompletionFailureCode } from '../../../../src/model_completion';
+
 export type Theme = 'auto' | 'light' | 'dark';
 export type TextSize = 'small' | 'default' | 'large' | 'larger';
 export type Effort =
@@ -74,6 +76,8 @@ export interface Message {
   attachments?: Attachment[];
   /** A runtime notice, separate from user/model text, for interface translation. */
   planCompleted?: number;
+  /** A core completion diagnostic; arbitrary model/provider text stays untranslated. */
+  completionFailure?: ModelCompletionFailureCode;
   usage?: {
     input: number;
     output: number;
@@ -90,6 +94,18 @@ export interface Session {
   id: string;
   /** Desktop-only organization; the core transcript and project files stay intact. */
   archivedAt?: string;
+  lifecycle?: 'open' | 'deleting';
+  /** Another process owns execution of this conversation. */
+  occupied?: boolean;
+  /** The last renderer action failure, kept with its source session for this window. */
+  actionError?: string;
+  /** Renderer-only state; never changes the core conversation or execution. */
+  presentation?: {
+    scroll?: { top: number; follow: boolean };
+    planCollapsed?: boolean;
+    disclosures?: Record<string, { open: boolean; defaultOpen: boolean }>;
+    toolTabs?: Record<string, 'input' | 'output'>;
+  };
   title: string;
   workspaceId: string;
   model: string;
@@ -144,6 +160,11 @@ export interface Workspace {
   branch: string;
   trusted: boolean;
   origin?: 'native' | 'preview';
+  /**
+   * `project` is a folder the person can pick, including the default circle
+   * workspace. `scratch` is a conversation that is not in any project.
+   */
+  kind?: 'project' | 'scratch';
   instructions: { name: string; content: string }[];
 }
 export interface WorkspaceFile {
@@ -350,8 +371,23 @@ export interface CommandResult {
   selection?: string;
   effect?: 'copy' | 'import' | 'download';
 }
+/** The first message from the home composer. No session exists until this runs. */
+export interface BeginConversation {
+  /** A known project. Omit it, or pass null, to work without a project. */
+  workspaceId?: string | null;
+  text: string;
+  /** Choices from the home composer, applied to the session this message starts. */
+  model?: string;
+  effort?: Effort;
+  mode?: SessionMode;
+  /** Files chosen on the home composer, folded the same way as a session send. */
+  attachments?: Attachment[];
+}
+export type BeginResult = { sessionId: string } | { dialog: 'trust' };
 export interface RuntimePort {
   readonly mode: 'preview' | 'live';
+  /** Changes when a reset replaces renderer session identities, even if IDs recur. */
+  readonly presentationEpoch?: number;
   getSnapshot: () => WorkbenchSnapshot;
   subscribe: (listener: () => void) => () => void;
   change: (update: (draft: WorkbenchSnapshot) => void) => void;
@@ -365,10 +401,14 @@ export interface RuntimePort {
   request: (
     kind: string,
     payload?: Record<string, unknown>,
+    sessionId?: string,
   ) => string | Promise<unknown>;
   newSession: (workspaceId?: string) => string | Promise<string>;
+  beginConversation: (
+    input: BeginConversation,
+  ) => BeginResult | Promise<BeginResult>;
   selectSession: (id: string) => void | Promise<void>;
-  deleteSession: (id: string) => void | Promise<void>;
+  deleteSession: (id: string, confirmed?: boolean) => void | Promise<void>;
   branch: (messageId: string, kind: 'tree' | 'fork') => void | Promise<void>;
   answer: (
     id: string,

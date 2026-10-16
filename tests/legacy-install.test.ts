@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test, type TestContext } from 'node:test';
 import {
   chmodSync,
   cpSync,
@@ -14,6 +14,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import { activeVersion, pruneVersions } from '../src/install_layout.js';
 import {
   chooseLocation,
@@ -338,16 +339,29 @@ test(
   },
 );
 
-test('a running Python circle blocks the installation and nothing changes', async (t) => {
-  const base = scratch(t);
+// A running Python circle: its frozen program is a copy of node, started from its version folder
+// or through the `current` link, as the bin link and the Windows PATH entry start it.
+async function startPython(
+  t: TestContext,
+  base: string,
+  throughCurrent: boolean,
+) {
   const { prefix, bin, pathEntry } = pythonInstall(base);
   const frozen = join(prefix, 'versions', '0.5.0', 'circle', program);
   rmSync(frozen);
   cpSync(process.execPath, frozen);
   if (!windows) chmodSync(frozen, 0o755);
-  const child = spawn(frozen, ['-e', 'setTimeout(() => {}, 60000)'], {
-    stdio: 'ignore',
-  });
+  const started = throughCurrent
+    ? join(prefix, 'current', 'circle', program)
+    : frozen;
+  const child = spawn(
+    started,
+    [
+      '-e',
+      "process.stdout.write('R'); process.stdin.resume(); process.stdin.on('end', () => process.exit(0));",
+    ],
+    { stdio: ['pipe', 'pipe', 'ignore'] },
+  );
   // Windows cannot delete the folder while the program in it still runs: wait for its exit.
   cleanup(t, async () => {
     if (child.exitCode !== null || child.signalCode !== null) return;
@@ -355,8 +369,21 @@ test('a running Python circle blocks the installation and nothing changes', asyn
     child.kill();
     await exited;
   });
-  await new Promise((resolve) => child.once('spawn', resolve));
-  const path = windows ? [pathEntry] : [bin];
+  await once(child, 'spawn');
+  const [ready] = await once(child.stdout, 'data', {
+    signal: AbortSignal.timeout(15000),
+  });
+  assert.equal(
+    ready.toString(),
+    'R',
+    'the copied program reached its own code',
+  );
+  return { prefix, frozen, child, path: windows ? [pathEntry] : [bin] };
+}
+
+test('a running Python circle blocks the installation and nothing changes', async (t) => {
+  const base = scratch(t);
+  const { prefix, frozen, child, path } = await startPython(t, base, false);
   const where = around(base, path);
   assert.deepEqual(runningCopies(findPythonCopies(where), where), [child.pid]);
   const run = runManager(base, fixture(base, '1.0.0'), path);
@@ -369,6 +396,171 @@ test('a running Python circle blocks the installation and nothing changes', asyn
   assert.ok(existsSync(join(prefix, 'current')));
   assert.equal(existsSync(join(prefix, 'versions', '1.0.0')), false);
   assert.equal(activeVersion(prefix), undefined);
+});
+
+test('a Python circle started through its current link blocks the installation too', async (t) => {
+  const base = scratch(t);
+  const { prefix, frozen, child, path } = await startPython(t, base, true);
+  const run = runManager(base, fixture(base, '1.0.0'), path);
+  assert.equal(run.status, 1, run.stderr + run.stdout);
+  // Windows may name the program by the link, outside the version folder: the program in use
+  // then stops the installer without a process number.
+  assert.match(
+    run.stderr,
+    new RegExp(
+      `still running \\(process ${child.pid}\\)|may still be running: .+ is in use by another program`,
+    ),
+  );
+  assert.ok(existsSync(frozen));
+  assert.ok(existsSync(join(prefix, 'current')));
+  assert.equal(existsSync(join(prefix, 'versions', '1.0.0')), false);
+  assert.equal(activeVersion(prefix), undefined);
+});
+
+// A Python copy as the Windows check sees it, on any system: the program, a library beside it
+// and a pip launcher, under a folder name outside any console code page.
+function windowsCopies(base: string) {
+  const version = join(base, '用户 prefix', 'versions', '0.5.0');
+  const frozen = join(version, 'circle', 'circle.exe');
+  mkdirSync(join(version, 'circle', '_internal'), { recursive: true });
+  writeFileSync(frozen, 'frozen python');
+  writeFileSync(join(version, 'circle', '_internal', 'python3.dll'), '');
+  const script = join(base, 'Scripts', 'circle.exe');
+  mkdirSync(join(base, 'Scripts'));
+  writeFileSync(script, 'pip launcher');
+  const copies = [
+    {
+      kind: 'installer',
+      prefix: join(base, '用户 prefix'),
+      versions: [version],
+      links: [],
+      leftovers: [],
+    } satisfies InstallerCopy,
+    {
+      kind: 'pip',
+      python: join(base, 'python.exe'),
+      script,
+    } satisfies PipCopy,
+  ];
+  const where: Surroundings = {
+    platform: 'win32',
+    home: join(base, 'home'),
+    path: '',
+  };
+  return { copies, where, frozen, script };
+}
+// What the process list prints: an id and the program's path in Base64.
+const processList = (entries: [number, string][]) => ({
+  status: 0,
+  stdout: entries
+    .map(([pid, path]) => `${pid} ${Buffer.from(path).toString('base64')}\r\n`)
+    .join(''),
+  stderr: '',
+  error: undefined,
+});
+
+test('on Windows a copy whose programs nothing holds is not looked up in the process list', (t) => {
+  const { copies, where } = windowsCopies(scratch(t));
+  const asked: string[] = [];
+  const running = runningCopies(copies, where, (command) => {
+    asked.push(command);
+    return processList([]);
+  });
+  assert.deepEqual(running, []);
+  assert.deepEqual(asked, []);
+});
+
+test('on Windows a held program is looked up, and the list names the processes running a copy or its pip launcher', (t) => {
+  const base = scratch(t);
+  const { copies, where, frozen, script } = windowsCopies(base);
+  const probed: string[] = [];
+  const asked: { command: string; args: string[]; timeout?: number }[] = [];
+  const running = runningCopies(
+    copies,
+    where,
+    (command, args, timeout) => {
+      asked.push({ command, args, timeout });
+      return processList([
+        [7, join(base, 'elsewhere', 'circle.exe')],
+        [41, frozen],
+        [57, script],
+      ]);
+    },
+    (path) => {
+      probed.push(path);
+      return path === frozen ? 'EBUSY' : undefined;
+    },
+  );
+  assert.deepEqual(running, [41, 57]);
+  assert.deepEqual(probed.sort(), [frozen, script].sort());
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0]!.command, process.execPath);
+  assert.match(asked[0]!.args[0]!, /windows_process_native\.[jt]s$/);
+  assert.equal(asked[0]!.args[2], 'names');
+  assert.deepEqual(
+    JSON.parse(Buffer.from(asked[0]!.args[1]!, 'base64').toString('utf8')),
+    ['circle'],
+  );
+  assert.equal(asked[0]!.timeout, 30_000);
+});
+
+test('on Windows a program in use that no process can be named for stops the installer, and says why', (t) => {
+  const base = scratch(t);
+  const { copies, where, frozen } = windowsCopies(base);
+  const busy = (path: string) => (path === frozen ? 'EBUSY' : undefined);
+  const others = () =>
+    processList([[7, join(base, 'elsewhere', 'circle.exe')]]);
+  const says = (text: string) => (error: unknown) => {
+    assert.equal((error as Error).message, text);
+    return true;
+  };
+  assert.throws(
+    () =>
+      runningCopies(
+        copies,
+        where,
+        () => ({
+          status: null,
+          stdout: '',
+          stderr: '',
+          error: Object.assign(Error('spawnSync powershell.exe ETIMEDOUT'), {
+            code: 'ETIMEDOUT',
+          }),
+        }),
+        busy,
+      ),
+    says(
+      `${frozen} is in use, and the running programs could not be listed (no answer in 30 s)`,
+    ),
+  );
+  assert.throws(
+    () =>
+      runningCopies(
+        copies,
+        where,
+        () => ({
+          status: 1,
+          stdout: '',
+          stderr: 'Get-CimInstance : Access denied\r\n',
+          error: undefined,
+        }),
+        busy,
+      ),
+    says(
+      `${frozen} is in use, and the running programs could not be listed (Get-CimInstance : Access denied)`,
+    ),
+  );
+  assert.throws(
+    () => runningCopies(copies, where, others, busy),
+    says(`${frozen} is in use by another program`),
+  );
+  // A program that cannot be opened for another reason, a read-only file, is not in use.
+  assert.deepEqual(
+    runningCopies(copies, where, others, (path) =>
+      path === frozen ? 'EPERM' : undefined,
+    ),
+    [],
+  );
 });
 
 test('an explicit prefix and bin folder win over the Python location, which wins over the default', (t) => {
@@ -443,4 +635,22 @@ test('installing keeps the newest three versions and the one it replaces', (t) =
     '1.1.0',
     'notes',
   ]);
+});
+
+test('Windows process lookup matches the same held program through a directory alias', (t) => {
+  const base = scratch(t);
+  const { copies, where, frozen } = windowsCopies(base);
+  const alias = join(base, 'version alias');
+  symlinkSync(
+    join(base, '用户 prefix', 'versions', '0.5.0'),
+    alias,
+    windows ? 'junction' : 'dir',
+  );
+  const running = runningCopies(
+    copies,
+    where,
+    () => processList([[41, join(alias, 'circle', 'circle.exe')]]),
+    (path) => (path === frozen ? 'EBUSY' : undefined),
+  );
+  assert.deepEqual(running, [41]);
 });

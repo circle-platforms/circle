@@ -11,9 +11,49 @@ import {
 } from '../components/common';
 import type { RuntimeExtension } from '../model/types';
 import type { WorkbenchPlugin } from './types';
+import { t } from '../i18n';
 
-// What the bundled circle-server extension publishes with api.setView.
-interface ServerView {
+interface HubProjection {
+  byteLimit: number;
+  shownItems: number;
+  omittedItems: number;
+  shortenedFields: number;
+}
+
+/** A limited projection is still a successful read, with its limits disclosed. */
+export function HubProjectionNotice({
+  projection,
+}: {
+  projection?: HubProjection;
+}) {
+  if (!projection) return null;
+  return (
+    <div className="panel-note" role="status">
+      <p>
+        {t(
+          'limited view: {shown} shown, {omitted} omitted · {bytes} byte budget',
+          {
+            shown: projection.shownItems,
+            omitted: projection.omittedItems,
+            bytes: projection.byteLimit,
+          },
+        )}
+      </p>
+      {projection.shortenedFields > 0 && (
+        <p>
+          {t('{count} text fields shortened', {
+            count: projection.shortenedFields,
+          })}
+        </p>
+      )}
+      <p>{t('full task details and results remain on hub')}</p>
+      <p>{t('counts apply to the records returned by this refresh')}</p>
+    </div>
+  );
+}
+
+// What the bundled hub extension publishes with api.setView.
+interface HubView {
   url: string;
   username: string;
   scopeId: string;
@@ -21,28 +61,29 @@ interface ServerView {
   following: string[];
   tasks: { taskId: string; title: string; seq: number; saved?: boolean }[];
   recent: string[];
+  projection?: HubProjection;
 }
-export function serverView(
+export function hubView(
   extensions: readonly RuntimeExtension[],
-): ServerView | undefined {
-  const view = extensions.find((item) => item.name === 'circle-server')?.view;
-  return view && typeof view === 'object' ? (view as ServerView) : undefined;
+): HubView | undefined {
+  const view = extensions.find((item) => item.name === 'hub')?.view;
+  return view && typeof view === 'object' ? (view as HubView) : undefined;
 }
-/** The interface half of the circle-server extension: its commands, as a page. */
-export function ServerPage() {
+/** The interface half of the hub extension: its commands, as a page. */
+export function HubPage() {
   const { snapshot, runtime, perform } = useRuntime();
-  const view = serverView(snapshot.extensions);
+  const view = hubView(snapshot.extensions);
   const [address, setAddress] = useState(view?.url || '');
   const [user, setUser] = useState(view?.username || '');
-  // Every action is the extension's own /server command; its lines go to the conversation.
+  // Every action is the extension's own /hub command; its lines go to the conversation.
   const run = (args: string) =>
     perform(async () => {
-      await runtime.command('server', args);
+      await runtime.command('hub', args);
     });
   return (
     <Page
-      title="circle-server"
-      description="Work handed to a circle-server from here. The server keeps each task; closing Circle does not stop it."
+      title="hub"
+      description="Work handed to a hub from here. The server keeps each task; closing Circle does not stop it."
       action={<Button onClick={() => run('tasks')}>refresh</Button>}
     >
       {view ? (
@@ -61,7 +102,7 @@ export function ServerPage() {
         />
       ) : (
         <EmptyState title="not connected">
-          The circle-server extension has published nothing yet.
+          The hub extension has published nothing yet.
         </EmptyState>
       )}
       <form
@@ -72,7 +113,7 @@ export function ServerPage() {
         }}
       >
         <input
-          aria-label="server address"
+          aria-label="hub address"
           placeholder="http://127.0.0.1:7410"
           value={address}
           onChange={(event) => setAddress(event.target.value)}
@@ -114,27 +155,28 @@ export function ServerPage() {
           ))}
         </div>
       ) : null}
+      <HubProjectionNotice projection={view?.projection} />
       {view?.recent.length ? (
         <DataBlock title="recent" value={view.recent.join('\n')} />
       ) : null}
     </Page>
   );
 }
-export const serverPlugin: WorkbenchPlugin = {
-  id: 'circle-server',
+export const hubPlugin: WorkbenchPlugin = {
+  id: 'hub',
   apiVersion: 1,
   version: '0.1.0',
-  title: 'circle-server',
+  title: 'hub',
   description:
-    'Hand work to a circle-server and follow it: the interface half of the bundled circle-server extension.',
+    'Hand work to a hub and follow it: the interface half of the bundled hub extension.',
   icon: Server,
-  runtimeExtension: 'circle-server',
+  runtimeExtension: 'hub',
   pages: [
     {
-      id: 'server',
-      title: 'circle-server',
+      id: 'hub',
+      title: 'hub',
       icon: Server,
-      component: ServerPage,
+      component: HubPage,
     },
   ],
 };

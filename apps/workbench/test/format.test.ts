@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { agentActivityText } from '../src/model/activity.ts';
+import {
+  completionFailureText,
+  completionNoticeText,
+} from '../src/model/completion.ts';
 import { setLanguage } from '../src/i18n/index.ts';
 import { planVisible } from '../../../src/plan_state.ts';
 import {
@@ -19,6 +23,51 @@ import {
   isSessionBrowser,
   shownDialog,
 } from '../src/model/browser.ts';
+
+test('only typed completion diagnostics translate; model and provider text stay verbatim', (t) => {
+  t.after(() => setLanguage('en'));
+  const failures = [
+    ['empty_response', 'model returned an empty response', '模型返回了空响应'],
+    [
+      'output_limit',
+      'model output limit reached; response incomplete',
+      '模型达到输出上限，响应未完成',
+    ],
+    [
+      'missing_finish',
+      'model response ended without a complete finish signal',
+      '模型响应缺少完整的结束信号',
+    ],
+    ['filtered', 'model response was filtered', '模型响应被过滤'],
+    [
+      'paused',
+      'model response paused before completion',
+      '模型响应尚未完成便暂停',
+    ],
+    [
+      'unknown_finish',
+      'model response ended with an unknown finish reason',
+      '模型响应的结束原因未知',
+    ],
+    [
+      'repetition_stopped',
+      'model response stopped after repeating; response incomplete',
+      '模型因重复输出而停止，响应未完成',
+    ],
+  ] as const;
+  setLanguage('en');
+  for (const [code, english] of failures)
+    assert.equal(completionFailureText(code), english);
+  setLanguage('zh-CN');
+  for (const [code, , chinese] of failures)
+    assert.equal(completionFailureText(code), chinese);
+  const text = '✖ model returned an empty response';
+  assert.equal(completionNoticeText({ text }), text);
+  assert.equal(
+    completionNoticeText({ text, completionFailure: 'empty_response' }),
+    '✖ 模型返回了空响应',
+  );
+});
 
 test('completed plans hide in either renderer, except while their plan-exit decision waits', () => {
   assert.equal(planVisible([{ status: 'completed' }]), false);

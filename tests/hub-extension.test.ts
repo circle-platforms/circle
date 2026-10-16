@@ -40,9 +40,6 @@ async function fakeServer(
   let delivered = false;
   let looks = 0;
   let tokens: string[] = [];
-  let logins = 0;
-  // The first token is turned down once it has been used five times, as an expired one is.
-  let uses = 0;
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://x');
     const body = await read(request);
@@ -63,23 +60,20 @@ async function fakeServer(
           status: 'failed',
           error: { code: 'UNAUTHENTICATED', message: 'bad password' },
         });
-      const token = logins++ === 0 ? TOKEN : TOKEN + '-renewed';
+      const token = TOKEN;
       tokens = [...tokens, token];
       return send(200, {
         data: { token, tokenType: 'Bearer', scopes: ['scp_lab'] },
       });
     }
     const presented = request.headers.authorization?.replace('Bearer ', '');
-    if (presented === TOKEN) uses += 1;
-    if (
-      !presented ||
-      !tokens.includes(presented) ||
-      (presented === TOKEN && uses > 5)
-    )
+    if (!presented || !tokens.includes(presented))
       return send(401, {
         status: 'failed',
         error: { code: 'UNAUTHENTICATED', message: 'expired' },
       });
+    if (url.pathname === '/v1/auth/logout' && request.method === 'POST')
+      return send(200, { data: { signedOut: true } });
     if (url.pathname === '/v1/status')
       return send(200, { data: { apiVersion: '1.0.0' } });
     if (url.pathname === '/v1/sources')
@@ -90,6 +84,23 @@ async function fakeServer(
           size: body.length,
           fileName: decodeURIComponent(String(request.headers['x-file-name'])),
           scopeId: request.headers['x-scope-id'],
+        },
+      });
+    if (url.pathname === '/v1/assets' && request.method === 'POST')
+      return send(201, {
+        data: {
+          assetId: 'ast_source',
+          kind: JSON.parse(body.toString()).kind,
+          lifecycle: 'draft',
+          sourceArtifactId: null,
+        },
+      });
+    if (url.pathname === '/v1/assets/ast_source')
+      return send(200, {
+        data: {
+          assetId: 'ast_source',
+          lifecycle: 'approved',
+          sourceArtifactId: 'sar_one',
         },
       });
     if (url.pathname === '/v1/tasks/submit') {
@@ -107,16 +118,40 @@ async function fakeServer(
     }
     if (url.pathname === '/v1/tasks/task_one/events') {
       const after = Number(url.searchParams.get('after'));
+      // Payloads as the server projects them: metadata only, an error reduced to its code,
+      // the body behind a content reference.
       const events = [
-        { seq: 1, taskId: 'task_one', kind: 'task.accepted', payload: {} },
+        {
+          seq: 1,
+          taskId: 'task_one',
+          kind: 'task.accepted',
+          payload: { inputRevisionId: 'inrev_1' },
+        },
         {
           seq: 2,
           taskId: 'task_one',
+          kind: 'task.waiting-input',
+          payload: {
+            requestId: 'pin_1',
+            inputRevisionId: 'inrev_1',
+            waitingReason: 'gateway-refused',
+            reason: { code: 'GATEWAY_REFUSED' },
+            error: { code: 'GATEWAY_REFUSED' },
+          },
+          content: {
+            sha256: 'd'.repeat(64),
+            size: 96,
+            downloadPath: '/v1/tasks/task_one/events/2/content',
+          },
+        },
+        {
+          seq: 3,
+          taskId: 'task_one',
           kind: 'task.delivered',
-          payload: { phase: 'delivered' },
+          payload: { inputRevisionId: 'inrev_1', status: 'succeeded' },
         },
       ].filter((event) => event.seq > after);
-      delivered ||= events.some((event) => event.seq === 2);
+      delivered ||= events.some((event) => event.seq === 3);
       return send(200, {
         data: { events, after: events.at(-1)?.seq ?? after },
       });
@@ -153,7 +188,137 @@ async function fakeServer(
           verification: { reader: 'read-excel-file/9.3.12', rowCount: 8 },
         },
       });
-    if (url.pathname === '/v1/tasks' && url.searchParams.get('limit') === '20')
+    // A repair pending input waits for a replacement of the bound input; a
+    // clarification waits for a response.
+    if (url.pathname === '/v1/tasks/task_two/status')
+      return send(200, {
+        data: {
+          taskId: 'task_two',
+          phase: 'waiting-input',
+          title: 'repair the build',
+          inputRevisionId: 'inrev_2',
+          pendingInputs: [
+            {
+              requestId: 'pin_2',
+              inputRevisionId: 'inrev_2',
+              status: 'open',
+              kind: 'repair',
+              question: 'Repair build-mismatch and replace the bound input',
+            },
+          ],
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_three/status')
+      return send(200, {
+        data: {
+          taskId: 'task_three',
+          phase: 'waiting-input',
+          title: 'a question',
+          inputRevisionId: 'inrev_3',
+          pendingInputs: [
+            {
+              requestId: 'pin_3',
+              inputRevisionId: 'inrev_3',
+              status: 'open',
+              kind: 'clarification',
+              question: 'Which bed?',
+            },
+          ],
+        },
+      });
+    if (
+      /^\/v1\/tasks\/task_(two|three)\/input$/.test(url.pathname) &&
+      request.method === 'POST'
+    )
+      return send(200, { data: { phase: 'running' } });
+    // A stale event cursor is refused with the retained window's first position.
+    if (url.pathname === '/v1/tasks/task_stale/status')
+      return send(200, {
+        data: {
+          taskId: 'task_stale',
+          phase: 'delivered',
+          title: 'an old task',
+          inputRevisionId: 'inrev_1',
+          pendingInputs: [],
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_stale/events') {
+      const after = Number(url.searchParams.get('after'));
+      if (after < 5)
+        return send(409, {
+          status: 'failed',
+          error: {
+            code: 'CURSOR_EXPIRED',
+            message: 'Events were retained for a bounded window',
+            details: { minCursor: 5 },
+          },
+        });
+      return send(200, {
+        data: {
+          events: [
+            {
+              seq: 5,
+              taskId: 'task_stale',
+              kind: 'task.delivered',
+              payload: { status: 'succeeded' },
+            },
+          ],
+          after: 5,
+        },
+      });
+    }
+    if (url.pathname === '/v1/tasks/task_stale/result')
+      return send(200, {
+        data: {
+          taskId: 'task_stale',
+          phase: 'delivered',
+          status: 'succeeded',
+          artifacts: [],
+          evidence: [],
+          unmapped: [],
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_bad/events')
+      return send(200, { data: { events: [], after: 0 } });
+    // A failed flow names the rejected step and its bounded cause.
+    if (url.pathname === '/v1/tasks/task_bad/status')
+      return send(200, {
+        data: {
+          taskId: 'task_bad',
+          phase: 'failed',
+          title: 'a failed flow',
+          inputRevisionId: 'inrev_1',
+          pendingInputs: [],
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_bad/result')
+      return send(200, {
+        data: {
+          taskId: 'task_bad',
+          phase: 'failed',
+          status: 'failed',
+          error: {
+            code: 'HOOK_FAILED',
+            message: 'Product flow did not complete',
+            details: {
+              stepId: 'submit',
+              kind: 'provider.call',
+              cause: {
+                code: 'BUILD_MISMATCH',
+                message: 'device reports OTHER, gateway bundle is EXPECTED',
+              },
+            },
+          },
+          artifacts: [],
+          evidence: [],
+          unmapped: [],
+        },
+      });
+    if (
+      url.pathname === '/v1/tasks' &&
+      url.searchParams.get('kind') === 'work' &&
+      url.searchParams.get('limit') === '20'
+    )
       return send(200, {
         data: [
           {
@@ -222,8 +387,27 @@ async function fakeServer(
           },
         ],
       });
-    if (url.pathname === '/v1/tasks/task_one/reconcile')
-      return send(200, { data: { operationId: 'op_1', status: 'reconciled' } });
+    if (url.pathname === '/v1/tasks/task_one/reconcile') {
+      // Hub rule: only a request naming the operation reconciles; without one it
+      // explains what is missing.
+      const asked = JSON.parse(body.toString() || '{}');
+      if (!asked.operationId)
+        return send(200, {
+          data: {
+            taskId: 'task_one',
+            phase: 'unknown',
+            reconciliation:
+              'No independently observed receipt is available for an unknown execution',
+          },
+        });
+      return send(202, {
+        data: {
+          operationId: 'op_new',
+          parentOperationId: asked.operationId,
+          status: 'accepted',
+        },
+      });
+    }
     if (url.pathname === '/v1/artifacts/art_1/content') {
       await beforeDownload?.();
       response.writeHead(200, {
@@ -249,7 +433,7 @@ async function fakeServer(
   };
 }
 
-test('the bundled circle-server connector signs in, uploads, submits, follows and saves a checked result', async (t) => {
+test('the bundled hub connector signs in, uploads, submits, follows and saves a checked result', async (t) => {
   const root = scratch(t);
   const home = join(root, 'home');
   const workspace = join(root, 'project');
@@ -263,7 +447,7 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
     workspace,
     trusted: true,
     bundledRoot: bundledExtensionsRoot(),
-    settings: { 'circle-server': { enabled: true } },
+    settings: { hub: { enabled: true } },
     secret: async (request) => {
       prompts.push(request.question);
       await submitAnswer(home, request.id, PASSWORD);
@@ -271,10 +455,10 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
   }).load();
   cleanup(t, () => host.close());
   assert.equal(
-    host.extensions.find((ext) => ext.name === 'circle-server')?.version,
+    host.extensions.find((ext) => ext.name === 'hub')?.version,
     '0.1.0',
   );
-  const command = host.commands().get('server')!;
+  const command = host.commands().get('hub')!;
   const lines: string[] = [];
   const context = {
     workspace,
@@ -288,10 +472,7 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
     lines.at(-1)!,
     /● signed in to .* as tester · scope scp_lab · api 1\.0\.0/,
   );
-  assert.equal(
-    await new ExtensionSecrets(home, 'circle-server').get('token'),
-    TOKEN,
-  );
+  assert.equal(await new ExtensionSecrets(home, 'hub').get('token'), TOKEN);
 
   await command.handler('submit mindmap-compile LBX-HA.xmind', context);
   await until(() => lines.some((line) => line.startsWith('✓ saved')));
@@ -310,12 +491,19 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
   });
   assert.equal(upload.auth, `Bearer ${TOKEN}`);
   assert.deepEqual(
-    readFileSync(join(workspace, 'cases.xlsx')),
+    readFileSync(join(workspace, 'tasks', 'task_one', 'cases.xlsx')),
     server.workbook,
   );
   assert.ok(
     lines.some((line) =>
-      /task_one · 2 · task\.delivered · delivered/.test(line),
+      /task_one · 2 · task\.waiting-input · gateway-refused · GATEWAY_REFUSED$/.test(
+        line,
+      ),
+    ),
+  );
+  assert.ok(
+    lines.some((line) =>
+      /task_one · 3 · task\.delivered · succeeded$/.test(line),
     ),
   );
   assert.ok(
@@ -328,14 +516,9 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
   // The same files again: the same key, so the server returns the same task.
   await command.handler('submit mindmap-compile LBX-HA.xmind', context);
   assert.ok(lines.some((line) => /no new task/.test(line)));
-  // The first token was turned down after a few uses: the password was asked once more on
-  // the masked card, and the work went on with a new token.
-  assert.equal(prompts.length, 2);
-  assert.match(prompts[1]!, /signed you out/);
-  assert.equal(
-    await new ExtensionSecrets(home, 'circle-server').get('token'),
-    TOKEN + '-renewed',
-  );
+  // Only signing in asked for the password.
+  assert.equal(prompts.length, 1);
+  assert.equal(await new ExtensionSecrets(home, 'hub').get('token'), TOKEN);
   // Neither the password nor a token ever reached the screen.
   const shown = lines.join('\n');
   assert.ok(!shown.includes(PASSWORD));
@@ -347,7 +530,7 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
   await command.handler('get task_one', context);
   assert.equal(lines.filter((line) => line.startsWith('✓ saved')).length, 2);
   assert.deepEqual(
-    readFileSync(join(workspace, 'cases-1.xlsx')),
+    readFileSync(join(workspace, 'tasks', 'task_one', 'cases-1.xlsx')),
     server.workbook,
   );
 
@@ -356,8 +539,7 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
   // The files are saved synchronously; showStatus publishes after an asynchronous token
   // read. A returned command is not a barrier for that background projection.
   await until(() => {
-    const latest = host.view('circle-server') as
-      Record<string, any> | undefined;
+    const latest = host.view('hub') as Record<string, any> | undefined;
     return (
       latest?.tasks?.find(
         (task: { taskId: string }) => task.taskId === 'task_one',
@@ -365,13 +547,10 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
     );
   });
   const persisted = JSON.parse(
-    readFileSync(
-      join(home, 'extension_data', 'circle-server', 'tasks.json'),
-      'utf8',
-    ),
+    readFileSync(join(home, 'extension_data', 'hub', 'tasks.json'), 'utf8'),
   );
   assert.equal(persisted.task_one.saved, true);
-  const view = host.view('circle-server') as Record<string, any>;
+  const view = host.view('hub') as Record<string, any>;
   assert.equal(view.username, 'tester');
   assert.equal(view.scopeId, 'scp_lab');
   assert.equal(view.signedIn, true);
@@ -382,19 +561,15 @@ test('the bundled circle-server connector signs in, uploads, submits, follows an
   await command.handler('tasks', context);
   assert.match(
     lines.at(-1)!,
-    /task_one · delivered · mindmap-compile: LBX-HA\.xmind · seen to 2/,
+    /task_one · delivered · mindmap-compile: LBX-HA\.xmind · seen to 3/,
   );
-  const ours = () =>
-    host.statuses().find((item) => item.extension === 'circle-server');
+  const ours = () => host.statuses().find((item) => item.extension === 'hub');
   // Following ends after the save; then the lamp goes back to green.
   await until(() => ours()?.lamp === 'ok');
-  assert.match(ours()!.text, /^circle-server · tester@127\.0\.0\.1:\d+$/);
+  assert.match(ours()!.text, /^hub · tester@127\.0\.0\.1:\d+$/);
   await command.handler('logout', context);
-  await until(() => ours()?.text === 'circle-server · signed out');
-  assert.equal(
-    await new ExtensionSecrets(home, 'circle-server').get('token'),
-    undefined,
-  );
+  await until(() => ours()?.text === 'hub · signed out');
+  assert.equal(await new ExtensionSecrets(home, 'hub').get('token'), undefined);
   await assert.rejects(
     async () => command.handler('packs', context),
     /not signed in/,
@@ -424,7 +599,7 @@ test('a checked file and tasks.json precede the latest asynchronous connector vi
     workspace,
     trusted: true,
     bundledRoot: bundledExtensionsRoot(),
-    settings: { 'circle-server': { enabled: true } },
+    settings: { hub: { enabled: true } },
     secret: async (request) => submitAnswer(home, request.id, PASSWORD),
   }).load();
   cleanup(t, () => host.close());
@@ -443,14 +618,14 @@ test('a checked file and tasks.json precede the latest asynchronous connector vi
     append: (line: string) => lines.push(line),
     sendUserMessage: () => {},
   };
-  const command = host.commands().get('server')!;
+  const command = host.commands().get('hub')!;
   await command.handler(`login ${server.url} tester`, context);
   await command.handler('submit mindmap-compile map.xmind', context);
   await until(() => downloading);
   await until(() =>
-    (
-      host.view('circle-server') as Record<string, any> | undefined
-    )?.tasks?.some((task: { taskId: string }) => task.taskId === 'task_one'),
+    (host.view('hub') as Record<string, any> | undefined)?.tasks?.some(
+      (task: { taskId: string }) => task.taskId === 'task_one',
+    ),
   );
   const token = ExtensionSecrets.prototype.get;
   // Keep the real secret-file read and masking, but hold its completion so the actual
@@ -467,19 +642,16 @@ test('a checked file and tasks.json precede the latest asynchronous connector vi
   releaseDownload();
   await until(() => lines.some((line) => line.startsWith('✓ saved')));
   assert.deepEqual(
-    readFileSync(join(workspace, 'cases.xlsx')),
+    readFileSync(join(workspace, 'tasks', 'task_one', 'cases.xlsx')),
     server.workbook,
   );
   const persisted = JSON.parse(
-    readFileSync(
-      join(home, 'extension_data', 'circle-server', 'tasks.json'),
-      'utf8',
-    ),
+    readFileSync(join(home, 'extension_data', 'hub', 'tasks.json'), 'utf8'),
   );
   assert.equal(persisted.task_one.saved, true);
-  assert.equal(persisted.task_one.seq, 2);
+  assert.equal(persisted.task_one.seq, 3);
   assert.equal(
-    (host.view('circle-server') as Record<string, any>).tasks.find(
+    (host.view('hub') as Record<string, any>).tasks.find(
       (task: { taskId: string }) => task.taskId === 'task_one',
     ).saved,
     undefined,
@@ -487,7 +659,7 @@ test('a checked file and tasks.json precede the latest asynchronous connector vi
   const latestSave = lines.find((line) => line.startsWith('✓ saved'))!;
   releaseProjection();
   await until(() => {
-    const latest = host.view('circle-server') as Record<string, any>;
+    const latest = host.view('hub') as Record<string, any>;
     return (
       latest.tasks.find(
         (task: { taskId: string }) => task.taskId === 'task_one',
@@ -495,7 +667,7 @@ test('a checked file and tasks.json precede the latest asynchronous connector vi
     );
   });
   assert.equal(lines.filter((line) => line.startsWith('✓ saved')).length, 1);
-  assert.ok(!JSON.stringify(host.view('circle-server')).includes(TOKEN));
+  assert.ok(!JSON.stringify(host.view('hub')).includes(TOKEN));
 });
 
 test('the connector tools let a model list packs, hand over a file and get the checked result', async (t) => {
@@ -510,14 +682,14 @@ test('the connector tools let a model list packs, hand over a file and get the c
     workspace,
     trusted: true,
     bundledRoot: bundledExtensionsRoot(),
-    settings: { 'circle-server': { enabled: true } },
+    settings: { hub: { enabled: true } },
     secret: async (request) => submitAnswer(home, request.id, PASSWORD),
   }).load();
   cleanup(t, () => host.close());
   const lines: string[] = [];
   await host
     .commands()
-    .get('server')!
+    .get('hub')!
     .handler(`login ${server.url} tester`, {
       workspace,
       toast: (text) => lines.push(text),
@@ -526,30 +698,120 @@ test('the connector tools let a model list packs, hand over a file and get the c
     });
   const tool = (name: string) =>
     host.tools().find((item) => item.name === name)!;
-  assert.equal(tool('circle_server_submit').approval, true);
-  assert.equal(tool('circle_server_packs').effect, 'read');
+  assert.equal(tool('hub_submit').approval, true);
+  assert.equal(tool('hub_packs').effect, 'read');
   const context = {
     signal: new AbortController().signal,
     sessionId: 'model',
   } as never;
   // Without a job list the watch is waited for, as an embedding would.
   const submitted = JSON.parse(
-    await tool('circle_server_submit').run(
+    await tool('hub_submit').run(
       { pack: 'mindmap-compile', file: 'map.xmind' },
       context,
     ),
   );
   assert.equal(submitted.taskId, 'task_one');
   assert.equal(submitted.phase, 'delivered');
+  // The rest of the input a pack asks for goes along; the file's own source stays the tool's.
+  await tool('hub_submit').run(
+    {
+      pack: 'apv-case-execute',
+      file: 'map.xmind',
+      input: {
+        gatewayAssetId: 'ast_gateway',
+        build: 'apv-10.4.6.4',
+        sourceRevisionId: 'src_other',
+      },
+    },
+    context,
+  );
+  const carried = JSON.parse(
+    server.seen
+      .filter((call) => call.path === '/v1/tasks/submit')
+      .at(-1)!
+      .body.toString(),
+  );
+  assert.deepEqual(carried.input, {
+    gatewayAssetId: 'ast_gateway',
+    build: 'apv-10.4.6.4',
+    sourceRevisionId: 'src_abc',
+    sourceSha256: createHash('sha256')
+      .update(Buffer.from('another mindmap'))
+      .digest('hex'),
+  });
+  await assert.rejects(
+    tool('hub_submit').run(
+      { pack: 'apv-case-execute', file: 'map.xmind', input: 'build=x' },
+      context,
+    ),
+    /input is an object/,
+  );
   assert.ok(
     submitted.lines.some((line: string) => /✓ saved .*cases\.xlsx/.test(line)),
   );
   assert.deepEqual(
-    readFileSync(join(workspace, 'cases.xlsx')),
+    readFileSync(join(workspace, 'tasks', 'task_one', 'cases.xlsx')),
     server.workbook,
   );
+  // Files become one source artifact: each uploaded as an original, listed with its role.
+  writeFileSync(join(workspace, 'tree.xml'), Buffer.from('<tree/>'));
+  assert.equal(tool('hub_source_artifact').approval, true);
+  const registered = JSON.parse(
+    await tool('hub_source_artifact').run(
+      {
+        name: 'command source',
+        version: '1.0.0',
+        files: [{ path: 'tree.xml', role: 'command-tree' }],
+        metadata: { buildName: 'Rel_SYN_1' },
+        readers: ['prn_reviewer'],
+      },
+      context,
+    ),
+  );
+  assert.equal(registered.registered.assetId, 'ast_source');
+  const listedSource = JSON.parse(
+    server.seen
+      .filter((call) => call.path === '/v1/assets' && call.method === 'POST')
+      .at(-1)!
+      .body.toString(),
+  );
+  assert.equal(listedSource.scopeId, 'scp_lab');
+  assert.equal(listedSource.kind, 'knowledge-source');
+  assert.equal(listedSource.configuration.schema, 'external-source-artifact/1');
+  assert.deepEqual(listedSource.configuration.metadata, {
+    buildName: 'Rel_SYN_1',
+  });
+  assert.deepEqual(listedSource.readers, ['prn_reviewer']);
+  assert.deepEqual(listedSource.configuration.files, [
+    {
+      path: 'tree.xml',
+      role: 'command-tree',
+      sourceRevisionId: 'src_abc',
+      sha256: createHash('sha256').update(Buffer.from('<tree/>')).digest('hex'),
+    },
+  ]);
+  await assert.rejects(
+    tool('hub_source_artifact').run(
+      {
+        name: 'x',
+        version: '1',
+        files: [{ path: '../outside.xml', role: 'r' }],
+      },
+      context,
+    ),
+    /outside the workspace/,
+  );
+  assert.equal(tool('hub_source_artifact_status').effect, 'read');
+  const approvedSource = JSON.parse(
+    await tool('hub_source_artifact_status').run(
+      { asset_id: 'ast_source' },
+      context,
+    ),
+  );
+  assert.equal(approvedSource.sourceArtifactId, 'sar_one');
   const looked = JSON.parse(
-    await tool('circle_server_task').run({ task_id: 'task_one' }, context),
+    await tool('hub_task').run({ task_id: 'task_one' }, context),
   );
   assert.equal(looked.result.status, 'succeeded');
   assert.equal(looked.result.verification.rowCount, 8);
@@ -568,7 +830,7 @@ test('the connector reads work, execution, knowledge and methods from the server
     workspace,
     trusted: true,
     bundledRoot: bundledExtensionsRoot(),
-    settings: { 'circle-server': { enabled: true } },
+    settings: { hub: { enabled: true } },
     secret: async (request) => submitAnswer(home, request.id, PASSWORD),
   }).load();
   cleanup(t, () => host.close());
@@ -579,11 +841,11 @@ test('the connector reads work, execution, knowledge and methods from the server
     append: (text: string) => lines.push(text),
     sendUserMessage: () => {},
   };
-  const command = host.commands().get('server')!;
+  const command = host.commands().get('hub')!;
   await command.handler(`login ${server.url} tester`, context);
   await command.handler('refresh', context);
   assert.match(lines.at(-1)!, /read 1 tasks and 1 capability packs/);
-  const objects = (host.view('circle-server') as Record<string, any>).objects;
+  const objects = (host.view('hub') as Record<string, any>).objects;
   assert.equal(objects.work[0].taskId, 'task_one');
   // A question bound to an older input revision is not one the task waits on now.
   assert.deepEqual(objects.work[0].pendingInputs, []);
@@ -625,8 +887,23 @@ test('the connector reads work, execution, knowledge and methods from the server
     /has no approval apr_missing/,
   );
   await command.handler('reconcile task_one', context);
-  assert.match(lines.at(-1)!, /task_one · reconcile · .*reconciled/);
-  assert.ok(!JSON.stringify(host.view('circle-server')).includes(TOKEN));
+  assert.match(
+    lines.at(-1)!,
+    /task_one · reconcile · .*No independently observed receipt/,
+  );
+  // Naming the operation makes it a real reconciliation request.
+  await command.handler('reconcile task_one op_9', context);
+  assert.deepEqual(
+    JSON.parse(
+      server.seen
+        .filter((call) => call.path === '/v1/tasks/task_one/reconcile')
+        .at(-1)!
+        .body.toString(),
+    ),
+    { operationId: 'op_9' },
+  );
+  assert.match(lines.at(-1)!, /task_one · reconcile · .*accepted/);
+  assert.ok(!JSON.stringify(host.view('hub')).includes(TOKEN));
 });
 
 test('closing the host ends a task the connector is still following, long poll and all', async (t) => {
@@ -679,7 +956,7 @@ test('closing the host ends a task the connector is still following, long poll a
     workspace,
     trusted: true,
     bundledRoot: bundledExtensionsRoot(),
-    settings: { 'circle-server': { enabled: true } },
+    settings: { hub: { enabled: true } },
     secret: async (request) => submitAnswer(home, request.id, PASSWORD),
   }).load();
   cleanup(t, () => host.close());
@@ -690,24 +967,265 @@ test('closing the host ends a task the connector is still following, long poll a
     append: (text: string) => lines.push(text),
     sendUserMessage: () => {},
   };
-  const command = host.commands().get('server')!;
+  const command = host.commands().get('hub')!;
   await command.handler(`login http://127.0.0.1:${port} tester`, context);
   await command.handler('task task_two', context);
-  const ours = () =>
-    host.statuses().find((item) => item.extension === 'circle-server');
+  const ours = () => host.statuses().find((item) => item.extension === 'hub');
   await until(() => ours()?.lamp === 'running');
   await until(() => seen.includes('/v1/tasks/task_two/events'));
   await host.close();
   // The poll was given up (the server sees the socket go a moment after the close), nothing
   // more was asked of the server, and the connector said nothing about it: the task goes on
-  // on the server for /server task to pick up.
+  // on the server for /hub task to pick up.
   await until(() => cut);
   const asked = seen.length;
   await delay(100);
   assert.equal(seen.length, asked);
   assert.ok(!lines.some((line) => line.startsWith('✖')));
   assert.deepEqual(
-    host.extensions.find((ext) => ext.name === 'circle-server')!.warnings,
+    host.extensions.find((ext) => ext.name === 'hub')!.warnings,
     [],
   );
+});
+
+test('signing out revokes the token family at the server before forgetting it locally', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = await fakeServer(t);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+    secret: async (request) => submitAnswer(home, request.id, PASSWORD),
+  }).load();
+  const context = {
+    workspace,
+    toast: () => {},
+    append: () => {},
+    sendUserMessage: () => {},
+  };
+  await host
+    .commands()
+    .get('hub')!
+    .handler(`login ${server.url} tester`, context);
+  await host.commands().get('hub')!.handler('logout', context);
+  const revocation = server.seen.find(
+    (call) => call.path === '/v1/auth/logout',
+  );
+  assert.ok(revocation, 'the server revoked the family');
+  assert.equal(revocation.auth, `Bearer ${TOKEN}`);
+  assert.equal(
+    await new ExtensionSecrets(home, 'hub').get('token'),
+    undefined,
+    'the local token is gone too',
+  );
+  await delay(100);
+});
+
+test('a repair pending input is answered with a replacement, a clarification with a response', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = await fakeServer(t);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+    secret: async (request) => submitAnswer(home, request.id, PASSWORD),
+  }).load();
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('hub')!;
+  await command.handler(`login ${server.url} tester`, context);
+
+  await command.handler(
+    'respond task_two {"sourceRevisionId":"src_new"}',
+    context,
+  );
+  const repair = JSON.parse(
+    server.seen
+      .find((call) => call.path === '/v1/tasks/task_two/input')!
+      .body.toString(),
+  );
+  assert.deepEqual(repair, {
+    inputRevisionId: 'inrev_2',
+    requestId: 'pin_2',
+    replacement: { sourceRevisionId: 'src_new' },
+  });
+  assert.ok(lines.some((line) => /replaced the input of task_two/.test(line)));
+
+  await command.handler('respond task_three bed=east', context);
+  const clarification = JSON.parse(
+    server.seen
+      .find((call) => call.path === '/v1/tasks/task_three/input')!
+      .body.toString(),
+  );
+  assert.deepEqual(clarification, {
+    inputRevisionId: 'inrev_3',
+    requestId: 'pin_3',
+    response: { bed: 'east' },
+  });
+  assert.ok(lines.some((line) => /✓ answered task_three/.test(line)));
+  await delay(100);
+});
+
+test('module-execute submits the flow input as it is, with no uploaded source', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = await fakeServer(t);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+    secret: async (request) => submitAnswer(home, request.id, PASSWORD),
+  }).load();
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('hub')!;
+  await command.handler(`login ${server.url} tester`, context);
+  const flow = {
+    flowId: 'apv-case-execute-v2',
+    methodPin: { assetId: 'ast_m', version: '1.3.0', sha256: 'f'.repeat(64) },
+    resources: {
+      gateway: { assetId: 'ast_g', version: '2.0.0', sha256: 'e'.repeat(64) },
+    },
+    sources: {},
+    value: { build: 'SYNTHETIC_BUILD_301' },
+    controlledBytes: [],
+  };
+  const run = { signal: new AbortController().signal, sessionId: 's' } as never;
+  const tool = host.tools().find((item) => item.name === 'hub_submit')!;
+  await tool.run({ pack: 'module-execute', input: flow }, run);
+  const sent = JSON.parse(
+    server.seen
+      .filter((call) => call.path === '/v1/tasks/submit')
+      .at(-1)!
+      .body.toString(),
+  );
+  assert.deepEqual(sent.input, flow, 'the flow input goes as it is');
+  assert.ok(
+    !('sourceRevisionId' in sent.input) && !('sourceSha256' in sent.input),
+  );
+  assert.ok(
+    !server.seen.some((call) => call.path === '/v1/sources'),
+    'nothing is uploaded',
+  );
+  // The command form takes the flow as one JSON word.
+  await command.handler(
+    `submit module-execute ${JSON.stringify(flow)}`,
+    context,
+  );
+  const again = JSON.parse(
+    server.seen
+      .filter((call) => call.path === '/v1/tasks/submit')
+      .at(-1)!
+      .body.toString(),
+  );
+  assert.deepEqual(again.input, flow);
+  // A file pack keeps refusing module-execute's input shape and vice versa.
+  await assert.rejects(tool.run({ pack: 'module-execute' }, run), /flow input/);
+  await assert.rejects(
+    tool.run({ pack: 'mindmap-compile' }, run),
+    /file is required/,
+  );
+  await delay(200);
+});
+
+test('a stale event cursor restarts at the retained window instead of sticking', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = await fakeServer(t);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+    secret: async (request) => submitAnswer(home, request.id, PASSWORD),
+  }).load();
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  await host
+    .commands()
+    .get('hub')!
+    .handler(`login ${server.url} tester`, context);
+  await host.commands().get('hub')!.handler('task task_stale', context);
+  await until(
+    () => lines.some((line) => /task_stale · 5 · task\.delivered/.test(line)),
+    5000,
+  );
+  const reads = server.seen
+    .filter((call) => call.path === '/v1/tasks/task_stale/events')
+    .map((call) => call.path);
+  assert.ok(reads.length >= 2, 'the expired cursor was retried');
+  assert.ok(
+    !lines.some((line) => /CURSOR_EXPIRED/.test(line)),
+    'the refusal stays off the screen',
+  );
+  await delay(100);
+});
+
+test('a failed flow shows the rejected step and the bounded cause', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const server = await fakeServer(t);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+    secret: async (request) => submitAnswer(home, request.id, PASSWORD),
+  }).load();
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => lines.push(text),
+    sendUserMessage: () => {},
+  };
+  await host
+    .commands()
+    .get('hub')!
+    .handler(`login ${server.url} tester`, context);
+  await host.commands().get('hub')!.handler('task task_bad', context);
+  await until(() => lines.some((line) => /✖ task_bad failed/.test(line)), 5000);
+  assert.ok(
+    lines.some((line) =>
+      /✖ task_bad failed: HOOK_FAILED · Product flow did not complete · step submit \(provider\.call\) · BUILD_MISMATCH: device reports OTHER, gateway bundle is EXPECTED/.test(
+        line,
+      ),
+    ),
+  );
+  await delay(100);
 });

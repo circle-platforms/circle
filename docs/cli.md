@@ -4,12 +4,13 @@ nav_order: 16
 
 # CLI
 
-Circle has one command, `circle`, and one subcommand, `circle update`. Without options `circle` opens the full-screen interface in a folder you choose. With `-p` it runs a prompt and prints the answer.
+Circle has one command, `circle`, and two subcommands, `circle update` and `circle uninstall`. Without options `circle` opens the full-screen interface in a folder you choose. With `-p` it runs a prompt and prints the answer.
 
 ```bash
 circle [options] [folder] [@file ...] [message ...]
 circle -p "prompt" [folder]
 circle update [version] [--check]
+circle uninstall [--purge] [--yes]
 ```
 
 ## Folder, messages and files
@@ -52,6 +53,7 @@ circle -p "review this" @src/app.ts "now list the risks"
 | `-xt`, `--exclude-tools LIST` | The model does not get these tools. |
 | `-nt`, `--no-tools` | The model gets no tools. |
 | `--yolo` | With `-p`, `--line` or `--mode`: run commands and file changes without asking. See [Print mode](#print-mode). |
+| `--extensions` | With `-p`, `--line` or `--mode`: load MCP servers and enabled extensions, which print, line and rpc modes otherwise leave out. See [Print mode](#print-mode). |
 | `--verbose` | With `-p` or `--line`: show each tool call, calls not run, failed results, retries and the tokens used on standard error. |
 | `-v`, `--version` | Print the version and exit. |
 | `--print-home` | Print the data folder (see [Configuration](configuration.md#where-circle-keeps-things)) and exit. Nothing is created. |
@@ -88,7 +90,7 @@ A question from the model comes back to it as text, and it asks the question in 
 
 [Background jobs](background-jobs.md) the model started (commands, subagents, watches) are waited for after its answer: when one ends, the model gets its notice and answers again, and that answer is the one printed. The wait lasts up to `CIRCLE_JOB_WAIT` seconds (1800 by default, `0` does not wait) and ten such answers; what still runs then is stopped. Processes a command left running, usually servers, are stopped at once. Background subagents follow the same approval rule.
 
-Print mode does not load MCP servers, extensions or custom commands. It does apply `credential_files` and a project's `.circle/settings.json`. The conversation is saved, so `circle -c` (with or without `-p`) can go on with it.
+Print mode does not load MCP servers, extensions or custom commands, unless you add `--extensions`: then MCP servers and enabled extensions load before the first prompt, as in the full-screen interface, and their tools are there from the first turn. Custom commands still are not. It does apply `credential_files` and a project's `.circle/settings.json`. The conversation is saved, so `circle -c` (with or without `-p`) can go on with it.
 
 Print mode, line mode and RPC mode need Circle set up and the folder trusted. When standard input is a terminal, they ask the setup and trust questions line by line first; otherwise they stop with exit code `2`.
 
@@ -157,6 +159,30 @@ When the full-screen interface starts, Circle checks once a day whether a newer 
 
 Turn it off with `"update_check": false` in [settings](settings.md#keys), or `CIRCLE_NO_UPDATE_CHECK=1` in the environment.
 
+## Uninstalling
+
+```bash
+circle uninstall [--purge] [--yes]
+```
+
+| Option | What it does |
+|---|---|
+| *(none)* | Remove the installation. On a terminal, ask first. |
+| `--purge` | Also delete the data folder, `~/.circle` (or `CIRCLE_HOME`), with the settings, keys and sessions in it. |
+| `-y`, `--yes` | Do not ask. Required without a terminal. |
+
+`circle uninstall` removes what the installer put on the machine: the `circle` launcher, every version under the prefix with `current.ref` and `installation.json`, and the PATH change — the lines marked `# circle path` in `~/.zshrc` or `~/.bashrc`, or on Windows the launcher's folder in your user `PATH`. The data folder stays unless `--purge` deletes it too. On a terminal it lists what goes and asks; anywhere else it needs `--yes`. Files of other programs in the prefix folder, and a startup-file block for another folder, are left alone.
+
+Like `circle update`, it works on a copy that `install.sh` or `install.ps1` put in place: a git checkout is not touched, and the command stops with `circle uninstall requires an installer-managed installation`. It also stops, changing nothing, while another circle session runs from the same installation. On Windows the launcher and the running version's own files are still in use while circle runs; a small helper removes them, and the launcher folder and prefix when nothing else is left in them, a moment after this session ends. To open a folder that is called `uninstall`, write `./uninstall`.
+
+| Code | When |
+|---|---|
+| `0` | Removed. A PATH entry that could not be removed is a warning, not a failure. |
+| `1` | The question was declined, another session is running, the copy was not installed by the installer, the receipt could not be read, or a removal failed. |
+| `2` | An unknown option, or no terminal and no `--yes`. |
+
+The desktop application is removed separately: on Windows through Settings → Apps, on macOS and Linux by deleting the application.
+
 ## Full-screen and line mode
 
 Circle uses the full-screen interface when both standard input and standard output are terminals, `-p`, `--line` and `--mode` are not given, and `CIRCLE_NO_TUI` is not `1`, `true`, or `yes`. Otherwise it runs line mode, or print mode when there are messages.
@@ -167,7 +193,7 @@ Line mode reads one prompt per line and prints each answer, all in one conversat
 printf 'Summarize README.md in one sentence\nNow list its sections\n' | circle ~/code/my-project
 ```
 
-Approvals follow the same rules as print mode, and `--yolo` and `--verbose` work the same way. When a [background job](background-jobs.md) ends, standard error says so (`Background job j3 ended.`); the model reads its notice with your next line. Leaving stops the jobs still running. It does not load MCP servers, extensions, or custom commands. `/exit` (`/quit`, `/q`) leaves and `/help` lists those two. Any other line shaped like a command, such as `/compact` or a misspelt one, is not sent: standard error says it works in the full-screen interface only. A path such as `/usr/bin/env is missing`, or a line that starts with a space, is sent as a message.
+Approvals follow the same rules as print mode, and `--yolo` and `--verbose` work the same way. When a [background job](background-jobs.md) ends, standard error says so (`Background job j3 ended.`); the model reads its notice with your next line. Leaving stops the jobs still running. It does not load MCP servers, extensions, or custom commands, unless you add `--extensions` (custom commands never). `/exit` (`/quit`, `/q`) leaves and `/help` lists those two. Any other line shaped like a command, such as `/compact` or a misspelt one, is not sent: standard error says it works in the full-screen interface only. A path such as `/usr/bin/env is missing`, or a line that starts with a space, is sent as a message.
 
 ## Exit codes
 

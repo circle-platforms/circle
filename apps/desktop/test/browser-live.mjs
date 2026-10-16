@@ -13,6 +13,10 @@ import { promisify } from 'node:util';
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
 import { captureFailure } from './helpers/diagnostics.mjs';
 import { setViewport } from './helpers/viewport.mjs';
+import {
+  parseModelRequestFrames,
+  readModelRequests,
+} from './helpers/model-requests.mjs';
 
 // The conversation's browser, driven by a scripted model and by the person, against local
 // HTTPS sites with a self-signed certificate: everything a page asks for reaches both.
@@ -451,8 +455,7 @@ if (process.env.CIRCLE_DESKTOP_EXECUTABLE)
       ? process.env.SystemRoot + '\\System32'
       : '/usr/bin:/bin:/usr/sbin:/sbin';
 
-const requests = async () =>
-  (await readFile(requestsPath, 'utf8')).trim().split('\n').map(JSON.parse);
+const requests = (options) => readModelRequests(requestsPath, options);
 const state = async () =>
   (await page.evaluate(() => window.circleDesktop.runtimeState())).snapshot;
 const browserState = (sessionId) =>
@@ -483,6 +486,25 @@ const nativeUrls = () =>
       view.webContents.getURL(),
     ),
   );
+// Close one named tab from its own page, as a page's script does
+const closeView = (title) =>
+  app.evaluate(({ BrowserWindow }, name) => {
+    const views = BrowserWindow.getAllWindows()[0].contentView.children;
+    const view = views.find((entry) => entry.webContents.getTitle() === name);
+    if (!view) throw Error(`no tab titled ${name}`);
+    view.webContents.executeJavaScript('window.close()');
+  }, title);
+// The tab’s own back-forward list, as Chromium holds it
+const nativeHistory = () =>
+  app.evaluate(({ BrowserWindow }) => {
+    const views = BrowserWindow.getAllWindows()[0].contentView.children;
+    const view = views.find((entry) => entry.getVisible()) ?? views[0];
+    const history = view.webContents.navigationHistory;
+    return {
+      active: history.getActiveIndex(),
+      entries: history.getAllEntries().map((entry) => entry.url),
+    };
+  });
 // The tool result a call got, from the model request that followed it
 const resultOf = async (id) => {
   for (const request of await requests()) {
@@ -634,6 +656,18 @@ try {
       .waitFor();
     await page.getByTestId('browser-insecure').waitFor();
     assert.equal((await browserState(sessionId)).insecure, true);
+    // A warning page nobody can answer any more is a dead page: it answers `not found`
+    // to whoever goes back to it, and a page that closes its own panel by walking
+    // history goes blank. So nothing of it may stay in the tab behind this point.
+    const passed = await nativeHistory();
+    assert(
+      !passed.entries.some((entry) => entry.startsWith('circle-warning://')),
+      'the passed warning left a page in the history: ' +
+        JSON.stringify(passed),
+    );
+    checks.push(
+      'a passed certificate warning leaves no dead page in the tab history',
+    );
     // The page fills the panel, also in a window as tall as the screen allows, where a
     // page of fixed height left a gap: below the footer there is only the panel's own
     // padding (20) and the footer's margin (10)
@@ -1536,11 +1570,22 @@ try {
         openerState.tabs.length + 1,
       'popup adopted',
     );
-    await native('window.close()');
+    // A tab a page opened may close itself, as in any browser.
+    await closeView('Self closing popup');
     await waitFor(
       async () =>
         (await browserState(sessionId)).tabs.length === openerState.tabs.length,
       'self-closed popup removed',
+    );
+    // A tab the person or Circle opened is not the page's to close away: Chrome refuses
+    // that, and so does Circle - otherwise a site that ends a side panel with
+    // window.close() would empty the browser panel under the person.
+    await closeView('Close fixture opener');
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.equal(
+      (await browserState(sessionId)).tabs.length,
+      openerState.tabs.length,
+      'a page closed a tab it did not open',
     );
     assert.deepEqual(await app.evaluate(() => globalThis.closeErrors), []);
     await app.evaluate(() =>
@@ -1554,11 +1599,12 @@ try {
     );
     assert.equal((await browserState(sessionId)).url, url);
     checks.push(
-      'a popup can close itself without a main-process exception; tabs, address and subsequent navigation recover',
+      'a popup can close itself and a tab the browser opened cannot, without a main-process exception; tabs, address and subsequent navigation recover',
     );
     await page.screenshot({ path: join(output, 'browser-live.png') });
     await app.close();
     app = undefined;
+    await requests({ requireComplete: true });
 
     // ---- after a restart: allowed once is forgotten; the person's way back reaches the model
     requestsPath = join(temp, 'restart-requests.jsonl');
@@ -1622,6 +1668,7 @@ try {
     );
     await app.close();
     app = undefined;
+    await requests({ requireComplete: true });
 
     requestsPath = join(temp, 'trusted-requests.jsonl');
     // A recorded script for the form on the other port, whose certificate this start has
@@ -1716,6 +1763,7 @@ try {
     );
     assert.deepEqual(errors, []);
   }
+  await requests({ requireComplete: true });
   await writeFile(
     join(
       output,
@@ -1747,21 +1795,30 @@ try {
     ),
   );
 } catch (error) {
-  const model = await readFile(requestsPath, 'utf8').catch(() => '');
-  await writeFile(join(output, 'failure-model.jsonl'), model);
-  // A failure seen only in a CI log shows what the model last read
-  const last = model.trim().split('\n').filter(Boolean).at(-1);
-  if (last)
-    console.error(
-      JSON.parse(last)
-        .messages.filter((row) => row.role === 'tool')
-        .slice(-3)
-        .map(
-          (row) => `${row.tool_call_id}: ${String(row.content).slice(0, 1500)}`,
-        )
-        .join('\n---\n'),
-    );
-  await captureFailure(page, error, errors, output);
+  try {
+    const model = await readFile(requestsPath);
+    await writeFile(join(output, 'failure-model.jsonl'), model);
+    // Retain raw bytes, including any in-flight tail; diagnose complete records only.
+    const last = parseModelRequestFrames(model).at(-1);
+    if (last)
+      console.error(
+        last.messages
+          .filter((row) => row.role === 'tool')
+          .slice(-3)
+          .map(
+            (row) =>
+              `${row.tool_call_id}: ${String(row.content).slice(0, 1500)}`,
+          )
+          .join('\n---\n'),
+      );
+  } catch (diagnosticError) {
+    console.error('model request diagnostic failed:', String(diagnosticError));
+  }
+  try {
+    await captureFailure(page, error, errors, output);
+  } catch (diagnosticError) {
+    console.error('failure capture failed:', String(diagnosticError));
+  }
   throw error;
 } finally {
   if (app) await app.close();
