@@ -158,7 +158,17 @@ export async function runNativeCommandHandoffJourney({
     target = resolved.target;
     assert.equal(target.executionSessionId, owner);
     assert.equal(target.toolCallId, 'native-handoff-execute');
-    const card = page.locator('.tool-call').filter({
+    const groups = page.locator('.main-stack .conversation .tool-group');
+    await groups.waitFor({ state: 'visible' });
+    assert.equal(
+      await groups.count(),
+      1,
+      'the dedicated conversation has its one original command group',
+    );
+    const groupSummary = groups.locator(':scope > .tool-summary');
+    if ((await groupSummary.getAttribute('aria-expanded')) !== 'true')
+      await groupSummary.click();
+    const card = groups.locator('.tool-call').filter({
       has: page
         .locator('.tool-target')
         .filter({ hasText: 'native-command-handoff.cjs' }),
