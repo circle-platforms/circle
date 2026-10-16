@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   enumerateWindowsProcesses,
+  writeWindowsProcessEntry,
   WindowsProcessApiError,
   type NativeProcessEntry,
   type WindowsProcessApi,
@@ -192,4 +193,31 @@ test('a publishing failure remains unknown and cannot prevent owned handle clean
   assert.equal(result.issueCount, 1);
   assert.deepEqual(result.issues, [{ stage: 'unknown' }]);
   assert.deepEqual(f.closed, [41n, 1n]);
+});
+
+test('partial output writes finish the same complete LF record in order', () => {
+  const entry = { pid: 41, path: 'C:\\用户 folder\\circle.exe' };
+  const chunks: Buffer[] = [];
+  writeWindowsProcessEntry(entry, (bytes, offset, length) => {
+    const progress = Math.min(3, length);
+    chunks.push(Buffer.from(bytes.subarray(offset, offset + progress)));
+    return progress;
+  });
+  assert.equal(
+    Buffer.concat(chunks).toString('utf8'),
+    `41 ${Buffer.from(entry.path).toString('base64')}\n`,
+  );
+  assert.ok(chunks.length > 1);
+});
+
+test('zero or invalid output progress fails rather than claiming a record was written', () => {
+  for (const result of [0, -1, NaN, 100000])
+    assert.throws(
+      () =>
+        writeWindowsProcessEntry(
+          { pid: 41, path: 'C:\\circle.exe' },
+          () => result,
+        ),
+      /failed at output/,
+    );
 });
