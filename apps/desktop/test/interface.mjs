@@ -802,12 +802,17 @@ try {
   checks.push(
     'the preview settings name the default workspace without a picker',
   );
-  await page
-    .getByRole('textbox', { name: 'keybindings json', exact: true })
-    .fill('{"model.select":"f3"}');
-  await page
-    .getByRole('button', { name: 'save key preferences', exact: true })
-    .click();
+  // Key preferences are one row per action: change…, then the new key.
+  const modelsKey = page.locator('.keybinding-list .setting-row', {
+    has: page.getByText('models', { exact: true }),
+  });
+  await modelsKey.getByRole('button', { name: 'change…', exact: true }).click();
+  await modelsKey.getByText('press the new key', { exact: true }).waitFor();
+  await page.keyboard.press('F3');
+  await modelsKey.getByText('f3', { exact: true }).waitFor();
+  await modelsKey
+    .getByRole('button', { name: 'reset key', exact: true })
+    .waitFor();
   await route('/session/session1');
   await page.getByRole('textbox', { name: 'message', exact: true }).press('F3');
   await page.getByRole('heading', { name: 'models', exact: true }).waitFor();
@@ -892,8 +897,8 @@ try {
     () => document.activeElement?.getAttribute('aria-label') === 'message',
   );
   await thinking.click();
-  await page.getByRole('menuitem', { name: 'extra high', exact: true }).click();
-  assert.match(await thinking.innerText(), /extra high/);
+  await page.getByRole('menuitem', { name: 'very high', exact: true }).click();
+  assert.match(await thinking.innerText(), /very high/);
   checks.push('home composer has the session controls');
   const projectButton = page.getByRole('button', {
     name: 'choose a project',
@@ -961,7 +966,7 @@ try {
     })
     .waitFor();
   assert.equal(await heldDraft.inputValue(), 'hold this');
-  assert.match(await thinking.innerText(), /extra high/);
+  assert.match(await thinking.innerText(), /very high/);
   checks.push(
     'leaving home and opening new session keeps the draft, project and thinking depth',
   );

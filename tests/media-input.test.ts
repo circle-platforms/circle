@@ -430,6 +430,7 @@ test('a model known not to read images gets the paths only, with a notice, and a
   assert.equal(model.requests[0]!.messages.at(-1)!.attachments, undefined);
   assert.deepEqual(notices, [
     { event: 'images_left_out', model: 'scripted', count: 1 },
+    { event: 'title_failed', message: 'model has no side request' },
   ]);
   const result = model.requests[1]!.messages.at(-1)!;
   assert.equal(result.role, 'tool');

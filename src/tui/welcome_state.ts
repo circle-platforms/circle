@@ -1,7 +1,8 @@
 // What the welcome block shows, looked up when it can change rather than on every frame:
 // the folder's own things, its recent sessions and the git branch (read again at most every
 // two seconds). The lamps follow the session: unlit until the folder is trusted, blinking
-// while it loads, green once loaded, red for an extension that failed.
+// while it loads, green once loaded, red for an extension that failed. Recent sessions
+// include a short title and an untitled one that has a message.
 import type { AgentRuntime } from '../runtime.js';
 import type { CircleSettings } from '../settings.js';
 import { isReady } from '../settings.js';
@@ -19,6 +20,7 @@ import {
   type FolderItem,
 } from './folder_inventory.js';
 import { displayPath } from './status_rows.js';
+import { sessionRowLabel } from './session_label.js';
 
 export interface WelcomeInput {
   version: string;
@@ -48,10 +50,12 @@ export class WelcomeState {
     return this.branchName;
   }
 
-  // Looked up again once the folder is trusted, once the session loads, and for a new session.
+  // Looked up again once the folder is trusted, once the session loads, when a
+  // session is saved, and for a new session.
   private refresh(input: WelcomeInput, now: number): void {
     const runtime = input.runtime;
-    const key = `${runtime?.session.id ?? ''}|${input.connected}|${input.trusted}`;
+    const version = runtime?.store.version ?? -1;
+    const key = `${runtime?.session.id ?? ''}|${input.connected}|${input.trusted}|${version}`;
     if (key === this.key) return;
     this.key = key;
     try {
@@ -59,16 +63,23 @@ export class WelcomeState {
     } catch {
       this.items = [];
     }
-    const saved =
-      runtime?.store
-        .list(this.workspace)
-        .filter((session) => session.id !== runtime.session.id) ?? [];
-    this.recent = saved
-      .slice(0, 3)
-      .map((session) => [
-        session.title || '(untitled)',
-        age(session.updated, now),
-      ]);
+    // Short titles and untitled sessions with a message are listed. An empty
+    // untitled row is already hidden by the store. The session you are in is
+    // left out; you are already looking at it. Shared titles pick up the
+    // start of the first reply, or the short id when that reply is shared too.
+    if (!runtime) {
+      this.recent = [];
+      this.more = 0;
+      return;
+    }
+    const saved = runtime.store
+      .list(this.workspace)
+      .filter((session) => session.id !== runtime.session.id);
+    const shown = saved.slice(0, 3);
+    this.recent = shown.map((session) => [
+      sessionRowLabel(session, saved, runtime.store),
+      age(session.activity ?? session.updated, now),
+    ]);
     this.more = Math.max(0, saved.length - 3);
   }
 

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { _electron as electron } from 'playwright';
 import { captureFailure } from './helpers/diagnostics.mjs';
+import { answerTitle, isTitleRequest } from './helpers/title-requests.mjs';
 
 // A local model gateway reads the real preceding screenshot result. It never calls a model.
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -58,6 +59,11 @@ const server = createServer(async (req, res) => {
   let body = '';
   for await (const chunk of req) body += chunk;
   const request = JSON.parse(body);
+  // The session title is asked after the turn. It is not one of the scripted steps.
+  if (isTitleRequest(request)) {
+    answerTitle(res, request);
+    return;
+  }
   requests.push(request);
   const tool = (id, name, args) => ({
     role: 'assistant',

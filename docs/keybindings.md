@@ -17,8 +17,8 @@ Press `?` in an empty input box, or run `/hotkeys`, to see the shortcuts in the 
 | `shift+enter`, `ctrl+j` | Insert a line break. |
 | `\` then `enter` | Also a line break, for terminals that send `shift+enter` as `enter`. |
 | `ctrl+g` | Edit the draft in `$VISUAL` or `$EDITOR`, the same as `/editor`. |
-| `esc` | While Circle works: stop the turn. Messages it had not read yet are sent next, one turn each. Otherwise: clear the input box. |
-| `esc` `esc` | Twice within half a second with an empty input box: open the session tree, the same as `/tree`. The `double_escape` setting can make it open `/fork` instead, or nothing. |
+| `esc` | While Circle works: stop the turn. Messages it had not read yet are sent next, one turn each. With a draft: press `esc` again to clear it (`ctrl+y` puts that draft back). One press leaves the draft. |
+| `esc` `esc` | Twice quickly with an empty input box: open the session tree, the same as `/tree`. The `double_escape` setting can make it open `/fork` instead, or nothing. With a draft, the second press clears the draft instead. |
 | `ctrl+c` | While Circle works: stop the turn. With text in the box: clear it (it stays in the history). With an empty box: press twice within 1.5 seconds to exit; a second press right after stopping a turn also exits. |
 | `ctrl+d` | With an empty box: exit at once. With text: delete the character after the cursor. |
 | `ctrl+z` | Suspend Circle and go back to the shell. `fg` brings it back as it was. Not on Windows. |
@@ -31,17 +31,19 @@ Press `?` in an empty input box, or run `/hotkeys`, to see the shortcuts in the 
 | `ctrl+y` | Put back what the last of these deleted. |
 | `home` or `ctrl+a`, `end` or `ctrl+e` | Go to the start or end of the draft. With an empty input box, `home` and `end` scroll the conversation instead. |
 | `backspace`, `delete` | Delete. |
-| `ctrl+u` | Clear the input box. |
+| `ctrl+u` | Delete back to the start of the current line. `ctrl+y` puts that text back. |
 | `↑` `↓` | Walk through earlier messages. With an empty input box and no more history, they scroll the conversation by 3 rows. While messages wait for the model, `↑` in an empty box takes back the last one instead. |
 | `tab` | Take the marked entry of the completion list, or, with the list closed, complete a `/command` name or the `@path` before the cursor. |
 | `?` | With an empty input box: show the shortcuts. |
 | `ctrl+r` | Search earlier messages. See [Search](#search). |
-| `ctrl+s` | Enter a secret that a task is waiting for. See [Secret entry](#secret-entry). |
-| `ctrl+l` | Choose a model, the same as `/models`. Also redraws the screen. |
+| `alt+k` | Enter a secret that a task is waiting for. See [Secret entry](#secret-entry). `ctrl+s` is not used: many terminals treat it as XOFF and freeze. |
+| `ctrl+l` | Redraw the screen. |
+| `alt+l` | Choose a model, the same as `/models`. |
 | `alt+s` | Choose a session, including while a turn or approval is waiting. |
-| `ctrl+x` | Copy the last answer, the same as `/copy`. |
+| `alt+c` | Copy the last answer, the same as `/copy`. |
 | `ctrl+f` | Find text in the conversation. See [Find](#find). |
-| `ctrl+p` | Switch to the next model for this session. See [Choose a model](models.md#switch-models). |
+| `alt+m` | Switch to the next model for this session. See [Choose a model](models.md#switch-models). |
+| `ctrl+p`, `ctrl+n` | Earlier or next prompt, the same as `↑` and `↓`. |
 | `shift+tab` | Switch to the next session mode: manual, accept edits, read-only, auto. See [Modes](usage.md#modes). |
 | `alt+t` | Switch to the next thinking depth for this session. |
 | `alt+p` | Focus the plan. `↑` / `↓` scroll its steps; `esc` returns to the input without stopping the turn. Clicking the plan also focuses it. Cards and lists keep their own keys. |
@@ -78,7 +80,7 @@ An approval:
 | `pageup`, `pagedown` | Scroll the conversation behind the card. |
 | `ctrl+c` | Stop the turn. It does not answer a background subagent's card (its title starts with the job, such as `j3 general-purpose`): the card stays. |
 
-In the row `Reject and explain`, type the reason and press `enter`; an empty reason is a plain rejection. `esc` returns to the options.
+In the row `Reject and explain`, type the reason and press `enter`; an empty reason is a plain rejection. The empty row says so. `esc` returns to the options and keeps what you typed. A `/command` runs, and the approval stays.
 
 Questions from the model:
 
@@ -138,7 +140,7 @@ A paste goes where typing goes, into the search or the line the list asks for, n
 
 When a list needs a line of text or a yes or no, such as a new name in `/resume` or `Stop j3 npm test?` in `/jobs`, it asks on the line under its title, in place of the search. Type the text (`backspace`, `ctrl+u` and a paste work) and press `enter`, or press `enter` to confirm. `esc` or `ctrl+c` cancel and change nothing; the list stays open.
 
-Some lists add keys, shown under their title: `ctrl+s` in `/models` and `/effort` also saves the choice as the default; `tab` in `/models` adds the model to the ones `ctrl+p` goes through or takes it out; `tab`, `ctrl+r` and `ctrl+d` in `/resume` switch folders, rename and delete; `L` and `ctrl+u` in `/tree` label a message and show only yours; `ctrl+d` in `/jobs` stops a job (after asking) or removes one that has ended.
+Some lists add keys, shown under their title: `alt+d` in `/models`, `/effort` and the default-mode list also saves the choice as the default; `tab` in `/models` adds the model to the ones `alt+m` goes through or takes it out; `tab`, `ctrl+r` and `ctrl+k` in `/resume` switch folders, rename and delete (`ctrl+r` starts with the old name selected, so typing replaces it); `L` and `ctrl+u` in `/tree` label a message and show only yours; `ctrl+k` in `/jobs` stops a job (after asking) or removes one that has ended. `/resume` searches titles and message text. A search that matches nothing says `No matches`. The every-folder list names each session's folder, and the hint line says whether `tab` returns to this folder. The marked row starts with `>`.
 
 `/approvals` has no search. `↑` `↓`, `k` `j` and `tab` move, a digit picks its row at once, `enter` picks the marked one and `esc` closes it. Other keys, and a paste, go to the input box. `ctrl+c` closes the list and then does what it does in the input box.
 
@@ -168,7 +170,7 @@ Any other key leaves the search with the match in the box and does what it norma
 
 ## Secret entry
 
-When a task asks for a secret, a card names the variable and the file it goes to. Choose `enter secret`, or press `ctrl+s`, and a second card takes the value: up to 512 characters, masked, `enter` to submit, `esc` or `ctrl+c` to cancel. An empty value is refused. `ctrl+s` in the input box opens the oldest secret a task is waiting for.
+When a task asks for a secret, a card names the variable and the file it goes to. Choose `enter secret`, and a second card takes the value: up to 512 characters, masked, `enter` to submit, `esc` or `ctrl+c` to cancel. An empty value is refused. `alt+k` in the input box opens the oldest secret a task is waiting for. Nothing happens when none is waiting.
 
 ## Subagents
 
@@ -185,7 +187,7 @@ In a subagent's record: `esc` or `backspace` go back, `←` `→` move to the pr
 
 A record keeps these keys while a card waits under it: `esc` leaves the record instead of answering the card, and any other key only leaves the record, so nothing you press on the page answers the card. Answer the card once you are back. `ctrl+c` still stops the turn.
 
-On a job's page (from `/jobs`): `esc` goes back to the list, `ctrl+d` stops the job (after a card asks) or removes one that has ended, and the mouse wheel scrolls. Other keys do nothing there, except `ctrl+c` and `ctrl+z`.
+On a job's page (from `/jobs`): `esc` goes back to the list, `ctrl+k` stops the job (after a card asks) or removes one that has ended, and the mouse wheel scrolls. Other keys do nothing there, except `ctrl+c` and `ctrl+z`.
 
 ## Mouse
 
@@ -220,27 +222,30 @@ A key named there does that action everywhere, in a card or a list too, and no l
 | `clear` | `ctrl+c` |
 | `exit` | `ctrl+d` |
 | `suspend` | `ctrl+z` |
-| `model.select` | `ctrl+l` |
+| `model.select` | `alt+l` |
 | `session.select` | `alt+s` |
-| `model.cycle` | `ctrl+p` |
+| `model.cycle` | `alt+m` |
 | `mode.cycle` | `shift+tab` |
 | `thinking.cycle` | `alt+t` |
 | `plan.focus` | `alt+p` |
 | `thinking.toggle` | `ctrl+t` |
 | `tools.expand` | `ctrl+o` |
 | `editor.external` | `ctrl+g` |
-| `message.copy` | `ctrl+x` |
+| `message.copy` | `alt+c` |
 | `message.dequeue` | `alt+up` |
 | `message.followup` | `ctrl+q` |
 | `image.paste` | `ctrl+v` |
 | `find` | `ctrl+f` |
 | `history.search` | `ctrl+r` |
-| `secret.enter` | `ctrl+s` |
+| `secret.enter` | `alt+k` |
 | `newline` | `ctrl+j` |
 | `job.background` | `ctrl+b` |
+| `sidebar.toggle` | desktop `ctrl+b` |
 
 Key names are written as on this page: `ctrl+k`, `alt+up`, `shift+tab`, `f1` to `f12`. `/hotkeys` lists the default keys.
 
+The desktop application uses its own defaults for a few actions: `ctrl+b` shows or hides the sidebar, `alt+b` backgrounds a job, `ctrl+alt+s` enters a secret, `alt+c` copies the last answer, `ctrl+shift+m` opens the model list and `alt+m` cycles models. Search is `ctrl+k` from anywhere. `ctrl+r` (`history.search`) opens that same search; it is the terminal's history-search key and is kept on the desktop on purpose. The keys in the table above are the terminal's, except `sidebar.toggle`, which is desktop only.
+
 ## Which key wins
 
-When several places could take a key, the first of these does: a subagent's record, a card, a list, find, search, a selection, the subagent strip, a job's page, `ctrl+s`, `ctrl+d` on an empty box, the completion list, the other global keys, then the input box. A card passes on the control keys it does not use, which is why `ctrl+c` still stops a turn while a card is up and plain letters do not.
+When several places could take a key, the first of these does: a subagent's record, a card, a list, find, search, a selection, the subagent strip, a job's page, `alt+k`, `ctrl+d` on an empty box, the completion list, the other global keys, then the input box. A card passes on the control keys it does not use, which is why `ctrl+c` still stops a turn while a card is up and plain letters do not.

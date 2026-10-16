@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Check,
@@ -20,6 +20,12 @@ import type {
   SessionMode,
 } from '../model/types';
 import { sessionMode } from '../model/state';
+import {
+  claimComposerFocus,
+  composerFocusPending,
+  sealComposerFocus,
+  takeComposerText,
+} from '../model/composer-focus';
 import { t } from '../i18n';
 import { FileChip, IconButton } from '../components/common';
 import { EffortMenu, ModeMenu, ModelMenu } from './Composer';
@@ -117,6 +123,25 @@ export function Home({
     if (focusToken === undefined) return;
     const timer = window.setTimeout(() => message.current?.focus(), 0);
     return () => window.clearTimeout(timer);
+  }, [focusToken]);
+  // New session took the keyboard before this view existed. Keys typed during
+  // the switch were held; they go after the kept draft, with the caret there.
+  useLayoutEffect(() => {
+    if (!composerFocusPending()) return;
+    sealComposerFocus();
+    const typed = takeComposerText();
+    const field = message.current;
+    if (typed) {
+      const next = draftRef.current + typed;
+      draftRef.current = next;
+      setDraft(next);
+      if (field) field.value = next;
+    }
+    if (field) {
+      field.focus({ preventScroll: true });
+      field.setSelectionRange(field.value.length, field.value.length);
+    }
+    claimComposerFocus();
   }, [focusToken]);
   useEffect(() => {
     if (!projectsOpen) return;

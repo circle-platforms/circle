@@ -1,5 +1,5 @@
 import { palette, sgrJoin } from '../theme.js';
-import { pad, truncate } from '../string_width.js';
+import { pad, stringWidth, truncate } from '../string_width.js';
 import { printable } from './dialog_card.js';
 export interface PickerItem {
   key: string;
@@ -11,7 +11,8 @@ export interface PickerItem {
 export interface PickerOptions {
   keys?: Record<string, (item: PickerItem | undefined) => void | Promise<void>>;
   hint?: string;
-  empty?: string;
+  /** Shown when the filter matches nothing. A function can tell a search miss from an empty list. */
+  empty?: string | ((query: string, total: number) => string);
   focusKey?: string;
   /** false: typing does not search. The keys the list does not use go on to the input box,
    * and ctrl+c closes the list before the session takes it (`/approvals`, as 0.5.0's). */
@@ -26,6 +27,8 @@ interface Asked {
   mask: boolean;
   keys: string;
   cancel?: () => void;
+  /** The next typed character replaces `text` (a rename starts with the old name selected). */
+  replace: boolean;
 }
 function dropLast(text: string): string {
   return Array.from(text).slice(0, -1).join('');
@@ -87,7 +90,12 @@ export class Picker {
     label: string,
     text: string,
     done: (text: string) => void | Promise<void>,
-    options: { mask?: boolean; keys?: string; cancel?: () => void } = {},
+    options: {
+      mask?: boolean;
+      keys?: string;
+      cancel?: () => void;
+      replace?: boolean;
+    } = {},
   ): void {
     this.confirming = undefined;
     this.asked = {
@@ -97,6 +105,7 @@ export class Picker {
       mask: Boolean(options.mask),
       keys: options.keys ?? 'enter saves · esc cancels',
       cancel: options.cancel,
+      replace: Boolean(options.replace),
     };
   }
   /** A yes or no in place of the search: enter runs `done`, esc cancels. */
@@ -128,9 +137,18 @@ export class Picker {
       } else if (key === 'escape' || key === 'ctrl+c') {
         this.asked = undefined;
         asked.cancel?.();
-      } else if (key === 'backspace') asked.text = dropLast(asked.text);
-      else if (key === 'ctrl+u') asked.text = '';
-      else asked.text += printable(key, char);
+      } else if (key === 'backspace') {
+        asked.text = asked.replace ? '' : dropLast(asked.text);
+        asked.replace = false;
+      } else if (key === 'ctrl+u') {
+        asked.text = '';
+        asked.replace = false;
+      } else {
+        const typed = printable(key, char);
+        if (!typed) return true;
+        asked.text = asked.replace ? typed : asked.text + typed;
+        asked.replace = false;
+      }
       return true;
     }
     const shown = this.matches();
@@ -185,8 +203,10 @@ export class Picker {
   paste(text: string): void {
     const line = printable('', text.replace(/[\r\n]/g, ''));
     if (this.confirming || !line) return;
-    if (this.asked) this.asked.text += line;
-    else {
+    if (this.asked) {
+      this.asked.text = this.asked.replace ? line : this.asked.text + line;
+      this.asked.replace = false;
+    } else {
       this.query += line;
       this.focus = 0;
     }
@@ -224,25 +244,34 @@ export class Picker {
           ),
         );
     }
-    shown
-      .slice(top, top + maximum)
-      .forEach((item, index) =>
-        rows.push(
-          sgrJoin(index + top === this.focus ? p.sel_bg : p.panel_bg, p.text) +
-            pad(
-              truncate(
-                `   ${item.label}${item.current ? ' · current' : ''}  ${item.meta || ''}`,
-                width,
-              ),
-              width,
-            ) +
-            p.reset,
-        ),
-      );
-    if (!shown.length)
+    const headOf = (item: PickerItem): string =>
+      `${item.current ? '● ' : ''}${item.label}${item.current ? ' · current' : ''}`;
+    // The time (or any meta) starts in one column. CJK titles are wider than
+    // their character count, so the pad uses display width.
+    const metas = shown.some((item) => item.meta);
+    const widest = Math.max(
+      0,
+      ...shown.map((item) => stringWidth(headOf(item))),
+    );
+    const column = metas ? Math.min(widest, Math.max(8, width - 3 - 8)) : 0;
+    shown.slice(top, top + maximum).forEach((item, index) => {
+      const marked = index + top === this.focus;
+      const head = headOf(item);
+      const body = metas ? pad(truncate(head, column), column) : head;
+      const meta = item.meta ? `  ${item.meta}` : '';
       rows.push(
-        p.faint + '   ' + (this.options.empty ?? 'Nothing to show') + p.reset,
+        sgrJoin(marked ? p.sel_bg : p.panel_bg, p.text) +
+          pad(truncate(` ${marked ? '>' : ' '} ${body}${meta}`, width), width) +
+          p.reset,
       );
+    });
+    if (!shown.length) {
+      const empty =
+        typeof this.options.empty === 'function'
+          ? this.options.empty(this.query, this.items.length)
+          : (this.options.empty ?? 'Nothing to show');
+      rows.push(p.faint + '   ' + empty + p.reset);
+    }
     return rows;
   }
 }

@@ -1,6 +1,7 @@
 import { desktopHost, folderOpenMessage, openNativeWorkspace } from '../host';
 import { openHome } from '../features/home-selection';
 import {
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -36,6 +37,8 @@ import {
   type ActivityAge,
 } from '../model/session-management';
 import type { DialogId, Session } from '../model/types';
+import { workspaceLabel } from '../model/workspace-label';
+import { armComposerFocus } from '../model/composer-focus';
 import { IconButton } from './common';
 import { t, tn } from '../i18n';
 import { UpdateChip } from '../features/Update';
@@ -63,6 +66,53 @@ export const CUSTOMIZE = [
 const SHOWN = 8;
 /** Collapse state for the recent list. It is not a workspace id. */
 const RECENT = 'recent';
+
+function RenameField({
+  label,
+  defaultValue,
+  onCommit,
+  onCancel,
+}: {
+  label: string;
+  defaultValue: string;
+  onCommit: (value: string) => void;
+  onCancel: () => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const input = ref.current;
+    if (!input) return;
+    const selectAll = () => {
+      input.focus();
+      input.setSelectionRange(0, input.value.length);
+      input.scrollLeft = 0;
+    };
+    selectAll();
+    const frame = requestAnimationFrame(selectAll);
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  return (
+    <input
+      ref={ref}
+      className="session-rename"
+      aria-label={label}
+      defaultValue={defaultValue}
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          onCommit(event.currentTarget.value);
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          onCancel();
+        }
+      }}
+      onBlur={(event) => onCommit(event.currentTarget.value)}
+    />
+  );
+}
 
 export function Sidebar({
   onSearch,
@@ -105,12 +155,63 @@ export function Sidebar({
   // not hide the card under a pointer that has not moved.
   const scrollGesture = useRef(false);
   const seenOrder = useRef<string | null>(null);
+  // The row whose title is being edited in place (F2 or rename). A session can
+  // be in recent and under its folder; only one of those rows becomes a field.
+  const [editing, setEditing] = useState<string | null>(null);
+  const editDone = useRef(false);
+  const rowKeysRef = useRef<string[]>([]);
+  const beginRename = (rowKey: string) => {
+    editDone.current = false;
+    setEditing(rowKey);
+  };
+  const commitRename = (sessionId: string, value: string, previous: string) => {
+    if (editDone.current) return;
+    editDone.current = true;
+    setEditing(null);
+    const title = value.trim();
+    if (!title || title === previous) return;
+    perform(() =>
+      runtime.change((state) => {
+        const target = state.sessions.find((item) => item.id === sessionId);
+        if (target) target.title = title;
+      }),
+    );
+  };
+  const cancelRename = () => {
+    editDone.current = true;
+    setEditing(null);
+  };
+  useEffect(() => {
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'F2' || event.ctrlKey || event.metaKey || event.altKey)
+        return;
+      if (document.querySelector('[role="dialog"]')) return;
+      if (document.documentElement.dataset.keyCapture) return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        target.closest('input, textarea, [contenteditable="true"]')
+      )
+        return;
+      const rowKey = rowKeysRef.current.find((key) =>
+        key.endsWith(`:${snapshot.activeSessionId}`),
+      );
+      if (!rowKey) return;
+      event.preventDefault();
+      beginRename(rowKey);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [snapshot.activeSessionId]);
   const goSession = async (id: string) => {
     await runtime.selectSession(id);
     navigate(`/session/${id}`);
     onNavigate?.();
   };
   const newSession = (workspaceId?: string) => {
+    // Before the route changes, while the click or the row still owns the
+    // keyboard: keys typed during the switch land in the home composer.
+    armComposerFocus();
     openHome(navigate, `${location.pathname}${location.search}`, workspaceId);
     onNavigate?.();
   };
@@ -148,6 +249,7 @@ export function Sidebar({
       group.shown.map((session) => `${group.workspace.id}:${session.id}`),
     ),
   ];
+  rowKeysRef.current = rowKeys;
   const orderKey = rowKeys.join('\n');
   // A new message moves rows. Keep the row that was at the top of the view there.
   // Hovering must not run this: a scroll event would close the card that just opened.
@@ -267,6 +369,12 @@ export function Sidebar({
           tabIndex={rowKey === tabKey ? 0 : -1}
           details={recentDetails(session, snapshot.workspaces)}
           renaming={renaming}
+          editing={editing === rowKey}
+          onRename={() => beginRename(rowKey)}
+          onRenameCommit={(value) =>
+            commitRename(session.id, value, session.title)
+          }
+          onRenameCancel={cancelRename}
           attention={waiting.has(session.id)}
           running={session.state === 'waiting'}
           onOpen={(id) => {
@@ -430,11 +538,13 @@ export function Sidebar({
                   aria-expanded={!collapsed.includes(workspace.id)}
                   onClick={() => toggle(workspace.id, collapsed, setCollapsed)}
                 >
-                  {workspace.name}
+                  {workspaceLabel(workspace)}
                 </button>
                 <div className="project-actions">
                   <IconButton
-                    label={t('new session in {name}', { name: workspace.name })}
+                    label={t('new session in {name}', {
+                      name: workspaceLabel(workspace),
+                    })}
                     tipOpen={scrollClosed ? false : undefined}
                     onClick={() => newSession(workspace.id)}
                   >
@@ -549,6 +659,10 @@ function SessionRow({
   tabIndex,
   details,
   renaming,
+  editing,
+  onRename,
+  onRenameCommit,
+  onRenameCancel,
   attention,
   running,
   onOpen,
@@ -571,6 +685,11 @@ function SessionRow({
   tabIndex: number;
   details: { project?: string; age: ActivityAge; absolute?: string };
   renaming: boolean;
+  /** The title is being edited in place, so the row is a text field. */
+  editing: boolean;
+  onRename: () => void;
+  onRenameCommit: (value: string) => void;
+  onRenameCancel: () => void;
   attention: boolean;
   running: boolean;
   onOpen: (id: string) => void;
@@ -612,6 +731,7 @@ function SessionRow({
     menuFocus !== null && (hoveredKey === null || hoveredKey === menuFocus);
   const cardOpen =
     !renaming &&
+    !editing &&
     !menuOpen &&
     !keyboardOwns &&
     !scrollClosed &&
@@ -619,6 +739,7 @@ function SessionRow({
   const tipOpen =
     keyboardOwns &&
     menuFocus === rowKey &&
+    !editing &&
     !menuOpen &&
     !scrollClosed &&
     inView;
@@ -634,80 +755,95 @@ function SessionRow({
         setMenuOpen(true);
       }}
     >
-      <NavLink
-        ref={(node) => {
-          linkNode.current = node;
-          linkRef(node);
-        }}
-        tabIndex={tabIndex}
-        className={active ? 'session-link active' : 'session-link'}
-        end
-        to={`/session/${session.id}`}
-        onPointerDown={(event) => {
-          if (event.button !== 0) return;
-          const target = event.target;
-          if (target instanceof Element && target.closest('button')) return;
-          linkNode.current?.focus({ preventScroll: true });
-        }}
-        onClick={(event) => {
-          event.preventDefault();
-          linkNode.current?.focus({ preventScroll: true });
-          onOpen(session.id);
-          onKeepHover();
-        }}
-        onFocus={() => {
-          setLinkFocused(true);
-          onFocusRow();
-        }}
-        onBlur={() => setLinkFocused(false)}
-        onKeyDown={(event) => {
-          if (
-            event.key === 'ArrowRight' &&
-            !event.altKey &&
-            !event.metaKey &&
-            !event.ctrlKey &&
-            !event.shiftKey
-          ) {
-            event.preventDefault();
-            menuButton.current?.focus({ preventScroll: true });
-          } else if (menuKey(event)) {
-            event.preventDefault();
-            setMenuOpen(true);
-          } else onKeyDown(event);
-        }}
-      >
-        <span>{sessionTitle(session.title)}</span>
-        {attention ? (
-          <i className="attention-dot" />
-        ) : running ? (
-          <i className="running-dot" />
-        ) : null}
-      </NavLink>
-      <SessionMenu
-        session={session}
-        buttonRef={menuButton}
-        open={menuOpen}
-        onOpenChange={setMenuOpen}
-        tipOpen={tipOpen}
-        onFocus={() => onMenuFocus(rowKey)}
-        onBlur={() => onMenuFocus(null)}
-        onKeyDown={(event) => {
-          if (
-            event.key === 'ArrowLeft' &&
-            !event.altKey &&
-            !event.metaKey &&
-            !event.ctrlKey &&
-            !event.shiftKey
-          ) {
-            event.preventDefault();
-            linkNode.current?.focus({ preventScroll: true });
-          } else if (menuKey(event)) {
-            event.preventDefault();
-            setMenuOpen(true);
-          }
-        }}
-        onDialog={(dialog, selection) => onDialog?.(dialog, selection)}
-      />
+      {editing ? (
+        <>
+          <RenameField
+            label={t('rename session')}
+            defaultValue={session.title === 'new session' ? '' : session.title}
+            onCommit={onRenameCommit}
+            onCancel={onRenameCancel}
+          />
+          <span className="session-menu-gap" aria-hidden="true" />
+        </>
+      ) : (
+        <>
+          <NavLink
+            ref={(node) => {
+              linkNode.current = node;
+              linkRef(node);
+            }}
+            tabIndex={tabIndex}
+            className={active ? 'session-link active' : 'session-link'}
+            end
+            to={`/session/${session.id}`}
+            onPointerDown={(event) => {
+              if (event.button !== 0) return;
+              const target = event.target;
+              if (target instanceof Element && target.closest('button')) return;
+              linkNode.current?.focus({ preventScroll: true });
+            }}
+            onClick={(event) => {
+              event.preventDefault();
+              linkNode.current?.focus({ preventScroll: true });
+              onOpen(session.id);
+              onKeepHover();
+            }}
+            onFocus={() => {
+              setLinkFocused(true);
+              onFocusRow();
+            }}
+            onBlur={() => setLinkFocused(false)}
+            onKeyDown={(event) => {
+              if (
+                event.key === 'ArrowRight' &&
+                !event.altKey &&
+                !event.metaKey &&
+                !event.ctrlKey &&
+                !event.shiftKey
+              ) {
+                event.preventDefault();
+                menuButton.current?.focus({ preventScroll: true });
+              } else if (menuKey(event)) {
+                event.preventDefault();
+                setMenuOpen(true);
+              } else onKeyDown(event);
+            }}
+          >
+            <span>{sessionTitle(session.title)}</span>
+            {attention ? (
+              <i className="attention-dot" />
+            ) : running ? (
+              <i className="running-dot" />
+            ) : null}
+          </NavLink>
+          <SessionMenu
+            session={session}
+            buttonRef={menuButton}
+            open={menuOpen}
+            onOpenChange={setMenuOpen}
+            tipOpen={tipOpen}
+            onFocus={() => onMenuFocus(rowKey)}
+            onBlur={() => onMenuFocus(null)}
+            onKeyDown={(event) => {
+              if (
+                event.key === 'ArrowLeft' &&
+                !event.altKey &&
+                !event.metaKey &&
+                !event.ctrlKey &&
+                !event.shiftKey
+              ) {
+                event.preventDefault();
+                linkNode.current?.focus({ preventScroll: true });
+              } else if (menuKey(event)) {
+                event.preventDefault();
+                setMenuOpen(true);
+              }
+            }}
+            onRename={onRename}
+            onDialog={(dialog, selection) => onDialog?.(dialog, selection)}
+          />
+        </>
+      )}
     </div>
   );
   return (

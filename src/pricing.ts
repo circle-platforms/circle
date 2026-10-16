@@ -60,10 +60,12 @@ export interface CostSummary {
   amounts: Record<string, number>;
   calls: number;
   unpriced_calls: number;
+  /** Part of `amounts` that came from a stopped turn's token estimate. */
+  estimated_amounts?: Record<string, number>;
 }
 export class UsageCostTotals {
   private summary: CostSummary = { amounts: {}, calls: 0, unpriced_calls: 0 };
-  add(receipt: unknown): void {
+  add(receipt: unknown, estimated = false): void {
     this.summary.calls++;
     const r = receipt as Partial<PriceReceipt> | undefined;
     if (
@@ -73,11 +75,18 @@ export class UsageCostTotals {
       r.amount < 0 ||
       !['USD', 'RMB'].includes(r.currency ?? '')
     ) {
-      this.summary.unpriced_calls++;
+      // An estimate with no rate is not a confirmed unpriced call, so it does
+      // not add the `+` that means "some other call had no price".
+      if (!estimated) this.summary.unpriced_calls++;
       return;
     }
     this.summary.amounts[r.currency!] =
       (this.summary.amounts[r.currency!] ?? 0) + r.amount;
+    if (estimated) {
+      const estimatedAmounts = (this.summary.estimated_amounts ??= {});
+      estimatedAmounts[r.currency!] =
+        (estimatedAmounts[r.currency!] ?? 0) + r.amount;
+    }
     if (r.tool_fee_unknown) this.summary.unpriced_calls++;
   }
   snapshot(): CostSummary {
@@ -89,7 +98,8 @@ export function messageCosts(messages: Message[]): CostSummary {
   for (const message of messages) {
     if (message.model_calls?.length)
       for (const call of message.model_calls) total.add(call.cost);
-    else if (message.usage) total.add(message.cost);
+    else if (message.usage)
+      total.add(message.cost, message.interrupted === true);
   }
   return total.snapshot();
 }
@@ -111,6 +121,10 @@ export function formatCosts(
       )
         amounts[currency] = (amounts[currency] ?? 0) + amount;
   }
+  let estimated = false;
+  for (const summary of summaries)
+    for (const amount of Object.values(summary.estimated_amounts ?? {}))
+      if (Number.isFinite(amount) && amount > 0) estimated = true;
   const text = ['USD', 'RMB']
     .filter((currency) => Object.hasOwn(amounts, currency))
     .map(
@@ -118,8 +132,10 @@ export function formatCosts(
         `${currency === 'USD' ? '$' : '¥'}${amounts[currency]!.toFixed(4)}`,
     )
     .join(' + ');
+  // `~` marks dollars that include a stopped turn's estimate. `+` is only a
+  // call whose usage was reported and still had no price.
   return text
-    ? text + (unpriced ? '+' : '')
+    ? (estimated ? '~' : '') + text + (unpriced ? '+' : '')
     : calls
       ? 'N/A'
       : knownEmpty

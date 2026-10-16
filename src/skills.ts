@@ -6,7 +6,7 @@ import {
   statSync,
   type Dirent,
 } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 export interface SkillInfo {
   name: string;
@@ -59,15 +59,8 @@ export function skillSources(
     [join(userHome, '.pi/agent/skills'), 'Pi'],
     [join(home, 'skills'), 'Circle'],
   ];
-  for (let directory = resolve(workspace); ; directory = dirname(directory)) {
-    sources.push([
-      join(directory, '.agents/skills'),
-      directory === resolve(workspace) ? 'Project Agents' : 'Ancestor Agents',
-    ]);
-    if (existsSync(join(directory, '.git')) || dirname(directory) === directory)
-      break;
-  }
   for (const [path, label] of [
+    ['.agents/skills', 'Project Agents'],
     ['.opencode/skills', 'Project OpenCode'],
     ['.pi/skills', 'Project Pi'],
     ['.claude/skills', 'Project Claude'],
