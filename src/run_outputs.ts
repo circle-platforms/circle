@@ -3,14 +3,9 @@
 // not cover these files. A declared file at the workspace root protects only
 // that file. A declared file in a subdirectory protects the existing files
 // in that directory.
-import {
-  existsSync,
-  readdirSync,
-  readFileSync,
-  realpathSync,
-  statSync,
-} from 'node:fs';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { dirname, relative, resolve, sep } from 'node:path';
+import { canonicalPath } from './paths.js';
 
 const SKIP = new Set(['node_modules', '.git', 'dist', '.circle']);
 
@@ -22,28 +17,12 @@ interface Guard {
 }
 
 function inside(root: string, path: string): boolean {
-  const rel = relative(root, path);
+  const rel = relative(canonicalPath(root), canonicalPath(path));
   return rel !== '..' && !rel.startsWith('..' + sep) && !/^[A-Za-z]:/.test(rel);
 }
 
-/** One spelling of a path. An existing path is realpath'd. A path that is
- * not there yet keeps its last part and uses the realpath of its parent, so
- * `/var/…/out/report.md` and `/private/var/…/out/report.md` compare equal. */
-function canonical(path: string): string {
-  const absolute = resolve(path);
-  try {
-    if (existsSync(absolute)) return realpathSync(absolute);
-  } catch {
-    return absolute;
-  }
-  const parent = dirname(absolute);
-  if (parent === absolute) return absolute;
-  const tail = absolute.slice(parent.length + (parent.endsWith(sep) ? 0 : 1));
-  return join(canonical(parent), tail);
-}
-
 function guards(workspace: string): Guard[] {
-  const root = canonical(workspace);
+  const root = canonicalPath(workspace);
   const found: Guard[] = [];
   const visit = (dir: string, depth: number): void => {
     if (depth > 4) return;
@@ -69,7 +48,7 @@ function guards(workspace: string): Guard[] {
             : [];
         for (const output of outputs) {
           if (typeof output !== 'string' || !output.trim()) continue;
-          const full = canonical(resolve(root, output));
+          const full = canonicalPath(resolve(root, output));
           if (!inside(root, full) || !existsSync(full)) continue;
           let stat;
           try {
@@ -78,11 +57,16 @@ function guards(workspace: string): Guard[] {
             continue;
           }
           if (stat.isDirectory()) {
+            // The workspace itself is not a folder of outputs: that would
+            // protect every existing file.
             if (full !== root) found.push({ directory: full });
             continue;
           }
           if (!stat.isFile()) continue;
-          const parent = dirname(full);
+          // dirname() is not a realpath. Compare it through the same helper
+          // as the root, or a spelling difference stores the workspace root
+          // as an output folder and every existing file asks again.
+          const parent = canonicalPath(dirname(full));
           if (parent === root) found.push({ file: full });
           else found.push({ directory: parent });
         }
@@ -106,8 +90,8 @@ function joinSafe(dir: string, name: string): string {
 
 /** An existing file a skill pack already produced, or another file in that directory. */
 export function isExistingRunOutput(workspace: string, path: string): boolean {
-  const root = canonical(workspace);
-  const full = canonical(path);
+  const root = canonicalPath(workspace);
+  const full = canonicalPath(path);
   if (!inside(root, full) || !existsSync(full)) return false;
   let stat;
   try {
@@ -117,7 +101,7 @@ export function isExistingRunOutput(workspace: string, path: string): boolean {
   }
   if (!stat.isFile()) return false;
   for (const guard of guards(workspace)) {
-    if (guard.file && guard.file === full) return true;
+    if (guard.file && canonicalPath(guard.file) === full) return true;
     if (guard.directory && inside(guard.directory, full)) return true;
   }
   return false;
@@ -128,14 +112,18 @@ export function commandTouchesRunOutput(
   workspace: string,
   command: string,
 ): boolean {
-  const root = canonical(workspace);
+  const root = canonicalPath(workspace);
   for (const guard of guards(workspace)) {
     if (guard.file) {
-      const rel = relative(root, guard.file).split(sep).join('/');
+      const rel = relative(root, canonicalPath(guard.file))
+        .split(sep)
+        .join('/');
       if (rel && command.includes(rel)) return true;
     }
     if (guard.directory) {
-      const rel = relative(root, guard.directory).split(sep).join('/');
+      const rel = relative(root, canonicalPath(guard.directory))
+        .split(sep)
+        .join('/');
       if (rel && (command.includes(rel + '/') || command.includes(rel + ' ')))
         return true;
     }

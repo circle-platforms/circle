@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { basename, join, relative, resolve, sep } from 'node:path';
-import { circleHome, normalizeWorkspace } from './paths.js';
+import { canonicalPath, circleHome, normalizeWorkspace } from './paths.js';
 import { commandTouchesRunOutput, isExistingRunOutput } from './run_outputs.js';
 import { isRecord, readJson, writePrivateJson } from './settings.js';
 
@@ -769,14 +769,17 @@ export class ApprovalPolicy {
               ),
             ].map((match) => match[1]!)
           : [String(args.file_path || args.path || '')];
+      const root = canonicalPath(this.workspace);
       const inside =
         paths.length > 0 &&
         paths.every((path) => {
           const rel = relative(
-            this.workspace,
-            this.resolvePath
-              ? this.resolvePath(path)
-              : normalizeWorkspace(resolve(this.workspace, path)),
+            root,
+            canonicalPath(
+              this.resolvePath
+                ? this.resolvePath(path)
+                : resolve(this.workspace, path),
+            ),
           );
           return Boolean(path) && rel !== '..' && !rel.startsWith('..' + sep);
         });

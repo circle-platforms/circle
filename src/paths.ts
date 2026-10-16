@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 
 export function expandUser(path: string): string {
   return path === '~'
@@ -13,6 +13,26 @@ export function expandUser(path: string): string {
 export function normalizeWorkspace(path: string): string {
   const absolute = resolve(expandUser(path));
   return existsSync(absolute) ? realpathSync(absolute) : absolute;
+}
+/** The spelling used before comparing paths. An existing path uses the
+ * operating system's realpath, so a macOS temporary folder is `/private/var/…`
+ * from either `/var/…` or `/private/var/…`. A missing path keeps its last
+ * part and takes the realpath of its parent. */
+export function canonicalPath(path: string): string {
+  const absolute = resolve(expandUser(path));
+  try {
+    if (existsSync(absolute)) return realpathSync.native(absolute);
+  } catch {
+    try {
+      if (existsSync(absolute)) return realpathSync(absolute);
+    } catch {
+      return absolute;
+    }
+  }
+  const parent = dirname(absolute);
+  if (parent === absolute) return absolute;
+  const tail = absolute.slice(parent.length + (parent.endsWith(sep) ? 0 : 1));
+  return join(canonicalPath(parent), tail);
 }
 export function circleHome(override?: string): string {
   return normalizeWorkspace(

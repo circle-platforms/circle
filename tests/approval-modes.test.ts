@@ -18,6 +18,7 @@ import {
   SESSION_MODES,
 } from '../src/approvals.js';
 import { CheckpointStore } from '../src/checkpoint_store.js';
+import { isExistingRunOutput } from '../src/run_outputs.js';
 import { Harness } from '../src/harness.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { Sandbox } from '../src/sandbox.js';
@@ -181,36 +182,98 @@ test('accept-edits still asks before overwriting a skill-run output', (t) => {
 });
 
 test('accept-edits still asks when the workspace path is a symlink', (t) => {
-  const real = scratch(t);
+  // On macOS a process is given `/var/…` while realpath of the same temporary
+  // folder is `/private/var/…`. `temporary` is the folder from `os.tmpdir()`;
+  // `linked` is a symlink to it, which is how Linux reproduces that split.
+  // The checks swap which spelling is the workspace and which is the file.
+  const temporary = scratch(t);
   const linked = join(scratch(t), 'workspace');
-  symlinkSync(real, linked);
-  mkdirSync(join(real, 'out'));
-  mkdirSync(join(real, 'pack'));
-  writeFileSync(join(real, 'out', 'report.md'), 'old\n');
+  symlinkSync(temporary, linked);
+  mkdirSync(join(temporary, 'out'));
+  mkdirSync(join(temporary, 'pack'));
+  writeFileSync(join(temporary, 'out', 'report.md'), 'old\n');
+  writeFileSync(join(temporary, 'notes.txt'), 'keep\n');
+  writeFileSync(join(temporary, 'README.md'), 'root output\n');
   writeFileSync(
-    join(real, 'pack', 'skillpack.json'),
-    JSON.stringify({ outputs: ['out/report.md'] }),
+    join(temporary, 'pack', 'skillpack.json'),
+    JSON.stringify({ outputs: ['out/report.md', 'README.md'] }),
   );
-  const rules = policy(linked);
-  rules.setMode('s', 'accept-edits');
   assert.notEqual(linked, realpathSync(linked));
-  assert.equal(
-    rules.review('write_file', { file_path: 'out/report.md', content: 'new' })
-      .verdict,
-    'ASK_FORCED',
+  const check = (
+    root: string,
+    notes: string,
+    fresh: string,
+    report: string,
+    readme: string,
+  ) => {
+    const rules = policy(root);
+    rules.setMode('s', 'accept-edits');
+    assert.equal(
+      rules.review('write_file', { file_path: report, content: 'new' }).verdict,
+      'ASK_FORCED',
+    );
+    assert.equal(
+      rules.review('write_file', { file_path: readme, content: 'new' }).verdict,
+      'ASK_FORCED',
+    );
+    assert.equal(
+      rules.needsApproval(
+        'write_file',
+        { file_path: fresh, content: 'n' },
+        's',
+      ),
+      false,
+    );
+    assert.equal(
+      rules.needsApproval(
+        'write_file',
+        { file_path: notes, content: 'n' },
+        's',
+      ),
+      false,
+    );
+    assert.equal(
+      rules.review('execute', { command: 'printf n > out/report.md' }).verdict,
+      'ASK_FORCED',
+    );
+  };
+  // The workspace is the symlink a process was given. Relative names realpath
+  // to the temporary folder, and the absolute file paths are that real folder.
+  check(linked, 'notes.txt', 'out/fresh.md', 'out/report.md', 'README.md');
+  check(
+    linked,
+    join(temporary, 'notes.txt'),
+    join(temporary, 'out', 'fresh.md'),
+    join(temporary, 'out', 'report.md'),
+    join(temporary, 'README.md'),
   );
-  assert.equal(
-    rules.needsApproval(
-      'write_file',
-      { file_path: 'out/fresh.md', content: 'n' },
-      's',
-    ),
-    false,
+  // The other way: the workspace is the real temporary folder, and the file
+  // paths keep the symlink spelling.
+  check(temporary, 'notes.txt', 'out/fresh.md', 'out/report.md', 'README.md');
+  check(
+    temporary,
+    join(linked, 'notes.txt'),
+    join(linked, 'out', 'fresh.md'),
+    join(linked, 'out', 'report.md'),
+    join(linked, 'README.md'),
   );
-  assert.equal(
-    rules.review('execute', { command: 'printf n > out/report.md' }).verdict,
-    'ASK_FORCED',
-  );
+  for (const root of [linked, temporary]) {
+    assert.equal(isExistingRunOutput(root, join(linked, 'notes.txt')), false);
+    assert.equal(
+      isExistingRunOutput(root, join(temporary, 'notes.txt')),
+      false,
+    );
+    assert.equal(isExistingRunOutput(root, join(linked, 'README.md')), true);
+    assert.equal(isExistingRunOutput(root, join(temporary, 'README.md')), true);
+    assert.equal(
+      isExistingRunOutput(root, join(linked, 'out', 'report.md')),
+      true,
+    );
+    assert.equal(
+      isExistingRunOutput(root, join(linked, 'out', 'other.md')),
+      false,
+    );
+  }
 });
 
 test('auto is the old yolo switch and manual clears it', (t) => {
