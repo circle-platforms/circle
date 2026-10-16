@@ -112,7 +112,13 @@ import { currentNetworkStatus } from '../../../src/net.js';
 import { SessionMetadata } from './session-metadata';
 import { WorkspaceServices } from './workspace/workspace-services';
 import { OperationLedger } from './workspace/operation-ledger';
-import { TaskService, readTaskLimits } from './workspace/task-service';
+import {
+  TaskService,
+  readTaskLimits,
+  readTaskSettingsRecovery,
+  type TaskSettingsWorkspace,
+  writeTaskLimits,
+} from './workspace/task-service';
 import {
   readArchivedTaskAttempts,
   taskToolAgentIds,
@@ -380,6 +386,10 @@ export class RuntimeController {
   private taskProjectionPending = false;
   private readonly taskResources: CollaborationResources;
   private readonly taskSettingsPath: string;
+  private readonly taskSettingsRecoveryPath: string;
+  private taskSettingsError?: string;
+  private taskQueuesPausedForSettings = false;
+  private taskQueuesStarted = new Map<string, TaskSettingsWorkspace>();
   private taskVerifiers = new Map<
     string,
     ReturnType<typeof createTaskVerifier>
@@ -433,10 +443,30 @@ export class RuntimeController {
       'workspace-services',
       'task-settings.json',
     );
-    // Ordinary parents use this pool before any task service exists.
-    this.taskResources = new CollaborationResources(
-      readTaskLimits(this.taskSettingsPath),
+    this.taskSettingsRecoveryPath = join(
+      options.dataFolder ?? this.home,
+      'workspace-services',
+      'task-settings-recovery.json',
     );
+    // Ordinary parents use this pool before any task service exists.
+    let initialLimits = { agents: 1, builds: 1, ui: 1, browsers: 1 };
+    try {
+      initialLimits = readTaskLimits(this.taskSettingsPath);
+      const recovery = readTaskSettingsRecovery(this.taskSettingsRecoveryPath);
+      if (recovery) {
+        this.taskQueuesPausedForSettings = true;
+        this.taskQueuesStarted = new Map(
+          recovery.map((row) => [row.canonical, row]),
+        );
+      }
+    } catch (error) {
+      // Keep history and original settings reachable, but never run with a
+      // silently increased cap when the saved limits cannot be read.
+      initialLimits = { agents: 1, builds: 1, ui: 1, browsers: 1 };
+      this.taskSettingsError = (error as Error).message;
+      this.taskQueuesPausedForSettings = true;
+    }
+    this.taskResources = new CollaborationResources(initialLimits);
     this.metadata = new SessionMetadata(this.home);
     this.store = new CheckpointStore(this.home);
     this.store.repairStaleTitles();
@@ -1135,10 +1165,50 @@ export class RuntimeController {
     }
     return verifier;
   }
+  private assertTaskSettings(): void {
+    if (this.taskSettingsError) throw Error(this.taskSettingsError);
+  }
+  private taskStartRequired(workspace: string): boolean {
+    const root = this.taskWorkspaces.get(workspace) ?? workspace;
+    if (!this.taskQueuesPausedForSettings) return false;
+    const binding = this.workspaceRoots.get(root);
+    const started = binding && this.taskQueuesStarted.get(binding.canonical);
+    return (
+      !started || started.dev !== binding!.dev || started.ino !== binding!.ino
+    );
+  }
+  private persistTaskRecovery(workspace?: string): void {
+    const started = this.taskSettingsError
+      ? new Map<string, TaskSettingsWorkspace>()
+      : new Map(this.taskQueuesStarted);
+    if (workspace) {
+      this.assertTaskSettings();
+      const granted = this.trustedWorkspace(workspace);
+      const root = this.trustedWorkspace(
+        this.taskWorkspaces.get(granted) ?? granted,
+      );
+      const binding = this.workspaceRoots.get(root)!;
+      started.set(root, { ...binding });
+    }
+    mkdirSync(
+      join(this.options.dataFolder ?? this.home, 'workspace-services'),
+      {
+        recursive: true,
+        mode: 0o700,
+      },
+    );
+    writePrivateJson(this.taskSettingsRecoveryPath, {
+      version: 1,
+      startedWorkspaces: [...started.values()],
+    });
+    this.taskQueuesPausedForSettings = true;
+    this.taskQueuesStarted = started;
+  }
   private collaboration(
     workspace: string,
     ownerSessionId: string,
   ): TaskService {
+    this.assertTaskSettings();
     const granted = this.trustedWorkspace(workspace);
     const root = this.taskWorkspaces.get(granted) ?? granted;
     let service = this.taskServices.get(root);
@@ -1147,6 +1217,7 @@ export class RuntimeController {
         workspace: root,
         resources: this.taskResources,
         settingsPath: this.taskSettingsPath,
+        autoStart: !this.taskStartRequired(root),
         dataDir: join(
           this.options.dataFolder ?? this.home,
           'collaboration',
@@ -1668,13 +1739,42 @@ export class RuntimeController {
       return result;
     }
     if (request.service === 'tasks')
-      return this.workspaceOperation(command, workspace, request, () =>
-        this.collaboration(workspace, id).call(
-          id,
-          request.method,
-          request.params,
-        ),
-      );
+      return this.workspaceOperation(command, workspace, request, async () => {
+        if (
+          request.method === 'settings' &&
+          (this.taskSettingsError || this.taskStartRequired(workspace))
+        ) {
+          if (request.params?.limits === undefined)
+            return {
+              ...this.taskResources.getLimits(),
+              ...(this.taskSettingsError
+                ? { error: this.taskSettingsError }
+                : {}),
+              ...(this.taskStartRequired(workspace)
+                ? { requiresStart: true }
+                : {}),
+            };
+          const next = await writeTaskLimits(
+            this.taskSettingsPath,
+            request.params.limits,
+            () => this.taskResources.getLimits(),
+            (next) => {
+              this.taskResources.setLimits(next);
+              this.taskSettingsError = undefined;
+            },
+            () => this.persistTaskRecovery(),
+          );
+          this.publish();
+          return next;
+        }
+        const service = this.collaboration(workspace, id);
+        if (request.method === 'start' && this.taskStartRequired(workspace)) {
+          // Persist the explicit intent before allowing queued work to start.
+          this.persistTaskRecovery(workspace);
+          this.publish();
+        }
+        return service.call(id, request.method, request.params);
+      });
     return this.workspaceOperation(command, workspace, request, () =>
       this.services(workspace).call(
         id,
@@ -1734,13 +1834,17 @@ export class RuntimeController {
               })(request)
           : undefined,
         wrapModel: (model) =>
-          wrapModelCompletion(model, (request, invoke) =>
-            this.taskResources.withResource(
+          wrapModelCompletion(model, (request, invoke) => {
+            this.assertTaskSettings();
+            return this.taskResources.withResource(
               'agent',
-              () => invoke(request),
+              () => {
+                this.assertTaskSettings();
+                return invoke(request);
+              },
               request.signal,
-            ),
-          ),
+            );
+          }),
         home: this.home,
         // A sentence shows as a new session until its summary title arrives.
         holdTitle: true,
@@ -2238,6 +2342,7 @@ export class RuntimeController {
         hasKey: (this.keySaved ??= Boolean(this.savedKey())),
         error:
           this.error ??
+          this.taskSettingsError ??
           this.workspaceStreamFailures.values().next().value ??
           this.taskProjectionErrors.values().next().value?.message,
       },
@@ -3421,6 +3526,7 @@ export class RuntimeController {
     untilStored = false,
     inputId?: string,
   ): Promise<{ sessionId?: string }> {
+    this.assertTaskSettings();
     await this.reloadTrustedRuntime(runtime);
     if (!isFolderTrusted(runtime.options.settings, runtime.options.workspace))
       throw Error('trust the workspace before running Circle');

@@ -102,6 +102,96 @@ export function readTaskLimits(
     return { ...current };
   }
 }
+/** A start confirmation is tied to the granted directory identity, never just its name. */
+export interface TaskSettingsWorkspace {
+  canonical: string;
+  dev: number;
+  ino: number;
+}
+/** An absent checkpoint is the normal automatic-start policy. A present one requires explicit starts. */
+export function readTaskSettingsRecovery(
+  path: string,
+): TaskSettingsWorkspace[] | undefined {
+  try {
+    const saved = object(
+      JSON.parse(readFileSync(path, 'utf8')),
+      'task settings recovery',
+    );
+    if (
+      saved.version !== 1 ||
+      !Array.isArray(saved.startedWorkspaces) ||
+      Object.keys(saved).some(
+        (key) => !['version', 'startedWorkspaces'].includes(key),
+      )
+    )
+      throw Error('invalid task settings recovery');
+    const seen = new Set<string>();
+    return saved.startedWorkspaces.map((value) => {
+      const row = object(value, 'task settings workspace');
+      if (
+        Object.keys(row).some(
+          (key) => !['canonical', 'dev', 'ino'].includes(key),
+        ) ||
+        typeof row.canonical !== 'string' ||
+        !isAbsolute(row.canonical) ||
+        seen.has(row.canonical) ||
+        typeof row.dev !== 'number' ||
+        !Number.isInteger(row.dev) ||
+        row.dev < 0 ||
+        typeof row.ino !== 'number' ||
+        !Number.isInteger(row.ino) ||
+        row.ino < 0
+      )
+        throw Error('invalid task settings workspace');
+      seen.add(row.canonical);
+      return { canonical: row.canonical, dev: row.dev, ino: row.ino };
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw Error(
+      `could not load task settings recovery: ${(error as Error).message}`,
+    );
+  }
+}
+function serialTaskSettings<T>(
+  path: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  const previous = settingsQueues.get(path) ?? Promise.resolve();
+  const pending = previous.catch(() => {}).then(action);
+  settingsQueues.set(path, pending);
+  void pending
+    .finally(() => {
+      if (settingsQueues.get(path) === pending) settingsQueues.delete(path);
+    })
+    .catch(() => {});
+  return pending;
+}
+/** Explicit app settings repair uses the same validation and atomic write as an open task service. */
+export function writeTaskLimits(
+  path: string,
+  value: unknown,
+  current: () => CollaborationLimits,
+  apply: (next: CollaborationLimits) => void,
+  beforeWrite?: () => void | Promise<void>,
+): Promise<CollaborationLimits> {
+  return serialTaskSettings(path, async () => {
+    const next = limits(value, current());
+    // Validate first, then make an exceptional recovery gate durable before repairing limits.
+    await beforeWrite?.();
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, JSON.stringify(next, null, 2) + '\n', {
+        mode: 0o600,
+      });
+      await rename(temporary, path);
+    } finally {
+      await rm(temporary, { force: true });
+    }
+    apply(next);
+    return next;
+  });
+}
 /** Narrow trusted-main adapter. Renderer selects task IDs and intent, never paths or executor code. */
 export class TaskService {
   private readonly scheduler: CollaborationScheduler;
@@ -328,16 +418,7 @@ export class TaskService {
     };
   }
   private serial<T>(action: () => Promise<T>): Promise<T> {
-    const previous = settingsQueues.get(this.settingsPath) ?? Promise.resolve();
-    const pending = previous.catch(() => {}).then(action);
-    settingsQueues.set(this.settingsPath, pending);
-    void pending
-      .finally(() => {
-        if (settingsQueues.get(this.settingsPath) === pending)
-          settingsQueues.delete(this.settingsPath);
-      })
-      .catch(() => {});
-    return pending;
+    return serialTaskSettings(this.settingsPath, action);
   }
   private async dispatch(
     sessionId: string,
@@ -396,22 +477,14 @@ export class TaskService {
       case 'review':
         return this.serial(() => this.review(params));
       case 'settings':
-        return this.serial(async () => {
-          const current = this.scheduler.getLimits();
-          if (params.limits === undefined) return current;
-          const next = limits(params.limits, current);
-          const temporary = `${this.settingsPath}.${randomUUID()}.tmp`;
-          try {
-            await writeFile(temporary, JSON.stringify(next, null, 2) + '\n', {
-              mode: 0o600,
-            });
-            await rename(temporary, this.settingsPath);
-          } finally {
-            await rm(temporary, { force: true });
-          }
-          this.scheduler.setLimits(next);
-          return this.scheduler.getLimits();
-        });
+        if (params.limits === undefined)
+          return this.serial(async () => this.scheduler.getLimits());
+        return writeTaskLimits(
+          this.settingsPath,
+          params.limits,
+          () => this.scheduler.getLimits(),
+          (next) => this.scheduler.setLimits(next),
+        );
       case 'createIntegration':
         return (await this.integration()).create(
           params.baseline === undefined
