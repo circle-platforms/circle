@@ -2087,3 +2087,82 @@ test('cancelling held account verification aborts only that attempt and a fresh 
     await f.close();
   }
 });
+
+test('an old cancellation cleanup failure reports to its caller without overwriting a fresh connected account', async (t) => {
+  const f = await fixture();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const internal = f.connection as unknown as {
+    command: (
+      args: string[],
+      env: NodeJS.ProcessEnv,
+      cwd: string,
+      signal?: AbortSignal,
+    ) => Promise<string>;
+    poll: () => Promise<void>;
+    attempt?: { id: string };
+    login: DeliveryLogin;
+  };
+  let calls = 0;
+  t.mock.method(internal, 'command', async () => {
+    const n = ++calls;
+    if (n === 1) await gate;
+    return JSON.stringify({
+      login: n === 1 ? 'old-account' : 'fresh-account',
+      id: n,
+    });
+  });
+  const original = internal.login.disconnect.bind(internal.login);
+  let failCleanup = true;
+  t.mock.method(internal.login, 'disconnect', async () => {
+    if (failCleanup) {
+      failCleanup = false;
+      throw Error('synthetic-old-cleanup-failure');
+    }
+    await original();
+  });
+  const complete = async (index: number) => {
+    f.helpers[index].finish();
+    await until(async () =>
+      internal.attempt &&
+      internal.login.poll(internal.attempt.id).status === 'complete'
+        ? true
+        : false,
+    );
+  };
+  try {
+    await f.connection.connect({ storage: 'session', repositories: [] });
+    await complete(0);
+    const oldPoll = internal.poll();
+    await until(async () => (calls === 1 ? true : false));
+    const cancelling = f.connection.cancel(f.connection.snapshot().epoch);
+    cancelling.catch(() => {});
+    await until(async () =>
+      f.connection.snapshot().state === 'disconnected' ? true : false,
+    );
+    await f.connection.connect({ storage: 'session', repositories: [] });
+    await complete(1);
+    await internal.poll();
+    assert.equal(f.connection.snapshot().account?.login, 'fresh-account');
+    release();
+    await oldPoll;
+    const callerError = await cancelling.then(
+      () => '',
+      (error) => String(error),
+    );
+    assert.equal(f.connection.snapshot().state, 'connected');
+    assert.equal(f.connection.snapshot().account?.login, 'fresh-account');
+    assert.equal(
+      f.connection.snapshot().error,
+      undefined,
+      'late old cleanup must not overwrite the fresh account status',
+    );
+    assert.match(
+      callerError,
+      /cancellation cleanup requires attention.*current connection was not changed/,
+    );
+  } finally {
+    release();
+    await f.close();
+  }
+});

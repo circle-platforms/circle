@@ -654,7 +654,7 @@ export class NativeGitHubConnection {
       this.active ||
       Boolean(this.state.account) ||
       this.state.remoteRevocation === 'unconfirmed';
-    this.state.epoch++;
+    const cancellationEpoch = ++this.state.epoch;
     this.active = false;
     this.state.state = 'disconnected';
     delete this.state.authorizationPhase;
@@ -681,6 +681,10 @@ export class NativeGitHubConnection {
       verification?.completion,
     ]);
     if (cleanup.some((result) => result.status === 'rejected')) {
+      if (this.state.epoch !== cancellationEpoch)
+        throw Error(
+          'GitHub cancellation cleanup requires attention; the current connection was not changed',
+        );
       this.state.error = 'local credential removal requires attention';
       this.emit();
     }
