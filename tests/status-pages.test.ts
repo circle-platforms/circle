@@ -236,7 +236,7 @@ test('compaction runs in a row above the input box, before what waits to be read
   }
 });
 
-test('a subagent folds under its Agent row while it runs and when it is done, and its page has the band and record of 0.5.0', async (t) => {
+test('a subagent folds under its Agent row while it runs and when it is done, and its page has a band and the record', async (t) => {
   const usage = {
     input_tokens: 1000,
     output_tokens: 100,
@@ -461,7 +461,7 @@ test('a background job is one faint line under its call and a notice row whose g
     results[0]!.content,
     /^In background: j1 · shell · .*do not poll or sleep\.$/,
   );
-  // what the command printed before it moved stays with the result, as in 0.5.0
+  // what the command printed before it moved stays with the result
   assert.match(
     results[1]!.content,
     /^ready\n\nThe command was moved to the background\.\nCommand continues in background: j2 · shell · /,
@@ -689,7 +689,7 @@ test('with --init the welcome shows no model and unlit lamps until a new one is 
   assert.equal(app.settings.auth.model, 'new-model');
 });
 
-test("a job's page has 0.5.0's band: lamp, id and command, state and time, and the file its output goes to", (t) => {
+test("a job's page has a band: lamp, id and command, state and time, and the file its output goes to", (t) => {
   const root = scratch(t);
   const output = join(root, 'j3.log');
   writeFileSync(output, 'line one\nline two\n');
@@ -736,7 +736,7 @@ test("a job's page has 0.5.0's band: lamp, id and command, state and time, and t
   }
 });
 
-test('a press on a subagent row in the strip opens its page, as in 0.5.0', async (t) => {
+test('a press on a subagent row in the strip opens its page', async (t) => {
   let check = (): void => {};
   const model = new ScriptedModel([
     reply('p1', '', [

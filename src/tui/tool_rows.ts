@@ -3,8 +3,7 @@
 // and its lines on the tool's type tint (read blue, write green, agent cyan, question
 // magenta). A failure the model can fix itself gets no lamp and a muted strikethrough.
 // Thinking is one folded row, `∴ Thought 6.3s · title  ctrl+t`, on the terminal
-// background: italic blue from the terminal's own slot, faint body text. No type tint
-// (ported from transcript_view.py, content_blocks.py and tool_display.py).
+// background: italic blue from the terminal's own slot, faint body text. No type tint.
 import { lampSgr, palette, sgrJoin, type LampState } from '../ink/theme.js';
 import { pad, stringWidth, truncate } from '../ink/string_width.js';
 import {

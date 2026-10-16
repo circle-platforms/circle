@@ -286,7 +286,7 @@ test('ctrl+c on an empty prompt says how to leave, and a second press within 1.5
   assert.equal(await app.wait(), 0);
 });
 
-test('esc esc opens the tree only within half a second, as 0.5.0 timed it', async (t) => {
+test('esc esc opens the tree only within half a second', async (t) => {
   const { app, ui, key } = await session(t, [answer('an answer')]);
   const list = (): string | undefined => app.state.picker?.title;
   await app.submit('a question');
@@ -341,7 +341,7 @@ test('ctrl+c during a turn stops it, and a second press right after leaves', asy
   assert.equal(ui.ended, true);
 });
 
-test('/tree draws the branches as 0.5.0 did: yours ›, answers ●, ├ where a branch starts, here and · on the way', async (t) => {
+test('/tree draws the branches: yours ›, answers ●, ├ where a branch starts, here and · on the way', async (t) => {
   const { app, ui, runtime, workspace } = await session(t, [
     {
       message: {
@@ -456,7 +456,7 @@ test('/jobs follows the jobs while it is open: one that starts appears and one t
   assert.match(list.items[0]!.meta!, /^running/);
 });
 
-test('/undo and /redo clear the context meter until the next answer, as 0.5.0 did', async (t) => {
+test('/undo and /redo clear the context meter until the next answer', async (t) => {
   const { app, ui, model } = await session(t, [
     answer('one', 1200),
     answer('two', 2400),
@@ -683,7 +683,7 @@ test('/resume: esc on the new name or on the delete question leaves the session 
   assert.ok(runtime.store.list(workspace).some((item) => item.id === other));
 });
 
-test('lists jump a page with pageup and pagedown, as 0.5.0 did, without scrolling the conversation', async (t) => {
+test('lists jump a page with pageup and pagedown without scrolling the conversation', async (t) => {
   const items = Array.from({ length: 30 }, (_, i) => ({
     key: String(i),
     label: `row ${i}`,

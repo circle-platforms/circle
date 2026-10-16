@@ -204,7 +204,7 @@ export function parseCli(argv: string[], cwd = process.cwd()): CliOptions {
     !(EFFORT_LEVELS as readonly string[]).includes(options.thinking)
   )
     throw new UsageError('unknown thinking depth');
-  // As in the Python releases: the words are a folder, @files and messages. The first word
+  // The words are a folder, @files and messages. The first word
   // is the folder when it is one, or when it has no spaces, so a mistyped folder is an
   // error and not a message; a folder may also come last, after a message.
   const path = (word: string): string => resolve(cwd, expandUser(word));
@@ -415,7 +415,7 @@ async function listModels(search: string, home: string): Promise<number> {
 // Setup was left unfinished, or the folder was not trusted: exit 1.
 class Declined extends Error {}
 // Settings for a run without the full-screen interface. When standard input is a terminal,
-// setup and the trust question are asked line by line, as the Python releases did.
+// setup and the trust question are asked line by line.
 async function headlessSettings(
   options: CliOptions,
   home: string,
@@ -521,7 +521,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         store.close();
       }
     }
-    // As in the Python releases: the flag beats the variable and is never saved.
+    // The flag beats the variable and is never saved.
     if (options.thinking)
       process.env.CIRCLE_REASONING_EFFORT = options.thinking;
     const attached = fileBlocks(options.files, options.workspace);

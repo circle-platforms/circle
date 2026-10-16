@@ -135,7 +135,7 @@ test('a call without a result is running only in the reply a running turn works 
     content: '',
     tool_calls: [{ id: call, name: 'read_file', args: { file_path: 'a' } }],
   });
-  // an older reply whose call never got a result (an interrupted turn, or a 0.5.0 session)
+  // an older reply whose call never got a result (an interrupted turn, or an older session)
   const messages: Message[] = [
     { id: 'u1', role: 'user', content: 'one' },
     reply('a1', 'lost'),

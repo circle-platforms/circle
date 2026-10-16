@@ -79,7 +79,7 @@ export function skillSources(
 }
 // The skill folders are read again on every rebuild of the system prompt, so a folder
 // that cannot be read is passed over rather than stopping a model switch or /reload.
-// A linked skill folder counts, as in 0.5.0 (`npx skills add` links them).
+// A linked skill folder counts (`npx skills add` links them).
 function folders(directory: string): string[] {
   let found: Dirent[];
   try {

@@ -2,7 +2,7 @@
 // round the rounded rectangle, and the busy word sits on the top edge from column 3 taking
 // its colour from the same sweep. Otherwise the frame is still, faint, or in `border` (the
 // card's yellow). The mode word (`read-only` / `auto`) sits at the bottom-right corner in its
-// own colour, never the rainbow (ported from dialog_frame.py). `CIRCLE_TUI_SHIMMER=0` keeps
+// own colour, never the rainbow. `CIRCLE_TUI_SHIMMER=0` keeps
 // the frame still while the model works.
 import { palette, rainbowAt } from '../theme.js';
 import { stringWidth, stripAnsi, truncate } from '../string_width.js';

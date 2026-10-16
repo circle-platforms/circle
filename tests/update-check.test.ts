@@ -337,7 +337,7 @@ test('ctrl+c during the download of circle update stops it and leaves nothing be
   assert.equal(existsSync(seen), false);
 });
 
-test('keybindings.json from the Python releases keeps working and its problems are shown', (t) => {
+test('keybindings.json keeps working, with an older action name too, and its problems are shown', (t) => {
   const home = scratch(t);
   writeFileSync(
     join(home, 'keybindings.json'),

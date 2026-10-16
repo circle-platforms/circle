@@ -1,7 +1,7 @@
 // The proxy and the certificate authorities for the requests Circle makes itself: the model,
 // model lists, models.dev, webfetch, websearch, the update check, `circle update`'s release
 // lookup and MCP servers reached by URL. All of them use fetch (the model SDKs too), so one
-// setting at start covers them. As in the Python releases, HTTPS_PROXY, HTTP_PROXY and
+// setting at start covers them. HTTPS_PROXY, HTTP_PROXY and
 // NO_PROXY choose the proxy, and SSL_CERT_FILE and SSL_CERT_DIR name certificate authorities
 // to trust. Those are added to the ones Node.js trusts already (its own list and
 // NODE_EXTRA_CA_CERTS); they do not replace them. trust_cert_files in settings names the

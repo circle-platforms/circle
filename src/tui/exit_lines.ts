@@ -1,6 +1,6 @@
-// What the terminal gets once the full screen is gone (0.5.0's run(): the stopped jobs, then
-// `_resume_hint`): `2 background jobs stopped`, then the command that opens the conversation
-// again, `To resume this session: circle --session circle-3f9a1c2e`, with the folder when
+// What the terminal gets once the full screen is gone: the jobs leaving stopped,
+// `2 background jobs stopped`, then the command that opens the conversation again,
+// `To resume this session: circle --session circle-3f9a1c2e`, with the folder when
 // Circle was started from another one.
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
