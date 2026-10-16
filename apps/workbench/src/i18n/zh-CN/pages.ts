@@ -159,7 +159,7 @@ export const pages: Record<string, string> = {
     '更改文件夹不会移动你的文件；新文件夹仍需要信任',
   'the old default folder {path} keeps its sessions until you delete it by hand':
     '旧的默认文件夹 {path} 仍保留其会话，需要手动删除',
-  'workspace trust': '工作区信任',
+  'workspace trust': '项目信任',
   review: '查看',
   'protected files': '受保护的文件',
   'additional file patterns': '额外的文件模式',

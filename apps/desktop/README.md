@@ -61,12 +61,20 @@ Quitting waits for Circle to cancel and close its owned jobs, then waits for its
 
 Rejected address input shows `invalid address` and keeps the loaded page. Other navigation errors remain separate from address validation, including when Electron wraps the native error before it reaches the renderer.
 
+
+`test:mode-tools` exercises the real native runtime with local Anthropic and
+OpenAI fixtures. It covers plan transitions inside a three-call tool batch,
+plan-to-manual/auto changes and restart, and checks original checkpoint JSON.
+`CIRCLE_DESKTOP_EXECUTABLE` selects the packaged executable. The check is also
+part of `test:desktop`; it never uses real application data or a paid endpoint.
+
 ## Check
 
 ```sh
 npm --prefix apps/workbench test
 npm --prefix apps/desktop test
 npm --prefix apps/desktop run test:runtime
+npm --prefix apps/desktop run test:mode-tools # Plan transitions, result ordering and restart
 npm --prefix apps/desktop run build
 npm --prefix apps/desktop run test:desktop
 npm --prefix apps/desktop run test:interface

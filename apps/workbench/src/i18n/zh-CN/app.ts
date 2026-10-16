@@ -19,6 +19,7 @@ export const app: Record<string, string> = {
   page: '页面',
   file: '文件',
   'message history': '消息历史',
+  'no results': '无结果',
   // the main view
   'plugin disabled': '插件已停用',
   'Records and execution state have been preserved.':
