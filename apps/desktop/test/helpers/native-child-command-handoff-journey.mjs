@@ -606,13 +606,12 @@ export async function runNativeChildCommandAfterRestart({
       `#terminal-${previous.target.terminal.id}:visible`,
     );
     await surface.waitFor();
-    await until(
-      async () =>
-        (await surface.innerText()).includes(
-          'CHILD_HANDOFF_ECHO:' + childCommandInput.trimEnd(),
-        ),
-      'old child output restores from its durable journal',
-    );
+    receipt.displayEvidence = await assertRenderedTerminalMatch({
+      panel: terminal,
+      surface,
+      text: 'CHILD_HANDOFF_ECHO:' + childCommandInput.trimEnd(),
+      until,
+    });
     assert.equal(
       await terminal
         .getByRole('button', { name: 'restart terminal', exact: true })

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { journeyNodeCommand } from './native-journey-platform.mjs';
+import { assertRenderedTerminalMatch } from './native-terminal-rendered-match.mjs';
 export const commandHandoffPrompt =
   'NATIVE_COMMAND_HANDOFF: run the owned interactive fixture';
 export async function createNativeCommandHandoffFixture(workspace, nodePath) {
@@ -221,10 +222,12 @@ export async function runNativeCommandHandoffJourney({
         ).includes(input),
       'the original process receives real native keyboard input',
     );
-    await until(
-      async () => (await surface.innerText()).includes('HANDOFF_ECHO:' + input),
-      'the same PTY displays its process echo',
-    );
+    receipt.displayEvidence = await assertRenderedTerminalMatch({
+      panel: terminal,
+      surface,
+      text: 'HANDOFF_ECHO:' + input,
+      until,
+    });
     await page.screenshot({ path: join(output, 'command-handoff-live.png') });
     await terminal
       .getByRole('button', { name: 'stop terminal', exact: true })

@@ -16,7 +16,7 @@ const accessibilityEnabled =
   process.env.CIRCLE_CHILD_ECHO_ACCESSIBILITY !== 'off';
 const receipt = { status: 'failed', checks: [], accessibilityEnabled };
 const f = await createCommandTerminalControllerFixture({ after() {} });
-let server, browser, page, timer;
+let server, browser, context, page, timer;
 const streams = new Set();
 let updateIndex = 0,
   eventIndex = 0,
@@ -135,55 +135,63 @@ process.stdin.resume();console.log('CHILD_HANDOFF_READY '+process.pid);setInterv
       ? { channel: process.env.CIRCLE_TEST_BROWSER_CHANNEL }
       : {}),
   });
-  page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  context = await browser.newContext({
+    viewport: { width: 1280, height: 900 },
+  });
+  page = await context.newPage();
   await page.goto(
     server.resolvedUrls.local[0] +
       `test/command-terminal-handoff-ui.html?theme=light#/session/${parent.sessionId}`,
   );
-  const composer = page.getByRole('textbox', { name: 'message', exact: true });
+  let composer = page.getByRole('textbox', { name: 'message', exact: true });
   await composer.waitFor();
   await composer.fill('PARENT_DRAFT_EXACT 保留');
-  await page
-    .getByRole('button', { name: 'activity panel', exact: true })
-    .click();
-  const agent = f.controller
-    .snapshot()
-    .agents.find((row) => row.id === child.sessionId);
-  assert(agent);
-  await page
-    .locator('.activity-row')
-    .filter({ has: page.locator('strong', { hasText: agent.name }) })
-    .click();
-  await page
-    .getByRole('button', { name: 'close inspector', exact: true })
-    .click();
-  const record = page.locator('.agent-record');
-  await record.waitFor();
-  for (const group of await record.locator('.tool-group').all()) {
-    const summary = group.locator(':scope > button').first();
-    if ((await summary.getAttribute('aria-expanded')) !== 'true')
-      await summary.click();
-  }
-  const card = record
-    .locator('.tool-call')
-    .filter({ has: page.locator('.tool-head code[title="execute"]') });
-  await card.waitFor();
-  if (
-    (await card.locator('.tool-head').getAttribute('aria-expanded')) !== 'true'
-  )
-    await card.locator('.tool-head').click();
-  await card
-    .getByRole('button', { name: 'open in terminal', exact: true })
-    .click();
-  const resolved = await f.service('terminal', 'resolveCommand', {
-    sourceSessionId: child.sessionId,
-    toolCallId: f.toolCallId,
-  });
-  assert.equal(resolved.available, true);
-  const target = resolved.target;
-  const panel = page.locator('.native-terminal:visible');
-  const surface = panel.locator(`#terminal-${target.terminal.id}:visible`);
-  await surface.waitFor();
+  const openOriginalChildTerminal = async () => {
+    await page
+      .getByRole('button', { name: 'activity panel', exact: true })
+      .click();
+    const agent = f.controller
+      .snapshot()
+      .agents.find((row) => row.id === child.sessionId);
+    assert(agent);
+    await page
+      .locator('.activity-row')
+      .filter({ has: page.locator('strong', { hasText: agent.name }) })
+      .click();
+    await page
+      .getByRole('button', { name: 'close inspector', exact: true })
+      .click();
+    const record = page.locator('.agent-record');
+    await record.waitFor();
+    for (const group of await record.locator('.tool-group').all()) {
+      const summary = group.locator(':scope > button').first();
+      if ((await summary.getAttribute('aria-expanded')) !== 'true')
+        await summary.click();
+    }
+    const card = record
+      .locator('.tool-call')
+      .filter({ has: page.locator('.tool-head code[title="execute"]') });
+    await card.waitFor();
+    if (
+      (await card.locator('.tool-head').getAttribute('aria-expanded')) !==
+      'true'
+    )
+      await card.locator('.tool-head').click();
+    await card
+      .getByRole('button', { name: 'open in terminal', exact: true })
+      .click();
+    const resolved = await f.service('terminal', 'resolveCommand', {
+      sourceSessionId: child.sessionId,
+      toolCallId: f.toolCallId,
+    });
+    assert.equal(resolved.available, true);
+    const target = resolved.target;
+    const panel = page.locator('.native-terminal:visible');
+    const surface = panel.locator(`#terminal-${target.terminal.id}:visible`);
+    await surface.waitFor();
+    return { resolved, target, panel, surface };
+  };
+  const { target, panel, surface } = await openOriginalChildTerminal();
   const input = 'NATIVE_CHILD_HANDOFF_INPUT\r';
   await surface.locator('.xterm-helper-textarea').focus();
   await page.keyboard.type(input.slice(0, -1));
@@ -214,11 +222,30 @@ process.stdin.resume();console.log('CHILD_HANDOFF_READY '+process.pid);setInterv
     listing.value[0].cols < expected.length,
     'fixture actually soft-wraps the complete echo',
   );
-  assert.equal(
-    originalText.includes(expected),
-    false,
-    'old contiguous innerText oracle rejects this correctly displayed soft-wrapped echo',
-  );
+  // Whole-surface text can contain an asynchronous accessibility live announcement.
+  // Record it; the real displayed rows and original xterm selection are the stable oracle.
+  const physicalRows = async (surface) => {
+    let rows = [];
+    if (accessibilityEnabled) {
+      await f.until(async () => {
+        rows = await surface
+          .locator('.xterm-accessibility-tree > div')
+          .allTextContents();
+        return rows.join('\n').includes('CHILD_HANDOFF_ECHO:');
+      }, 'physical accessibility rows contain the parsed echo');
+      assert.equal(
+        rows.join('\n').includes(expected),
+        false,
+        'the actual physical xterm rows soft-wrap the exact echo',
+      );
+    } else {
+      assert.equal(
+        await surface.locator('.xterm-accessibility-tree').count(),
+        0,
+      );
+    }
+    return rows;
+  };
   const rendered = await assertRenderedTerminalMatch({
     panel,
     surface,
@@ -231,33 +258,118 @@ process.stdin.resume();console.log('CHILD_HANDOFF_READY '+process.pid);setInterv
     ).length >= 2,
     'exact xterm match spans real displayed physical rows',
   );
+  const livePhysicalRows = await physicalRows(surface);
   assert.equal(await f.read(parent.workspace, f.files.input), '');
   assert.equal(await f.read(child.workspace, f.files.starts), 'once\n');
   assert.equal(listing.value[0].managedCommand.commandPid, child.pid);
   await page.screenshot({ path: join(output, 'wrapped-child-echo.png') });
   Object.assign(receipt, {
-    status: 'passed',
+    status: 'running',
     parentSessionId: parent.sessionId,
     childSessionId: child.sessionId,
     target,
     pid: child.pid,
     cols: listing.value[0].cols,
     originalText,
+    livePhysicalRows,
     rendered,
     inputBytes: await f.read(child.workspace, f.files.input),
   });
   receipt.checks.push(
     'real delegated child original PID and exact keyboard bytes',
-    'old contiguous DOM oracle is a true negative at narrow columns',
+    'physical xterm rows soft-wrap the exact echo; whole-DOM live announcements are recorded',
     'missing output does not select',
     accessibilityEnabled
-      ? 'native accessibility on: wrapped rows preserve the old-oracle negative'
+      ? 'native accessibility on: actual physical rows contain a wrapped echo'
       : 'native accessibility auto-off: real match does not rely on hidden DOM text',
     'real xterm exact rendered match spans the soft-wrapped rows',
     'parent input unchanged and child process starts once',
   );
+  // Destroy and recreate the actual controller before mounting a fresh renderer document.
+  // The restored view can only read the durable journal, never a still-live xterm instance.
+  await page.close();
+  await f.restart();
+  page = await context.newPage();
+  composer = page.getByRole('textbox', { name: 'message', exact: true });
+  const requestsAfterClose = f.model.requests.length;
+  assert.throws(() => process.kill(child.pid, 0), { code: 'ESRCH' });
+  await page.goto(
+    server.resolvedUrls.local[0] +
+      `test/command-terminal-handoff-ui.html?theme=light#/session/${parent.sessionId}`,
+  );
+  const main = page
+    .locator('.agent-record:visible')
+    .getByRole('button', { name: 'main', exact: true });
+  if (await main.isVisible()) await main.click();
+  await composer.waitFor();
+  assert.equal(await composer.inputValue(), 'PARENT_DRAFT_EXACT 保留');
+  const restored = await openOriginalChildTerminal();
+  assert.deepEqual(restored.target, target);
+  assert.deepEqual(restored.resolved.capabilities, {
+    read: true,
+    input: false,
+    stop: false,
+    addToDraft: false,
+  });
+  if (accessibilityEnabled) {
+    await f.until(
+      async () =>
+        (await restored.surface.innerText()).includes('CHILD_HANDOFF_ECHO:'),
+      'actual durable journal output reaches the fresh xterm',
+    );
+  }
+  const restoredDomText = await restored.surface.innerText();
+
+  const restoredMatch = await assertRenderedTerminalMatch({
+    panel: restored.panel,
+    surface: restored.surface,
+    text: expected,
+    until: f.until,
+  });
+  assert(
+    restoredMatch.selectionRectangles.filter(
+      (rect) => rect.width > 0 && rect.height > 0,
+    ).length >= 2,
+  );
+  const restoredPhysicalRows = await physicalRows(restored.surface);
+  for (const name of ['stop terminal', 'restart terminal'])
+    assert.equal(
+      await restored.panel
+        .getByRole('button', { name, exact: true })
+        .isEnabled(),
+      false,
+    );
+  const rejected = await f.serviceReply('terminal', 'command', {
+    target,
+    action: 'write',
+    params: { data: 'MUST_NOT_RUN' },
+  });
+  assert.equal(rejected.ok, false);
+  assert.equal(await f.read(child.workspace, f.files.input), input);
+  assert.equal(await f.read(child.workspace, f.files.starts), 'once\n');
+  assert.equal(Number(await f.read(child.workspace, f.files.pid)), child.pid);
+  assert.equal(f.model.requests.length, requestsAfterClose);
+  assert.throws(() => process.kill(child.pid, 0), { code: 'ESRCH' });
+  await page.screenshot({
+    path: join(output, 'wrapped-child-after-controller-restart.png'),
+  });
+  receipt.afterControllerRestart = {
+    sameTarget: true,
+    readonly: true,
+    noNewProcess: true,
+    noModelReplay: true,
+    restoredDomText,
+    restoredPhysicalRows,
+    match: restoredMatch,
+  };
+  receipt.checks.push(
+    'fresh controller and renderer restore the actual journal output',
+    'archived target stays readonly and original input/start count/PID/model count remain unchanged',
+  );
+  receipt.status = 'passed';
   console.log(JSON.stringify(receipt));
 } catch (error) {
+  receipt.status = 'failed';
   receipt.error = String(error);
   await page?.screenshot({ path: join(output, 'failure.png') }).catch(() => {});
   throw error;
