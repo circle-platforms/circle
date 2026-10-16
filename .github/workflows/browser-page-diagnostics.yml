@@ -1,19 +1,26 @@
 name: Browser page diagnostics
+# Diagnostic branch only (issue #124): when does the packaged Linux window produce its
+# first animation frames under the release job's display, compared with the workbench's?
 on:
-  pull_request:
-    paths:
-      - 'apps/desktop/test/browser-page.mjs'
-      - 'apps/desktop/test/browser-input-native.mjs'
-      - 'apps/desktop/test/browser-input-focus.mjs'
-      - 'src/browser/page.ts'
-      - '.github/workflows/browser-page-diagnostics.yml'
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  page-x64:
-    runs-on: macos-15-intel
-    timeout-minutes: 10
+  frames:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { config: release, replica: 1, show: harness, display: xvfb-run }
+          - { config: release, replica: 2, show: harness, display: xvfb-run }
+          - { config: release, replica: 3, show: harness, display: xvfb-run }
+          - { config: release-wide, replica: 1, show: harness, display: xvfb-run-wide }
+          - { config: release-wide, replica: 2, show: harness, display: xvfb-run-wide }
+          - { config: release-production, replica: 1, show: production, display: xvfb-run }
+          - { config: release-production, replica: 2, show: production, display: xvfb-run }
+          - { config: workbench, replica: 1, show: harness, display: persistent }
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -22,22 +29,44 @@ jobs:
           cache: npm
           cache-dependency-path: |
             package-lock.json
+            apps/workbench/package-lock.json
             apps/desktop/package-lock.json
       - run: npm ci
+      - run: npm --prefix apps/workbench ci
       - run: npm --prefix apps/desktop ci
-      - run: node -e "console.log(require('./apps/desktop/node_modules/electron'))"
-      # Compare actual adapter effects and raw CDP focus/target routing first.
-      # Keep all evidence even when an earlier comparison fails.
-      - run: node apps/desktop/test/browser-input-native.mjs
-      - run: node apps/desktop/test/browser-input-focus.mjs
-        if: always()
-      # This standalone fixture creates only local HTTP pages and isolated profiles.
-      - run: node apps/desktop/test/browser-page.mjs
-        if: always()
+      - name: Workbench display
+        if: matrix.display == 'persistent'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xauth libgtk-3-0 libnss3 libasound2t64
+          Xvfb :99 -screen 0 1920x1080x24 > "$RUNNER_TEMP/circle-xvfb.log" 2>&1 &
+          echo 'DISPLAY=:99' >> "$GITHUB_ENV"
+      - run: npm --prefix apps/desktop run package
+      - name: Probe the packaged application's first frames
+        shell: bash
+        env:
+          PROBE_LABEL: ${{ matrix.config }}-${{ matrix.replica }}
+          PROBE_SHOW: ${{ matrix.show }}
+          PROBE_ITERATIONS: '8'
+        run: |
+          export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/Circle-linux-x64"
+          export CIRCLE_DESKTOP_EXECUTABLE="$CIRCLE_DESKTOP_APP_PATH/Circle"
+          dpkg -l | grep -E ' (xvfb|libgtk-3-0t64|libgbm1|libegl-mesa0|mesa-libgallium|libgl1-mesa-dri) ' || true
+          grep -n 'XVFBARGS=' "$(command -v xvfb-run)" || true
+          timeout 20 xvfb-run -a "$CIRCLE_DESKTOP_EXECUTABLE" 2>&1 | head -5 || true
+          helper="$(dirname "$CIRCLE_DESKTOP_EXECUTABLE")/chrome-sandbox"
+          sudo chown root:root "$helper"
+          sudo chmod 4755 "$helper"
+          case "${{ matrix.display }}" in
+            xvfb-run) run=(xvfb-run -a) ;;
+            xvfb-run-wide) run=(xvfb-run -a -s '-screen 0 1920x1080x24') ;;
+            persistent) run=() ;;
+          esac
+          "${run[@]}" node apps/desktop/test/diagnose-frames.mjs
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         if: always()
         with:
-          name: circle-browser-page-x64-diagnostics
-          path: outputs/browser-regressions/*metadata.json
+          name: frames-124-${{ matrix.config }}-${{ matrix.replica }}
+          path: outputs/frames-124/
           if-no-files-found: ignore
           retention-days: 7
