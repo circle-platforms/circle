@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
+import { readFileSync } from 'node:fs';
+import { stripTypeScriptTypes } from 'node:module';
+import { runInNewContext } from 'node:vm';
 import { isHostAbsolutePath, Sandbox } from '../src/sandbox.js';
 import { CheckpointStore } from '../src/checkpoint_store.js';
 import { sessionSearchText } from '../src/session_search.js';
@@ -483,6 +486,37 @@ test('/variables and /secrets omit the Windows placeholder except on Windows', (
   assert.match(variableCopy('win32').variables, /%NAME%/);
   assert.match(variableCopy('linux').saved('BASE'), /Circle fills BASE in/);
   assert.match(variableCopy('win32').saved('BASE'), /%BASE%/);
+});
+
+test('the command list loads where there is no process, as in the desktop window', () => {
+  // The desktop renderer and its browser preview import this list. A top-level
+  // `process.platform` there left the window blank.
+  const source = stripTypeScriptTypes(
+    readFileSync(
+      new URL('../src/tui/slash_commands.ts', import.meta.url),
+      'utf8',
+    ),
+  ).replace(/^export /gm, '');
+  for (const [agent, windows] of [
+    ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) Circle', true],
+    ['Mozilla/5.0 (X11; Linux x86_64) Circle', false],
+  ] as const) {
+    const loaded = runInNewContext(
+      `${source}\n({ BUILTIN_SLASH, variableCopy })`,
+      { navigator: { userAgent: agent } },
+    ) as {
+      BUILTIN_SLASH: { name: string; description: string }[];
+      variableCopy: typeof variableCopy;
+    };
+    const variables = loaded.BUILTIN_SLASH.find(
+      (command) => command.name === 'variables',
+    )!;
+    assert.equal(variables.description.includes('%NAME%'), windows, agent);
+    assert.equal(
+      loaded.variableCopy().saved('BASE').includes('%BASE%'),
+      windows,
+    );
+  }
 });
 
 test('the terminal creates a session on the first message, keeps the user text after a model error, and counts streamed text', async (t) => {

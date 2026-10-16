@@ -4,10 +4,20 @@ export interface SlashCommand {
   aliases?: string[];
 }
 /**
+ * The system the words are for. The desktop window and its browser preview
+ * load this list too, and they have no `process`.
+ */
+function hostPlatform(): string {
+  if (typeof process !== 'undefined' && process.platform)
+    return process.platform;
+  const agent = globalThis.navigator?.userAgent ?? '';
+  return /Windows/i.test(agent) ? 'win32' : 'browser';
+}
+/**
  * What /variables and /secrets say. The value is still written `%NAME%` in a tool's
  * arguments; on Windows the commands say so, and elsewhere they do not show that form.
  */
-export function variableCopy(platform: NodeJS.Platform = process.platform): {
+export function variableCopy(platform: string = hostPlatform()): {
   variables: string;
   secrets: string;
   saved(name: string): string;
