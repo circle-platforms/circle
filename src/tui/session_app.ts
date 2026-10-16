@@ -214,6 +214,10 @@ export class SessionApp {
     this.view.secretReady = value;
   }
   private ended = false;
+  /** Head last drawn for a view-only session, so the lock poll can refresh totals. */
+  private watchedHead = '';
+  /** /exit during a turn: keys stop here while the turn is cancelled. */
+  private leaving = false;
   private closing?: Promise<void>;
   private externalEditor = false;
   private animation?: NodeJS.Timeout;
@@ -465,6 +469,7 @@ export class SessionApp {
         else this.scrollBy(rows);
       },
       send: (kind) => this.send(kind),
+      watchLease: () => this.watchLease(),
       command: (name) =>
         void this.command(name, '').catch((error) => this.fail(error)),
       flash: (text) => this.flash(text),
@@ -487,6 +492,8 @@ export class SessionApp {
     this.started = true;
     this.theme.start();
     this.animation = setInterval(() => {
+      this.watchLease();
+      if (this.jobsList) this.refreshJobsList();
       if (
         [...this.views.values()].some(
           (view) => view.runtime?.busy || view.interactions.pendingCount > 0,
@@ -544,6 +551,7 @@ export class SessionApp {
       this.state.queue = this.runtime.harness.queuedShown;
       this.state.model = this.runtime.harness.model.model;
       this.state.planMode = this.runtime.harness.planMode;
+      this.state.viewOnly = this.runtime.viewOnly;
       this.state.autoMode = this.runtime.policy.yoloEnabled(
         this.runtime.session.id,
       );
@@ -552,6 +560,8 @@ export class SessionApp {
       this.state.busy = this.runtime.busy;
       const stats = this.runtime.stats();
       this.state.usage = { ...stats.usage };
+      this.state.usageUnreported =
+        this.state.busy && this.state.usage.input_tokens === 0;
       if (this.state.busy && this.turns.pendingOutput)
         this.state.usage.output_tokens += this.turns.pendingOutput;
       const facts =
@@ -577,10 +587,20 @@ export class SessionApp {
           this.state.contextInput = undefined;
         else this.meterCleared = undefined;
       }
-      this.state.costText = formatCosts(
-        [stats.costs],
-        facts.rates?.input !== undefined && facts.rates.output !== undefined,
-      );
+      const priced =
+        facts.rates?.input !== undefined && facts.rates.output !== undefined;
+      const pending = this.state.busy ? this.turns.pendingOutput : 0;
+      const costs = stats.costs;
+      if (pending && facts.rates?.output !== undefined) {
+        const extra = (pending * facts.rates.output) / 1_000_000;
+        costs.amounts = { ...costs.amounts };
+        costs.amounts.USD = (costs.amounts.USD ?? 0) + extra;
+        costs.estimated_amounts = {
+          ...costs.estimated_amounts,
+          USD: (costs.estimated_amounts?.USD ?? 0) + extra,
+        };
+      }
+      this.state.costText = formatCosts([costs], priced);
       this.state.jobs = this.runtime.jobs.list();
       const cache = this.subagentCache;
       if (
@@ -854,21 +874,32 @@ export class SessionApp {
   // A notice goes after the message on screen when it came, not under everything that
   // arrives later: `''` before the first message, nothing when no session is open yet.
   private addNotice(text: string): void {
+    // A second Resumed line for the same switch is the same event drawn twice.
+    if (
+      /^(?:Resumed|Continued|Forked) /.test(text) &&
+      this.state.notices.at(-1) === text
+    )
+      return;
     const anchors = (this.state.noticeAnchors ??= []);
     while (anchors.length < this.state.notices.length) anchors.push(undefined);
     this.state.notices.push(text);
+    const trail =
+      /^(?:Resumed|Continued|Forked|Open in another terminal) /.test(text) ||
+      text === 'this session is writable again';
     anchors.push(
-      this.runtime
-        ? (this.undo
-            .visible(this.runtime.harness.messages)
-            .filter(
-              (message) =>
-                !message.internal ||
-                message.internal === 'job_notice' ||
-                message.internal === 'interrupted',
-            )
-            .at(-1)?.id ?? '')
-        : undefined,
+      trail
+        ? undefined
+        : this.runtime
+          ? (this.undo
+              .visible(this.runtime.harness.messages)
+              .filter(
+                (message) =>
+                  !message.internal ||
+                  message.internal === 'job_notice' ||
+                  message.internal === 'interrupted',
+              )
+              .at(-1)?.id ?? '')
+          : undefined,
     );
   }
   private fail(error: unknown): void {
@@ -1061,12 +1092,20 @@ export class SessionApp {
       },
       ...this.cardHooks(view),
       onExtensionStatus: () => this.inView(view, () => this.requestRender()),
+      onStoreBusy: () => {
+        this.state.storeWait = true;
+        this.repaint();
+      },
       openUrl: async (url) => {
         await openInBrowser(url);
         this.inView(view, () => this.flash('Opened in the browser'));
       },
     });
     view.runtime = runtime;
+    if (this.state.storeWait) {
+      this.state.storeWait = false;
+      this.repaint();
+    }
     this.views.set(runtime, view);
     if (browser) this.browsers.set(runtime, browser);
     this.subscriptions.set(
@@ -1266,11 +1305,45 @@ export class SessionApp {
     );
     return runtime;
   }
+  /** Redraw footer totals when the other terminal has saved messages. */
+  private refreshWatchedFooter(): void {
+    const runtime = this.runtime;
+    if (!runtime) return;
+    let stamp = '';
+    try {
+      const session = runtime.store.get(runtime.session.id);
+      stamp = `${session?.head ?? ''}:${session?.updated ?? 0}`;
+    } catch {
+      return;
+    }
+    if (stamp === this.watchedHead) return;
+    this.watchedHead = stamp;
+    this.repaint();
+  }
+  /**
+   * A view-only session stays that way until something asks again. The screen
+   * asks on its timer, and enter and picking the session ask at once.
+   */
+  private watchLease(): void {
+    const runtime = this.runtime;
+    if (this.ended || !runtime?.viewOnly || runtime.isClosing) return;
+    if (sessionOccupied(this.home, runtime.session.id)) {
+      this.refreshWatchedFooter();
+      return;
+    }
+    if (!runtime.resumeLease()) return;
+    const text = 'this session is writable again';
+    if (this.state.notices.at(-1) !== text) this.notice(text);
+    else this.repaint();
+  }
   private async selectRuntime(runtime: AgentRuntime): Promise<void> {
     await runtime.initialize();
     if (this.ended || this.sessions?.lifecycle(runtime.session.id) !== 'open')
       throw new Error('session is closing');
-    const old = this.runtime?.session.id;
+    const oldRuntime = this.runtime;
+    const old = oldRuntime?.session.id;
+    if (oldRuntime && oldRuntime !== runtime) oldRuntime.yieldLease();
+    runtime.resumeLease();
     this.state.picker = undefined;
     this.jobsList = undefined;
     if (this.view.suspendedDialog) {
@@ -1313,13 +1386,38 @@ export class SessionApp {
     // empty sessions, and a live conversation can still sit beside it.
     this.ensureSessions();
     const work = this.selecting.then(async () => {
-      const runtime = id
-        ? this.sessions!.open(this.workspace, id)
-        : this.sessions!.create(this.workspace);
+      let runtime: AgentRuntime;
+      try {
+        runtime = id
+          ? this.sessions!.open(this.workspace, id)
+          : this.sessions!.create(this.workspace);
+      } catch (error) {
+        if (!(error instanceof SessionOccupiedError) || !id) throw error;
+        runtime = this.openOccupied(id);
+      }
       await this.selectRuntime(runtime);
     });
     this.selecting = work.catch(() => {});
     return work;
+  }
+  /** History of a session another terminal is running. No lease, no writes. */
+  private openOccupied(id: string): AgentRuntime {
+    const source =
+      this.runtime?.store.get(id) ?? this.sessions?.get(id)?.store.get(id);
+    if (!source) throw new Error('unknown session');
+    const runtime = this.createRuntime(
+      {
+        ...this.runtimeOptions!,
+        workspace: source.workspace,
+        session: id,
+        sessionId: undefined,
+        continue: false,
+        fork: undefined,
+        inspect: true,
+      },
+      this.makeView(),
+    );
+    return this.ensureSessions().register(runtime);
   }
   private async deleteSession(id: string): Promise<boolean> {
     this.ensureSessions();
@@ -1704,7 +1802,7 @@ export class SessionApp {
     );
   }
   private handle(event: InputEvent): void {
-    if (this.ended || this.externalEditor) return;
+    if (this.ended || this.leaving || this.externalEditor) return;
     this.theme.feed(event);
     if (event.type === 'color' || event.type === 'scheme') return;
     if (event.type === 'mouse') {
@@ -2157,7 +2255,8 @@ export class SessionApp {
       else if (this.state.draft) {
         // One esc is not enough to throw the draft away. The second clears it,
         // and ctrl+y puts that draft back.
-        if (Date.now() - this.lastEscape < 800) {
+        // The hint stays for the flash (1.8s). A second esc in that time clears.
+        if (Date.now() - this.lastEscape < 1800) {
           this.composer.stashClear();
           this.flash('cleared · ctrl+y restores');
           this.lastEscape = 0;
@@ -2620,6 +2719,17 @@ export class SessionApp {
       (this.sessions && this.sessions.lifecycle(runtime.session.id) !== 'open')
     )
       return;
+    if (runtime.viewOnly) {
+      // The other terminal may have left since this one opened the session.
+      this.watchLease();
+      if (runtime.viewOnly) {
+        // The box already gave the text up. Put it back and say why it was not sent.
+        this.composer.restore(raw, pastes);
+        const text = `Open in another terminal · view only · circle --fork ${runtime.session.id} copies it here`;
+        if (this.state.notices.at(-1) !== text) this.notice(text);
+        return;
+      }
+    }
     if (!plain && message.startsWith('!')) {
       try {
         await runtime.userShells.run(
@@ -2733,6 +2843,7 @@ export class SessionApp {
       },
       selected: () => owner === this.selectedView,
       refreshConnection: () => this.refreshConnections(),
+      watchLease: () => this.watchLease(),
       sessionStatus: (id) => {
         if (this.sessions?.lifecycle(id) === 'deleting') return 'deleting';
         const runtime = this.sessions?.get(id);
@@ -2821,10 +2932,9 @@ export class SessionApp {
       trustWorkspace: () => this.trustWorkspace(),
       clipboard: async (text) => {
         if (await this.clipboard.copyNative(text)) return true;
-        // No local tool (a Linux terminal without wl-copy or xclip). OSC 52 still
-        // reaches the terminal; the file fallback remains when that is all we have.
-        await this.clipboard.copySelection(text);
-        return false;
+        // No local tool (tmux, ssh, a Linux terminal without wl-copy). OSC 52
+        // asks the terminal for the clipboard. The file is only the last resort.
+        return (await this.clipboard.copySelection(text)).length > 0;
       },
       followJobs: (list, rows) => {
         owner.jobsList = { list, rows };
@@ -2949,12 +3059,14 @@ export class SessionApp {
     const view = this.view;
     if (!this.runtime) return;
     if (['login', 'logout'].includes(name) && this.connectionBusy()) {
-      this.flash(
-        'Busy · wait for all sessions to finish before changing the connection',
-      );
+      const reason =
+        'Busy · wait for all sessions to finish before changing the connection';
+      this.notice(reason);
+      this.flash(reason, 4000);
+      if (!this.state.draft) this.composer.restore(`/${name}`);
       return;
     }
-    if (await runCommand(this.commandHost(), name, args, () => this.exit(0)))
+    if (await runCommand(this.commandHost(), name, args, () => this.leave()))
       return;
     try {
       await this.inView(view, () => this.ownCommand(name, args));
@@ -3427,6 +3539,29 @@ export class SessionApp {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
+  }
+  /** /exit. A running turn is stopped first, and the screen says so. */
+  private leave(): void {
+    if (this.ended || this.leaving) return;
+    const runtimes = this.sessions
+      ? [...this.sessions.values()]
+      : this.runtime
+        ? [this.runtime]
+        : [];
+    if (!runtimes.some((runtime) => runtime.busy && !runtime.viewOnly)) {
+      this.exit(0);
+      return;
+    }
+    this.leaving = true;
+    this.notice('Leaving · stopping the turn');
+    this.repaint();
+    void Promise.allSettled(
+      runtimes.map((runtime) =>
+        runtime.busy && !runtime.viewOnly
+          ? runtime.cancel({ keepQueue: false })
+          : Promise.resolve(),
+      ),
+    ).finally(() => this.exit(0));
   }
   exit(code: number): void {
     if (this.ended) return;

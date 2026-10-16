@@ -101,6 +101,7 @@ export function formatChord(chord: string): string {
       if (part === 'meta') return mac ? '⌘' : 'Meta';
       if (part === 'escape') return 'Esc';
       if (part.length === 1) return part.toUpperCase();
+      if (/^f(?:[1-9]|1[0-2])$/.test(part)) return part.toUpperCase();
       const word = (
         {
           up: 'Up',

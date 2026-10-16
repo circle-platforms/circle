@@ -5,6 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { encode, ExtData } from '@msgpack/msgpack';
+import { AgentRuntime } from '../src/runtime.js';
 import { SessionApp } from '../src/tui/session_app.js';
 import { ScreenRenderer } from '../src/ink/screen.js';
 import { editorCommand } from '../src/tui/external_editor.js';
@@ -26,6 +27,7 @@ import {
   type ModelRequest,
   type ModelResponse,
 } from '../src/types.js';
+import { sessionOccupied } from '../src/session_lock.js';
 import { cleanup, scratch } from './helpers.js';
 
 type Reply =
@@ -46,7 +48,12 @@ async function until(predicate: () => boolean, timeout = 5000): Promise<void> {
 async function session(
   t: Parameters<typeof scratch>[0],
   replies: Reply[] = [],
-  options: { home?: string; workspace?: string; session?: string } = {},
+  options: {
+    home?: string;
+    workspace?: string;
+    session?: string;
+    inspect?: boolean;
+  } = {},
 ) {
   const home = options.home ?? scratch(t);
   const workspace = options.workspace ?? scratch(t);
@@ -69,6 +76,7 @@ async function session(
     model,
     headless: true,
     ...(options.session ? { session: options.session } : {}),
+    ...(options.inspect ? { inspect: true } : {}),
   });
   const runtime = app.runtime!;
   cleanup(t, async () => {
@@ -994,4 +1002,185 @@ test('an internal reminder cannot become the fallback position of a prior failur
     text.indexOf('model ended without an answer') < text.indexOf('continue'),
   );
   assert.doesNotMatch(text, /hidden reminder/);
+});
+
+test('a view-only session keeps the typed message and says why it was not sent', async (t) => {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const owner = new AgentRuntime({
+    workspace,
+    home,
+    settings: defaultSettings(),
+    model: new ScriptedModel([
+      { message: { id: 'stored', role: 'assistant', content: 'stored reply' } },
+    ]),
+    headless: true,
+  });
+  cleanup(t, () => owner.close());
+  await owner.harness.run('hello from the owner');
+  const { app, ui } = await session(t, [], {
+    home,
+    workspace,
+    session: owner.session.id,
+    inspect: true,
+  });
+  ui.composer.set('keep this draft');
+  await ui.send('steer');
+  assert.equal(app.state.draft, 'keep this draft');
+  assert.ok(
+    app.state.notices.some(
+      (note) => note.includes('view only') && note.includes('circle --fork'),
+    ),
+  );
+  assert.equal(
+    app.runtime!.harness.messages.some((message) =>
+      (message.content ?? '').includes('keep this draft'),
+    ),
+    false,
+  );
+});
+
+async function occupiedPair(
+  t: Parameters<typeof scratch>[0],
+  replies: Reply[] = [],
+) {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const owner = new AgentRuntime({
+    workspace,
+    home,
+    settings: defaultSettings(),
+    model: new ScriptedModel([
+      { message: { id: 'stored', role: 'assistant', content: 'stored reply' } },
+    ]),
+    headless: true,
+  });
+  cleanup(t, () => owner.close());
+  await owner.harness.run('hello from the owner');
+  const opened = await session(t, replies, {
+    home,
+    workspace,
+    session: owner.session.id,
+    inspect: true,
+  });
+  return { owner, ...opened };
+}
+
+test('enter sends once the other terminal has released a view-only session', async (t) => {
+  const { app, owner, runtime, ui } = await occupiedPair(t, [
+    answer('continued'),
+  ]);
+  ui.composer.set('keep this draft');
+  await ui.send('steer');
+  assert.equal(runtime.viewOnly, true);
+  assert.equal(app.state.draft, 'keep this draft');
+  owner.yieldLease();
+  await app.submit('now it sends');
+  assert.equal(runtime.viewOnly, false);
+  assert.ok(
+    app.state.notices.includes('this session is writable again'),
+    app.state.notices.join('\n'),
+  );
+  assert.ok(
+    runtime.harness.messages.some((message) =>
+      (message.content ?? '').includes('now it sends'),
+    ),
+  );
+});
+
+test('an empty enter and the session list take a released view-only session', async (t) => {
+  const { app, owner, runtime, ui, key } = await occupiedPair(t);
+  ui.composer.set('');
+  key('enter');
+  assert.equal(runtime.viewOnly, true);
+  owner.yieldLease();
+  key('enter');
+  assert.equal(runtime.viewOnly, false);
+  assert.ok(app.state.notices.includes('this session is writable again'));
+
+  const again = await occupiedPair(t);
+  again.owner.yieldLease();
+  await again.app.submit('/resume');
+  assert.equal(again.app.state.picker?.title, 'Sessions · this folder');
+  again.key('enter');
+  await until(() => !again.runtime.viewOnly);
+  assert.equal(again.app.state.picker, undefined);
+  assert.ok(again.app.state.notices.includes('this session is writable again'));
+  assert.equal(
+    again.runtime.harness.messages.some((message) =>
+      (message.content ?? '').includes('now it sends'),
+    ),
+    false,
+  );
+});
+
+test('switching away releases the lock when the background turn finishes', async (t) => {
+  let finish!: () => void;
+  let started!: () => void;
+  const runningTurn = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const { app, runtime, home } = await session(t, [
+    async (request) => {
+      started();
+      await new Promise<void>((resolve, reject) => {
+        finish = resolve;
+        request.signal.addEventListener(
+          'abort',
+          () => reject(request.signal.reason),
+          {
+            once: true,
+          },
+        );
+      });
+      return {
+        message: { id: 'done', role: 'assistant', content: 'done' },
+        usage: emptyUsage(),
+      };
+    },
+  ]);
+  const first = runtime.session.id;
+  const turn = app.submit('start a turn');
+  await runningTurn;
+  await app.submit('/new');
+  const second = app.runtime!.session.id;
+  assert.notEqual(second, first);
+  assert.equal(sessionOccupied(home, first), true);
+  assert.equal(sessionOccupied(home, second), true);
+  finish();
+  await turn;
+  assert.equal(sessionOccupied(home, first), false);
+  assert.equal(sessionOccupied(home, second), true);
+});
+
+test('the view-only screen takes the lock back without a key', async (t) => {
+  const { app, owner, runtime, ui } = await occupiedPair(t);
+  ui.watchLease();
+  assert.equal(runtime.viewOnly, true);
+  owner.yieldLease();
+  ui.watchLease();
+  assert.equal(runtime.viewOnly, false);
+  assert.ok(app.state.notices.includes('this session is writable again'));
+});
+
+test('a view-only screen refreshes footer totals while the other terminal writes', async (t) => {
+  const { app, owner, runtime, ui } = await occupiedPair(t);
+  ui.watchLease();
+  assert.equal(runtime.viewOnly, true);
+  const beforeIn = app.state.usage.input_tokens;
+  const beforeOut = app.state.usage.output_tokens;
+  owner.store.append(owner.session.id, [
+    {
+      id: 'later',
+      role: 'assistant',
+      content: 'more',
+      usage: { ...emptyUsage(), input_tokens: 40, output_tokens: 8 },
+    },
+  ]);
+  ui.watchLease();
+  assert.equal(runtime.viewOnly, true);
+  assert.equal(app.state.usage.input_tokens, beforeIn + 40);
+  assert.equal(app.state.usage.output_tokens, beforeOut + 8);
+  ui.watchLease();
+  assert.equal(app.state.usage.input_tokens, beforeIn + 40);
 });

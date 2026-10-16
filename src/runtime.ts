@@ -7,6 +7,10 @@ import { WebSearchService } from './websearch_service.js';
 import type { NativeSearchConnection } from './native_websearch.js';
 import { CheckpointStore, type Session } from './checkpoint_store.js';
 import {
+  occupiedSessionMessage,
+  SessionOccupiedError,
+} from './session_lock.js';
+import {
   defaultPolicy,
   DEFAULT_CREDENTIAL_FILES,
   type SessionMode,
@@ -137,6 +141,8 @@ export interface RuntimeOptions {
   bundledExtensions?: string | false;
   /** An extension's status line changed. */
   onExtensionStatus?: () => void;
+  /** The shared database is locked and startup is about to wait. */
+  onStoreBusy?: () => void;
   /** Opens a link an extension asked for (api.openUrl); the URL is already checked. */
   openUrl?: (url: string) => Promise<void>;
   /** External session resources must be gone before history and ownership are removed. */
@@ -168,11 +174,16 @@ export interface RuntimeOptions {
    */
   deferSession?: boolean;
   /**
-   * Leave a sentence untitled until its generated title arrives, and do not ask
-   * for a title again when a session opens. The desktop shows such a session as
-   * a new session and keeps its own list.
+   * Leave a sentence untitled until its generated title arrives. A stale stored
+   * title is still asked again when the session opens. The desktop shows a new
+   * sentence as a new session until that summary arrives.
    */
   holdTitle?: boolean;
+  /**
+   * Open stored history without taking the lease. Another terminal is running
+   * the session: this one can read it and cannot continue, change or delete it.
+   */
+  inspect?: boolean;
 }
 export class AgentRuntime {
   private readonly searches = new WebSearchService();
@@ -232,6 +243,8 @@ export class AgentRuntime {
   private ownershipError?: Error;
   private ownershipCleanup?: Promise<void>;
   private deleting = false;
+  /** Left the screen. The lock drops once a background turn, job or queue finishes. */
+  private away = false;
   get isDeleting(): boolean {
     return this.deleting;
   }
@@ -276,6 +289,7 @@ export class AgentRuntime {
     this.catalog = options.catalog ?? new ModelCatalog(options.home);
     this.store = new CheckpointStore(
       this.runOptions.no_session ? undefined : options.home,
+      options.onStoreBusy ? { onBusy: options.onStoreBusy } : undefined,
     );
     this.migration = this.runOptions.no_session
       ? { imported: [], skipped: [], errors: [] }
@@ -285,8 +299,11 @@ export class AgentRuntime {
       if (options.session) {
         session = this.store.find(options.session);
         if (!session) throw new Error('unknown session');
-        if (session.workspace !== options.workspace)
+        if (session.workspace !== options.workspace) {
+          if (options.inspect)
+            throw new Error('session belongs to a different workspace');
           session = this.store.fork(session.id, options.workspace);
+        }
       } else if (options.continue) {
         session = this.store.list(options.workspace)[0];
         if (!session) throw new Error('no saved session in this folder');
@@ -307,9 +324,10 @@ export class AgentRuntime {
             !this.runOptions.session_name &&
             !options.sessionId,
         );
-      this.store.claimSession(this.session.id, (error) =>
-        this.ownershipLost(error),
-      );
+      if (!options.inspect)
+        this.store.claimSession(this.session.id, (error) =>
+          this.ownershipLost(error),
+        );
       // A delete may have completed between discovery and acquiring the lease.
       const current = this.store.get(this.session.id);
       if (!current) throw new Error('unknown session');
@@ -344,6 +362,7 @@ export class AgentRuntime {
         payload: { job },
         tags: { session_id: job.sessionId },
       });
+      if (kind === 'job_ended') this.releaseIfAway();
     });
     // A background command can print a secret: its notice reaches the model and history.
     // Calls and notices share what values each secret had.
@@ -362,7 +381,10 @@ export class AgentRuntime {
         this.busy,
       modelBusy: () => this.harness.busy,
       planMode: () => this.harness.planMode,
-      changed: () => this.bus.emit('info', { payload: { user_shell: true } }),
+      changed: () => {
+        this.bus.emit('info', { payload: { user_shell: true } });
+        this.releaseIfAway();
+      },
     });
     this.mcp = new McpManager(options.workspace);
     this.lsp = new LspManager(this.sandbox);
@@ -747,6 +769,7 @@ export class AgentRuntime {
       redact: this.redact,
       model: this.modelWithSearch(model),
       holdTitle: this.options.holdTitle,
+      inspect: this.options.inspect,
       tools,
       store: this.store,
       session: this.session,
@@ -788,6 +811,7 @@ export class AgentRuntime {
           this.harness.tools,
           signal,
         ),
+      settled: () => this.releaseIfAway(),
       planFileMutation: (call) => {
         if (['write_file', 'edit_file', 'delete'].includes(call.name)) {
           const path = this.sandbox.resolvePath(
@@ -1076,6 +1100,7 @@ export class AgentRuntime {
     await this.initialize();
   }
   setPlanMode(enabled: boolean): void {
+    if (this.viewOnly) throw new Error(occupiedSessionMessage(this.session.id));
     if (this.harness.planMode === enabled) return;
     this.harness.planMode = enabled;
     // /plan between turns rebuilt the agent in 0.5.0; plan_enter and plan_exit run mid-turn.
@@ -1367,7 +1392,55 @@ export class AgentRuntime {
     } finally {
       this.activeCompaction = undefined;
       this.compactionController = undefined;
+      this.releaseIfAway();
     }
+  }
+  /** Another terminal owns this session. History is readable; nothing may write. */
+  get viewOnly(): boolean {
+    return this.options.inspect === true;
+  }
+  /** A turn, a job or a queued message still belongs to this terminal. */
+  private retainsLease(): boolean {
+    if (this.busy || this.closing) return true;
+    if (this.jobs.list().some((job) => job.status === 'running')) return true;
+    const queued = this.harness.queuedMessages;
+    return queued.steering.length > 0 || queued.followUp.length > 0;
+  }
+  /**
+   * Drop the lease when the session leaves the screen. A turn, a job or a queue
+   * keeps it until that work finishes, then the lock goes.
+   */
+  yieldLease(): void {
+    if (this.viewOnly) return;
+    this.away = true;
+    this.releaseIfAway();
+  }
+  private releaseIfAway(): void {
+    if (!this.away || this.viewOnly || this.retainsLease()) return;
+    this.store.releaseSession(this.session.id);
+  }
+  /**
+   * Take the lease back after a switch. False when another Circle holds it:
+   * this runtime stays view-only until a later call succeeds.
+   */
+  resumeLease(): boolean {
+    if (this.closing) return false;
+    this.away = false;
+    const wasInspect = this.viewOnly;
+    try {
+      this.store.claimSession(this.session.id, (error) =>
+        this.ownershipLost(error),
+      );
+    } catch (error) {
+      if (!(error instanceof SessionOccupiedError)) throw error;
+      this.options.inspect = true;
+      this.harness.options.inspect = true;
+      return false;
+    }
+    this.options.inspect = false;
+    this.harness.options.inspect = false;
+    if (wasInspect) this.store.repairInterrupted(this.session.id);
+    return true;
   }
   get busy(): boolean {
     return (
@@ -1482,7 +1555,7 @@ export class AgentRuntime {
    * from /name stays.
    */
   private refreshFallbackTitle(): void {
-    if (this.options.holdTitle) return;
+    if (this.options.inspect) return;
     void this.retitleSession(this.session.id);
   }
   /**
@@ -1493,7 +1566,7 @@ export class AgentRuntime {
   repairRecentTitles(): void {
     if (
       this.closing ||
-      this.options.holdTitle ||
+      this.options.inspect ||
       !this.harness.model.sideRequests
     )
       return;

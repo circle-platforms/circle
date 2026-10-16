@@ -60,6 +60,7 @@ export function applyTheme(choice: Theme, size: TextSize = 'default') {
   root.style.setProperty('--logo-gradient', `conic-gradient(${stops})`);
   // Plan mode's colour, for the composer frame and the mode word
   root.style.setProperty('--violet', stop(1));
+  root.style.setProperty('--call', rgb(p.call_hex));
   // Your turn: the terminal's frame is yellow; the app takes the rainbow's orange, which
   // the palette has already darkened to read on a light background.
   root.style.setProperty('--attention', stop(3));

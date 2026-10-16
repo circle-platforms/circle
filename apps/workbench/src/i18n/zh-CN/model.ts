@@ -208,4 +208,8 @@ export const model: Record<string, string> = {
     '用于只该由你在网页上完成的事，比如安全密钥或验证码。浏览器在你手上时 Circle 什么也看不到，只会知道标签页去了哪些地址。',
   'For a file input, or for the file chooser one of its clicks opened. Circle asks you every time, with the files and the site.':
     '用于文件输入框，或它的点击打开的文件选择框。Circle 每次都会问你，并列出文件和站点。',
+  'Named values Circle fills in: /variables [NAME=value]':
+    'Circle 会填入的命名值：/variables [NAME=value]',
+  'Named values Circle fills in unseen: /secrets [NAME]':
+    'Circle 会填入、但模型看不到的命名值：/secrets [NAME]',
 };

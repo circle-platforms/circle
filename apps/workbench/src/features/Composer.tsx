@@ -304,9 +304,10 @@ export function ContextRing({
           ? 'high'
           : '';
   const cache =
-    meters && meters.input
-      ? (Math.min(meters.cacheRead, meters.input) / meters.input) * 100
-      : 0;
+    meters?.cache ??
+    (meters && meters.input
+      ? `${((Math.min(meters.cacheRead, meters.input) / meters.input) * 100).toFixed(1)}%`
+      : 'N/A');
   const context =
     meters && meters.contextInput !== null
       ? meters.contextWindow
@@ -352,7 +353,7 @@ export function ContextRing({
             <dt>{t('tokens')}</dt>
             <dd>
               {meters
-                ? `↑ ${formatTokens(meters.input)} · ↓ ${formatTokens(meters.output)}`
+                ? `↑ ${meters.inputUnknown ? 'N/A' : formatTokens(meters.input)} · ↓ ${formatTokens(meters.output)}`
                 : 'N/A'}
             </dd>
             <dt>{t('cost')}</dt>
@@ -360,7 +361,7 @@ export function ContextRing({
               {meters?.cost ?? 'N/A'}
             </dd>
             <dt>{t('cache')}</dt>
-            <dd>{meters ? `${cache.toFixed(1)}%` : 'N/A'}</dd>
+            <dd>{cache === 'N/A' ? t('cache N/A') : cache}</dd>
           </dl>
           <div className="usage-actions">
             <Popover.Close asChild>

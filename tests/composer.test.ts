@@ -466,6 +466,8 @@ test('esc esc clears the box and ctrl+y puts it back; only esc esc on an empty b
   key(ui, 'escape');
   assert.equal(app.state.draft, 'draft one');
   assert.match(app.state.flash ?? '', /press esc again to clear/);
+  // The hint stays for 1.8s. A second esc after the old 0.8s window still clears.
+  ui.lastEscape = Date.now() - 1400;
   key(ui, 'escape');
   assert.equal(app.state.draft, '');
   assert.match(app.state.flash ?? '', /ctrl\+y restores/);

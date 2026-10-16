@@ -21,6 +21,7 @@ import { formatChord } from '../model/shortcuts';
 import { desktopHost } from '../host';
 import { useRuntime } from '../app/context';
 import {
+  archiveBlockReason,
   canArchiveSession,
   workspaceSessions,
 } from '../model/session-management';
@@ -220,6 +221,9 @@ export function SessionMenu({
         icon={Archive}
         label={session.archivedAt ? t('restore session') : t('archive session')}
         disabled={!session.archivedAt && !canArchiveSession(snapshot, session)}
+        title={
+          session.archivedAt ? undefined : archiveBlockReason(snapshot, session)
+        }
         onSelect={archive}
       />
       <DropdownMenu.Separator className="dropdown-separator" />

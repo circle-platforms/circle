@@ -71,6 +71,7 @@ import { armComposerFocus, sealComposerFocus } from '../model/composer-focus';
 import {
   effectiveBindings,
   DESKTOP_SEARCH_CHORD,
+  DESKTOP_SETTINGS_CHORD,
   formatChord,
   isDesktopNewSession,
   isDesktopSearch,
@@ -155,6 +156,26 @@ export function App() {
   const wholeBox = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (whole) wholeBox.current?.focus();
+  }, [whole]);
+  // Escape leaves the full view from anywhere in the window. The panel's own
+  // handler only hears keys while the panel itself is focused.
+  useEffect(() => {
+    if (!whole) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (
+        event.key !== 'Escape' ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey
+      )
+        return;
+      if (document.querySelector('[role="dialog"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setFullView(false);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [whole]);
   const onSession = () => {
     setFile(null);
@@ -687,23 +708,29 @@ export function App() {
       detail: t('platform plugin'),
       run: () => navigate('/page/' + page.id),
     })),
-    ...visibleSessions(snapshot.sessions).map((item) => ({
-      id: item.id,
-      label: sessionTitle(item.title),
-      detail: t('session · {workspace}', {
-        workspace: String(
-          snapshot.workspaces.find(
-            (workspace) => workspace.id === item.workspaceId,
-          )?.name,
-        ),
-      }),
-      run: () => {
-        runtime.selectSession(item.id);
-        onSession();
-      },
-    })),
+    ...visibleSessions(snapshot.sessions).map((item) => {
+      const workspace = snapshot.workspaces.find(
+        (entry) => entry.id === item.workspaceId,
+      );
+      return {
+        id: `session:${item.id}`,
+        label: sessionTitle(item.title),
+        detail: workspace
+          ? t('session · {workspace}', {
+              workspace: workspaceLabel(workspace),
+            })
+          : t('session'),
+        run: () => {
+          // Navigate to the session that was chosen. onSession() would follow
+          // whichever session is still active while select is in flight.
+          void Promise.resolve(runtime.selectSession(item.id)).then(() =>
+            navigate(`/session/${item.id}`),
+          );
+        },
+      };
+    }),
     ...NAVIGATION.map((item) => ({
-      id: item.id,
+      id: `page:${item.id}`,
       label: item.label(),
       detail: t('page'),
       run: () => navigate('/page/' + item.id),
@@ -711,26 +738,27 @@ export function App() {
     ...snapshot.files
       .filter((item) => item.workspaceId === session.workspaceId)
       .map((item) => ({
-        id: item.id,
+        id: `file:${item.id}`,
         label: item.path,
         detail: t('file'),
         run: () => onFile(item.path),
       })),
     ...visibleSessions(snapshot.sessions).flatMap((item) =>
       historyMessages(item).map((message) => ({
-        id: message.id,
+        id: `message:${item.id}:${message.id}`,
         label: message.text,
         detail: t('message history'),
         run: () => {
-          void runtime.selectSession(item.id);
-          if (message.role === 'user')
-            runtime.change((state) => {
-              const target = state.sessions.find(
-                (session) => session.id === item.id,
-              );
-              if (target) target.draft = message.text;
-            });
-          onSession();
+          void Promise.resolve(runtime.selectSession(item.id)).then(() => {
+            if (message.role === 'user')
+              runtime.change((state) => {
+                const target = state.sessions.find(
+                  (session) => session.id === item.id,
+                );
+                if (target) target.draft = message.text;
+              });
+            navigate(`/session/${item.id}`);
+          });
         },
       })),
     ),
@@ -835,6 +863,14 @@ export function App() {
                       {/* A visible hint. The item is still named by its words. */}
                       <kbd aria-hidden="true">
                         {formatChord(DESKTOP_SEARCH_CHORD)}
+                      </kbd>
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item
+                      onSelect={() => navigate('/page/settings')}
+                    >
+                      <span>{t('settings')}</span>
+                      <kbd aria-hidden="true">
+                        {formatChord(DESKTOP_SETTINGS_CHORD)}
                       </kbd>
                     </DropdownMenu.Item>
                     <DropdownMenu.Item

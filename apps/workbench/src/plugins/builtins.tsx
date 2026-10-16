@@ -57,6 +57,7 @@ export const circlePlugins: WorkbenchPlugin[] = [
           return t('changes');
         },
         icon: FileDiff,
+        fullView: true,
         component: (props) => <ChangesPanel onFile={props.onFile} />,
       },
     ],
@@ -79,6 +80,7 @@ export const circlePlugins: WorkbenchPlugin[] = [
           return t('activity');
         },
         icon: Activity,
+        fullView: true,
         component: (props) => <ActivityPanel {...props} />,
       },
     ],

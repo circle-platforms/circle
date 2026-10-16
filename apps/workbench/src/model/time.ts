@@ -5,6 +5,8 @@ import { dateLocale } from '../i18n/index.ts';
  * preview's `10:24` or `yesterday`, is shown as it is.
  */
 export function shownTime(at: string, now = new Date()): string {
+  // A reply still arriving has no clock time. The turn line says what it is doing.
+  if (at === 'streaming') return '';
   if (!/^\d{4}-\d{2}-\d{2}T/.test(at)) return at;
   const date = new Date(at);
   if (Number.isNaN(date.getTime())) return at;

@@ -220,6 +220,20 @@ export async function updateInstalled(
     out = process.stdout,
   }: { root?: string; out?: UpdateOutput } = {},
 ): Promise<number> {
+  if (args.includes('--help') || args.includes('-h')) {
+    out.write(
+      [
+        'usage: circle update [version] [--check]',
+        '',
+        'Download a Circle release and install it over this installation.',
+        '  circle update           the latest release',
+        '  circle update 1.2.3     that version',
+        '  circle update --check   print the installed and available versions',
+        '',
+      ].join('\n'),
+    );
+    return 0;
+  }
   const check = args.includes('--check');
   // `--version X` is how the Python releases took a version.
   const versions = args.flatMap((arg, index) =>

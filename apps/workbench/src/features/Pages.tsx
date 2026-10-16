@@ -80,6 +80,7 @@ import { VariablesSettings } from './VariablesSettings';
 import { SessionMenu } from '../components/SessionMenus';
 import {
   canArchiveSession,
+  sessionActivityAt,
   visibleSessions,
 } from '../model/session-management';
 import { openHome } from './home-selection';
@@ -212,7 +213,7 @@ function SessionsPage({ onSession, onDialog }: Props) {
                       (workspace) => workspace.id === session.workspaceId,
                     ) ?? { name: '' },
                   )}{' '}
-                  · {shownTime(session.updatedAt)}
+                  · {shownTime(sessionActivityAt(session))}
                 </small>
               </span>
               {session.id === current.id && (

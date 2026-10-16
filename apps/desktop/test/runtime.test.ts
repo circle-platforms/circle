@@ -1724,6 +1724,50 @@ test('cancel aborts the model, invalidates the interaction, and preserves raw hi
   );
 });
 
+test('stopping mid-stream keeps the partial reply and marks the turn interrupted', async (t) => {
+  const f = await setup(t, [
+    (request) =>
+      new Promise((_resolve, reject) => {
+        request.token('partial');
+        request.signal.addEventListener('abort', () => {
+          request.token(' LATE');
+          reject(request.signal.reason ?? Error('Interrupted'));
+        });
+      }),
+  ]);
+  assert.equal(
+    (
+      await f.call('prompt', {
+        text: 'explain the files in this workspace please',
+      })
+    ).ok,
+    true,
+  );
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .sessions.some((session) =>
+          session.messages.some((message) => message.text.includes('partial')),
+        ),
+    'partial text',
+  );
+  assert.equal((await f.call('abort')).ok, true);
+  await wait(() => activeSession(f).state === 'idle', 'the stopped turn');
+  const session = activeSession(f);
+  const reply = session.messages.find(
+    (message) => message.role === 'assistant',
+  );
+  assert.equal(reply?.text, 'partial');
+  assert.equal(reply?.usage?.estimated, true);
+  assert.ok(
+    session.messages.some((message) => message.text === '✖ Interrupted'),
+  );
+  assert.equal(session.meters?.cache, 'N/A');
+  if (session.meters?.cost.includes('$'))
+    assert.match(session.meters.cost, /^~/);
+});
+
 test('checkpoint branches, import and restart preserve native identities and model inputs', async (t) => {
   const f = await setup(t, [
     { message: assistant('first answer') },

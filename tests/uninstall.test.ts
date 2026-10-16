@@ -231,6 +231,23 @@ test('circle uninstall stops when the program does not run from the installation
   assert.equal(existsSync(join(inst.prefix, 'installation.json')), true);
 });
 
+test('circle uninstall --help explains what is removed and exits 0', async () => {
+  let text = '';
+  const code = await uninstallInstalled(['--help'], {
+    env: {},
+    out: {
+      write: (chunk: string) => {
+        text += chunk;
+      },
+      isTTY: false,
+    } as NodeJS.WriteStream,
+  });
+  assert.equal(code, 0);
+  assert.match(text, /usage: circle uninstall/);
+  assert.match(text, /data folder/);
+  assert.match(text, /--purge/);
+});
+
 test('circle uninstall rejects an unknown option before anything else', async () => {
   await assert.rejects(
     uninstallInstalled(['--force'], { env: {} }),

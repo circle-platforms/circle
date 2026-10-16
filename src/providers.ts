@@ -29,6 +29,8 @@ const SEARCH_ADAPTERS: Readonly<Record<string, NativeSearchAdapter>> = {
   'ark-anthropic': 'anthropic',
   bailian: 'bailian',
   zhipu: 'zhipu',
+  // The Anthropic route has no web_search tool. Search uses the same key on paas v4.
+  'zhipu-anthropic': 'zhipu',
   gemini: 'gemini',
   moonshot: 'kimi',
   groq: 'groq',

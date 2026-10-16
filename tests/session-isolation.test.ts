@@ -657,3 +657,142 @@ test('settings changes from real concurrent processes retain every read-modify-w
   assert.equal(saved.counter, 30);
   assert.deepEqual(saved.variables, { A: '15', B: '15' });
 });
+
+test('an occupied session opens view-only and a turn names how to fork it', async (t) => {
+  const home = scratch(t),
+    workspace = scratch(t);
+  const owner = new AgentRuntime({
+    workspace,
+    home,
+    settings: defaultSettings(),
+    model: new ScriptedModel([
+      { message: { id: 'ok', role: 'assistant', content: 'stored reply' } },
+    ]),
+    headless: true,
+  });
+  cleanup(t, () => owner.close());
+  await owner.harness.run('hello from the owner');
+  const viewer = new AgentRuntime({
+    workspace,
+    home,
+    session: owner.session.id,
+    settings: defaultSettings(),
+    model: new ScriptedModel(),
+    headless: true,
+    inspect: true,
+  });
+  cleanup(t, () => viewer.close());
+  assert.equal(viewer.viewOnly, true);
+  assert.match(
+    viewer.harness.messages.map((message) => message.content).join('\n'),
+    /hello from the owner/,
+  );
+  assert.match(
+    viewer.harness.messages.map((message) => message.content).join('\n'),
+    /stored reply/,
+  );
+  await assert.rejects(
+    () => viewer.harness.run('continue here'),
+    /circle --fork/,
+  );
+  assert.equal(sessionOccupied(home, owner.session.id), true);
+  await viewer.close();
+  assert.equal(sessionOccupied(home, owner.session.id), true);
+});
+
+test('a background turn and its queue release the lock after the session leaves the screen', async (t) => {
+  const home = scratch(t),
+    workspace = scratch(t);
+  const first = gate();
+  const queued = gate();
+  const owner = new AgentRuntime({
+    workspace,
+    home,
+    settings: defaultSettings(),
+    model: new ScriptedModel([first.reply, queued.reply]),
+    headless: true,
+  });
+  cleanup(t, () => owner.close());
+  const running = owner.harness.run('hello from the owner');
+  await first.ready;
+  owner.harness.queue('and then', 'followUp');
+  owner.yieldLease();
+  assert.equal(sessionOccupied(home, owner.session.id), true);
+  first.finish();
+  await queued.ready;
+  assert.equal(sessionOccupied(home, owner.session.id), true);
+  queued.finish();
+  await running;
+  assert.equal(sessionOccupied(home, owner.session.id), false);
+  const next = new AgentRuntime({
+    workspace,
+    home,
+    session: owner.session.id,
+    settings: defaultSettings(),
+    model: new ScriptedModel([
+      { message: { id: 'next', role: 'assistant', content: 'taken over' } },
+    ]),
+    headless: true,
+  });
+  cleanup(t, () => next.close());
+  assert.equal(next.viewOnly, false);
+  assert.equal(sessionOccupied(home, owner.session.id), true);
+});
+
+test('coming back before a background turn finishes keeps the lock', async (t) => {
+  const home = scratch(t),
+    workspace = scratch(t);
+  const held = gate();
+  const owner = new AgentRuntime({
+    workspace,
+    home,
+    settings: defaultSettings(),
+    model: new ScriptedModel([held.reply]),
+    headless: true,
+  });
+  cleanup(t, () => owner.close());
+  const running = owner.harness.run('hello from the owner');
+  await held.ready;
+  owner.yieldLease();
+  assert.equal(owner.resumeLease(), true);
+  held.finish();
+  await running;
+  assert.equal(sessionOccupied(home, owner.session.id), true);
+});
+
+test('leaving an idle session releases it for another terminal', async (t) => {
+  const home = scratch(t),
+    workspace = scratch(t);
+  const owner = new AgentRuntime({
+    workspace,
+    home,
+    settings: defaultSettings(),
+    model: new ScriptedModel([
+      { message: { id: 'ok', role: 'assistant', content: 'stored reply' } },
+    ]),
+    headless: true,
+  });
+  cleanup(t, () => owner.close());
+  await owner.harness.run('hello from the owner');
+  assert.equal(sessionOccupied(home, owner.session.id), true);
+  owner.yieldLease();
+  assert.equal(sessionOccupied(home, owner.session.id), false);
+  const next = new AgentRuntime({
+    workspace,
+    home,
+    session: owner.session.id,
+    settings: defaultSettings(),
+    model: new ScriptedModel([
+      { message: { id: 'next', role: 'assistant', content: 'taken over' } },
+    ]),
+    headless: true,
+  });
+  cleanup(t, () => next.close());
+  assert.equal(next.viewOnly, false);
+  await next.harness.run('continue here');
+  assert.equal(owner.resumeLease(), false);
+  assert.equal(owner.viewOnly, true);
+  await next.close();
+  assert.equal(owner.resumeLease(), true);
+  assert.equal(owner.viewOnly, false);
+});
