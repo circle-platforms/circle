@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { journeyNodeCommand } from './native-journey-platform.mjs';
 export const commandHandoffPrompt =
@@ -137,7 +137,7 @@ export async function runNativeCommandHandoffJourney({
       (item) => item.id === ownSession.workspaceId,
     );
     assert(ownWorkspace);
-    assert.equal(ownWorkspace.path, workspace);
+    assert.equal(await realpath(ownWorkspace.path), await realpath(workspace));
     const pid = Number(
       await readFile(join(workspace, 'native-command-pid'), 'utf8'),
     );
