@@ -452,7 +452,7 @@ test('credential waits recheck the accepted candidate and authenticated pushes c
     );
     await git(['init', '--bare', remote], env, root);
     await git(['remote', 'add', 'origin', url], env, root);
-    const service = new GitWorkspaceService(root, { setUpstream: false });
+    const service = new GitWorkspaceService(root);
     const accepted = await service.snapshot();
     let release!: () => void;
     const held = new Promise<void>((resolve) => {
