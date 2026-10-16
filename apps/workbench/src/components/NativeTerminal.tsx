@@ -1,3 +1,4 @@
+import { useTerminalScreenReader } from '../terminal-accessibility';
 import {
   useCallback,
   useEffect,
@@ -1009,7 +1010,12 @@ function TerminalSurface({
 }) {
   const language = useLocale();
   const container = useRef<HTMLDivElement>(null);
+  const screenReaderMode = useTerminalScreenReader();
   const instance = useRef<{ terminal: Terminal; fit: FitAddon } | null>(null);
+  useEffect(() => {
+    if (instance.current)
+      instance.current.terminal.options.screenReaderMode = screenReaderMode;
+  }, [screenReaderMode]);
   const synchronizeRef = useRef<(() => void) | null>(null);
   const notifySearchesRef = useRef<(() => void) | null>(null);
   const activeRef = useRef(active);
@@ -1057,7 +1063,7 @@ function TerminalSurface({
     localizeTerminal();
     const terminal = new Terminal({
       cursorBlink: true,
-      screenReaderMode: true,
+      screenReaderMode,
       scrollback: 10000,
       fontFamily: getComputedStyle(document.documentElement)
         .getPropertyValue('--mono')

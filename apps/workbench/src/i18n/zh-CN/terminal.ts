@@ -1,4 +1,6 @@
 export const terminal: Record<string, string> = {
+  'terminal screen reader': '终端屏幕阅读支持',
+  'always on': '始终启用',
   'terminal closed': '终端已关闭',
 
   'session terminals': '会话终端',

@@ -49,7 +49,16 @@ export type UpdateState =
   | { phase: 'installing'; version: string }
   | { phase: 'failed'; version?: string; error: string; page?: string };
 export type UpdateAction = 'check' | 'download' | 'install';
+export interface NativeAccessibilityState {
+  supported: boolean;
+  enabled: boolean;
+  revision: number;
+}
 export interface DesktopBridge {
+  nativeAccessibility?: () => Promise<NativeAccessibilityState>;
+  onNativeAccessibility?: (
+    listener: (state: NativeAccessibilityState) => void,
+  ) => () => void;
   apiVersion: 1;
   info: () => Promise<DesktopInfo>;
   runtimeState: () => Promise<RuntimeUpdate>;

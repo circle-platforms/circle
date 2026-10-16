@@ -1,3 +1,4 @@
+import { setTerminalAccessibility } from '../src/terminal-accessibility';
 import { createRoot } from 'react-dom/client';
 import { CircleWorkbench } from '../src/workbench';
 import { PreviewRuntime } from '../src/model/state';
@@ -122,9 +123,32 @@ window.circleDesktop = {
     return { ok: true, data: item };
   },
 } as unknown as NonNullable<Window['circleDesktop']>;
+const accessibilityListeners = new Set<
+  (state: { supported: boolean; enabled: boolean; revision: number }) => void
+>();
+let accessibility = { supported: true, enabled: true, revision: 0 };
+if (query.has('accessibility'))
+  Object.assign(window.circleDesktop!, {
+    nativeAccessibility: async () => accessibility,
+    onNativeAccessibility: (
+      listener: (state: typeof accessibility) => void,
+    ) => {
+      accessibilityListeners.add(listener);
+      return () => accessibilityListeners.delete(listener);
+    },
+  });
 connectWorkspaceStreams(workspaceId, 'A');
 Object.assign(window, {
   terminalTabsFixture: {
+    accessibility: (enabled: boolean, supported = true) => {
+      accessibility = {
+        enabled,
+        supported,
+        revision: accessibility.revision + 1,
+      };
+      for (const listener of accessibilityListeners) listener(accessibility);
+    },
+    accessibilityChoice: setTerminalAccessibility,
     log: () => {
       const item = items.at(-1)!;
       item.lastSequence++;

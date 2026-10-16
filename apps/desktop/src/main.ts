@@ -671,6 +671,24 @@ app
       workspaceSelections.set(listed.id, listed.path);
       return listed;
     });
+    let accessibilityRevision = 0;
+    const nativeAccessibility = () => ({
+      supported: process.platform === 'darwin' || process.platform === 'win32',
+      enabled:
+        process.platform === 'darwin' || process.platform === 'win32'
+          ? app.isAccessibilitySupportEnabled()
+          : true,
+      revision: accessibilityRevision,
+    });
+    handle('circle:native-accessibility', () => nativeAccessibility());
+    app.on('accessibility-support-changed', () => {
+      accessibilityRevision++;
+      if (window && !window.isDestroyed())
+        window.webContents.send(
+          'circle:native-accessibility-changed',
+          nativeAccessibility(),
+        );
+    });
     handle('circle:set-language', (value) => {
       if (!isNativeLocale(value)) throw Error('invalid language');
       interfaceLocale = value;

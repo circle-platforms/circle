@@ -1,3 +1,7 @@
+import {
+  setTerminalAccessibility,
+  useTerminalAccessibilityChoice,
+} from '../terminal-accessibility';
 import { desktopHost, setDefaultWorkspace } from '../host';
 import { validateKeybindings } from '../model/shortcuts';
 import { usePlugins } from '../plugins/context';
@@ -1454,6 +1458,7 @@ const THEME_LABELS: Record<'auto' | 'light' | 'dark', () => string> = {
   dark: () => t('dark'),
 };
 function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
+  const terminalAccessibility = useTerminalAccessibilityChoice();
   const { snapshot, runtime, perform, notify } = useRuntime();
   const settings = snapshot.settings;
   const [bindings, setBindings] = useState(
@@ -1526,6 +1531,25 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
                   : language === 'zh-CN'
                     ? '简体中文'
                     : 'English'}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="setting-row">
+          <span>{t('terminal screen reader')}</span>
+          <div
+            className="segmented"
+            role="group"
+            aria-label={t('terminal screen reader')}
+          >
+            {(['auto', 'always'] as const).map((value) => (
+              <button
+                key={value}
+                aria-pressed={terminalAccessibility === value}
+                className={terminalAccessibility === value ? 'active' : ''}
+                onClick={() => setTerminalAccessibility(value)}
+              >
+                {value === 'auto' ? t('follow system') : t('always on')}
               </button>
             ))}
           </div>

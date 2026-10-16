@@ -22,6 +22,17 @@ const raiseBrowserError = (error: unknown): never => {
 };
 const bridge: DesktopBridge = {
   apiVersion: 1,
+  nativeAccessibility: () => ipcRenderer.invoke('circle:native-accessibility'),
+  onNativeAccessibility: (listener) => {
+    const handler = (_event: unknown, state: Parameters<typeof listener>[0]) =>
+      listener(state);
+    ipcRenderer.on('circle:native-accessibility-changed', handler);
+    return () =>
+      ipcRenderer.removeListener(
+        'circle:native-accessibility-changed',
+        handler,
+      );
+  },
   info: () => ipcRenderer.invoke('circle:info'),
   runtimeState: () => ipcRenderer.invoke('circle:runtime-state'),
   runtimeCommand: (command) =>
