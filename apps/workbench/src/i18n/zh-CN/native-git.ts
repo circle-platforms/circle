@@ -1,4 +1,11 @@
 export const nativeGit: Record<string, string> = {
+  'publication was sent, but GitHub has not confirmed the reviewed commit; refresh PR checks before retrying and do not repeat the push':
+    '发布请求已发送，但 GitHub 尚未确认已审阅的提交；请刷新 PR 检查后再决定下一步，不要重复推送',
+  'GitHub candidate changed or the revision is not the inspected opaque revision; read github_candidate and review its current head, revision and paths before publishing; nothing was pushed':
+    '候选内容已更改或检查标识已失效；请重新检查并审阅当前提交与文件后再发布；尚未推送任何内容',
+  'connect or reconnect GitHub in its plugin details before checking or publishing':
+    '请先前往 GitHub 插件详情连接或重新连接账户，再检查或发布',
+
   skipped: '已跳过',
   'open this workspace in Circle desktop, then refresh':
     '在 Circle 桌面端打开此工作区后刷新',
