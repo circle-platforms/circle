@@ -144,6 +144,8 @@ export interface Workspace {
   branch: string;
   trusted: boolean;
   origin?: 'native' | 'preview';
+  /** One task's own folder under the task folder: work with no project. */
+  task?: boolean;
   instructions: { name: string; content: string }[];
 }
 export interface WorkspaceFile {
@@ -292,6 +294,8 @@ export interface Settings {
    * changes through the native folder dialog, never through save-settings.
    */
   workspaceFolder: string;
+  /** Where a task with no project gets a folder of its own. */
+  taskFolder?: string;
   /**
    * The built-in scratch folder's path while a different default workspace is
    * configured and the scratch folder still holds files: changing the default

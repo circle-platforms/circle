@@ -102,6 +102,16 @@ Changing the folder moves no files:
 
 Session history, the `projects/` offload folders and updates stay in the data folder wherever the default workspace lives.
 
+## Tasks with no project
+
+A task that belongs to no project gets a folder of its own, so its files and its history sit apart from your projects and one task can be deleted whole. Those folders live under the **task folder**: `tasks` inside the data folder at first; settings → tasks with no project → change… points it somewhere else, on another drive if you like. The choice is saved as `task_folder` in the data folder's `settings.json`; the app refuses its own data folder, a folder inside it and a folder containing it.
+
+Starting a new session while the app sits in its default workspace — nothing of yours opened — makes the task's folder, trusts it as the app trusts its own scratch folder, and starts the session there. A new session inside a project you opened stays with that project. The sidebar lists these tasks under **no project**, after your folders, each with its own folder name (`2026-10-15-1f2e3d`).
+
+The terminal reaches the same place with one flag: `circle --task [name]` works in `<task folder>/<name>`, making and trusting it. Without the flag it still works in the folder you started it in. See [Arguments and options](cli.md#arguments-and-options).
+
+Circle keeps each task's conversation in `projects/` inside the data folder, as it does for any folder: deleting the task's folder takes its files and leaves that record until you clear it too. See [Known issues](known-issues.md).
+
 ## Variables
 
 Settings → variables lists names and values as Windows lists environment variables, with **new…**, **edit…** and **delete** under each table; double-click a row to edit it. The model writes `%NAME%` in any tool's arguments and Circle puts the value in when the tool runs. The first table holds plain variables, whose values the model is told; they are `variables` in `settings.json`. The second holds secrets, whose values the model never sees and the page never shows again: to change one, enter a new value, or leave the value empty to keep it when you only rename it. In the dialog, **secret** decides which: it is ticked by itself for a name with a part such as `PASSWORD`, `TOKEN` or `KEY`, and ticking it while you edit a plain variable moves that variable to the secrets in one step. See [Secrets by name](security.md#secrets-by-name).

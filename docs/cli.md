@@ -54,6 +54,7 @@ circle -p "review this" @src/app.ts "now list the risks"
 | `--yolo` | With `-p`, `--line` or `--mode`: run commands and file changes without asking. See [Print mode](#print-mode). |
 | `--verbose` | With `-p` or `--line`: show each tool call, calls not run, failed results, retries and the tokens used on standard error. |
 | `-v`, `--version` | Print the version and exit. |
+| `--task [NAME]` | Work in a folder of Circle's own under the task folder, named `NAME` or today's date and a short id: for work that belongs to no project. The folder is made and trusted. Without the flag, Circle still works in the folder you started it in. See [Tasks with no project](desktop.md#tasks-with-no-project). |
 | `--print-home` | Print the data folder (see [Configuration](configuration.md#where-circle-keeps-things)) and exit. Nothing is created. |
 | `--init` | Run model setup again, even if Circle is already set up. See [Setting up again](#setting-up-again). |
 | `--line` | Use the plain line-by-line mode instead of the full-screen interface. |

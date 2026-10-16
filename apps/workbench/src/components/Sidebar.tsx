@@ -1,5 +1,5 @@
 import { desktopHost, openNativeWorkspace } from '../host';
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   Plus,
@@ -82,6 +82,8 @@ export function Sidebar({
         (value, session) => Math.max(value, Date.parse(session.updatedAt) || 0),
         0,
       );
+  // Projects first; the folders of tasks with no project come last, under their own
+  // heading, so a loose task is not dressed up as a project.
   const projects = snapshot.workspaces
     .filter((workspace) =>
       snapshot.sessions.some(
@@ -94,7 +96,8 @@ export function Sidebar({
         ? -1
         : b.id === current.workspaceId
           ? 1
-          : latest(b.id) - latest(a.id),
+          : Number(Boolean(a.task)) - Number(Boolean(b.task)) ||
+            latest(b.id) - latest(a.id),
     );
   const waiting = new Set(
     snapshot.interactions
@@ -167,7 +170,8 @@ export function Sidebar({
         </nav>
       )}
       <div className="project-list">
-        {projects.map((workspace) => {
+        {projects.map((workspace, at) => {
+          const firstTask = workspace.task && !projects[at - 1]?.task;
           const sessions = snapshot.sessions
             .filter(
               (session) =>
@@ -180,88 +184,96 @@ export function Sidebar({
             );
           const open = all.includes(workspace.id);
           return (
-            <section className="project" key={workspace.id}>
-              <div className="project-header" title={workspace.path}>
-                <button
-                  className="project-name"
-                  aria-expanded={!collapsed.includes(workspace.id)}
-                  onClick={() =>
-                    setCollapsed((ids) =>
-                      ids.includes(workspace.id)
-                        ? ids.filter((id) => id !== workspace.id)
-                        : [...ids, workspace.id],
-                    )
-                  }
-                >
-                  {workspace.name}
-                </button>
-                <div className="project-actions">
-                  <IconButton
-                    label={t('new session in {name}', { name: workspace.name })}
-                    onClick={() => newSession(workspace.id)}
-                  >
-                    <Plus size={13} />
-                  </IconButton>
-                  <WorkspaceMenu
-                    workspace={workspace}
-                    onNew={() => newSession(workspace.id)}
-                    onCollapseAll={() =>
-                      setCollapsed(projects.map((item) => item.id))
-                    }
-                  />
-                </div>
-              </div>
-              {(collapsed.includes(workspace.id)
-                ? []
-                : open
-                  ? sessions
-                  : sessions.slice(0, SHOWN)
-              ).map((session) => (
-                <div className="session-row" key={session.id}>
-                  <NavLink
-                    className={({ isActive }) =>
-                      isActive ? 'session-link active' : 'session-link'
-                    }
-                    to={`/session/${session.id}`}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      perform(async () => {
-                        await goSession(session.id);
-                      });
-                    }}
-                  >
-                    <span>{sessionTitle(session.title)}</span>
-                    {waiting.has(session.id) ? (
-                      <i className="attention-dot" />
-                    ) : session.state === 'waiting' ? (
-                      <i className="running-dot" />
-                    ) : null}
-                  </NavLink>
-                  <SessionMenu
-                    session={session}
-                    onDialog={(dialog, selection) =>
-                      onDialog?.(dialog, selection)
-                    }
-                  />
-                </div>
-              ))}
-              {!collapsed.includes(workspace.id) && sessions.length > SHOWN && (
-                <button
-                  className="text-button show-more"
-                  onClick={() =>
-                    setAll(
-                      open
-                        ? all.filter((id) => id !== workspace.id)
-                        : [...all, workspace.id],
-                    )
-                  }
-                >
-                  {open
-                    ? t('show less')
-                    : t('show {n} more', { n: sessions.length - SHOWN })}
-                </button>
+            <Fragment key={workspace.id}>
+              {firstTask && (
+                <div className="section-label">{t('no project')}</div>
               )}
-            </section>
+              <section className="project">
+                <div className="project-header" title={workspace.path}>
+                  <button
+                    className="project-name"
+                    aria-expanded={!collapsed.includes(workspace.id)}
+                    onClick={() =>
+                      setCollapsed((ids) =>
+                        ids.includes(workspace.id)
+                          ? ids.filter((id) => id !== workspace.id)
+                          : [...ids, workspace.id],
+                      )
+                    }
+                  >
+                    {workspace.name}
+                  </button>
+                  <div className="project-actions">
+                    <IconButton
+                      label={t('new session in {name}', {
+                        name: workspace.name,
+                      })}
+                      onClick={() => newSession(workspace.id)}
+                    >
+                      <Plus size={13} />
+                    </IconButton>
+                    <WorkspaceMenu
+                      workspace={workspace}
+                      onNew={() => newSession(workspace.id)}
+                      onCollapseAll={() =>
+                        setCollapsed(projects.map((item) => item.id))
+                      }
+                    />
+                  </div>
+                </div>
+                {(collapsed.includes(workspace.id)
+                  ? []
+                  : open
+                    ? sessions
+                    : sessions.slice(0, SHOWN)
+                ).map((session) => (
+                  <div className="session-row" key={session.id}>
+                    <NavLink
+                      className={({ isActive }) =>
+                        isActive ? 'session-link active' : 'session-link'
+                      }
+                      to={`/session/${session.id}`}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        perform(async () => {
+                          await goSession(session.id);
+                        });
+                      }}
+                    >
+                      <span>{sessionTitle(session.title)}</span>
+                      {waiting.has(session.id) ? (
+                        <i className="attention-dot" />
+                      ) : session.state === 'waiting' ? (
+                        <i className="running-dot" />
+                      ) : null}
+                    </NavLink>
+                    <SessionMenu
+                      session={session}
+                      onDialog={(dialog, selection) =>
+                        onDialog?.(dialog, selection)
+                      }
+                    />
+                  </div>
+                ))}
+                {!collapsed.includes(workspace.id) &&
+                  sessions.length > SHOWN && (
+                    <button
+                      className="text-button show-more"
+                      onClick={() =>
+                        setAll(
+                          open
+                            ? all.filter((id) => id !== workspace.id)
+                            : [...all, workspace.id],
+                        )
+                      }
+                    >
+                      {open
+                        ? t('show less')
+                        : t('show {n} more', { n: sessions.length - SHOWN })}
+                    </button>
+                  )}
+              </section>
+            </Fragment>
           );
         })}
         {desktopHost() && (

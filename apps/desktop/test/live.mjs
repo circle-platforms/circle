@@ -919,7 +919,16 @@ try {
   await page
     .getByRole('heading', { name: 'default workspace', exact: true })
     .waitFor();
-  await page.getByRole('button', { name: 'change…', exact: true }).click();
+  // Tasks with no project name their own folder here, with a picker of their own.
+  await page
+    .getByRole('heading', { name: 'tasks with no project', exact: true })
+    .waitFor();
+  // Two blocks of this page can change a folder: name which one is clicked.
+  await page
+    .locator('.settings-block')
+    .filter({ hasText: 'default workspace' })
+    .getByRole('button', { name: 'change…', exact: true })
+    .click();
   // The move crosses three processes, and perform() shows a failure only as a
   // toast for four seconds: collect them so a timeout says what the app saw.
   const toasts = new Set();

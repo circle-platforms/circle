@@ -479,7 +479,8 @@ app
       const command = validateRuntimeCommand(value);
       if (
         command.name === 'open-workspace' ||
-        command.name === 'set-default-workspace'
+        command.name === 'set-default-workspace' ||
+        command.name === 'set-task-folder'
       ) {
         const path = workspaceSelections.get(
           String(command.payload.workspaceGrant),
