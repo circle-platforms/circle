@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync, type ChildProcess } from 'node:child_process';
+import {
+  execFileSync,
+  spawn,
+  spawnSync,
+  type ChildProcess,
+} from 'node:child_process';
 import { X509Certificate } from 'node:crypto';
 import {
   existsSync,
@@ -26,7 +31,7 @@ import type {
 } from '../src/browser/protocol.js';
 import { emptyUsage } from '../src/types.js';
 import { getEventListeners } from 'node:events';
-import { cleanup, scratch as made } from './helpers.js';
+import { cleanup, cleanupServer, scratch as made } from './helpers.js';
 import {
   BrowserFixture,
   BrowserFixtureDeadline,
@@ -137,6 +142,44 @@ test(
     assert.equal(child.killed, true);
   },
 );
+
+test('close returns only after the browser it stopped has exited, and kills one that will not stop', async (t) => {
+  // Stand-ins for a browser that does not close when asked: one is slow to finish once it is
+  // stopped, as a loaded Windows machine was; the other ignores the stop.
+  const programs = {
+    slow: "process.on('SIGTERM', () => setTimeout(() => process.exit(0), 700));",
+    deaf: "process.on('SIGTERM', () => {});",
+  };
+  const root = made(t);
+  const stopped = await Promise.all(
+    Object.values(programs).map(async (program) => {
+      const child = spawn(
+        process.execPath,
+        ['-e', `${program} setInterval(() => {}, 1000); console.log('ready');`],
+        { stdio: ['ignore', 'pipe', 'ignore'] },
+      );
+      t.after(() => void child.kill('SIGKILL'));
+      await new Promise((resolve) => child.stdout.once('data', resolve));
+      const chrome = new ChromeBrowser({
+        executable: process.execPath,
+        headless: true,
+        downloads: join(root, 'downloads'),
+      });
+      (chrome as unknown as { child: ChildProcess }).child = child;
+      await chrome.close();
+      return child;
+    }),
+  );
+  for (const child of stopped) {
+    assert.ok(child.exitCode !== null || child.signalCode !== null);
+    assert.throws(() => process.kill(child.pid!, 0), { code: 'ESRCH' });
+  }
+  if (process.platform !== 'win32') {
+    const [slow, deaf] = stopped;
+    assert.equal(slow!.exitCode, 0);
+    assert.equal(deaf!.signalCode, 'SIGKILL');
+  }
+});
 
 const listen = (server: Server) =>
   new Promise<number>((resolve) =>
@@ -388,6 +431,7 @@ function browserFixture(
 ) {
   const internal = chrome as unknown as {
     child?: ChildProcess;
+    ownedRoots?: Set<ChildProcess>;
     conversations: Map<
       string,
       {
@@ -409,6 +453,7 @@ function browserFixture(
     budgetMs,
     report,
     close: () => chrome.close(),
+    ownedRoots: () => [...(internal.ownedRoots ?? []), internal.child],
     state: () => ({
       process: internal.child
         ? {
@@ -446,7 +491,7 @@ test(
       res.end('<!doctype html><title>local pending fixture</title>');
     });
     const url = `http://127.0.0.1:${await listen(site)}`;
-    t.after(() => site.close());
+    cleanupServer(t, site);
     const chrome = new ChromeBrowser({
       executable: executable!,
       headless: true,
@@ -514,7 +559,7 @@ test(
         fallbackClose = fixture.close();
         fallbackClose.catch(() => {});
       },
-      200 + 2000 + 3000 + 1000,
+      200 + 2000 + 3000 + 2000 + 1000 + 1000,
     );
     try {
       await assert.rejects(
@@ -534,6 +579,11 @@ test(
           assert.equal(error.fixturePhase.session, tab.session);
           assert.equal(error.fixturePhase.status, 'timeout');
           assert.ok(fixture.signal.aborted);
+          assert.equal(
+            Object.hasOwn(error, 'browserFixtureCleanup'),
+            false,
+            error,
+          );
           return true;
         },
       );
@@ -632,7 +682,7 @@ test(
         </script>`);
     });
     const url = `http://127.0.0.1:${await listen(site)}/`;
-    t.after(() => site.close());
+    cleanupServer(t, site);
     const chrome = new ChromeBrowser({
       executable: executable!,
       headless: true,
@@ -924,10 +974,8 @@ test(
     const devices = [device(), device()];
     const http = `http://127.0.0.1:${await listen(site)}`;
     const ports = await Promise.all(devices.map(listen));
-    t.after(() => {
-      site.close();
-      for (const server of devices) server.close();
-    });
+    cleanupServer(t, site);
+    for (const server of devices) cleanupServer(t, server);
     const trustFile = join(temp, 'browser-certificates.json');
     const downloads = join(temp, 'downloads');
     const traces = new WeakMap<
@@ -1538,7 +1586,7 @@ test(
       },
     );
     const url = `https://127.0.0.1:${await listen(device)}/`;
-    t.after(() => device.close());
+    cleanupServer(t, device);
     const chrome = new ChromeBrowser({
       executable: executable!,
       trustFile: join(temp, 'certificates.json'),
@@ -1674,17 +1722,27 @@ test(
   { skip },
   async (t) => {
     const temp = made(t, 'circle-chrome-handoff-');
+    const responses = new Set<ReturnType<typeof setTimeout>>();
     const site = createHttp((req, res) => {
       res.writeHead(200, { 'content-type': 'text/html' });
       const finish = () =>
         res.end(
           `<!doctype html><title>${req.url === '/b' ? 'Signed in' : 'Sign in'}</title><input aria-label="Code">`,
         );
-      if (req.url === '/b') setTimeout(finish, 1500);
-      else finish();
+      if (req.url === '/b') {
+        const timer = setTimeout(() => {
+          responses.delete(timer);
+          finish();
+        }, 1500);
+        responses.add(timer);
+      } else finish();
     });
     const base = `http://127.0.0.1:${await listen(site)}`;
-    t.after(() => site.close());
+    cleanupServer(t, site);
+    cleanup(t, () => {
+      for (const timer of responses) clearTimeout(timer);
+      responses.clear();
+    });
     const reasons: string[] = [];
     const chrome: ChromeBrowser = new ChromeBrowser({
       executable: executable!,
@@ -1793,7 +1851,7 @@ test(
       res.end('data');
     });
     const url = `http://127.0.0.1:${await listen(site)}/download`;
-    t.after(() => site.close());
+    cleanupServer(t, site);
     const downloads = join(temp, 'downloads');
     const chrome = new ChromeBrowser({
       executable: executable!,
@@ -1887,10 +1945,8 @@ test(
     });
     const base = `http://127.0.0.1:${await listen(site)}`;
     otherBase = `http://127.0.0.1:${await listen(other)}`;
-    t.after(() => {
-      site.close();
-      other.close();
-    });
+    cleanupServer(t, site);
+    cleanupServer(t, other);
     const downloads = join(temp, 'downloads');
     const chrome = new ChromeBrowser({
       executable: executable!,
@@ -2128,7 +2184,7 @@ test(
       );
     });
     const menu = `http://127.0.0.1:${await listen(site)}/menu`;
-    t.after(() => site.close());
+    cleanupServer(t, site);
     const chrome = new ChromeBrowser({
       executable: executable!,
       headless: true,
@@ -2292,10 +2348,7 @@ test(
       },
     );
     const port = await listen(server as unknown as Server);
-    cleanup(
-      t,
-      () => new Promise<void>((resolve) => server.close(() => resolve())),
-    );
+    cleanupServer(t, server);
     const chrome = new ChromeBrowser({
       executable: executable!,
       headless: true,
@@ -2416,7 +2469,7 @@ test(
       );
     });
     const base = `http://127.0.0.1:${await listen(site)}`;
-    t.after(() => site.close());
+    cleanupServer(t, site);
     let mode = 'auto';
     let closed = false;
     const chrome: ChromeBrowser = new ChromeBrowser({
@@ -2537,7 +2590,7 @@ test(
       },
     );
     const url = `https://127.0.0.1:${await listen(device)}/form`;
-    t.after(() => device.close());
+    cleanupServer(t, device);
     const settings = trustFolder(defaultSettings(), temp);
     settings.variables = { LAB_USER: 'operator' };
     const browser = () => {
@@ -2724,7 +2777,7 @@ test(
       res.end('late bytes');
     });
     const url = `http://127.0.0.1:${await listen(site)}/download`;
-    t.after(() => site.close());
+    cleanupServer(t, site);
     const chrome = new ChromeBrowser({
       executable: executable!,
       headless: true,
@@ -2743,7 +2796,10 @@ test(
     };
     const event = internals.event.bind(chrome);
     const timers: ReturnType<typeof setTimeout>[] = [];
-    t.after(() => timers.forEach(clearTimeout));
+    cleanup(t, () => {
+      timers.forEach(clearTimeout);
+      timers.length = 0;
+    });
     internals.event = (pipe, value) => {
       if (value.method.startsWith('Browser.download'))
         timers.push(setTimeout(() => event(pipe, value), 1600));
@@ -2786,7 +2842,7 @@ test(
       }
     });
     const base = `http://127.0.0.1:${await listen(site)}`;
-    t.after(() => site.close());
+    cleanupServer(t, site);
     const downloads = join(temp, 'downloads');
     const chrome = new ChromeBrowser({
       executable: executable!,
@@ -2843,7 +2899,7 @@ test(
       );
     });
     const url = `http://127.0.0.1:${await listen(site)}/`;
-    t.after(() => site.close());
+    cleanupServer(t, site);
     const chrome = new ChromeBrowser({
       executable: executable!,
       headless: true,
@@ -2967,7 +3023,7 @@ test(
       );
     });
     const url = `http://127.0.0.1:${await listen(site)}/`;
-    t.after(() => site.close());
+    cleanupServer(t, site);
     const chrome = new ChromeBrowser({
       executable: executable!,
       headless: true,
@@ -3023,7 +3079,7 @@ test(
       );
     });
     const url = `http://127.0.0.1:${await listen(site)}/`;
-    t.after(() => site.close());
+    cleanupServer(t, site);
     const chrome = new ChromeBrowser({
       executable: executable!,
       headless: true,
@@ -3089,7 +3145,7 @@ test(
       );
     });
     const url = `http://127.0.0.1:${await listen(site)}/`;
-    t.after(() => site.close());
+    cleanupServer(t, site);
     const chrome = new ChromeBrowser({
       executable: executable!,
       headless: true,

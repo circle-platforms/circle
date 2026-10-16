@@ -459,8 +459,37 @@ try {
   // Open folder sits in the sidebar, under the folders and their sessions.
   await page.getByRole('button', { name: 'open folder', exact: true }).click();
   await page
-    .getByRole('heading', { name: 'new session', exact: true })
+    .getByRole('heading', {
+      name: 'what should we build in project?',
+      exact: true,
+    })
     .waitFor();
+  const sessionsBeforeSend = (
+    await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('circle.workbench.preview.v1')),
+    )
+  ).sessions.length;
+  await page
+    .getByRole('textbox', { name: 'message', exact: true })
+    .fill('look at hello');
+  await page.getByRole('button', { name: 'send message', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: 'workspace trust', exact: true })
+    .waitFor();
+  await page
+    .getByRole('button', { name: 'trust in preview', exact: true })
+    .click();
+  await page
+    .getByRole('heading', { name: 'look at hello', exact: true })
+    .waitFor();
+  assert.equal(
+    (
+      await page.evaluate(() =>
+        JSON.parse(localStorage.getItem('circle.workbench.preview.v1')),
+      )
+    ).sessions.length,
+    sessionsBeforeSend + 1,
+  );
   // The side panel starts closed; the top bar's files icon opens it.
   const files = page.getByRole('button', { name: 'files panel', exact: true });
   if ((await files.getAttribute('aria-pressed')) !== 'true')
@@ -507,22 +536,22 @@ try {
         .isChecked(),
       false,
     );
-  // The circle-server interface and the four platform objects are paired with its
+  // The hub interface and the four platform objects are paired with its
   // runtime extension, which the preview does not have, so they stay off.
   assert.equal(
     await page
       .getByRole('checkbox', {
-        name: 'enable circle-server interface',
+        name: 'enable hub interface',
         exact: true,
       })
       .isChecked(),
     false,
   );
   const pairedNotes = page.getByText(
-    /paired with runtime extension circle-server · 0\.1\.0 · runtime extension circle-server is not installed/,
+    /paired with runtime extension hub · 0\.1\.0 · runtime extension hub is not installed/,
   );
   await pairedNotes.first().waitFor();
-  // circle-server and the four platform objects share one runtime extension.
+  // hub and the four platform objects share one runtime extension.
   assert.equal(await pairedNotes.count(), 5);
   for (const id of ['knowledge', 'work', 'execution', 'methods'])
     assert.equal(
@@ -569,7 +598,7 @@ try {
   });
   page = await app.firstWindow();
   await page
-    .getByRole('heading', { name: 'new session', exact: true })
+    .getByRole('heading', { name: 'look at hello', exact: true })
     .waitFor();
   const reopened = await page.evaluate(() =>
     JSON.parse(localStorage.getItem('circle.workbench.preview.v1')),

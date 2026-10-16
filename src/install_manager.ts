@@ -42,7 +42,16 @@ const where = surroundings();
 if (prefixArgument) where.prefix = prefixArgument;
 if (binArgument) where.binDir = binArgument;
 const copies = findPythonCopies(where);
-const running = runningCopies(copies, where);
+let running: number[];
+try {
+  running = runningCopies(copies, where);
+} catch (error) {
+  process.stderr.write(
+    `[circle-install] the Python circle may still be running: ${error instanceof Error ? error.message : String(error)}. ` +
+      'Close those sessions, then run the installer again. Nothing was changed.\n',
+  );
+  process.exit(1);
+}
 if (running.length) {
   process.stderr.write(
     `[circle-install] the Python circle is still running (process ${running.join(', ')}). ` +

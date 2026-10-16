@@ -6,6 +6,7 @@ import { fullTime, shownTime } from '../model/time';
 import { FileChip, IconButton } from './common';
 import { Markdown } from './Markdown';
 import { t } from '../i18n';
+import { useSessionDisclosure } from '../model/presentation';
 
 /**
  * A message as Claude shows one: yours in a bubble on the right, Circle's as plain text
@@ -21,12 +22,20 @@ export function MessageView({
   onAttachment: () => void;
 }) {
   const { notify } = useRuntime();
+  const [thinkingOpen, setThinkingOpen] = useSessionDisclosure(
+    'thinking:' + message.id,
+  );
   const preview = message.thinking?.trim().split('\n')[0]?.slice(0, 120);
   return (
     <article className={`message ${message.role}`}>
       {message.thinking && showThinking && (
-        <details className="thinking">
-          <summary>
+        <details className="thinking" open={thinkingOpen}>
+          <summary
+            onClick={(event) => {
+              event.preventDefault();
+              setThinkingOpen(!thinkingOpen);
+            }}
+          >
             <Brain size={13} />
             <span>{t('thinking')}</span>
             <span className="thinking-preview">{preview}</span>

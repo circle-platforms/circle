@@ -350,7 +350,10 @@ export class BrowserSessions {
     if (!this.window.isDestroyed()) this.emit(this.state(id));
   }
   // ---- conversations and tabs
+  private deletedSessions = new Set<string>();
+  private retiringContents = new Map<string, Set<WebContents>>();
   private conversation(id: string): Conversation {
+    if (this.deletedSessions.has(id)) throw Error('this session was deleted');
     if (this.closed) throw Error('the browser is closed');
     let conversation = this.conversations.get(id);
     if (!conversation) {
@@ -3019,6 +3022,50 @@ export class BrowserSessions {
         signal,
       ),
     };
+  }
+  /** Retire only this conversation; other sessions keep their pages and approvals. */
+  async deleteSession(id: string): Promise<void> {
+    this.deletedSessions.add(id);
+    const conversation = this.conversations.get(id);
+    if (!conversation) return;
+    clearInterval(conversation.autoReturn);
+    for (const wake of conversation.handedBack) wake();
+    conversation.handedBack.clear();
+    const mask = conversation.mask;
+    const contents = this.retiringContents.get(id) ?? new Set<WebContents>();
+    for (const tab of conversation.tabs.values()) contents.add(tab.contents);
+    if (mask) contents.add(mask.webContents);
+    this.retiringContents.set(id, contents);
+    const stopped = Promise.all(
+      [...contents]
+        .filter((content) => !content.isDestroyed())
+        .map(
+          (content) =>
+            new Promise<void>((resolve, reject) => {
+              const timer = setTimeout(() => {
+                content.removeListener('destroyed', done);
+                reject(Error('session browser did not close'));
+              }, 5000);
+              const done = () => {
+                clearTimeout(timer);
+                resolve();
+              };
+              content.once('destroyed', done);
+            }),
+        ),
+    );
+    void stopped.catch(() => {});
+    if (mask && !mask.webContents.isDestroyed()) mask.webContents.close();
+    for (const tab of [...conversation.tabs.values()])
+      this.closeTab(conversation, tab, 'the session was deleted');
+    for (const content of contents)
+      if (!content.isDestroyed()) content.close({ waitForBeforeUnload: false });
+    for (const hold of [...conversation.holds])
+      this.decideHold(conversation, hold, false, false);
+    await stopped;
+    this.retiringContents.delete(id);
+    this.exceptions.delete(id);
+    this.conversations.delete(id);
   }
   close() {
     this.closed = true;

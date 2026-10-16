@@ -52,6 +52,7 @@ circle -p "review this" @src/app.ts "now list the risks"
 | `-xt`, `--exclude-tools LIST` | The model does not get these tools. |
 | `-nt`, `--no-tools` | The model gets no tools. |
 | `--yolo` | With `-p`, `--line` or `--mode`: run commands and file changes without asking. See [Print mode](#print-mode). |
+| `--extensions` | With `-p`, `--line` or `--mode`: load MCP servers and enabled extensions, which print, line and rpc modes otherwise leave out. See [Print mode](#print-mode). |
 | `--verbose` | With `-p` or `--line`: show each tool call, calls not run, failed results, retries and the tokens used on standard error. |
 | `-v`, `--version` | Print the version and exit. |
 | `--print-home` | Print the data folder (see [Configuration](configuration.md#where-circle-keeps-things)) and exit. Nothing is created. |
@@ -88,7 +89,7 @@ A question from the model comes back to it as text, and it asks the question in 
 
 [Background jobs](background-jobs.md) the model started (commands, subagents, watches) are waited for after its answer: when one ends, the model gets its notice and answers again, and that answer is the one printed. The wait lasts up to `CIRCLE_JOB_WAIT` seconds (1800 by default, `0` does not wait) and ten such answers; what still runs then is stopped. Processes a command left running, usually servers, are stopped at once. Background subagents follow the same approval rule.
 
-Print mode does not load MCP servers, extensions or custom commands. It does apply `credential_files` and a project's `.circle/settings.json`. The conversation is saved, so `circle -c` (with or without `-p`) can go on with it.
+Print mode does not load MCP servers, extensions or custom commands, unless you add `--extensions`: then MCP servers and enabled extensions load before the first prompt, as in the full-screen interface, and their tools are there from the first turn. Custom commands still are not. It does apply `credential_files` and a project's `.circle/settings.json`. The conversation is saved, so `circle -c` (with or without `-p`) can go on with it.
 
 Print mode, line mode and RPC mode need Circle set up and the folder trusted. When standard input is a terminal, they ask the setup and trust questions line by line first; otherwise they stop with exit code `2`.
 
@@ -167,7 +168,7 @@ Line mode reads one prompt per line and prints each answer, all in one conversat
 printf 'Summarize README.md in one sentence\nNow list its sections\n' | circle ~/code/my-project
 ```
 
-Approvals follow the same rules as print mode, and `--yolo` and `--verbose` work the same way. When a [background job](background-jobs.md) ends, standard error says so (`Background job j3 ended.`); the model reads its notice with your next line. Leaving stops the jobs still running. It does not load MCP servers, extensions, or custom commands. `/exit` (`/quit`, `/q`) leaves and `/help` lists those two. Any other line shaped like a command, such as `/compact` or a misspelt one, is not sent: standard error says it works in the full-screen interface only. A path such as `/usr/bin/env is missing`, or a line that starts with a space, is sent as a message.
+Approvals follow the same rules as print mode, and `--yolo` and `--verbose` work the same way. When a [background job](background-jobs.md) ends, standard error says so (`Background job j3 ended.`); the model reads its notice with your next line. Leaving stops the jobs still running. It does not load MCP servers, extensions, or custom commands, unless you add `--extensions` (custom commands never). `/exit` (`/quit`, `/q`) leaves and `/help` lists those two. Any other line shaped like a command, such as `/compact` or a misspelt one, is not sent: standard error says it works in the full-screen interface only. A path such as `/usr/bin/env is missing`, or a line that starts with a space, is sent as a message.
 
 ## Exit codes
 

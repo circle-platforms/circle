@@ -45,6 +45,8 @@ function session(
   cleanup(t, () => {
     if (ui.flashTimer) clearTimeout(ui.flashTimer);
     ui.input.close();
+    for (const view of ui.views.values()) view.interactions.close();
+    return ui.sessions?.close();
   });
   const parser = new InputParser();
   /** Bytes as a terminal sends them, through the real parser and key handling. */
@@ -293,7 +295,7 @@ test('a long paste becomes a placeholder: the model reads the paste, the transcr
   picker()!.handle('enter', '');
   await until(() => app.state.draft === '[Pasted text #3 +3 lines] explain');
   feed('\r');
-  await until(() => model.requests.length === 3 && !runtime.busy);
+  await until(() => model.requests.length === 3 && !app.runtime!.busy);
   assert.equal(
     model.requests[2]!.messages.at(-1)!.content,
     'line a\nline b\nline c\nline d explain',

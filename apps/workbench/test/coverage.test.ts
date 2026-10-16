@@ -39,9 +39,9 @@ test('all configurable Circle key actions are represented', () => {
     'utf8',
   );
   const section = docs
-    .split('| Action | Default key |')[1]!
+    .split(/^\|\s*Action\s*\|\s*Default key\s*\|\s*$/m)[1]!
     .split('## Which key wins')[0]!;
-  const actions = [...section.matchAll(/^\| `([^`]+)` \|/gm)].map(
+  const actions = [...section.matchAll(/^\|\s*`([^`]+)`\s*\|/gm)].map(
     (item) => item[1],
   );
   assert.deepEqual(Object.keys(KEY_ACTIONS).sort(), actions.sort());

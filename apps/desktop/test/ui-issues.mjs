@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { readModelRequests } from './helpers/model-requests.mjs';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
 const temp = await mkdtemp(join(tmpdir(), 'circle-ui-issues-'));
@@ -136,8 +137,7 @@ try {
   const plan = page.getByRole('region', { name: 'plan steps' });
   await plan.waitFor();
   await until(
-    async () =>
-      (await readFile(requestsPath, 'utf8')).trim().split('\n').length >= 2,
+    async () => (await readModelRequests(requestsPath)).length >= 2,
     'waiting model request',
   );
   for (const theme of ['dark', 'light']) {
@@ -302,10 +302,9 @@ try {
     await readFile(join(workspace, 'activity.txt'), 'utf8'),
     'actual child bytes',
   );
-  const requests = (await readFile(requestsPath, 'utf8'))
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line));
+  const requests = await readModelRequests(requestsPath, {
+    requireComplete: true,
+  });
   assert(
     requests
       .at(-1)
@@ -335,6 +334,7 @@ try {
     'archived native conversation remains readable without a composer and restores explicitly',
   );
   assert.deepEqual(errors, []);
+  await readModelRequests(requestsPath, { requireComplete: true });
   await writeFile(
     join(output, 'receipt.json'),
     JSON.stringify(

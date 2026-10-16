@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import type {
@@ -24,6 +24,7 @@ import {
   MissingFinish,
   TextRepetitionLoop,
   type GuardOptions,
+  isThinkingSignatureError,
 } from './model_guard.js';
 import { parseToolInput } from './tool_call_compat.js';
 import { isRecord } from './settings.js';
@@ -37,6 +38,7 @@ import {
   openAIContent,
   anthropicContent,
 } from './model_media.js';
+import { orderModeToolResults } from './tool_history.js';
 export const EFFORT_LEVELS = [
   'minimal',
   'low',
@@ -54,6 +56,8 @@ export class GatewayModel implements ChatModel {
   effort: string;
   private readonly dropped = new Set<string>();
   private sentParameters = new Set<string>();
+  private readonly thinkingScope: string;
+  private readonly rejectedThinking = new Set<string>();
   private readonly guard: ModelGuard;
   readonly catalog: ModelCatalog;
   constructor(
@@ -71,6 +75,17 @@ export class GatewayModel implements ChatModel {
     const apiKey =
       credentials[settings.auth.api_key_ref] || credentials.api_key;
     if (!apiKey) throw new Error('missing API key; re-run circle --init');
+    // Keyed identity lets saved history detect account/endpoint/model changes without
+    // storing a key or endpoint in the transcript. Rotation conservatively drops replay.
+    this.thinkingScope = createHmac('sha256', apiKey)
+      .update(
+        JSON.stringify([
+          settings.auth.protocol,
+          settings.auth.base_url.replace(/\/+$/, ''),
+          this.model,
+        ]),
+      )
+      .digest('hex');
     // Whole milliseconds: the SDKs refuse a fractional per-request timeout
     this.timeout = Math.max(
       5000,
@@ -100,6 +115,7 @@ export class GatewayModel implements ChatModel {
     );
   }
   async complete(request: ModelRequest): Promise<ModelResponse> {
+    request = { ...request, messages: orderModeToolResults(request.messages) };
     checkRequestMedia(request.messages);
     let response: ModelResponse;
     try {
@@ -383,6 +399,65 @@ export class GatewayModel implements ChatModel {
   private async completeAnthropic(
     request: ModelRequest,
   ): Promise<ModelResponse> {
+    const projected = this.projectThinking(request);
+    try {
+      return await this.sendAnthropic(projected);
+    } catch (error) {
+      request.signal.throwIfAborted();
+      if (!isThinkingSignatureError(error)) throw error;
+      const signed = projected.messages.filter(
+        (message) =>
+          message.role === 'assistant' &&
+          message.provider_content?.some(isThinkingBlock),
+      );
+      if (!signed.length) throw error;
+      // Legacy/imported histories have no scope. Only an explicit server rejection
+      // authorizes dropping their signed blocks, once, from requests to this model.
+      // Keep original checkpoints intact, and keep newly generated thinking intact.
+      for (const message of signed)
+        this.rejectedThinking.add(thinkingIdentity(message));
+      try {
+        request.notice?.({ event: 'thinking_signature_retry' });
+      } catch {
+        /* Display subscribers cannot stop recovery. */
+      }
+      return this.sendAnthropic(this.projectThinking(request));
+    }
+  }
+  private projectThinking(request: ModelRequest): ModelRequest {
+    return {
+      ...request,
+      messages: request.messages.flatMap((message) => {
+        if (
+          message.role !== 'assistant' ||
+          (!(
+            this.rejectedThinking.size &&
+            this.rejectedThinking.has(thinkingIdentity(message))
+          ) &&
+            (!message.thinking_scope ||
+              message.thinking_scope === this.thinkingScope))
+        )
+          return [message];
+        const blocks = message.provider_content?.filter(
+          (block) => !isThinkingBlock(block),
+        );
+        if (
+          blocks?.length === 0 &&
+          !message.content &&
+          !message.tool_calls?.length
+        )
+          return [];
+        return [
+          {
+            ...message,
+            thinking: undefined,
+            provider_content: blocks?.length ? blocks : undefined,
+          },
+        ];
+      }),
+    };
+  }
+  private async sendAnthropic(request: ModelRequest): Promise<ModelResponse> {
     const messages: MessageParam[] = [];
     let system = request.system;
     for (const message of request.messages) {
@@ -411,7 +486,7 @@ export class GatewayModel implements ChatModel {
       } else if (message.role === 'assistant') {
         role = 'assistant';
         content = message.provider_content
-          ? (message.provider_content as ContentBlockParam[])
+          ? ([...message.provider_content] as ContentBlockParam[])
           : [
               ...(message.content
                 ? [{ type: 'text' as const, text: message.content }]
@@ -539,6 +614,7 @@ export class GatewayModel implements ChatModel {
         thinking,
         tool_calls,
         provider_content: final.content,
+        thinking_scope: this.thinkingScope,
         ...(guardedStop ||
         !final.stop_reason ||
         final.stop_reason === 'max_tokens'
@@ -575,4 +651,23 @@ export class GatewayModel implements ChatModel {
       });
     return response;
   }
+}
+
+function isThinkingBlock(block: unknown): boolean {
+  return (
+    isRecord(block) &&
+    ['thinking', 'redacted_thinking'].includes(String(block.type))
+  );
+}
+
+/** Imported sessions can reuse ids; rejection belongs to this exact signed payload. */
+function thinkingIdentity(message: Message): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify([
+        message.id,
+        message.provider_content?.filter(isThinkingBlock),
+      ]),
+    )
+    .digest('hex');
 }

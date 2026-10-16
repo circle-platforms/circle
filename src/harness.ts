@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { orderModeToolResults } from './tool_history.js';
 import type {
   ChatModel,
   Message,
@@ -50,6 +51,8 @@ export interface HarnessOptions {
   maxSteps?: number;
   headless?: boolean;
   beforeRun?: (signal: AbortSignal) => Promise<void>;
+  /** Called for each turn, including queued follow-ups, before consuming its message. */
+  beforeTurn?: () => void;
   beforeStep?: () => void;
   priceUsage?: (
     model: string,
@@ -305,14 +308,18 @@ export class Harness {
     signal.throwIfAborted();
     const total = emptyUsage();
     let answer = '';
-    let next: string | undefined =
-      prompt ?? this.steering.shift() ?? this.followUps.shift();
+    let first = true;
     do {
+      this.options.beforeTurn?.();
+      signal.throwIfAborted();
+      const next = first
+        ? (prompt ?? this.steering.shift() ?? this.followUps.shift())
+        : this.followUps.shift();
       const result = await this.runTurn(next, signal);
       answer = result.answer;
       addUsage(total, result.usage);
-      next = this.followUps.shift();
-    } while (next !== undefined);
+      first = false;
+    } while (this.followUps.length);
     return { answer, usage: total };
   }
   private async runTurn(
@@ -384,9 +391,11 @@ export class Harness {
                   ? '\nRead-only mode: inspect and plan; only plan.md or plan files may be changed, subject to approval. Do not run shell commands.'
                   : '\nRead-only mode: inspect and plan; do not change files or run commands.'
                 : ''),
-            messages: this.options.prepareMessages
-              ? await this.options.prepareMessages(signal)
-              : this.options.store.projectedMessages(this.sessionId),
+            messages: orderModeToolResults(
+              this.options.prepareMessages
+                ? await this.options.prepareMessages(signal)
+                : this.options.store.projectedMessages(this.sessionId),
+            ),
             tools: this.tools,
             signal: stepSignal,
             notice: (event) =>

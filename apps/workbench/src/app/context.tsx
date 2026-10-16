@@ -12,6 +12,7 @@ import type {
   WorkbenchSnapshot,
 } from '../model/types';
 import { t } from '../i18n';
+import { SessionActionError } from '../model/action-error';
 interface ContextValue {
   runtime: RuntimePort;
   snapshot: WorkbenchSnapshot;
@@ -44,23 +45,37 @@ export function RuntimeProvider({
   useEffect(() => {
     if (snapshot.runtime?.error) notify(snapshot.runtime.error);
   }, [snapshot.runtime?.error]);
+  const actionError = snapshot.sessions.find(
+    (session) => session.id === snapshot.activeSessionId,
+  )?.actionError;
+  useEffect(() => {
+    setNotice(actionError ?? '');
+    if (actionError) notify(actionError);
+  }, [snapshot.activeSessionId, actionError]);
   const perform = (action: () => void | Promise<unknown>) => {
+    const sessionId = runtime.getSnapshot().activeSessionId;
+    const report = (error: unknown) => {
+      const source =
+        error instanceof SessionActionError ? error.sessionId : sessionId;
+      if (runtime.getSnapshot().activeSessionId === source)
+        notify(error instanceof Error ? error.message : t('action failed'));
+    };
     try {
       const result = action();
-      if (result instanceof Promise)
-        void result.catch((error) =>
-          notify(error instanceof Error ? error.message : t('action failed')),
-        );
+      if (result instanceof Promise) void result.catch(report);
     } catch (error) {
-      notify(error instanceof Error ? error.message : t('action failed'));
+      report(error);
     }
   };
-  const act = (action: () => CommandResult | Promise<CommandResult>) =>
+  const act = (action: () => CommandResult | Promise<CommandResult>) => {
+    const sessionId = runtime.getSnapshot().activeSessionId;
     perform(async () => {
       const result = await action();
-      if (result.notice) notify(result.notice);
-      router.handler(result);
+      const selected = runtime.getSnapshot().activeSessionId === sessionId;
+      if (result.notice && selected) notify(result.notice);
+      if (selected || result.openSession) router.handler(result);
     });
+  };
   return (
     <Context.Provider
       value={{
