@@ -42,6 +42,8 @@ export class NativeGitHubConnection {
   private active = false;
   private lifetime = new AbortController();
   private disposed = false;
+  private disposal?: Promise<void>;
+  private children = new Set<Promise<void>>();
   private connecting?: Promise<GitHubConnectionState>;
   private polling = false;
   private restoreEpoch?: number;
@@ -64,17 +66,40 @@ export class NativeGitHubConnection {
     this.config = path.join(options.dataDir, 'github-empty-config');
     this.command =
       options.command ??
-      (async (args, env, cwd, signal) =>
-        (
-          await exec(options.ghPath, args, {
-            encoding: 'utf8',
-            env,
-            cwd,
-            signal,
-            timeout: 120000,
-            maxBuffer: 8 * 1024 * 1024,
-          })
-        ).stdout);
+      (async (args, env, cwd, signal) => {
+        const request = exec(options.ghPath, args, {
+          encoding: 'utf8',
+          env,
+          cwd,
+          signal,
+          timeout: 120000,
+          maxBuffer: 8 * 1024 * 1024,
+        });
+        // execFile may reject on AbortError before the owned process and its
+        // pipes close. Preserve that result, but do not release its resources
+        // or report cancellation complete until close has actually occurred.
+        let escalation: ReturnType<typeof setTimeout> | undefined;
+        const escalate = () => {
+          escalation ??= setTimeout(() => request.child.kill('SIGKILL'), 1000);
+          escalation.unref();
+        };
+        const closed = new Promise<void>((resolve) => {
+          request.child.once('close', () => {
+            clearTimeout(escalation);
+            signal?.removeEventListener('abort', escalate);
+            resolve();
+          });
+        });
+        this.children.add(closed);
+        signal?.addEventListener('abort', escalate, { once: true });
+        if (signal?.aborted) escalate();
+        try {
+          return (await request).stdout;
+        } finally {
+          await closed;
+          this.children.delete(closed);
+        }
+      });
     this.login = new DeliveryLogin(
       options.spawn,
       options.ghPath,
@@ -651,16 +676,22 @@ export class NativeGitHubConnection {
     )
       throw Error('GitHub connection or repository permission changed');
   }
-  async dispose() {
-    if (this.disposed) return;
+  dispose(): Promise<void> {
+    return (this.disposal ??= this.close());
+  }
+  private async close() {
     this.disposed = true;
     this.state.epoch++;
     this.lifetime.abort();
     clearInterval(this.timer);
     this.active = false;
     await this.connecting?.catch(() => {});
-    await this.cancelCurrent();
-    await this.login.dispose();
-    this.listeners.clear();
+    try {
+      await this.cancelCurrent();
+      await this.login.dispose();
+    } finally {
+      await Promise.allSettled([...this.children]);
+      this.listeners.clear();
+    }
   }
 }
