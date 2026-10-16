@@ -27,6 +27,11 @@ import {
   executedNativeBuildEvidence,
   verifyNativeBuildManifest,
 } from './helpers/native-build-manifest.mjs';
+import {
+  armNativeFeedback,
+  captureNativeTranscriptAnchor,
+  terminalObservationRows,
+} from './helpers/native-performance-observation.mjs';
 import { CheckpointStore } from '../../../src/checkpoint_store.ts';
 import {
   defaultSettings,
@@ -161,8 +166,6 @@ const samples = {
   save: [],
   eventToFrame: [],
 };
-const skipLegacyLayout =
-  process.env.CIRCLE_NATIVE_PERF_SKIP_LEGACY_LAYOUT === '1';
 const errors = [];
 const checks = [];
 let app;
@@ -225,57 +228,7 @@ async function waitFor(test, label, timeout = 30000) {
   }
 }
 async function arm(kind, selector, condition) {
-  await page.evaluate(
-    ({ kind, selector, condition }) => {
-      window.__circleNativePerfPending = new Promise((resolve, reject) => {
-        let started;
-        let frames = 0;
-        const timeout = setTimeout(() => {
-          cleanup();
-          reject(Error('visible feedback timed out'));
-        }, 10000);
-        const cleanup = () => {
-          clearTimeout(timeout);
-          document.removeEventListener(kind, begin, true);
-        };
-        const ready = () => {
-          const target = document.querySelector(condition.selector);
-          if (!target) return false;
-          if (condition.feedback) {
-            const feedback = document.querySelector(
-              condition.feedback.selector,
-            );
-            if (!feedback || feedback.disabled !== condition.feedback.disabled)
-              return false;
-          }
-          if (condition.attribute)
-            return (
-              target.getAttribute(condition.attribute) === condition.equals
-            );
-          if (condition.value !== undefined)
-            return target.value === condition.value;
-          return (target.textContent ?? '').includes(condition.text);
-        };
-        const frame = () => {
-          if (ready()) {
-            if (++frames >= 2) {
-              cleanup();
-              resolve(performance.now() - started);
-              return;
-            }
-          } else frames = 0;
-          requestAnimationFrame(frame);
-        };
-        const begin = (event) => {
-          if (started !== undefined || !event.target.closest(selector)) return;
-          started = performance.now();
-          requestAnimationFrame(frame);
-        };
-        document.addEventListener(kind, begin, true);
-      });
-    },
-    { kind, selector, condition },
-  );
+  await page.evaluate(armNativeFeedback, { kind, selector, condition });
 }
 async function finish(metric) {
   const value = await page.evaluate(() => window.__circleNativePerfPending);
@@ -404,15 +357,25 @@ try {
     mainSession,
     'background task startup must retain the developer conversation',
   );
+  await page.evaluate(() => {
+    window.__circleNativePerfTerminalTiming = [];
+    window.__circleNativeTerminalTiming = (record) => {
+      if (window.__circleNativePerfTerminalTiming.length >= 50000) {
+        window.__circleNativePerfTimingOverflow = true;
+        return;
+      }
+      window.__circleNativePerfTerminalTiming.push(record);
+    };
+  });
   await page
-    .getByRole('tab', { name: 'terminal', exact: true })
+    .getByRole('button', { name: 'terminal panel', exact: true })
     .first()
     .click();
   await page
     .getByRole('button', { name: 'new terminal', exact: true })
     .first()
     .click();
-  await page.locator('.xterm').first().waitFor();
+  await page.locator('#inspector-terminal-terminal .xterm').first().waitFor();
   const terminals = await service('terminal', 'list');
   terminalId = terminals[0].id;
   const appIdentity = await app.evaluate(({ app }) => ({
@@ -507,68 +470,105 @@ try {
     await input.fill(value);
     await finish('inputPaste');
   }
-  report.legacyLayout = skipLegacyLayout
-    ? 'excluded by updated product scope; no final layout acceptance claimed'
-    : 'legacy candidate baseline';
-  if (!skipLegacyLayout) {
-    for (let index = 0; index < 40; index++) {
-      const label = index % 2 ? 'task layout' : 'developer layout';
-      const button = page.getByRole('button', { name: label, exact: true });
-      await page
-        .locator('[data-perf-target^="layout-"]')
-        .evaluateAll((nodes) => {
-          for (const node of nodes) delete node.dataset.perfTarget;
-        });
-      const target = `layout-${index}`;
-      await button.evaluate(
-        (node, value) => (node.dataset.perfTarget = value),
-        target,
-      );
-      const selector = `[data-perf-target="${target}"]`;
-      await arm('click', selector, {
-        selector,
-        attribute: 'aria-pressed',
-        equals: 'true',
-      });
-      await button.click();
-      await finish('click');
-    }
-    await input.fill('retained developer draft');
-    await input.evaluate((node) => {
-      node.focus();
-      node.setSelectionRange(3, 10);
+  report.interfaceScope =
+    'original topbar panels, inspector and main file view; no dual layout';
+  await input.fill('retained developer draft');
+  await input.evaluate((node) => {
+    node.focus();
+    node.setSelectionRange(3, 10);
+  });
+  const panelAnchor = await page.evaluate(captureNativeTranscriptAnchor);
+  for (let index = 0; index < 40; index++) {
+    const open = index % 2 === 1;
+    await arm('click', 'button[aria-label="terminal panel"]', {
+      selector: 'button[aria-label="terminal panel"]',
+      attribute: 'aria-pressed',
+      equals: String(open),
+      panel: { selector: '#inspector-terminal-terminal', visible: open },
     });
     await page
-      .getByRole('button', { name: 'developer layout', exact: true })
+      .getByRole('button', { name: 'terminal panel', exact: true })
       .click();
-    assert.deepEqual(
-      await input.evaluate((node) => ({
-        value: node.value,
-        start: node.selectionStart,
-        end: node.selectionEnd,
-      })),
-      { value: 'retained developer draft', start: 3, end: 10 },
-    );
-    checks.push('layout retains actual composer value and selection');
+    await finish('click');
+    if (open) {
+      const restored = await page.evaluate(captureNativeTranscriptAnchor);
+      assert.equal(
+        restored.id,
+        panelAnchor.id,
+        'original panel roundtrip retains visible message identity',
+      );
+      assert.ok(
+        Math.abs(restored.offset - panelAnchor.offset) <= 2,
+        'original panel roundtrip retains reading anchor',
+      );
+    }
   }
+  assert.deepEqual(
+    await input.evaluate((node) => ({
+      value: node.value,
+      start: node.selectionStart,
+      end: node.selectionEnd,
+    })),
+    { value: 'retained developer draft', start: 3, end: 10 },
+  );
+  checks.push(
+    'original terminal panel roundtrips retain draft, selection and reading anchor',
+  );
 
   await waitFor(
     async () =>
       await page.evaluate(() => window.__circleNativePerfEvents.length >= 60),
-    '60 continuously visible producer-to-frame samples',
+    '60 accessibility diagnostic observations',
     20000,
   );
   const events = await page.evaluate(() => {
     window.__circleNativePerfObserver.disconnect();
     return window.__circleNativePerfEvents;
   });
-  samples.eventToFrame.push(
-    ...events
-      .slice(10)
-      .filter((value) => value.ms >= 0)
-      .map((value) => value.ms),
-  );
   report.eventRaw = events;
+  report.terminalTiming = await page.evaluate(
+    () => window.__circleNativePerfTerminalTiming,
+  );
+  const rawEvents = [];
+  let rawCursor = 0;
+  const rawBoundary = (await service('terminal', 'list')).find(
+    (item) => item.id === terminalId,
+  ).lastSequence;
+  while (rawCursor < rawBoundary) {
+    const rawPage = await service('terminal', 'replay', {
+      id: terminalId,
+      afterSequence: rawCursor,
+      limit: 1000,
+    });
+    assert.ok(rawPage.nextSequence > rawCursor, 'raw replay cursor advances');
+    rawEvents.push(
+      ...rawPage.events.filter((event) => event.sequence <= rawBoundary),
+    );
+    rawCursor = rawPage.nextSequence;
+  }
+  assert.equal(
+    await page.evaluate(() => Boolean(window.__circleNativePerfTimingOverflow)),
+    false,
+    'timing evidence buffer must not overflow',
+  );
+  report.terminalEventStages = terminalObservationRows(
+    rawEvents,
+    report.terminalTiming,
+    events,
+  );
+  report.eventMeasurement =
+    'producer→runtime TerminalEvent.at; actual UI replay response→xterm.write callback parse→two RAF while visible; AX is a separate diagnostic. Raw replay below is only evidence mapping, not a substitute for product parser timestamps.';
+  samples.eventToFrame.push(
+    ...report.terminalEventStages
+      .slice(10)
+      .filter((row) => row.frameAt !== undefined)
+      .map((row) => row.producerToFrameMs),
+  );
+  report.eventAxDiagnostic = events.slice(10).map((row) => row.ms);
+  assert.ok(
+    samples.eventToFrame.length >= 20,
+    'actual visible xterm write/frame instrumentation required; AX does not substitute',
+  );
   const switchSession = async (title) => {
     await input.press(
       process.platform === 'darwin' ? 'Meta+k' : 'Control+Shift+p',
@@ -582,23 +582,51 @@ try {
       .first();
     await result.evaluate((node) => (node.dataset.perfTarget = 'switch'));
     await arm('click', '[data-perf-target="switch"]', {
-      selector: '.transcript',
-      text:
-        title === 'performance history'
-          ? 'PERF_HISTORY_READY'
-          : 'PERF_ALTERNATE_READY',
+      session: {
+        id: title === 'performance history' ? mainSession : otherSession,
+        title,
+        content:
+          title === 'performance history'
+            ? 'persisted history'
+            : 'PERF_ALTERNATE_READY',
+      },
     });
     await result.click();
     await finish('sessionSwitch');
   };
-  for (let index = 0; index < 24; index++)
+  const sessionAnchor = await page.evaluate(captureNativeTranscriptAnchor);
+  for (let index = 0; index < 24; index++) {
     await switchSession(
       index % 2 ? 'performance history' : 'performance alternate',
     );
+    if (index % 2) {
+      const restored = await page.evaluate(captureNativeTranscriptAnchor);
+      assert.equal(
+        restored.id,
+        sessionAnchor.id,
+        'session return retains reading message',
+      );
+      assert.ok(
+        Math.abs(restored.offset - sessionAnchor.offset) <= 2,
+        'session return retains reading offset',
+      );
+    }
+  }
+  checks.push(
+    'session feedback binds backend identity, route, header and visible body; reading anchor checked separately',
+  );
   await page
     .locator('.transcript')
     .evaluate((node) => node.scrollTo({ top: node.scrollHeight }));
   const openSource = async (name, marker) => {
+    if (
+      await page
+        .getByRole('button', { name: 'close file', exact: true })
+        .count()
+    )
+      await page
+        .getByRole('button', { name: 'close file', exact: true })
+        .click();
     const link = page.locator(`a[href="${name}#L1"]`).first();
     await link.evaluate((node) => (node.dataset.perfTarget = 'file'));
     await arm('click', '[data-perf-target="file"]', {
@@ -701,7 +729,7 @@ try {
   for (const [metric, budget] of Object.entries({
     inputKeystroke: 100,
     inputPaste: 100,
-    ...(skipLegacyLayout ? {} : { click: 100 }),
+    click: 100,
     eventToFrame: 200,
     sessionSwitch: 300,
     fileSwitch: 300,
@@ -716,7 +744,7 @@ try {
     };
   }
   report.measurement =
-    'renderer input requires textarea value plus React-derived Send disabled state; 40 actual x/Backspace key presses and 40 whole-input updates alternating empty/600-line input are reported separately; input/click to two animation frames after actual visible state; PTY producer Date.now to accessibility rows plus two animation frames, a paint-opportunity approximation rather than a compositor pixel timestamp';
+    '40 actual keys and40 alternating empty/600line updates require textarea and React Send state; original-panel click feedback and session backend/route/header/visible-body require two frames; producer-to-frame uses actual xterm write callback plus two visible RAF opportunities, never a compositor pixel timestamp. AX latency is reported independently.';
   report.complete = true;
   report.passed =
     Object.values(report.metrics).every((metric) => metric.passed) &&
@@ -740,20 +768,50 @@ try {
     report.stateReadFailure = String(diagnosticError);
   }
   try {
-    if (page) await page.screenshot({ path: join(output, 'failure.png') });
+    if (page) {
+      report.actualVisibleOwnerOnFailure = await page.evaluate(() => ({
+        url: location.href,
+        header: document.querySelector('.session-title')?.textContent,
+        selectedSidebar: [
+          ...document.querySelectorAll(
+            '.sidebar a.active,.sidebar a[aria-current]',
+          ),
+        ].map((node) => ({
+          href: node.getAttribute('href'),
+          text: node.textContent,
+        })),
+        messages: [
+          ...document.querySelectorAll('.transcript [data-message-id]'),
+        ].map((node) => ({
+          id: node.dataset.messageId,
+          top: node.getBoundingClientRect().top,
+          bottom: node.getBoundingClientRect().bottom,
+          text: node.textContent?.slice(0, 160),
+        })),
+      }));
+      await page.screenshot({ path: join(output, 'failure.png') });
+    }
   } catch {}
   process.exitCode = 1;
 } finally {
+  if (page) {
+    try {
+      report.terminalTiming = await page.evaluate(
+        () => window.__circleNativePerfTerminalTiming ?? [],
+      );
+    } catch {}
+  }
   await writeFile(
     join(output, 'samples-before-cleanup.json'),
     JSON.stringify(
       {
         samples,
+        terminalTiming: report.terminalTiming,
         checks,
         errors,
         failure: report.failure,
         initialTranscriptPassed: report.initialTranscriptPassed,
-        legacyLayout: report.legacyLayout,
+        interfaceScope: report.interfaceScope,
       },
       null,
       2,
@@ -769,9 +827,10 @@ try {
         await service('terminal', 'close', { id: terminalId });
       } catch {}
     try {
-      await page.evaluate(() =>
-        window.__circleNativePerfObserver?.disconnect(),
-      );
+      await page.evaluate(() => {
+        window.__circleNativePerfObserver?.disconnect();
+        delete window.__circleNativeTerminalTiming;
+      });
     } catch {}
   }
   if (app) {
@@ -810,7 +869,7 @@ try {
   for (const [metric, budget] of Object.entries({
     inputKeystroke: 100,
     inputPaste: 100,
-    ...(skipLegacyLayout ? {} : { click: 100 }),
+    click: 100,
     eventToFrame: 200,
     sessionSwitch: 300,
     fileSwitch: 300,
