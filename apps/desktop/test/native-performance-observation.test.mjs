@@ -12,7 +12,8 @@ function renderer() {
   let runtimeListener,
     inputListener,
     now = 0,
-    unsubscribed = 0;
+    unsubscribed = 0,
+    timeoutCallback;
   const frames = [];
   const message = {
     dataset: { messageId: 'message-middle' },
@@ -67,7 +68,10 @@ function renderer() {
     document,
     location,
     performance: { now: () => now },
-    setTimeout: () => 1,
+    setTimeout: (callback) => {
+      timeoutCallback = callback;
+      return 1;
+    },
     clearTimeout: () => {},
     requestAnimationFrame: (fn) => frames.push(fn),
   };
@@ -85,7 +89,9 @@ function renderer() {
         '(' + armNativeFeedback.toString() + ')',
         context,
       )({ kind: 'click', selector: '#target', condition }),
-    click: () => inputListener({ target: { closest: () => true } }),
+    click: (target) =>
+      inputListener({ target: target ?? { closest: () => true } }),
+    timeout: () => timeoutCallback(),
     backend: (id) => runtimeListener({ snapshot: { activeSessionId: id } }),
     frame: () => {
       now += 16;
@@ -336,4 +342,56 @@ test('file save feedback cannot use a hidden matched toolbar while visible buffe
   r.frame();
   await Promise.resolve();
   assert.equal(finished, true);
+});
+
+test('timeout evidence distinguishes a replaced link that opens the file without starting the metric clock', async () => {
+  const r = renderer();
+  const armed = {
+    isConnected: false,
+    getAttribute: (name) => (name === 'href' ? 'SECOND.md#L1' : 'file'),
+  };
+  const clicked = {
+    isConnected: true,
+    getAttribute: (name) => (name === 'href' ? 'SECOND.md#L1' : null),
+  };
+  const node = {
+    textContent: 'PERF_SECOND',
+    closest: () => null,
+    getBoundingClientRect: () => ({ width: 500, height: 80 }),
+  };
+  const view = {
+    ...node,
+    querySelector: (selector) =>
+      selector === '.file-view-filename strong'
+        ? { textContent: 'SECOND.md' }
+        : { getAttribute: () => 'workspace source: workspace: /actual-owner' },
+    querySelectorAll: () => [node],
+  };
+  r.document.querySelector = () => armed;
+  r.document.querySelectorAll = (selector) =>
+    selector === '.file-view'
+      ? [view]
+      : selector === '[data-perf-target="file"]'
+        ? []
+        : [];
+  r.install({
+    selector: '.monaco-editor .view-lines',
+    file: { path: 'SECOND.md', sourceDirectory: '/actual-owner' },
+    text: 'PERF_SECOND',
+  });
+  const rejected = assert.rejects(
+    r.window.__circleNativePerfPending,
+    /timed out/,
+  );
+  // The browser target is the replacement real anchor without test-only attributes.
+  r.click({ closest: (selector) => (selector === 'a' ? clicked : null) });
+  r.timeout();
+  await rejected;
+  const record = r.window.__circleNativePerfFeedbackDiagnostics[0];
+  assert.equal(record.started, false);
+  assert.equal(record.armedConnected, false);
+  assert.equal(record.clicks[0].href, 'SECOND.md#L1');
+  assert.equal(record.clicks[0].dataFlag, null);
+  assert.equal(record.clicks[0].matchesSelector, false);
+  assert.equal(record.fileState[0].targets[0].text, 'PERF_SECOND');
 });

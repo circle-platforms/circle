@@ -4,6 +4,66 @@ export function armNativeFeedback({ kind, selector, condition }) {
     let started,
       frames = 0,
       backendId;
+    const armedTarget = condition.file
+      ? document.querySelector(selector)
+      : undefined;
+    const diagnostic = condition.file
+      ? {
+          selector,
+          expected: condition.file,
+          text: condition.text,
+          armedAt: Date.now(),
+          clicks: [],
+        }
+      : undefined;
+    const fileState = () =>
+      [...document.querySelectorAll('.file-view')].map((view) => ({
+        heading: view.querySelector('.file-view-filename strong')?.textContent,
+        sourceAria: view
+          .querySelector('.file-source-origin')
+          ?.getAttribute('aria-label'),
+        hiddenAncestor: Boolean(view.closest('[hidden]')),
+        rect:
+          view.getBoundingClientRect().toJSON?.() ??
+          view.getBoundingClientRect(),
+        style:
+          typeof getComputedStyle === 'function'
+            ? {
+                display: getComputedStyle(view).display,
+                visibility: getComputedStyle(view).visibility,
+              }
+            : undefined,
+        targets: [...view.querySelectorAll(condition.selector)].map((node) => ({
+          text: node.textContent?.slice(0, 4096),
+          hiddenAncestor: Boolean(node.closest('[hidden]')),
+          rect:
+            node.getBoundingClientRect().toJSON?.() ??
+            node.getBoundingClientRect(),
+          style:
+            typeof getComputedStyle === 'function'
+              ? {
+                  display: getComputedStyle(node).display,
+                  visibility: getComputedStyle(node).visibility,
+                }
+              : undefined,
+        })),
+      }));
+    const saveDiagnostic = (outcome) => {
+      if (!diagnostic) return;
+      Object.assign(diagnostic, {
+        outcome,
+        recordedAt: Date.now(),
+        started: started !== undefined,
+        startedAt: started,
+        frames,
+        armedConnected: Boolean(armedTarget?.isConnected),
+        currentSelectorMatches: document.querySelectorAll(selector).length,
+        fileState: fileState(),
+      });
+      const records = (window.__circleNativePerfFeedbackDiagnostics ??= []);
+      if (records.length < 64) records.push(diagnostic);
+      else window.__circleNativePerfFeedbackDiagnosticOverflow = true;
+    };
     const unsubscribe = condition.session
       ? window.circleDesktop.onRuntime((update) => {
           backendId = update.snapshot?.activeSessionId;
@@ -16,6 +76,7 @@ export function armNativeFeedback({ kind, selector, condition }) {
     };
     const timeout = setTimeout(() => {
       cleanup();
+      saveDiagnostic('timeout');
       reject(Error('visible feedback timed out'));
     }, 10000);
     const visible = (node) => {
@@ -89,6 +150,7 @@ export function armNativeFeedback({ kind, selector, condition }) {
       if (ready()) {
         if (++frames >= 2) {
           cleanup();
+          saveDiagnostic('resolved');
           resolve(performance.now() - started);
           return;
         }
@@ -96,6 +158,18 @@ export function armNativeFeedback({ kind, selector, condition }) {
       requestAnimationFrame(frame);
     };
     const begin = (event) => {
+      if (diagnostic && diagnostic.clicks.length < 16) {
+        const anchor = event.target.closest('a');
+        diagnostic.clicks.push({
+          at: Date.now(),
+          trusted: event.isTrusted,
+          href: anchor?.getAttribute?.('href'),
+          dataFlag: anchor?.getAttribute?.('data-perf-target'),
+          matchesSelector: Boolean(event.target.closest(selector)),
+          sameArmed: anchor === armedTarget,
+          armedConnected: Boolean(armedTarget?.isConnected),
+        });
+      }
       if (started !== undefined || !event.target.closest(selector)) return;
       started = performance.now();
       requestAnimationFrame(frame);

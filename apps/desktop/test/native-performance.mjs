@@ -980,6 +980,21 @@ try {
   } catch {}
   process.exitCode = 1;
 } finally {
+  if (page) {
+    try {
+      report.feedbackDiagnostics = await page.evaluate(() => ({
+        records: window.__circleNativePerfFeedbackDiagnostics ?? [],
+        overflow: Boolean(window.__circleNativePerfFeedbackDiagnosticOverflow),
+      }));
+      await writePerformanceEvidence(
+        report,
+        join(output, 'feedback-diagnostics.json'),
+        JSON.stringify(report.feedbackDiagnostics, null, 2),
+      );
+    } catch (error) {
+      report.feedbackDiagnosticError = String(error);
+    }
+  }
   await stopNativePerformanceCpuProfile(cpuProfile, output, report);
   if (page && report.readingTrace) {
     try {
