@@ -16,6 +16,8 @@ on:
     tags:
       - 'v*'
   pull_request:
+    # ready_for_review: a draft runs nothing, and marking it ready runs the workflow
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'install.sh'
       - 'install.ps1'
@@ -42,29 +44,37 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request replaces the run of the older one. A run on main or a tag finishes:
+# releasing needs the release workflow to have passed on main, and only main and tags build macOS.
+# The newest waiting run replaces older waiting ones.
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
+    # A draft pull request runs nothing
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: ubuntu-24.04
-            target: linux-x64
-          - runner: ubuntu-24.04-arm
-            target: linux-arm64
-          - runner: macos-15-intel
-            target: darwin-x64
-          - runner: macos-15
-            target: darwin-arm64
-          - runner: windows-2025
-            target: windows-x64
-          - runner: windows-11-arm
-            target: windows-arm64
+        # A pull request leaves out the two macOS targets, which main and every tag still build.
+        # The organization runs five macOS jobs at a time, shared with main and releases.
+        include: >-
+          ${{ fromJSON(github.event_name == 'pull_request' && '[
+          {"runner": "ubuntu-24.04", "target": "linux-x64"},
+          {"runner": "ubuntu-24.04-arm", "target": "linux-arm64"},
+          {"runner": "windows-2025", "target": "windows-x64"},
+          {"runner": "windows-11-arm", "target": "windows-arm64"}
+          ]' || '[
+          {"runner": "ubuntu-24.04", "target": "linux-x64"},
+          {"runner": "ubuntu-24.04-arm", "target": "linux-arm64"},
+          {"runner": "macos-15-intel", "target": "darwin-x64"},
+          {"runner": "macos-15", "target": "darwin-arm64"},
+          {"runner": "windows-2025", "target": "windows-x64"},
+          {"runner": "windows-11-arm", "target": "windows-arm64"}
+          ]') }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
@@ -93,27 +103,22 @@ jobs:
   # published. The MSI holds the packaged folder; it is installed and removed here.
   desktop:
     name: desktop (${{ matrix.target }})
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: macos-15
-            target: darwin-arm64
-            app: Circle-darwin-arm64/Circle.app
-            executable: Circle-darwin-arm64/Circle.app/Contents/MacOS/Circle
-          - runner: macos-15-intel
-            target: darwin-x64
-            app: Circle-darwin-x64/Circle.app
-            executable: Circle-darwin-x64/Circle.app/Contents/MacOS/Circle
-          - runner: windows-2025
-            target: windows-x64
-            app: Circle-win32-x64
-            executable: Circle-win32-x64/Circle.exe
-          - runner: ubuntu-24.04
-            target: linux-x64
-            app: Circle-linux-x64
-            executable: Circle-linux-x64/Circle
+        # A pull request leaves out the two macOS targets, as build does
+        include: >-
+          ${{ fromJSON(github.event_name == 'pull_request' && '[
+          {"runner": "windows-2025", "target": "windows-x64", "app": "Circle-win32-x64", "executable": "Circle-win32-x64/Circle.exe"},
+          {"runner": "ubuntu-24.04", "target": "linux-x64", "app": "Circle-linux-x64", "executable": "Circle-linux-x64/Circle"}
+          ]' || '[
+          {"runner": "macos-15", "target": "darwin-arm64", "app": "Circle-darwin-arm64/Circle.app", "executable": "Circle-darwin-arm64/Circle.app/Contents/MacOS/Circle"},
+          {"runner": "macos-15-intel", "target": "darwin-x64", "app": "Circle-darwin-x64/Circle.app", "executable": "Circle-darwin-x64/Circle.app/Contents/MacOS/Circle"},
+          {"runner": "windows-2025", "target": "windows-x64", "app": "Circle-win32-x64", "executable": "Circle-win32-x64/Circle.exe"},
+          {"runner": "ubuntu-24.04", "target": "linux-x64", "app": "Circle-linux-x64", "executable": "Circle-linux-x64/Circle"}
+          ]') }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7

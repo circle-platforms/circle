@@ -70,7 +70,8 @@ One short imperative sentence in English, capitalised, with no prefix and no ful
 - Run the tests and say so in the description.
 - Sign off every commit (`git commit -s`); see [Contributor terms](#contributor-terms).
 - Fill in the checklist in the template.
-- A pull request merges through the merge queue once `check (ubuntu-24.04)`, `check (macos-15)` and `check (windows-latest)` pass. `gh pr merge` or **Merge when ready** adds it; the queue checks it again on top of the pull requests ahead of it before `main` moves.
+- A draft pull request runs no CI; marking it ready for review starts it. Push drafts as often as you like.
+- A pull request runs `check (ubuntu-24.04)` and `check (windows-latest)`. `check (macos-15)` is skipped on the pull request and runs in the merge queue, because the organization has five macOS runners shared with `main` and releases. `gh pr merge` or **Merge when ready** adds a pull request to the queue once its checks pass; the queue runs all three on top of the pull requests ahead of it before `main` moves, and a macOS failure there takes the pull request back out.
 
 ## Security
 
