@@ -1,3 +1,4 @@
+import { githubConnection } from './github-connection.ts';
 import { nativeGit } from './native-git.ts';
 import { agentTools } from './agent-tools.ts';
 import { taskPanel } from './task-panel.ts';
@@ -19,6 +20,7 @@ import { plugins } from './plugins.ts';
 /** Every interface text in Simplified Chinese, keyed by its English. */
 export const ZH_CN: Record<string, string> = {
   ...agentTools,
+  ...githubConnection,
   ...taskPanel,
   ...nativeGit,
   ...developer,

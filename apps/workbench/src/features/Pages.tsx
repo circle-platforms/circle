@@ -67,6 +67,7 @@ import {
 } from '../components/common';
 import { Markdown } from '../components/Markdown';
 import { UpdateControl } from './Update';
+import { GitHubConnectionCard } from '../components/GitHubConnectionCard';
 import { VariablesSettings } from './VariablesSettings';
 import { SessionMenu } from '../components/SessionMenus';
 import { canArchiveSession } from '../model/session-management';
@@ -1281,6 +1282,7 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
           }
         />
       </section>
+      <GitHubConnectionCard />
       <section className="settings-block">
         <h2>{t('session defaults')}</h2>
         <div className="setting-row">

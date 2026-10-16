@@ -30,6 +30,19 @@ import { t } from '../i18n';
 // Titles and descriptions are getters so they follow the interface language when it changes.
 export const circlePlugins: WorkbenchPlugin[] = [
   {
+    id: 'github',
+    apiVersion: 1,
+    version: '0.1.0',
+    runtimeExtension: 'github',
+    get title() {
+      return t('GitHub connection');
+    },
+    get description() {
+      return t('Connect GitHub in settings for repository delivery.');
+    },
+    icon: Blocks,
+  },
+  {
     id: 'files',
     apiVersion: 1,
     version: '0.1.0',
