@@ -281,7 +281,21 @@ export function Home({
             aria-label={t('message')}
             placeholder={t('Ask anything, or describe a change…')}
             value={draft}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => {
+              const text = event.target.value;
+              setDraft(text);
+              // A click can leave this page before the effect writes the draft.
+              const next = {
+                text,
+                attachments,
+                model,
+                effort,
+                mode,
+                projectId: project?.id ?? null,
+              };
+              remembered.current = next;
+              rememberHomeComposer(next);
+            }}
             onKeyDown={(event) => {
               if (event.nativeEvent.isComposing) return;
               if (event.key === 'Enter' && !event.shiftKey) {

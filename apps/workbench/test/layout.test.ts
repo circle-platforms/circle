@@ -87,6 +87,43 @@ test('a session column keeps the composer inside the window', () => {
   assert.match(composerBlock, /flex:\s*0 0 auto/);
 });
 
+test('the sidebar settings control shows its name', () => {
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/components/Sidebar.tsx', import.meta.url)),
+    'utf8',
+  );
+  assert.match(source, /className="sidebar-settings"/);
+  assert.match(source, /<span>\{t\('settings'\)\}<\/span>/);
+  const rule =
+    css.match(/\.sidebar-footer button\.sidebar-settings \{[^}]*\}/)?.[0] ?? '';
+  assert.match(rule, /width:\s*auto/);
+  assert.doesNotMatch(rule, /width:\s*30px/);
+});
+
+test('changes and activity can take the full view, as the browser does', () => {
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/plugins/builtins.tsx', import.meta.url)),
+    'utf8',
+  );
+  const fullView = (id: string) => {
+    const marker = `id: '${id}'`;
+    let from = 0;
+    while (from < source.length) {
+      const at = source.indexOf(marker, from);
+      if (at < 0) return false;
+      const next = source.indexOf('id:', at + marker.length);
+      const block = source.slice(at, next < 0 ? source.length : next);
+      if (/fullView:\s*true/.test(block)) return true;
+      from = at + marker.length;
+    }
+    return false;
+  };
+  assert.equal(fullView('changes'), true);
+  assert.equal(fullView('activity'), true);
+  assert.equal(fullView('browser'), true);
+  assert.equal(fullView('files'), false);
+});
+
 test('the effort menu is not capped by the shared footbar menu', () => {
   const shared = css.indexOf('.footbar-menu {');
   const effort = css.indexOf('.footbar-menu.effort-menu');

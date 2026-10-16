@@ -40,6 +40,11 @@ import {
 import type { DialogId, Session } from '../model/types';
 import { workspaceLabel } from '../model/workspace-label';
 import { armComposerFocus } from '../model/composer-focus';
+import {
+  selectRenameText,
+  sessionCardVisible,
+  shouldOpenSession,
+} from '../model/session-row';
 import { IconButton } from './common';
 import { t, tn } from '../i18n';
 import { UpdateChip } from '../features/Update';
@@ -80,16 +85,14 @@ function RenameField({
   onCancel: () => void;
 }) {
   const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const input = ref.current;
     if (!input) return;
-    const selectAll = () => {
-      input.focus();
-      input.setSelectionRange(0, input.value.length);
-      input.scrollLeft = 0;
-    };
-    selectAll();
-    const frame = requestAnimationFrame(selectAll);
+    selectRenameText(input);
+    // Focus can place a caret after this effect. Select again once it has.
+    const frame = requestAnimationFrame(() => {
+      if (ref.current) selectRenameText(ref.current);
+    });
     return () => cancelAnimationFrame(frame);
   }, []);
   return (
@@ -158,6 +161,55 @@ export function Sidebar({
   // not hide the card under a pointer that has not moved.
   const scrollGesture = useRef(false);
   const seenOrder = useRef<string | null>(null);
+  const asideRef = useRef<HTMLElement>(null);
+  // A page change, or a press that started outside the sidebar, hides the
+  // session card until the pointer really moves. The flag stays set through
+  // the click, so a card that unmounts under the pointer cannot land that
+  // click on a session row.
+  const routeHold = useRef(false);
+  const pressOutside = useRef(false);
+  const pointerOpening = useRef(false);
+  const path = `${location.pathname}${location.search}`;
+  const pathRef = useRef(path);
+  useEffect(() => {
+    if (pathRef.current === path) return;
+    pathRef.current = path;
+    routeHold.current = true;
+    setHoveredKey(null);
+    pointerAtScroll.current = lastPointer.current;
+    scrollClosedRef.current = true;
+    setScrollClosed(true);
+  }, [path]);
+  useEffect(() => {
+    const onDown = (event: PointerEvent) => {
+      const target = event.target;
+      const inside =
+        target instanceof Node && !!asideRef.current?.contains(target);
+      pressOutside.current = !inside;
+      if (inside) return;
+      routeHold.current = true;
+      setHoveredKey(null);
+      pointerAtScroll.current = { x: event.clientX, y: event.clientY };
+      scrollClosedRef.current = true;
+      setScrollClosed(true);
+    };
+    // Bubble, so a row's click still sees a press that started outside.
+    const onClick = () => {
+      pressOutside.current = false;
+    };
+    // Enter activates the focused row after this. A key clears the flag first.
+    const onKey = () => {
+      pressOutside.current = false;
+    };
+    window.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('click', onClick);
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      window.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('click', onClick);
+      window.removeEventListener('keydown', onKey, true);
+    };
+  }, []);
   // The row whose title is being edited in place (F2 or rename). A session can
   // be in recent and under its folder; only one of those rows becomes a field.
   const [editing, setEditing] = useState<string | null>(null);
@@ -336,6 +388,7 @@ export function Sidebar({
     }
     pointerAtScroll.current = null;
     scrollClosedRef.current = false;
+    routeHold.current = false;
     setScrollClosed(false);
     setHoveredKey(key);
   };
@@ -357,6 +410,7 @@ export function Sidebar({
   // the click's render dropped it.
   const keepHover = () => {
     requestAnimationFrame(() => {
+      if (routeHold.current) return;
       const point = lastPointer.current;
       if (!point || menuFocusRef.current) return;
       const hit = document.elementFromPoint(point.x, point.y);
@@ -404,7 +458,17 @@ export function Sidebar({
             });
           }}
           onKeyDown={(event) => onRowKeyDown(rowKey, event)}
-          onFocusRow={() => setRoving(rowKey)}
+          onFocusRow={() => {
+            setRoving(rowKey);
+            // The press that opens a row focuses it too. That focus must not
+            // bring the card back over the page the press just opened.
+            if (pointerOpening.current) return;
+            routeHold.current = false;
+            scrollClosedRef.current = false;
+            setScrollClosed(false);
+          }}
+          pressOutside={pressOutside}
+          pointerOpening={pointerOpening}
           hovered={hoveredKey === rowKey}
           hoveredKey={hoveredKey}
           menuFocus={menuFocus}
@@ -434,7 +498,19 @@ export function Sidebar({
           ? 'ready'
           : 'not-configured';
   return (
-    <aside className="sidebar">
+    <aside
+      ref={asideRef}
+      className="sidebar"
+      onPointerLeave={() => {
+        // The card is drawn over the page. Leaving the sidebar drops it,
+        // including when the row stays focused.
+        routeHold.current = true;
+        setHoveredKey(null);
+        if (lastPointer.current) pointerAtScroll.current = lastPointer.current;
+        scrollClosedRef.current = true;
+        setScrollClosed(true);
+      }}
+    >
       <header className="brand">
         <span className="circle-logo" />
         <strong>circle</strong>
@@ -661,15 +737,17 @@ export function Sidebar({
                   : current.model}
           </span>
         </button>
-        <IconButton
-          label={t('settings')}
+        <button
+          type="button"
+          className="sidebar-settings"
           onClick={() => {
             navigate('/page/settings');
             onNavigate?.();
           }}
         >
           <Settings2 size={15} />
-        </IconButton>
+          <span>{t('settings')}</span>
+        </button>
       </footer>
     </aside>
   );
@@ -702,6 +780,8 @@ function SessionRow({
   onKeepHover,
   linkRef,
   onDialog,
+  pressOutside,
+  pointerOpening,
 }: {
   rowKey: string;
   session: Session;
@@ -730,6 +810,8 @@ function SessionRow({
   onKeepHover: () => void;
   linkRef: (node: HTMLAnchorElement | null) => void;
   onDialog?: (dialog: DialogId, selection?: string) => void;
+  pressOutside: { current: boolean };
+  pointerOpening: { current: boolean };
 }) {
   // A function class would be stringified by the tooltip trigger, so the
   // active row would lose its highlight. The same path is used in a project
@@ -755,13 +837,35 @@ function SessionRow({
   // or nowhere. Moving onto another row lets that row's card replace the tip.
   const keyboardOwns =
     menuFocus !== null && (hoveredKey === null || hoveredKey === menuFocus);
-  const cardOpen =
-    !renaming &&
-    !editing &&
-    !menuOpen &&
-    !keyboardOwns &&
-    !scrollClosed &&
-    (hovered || (linkFocused && hoveredKey === null));
+  const cardOpen = sessionCardVisible({
+    renaming,
+    editing,
+    menuOpen,
+    keyboardOwns,
+    suppressed: scrollClosed,
+    hovered,
+    focused: linkFocused,
+    pointerIdle: hoveredKey === null,
+  });
+  const openFromPointer = (event: {
+    button: number;
+    detail: number;
+    clientX: number;
+    clientY: number;
+    target: EventTarget | null;
+    currentTarget: HTMLAnchorElement;
+  }) =>
+    !pressOutside.current &&
+    shouldOpenSession({
+      button: event.button,
+      detail: event.detail,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      targetInside:
+        event.target instanceof Node &&
+        event.currentTarget.contains(event.target),
+      rect: event.currentTarget.getBoundingClientRect(),
+    });
   const tipOpen =
     keyboardOwns &&
     menuFocus === rowKey &&
@@ -806,17 +910,21 @@ function SessionRow({
               if (event.button !== 0) return;
               const target = event.target;
               if (target instanceof Element && target.closest('button')) return;
+              if (!openFromPointer(event)) return;
               // Open on the press. A re-render between press and click used to
               // drop the first click, so the row looked like it ignored it.
+              pointerOpening.current = true;
               linkNode.current?.focus({ preventScroll: true });
               pressed.current = true;
               onOpen(session.id);
+              pointerOpening.current = false;
             }}
             onClick={(event) => {
               event.preventDefault();
-              if (!pressed.current) onOpen(session.id);
+              const open = openFromPointer(event);
+              if (!pressed.current && open) onOpen(session.id);
               pressed.current = false;
-              onKeepHover();
+              if (open) onKeepHover();
             }}
             onFocus={() => {
               setLinkFocused(true);
@@ -941,6 +1049,14 @@ function RecentHover({
           align="start"
           sideOffset={8}
           avoidCollisions={false}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
         >
           {details.project ? <span>{details.project}</span> : null}
           <span>{activityLabel(details.age)}</span>

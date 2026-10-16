@@ -2579,7 +2579,7 @@ pre {
 }
 /* Read-only tips must not block the control beneath Radix's positioning box. */
 [data-radix-popper-content-wrapper]:has(> .tooltip) {
-  pointer-events: none;
+  pointer-events: none !important;
 }
 .tooltip {
   z-index: 110;
@@ -2594,7 +2594,7 @@ pre {
   fill: var(--fg);
 }
 .tooltip.session-hover {
-  pointer-events: none;
+  pointer-events: none !important;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -4089,6 +4089,23 @@ pre {
 }
 .connection-status[data-state='stopped'] i {
   background: var(--negative);
+}
+.sidebar-footer button.sidebar-settings {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  width: auto;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--secondary);
+  font-size: var(--ui-small);
+}
+.sidebar-footer button.sidebar-settings:hover {
+  background: var(--hover);
+  color: var(--fg);
 }
 
 /* The top bar: the session's title and folder, the panels on the right. */

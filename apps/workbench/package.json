@@ -9,7 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 4202 --strictPort",
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/state.test.ts test/coverage.test.ts test/i18n.test.ts test/format.test.ts test/pairing.test.ts test/tool-summary.test.ts test/highlight.test.ts test/layout.test.ts test/turn-line.test.ts test/workspace-label.test.ts test/decisions.test.ts test/composer-pin.test.ts test/composer-focus.test.ts && node ../../node_modules/tsx/dist/cli.mjs --test test/live-runtime.test.ts",
+    "test": "node --test test/state.test.ts test/coverage.test.ts test/i18n.test.ts test/format.test.ts test/pairing.test.ts test/tool-summary.test.ts test/highlight.test.ts test/layout.test.ts test/turn-line.test.ts test/workspace-label.test.ts test/decisions.test.ts test/composer-pin.test.ts test/composer-focus.test.ts test/session-row.test.ts && node ../../node_modules/tsx/dist/cli.mjs --test test/live-runtime.test.ts",
     "format:check": "prettier --check src test package.json tsconfig.json vite.config.ts index.html",
     "test:ui": "npm --prefix ../desktop run test:interface"
   },
