@@ -112,12 +112,28 @@ try {
         }),
       });
       if (!(await original.evaluate((node) => node.open)))
-        await original.locator('summary').click();
-      assert.equal(
-        await original.locator('pre').textContent(),
-        attachment.content,
-        'existing context panel exposes the complete original selection and metadata',
+        await original.locator(':scope > summary').click();
+      const text = attachment.content.slice(
+        0,
+        attachment.content.lastIndexOf('\n\n--- terminal capture source ---\n'),
       );
+      assert.equal(
+        await original.locator('.terminal-selection-text').textContent(),
+        text,
+      );
+      const raw = original.locator('.terminal-selection-original');
+      assert.equal(
+        await raw.evaluate((node) => node.open),
+        false,
+        'technical metadata starts folded',
+      );
+      await raw.locator('summary').click();
+      assert.equal(
+        await raw.locator('pre').textContent(),
+        attachment.content,
+        'original attachment remains complete',
+      );
+      await raw.locator('summary').click();
       await page.screenshot({
         path: output + '/' + theme + '-original-context-preview.png',
       });

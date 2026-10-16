@@ -1,3 +1,4 @@
+import { TerminalSelectionPreview } from '../components/TerminalSelectionPreview';
 import { WorkspacePanelContents } from './WorkspacePanelContents';
 import { useSources } from '../components/SourceNavigation';
 import { desktopHost } from '../host';
@@ -490,7 +491,7 @@ export function ContextPanel({ onDialog }: Pick<Props, 'onDialog'>) {
                   alt={file.name}
                 />
               ) : (
-                <pre>{file.content}</pre>
+                <TerminalSelectionPreview file={file} />
               )}
               {file.truncated && (
                 <p className="panel-note">

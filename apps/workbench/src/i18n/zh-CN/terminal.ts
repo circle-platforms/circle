@@ -1,4 +1,7 @@
 export const terminal: Record<string, string> = {
+  'copy selected text': '复制选中文字',
+  'original attachment and source details': '原附件与来源详情',
+  'copy original attachment': '复制原附件',
   selection: '选区',
   'add selection to chat': '将选区添加到对话',
   'select terminal output first': '请先选择终端输出',
