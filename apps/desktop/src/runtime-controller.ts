@@ -21,6 +21,12 @@ import {
   SessionOccupiedError,
 } from '../../../src/session_lock.js';
 import { CheckpointStore } from '../../../src/checkpoint_store.js';
+import {
+  isTaskWorkspace,
+  newTaskName,
+  tasksRoot,
+  taskWorkspace,
+} from '../../../src/paths.js';
 import type {
   ChatModel,
   ToolCall,
@@ -427,6 +433,79 @@ export class RuntimeController {
       return undefined;
     }
   }
+  // Where a task that belongs to no project gets a folder of its own. The built-in one
+  // sits inside the data folder, as the scratch folder does; a folder the person points at
+  // may not expose the app's own data, for the same reason the default workspace may not.
+  private tasksPath(): string {
+    return tasksRoot(this.home);
+  }
+  private tasksRootFor(settings: CircleSettings): string {
+    const built = this.tasksPath();
+    if (!settings.task_folder) return built;
+    try {
+      const target = realpathSync(settings.task_folder);
+      if (!statSync(target).isDirectory()) return built;
+      return target === built || this.acceptableDefaultFolder(target)
+        ? target
+        : built;
+    } catch {
+      return built;
+    }
+  }
+  // Whether a workspace is where the app falls back to rather than a project the person
+  // opened: the default workspace, the folder no-project conversations shared before,
+  // or one of the task folders before it.
+  private isDefaultWorkspace(
+    current: string,
+    settings: CircleSettings,
+  ): boolean {
+    const fallback = this.defaultWorkspace(settings).folder;
+    // The fallback folder may not exist yet, and home may sit behind a link: compare
+    // both spellings, and never fail a command over a path that is simply missing.
+    let same = current === fallback;
+    if (!same) {
+      try {
+        same = current === realpathSync(fallback);
+      } catch {
+        /* Nothing to compare against yet. */
+      }
+    }
+    return (
+      same ||
+      this.isUnscoped(current) ||
+      isTaskWorkspace(current, this.tasksRootFor(settings))
+    );
+  }
+  /**
+   * A task that belongs to no project gets a folder of its own under the task folder,
+   * trusted as Circle's own scratch folder is, so its files and its history sit apart
+   * and it can be deleted whole.
+   */
+  private taskFolder(): string {
+    const settings = loadSettings(this.home);
+    const folder = taskWorkspace(newTaskName(), this.tasksRootFor(settings));
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    const resolved = realpathSync(folder);
+    if (!isFolderTrusted(settings, resolved))
+      saveSettingsChange(this.home, (saved) => {
+        Object.assign(saved, trustFolder(saved, resolved));
+      });
+    return resolved;
+  }
+  /**
+   * The runtime for a new session started where no project is. Nothing happens when
+   * the person is working in a project: a new session there stays in it. The runtime
+   * made for a fresh task folder opens on a conversation of its own, which is the new
+   * session.
+   */
+  private projectlessTask(runtime: AgentRuntime): AgentRuntime | undefined {
+    const current = runtime.options.workspace;
+    if (!this.isDefaultWorkspace(current, loadSettings(this.home)))
+      return undefined;
+    const owner = this.runtimes.create(this.taskFolder());
+    this.selectRuntime(owner);
+    return owner;
+  }
   private defaultWorkspace(settings: CircleSettings): {
     folder: string;
     stale?: string;
@@ -823,6 +902,7 @@ export class RuntimeController {
     const savedSettings = loadSettings(this.home);
     const inspecting = !!this.viewedSessionId;
     const defaultFolder = this.defaultWorkspace(savedSettings);
+    const taskRoot = this.tasksRootFor(savedSettings);
     // The open conversation is listed before its first message.
     const rows = this.store.list(undefined, false, true);
     const paths = [
@@ -958,10 +1038,12 @@ export class RuntimeController {
         trusted: isFolderTrusted(savedSettings, path),
         origin: 'native' as const,
         // The default circle folder is a project the person can pick. Scratch is
-        // only the separate folder used by "work without a project".
-        kind: this.isUnscoped(path)
-          ? ('scratch' as const)
-          : ('project' as const),
+        // work without one: a task's own folder, or the shared unscoped folder.
+        kind:
+          this.isUnscoped(path) || isTaskWorkspace(path, taskRoot)
+            ? ('scratch' as const)
+            : ('project' as const),
+        ...(isTaskWorkspace(path, taskRoot) ? { task: true } : {}),
         instructions: [],
       })),
       sessions,
@@ -1154,6 +1236,7 @@ export class RuntimeController {
         ...(defaultFolder.stale
           ? { oldWorkspaceFolder: defaultFolder.stale }
           : {}),
+        taskFolder: taskRoot,
         textSize: 'default',
         keybindings: {},
       },
@@ -1970,15 +2053,6 @@ export class RuntimeController {
       return false;
     }
   }
-  private ensureUnscoped(): string {
-    const folder = this.unscopedPath();
-    mkdirSync(folder, { recursive: true, mode: 0o700 });
-    const resolved = realpathSync(folder);
-    saveSettingsChange(this.home, (saved) => {
-      Object.assign(saved, trustFolder(saved, resolved));
-    });
-    return resolved;
-  }
   private workspaceById(id: string): string {
     for (const row of this.store.list(undefined, true))
       if (identity(row.workspace) === id) return row.workspace;
@@ -2192,7 +2266,8 @@ export class RuntimeController {
         if (!promptText.trim()) throw Error('prompt is empty');
         const workspace =
           p.workspaceId === undefined
-            ? this.ensureUnscoped()
+            ? // Work with no project: the first message opens in a task folder of its own.
+              this.taskFolder()
             : this.workspaceById(text(p.workspaceId, 'workspace', 200));
         if (!isFolderTrusted(loadSettings(this.home), workspace))
           throw Error('trust the workspace before running Circle');
@@ -2227,6 +2302,11 @@ export class RuntimeController {
         return runtime.jobs.backgroundForeground();
       case 'new-session': {
         const previous = this.selectedSessionId;
+        // Work with no project of its own gets a task folder; a project keeps its
+        // own sessions together. The draft conversation the app fell back to is not
+        // this task's, so it stays where it was, ready for the next loose question.
+        const task = this.projectlessTask(runtime);
+        if (task) return { sessionId: task.session.id };
         if (this.unusedSession(previous) && !this.viewedSessionId)
           return { sessionId: previous };
         const owner = this.runtimes.create(this.selectedWorkspace);
@@ -2595,7 +2675,8 @@ export class RuntimeController {
             throw Error('invalid settings');
           if (
             data.workspaceFolder !== undefined ||
-            data.oldWorkspaceFolder !== undefined
+            data.oldWorkspaceFolder !== undefined ||
+            data.taskFolder !== undefined
           )
             throw Error(
               'the default workspace only changes through the native folder dialog',
@@ -2884,6 +2965,22 @@ export class RuntimeController {
           workspaceId: identity(workspace),
           sessionId: owner.session.id,
         };
+      }
+      case 'set-task-folder': {
+        // The path comes from the native dialog, as the default workspace's does.
+        const folder = realpathSync(text(p.path, 'workspace', 8000));
+        if (!statSync(folder).isDirectory())
+          throw Error('the task folder must be a folder');
+        const built = this.tasksPath();
+        if (folder !== built && !this.acceptableDefaultFolder(folder))
+          throw Error(
+            'the task folder may not be the Circle data folder, a folder inside it or a folder that holds it',
+          );
+        saveSettingsChange(this.home, (settings) => {
+          // Choosing Circle's own tasks folder again resets the default.
+          settings.task_folder = folder === built ? '' : folder;
+        });
+        return { taskFolder: this.tasksRootFor(loadSettings(this.home)) };
       }
       case 'load-skill': {
         const skill = runtime.skills.find((skill) => skill.name === p.name);

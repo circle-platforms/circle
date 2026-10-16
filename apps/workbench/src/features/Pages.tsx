@@ -1,4 +1,4 @@
-import { desktopHost, setDefaultWorkspace } from '../host';
+import { desktopHost, setDefaultWorkspace, setTaskFolder } from '../host';
 import { recordedDecision, recordedTitle } from '../model/decisions';
 import { KeybindingsEditor } from './KeybindingsEditor';
 import { usePlugins } from '../plugins/context';
@@ -146,7 +146,14 @@ function SessionsPage({ onSession, onDialog }: Props) {
   const navigate = useNavigate();
   const location = useLocation();
   const [search, setSearch] = useState('');
-  const [all, setAll] = useState(false);
+  // A task with no project is a folder of its own, so showing only "this workspace" while
+  // one is open would hide every other task: those pages start on all workspaces.
+  const [all, setAll] = useState(() => {
+    const here = currentSession(snapshot);
+    return snapshot.workspaces.some(
+      (workspace) => workspace.id === here.workspaceId && workspace.task,
+    );
+  });
   const [archived, setArchived] = useState(false);
   const current = currentSession(snapshot);
   const sessions = visibleSessions(snapshot.sessions).filter(
@@ -1505,6 +1512,34 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
           </p>
         )}
       </section>
+      {!!settings.taskFolder && (
+        <section className="settings-block">
+          <h2>{t('tasks with no project')}</h2>
+          <div className="setting-row">
+            <span>
+              {t('folder')}
+              <small>{settings.taskFolder}</small>
+            </span>
+            {runtime.mode === 'live' && (
+              <Button
+                onClick={() =>
+                  perform(async () => {
+                    if (await setTaskFolder(runtime))
+                      notify(t('task folder changed'));
+                  })
+                }
+              >
+                {t('change…')}
+              </Button>
+            )}
+          </div>
+          <p className="panel-note">
+            {t(
+              'a task you start outside a project gets a folder of its own here, and is listed apart from your projects',
+            )}
+          </p>
+        </section>
+      )}
       <WorkspaceTrustSettings onReview={(id) => onDialog('trust', id)} />
       <ProtectedFilesSettings />
       <section className="settings-block">
