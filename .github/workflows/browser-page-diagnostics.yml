@@ -1,22 +1,19 @@
 name: Browser page diagnostics
-# Diagnostic branch only (issue #124): the release job's packaged Linux step, from the
-# fix branch, on fresh runners where the packaged check is the first Electron launch.
+# Diagnostic branch only (issue #124): can the GPU process be held back on Linux?
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  release-step:
+  hold:
     strategy:
       fail-fast: false
       matrix:
-        replica: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        build: [packaged, development]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: fix/triage-124
       - uses: actions/setup-node@v7
         with:
           node-version: '24.21.0'
@@ -25,36 +22,21 @@ jobs:
             package-lock.json
             apps/workbench/package-lock.json
             apps/desktop/package-lock.json
-      - run: git log -1 --format='%H %s'
       - run: npm ci
       - run: npm --prefix apps/workbench ci
       - run: npm --prefix apps/desktop ci
+      - run: node -e "console.log(require('./apps/desktop/node_modules/electron'))"
       - run: npm --prefix apps/desktop run package
-      # As release.yml's "Run the packaged application" step, test:desktop only
-      - name: Run the packaged application
+      - name: Probe holding the GPU process back
         shell: bash
         run: |
-          export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/Circle-linux-x64"
-          export CIRCLE_DESKTOP_EXECUTABLE="$GITHUB_WORKSPACE/apps/desktop/out/Circle-linux-x64/Circle"
-          run=()
-          if [ "$RUNNER_OS" = Linux ]; then
-            sysctl kernel.apparmor_restrict_unprivileged_userns || true
-            timeout 20 xvfb-run -a "$CIRCLE_DESKTOP_EXECUTABLE" 2>&1 | head -20 || true
-            helper="$(dirname "$CIRCLE_DESKTOP_EXECUTABLE")/chrome-sandbox"
-            sudo chown root:root "$helper"
-            sudo chmod 4755 "$helper"
-            run=(xvfb-run -a)
+          if [ "${{ matrix.build }}" = packaged ]; then
+            export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/Circle-linux-x64"
+            export CIRCLE_DESKTOP_EXECUTABLE="$CIRCLE_DESKTOP_APP_PATH/Circle"
+            helper="$CIRCLE_DESKTOP_APP_PATH/chrome-sandbox"
+          else
+            helper="$GITHUB_WORKSPACE/apps/desktop/node_modules/electron/dist/chrome-sandbox"
           fi
-          "${run[@]}" npm --prefix apps/desktop run test:desktop
-      - name: Report the first frames
-        if: always()
-        run: |
-          node -e "const r=require('./apps/desktop/artifacts/desktop/receipt.json'); console.log(JSON.stringify({harnessShow:r.startupReadiness.harnessShow, frames:r.startupReadiness.frames}))" || true
-          cat apps/desktop/artifacts/frame-readiness/receipt.json || true
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
-        if: always()
-        with:
-          name: release-step-${{ matrix.replica }}
-          path: apps/desktop/artifacts/
-          if-no-files-found: ignore
-          retention-days: 7
+          sudo chown root:root "$helper"
+          sudo chmod 4755 "$helper"
+          xvfb-run -a node apps/desktop/test/diagnose-hold.mjs
