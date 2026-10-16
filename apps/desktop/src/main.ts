@@ -1,4 +1,10 @@
+import { validateBrowserDiagnosticRequest } from './browser-diagnostics-contracts';
+import {
+  EncryptedCredentialStore,
+  nativeHttpsUrl,
+} from './encrypted-credentials';
 import { BrowserSessions } from './browser';
+import { devToolsMenuShortcut } from './menu-shortcuts';
 import { RuntimeSupervisor } from './runtime-supervisor';
 import { validateRuntimeCommand } from './runtime-protocol';
 import {
@@ -14,6 +20,7 @@ import {
   protocol,
   shell,
   session,
+  safeStorage,
 } from 'electron';
 import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
@@ -242,7 +249,10 @@ function configureMenu() {
           accelerator: 'CmdOrCtrl+Shift+R',
           click: () => window?.webContents.reload(),
         },
-        role('toggleDevTools', 'Toggle Developer Tools'),
+        {
+          ...role('toggleDevTools', 'Toggle Developer Tools'),
+          ...devToolsMenuShortcut(process.platform),
+        },
         { type: 'separator' },
         role('resetZoom', 'Actual Size'),
         role('zoomIn', 'Zoom In'),
@@ -424,6 +434,16 @@ async function createWindow() {
     // How the person handed over the browser: auto mode takes it back by itself
     (id) =>
       runtime?.state().snapshot.sessions.find((row) => row.id === id)?.mode,
+    (event) => {
+      if (window && !window.isDestroyed())
+        window.webContents.send('circle:browser-diagnostic-event', event);
+    },
+  );
+  window.webContents.on('did-start-loading', () =>
+    browsers?.clearDiagnosticSubscriptions(),
+  );
+  window.webContents.on('render-process-gone', () =>
+    browsers?.clearDiagnosticSubscriptions(),
   );
   runtime?.onSessionCleanup(async (id) => {
     await browsers?.deleteSession(id);
@@ -507,6 +527,27 @@ app
           if (allowed && !fixtureProfile) void shell.openExternal(allowed);
         },
       );
+      runtime.onCredentials(
+        new EncryptedCredentialStore(join(dataPath, 'private-credentials'), {
+          isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
+          encryptString: (value) => safeStorage.encryptString(value),
+          decryptString: (value) => safeStorage.decryptString(value),
+          ...(process.platform === 'linux'
+            ? {
+                getSelectedStorageBackend: () =>
+                  safeStorage.getSelectedStorageBackend(),
+              }
+            : {}),
+        }),
+      );
+      runtime.onWorkspaceEvent((event) => {
+        if (window && !window.isDestroyed())
+          window.webContents.send('circle:workspace-event', event);
+      });
+      runtime.onTokenDelta((delta) => {
+        if (window && !window.isDestroyed())
+          window.webContents.send('circle:runtime-token-delta', delta);
+      });
       runtime.subscribe((update) => {
         const current = new Set(
           update.snapshot.sessions.map((session) => session.id),
@@ -663,6 +704,24 @@ app
       workspaceSelections.set(listed.id, listed.path);
       return listed;
     });
+    let accessibilityRevision = 0;
+    const nativeAccessibility = () => ({
+      supported: process.platform === 'darwin' || process.platform === 'win32',
+      enabled:
+        process.platform === 'darwin' || process.platform === 'win32'
+          ? app.isAccessibilitySupportEnabled()
+          : true,
+      revision: accessibilityRevision,
+    });
+    handle('circle:native-accessibility', () => nativeAccessibility());
+    app.on('accessibility-support-changed', () => {
+      accessibilityRevision++;
+      if (window && !window.isDestroyed())
+        window.webContents.send(
+          'circle:native-accessibility-changed',
+          nativeAccessibility(),
+        );
+    });
     handle('circle:set-language', (value) => {
       if (!isNativeLocale(value)) throw Error('invalid language');
       interfaceLocale = value;
@@ -693,7 +752,26 @@ app
       return { saved: true, name: basename(result.filePath) };
     });
     handle('circle:copy-text', (value) => {
-      clipboard.writeText(boundedText(value, MAX_EXPORT_BYTES));
+      return clipboard.writeText(boundedText(value, MAX_EXPORT_BYTES));
+    });
+    handle('circle:open-external', async (value) => {
+      const url = nativeHttpsUrl(value);
+      if (!fixtureProfile) await shell.openExternal(url);
+    });
+    handle('circle:browser-diagnostics', (id, value) => {
+      if (!browsers || !runtime) throw Error('window not ready');
+      if (typeof id !== 'string') throw Error('invalid browser session');
+      const snapshot = runtime.state().snapshot;
+      const session = snapshot.sessions.find((row) => row.id === id);
+      if (!session) throw Error('browser session not found');
+      const request = validateBrowserDiagnosticRequest(value);
+      if (
+        !['read', 'watch'].includes(request.action) &&
+        !snapshot.workspaces.find((row) => row.id === session.workspaceId)
+          ?.trusted
+      )
+        throw Error('trust the workspace before changing page diagnostics');
+      return browsers.diagnostics(id, request);
     });
     handle('circle:browser-state', (id) => {
       if (!browsers) throw Error('window not ready');

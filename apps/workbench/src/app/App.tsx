@@ -1,3 +1,9 @@
+import { CommandTerminalNavigation } from '../components/CommandTerminalNavigation';
+import type { CommandTerminalResolution } from '../command-terminal-target';
+import {
+  commandTerminalUnavailable,
+  type CommandTerminalView,
+} from '../model/command-terminal-client';
 import {
   desktopHost,
   copyText,
@@ -9,7 +15,16 @@ import {
 import { parsePreviewBundle } from '../model/transfer';
 import { usePlugins } from '../plugins/context';
 import { PluginBoundary } from '../plugins/Boundary';
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Group, Panel, Separator } from 'react-resizable-panels';
 import { DropdownMenu, Tooltip } from 'radix-ui';
@@ -59,8 +74,29 @@ import { ToolMessage } from '../components/ToolMessage';
 import { Conversation } from '../features/Conversation';
 import { Home } from '../features/Home';
 import { homePath, openHome, startPath } from '../features/home-selection';
+import '../styles/developer-workbench.css';
+import {
+  sourceLocation,
+  workspaceRelativePath,
+} from '../model/source-navigation';
+import { SourceOpenCoordinator } from '../model/source-open';
+import {
+  connectWorkspaceStreams,
+  workspaceCall,
+} from '../model/workspace-client';
+import { NativeResourceBoundary } from '../components/NativeResourceBoundary';
+import { SourceNavigation } from '../components/SourceNavigation';
+import { agentState } from '../model/activity';
+import {
+  agentSourceOwner,
+  type SourceResourceOwner,
+} from '../model/source-resource-owner';
 import { Inspector, PanelButtons } from '../features/Panels';
-import { FileViewer } from '../features/FileViewer';
+const FileViewer = lazy(() =>
+  import('../features/FileViewer').then((module) => ({
+    default: module.FileViewer,
+  })),
+);
 import { ManagementPage } from '../features/Pages';
 import { DialogHost, InteractionDialog } from '../features/Dialogs';
 import { applyTheme } from '../theme';
@@ -107,6 +143,15 @@ export function App() {
   const pluginPages = registry.pages(enabled);
   const location = useLocation();
   const session = currentSession(snapshot);
+  useEffect(
+    () =>
+      runtime.mode === 'live' && snapshot.runtime?.connected
+        ? connectWorkspaceStreams(session.workspaceId, session.id, (error) =>
+            notify(String(error)),
+          )
+        : undefined,
+    [runtime, session.id, session.workspaceId, snapshot.runtime?.connected],
+  );
   const workspace = snapshot.workspaces.find(
     (item) => item.id === session.workspaceId,
   )!;
@@ -127,13 +172,87 @@ export function App() {
   const [fullView, setFullView] = useState(false);
   const [selection, setSelection] = useState('');
   const [file, setFile] = useState<string | null>(null);
+  const [fileOwner, setFileOwner] = useState<SourceResourceOwner>();
+  const sourceOpener = useRef(
+    new SourceOpenCoordinator(() => runtime.getSnapshot().activeSessionId),
+  );
+  const [sourceLine, setSourceLine] = useState<number | undefined>();
+  const [sourceColumn, setSourceColumn] = useState<number | undefined>();
+  const [quickOpen, setQuickOpen] = useState(false);
   const [agent, setAgent] = useState<string | null>(null);
+  const [commandTerminal, setCommandTerminal] = useState<CommandTerminalView>();
+  const commandRequest = useRef(0);
+  const commandReturnFocus = useRef<
+    { origin: string; trigger: HTMLElement } | undefined
+  >(undefined);
+  const commandOrigin = useRef('');
+  commandOrigin.current = JSON.stringify([
+    session.id,
+    agent,
+    location.pathname,
+    file,
+  ]);
+  useEffect(() => {
+    commandRequest.current++;
+    setCommandTerminal(undefined);
+  }, [session.id, agent]);
+  const openCommandTerminal = async (
+    sourceSessionId: string,
+    toolCallId: string,
+    trigger?: HTMLElement,
+  ) => {
+    const request = ++commandRequest.current;
+    const origin = commandOrigin.current;
+    const viewSessionId = session.id;
+    let reply: CommandTerminalResolution;
+    try {
+      reply = await workspaceCall<CommandTerminalResolution>(
+        viewSessionId,
+        'terminal',
+        'resolveCommand',
+        { sourceSessionId, toolCallId },
+      );
+    } catch {
+      if (
+        request !== commandRequest.current ||
+        origin !== commandOrigin.current
+      )
+        return;
+      throw Error(t('command terminal could not be opened; try again'));
+    }
+    if (request !== commandRequest.current || origin !== commandOrigin.current)
+      return;
+    if (!reply.available) throw Error(commandTerminalUnavailable(reply.reason));
+    if (
+      reply.target.executionSessionId !== sourceSessionId ||
+      reply.target.toolCallId !== toolCallId
+    )
+      throw Error(t('command terminal source changed; open it again'));
+    commandReturnFocus.current = trigger ? { origin, trigger } : undefined;
+    setCommandTerminal({ viewSessionId, requestId: request, resolved: reply });
+    setPanel('terminal');
+    setSelection('');
+    setInspectorOpen(true);
+  };
+
+  const selectAgent = (id: string | null) => {
+    commandRequest.current++;
+    sourceOpener.current.cancel();
+    setFile(null);
+    setFileOwner(undefined);
+    setAgent(id);
+    if (narrow) setInspectorOpen(false);
+  };
   const [dialog, setDialog] = useState<DialogId | null>(null);
   const [dialogSelection, setDialogSelection] = useState('');
   const [interaction, setInteraction] = useState<Interaction | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  const searchReturnFocus = useRef<HTMLElement | null>(null);
+  const restoreSearchFocus = useRef(false);
   const [finding, setFinding] = useState(false);
   const [search, setSearch] = useState('');
+  const [searchCursor, setSearchCursor] = useState(0);
+  useEffect(() => setSearchCursor(0), [search, searchOpen, quickOpen]);
   const page = location.pathname.startsWith('/page/')
     ? (location.pathname.slice(6) as PageId)
     : null;
@@ -165,13 +284,63 @@ export function App() {
   // The view takes the focus when it opens, so Escape is one keystroke away, and the way
   // out is always in its own header as well.
   const wholeBox = useRef<HTMLDivElement>(null);
+  const splitInspectorBox = useRef<HTMLDivElement>(null);
+  // One original resource host moves between the split and the full-view surface.
+  // The portal target stays identical, so native sessions and panel drafts stay mounted.
+  const [inspectorHost] = useState(() => {
+    const host = document.createElement('div');
+    host.className = 'inspector-resource-host';
+    return host;
+  });
+  useLayoutEffect(() => {
+    const destination = whole ? wholeBox.current : splitInspectorBox.current;
+    if (destination && inspectorHost.parentElement !== destination)
+      destination.appendChild(inspectorHost);
+  }, [whole, inspectorHost]);
+  useEffect(() => () => inspectorHost.remove(), [inspectorHost]);
   useEffect(() => {
     if (whole) wholeBox.current?.focus();
   }, [whole]);
-  const onSession = () => {
+  const sessionSelection = useRef({ revision: 0, pending: Promise.resolve() });
+  const selectSessionAndNavigate = (id: string) => {
+    const revision = ++sessionSelection.current.revision;
+    // A session switch can load trusted configuration asynchronously. Preserve user
+    // selection order and let only the latest request choose the visible route.
+    const pending = sessionSelection.current.pending
+      .catch(() => {})
+      .then(async () => {
+        if (revision !== sessionSelection.current.revision) return;
+        try {
+          await runtime.selectSession(id);
+        } catch (error) {
+          if (revision === sessionSelection.current.revision) throw error;
+          return;
+        }
+        if (
+          revision !== sessionSelection.current.revision ||
+          runtime.getSnapshot().activeSessionId !== id
+        )
+          return;
+        sourceOpener.current.cancel();
+        setFile(null);
+        setFileOwner(undefined);
+        setAgent(null);
+        navigate(`/session/${id}`);
+      });
+    sessionSelection.current.pending = pending;
+    return pending;
+  };
+  const onSession = (focusComposer = false) => {
+    sourceOpener.current.cancel();
     setFile(null);
+    setFileOwner(undefined);
     setAgent(null);
-    navigate(`/session/${runtime.getSnapshot().activeSessionId}`);
+    navigate(
+      `/session/${runtime.getSnapshot().activeSessionId}`,
+      focusComposer
+        ? { state: { focusComposer: performance.now() } }
+        : undefined,
+    );
   };
   // The first time, before anything is set up, the connection form opens by itself.
   useEffect(() => {
@@ -208,18 +377,83 @@ export function App() {
     };
     return host.onBrowserEvent(show);
   }, [session.id, onPage, narrow]);
-  const onFile = async (path: string) => {
-    try {
-      await readNativeFile(runtime, path);
-      setFile(path);
-      setAgent(null);
-      if (narrow) setInspectorOpen(false);
-      onSessionRoute();
-    } catch (error) {
+  const openSource = async (
+    path: string,
+    line?: number,
+    column?: number,
+    sourceOwner?: SourceResourceOwner,
+  ) => {
+    commandRequest.current++;
+    const sourceSessionId = session.id;
+    const result = await sourceOpener.current.open(
+      sourceSessionId,
+      async () => {
+        const target = /^file:/i.test(path) ? sourceLocation(path) : null;
+        if (/^file:/i.test(path) && !target)
+          throw Error('unsupported source path');
+        let requested = target?.path ?? path;
+        if (/^\/[A-Za-z]:[\\/]/.test(requested)) requested = requested.slice(1);
+        const relative =
+          runtime.mode === 'live'
+            ? (
+                await workspaceCall<{ path: string }>(
+                  sourceOwner?.sessionId ?? sourceSessionId,
+                  'documents',
+                  'resolveSource',
+                  { path: requested },
+                )
+              ).path
+            : workspaceRelativePath(
+                requested,
+                snapshot.workspaces.find(
+                  (item) =>
+                    item.id ===
+                    (sourceOwner?.workspaceId ?? session.workspaceId),
+                )?.path ?? '',
+              );
+        if (runtime.mode !== 'live') await readNativeFile(runtime, relative);
+        return {
+          path: relative.replaceAll('\\', '/'),
+          line: line ?? target?.line,
+          column: column ?? target?.column,
+        };
+      },
+    );
+    if (result.status === 'superseded') return;
+    if (result.status === 'failed') {
+      const error = result.error;
       notify(
-        error instanceof Error ? error.message : t('file could not be opened'),
+        error instanceof Error
+          ? error.message === 'source is outside the workspace' ||
+            error.message === 'source is outside the granted workspace'
+            ? t('source is outside the workspace')
+            : error.message === 'unsupported source path'
+              ? t('unsupported source path')
+              : error.message
+          : t('file could not be opened'),
       );
+      return;
     }
+    setFileOwner(sourceOwner ?? undefined);
+    setFile(result.source.path);
+    setSourceLine(result.source.line);
+    setSourceColumn(result.source.column);
+    if (narrow) setInspectorOpen(false);
+    navigate(`/session/${sourceSessionId}`);
+  };
+
+  const onFile = (path: string, line?: number, column?: number) =>
+    openSource(path, line, column);
+  const onAgentFile = (path: string, line?: number, column?: number) => {
+    const origin = snapshot.agents.find(
+      (item) => item.id === agent && item.sessionId === session.id,
+    );
+    const owner = origin && agentSourceOwner(origin);
+    if (!owner) {
+      notify(t('source workspace is not available'));
+      return;
+    }
+    return openSource(path, line, column, owner);
   };
   const onSessionRoute = () =>
     navigate(`/session/${runtime.getSnapshot().activeSessionId}`);
@@ -248,7 +482,13 @@ export function App() {
       navigate(startPath(snapshot), { replace: true });
       return;
     }
-    if (location.pathname === '/home') return;
+    if (location.pathname === '/home') {
+      sourceOpener.current.cancel();
+      setFile(null);
+      setFileOwner(undefined);
+      setAgent(null);
+      return;
+    }
     const id = location.pathname.startsWith('/session/')
       ? location.pathname.slice(9)
       : undefined;
@@ -259,7 +499,9 @@ export function App() {
     }
   }, [location.pathname]);
   useEffect(() => {
+    sourceOpener.current.cancel();
     setFile(null);
+    setFileOwner(undefined);
     setAgent(null);
     const id = location.pathname.startsWith('/session/')
       ? location.pathname.slice(9)
@@ -339,14 +581,15 @@ export function App() {
             });
             onSession();
           } else if (into) into(nativeAttachment(item));
-          else
-            runtime.change((state) => {
-              const target = state.sessions.find(
-                (session) => session.id === originSessionId,
-              );
-              if (target && target.lifecycle !== 'deleting')
-                target.attachments.push(nativeAttachment(item));
-            });
+          else {
+            const target = runtime
+              .getSnapshot()
+              .sessions.find((session) => session.id === originSessionId);
+            if (target && target.lifecycle !== 'deleting')
+              runtime.updateSessionView(originSessionId, {
+                attachments: [...target.attachments, nativeAttachment(item)],
+              });
+          }
         }
       } catch (error) {
         if (!into && runtime.getSnapshot().activeSessionId !== originSessionId)
@@ -453,14 +696,15 @@ export function App() {
             truncated: kind === 'file' && item.size > 256000,
           };
           if (into) into(attachment);
-          else
-            runtime.change((state) => {
-              const target = state.sessions.find(
-                (session) => session.id === originSessionId,
-              );
-              if (target && target.lifecycle !== 'deleting')
-                target.attachments.push(attachment);
-            });
+          else {
+            const target = runtime
+              .getSnapshot()
+              .sessions.find((session) => session.id === originSessionId);
+            if (target && target.lifecycle !== 'deleting')
+              runtime.updateSessionView(originSessionId, {
+                attachments: [...target.attachments, attachment],
+              });
+          }
         }
       } catch (error) {
         if (!into && runtime.getSnapshot().activeSessionId !== originSessionId)
@@ -475,7 +719,7 @@ export function App() {
     input.click();
   };
   setRouter((result) => {
-    if (result.openSession) onSession();
+    if (result.openSession) onSession(result.focusComposer);
     if (result.focusComposer) sealComposerFocus();
     if (result.page) navigate('/page/' + result.page);
     if (result.dialog) onDialog(result.dialog, result.selection);
@@ -519,6 +763,27 @@ export function App() {
       if (document.querySelector('[role="dialog"]')) return;
       if (isDesktopSearch(event)) {
         event.preventDefault();
+        searchReturnFocus.current =
+          document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+        restoreSearchFocus.current = true;
+        setQuickOpen(false);
+        setSearchOpen(true);
+      } else if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === 'p' &&
+        !document.querySelector('[role="dialog"]')
+      ) {
+        event.preventDefault();
+        searchReturnFocus.current =
+          document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+        restoreSearchFocus.current = true;
+        setQuickOpen(true);
+        setSearch('');
         setSearchOpen(true);
         return;
       }
@@ -559,7 +824,9 @@ export function App() {
     location.pathname,
     location.search,
   ]);
-  const activeAgent = snapshot.agents.find((item) => item.id === agent);
+  const activeAgent = snapshot.agents.find(
+    (item) => item.id === agent && item.sessionId === session.id,
+  );
   const pluginPage = pluginPages.find((item) => item.page.id === page);
   const installedPage = registry.plugins.find((plugin) =>
     plugin.pages?.some((item) => item.id === page),
@@ -583,44 +850,6 @@ export function App() {
       onDialog={onDialog}
       onPanel={onPanel}
     />
-  ) : file ? (
-    <FileViewer path={file} onClose={() => setFile(null)} />
-  ) : activeAgent ? (
-    <section className="agent-record">
-      <header>
-        <Button onClick={() => setAgent(null)}>
-          <ChevronLeft size={13} />
-          {t('main')}
-        </Button>
-        <strong>{activeAgent.name}</strong>
-        <Status value={activeAgent.status} />
-      </header>
-      <div className="agent-record-body">
-        <h2>{activeAgent.description}</h2>
-        <Facts
-          values={{
-            [t('model')]: activeAgent.model,
-            [t('tokens')]: activeAgent.tokens,
-            [t('record')]: activeAgent.id,
-          }}
-        />
-        {activeAgent.messages.map((message) =>
-          message.tool ? (
-            <ToolMessage
-              key={message.id}
-              tool={message.tool}
-              expanded
-              onAgent={setAgent}
-              onFile={onFile}
-            />
-          ) : (
-            <div className="message" key={message.id}>
-              <Markdown text={message.text} />
-            </div>
-          ),
-        )}
-      </div>
-    </section>
   ) : home ? (
     <Home
       requestedId={homeRequested}
@@ -629,19 +858,110 @@ export function App() {
       onAttach={(accept) => void pickFiles(false, accept)}
     />
   ) : (
-    <Conversation
-      onDialog={onDialog}
-      onPanel={onPanel}
-      onAgent={setAgent}
-      onFile={onFile}
-      onAttach={() => pickFiles()}
-      onCommand={() => {
-        setSearch('');
-        setSearchOpen(true);
-      }}
-      finding={finding}
-      setFinding={setFinding}
-    />
+    <div className="session-resource-stack">
+      <div className="session-resource-view" hidden={!!file}>
+        {activeAgent ? (
+          <SourceNavigation onFile={onAgentFile}>
+            <section className="agent-record">
+              <header>
+                <Button onClick={() => selectAgent(null)}>
+                  <ChevronLeft size={13} />
+                  {t('main')}
+                </Button>
+                <strong>{activeAgent.name}</strong>
+                <Status value={agentState(activeAgent)} />
+                {activeAgent.task &&
+                  snapshot.sessions.some(
+                    (item) => item.id === activeAgent.id,
+                  ) && (
+                    <IconButton
+                      label={t('open task conversation')}
+                      onClick={() =>
+                        perform(() => selectSessionAndNavigate(activeAgent.id))
+                      }
+                    >
+                      <ArrowUpRight size={14} />
+                    </IconButton>
+                  )}
+              </header>
+              <div className="agent-record-body">
+                <h2>{activeAgent.description}</h2>
+                <Facts
+                  values={{
+                    [t('model')]: activeAgent.model,
+                    [t('tokens')]: activeAgent.tokens,
+                    [t('record')]: activeAgent.id,
+                  }}
+                />
+                {activeAgent.messages.map((message) =>
+                  message.tool ? (
+                    <ToolMessage
+                      key={message.id}
+                      tool={message.tool}
+                      ownerSessionId={activeAgent.id}
+                      expanded
+                      onAgent={selectAgent}
+                      onFile={onAgentFile}
+                    />
+                  ) : (
+                    <div className="message" key={message.id}>
+                      <Markdown text={message.text} />
+                    </div>
+                  ),
+                )}
+              </div>
+            </section>
+          </SourceNavigation>
+        ) : (
+          <NativeResourceBoundary
+            name={t('conversation')}
+            resetKey={session.id}
+          >
+            <Conversation
+              focusComposer={
+                location.pathname === `/session/${session.id}`
+                  ? (location.state as { focusComposer?: number } | null)
+                      ?.focusComposer
+                  : undefined
+              }
+              onDialog={onDialog}
+              onPanel={onPanel}
+              onAgent={selectAgent}
+              onFile={onFile}
+              onAttach={() => pickFiles()}
+              onCommand={() => {
+                setSearch('');
+                setSearchOpen(true);
+              }}
+              finding={finding}
+              setFinding={setFinding}
+            />
+          </NativeResourceBoundary>
+        )}
+      </div>
+      <div className="session-resource-view" hidden={!file}>
+        {file && (
+          <NativeResourceBoundary name={t('editor')} resetKey={file}>
+            <Suspense fallback={<p role="status">{t('opening file…')}</p>}>
+              <FileViewer
+                path={file}
+                line={sourceLine}
+                column={sourceColumn}
+                resourceOwner={fileOwner}
+                onNavigate={(path, line, column) =>
+                  openSource(path, line, column, fileOwner)
+                }
+                onClose={() => {
+                  sourceOpener.current.cancel();
+                  setFile(null);
+                  setFileOwner(undefined);
+                }}
+              />
+            </Suspense>
+          </NativeResourceBoundary>
+        )}
+      </div>
+    </div>
   );
   // The session's own actions, under its title as Claude has them.
   const SESSION_ACTIONS = [
@@ -658,359 +978,447 @@ export function App() {
     [() => t('redo on screen'), () => act(() => runtime.command('redo'))],
   ] as const;
   const inspector = (
-    <Inspector
-      panel={panel}
-      selection={selection}
-      onPanel={onPanel}
-      onClose={() => setInspectorOpen(false)}
-      whole={whole}
-      canBeWhole={canBeWhole}
-      onWhole={() => setFullView((on) => !on)}
-      onFile={onFile}
-      onAgent={setAgent}
-      onDialog={onDialog}
-      onInteraction={(item) => {
-        if (item.kind === 'secret') {
-          onDialog('secret');
-        } else setInteraction(item);
-      }}
-    />
+    <NativeResourceBoundary name={t('inspector')} resetKey={panel}>
+      <Inspector
+        resourcesPaused={home}
+        panel={panel}
+        visible={inspectorVisible}
+        commandTerminal={commandTerminal}
+        onExitCommandTerminal={() => {
+          commandRequest.current++;
+          commandReturnFocus.current = undefined;
+          setCommandTerminal(undefined);
+        }}
+        onSession={(id) => {
+          perform(() => selectSessionAndNavigate(id));
+        }}
+        whole={whole}
+        canBeWhole={canBeWhole}
+        onWhole={() => setFullView((on) => !on)}
+        selection={selection}
+        onPanel={onPanel}
+        onClose={() => {
+          commandRequest.current++;
+          setInspectorOpen(false);
+          const previous = commandReturnFocus.current;
+          if (
+            panel === 'terminal' &&
+            commandTerminal &&
+            previous?.origin === commandOrigin.current &&
+            previous.trigger.isConnected
+          )
+            previous.trigger.focus({ preventScroll: true });
+        }}
+        onFile={onFile}
+        onAgent={selectAgent}
+        onDialog={onDialog}
+        onInteraction={(item) => {
+          if (item.kind === 'secret') {
+            onDialog('secret');
+          } else setInteraction(item);
+        }}
+      />
+    </NativeResourceBoundary>
   );
-  const searchItems = [
-    ...pluginPages.map(({ page }) => ({
-      id: 'plugin-' + page.id,
-      label: page.title,
-      detail: t('platform plugin'),
-      run: () => navigate('/page/' + page.id),
-    })),
-    ...visibleSessions(snapshot.sessions).map((item) => ({
-      id: item.id,
-      label: sessionTitle(item.title),
-      detail: t('session · {workspace}', {
-        workspace: String(
-          snapshot.workspaces.find(
-            (workspace) => workspace.id === item.workspaceId,
-          )?.name,
+  const searchItems = searchOpen
+    ? [
+        ...[
+          { id: 'new', label: t('new session') },
+          { id: 'compact', label: t('compact context') },
+          { id: 'fork', label: t('fork') },
+          { id: 'export', label: t('export') },
+          { id: 'name', label: t('rename') },
+        ].map((command) => ({
+          id: 'command-' + command.id,
+          label: command.label,
+          detail: t('command'),
+          // A new session starts from the home composer, as everywhere else.
+          run: () =>
+            command.id === 'new'
+              ? openHome(navigate, `${location.pathname}${location.search}`)
+              : act(() => runtime.command(command.id)),
+        })),
+        ...pluginPages.map(({ page }) => ({
+          id: 'plugin-' + page.id,
+          label: page.title,
+          detail: t('platform plugin'),
+          run: () => navigate('/page/' + page.id),
+        })),
+        ...visibleSessions(snapshot.sessions).map((item) => ({
+          id: item.id,
+          label: sessionTitle(item.title),
+          detail: t('session · {workspace}', {
+            workspace: String(
+              snapshot.workspaces.find(
+                (workspace) => workspace.id === item.workspaceId,
+              )?.name,
+            ),
+          }),
+          run: () => perform(() => selectSessionAndNavigate(item.id)),
+        })),
+        ...NAVIGATION.map((item) => ({
+          id: item.id,
+          label: item.label(),
+          detail: t('page'),
+          run: () => navigate('/page/' + item.id),
+        })),
+        ...snapshot.files
+          .filter((item) => item.workspaceId === session.workspaceId)
+          .map((item) => ({
+            id: item.id,
+            label: item.path,
+            detail: t('file'),
+            run: () => onFile(item.path),
+          })),
+        ...visibleSessions(snapshot.sessions).flatMap((item) =>
+          historyMessages(item).map((message) => ({
+            id: message.id,
+            label: message.text,
+            detail: t('message history'),
+            run: () => {
+              void runtime.selectSession(item.id);
+              if (message.role === 'user')
+                runtime.change((state) => {
+                  const target = state.sessions.find(
+                    (session) => session.id === item.id,
+                  );
+                  if (target) target.draft = message.text;
+                });
+              onSession();
+            },
+          })),
         ),
-      }),
-      run: () => {
-        runtime.selectSession(item.id);
-        onSession();
-      },
-    })),
-    ...NAVIGATION.map((item) => ({
-      id: item.id,
-      label: item.label(),
-      detail: t('page'),
-      run: () => navigate('/page/' + item.id),
-    })),
-    ...snapshot.files
-      .filter((item) => item.workspaceId === session.workspaceId)
-      .map((item) => ({
-        id: item.id,
-        label: item.path,
-        detail: t('file'),
-        run: () => onFile(item.path),
-      })),
-    ...visibleSessions(snapshot.sessions).flatMap((item) =>
-      historyMessages(item).map((message) => ({
-        id: message.id,
-        label: message.text,
-        detail: t('message history'),
-        run: () => {
-          void runtime.selectSession(item.id);
-          if (message.role === 'user')
-            runtime.change((state) => {
-              const target = state.sessions.find(
-                (session) => session.id === item.id,
-              );
-              if (target) target.draft = message.text;
-            });
-          onSession();
-        },
-      })),
-    ),
-  ].filter((item) =>
-    (item.label + ' ' + item.detail)
-      .toLowerCase()
-      .includes(search.toLowerCase()),
-  );
-  return (
-    <Tooltip.Provider delayDuration={300}>
-      <div
-        className={`workbench${sidebarCollapsed && !narrow ? ' sidebar-collapsed' : ''}`}
-      >
-        {desktopHost() && <div className="desktop-drag-region" />}
-        <div className="desktop-sidebar">
-          <Sidebar
-            onSearch={() => setSearchOpen(true)}
-            onDialog={onDialog}
-            renaming={dialog === 'rename'}
-          />
-        </div>
-        <main className="workspace">
-          <header className="topbar">
-            <div className="topbar-title">
-              <IconButton
-                label={t('show or hide the sidebar')}
-                onClick={toggleSidebar}
-              >
-                <PanelLeft size={16} />
-              </IconButton>
-              {page || file || agent || home ? (
-                <span className="page-title">
-                  {home
-                    ? t('new session')
-                    : page
-                      ? (PAGE_NAMES[page]?.() ?? page)
-                      : file
-                        ? file
-                        : t('agent record')}
-                </span>
-              ) : (
+      ].filter(
+        (item) =>
+          (!quickOpen || item.detail === t('file')) &&
+          (item.label + ' ' + item.detail)
+            .toLowerCase()
+            .includes(search.toLowerCase()),
+      )
+    : [];
+  const surface = (
+    <SourceNavigation onFile={onFile}>
+      <Tooltip.Provider delayDuration={300}>
+        <div
+          className={`workbench${sidebarCollapsed && !narrow ? ' sidebar-collapsed' : ''}`}
+        >
+          {desktopHost() && <div className="desktop-drag-region" />}
+          <div className="desktop-sidebar">
+            <Sidebar
+              onSearch={() => setSearchOpen(true)}
+              onDialog={onDialog}
+              renaming={dialog === 'rename'}
+            />
+          </div>
+          <main className="workspace">
+            <header className="topbar">
+              <div className="topbar-title">
+                <IconButton
+                  label={t('show or hide the sidebar')}
+                  onClick={toggleSidebar}
+                >
+                  <PanelLeft size={16} />
+                </IconButton>
+                {page || file || agent || home ? (
+                  <span className="page-title">
+                    {home
+                      ? t('new session')
+                      : page
+                        ? (PAGE_NAMES[page]?.() ?? page)
+                        : file
+                          ? file
+                          : t('agent record')}
+                  </span>
+                ) : (
+                  <DropdownMenu.Root>
+                    <h1 className="session-title">
+                      <DropdownMenu.Trigger asChild>
+                        <button>
+                          <span>{sessionTitle(session.title)}</span>
+                          <ChevronDown size={14} />
+                        </button>
+                      </DropdownMenu.Trigger>
+                    </h1>
+                    <DropdownMenu.Portal>
+                      <DropdownMenu.Content
+                        className="dropdown"
+                        align="start"
+                        sideOffset={6}
+                      >
+                        {SESSION_ACTIONS.map(([label, run]) => (
+                          <DropdownMenu.Item key={label()} onSelect={run}>
+                            {label()}
+                          </DropdownMenu.Item>
+                        ))}
+                      </DropdownMenu.Content>
+                    </DropdownMenu.Portal>
+                  </DropdownMenu.Root>
+                )}
+                {!home && (
+                  <span className="project-chip" title={workspace.path}>
+                    <Folder size={12} />
+                    {workspace.name}
+                    {workspace.branch && (
+                      <>
+                        <GitBranch size={11} />
+                        {workspace.branch}
+                      </>
+                    )}
+                  </span>
+                )}
+              </div>
+              <div className="topbar-actions">
+                {!page && !home && (
+                  <PanelButtons
+                    panel={panel}
+                    open={inspectorOpen}
+                    onPanel={(id) => onPanel(id)}
+                    onClose={() => setInspectorOpen(false)}
+                  />
+                )}
                 <DropdownMenu.Root>
-                  <h1 className="session-title">
-                    <DropdownMenu.Trigger asChild>
-                      <button>
-                        <span>{sessionTitle(session.title)}</span>
-                        <ChevronDown size={14} />
-                      </button>
-                    </DropdownMenu.Trigger>
-                  </h1>
+                  <DropdownMenu.Trigger asChild>
+                    <button className="icon-button" aria-label={t('more')}>
+                      <MoreHorizontal size={16} />
+                    </button>
+                  </DropdownMenu.Trigger>
                   <DropdownMenu.Portal>
                     <DropdownMenu.Content
                       className="dropdown"
-                      align="start"
+                      align="end"
                       sideOffset={6}
                     >
-                      {SESSION_ACTIONS.map(([label, run]) => (
-                        <DropdownMenu.Item key={label()} onSelect={run}>
-                          {label()}
-                        </DropdownMenu.Item>
-                      ))}
+                      <DropdownMenu.Item onSelect={() => setSearchOpen(true)}>
+                        {t('search')}
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item
+                        onSelect={() =>
+                          perform(() =>
+                            runtime.change((state) => {
+                              state.settings.theme =
+                                document.documentElement.dataset.theme ===
+                                'dark'
+                                  ? 'light'
+                                  : 'dark';
+                            }),
+                          )
+                        }
+                      >
+                        {document.documentElement.dataset.theme === 'dark'
+                          ? t('light theme')
+                          : t('dark theme')}
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item
+                        onSelect={() =>
+                          onDialog(
+                            runtime.mode === 'live' ? 'connect' : 'preview',
+                          )
+                        }
+                      >
+                        {t('connection')}
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item
+                        onSelect={() => navigate('/page/help')}
+                      >
+                        {t('help')}
+                      </DropdownMenu.Item>
                     </DropdownMenu.Content>
                   </DropdownMenu.Portal>
                 </DropdownMenu.Root>
-              )}
-              {!page && !home && (
-                <span className="project-chip" title={workspace.path}>
-                  <Folder size={12} />
-                  {workspaceLabel(workspace)}
-                  {workspace.branch && (
-                    <>
-                      <GitBranch size={11} />
-                      {workspace.branch}
-                    </>
-                  )}
-                </span>
-              )}
-            </div>
-            <div className="topbar-actions">
-              {!page && !home && (
-                <PanelButtons
-                  panel={panel}
-                  open={inspectorOpen}
-                  onPanel={(id) => onPanel(id)}
-                  onClose={() => setInspectorOpen(false)}
-                />
-              )}
-              <DropdownMenu.Root>
-                <DropdownMenu.Trigger asChild>
-                  <button className="icon-button" aria-label={t('more')}>
-                    <MoreHorizontal size={16} />
-                  </button>
-                </DropdownMenu.Trigger>
-                <DropdownMenu.Portal>
-                  <DropdownMenu.Content
-                    className="dropdown app-menu"
-                    align="end"
-                    sideOffset={6}
-                  >
-                    <DropdownMenu.Item onSelect={() => setSearchOpen(true)}>
-                      <span>{t('search')}</span>
-                      {/* A visible hint. The item is still named by its words. */}
-                      <kbd aria-hidden="true">
-                        {formatChord(DESKTOP_SEARCH_CHORD)}
-                      </kbd>
-                    </DropdownMenu.Item>
-                    <DropdownMenu.Item
-                      onSelect={() =>
-                        perform(() =>
-                          runtime.change((state) => {
-                            state.settings.theme =
-                              document.documentElement.dataset.theme === 'dark'
-                                ? 'light'
-                                : 'dark';
-                          }),
-                        )
-                      }
-                    >
-                      {document.documentElement.dataset.theme === 'dark'
-                        ? t('light theme')
-                        : t('dark theme')}
-                    </DropdownMenu.Item>
-                    <DropdownMenu.Item
-                      onSelect={() =>
-                        onDialog(
-                          runtime.mode === 'live' ? 'connect' : 'preview',
-                        )
-                      }
-                    >
-                      {t('connection')}
-                    </DropdownMenu.Item>
-                    <DropdownMenu.Item onSelect={() => navigate('/page/help')}>
-                      {t('help')}
-                    </DropdownMenu.Item>
-                  </DropdownMenu.Content>
-                </DropdownMenu.Portal>
-              </DropdownMenu.Root>
-            </div>
-          </header>
-          <div
-            className={whole ? 'workspace-content whole' : 'workspace-content'}
-          >
-            {/* Seen whole, the panel takes the workspace above the conversation's own
-                input, which stays where the person left it. The columns are only put
-                aside, never unmounted: what was typed, and where the transcript had been
-                scrolled, are kept for the way back. */}
-            {whole && (
-              <div
-                className="inspector-full"
-                ref={wholeBox}
-                tabIndex={-1}
-                onKeyDown={(event) => {
-                  if (event.key === 'Escape') setFullView(false);
-                }}
-              >
-                {inspector}
               </div>
-            )}
-            <div className={whole ? 'columns whole-under' : 'columns'}>
-              <Group orientation="horizontal" id="workbench-columns">
-                <Panel
-                  id="main"
-                  defaultSize={inspectorVisible && !narrow ? '68%' : '100%'}
-                  minSize="38%"
+            </header>
+            <div
+              className={
+                whole ? 'workspace-content whole' : 'workspace-content'
+              }
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  if (whole) setFullView(false);
+                  else if (inspectorVisible) setInspectorOpen(false);
+                }
+              }}
+            >
+              {whole && (
+                <div className="inspector-full" ref={wholeBox} tabIndex={-1} />
+              )}
+              <div className={whole ? 'columns whole-under' : 'columns'}>
+                <Group
+                  orientation="horizontal"
+                  id="workbench-columns"
+                  data-inspector-mode={
+                    inspectorVisible && !whole
+                      ? narrow
+                        ? 'overlay'
+                        : 'split'
+                      : 'closed'
+                  }
                 >
-                  <div className="main-stack">
-                    {content}
-                    {/* Centred on the conversation, above its input. */}
-                    {notice && !whole && (
-                      <div className="toast" role="status">
-                        {notice}
-                      </div>
-                    )}
-                  </div>
-                </Panel>
-                {inspectorVisible && !narrow && !whole && (
-                  <>
-                    <Separator
-                      className="resize-handle"
-                      aria-label={t('resize inspector')}
+                  <Panel id="main" defaultSize="68%" minSize="38%">
+                    <div className="main-stack">{content}</div>
+                  </Panel>
+                  <Separator
+                    className="resize-handle"
+                    style={{
+                      display:
+                        inspectorVisible && !narrow && !whole
+                          ? undefined
+                          : 'none',
+                    }}
+                    aria-label={t('resize inspector')}
+                  />
+                  <Panel
+                    id="inspector"
+                    minSize={narrow ? 0 : 290}
+                    maxSize={narrow ? '100%' : '50%'}
+                    defaultSize="32%"
+                    className={
+                      narrow
+                        ? 'inspector-column inspector-overlay'
+                        : 'inspector-column'
+                    }
+                    style={{
+                      display: inspectorVisible && !whole ? undefined : 'none',
+                    }}
+                  >
+                    <div
+                      ref={splitInspectorBox}
+                      className="inspector-resource-host"
+                      onKeyDown={(event) => {
+                        if (event.key === 'Escape') setInspectorOpen(false);
+                      }}
                     />
-                    <Panel
-                      id="inspector"
-                      minSize={290}
-                      maxSize="50%"
-                      defaultSize="32%"
-                    >
-                      {inspector}
-                    </Panel>
-                  </>
-                )}
-              </Group>
-            </div>
-            {/* A narrow window lays the panel over the conversation, on the right,
-                and keeps the top bar's icons usable. */}
-            {inspectorVisible && narrow && (
-              <div
-                className="inspector-overlay"
-                onKeyDown={(event) => {
-                  if (event.key === 'Escape') setInspectorOpen(false);
-                }}
-              >
-                {inspector}
+                  </Panel>
+                </Group>
               </div>
-            )}
-          </div>
-        </main>
-        <Modal
-          open={sidebarOpen}
-          onOpenChange={setSidebarOpen}
-          title={t('navigation')}
-        >
-          <Sidebar
-            onSearch={() => {
-              setSidebarOpen(false);
-              setSearchOpen(true);
+              {createPortal(inspector, inspectorHost)}
+            </div>
+          </main>
+          <Modal
+            open={sidebarOpen}
+            onOpenChange={setSidebarOpen}
+            title={t('navigation')}
+          >
+            <Sidebar
+              onSearch={() => {
+                setSidebarOpen(false);
+                setSearchOpen(true);
+              }}
+              onNavigate={() => setSidebarOpen(false)}
+              onDialog={onDialog}
+              renaming={dialog === 'rename'}
+            />
+          </Modal>
+          <Modal
+            open={searchOpen}
+            onOpenChange={setSearchOpen}
+            title={quickOpen ? t('quick open') : t('search')}
+            onCloseAutoFocus={(event) => {
+              const target = searchReturnFocus.current;
+              if (restoreSearchFocus.current && target?.isConnected) {
+                event.preventDefault();
+                target.focus({ preventScroll: true });
+              }
+              restoreSearchFocus.current = false;
+              searchReturnFocus.current = null;
             }}
-            onNavigate={() => setSidebarOpen(false)}
-            onDialog={onDialog}
-            renaming={dialog === 'rename'}
-          />
-        </Modal>
-        <Modal
-          open={searchOpen}
-          onOpenChange={setSearchOpen}
-          title={t('search')}
-        >
-          <SearchInput
-            autoFocus
-            value={search}
-            onChange={setSearch}
-            label={t('global search')}
-            placeholder={t('sessions, files, pages or past messages')}
-          />
-          <div className="search-results">
-            {search.trim() && searchItems.length === 0 ? (
-              <EmptyState title={t('no results')} />
-            ) : (
-              searchItems.map((item) => (
-                <button
-                  key={item.id}
-                  onClick={() => {
-                    item.run();
+          >
+            <SearchInput
+              autoFocus
+              value={search}
+              onChange={setSearch}
+              label={t('global search')}
+              inputProps={{
+                onKeyDown: (event) => {
+                  if (event.nativeEvent.isComposing) return;
+                  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    setSearchCursor((value) =>
+                      Math.max(
+                        0,
+                        Math.min(
+                          searchItems.length - 1,
+                          value + (event.key === 'ArrowDown' ? 1 : -1),
+                        ),
+                      ),
+                    );
+                  } else if (
+                    event.key === 'Enter' &&
+                    searchItems[searchCursor]
+                  ) {
+                    event.preventDefault();
+                    restoreSearchFocus.current = false;
+                    searchItems[searchCursor]!.run();
                     setSearchOpen(false);
                     setSearch('');
-                  }}
-                >
-                  <Search size={14} />
-                  <span>
-                    <strong>{item.label}</strong>
-                    <small>{item.detail}</small>
-                  </span>
-                  <ArrowUpRight size={12} />
-                </button>
-              ))
-            )}
-          </div>
-        </Modal>
-        <DialogHost
-          dialog={dialog}
-          selection={dialogSelection}
-          onClose={() => setDialog(null)}
-          onSession={onSession}
-        />
-        <InteractionDialog
-          item={
-            interaction
-              ? (snapshot.interactions.find(
-                  (item) => item.id === interaction.id,
-                ) ?? null)
-              : null
-          }
-          onClose={() => {
-            setInteraction(null);
-            if (narrow) setInspectorOpen(false);
-          }}
-        />
-        {/* With the panel seen whole, the conversation shows only its input. */}
-        {notice && whole && (
-          <div className="toast whole" role="status">
-            {notice}
-          </div>
-        )}
-      </div>
-    </Tooltip.Provider>
+                  }
+                },
+              }}
+              placeholder={
+                quickOpen
+                  ? t('search workspace files')
+                  : t('sessions, files, pages or past messages')
+              }
+            />
+            <div className="search-results">
+              {search.trim() && searchItems.length === 0 ? (
+                <EmptyState title={t('no results')} />
+              ) : (
+                searchItems.map((item, index) => (
+                  <button
+                    key={item.id}
+                    className={index === searchCursor ? 'selected' : undefined}
+                    onMouseEnter={() => setSearchCursor(index)}
+                    onClick={() => {
+                      restoreSearchFocus.current = false;
+                      item.run();
+                      setSearchOpen(false);
+                      setSearch('');
+                    }}
+                  >
+                    <Search size={14} />
+                    <span>
+                      <strong>{item.label}</strong>
+                      <small>{item.detail}</small>
+                    </span>
+                    <ArrowUpRight size={12} />
+                  </button>
+                ))
+              )}
+            </div>
+          </Modal>
+          <DialogHost
+            dialog={dialog}
+            selection={dialogSelection}
+            onClose={() => setDialog(null)}
+            onSession={onSession}
+          />
+          <InteractionDialog
+            item={
+              interaction
+                ? (snapshot.interactions.find(
+                    (item) => item.id === interaction.id,
+                  ) ?? null)
+                : null
+            }
+            onClose={() => {
+              setInteraction(null);
+              if (narrow) setInspectorOpen(false);
+            }}
+          />
+          {notice && (
+            <div className="toast" role="status">
+              {notice}
+            </div>
+          )}
+        </div>
+      </Tooltip.Provider>
+    </SourceNavigation>
+  );
+  return (
+    <CommandTerminalNavigation
+      onOpen={runtime.mode === 'live' ? openCommandTerminal : undefined}
+    >
+      {surface}
+    </CommandTerminalNavigation>
   );
 }

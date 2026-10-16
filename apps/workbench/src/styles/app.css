@@ -2892,7 +2892,7 @@ pre {
     display: none;
   }
   .workspace {
-    height: 100dvh;
+    height: 100%;
   }
   .mobile-only {
     display: inline-flex;

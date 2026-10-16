@@ -1,5 +1,9 @@
+import type { CommandTerminalView } from '../model/command-terminal-client';
+import { TerminalSelectionPreview } from '../components/TerminalSelectionPreview';
+import { WorkspacePanelContents } from './WorkspacePanelContents';
+import { useSources } from '../components/SourceNavigation';
 import { desktopHost } from '../host';
-import { agentActivityText } from '../model/activity';
+import { agentActivityText, agentState } from '../model/activity';
 import { NativeBrowser } from './NativeBrowser';
 import { usePlugins } from '../plugins/context';
 import { PluginBoundary } from '../plugins/Boundary';
@@ -65,15 +69,20 @@ const REQUEST_KIND: Record<string, () => string> = {
   'plan-exit': () => t('plan exit'),
 };
 interface Props {
+  resourcesPaused?: boolean;
+  commandTerminal?: CommandTerminalView;
+  onExitCommandTerminal?: () => void;
   panel: PanelId;
   selection: string;
   onPanel: (panel: PanelId, selection?: string) => void;
   onClose: () => void;
+  onFile: (path: string, line?: number, column?: number) => void;
+  visible?: boolean;
+  onSession?: (id: string) => void;
   /** The panel across the whole workspace, and the way back to the split. */
   whole: boolean;
   canBeWhole: boolean;
   onWhole: () => void;
-  onFile: (path: string) => void;
   onAgent: (id: string) => void;
   onInteraction: (item: Interaction) => void;
   onDialog: (dialog: DialogId, selection?: string) => void;
@@ -174,17 +183,85 @@ export function Inspector(props: Props) {
         </span>
       </header>
       <div className={`inspector-body ${terminal ? 'flush' : ''}`}>
-        {terminal ? (
-          <TerminalPanel embedded onClose={props.onClose} />
-        ) : selected ? (
-          <PluginBoundary key={selected.panel.id} name={selected.plugin.title}>
-            <selected.panel.component {...props} sessionId={session.id} />
-          </PluginBoundary>
-        ) : (
-          <ContextPanel {...props} />
+        {props.resourcesPaused && (
+          <p
+            className="panel-note"
+            role="status"
+            style={{ overflowWrap: 'anywhere' }}
+          >
+            {t(
+              'Resources belong to {name}. Start a conversation in the selected project to make changes.',
+              {
+                name:
+                  snapshot.workspaces.find(
+                    (item) => item.id === session.workspaceId,
+                  )?.path ?? session.title,
+              },
+            )}
+          </p>
         )}
+        <InspectorResources {...props} sessionId={session.id} panels={panels} />
       </div>
     </aside>
+  );
+}
+function InspectorResources(
+  props: Props & { sessionId: string; panels: ReturnType<typeof usePanels> },
+) {
+  const [visited, setVisited] = useState<Set<string>>(
+    () => new Set([props.panel]),
+  );
+  useEffect(() => {
+    setVisited((old) =>
+      old.has(props.panel) ? old : new Set(old).add(props.panel),
+    );
+  }, [props.panel]);
+  const ids = new Set([...visited, props.panel]);
+  return (
+    <>
+      {[...ids].map((id) => {
+        const item = props.panels.find((item) => item.panel.id === id);
+        const original =
+          id === 'terminal' ? (
+            <TerminalPanel embedded onClose={props.onClose} />
+          ) : item ? (
+            <PluginBoundary name={item.plugin.title}>
+              <item.panel.component {...props} sessionId={props.sessionId} />
+            </PluginBoundary>
+          ) : (
+            <ContextPanel {...props} />
+          );
+        return (
+          <div
+            key={id}
+            hidden={id !== props.panel}
+            className="inspector-resource-view"
+            data-inspector-resource={id}
+          >
+            {id === 'terminal' || id === 'changes' || id === 'activity' ? (
+              <WorkspacePanelContents
+                kind={id}
+                resourcesPaused={props.resourcesPaused}
+                commandTerminal={
+                  id === 'terminal' ? props.commandTerminal : undefined
+                }
+                onExitCommandTerminal={props.onExitCommandTerminal}
+                sessionId={props.sessionId}
+                visible={!!props.visible && id === props.panel}
+                selection={props.selection}
+                onFile={props.onFile}
+                onSession={props.onSession ?? (() => {})}
+                onTask={(task) => props.onPanel('activity', `task:${task}`)}
+              >
+                {original}
+              </WorkspacePanelContents>
+            ) : (
+              original
+            )}
+          </div>
+        );
+      })}
+    </>
   );
 }
 export function FilesPanel({
@@ -388,6 +465,7 @@ function SampleChanges({ onFile }: Pick<Props, 'onFile'>) {
   );
 }
 export function ContextPanel({ onDialog }: Pick<Props, 'onDialog'>) {
+  const sources = useSources();
   const { snapshot, runtime, perform } = useRuntime();
   const session = currentSession(snapshot);
   const workspace = snapshot.workspaces.find(
@@ -418,14 +496,22 @@ export function ContextPanel({ onDialog }: Pick<Props, 'onDialog'>) {
       <div className="panel-section">
         <h3>{t('instructions')}</h3>
         {!workspace.instructions.length && (
-          <p className="muted">{t('no instruction files in this folder')}</p>
+          <p className="muted">{t('no instruction files loaded')}</p>
         )}
         {workspace.instructions.map((item) => (
-          <details key={item.name} className="context-source">
+          <details key={item.path ?? item.name} className="context-source">
             <summary>
               <FileText size={14} />
               {item.name}
             </summary>
+            {item.path && (
+              <button
+                className="text-button"
+                onClick={() => sources?.openFile(item.path!)}
+              >
+                {item.path}
+              </button>
+            )}
             <pre>{item.content}</pre>
           </details>
         ))}
@@ -449,7 +535,7 @@ export function ContextPanel({ onDialog }: Pick<Props, 'onDialog'>) {
                   alt={file.name}
                 />
               ) : (
-                <pre>{file.content}</pre>
+                <TerminalSelectionPreview file={file} />
               )}
               {file.truncated && (
                 <p className="panel-note">
@@ -629,7 +715,7 @@ export function ActivityPanel({
                     <strong>{agent.name}</strong>
                     <small>{agentActivityText(agent)}</small>
                   </span>
-                  <Status value={agent.status} />
+                  <Status value={agentState(agent)} />
                 </button>
               ))}
           </div>

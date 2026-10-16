@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { ChromeBrowser } from '../src/browser/chrome.js';
 import { CheckpointStore } from '../src/checkpoint_store.js';
@@ -286,3 +286,341 @@ test('refused forced browser termination retains session history until a success
   cleanup(t, () => store.close());
   assert.equal(store.get(id), undefined);
 });
+
+test(
+  'permission-denied group probes still verify actual owned processes and exit',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const child = spawn(
+      process.execPath,
+      ['-e', "process.stdout.write('ready');setInterval(()=>{},1000)"],
+      {
+        detached: true,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      },
+    );
+    cleanup(t, () => {
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill('SIGKILL');
+    });
+    await new Promise<void>((resolve, reject) => {
+      child.stdout!.once('data', () => resolve());
+      child.once('error', reject);
+    });
+    const kill = process.kill.bind(process);
+    t.mock.method(
+      process,
+      'kill',
+      (pid: number, signal?: NodeJS.Signals | number) => {
+        if (pid === -child.pid! && signal === 0)
+          throw Object.assign(new Error('probe denied'), { code: 'EPERM' });
+        return kill(pid, signal);
+      },
+    );
+    const browser = browserWithChild(child);
+    assert.equal(
+      await (browser as any).groupRunning(child.pid),
+      true,
+      'EPERM must not mean exited',
+    );
+    await browser.close();
+    assert.notEqual(child.signalCode, null);
+    assert.equal(
+      await (browser as any).groupRunning(child.pid),
+      false,
+      'ps confirms no runnable member after actual exit',
+    );
+  },
+);
+
+test(
+  'permission-denied termination retains owned groups for retry',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const child = spawn(
+      process.execPath,
+      ['-e', "process.stdout.write('ready');setInterval(()=>{},1000)"],
+      { detached: true, stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    cleanup(t, () => {
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill('SIGKILL');
+    });
+    await new Promise<void>((resolve, reject) => {
+      child.stdout!.once('data', () => resolve());
+      child.once('error', reject);
+    });
+    const kill = process.kill.bind(process);
+    t.mock.method(
+      process,
+      'kill',
+      (pid: number, signal?: NodeJS.Signals | number) => {
+        if (pid === -child.pid!)
+          throw Object.assign(new Error('termination denied'), {
+            code: 'EPERM',
+          });
+        return kill(pid, signal);
+      },
+    );
+    const browser = new ChromeBrowser({
+      executable: process.execPath,
+      closeTimeout: 40,
+    });
+    const state = browser as any;
+    state.cdp = {
+      close: () => {
+        throw new Error('must not confirm cleanup');
+      },
+    };
+    state.processGroups.add(child.pid);
+    await assert.rejects(browser.close(), /termination denied/);
+    assert.equal(state.processGroups.has(child.pid), true);
+    assert.equal(child.exitCode, null);
+    assert.equal(child.signalCode, null);
+  },
+);
+
+test(
+  'a denied probe with unavailable process inspection cannot confirm exit',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const originalPath = process.env.PATH;
+    process.env.PATH = scratch(t);
+    t.after(() => {
+      process.env.PATH = originalPath;
+    });
+    t.mock.method(process, 'kill', () => {
+      throw Object.assign(new Error('probe denied'), { code: 'EPERM' });
+    });
+    const browser = new ChromeBrowser({ executable: process.execPath });
+    await assert.rejects((browser as any).groupRunning(1_073_741_824), {
+      code: 'ENOENT',
+    });
+  },
+);
+
+test(
+  'process inspection has its own bounded budget when the browser exit grace period is shorter than ps startup',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const root = scratch(t);
+    const marker = join(root, 'inspection-started');
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    writeFileSync(
+      join(root, 'ps'),
+      `#!/bin/sh\nprintf '%s' "$$" > ${quote(marker)}\n/bin/sleep 0.12\nexec /bin/ps "$@"\n`,
+      { mode: 0o755 },
+    );
+    const child = spawn(
+      process.execPath,
+      ['-e', "process.stdout.write('ready');setInterval(()=>{},1000)"],
+      { detached: true, stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    await new Promise<void>((resolve, reject) => {
+      child.stdout!.once('data', () => resolve());
+      child.once('error', reject);
+    });
+    const exited = new Promise<void>((resolve) =>
+      child.once('exit', () => resolve()),
+    );
+    const browser = new ChromeBrowser({
+      executable: process.execPath,
+      closeTimeout: 40,
+      processInspectionTimeout: 1000,
+    });
+    const owned = browser as any;
+    owned.processGroups.add(child.pid);
+    owned.cdp = { close: () => {} };
+    const previousPath = process.env.PATH;
+    try {
+      process.env.PATH = root;
+      const started = Date.now();
+      assert.equal(await owned.groupRunning(child.pid), true);
+      assert.ok(Date.now() - started >= 100, 'the actual delayed ps ran');
+      assert.ok(existsSync(marker), 'the inspection process really started');
+      assert.equal(child.exitCode, null);
+      assert.equal(child.signalCode, null);
+      await browser.close();
+      await exited;
+      assert.equal(child.signalCode, 'SIGKILL');
+      assert.equal(owned.processGroups.has(child.pid), false);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill('SIGKILL');
+      await exited;
+    }
+  },
+);
+
+test(
+  'a never-ending process inspector fails within its bound and retains the real browser group for a successful close retry',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const root = join(scratch(t), 'inspection fixture with spaces');
+    mkdirSync(root);
+    const inspectorPid = join(root, 'inspector.pid');
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    // Record the actual inspector PID before blocking on its open stdin pipe.
+    // Ignore TERM so a timeout that only sends TERM still fails this regression.
+    writeFileSync(
+      join(root, 'ps'),
+      `#!/bin/sh\ntrap '' TERM\nprintf '%s' "$$" > ${quote(inspectorPid)}\nexec /bin/cat\n`,
+      { mode: 0o755 },
+    );
+    const child = spawn(
+      process.execPath,
+      ['-e', "process.stdout.write('ready');setInterval(()=>{},1000)"],
+      { detached: true, stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    await new Promise<void>((resolve, reject) => {
+      child.stdout!.once('data', () => resolve());
+      child.once('error', reject);
+    });
+    const exited = new Promise<void>((resolve) =>
+      child.once('exit', () => resolve()),
+    );
+    const options: ConstructorParameters<typeof ChromeBrowser>[0] = {
+      executable: process.execPath,
+      closeTimeout: 1000,
+      processInspectionTimeout: 1000,
+    };
+    const browser = new ChromeBrowser(options);
+    const owned = browser as any;
+    let closed = false;
+    owned.processGroups.add(child.pid);
+    owned.cdp = {
+      close: () => {
+        closed = true;
+      },
+    };
+    const previousPath = process.env.PATH;
+    let closing: Promise<void> | undefined;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    const restorePath = () => {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    };
+    try {
+      process.env.PATH = root;
+      closing = browser.close();
+      const outcome = await Promise.race([
+        closing.then(
+          () => ({ status: 'closed' as const }),
+          (error: any) => ({ status: 'failed' as const, error }),
+        ),
+        new Promise<{ status: 'blocked' }>((resolve) => {
+          watchdog = setTimeout(() => resolve({ status: 'blocked' }), 2000);
+        }),
+      ]);
+      assert.equal(
+        outcome.status,
+        'failed',
+        'a stuck ps must fail instead of hanging or confirming exit',
+      );
+      if (outcome.status !== 'failed') return;
+      assert.equal(outcome.error.killed, true);
+      assert.equal(outcome.error.signal, 'SIGKILL');
+      assert.equal(closed, false);
+      assert.equal(owned.processGroups.has(child.pid), true);
+      assert.equal(child.exitCode, null);
+      assert.equal(child.signalCode, null);
+      assert.ok(
+        existsSync(inspectorPid),
+        'the real inspector fixture started and never exited by itself',
+      );
+      const pid = Number(readFileSync(inspectorPid, 'utf8'));
+      assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+      // The one-second injection belongs only to the hanging inspector. Real
+      // process inspection on the success retry uses the production default.
+      delete options.processInspectionTimeout;
+      restorePath();
+      await browser.close();
+      await exited;
+      assert.equal(child.signalCode, 'SIGKILL');
+      assert.equal(owned.processGroups.has(child.pid), false);
+      assert.equal(closed, true);
+    } finally {
+      clearTimeout(watchdog);
+      restorePath();
+      if (existsSync(inspectorPid)) {
+        try {
+          process.kill(Number(readFileSync(inspectorPid, 'utf8')), 'SIGKILL');
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+        }
+      }
+      await closing?.catch(() => {});
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill('SIGKILL');
+      await exited;
+    }
+  },
+);
+
+test(
+  'restoring the normal inspector budget permits a real slow process inspection without weakening the injected deadline',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const root = join(scratch(t), 'slow real inspector');
+    mkdirSync(root);
+    // Execute the actual platform process listing after a controlled delay. The
+    // same command must fail with the injected second and pass with the default.
+    writeFileSync(
+      join(root, 'ps'),
+      '#!/bin/sh\n/bin/sleep 1.1\nexec /bin/ps "$@"\n',
+      { mode: 0o755 },
+    );
+    const child = spawn(
+      process.execPath,
+      ['-e', "process.stdout.write('ready');setInterval(()=>{},1000)"],
+      { detached: true, stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    await new Promise<void>((resolve, reject) => {
+      child.stdout!.once('data', () => resolve());
+      child.once('error', reject);
+    });
+    const exited = new Promise<void>((resolve) =>
+      child.once('exit', () => resolve()),
+    );
+    const options: ConstructorParameters<typeof ChromeBrowser>[0] = {
+      executable: process.execPath,
+      closeTimeout: 1000,
+      processInspectionTimeout: 1000,
+    };
+    const browser = new ChromeBrowser(options);
+    const owned = browser as any;
+    owned.processGroups.add(child.pid);
+    let closed = false;
+    owned.cdp = {
+      close: () => {
+        closed = true;
+      },
+    };
+    const previousPath = process.env.PATH;
+    try {
+      process.env.PATH = root;
+      await assert.rejects(browser.close(), (error: any) => {
+        assert.equal(error.killed, true);
+        assert.equal(error.signal, 'SIGKILL');
+        return true;
+      });
+      assert.equal(owned.processGroups.has(child.pid), true);
+      assert.equal(child.signalCode, null);
+      assert.equal(closed, false);
+      delete options.processInspectionTimeout;
+      await browser.close();
+      await exited;
+      assert.equal(child.signalCode, 'SIGKILL');
+      assert.equal(owned.processGroups.has(child.pid), false);
+      assert.equal(closed, true);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill('SIGKILL');
+      await exited;
+    }
+  },
+);

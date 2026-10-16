@@ -1,0 +1,276 @@
+import { chromium } from 'playwright';
+import { createServer } from 'vite';
+import { fileURLToPath } from 'node:url';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import assert from 'node:assert/strict';
+const server = await createServer({
+  root: fileURLToPath(new URL('..', import.meta.url)),
+  server: { host: '127.0.0.1', port: 0 },
+  logLevel: 'error',
+});
+await server.listen();
+const output =
+  process.env.CIRCLE_TERMINAL_TABS_EVIDENCE ??
+  process.env.CIRCLE_COMPONENT_UI_EVIDENCE ??
+  (await mkdtemp(join(tmpdir(), 'circle-terminal-tabs-')));
+await mkdir(output, { recursive: true });
+let browser, currentPage;
+const cases = [];
+try {
+  browser = await chromium.launch({
+    headless: true,
+    ...(process.env.CIRCLE_TEST_BROWSER_CHANNEL
+      ? { channel: process.env.CIRCLE_TEST_BROWSER_CHANNEL }
+      : {}),
+  });
+  for (const theme of ['dark', 'light'])
+    for (const width of [375, 760, 1280]) {
+      const page = await browser.newPage({ viewport: { width, height: 900 } });
+      currentPage = page;
+      page.setDefaultTimeout(5000);
+      const errors = [];
+      page.on('pageerror', (error) => errors.push(String(error)));
+      await page.goto(
+        `${server.resolvedUrls.local[0]}test/native-terminal-tabs-ui.html?theme=${theme}`,
+      );
+      const toggle = page.getByRole('button', {
+        name: 'terminal panel',
+        exact: true,
+      });
+      await toggle.click();
+      await page.locator('#inspector-terminal-tab-terminal').click();
+      const strip = page.locator('.native-terminal-tabs');
+      await strip.getByRole('tab', { name: 'zsh 9', exact: true }).waitFor();
+      const geometry = () =>
+        strip.evaluate((el) => {
+          const selected = el.querySelector('[aria-selected="true"]');
+          const box = el.getBoundingClientRect(),
+            tab = selected.getBoundingClientRect();
+          return {
+            label: selected.textContent,
+            selected: selected.getAttribute('aria-controls'),
+            left: tab.left,
+            right: tab.right,
+            viewportLeft: box.left + el.clientLeft,
+            viewportRight: box.left + el.clientLeft + el.clientWidth,
+            scrollLeft: el.scrollLeft,
+            pageX: window.scrollX,
+            pageY: window.scrollY,
+          };
+        });
+      const visible = async () => {
+        await page.waitForFunction(() => {
+          const el = document.querySelector('.native-terminal-tabs'),
+            tab = el?.querySelector('[aria-selected="true"]');
+          if (!el || !tab || !el.clientWidth) return false;
+          const e = el.getBoundingClientRect(),
+            t = tab.getBoundingClientRect();
+          const left = e.left + el.clientLeft,
+            right = left + el.clientWidth;
+          if (t.width <= el.clientWidth)
+            return t.left >= left - 1 && t.right <= right + 1;
+          // A compact original Inspector can be narrower than a tab's padding
+          // plus lamp. Require every actual label character, not impossible
+          // off-screen border pixels, to fit in that case.
+          const labels = [...tab.childNodes]
+            .filter(
+              (node) =>
+                node.nodeType === Node.TEXT_NODE && node.textContent.trim(),
+            )
+            .map((node) => {
+              const range = document.createRange();
+              range.selectNodeContents(node);
+              return range.getBoundingClientRect();
+            });
+          return (
+            labels.length > 0 &&
+            labels.every(
+              (rect) => rect.left >= left - 1 && rect.right <= right + 1,
+            )
+          );
+        });
+        return geometry();
+      };
+      const initial = await visible();
+      assert.match(initial.label, /zsh 9/);
+      await page
+        .getByRole('button', { name: 'new terminal', exact: true })
+        .click();
+      await strip.getByRole('tab', { name: 'zsh 10', exact: true }).waitFor();
+      const created = await visible();
+      assert.match(created.label, /zsh 10/);
+      assert.equal(created.selected, 'terminal-terminal-10');
+      await page.screenshot({ path: `${output}/${theme}-${width}-zsh10.png` });
+      await page
+        .locator('#terminal-terminal-10 .xterm-helper-textarea')
+        .focus();
+      await page.keyboard.type('TAB_SELECTED_INPUT');
+      await page.waitForFunction(() =>
+        window.terminalTabsFixture.writes
+          .map((item) => item.data)
+          .join('')
+          .includes('TAB_SELECTED_INPUT'),
+      );
+      const writes = await page.evaluate(
+        () => window.terminalTabsFixture.writes,
+      );
+      assert.ok(writes.every((item) => item.id === 'terminal-10'));
+      assert.match(
+        writes.map((item) => item.data).join(''),
+        /TAB_SELECTED_INPUT/,
+      );
+      // Manual history browsing must survive unrelated live output and status renders.
+      await strip.evaluate((el) => {
+        el.scrollLeft = 0;
+      });
+      const manual = await geometry();
+      await page.evaluate(() => window.terminalTabsFixture.log());
+      await page
+        .locator('.native-terminal-status [title="/synthetic/log-update"]')
+        .waitFor();
+      const afterLog = await geometry();
+      assert.equal(afterLog.scrollLeft, manual.scrollLeft);
+      assert.equal(afterLog.selected, created.selected);
+      await toggle.click();
+      await toggle.click();
+      const reopened = await visible();
+      assert.equal(reopened.selected, created.selected);
+      await page.setViewportSize({
+        width: width === 1280 ? 760 : 1280,
+        height: 900,
+      });
+      await page.evaluate(
+        () =>
+          new Promise((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(resolve)),
+          ),
+      );
+      if ((await toggle.getAttribute('aria-pressed')) !== 'true')
+        await toggle.click();
+      const resized = await visible();
+      assert.equal(resized.selected, created.selected);
+      await page.setViewportSize({ width, height: 900 });
+      await page.evaluate(
+        () =>
+          new Promise((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(resolve)),
+          ),
+      );
+      if ((await toggle.getAttribute('aria-pressed')) !== 'true')
+        await toggle.click();
+      await visible();
+      // Real tab keyboard changes, including the debug label seen in the CUA report.
+      await strip.getByRole('tab', { name: 'zsh 10', exact: true }).focus();
+      await page.keyboard.press('Home');
+      const first = await visible();
+      assert.match(first.label, /zsh 1/);
+      await page.keyboard.press('ArrowRight');
+      const debug = await visible();
+      assert.match(debug.label, /debug 2/);
+      await page.keyboard.press('End');
+      const last = await visible();
+      assert.match(last.label, /zsh 10/);
+      await page
+        .getByRole('button', { name: 'stop terminal', exact: true })
+        .click();
+      assert.equal((await geometry()).selected, created.selected);
+      // Reload the session list after a real session switch, preserving selected id
+      // even when the backend list order changes.
+      await page.evaluate(() => window.terminalTabsFixture.reorder());
+      if ((await toggle.getAttribute('aria-pressed')) === 'true')
+        await toggle.click();
+      const chooseSession = async (id) => {
+        const link = page.locator(
+          `.sidebar:visible [data-row-key="recent:${id}"] .session-link`,
+        );
+        if (!(await link.isVisible()))
+          await page
+            .getByRole('button', {
+              name: 'show or hide the sidebar',
+              exact: true,
+            })
+            .click();
+        await link.click();
+      };
+      await chooseSession('B');
+      await chooseSession('A');
+      if ((await toggle.getAttribute('aria-pressed')) !== 'true')
+        await toggle.click();
+      await page.locator('#inspector-terminal-tab-terminal').click();
+      const reordered = await visible();
+      assert.equal(reordered.selected, created.selected);
+      assert.match(reordered.label, /zsh 1/);
+      await page.screenshot({ path: `${output}/${theme}-${width}.png` });
+      assert.equal(reordered.pageX, initial.pageX);
+      assert.equal(reordered.pageY, initial.pageY);
+      assert.deepEqual(errors, []);
+      await page.reload();
+      await toggle.click();
+      await page.locator('#inspector-terminal-tab-terminal').click();
+      const reloaded = await visible();
+      assert.equal(reloaded.selected, 'terminal-terminal-9');
+      cases.push({
+        theme,
+        width,
+        initial,
+        created,
+        manual,
+        afterLog,
+        reopened,
+        resized,
+        first,
+        debug,
+        last,
+        reordered,
+        reloaded,
+      });
+      await page.close();
+    }
+  await writeFile(
+    `${output}/receipt.json`,
+    JSON.stringify(
+      {
+        scope:
+          'headless whole CircleWorkbench with actual xterm and controlled terminal bridge; no native desktop operation',
+        cases,
+      },
+      null,
+      2,
+    ),
+  );
+} catch (error) {
+  if (currentPage && !currentPage.isClosed()) {
+    await currentPage.screenshot({ path: `${output}/failure.png` });
+    await writeFile(
+      `${output}/failure.json`,
+      JSON.stringify(
+        {
+          error: String(error),
+          geometry: await currentPage
+            .locator('.native-terminal-tabs')
+            .evaluate((el) => ({
+              scrollLeft: el.scrollLeft,
+              width: el.clientWidth,
+              tabs: [...el.children].map((tab) => ({
+                selected: tab.getAttribute('aria-selected'),
+                label: tab.textContent,
+                rect: tab.getBoundingClientRect().toJSON(),
+              })),
+              active: {
+                tag: document.activeElement?.tagName,
+                role: document.activeElement?.getAttribute('role'),
+              },
+            })),
+        },
+        null,
+        2,
+      ),
+    );
+  }
+  throw error;
+} finally {
+  await browser?.close();
+  await server.close();
+}

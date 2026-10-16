@@ -495,9 +495,18 @@ try {
   if ((await files.getAttribute('aria-pressed')) !== 'true')
     await files.click();
   await page.getByRole('button', { name: 'hello.ts', exact: true }).click();
-  await page
-    .getByText('export const hello = "native workspace";', { exact: true })
-    .waitFor();
+  const fileLines = page.locator('.file-view .native-code-editor .view-lines');
+  await fileLines.waitFor({ state: 'visible' });
+  assert.equal(await fileLines.count(), 1, 'one visible source editor');
+  await page.waitForFunction(() => {
+    const lines = document.querySelector(
+      '.file-view .native-code-editor .view-lines',
+    );
+    return (
+      lines?.textContent.replaceAll('\u00a0', ' ') ===
+      'export const hello = "native workspace";'
+    );
+  });
   assert.equal(
     await readFile(join(workspace, 'hello.ts'), 'utf8'),
     'export const hello = "native workspace";\n',
@@ -528,7 +537,27 @@ try {
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
-  assert.equal(await page.getByRole('checkbox').count(), 8);
+  const expectedInterfaces = [
+    'github',
+    'files',
+    'activity',
+    'browser',
+    'hub',
+    'knowledge',
+    'work',
+    'execution',
+    'methods',
+  ].map((id) => `enable ${id} interface`);
+  assert.equal(
+    await page.getByRole('checkbox').count(),
+    expectedInterfaces.length,
+  );
+  for (const name of expectedInterfaces)
+    assert.equal(
+      await page.getByRole('checkbox', { name, exact: true }).count(),
+      1,
+      `the interface list contains exactly one ${name} checkbox`,
+    );
   for (const id of ['knowledge', 'work', 'execution', 'methods'])
     assert.equal(
       await page

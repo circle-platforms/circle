@@ -320,7 +320,7 @@ test('TUI deleting a background session reaps its real descendant without stoppi
   const { app, ui, workspace, model } = await appFor(t, [bReply.reply]);
   const a = app.runtime!;
   const fixture = await cancellationFixture(t, workspace);
-  const job = a.jobs.startShell(fixture.command, {
+  const job = await a.jobs.startShell(fixture.command, {
     sessionId: a.session.id,
     startedBy: 'user',
   });
@@ -410,6 +410,9 @@ test('TUI deletion completion preserves a newer user selection during slow clean
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
+  // Cleanup owns its held gate even if deletion fails before reaching jobs.close.
+  // Register after app cleanup so it releases first on the failure path.
+  cleanup(t, () => release());
   a.jobs.close = async () => {
     cleaning = true;
     await gate;

@@ -579,14 +579,31 @@ try {
       .click();
     const certificate = approval('trusts an untrusted certificate');
     await certificate.waitFor();
-    assert.equal(await page.locator('.inspector-overlay').count(), 0);
-    await certificate
-      .getByRole('button', { name: 'allow once', exact: true })
-      .click();
+    assert.equal(await page.locator('.inspector-overlay:visible').count(), 0);
+    const allowCertificate = certificate.getByRole('button', {
+      name: 'allow once',
+      exact: true,
+    });
+    await allowCertificate.scrollIntoViewIfNeeded();
+    assert.equal(
+      await allowCertificate.evaluate((button) => {
+        const rect = button.getBoundingClientRect();
+        const target = document.elementFromPoint(
+          rect.x + rect.width / 2,
+          rect.y + rect.height / 2,
+        );
+        return !!target && button.contains(target);
+      }),
+      true,
+      'the actual certificate approval is reachable without an inspector overlay',
+    );
+    await allowCertificate.click();
     await page
       .getByText('browser navigation completed', { exact: true })
       .waitFor();
-    assert.equal(await page.locator('.inspector-overlay').count(), 0);
+    // The inspector stays mounted, hidden, so its resources survive: the panel
+    // must not be shown, which a DOM count cannot tell.
+    assert.equal(await page.locator('.inspector-overlay:visible').count(), 0);
     assert.match(
       await textOf('proceed'),
       /Circle proceeded, approved by the user/,
@@ -684,9 +701,19 @@ try {
       return page.evaluate(() => {
         const bottom = (selector) =>
           document.querySelector(selector).getBoundingClientRect().bottom;
+        const children = [...document.querySelector('.native-browser').children]
+          .map((child) => child.getBoundingClientRect())
+          .filter((rect) => rect.width > 0 && rect.height > 0);
+        // Diagnostics/download/capture controls follow the page status footer.
+        // They occupy real panel space; only the gap after all visible content is blank.
+        const contentBottom = Math.max(...children.map((rect) => rect.bottom));
         return {
           height: innerHeight,
-          blank: bottom('.inspector-body') - bottom('.native-browser-footer'),
+          footerGap:
+            bottom('.inspector-body') - bottom('.native-browser-footer'),
+          blank: bottom('.inspector-body') - contentBottom,
+          contentBottom,
+          containerBottom: bottom('.inspector-body'),
         };
       });
     };
@@ -695,6 +722,13 @@ try {
     );
     for (const height of [tallest, 900]) {
       const panel = await blankBelow(height);
+      await page
+        .getByRole('button', { name: 'page diagnostics', exact: true })
+        .waitFor({ state: 'visible' });
+      assert(
+        panel.contentBottom <= panel.containerBottom + 2,
+        'browser controls stay inside the inspector',
+      );
       assert(
         panel.blank <= 32,
         `blank under the browser panel: ${JSON.stringify(panel)}`,

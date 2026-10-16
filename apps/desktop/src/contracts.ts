@@ -1,3 +1,10 @@
+import type {
+  BrowserDiagnosticEvent,
+  BrowserDiagnosticRequest,
+  BrowserDiagnosticResult,
+} from './browser-diagnostics-contracts';
+import type { WorkspaceServiceEvent } from './workspace-protocol';
+
 export interface NativeFile {
   id: string;
   name: string;
@@ -42,12 +49,27 @@ export type UpdateState =
   | { phase: 'installing'; version: string }
   | { phase: 'failed'; version?: string; error: string; page?: string };
 export type UpdateAction = 'check' | 'download' | 'install';
+export interface NativeAccessibilityState {
+  supported: boolean;
+  enabled: boolean;
+  revision: number;
+}
 export interface DesktopBridge {
+  nativeAccessibility?: () => Promise<NativeAccessibilityState>;
+  onNativeAccessibility?: (
+    listener: (state: NativeAccessibilityState) => void,
+  ) => () => void;
   apiVersion: 1;
   info: () => Promise<DesktopInfo>;
   runtimeState: () => Promise<RuntimeUpdate>;
   runtimeCommand: (command: RuntimeCommand) => Promise<RuntimeReply>;
   onRuntime: (listener: (update: RuntimeUpdate) => void) => () => void;
+  onRuntimeDelta?: (
+    listener: (delta: import('./runtime-protocol').RuntimeTokenDelta) => void,
+  ) => () => void;
+  onWorkspaceEvent?: (
+    listener: (event: WorkspaceServiceEvent) => void,
+  ) => () => void;
   chooseFiles: (
     purpose: 'attach' | 'import' | 'source',
   ) => Promise<NativeFile[]>;
@@ -71,6 +93,15 @@ export interface DesktopBridge {
   windowControl: (
     action: 'minimize' | 'maximize' | 'close' | 'quit',
   ) => Promise<void>;
+  /** Opens a human-requested HTTPS link; credentials are never accepted. */
+  openExternal?: (url: string) => Promise<void>;
+  onBrowserDiagnosticEvent?: (
+    listener: (event: BrowserDiagnosticEvent) => void,
+  ) => () => void;
+  browserDiagnostics?: (
+    sessionId: string,
+    request: BrowserDiagnosticRequest,
+  ) => Promise<BrowserDiagnosticResult>;
   browserState: (sessionId: string) => Promise<BrowserState>;
   browserNavigate: (sessionId: string, url: string) => Promise<BrowserState>;
   browserBounds: (

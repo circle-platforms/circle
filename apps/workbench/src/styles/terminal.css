@@ -1,0 +1,218 @@
+.native-terminal {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 180px;
+  height: 100%;
+  overflow: hidden;
+}
+.native-terminal.embedded {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+  background: inherit;
+}
+.native-terminal-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 7px 13px;
+  min-height: 37px;
+  border-bottom: 1px solid var(--border);
+}
+.native-terminal-tabs {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+}
+.native-terminal-tabs > button {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.native-terminal-lamp {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.native-terminal-lamp.running {
+  background: var(--accent);
+}
+.native-terminal-lamp.stopping {
+  background: var(--attention);
+}
+.native-terminal-lamp.failed {
+  background: var(--negative);
+}
+.native-terminal-search {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 7px 13px;
+}
+.native-terminal-search > input {
+  flex: 1;
+  min-width: 0;
+}
+.native-terminal-search > span {
+  color: var(--muted);
+  font-size: var(--ui-small);
+}
+.native-terminal-surfaces {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  overflow: hidden;
+}
+.native-terminal-surface {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.native-terminal-surface[hidden] {
+  display: none;
+}
+.native-terminal-screen {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  padding: 10px 13px;
+  overflow: hidden;
+}
+.native-terminal-fit {
+  /* FitAddon reads its unpadded parent, within the finite flex viewport. */
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.native-terminal-screen .xterm {
+  height: 100%;
+}
+.native-terminal-screen .xterm-viewport {
+  background: var(--bg);
+}
+.native-terminal-status {
+  display: flex;
+  gap: 12px;
+  padding: 7px 13px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--ui-small);
+}
+.native-terminal-status > span:first-child {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+.native-terminal-status > span:not(:first-child) {
+  flex-shrink: 0;
+}
+.native-terminal-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  color: var(--negative);
+  overflow-wrap: anywhere;
+}
+.native-terminal-error > span {
+  flex: 1;
+  min-width: 0;
+}
+.native-terminal-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  color: var(--muted);
+}
+@media (max-width: 600px) {
+  .native-terminal-search {
+    flex-wrap: wrap;
+  }
+  .native-terminal-status {
+    flex-wrap: wrap;
+    gap: 5px 10px;
+  }
+  .native-terminal-status > span:first-child {
+    flex-basis: 100%;
+  }
+}
+
+.native-service-details {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--ui-small);
+}
+.native-service-details code {
+  min-width: 0;
+  flex: 1 1 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.native-service-details > span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.native-service-form {
+  min-width: 0;
+}
+.native-service-form fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.native-service-form p {
+  color: var(--muted);
+  font-size: var(--ui-small);
+}
+.native-service-argument {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.native-service-argument > input {
+  flex: 1;
+  font-family: var(--mono);
+}
+.native-service-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.native-terminal-lamp.ready {
+  background: var(--accent);
+}
+.native-terminal-lamp.starting {
+  background: var(--attention);
+}

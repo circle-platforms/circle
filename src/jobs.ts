@@ -19,6 +19,15 @@ import { redact } from './redact.js';
 import type { Message } from './types.js';
 import stripAnsi from 'strip-ansi';
 import { Watch, pollWatch, stopWatch } from './watch.js';
+import type {
+  CommandExecution,
+  CommandOrigin,
+  CommandProcessHandle,
+  CommandProcessOptions,
+  CommandPtyGroupProcessHandle,
+  CommandDescendantCoverage,
+} from './command_process.js';
+import { commandExecutionReceipt } from './command_process.js';
 export function plainJobOutput(text: string): string {
   return text
     .split('\n')
@@ -34,6 +43,7 @@ export interface JobOwner {
   sessionId: string;
   parent?: string;
   startedBy?: 'model' | 'user';
+  origin?: CommandOrigin;
 }
 export interface Job extends JobOwner {
   id: string;
@@ -48,8 +58,18 @@ export interface Job extends JobOwner {
   virtualPath: string;
   detail?: string;
   source?: string;
+  execution?: CommandExecution;
 }
 interface Entry {
+  execution?: CommandExecution;
+  ready?: Promise<void>;
+  failure?: Promise<never>;
+  fail?: (error: unknown) => void;
+  process?: CommandProcessHandle;
+  processSettled?: Promise<void>;
+  unsubscribeCoverage?: () => void;
+  reserved?: boolean;
+  transportFailed?: boolean;
   watch?: Watch;
   job?: Job;
   owner: JobOwner;
@@ -74,6 +94,7 @@ export interface ExecuteResult {
   exit_code?: number;
   job?: Job;
   how?: string;
+  execution?: CommandExecution;
 }
 
 // The first `limit` bytes of an output file, as text.
@@ -197,6 +218,7 @@ export class JobRegistry {
   redact: (text: string, sessionId: string) => string = (text) => text;
   private entries = new Set<Entry>();
   private jobs = new Map<string, Entry>();
+  private executions = new Map<string, Entry>();
   private notices = new Map<string, Job[]>();
   private changes = new EventEmitter();
   private next = 1;
@@ -215,6 +237,7 @@ export class JobRegistry {
     ) => void = () => {},
     readonly maxRunning = 16,
     readonly outputLimit = JobRegistry.outputLimit(),
+    private readonly processOptions: CommandProcessOptions = {},
   ) {
     if (!sandbox.offloadRoot)
       throw new Error('background jobs need a data folder');
@@ -252,16 +275,21 @@ export class JobRegistry {
         if (size > this.outputLimit) void this.stopEntry(entry, 'output limit');
         else if (entry.deadline && Date.now() >= entry.deadline)
           void this.stopEntry(entry, 'timeout');
-        else if (entry.shellExited && !groupAlive(entry)) this.finish(entry);
+        // A custom transport owns its output closure and descendant observation.
+        // PID disappearance cannot prove that its final log has flushed.
+        else if (!entry.ready && entry.shellExited && !groupAlive(entry))
+          this.finish(entry);
       }
     }
   }
   private checkCapacity(kind: Job['kind']): void {
     if (this.closed) throw new Error('background jobs are closed');
-    const count = this.list().filter(
-      (job) =>
-        job.status === 'running' &&
-        (kind === 'agent' ? job.kind === 'agent' : job.kind !== 'agent'),
+    const count = [...this.entries].filter(
+      (entry) =>
+        !entry.finished &&
+        (kind === 'agent'
+          ? entry.job?.kind === 'agent'
+          : (entry.job && entry.job.kind !== 'agent') || entry.reserved),
     ).length;
     const limit = kind === 'agent' ? 4 : this.maxRunning;
     if (count >= limit)
@@ -279,7 +307,7 @@ export class JobRegistry {
     const entry: Entry = {
       command,
       started: Date.now(),
-      owner,
+      owner: structuredClone(owner),
       path,
       controller: new AbortController(),
       settled,
@@ -298,7 +326,12 @@ export class JobRegistry {
       ...entry.owner,
       id,
       kind,
-      title: entry.command.replace(/\s+/g, ' ').slice(0, 160),
+      title: (entry.ready
+        ? (entry.owner.origin?.displayCommand ?? 'command')
+        : entry.command
+      )
+        .replace(/\s+/g, ' ')
+        .slice(0, 160),
       status: 'running',
       reason: '',
       started: entry.started,
@@ -307,6 +340,13 @@ export class JobRegistry {
       ...(detail ? { detail } : {}),
     };
     entry.job = job;
+    if (entry.execution) {
+      entry.execution.jobId = id;
+      entry.execution.status =
+        entry.ready && !entry.process ? 'starting' : 'background';
+      job.execution = structuredClone(entry.execution);
+      this.executionChanged(entry);
+    }
     this.jobs.set(id, entry);
     this.emit('job_started', job);
     return job;
@@ -317,16 +357,101 @@ export class JobRegistry {
   ): void {
     this.changes.emit('change');
     try {
-      this.notify(event, { ...job });
+      this.notify(event, structuredClone(job));
     } catch {
       /* UI must not own process lifetime. */
+    }
+  }
+  private executionChanged(entry: Entry): void {
+    if (!entry.execution) return;
+    if (entry.job) entry.job.execution = structuredClone(entry.execution);
+    try {
+      this.processOptions.onExecution?.(structuredClone(entry.execution));
+    } catch {
+      /* Observers cannot start, stop, or invalidate a process. */
+    }
+    if (this.executions.size > 1000)
+      for (const [id, previous] of this.executions) {
+        if (previous.finished) this.executions.delete(id);
+        if (this.executions.size <= 1000) break;
+      }
+  }
+  execution(executionId: string): CommandExecution | undefined {
+    const execution = this.executions.get(executionId)?.execution;
+    return execution ? structuredClone(execution) : undefined;
+  }
+  /** A reused tool ID is ambiguous; never bind an old card to a newer process. */
+  executionFor(
+    executionSessionId: string,
+    toolCallId: string,
+  ): CommandExecution | undefined {
+    const matches = [...this.executions.values()].filter(
+      (entry) =>
+        entry.execution?.executionSessionId === executionSessionId &&
+        entry.execution.toolCallId === toolCallId,
+    );
+    return matches.length === 1
+      ? structuredClone(matches[0]!.execution!)
+      : undefined;
+  }
+  /** Internal handoff control, scoped to the actual executing session. */
+  async stopExecution(
+    executionSessionId: string,
+    executionId: string,
+    reason = 'user',
+  ): Promise<CommandExecution> {
+    const entry = this.executions.get(executionId);
+    if (entry?.execution?.executionSessionId !== executionSessionId)
+      throw new Error('there is no command execution in this session');
+    await this.stopEntry(entry, reason);
+    return structuredClone(entry.execution);
+  }
+  private transportDiagnostic(entry: Entry, error: unknown): unknown {
+    try {
+      writeFileSync(
+        entry.path,
+        this.redact(
+          error instanceof Error ? error.message : String(error),
+          entry.execution!.executionSessionId,
+        ),
+        { flag: 'a' },
+      );
+      return error;
+    } catch (loggingError) {
+      return new AggregateError(
+        [error, loggingError],
+        'command transport failed; diagnostic output unavailable',
+      );
     }
   }
   private finish(entry: Entry): void {
     if (entry.finished) return;
     entry.finished = true;
+    try {
+      entry.unsubscribeCoverage?.();
+    } catch {
+      /* Metadata observers cannot own cleanup. */
+    }
+    entry.unsubscribeCoverage = undefined;
     this.entries.delete(entry);
     const job = entry.job;
+    if (entry.execution) {
+      entry.execution.exitCode = entry.exitCode;
+      entry.execution.reason = entry.reason ?? 'exit';
+      entry.execution.status = [
+        'user',
+        'model',
+        'exit',
+        'parent ended',
+        'cancelled',
+      ].includes(entry.reason ?? '')
+        ? 'stopped'
+        : entry.reason || (entry.exitCode !== undefined && entry.exitCode !== 0)
+          ? 'failed'
+          : 'done';
+      if (job) job.execution = structuredClone(entry.execution);
+      this.executionChanged(entry);
+    }
     if (job) {
       job.ended = Date.now();
       job.reason = entry.reason ?? 'exit';
@@ -352,11 +477,210 @@ export class JobRegistry {
     entry.settle();
     this.changes.emit('change');
   }
+  private observePtyGroup(
+    entry: Entry,
+    process: CommandPtyGroupProcessHandle,
+    transportError: (error: unknown) => void,
+  ): void {
+    const execution = entry.execution!;
+    const completion = (execution.completion = {
+      kind: 'pty-group' as const,
+      descendantCoverage: {
+        state: 'unknown' as const,
+        reason: 'coverage-unavailable' as const,
+        observedAt: Date.now(),
+      },
+    } as NonNullable<CommandExecution['completion']>);
+    const rootExit = process.rootExit.then((exit) => {
+      if (
+        !Number.isInteger(exit.exitCode) ||
+        (exit.signal !== undefined &&
+          (!Number.isInteger(exit.signal) ||
+            exit.signal < 0 ||
+            exit.signal > 128)) ||
+        !['active', 'empty', 'unknown'].includes(exit.controlledGroupAtExit)
+      )
+        throw Error('invalid PTY command exit evidence');
+      completion.rootExit ??= {
+        exitCode: exit.exitCode,
+        ...(exit.signal === undefined ? {} : { signal: exit.signal }),
+        controlledGroupAtExit: exit.controlledGroupAtExit,
+        observedAt: Date.now(),
+      };
+      entry.shellExited = true;
+      entry.exitCode = exit.exitCode;
+      this.executionChanged(entry);
+      if (
+        !entry.finished &&
+        exit.controlledGroupAtExit === 'active' &&
+        !entry.job &&
+        !entry.stopPromise
+      ) {
+        this.publish(entry, 'adopted', 'controlled PTY group remains active');
+        entry.interrupt?.();
+      }
+    });
+    const ioClosed = process.transportAndLogClosed.then(() => {
+      completion.transportAndLogClosed ??= { observedAt: Date.now() };
+      this.executionChanged(entry);
+    });
+    const groupEmpty = process.controlledGroupEmpty.then(() => {
+      completion.controlledGroupEmpty ??= { observedAt: Date.now() };
+      this.executionChanged(entry);
+    });
+    entry.processSettled = Promise.all([rootExit, ioClosed, groupEmpty]).then(
+      () => {},
+    );
+    void entry.processSettled
+      .then(() => this.finish(entry))
+      .catch(transportError);
+    const coverageChanged = () => {
+      if (entry.finished || entry.process !== process) return;
+      try {
+        const coverage = process.descendantCoverage.snapshot();
+        if (!['unknown', 'unmanaged'].includes(coverage.state))
+          throw Error('invalid PTY descendant coverage evidence');
+        const reason = [
+          'outside-controlled-group',
+          'coverage-unavailable',
+        ].includes(coverage.reason ?? '')
+          ? coverage.reason
+          : undefined;
+        const next: CommandDescendantCoverage = {
+          state: coverage.state,
+          ...(reason ? { reason } : {}),
+        };
+        const previous = completion.descendantCoverage;
+        if (previous.state === 'unmanaged') return;
+        if (previous.state === next.state && previous.reason === next.reason)
+          return;
+        completion.descendantCoverage = { ...next, observedAt: Date.now() };
+        this.executionChanged(entry);
+      } catch (error) {
+        transportError(error);
+      }
+    };
+    try {
+      entry.unsubscribeCoverage =
+        process.descendantCoverage.subscribe(coverageChanged);
+      coverageChanged();
+    } catch (error) {
+      transportError(error);
+    }
+    this.executionChanged(entry);
+  }
   private launch(command: string, owner: JobOwner): Entry {
     const verdict = classifyCommand(command, this.sandbox.credentialFiles);
     if (verdict.verdict === 'DENY')
       throw new Error(verdict.message || verdict.reason);
     const entry = this.entry(command, owner);
+    owner = entry.owner;
+    const execution: CommandExecution = {
+      executionId: randomUUID(),
+      epoch: this.runName,
+      ownerSessionId: owner.sessionId,
+      executionSessionId: owner.origin?.executionSessionId ?? owner.sessionId,
+      toolCallId: owner.origin?.toolCallId,
+      displayCommand: owner.origin?.displayCommand,
+      status: 'starting',
+      started: entry.started,
+      outputPath: `/background_jobs/${this.runName}/${entry.path.split(/[\\/]/).at(-1)}`,
+    };
+    entry.execution = execution;
+    this.executions.set(execution.executionId, entry);
+    this.executionChanged(entry);
+    const launcher = this.processOptions.commandLauncher;
+    if (launcher) {
+      entry.reserved = true;
+      entry.failure = new Promise<never>((_resolve, reject) => {
+        entry.fail = reject;
+      });
+      void entry.failure.catch(() => {});
+      entry.ready = Promise.resolve()
+        .then(async () => {
+          entry.controller.signal.throwIfAborted();
+          const process = await launcher({
+            executionId: execution.executionId,
+            origin: {
+              executionSessionId: execution.executionSessionId,
+              ...owner.origin,
+            },
+            notificationOwner: {
+              sessionId: owner.sessionId,
+              parent: owner.parent,
+              startedBy: owner.startedBy,
+            },
+            command,
+            cwd: this.sandbox.workspace,
+            env: shellEnvironment(),
+            outputPath: entry.path,
+            signal: entry.controller.signal,
+          });
+          entry.process = process;
+          entry.pid = process.pid;
+          execution.pid = process.pid;
+          execution.terminal = process.terminal
+            ? { ...process.terminal }
+            : undefined;
+          execution.status = entry.job ? 'background' : 'running';
+          this.executionChanged(entry);
+          const transportError = (error: unknown) => {
+            if (entry.finished || entry.transportFailed) return;
+            entry.transportFailed = true;
+            entry.reason = 'transport error';
+            execution.reason = 'transport error';
+            execution.status = 'failed';
+            this.executionChanged(entry);
+            // Reporting a failed logger must never require that logger to work.
+            entry.fail?.(this.transportDiagnostic(entry, error));
+            void this.stopEntry(entry, 'transport error').catch(() => {
+              execution.reason = 'transport cleanup failed';
+              this.executionChanged(entry);
+            });
+          };
+          if (process.kind === 'pty-group') {
+            this.observePtyGroup(entry, process, transportError);
+            return;
+          }
+          entry.processSettled = process.settled;
+          void process.settled
+            .then(async () => {
+              const exit = await process.shellExit;
+              entry.shellExited = true;
+              entry.exitCode = exit.exitCode;
+              this.finish(entry);
+            })
+            .catch(transportError);
+          void process.shellExit
+            .then((exit) => {
+              entry.shellExited = true;
+              entry.exitCode = exit.exitCode;
+              if (
+                !entry.finished &&
+                exit.remainingProcesses &&
+                !entry.job &&
+                !entry.stopPromise
+              ) {
+                this.publish(entry, 'adopted', 'left running');
+                entry.interrupt?.();
+              }
+            })
+            .catch(transportError);
+        })
+        .catch((error: unknown) => {
+          entry.reason ??= entry.controller.signal.aborted
+            ? 'cancelled'
+            : 'spawn error';
+          const failure = this.transportDiagnostic(entry, error);
+          // Wake the original foreground caller with the actual failure before
+          // finish releases its success/log-reading path.
+          entry.fail?.(failure);
+          this.finish(entry);
+          throw failure;
+        });
+      void entry.ready.catch(() => {});
+      return entry;
+    }
     const fd = openSync(entry.path, 'a', 0o600);
     try {
       const child = spawn(command, {
@@ -368,6 +692,9 @@ export class JobRegistry {
       });
       entry.child = child;
       entry.pid = child.pid;
+      execution.pid = child.pid;
+      execution.status = 'running';
+      this.executionChanged(entry);
       child.once('error', (error) => {
         writeFileSync(entry.path, redact(error.message), { flag: 'a' });
         entry.reason = 'spawn error';
@@ -387,7 +714,13 @@ export class JobRegistry {
     }
     return entry;
   }
-  startShell(command: string, owner: JobOwner, timeout?: number): Job {
+  async startShell(
+    command: string,
+    owner: JobOwner,
+    timeout?: number,
+    signal?: AbortSignal,
+  ): Promise<Job> {
+    signal?.throwIfAborted();
     this.checkCapacity('shell');
     if (
       timeout !== undefined &&
@@ -395,8 +728,29 @@ export class JobRegistry {
     )
       throw new Error('background timeout must be between 0 and 86400 seconds');
     const entry = this.launch(command, owner);
+    entry.reserved = true;
     if (timeout) entry.deadline = Date.now() + timeout * 1000;
-    return this.publish(entry, 'shell');
+    this.publish(entry, 'shell');
+    // A pending transport is not accepted yet. After ready returns, background
+    // jobs keep their existing independent lifetime when the Agent is cancelled.
+    const cancel = () => {
+      void this.stopEntry(entry, 'cancelled');
+    };
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) cancel();
+    try {
+      if (entry.ready) {
+        await entry.ready;
+        if (entry.controller.signal.aborted) {
+          await this.stopEntry(entry, entry.reason ?? 'cancelled');
+          entry.controller.signal.throwIfAborted();
+        }
+      }
+      signal?.throwIfAborted();
+      return structuredClone(entry.job!);
+    } finally {
+      signal?.removeEventListener('abort', cancel);
+    }
   }
   async execute(
     command: string,
@@ -414,6 +768,7 @@ export class JobRegistry {
         'foreground timeout must be positive and at most 600 seconds',
       );
     signal.throwIfAborted();
+    if (this.processOptions.commandLauncher) this.checkCapacity('shell');
     const entry = this.launch(command, owner);
     const sequence = this.endSequence;
     let awakened: Job[] = [];
@@ -457,7 +812,11 @@ export class JobRegistry {
     signal.addEventListener('abort', cancel, { once: true });
     if (signal.aborted) cancel();
     try {
-      await Promise.race([entry.settled, promoted]);
+      await Promise.race([
+        entry.settled,
+        promoted,
+        ...(entry.failure ? [entry.failure] : []),
+      ]);
       if (signal.aborted) {
         await this.stopEntry(entry, 'cancelled');
         signal.throwIfAborted();
@@ -471,7 +830,10 @@ export class JobRegistry {
             (entry.exitCode ? `Exit code: ${entry.exitCode}\n` : '') +
             'The command has ended, but processes it started are still running.';
         return {
-          job: { ...entry.job },
+          execution: entry.execution
+            ? structuredClone(entry.execution)
+            : undefined,
+          job: structuredClone(entry.job),
           how: adopted ? 'adopted' : 'moved',
           output:
             (head ? head + '\n\n' : '') +
@@ -485,6 +847,9 @@ export class JobRegistry {
         const data = Buffer.alloc(Math.min(size, 80_000));
         readSync(fd, data, 0, data.length, 0);
         return {
+          execution: entry.execution
+            ? structuredClone(entry.execution)
+            : undefined,
           output:
             (awakened.length
               ? `Stopped waiting because background jobs ended: ${awakened.map((job) => `${job.id} ${job.status}`).join(', ')}. Their notices reach the next model request.`
@@ -498,6 +863,19 @@ export class JobRegistry {
       } finally {
         closeSync(fd);
       }
+    } catch (error) {
+      if (entry.failure) {
+        try {
+          await this.stopEntry(entry, entry.reason ?? 'transport error');
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            'command transport failed; cleanup failed',
+          );
+        }
+        signal.throwIfAborted();
+      }
+      throw error;
     } finally {
       clearTimeout(timer);
       signal.removeEventListener('abort', cancel);
@@ -508,7 +886,7 @@ export class JobRegistry {
   backgroundForeground(): number {
     let count = 0;
     for (const entry of this.entries)
-      if (entry.child && !entry.job && !entry.stopPromise) {
+      if ((entry.child || entry.ready) && !entry.job && !entry.stopPromise) {
         this.publish(entry, 'shell', 'moved to background');
         entry.interrupt?.();
         count++;
@@ -586,7 +964,7 @@ export class JobRegistry {
     return [...this.jobs.values()]
       .flatMap((entry) =>
         entry.job && (!sessionId || entry.job.sessionId === sessionId)
-          ? [{ ...entry.job }]
+          ? [structuredClone(entry.job)]
           : [],
       )
       .sort(
@@ -597,7 +975,7 @@ export class JobRegistry {
   }
   get(id: string): Job | undefined {
     const job = this.jobs.get(id)?.job;
-    return job ? { ...job } : undefined;
+    return job ? structuredClone(job) : undefined;
   }
   activity(id: string, detail: string): void {
     const job = this.jobs.get(id)?.job;
@@ -612,13 +990,38 @@ export class JobRegistry {
       throw new Error('stop the job before removing it');
     this.jobs.delete(id);
   }
-  private async stopEntry(entry: Entry, reason: string): Promise<void> {
-    if (entry.finished) return;
+  private stopEntry(entry: Entry, reason: string): Promise<void> {
+    if (entry.finished) return Promise.resolve();
     if (entry.stopPromise) return entry.stopPromise;
     entry.reason = reason;
     entry.controller.abort(new Error('Interrupted'));
     entry.stopPromise = (async () => {
-      if (entry.child) {
+      if (entry.ready) {
+        try {
+          await entry.ready;
+        } catch (error) {
+          if (entry.finished) return;
+          throw error;
+        }
+        const process = entry.process;
+        if (process) {
+          await process.stop(reason);
+          try {
+            await entry.processSettled;
+          } catch (error) {
+            entry.reason = 'transport error';
+            // A bounded group cannot release its reservation without all three
+            // facts. A rejected I/O acknowledgement is never a closed log.
+            if (process.kind !== 'pty-group') this.finish(entry);
+            throw error;
+          }
+          const exit = await (process.kind === 'pty-group'
+            ? process.rootExit
+            : process.shellExit);
+          entry.exitCode = exit.exitCode;
+          this.finish(entry);
+        }
+      } else if (entry.child) {
         await kill(entry, false);
         await Promise.race([entry.settled, delay(1000)]);
         await kill(entry, true);
@@ -633,7 +1036,20 @@ export class JobRegistry {
         await stopWatch(entry.watch);
         this.finish(entry);
       } else await entry.settled;
-    })();
+    })().catch((error: unknown) => {
+      if (entry.process?.kind === 'pty-group' && !entry.finished)
+        entry.reason = 'transport cleanup failed';
+      if (entry.execution) {
+        entry.execution.status = 'failed';
+        entry.execution.reason = 'transport cleanup failed';
+        this.executionChanged(entry);
+      }
+      entry.fail?.(error);
+      throw error;
+    });
+    // Timer/abort callbacks have no awaited caller. Keep their rejection handled
+    // while the original call, explicit stop, and close still receive the error.
+    void entry.stopPromise.catch(() => {});
     return entry.stopPromise;
   }
   async stop(id: string, reason = 'model'): Promise<void> {
@@ -663,6 +1079,10 @@ export class JobRegistry {
       pending.filter((job) => !taken.includes(job)),
     );
     if (!taken.length) return [];
+    const commandExecutions = taken.flatMap((job) => {
+      const receipt = commandExecutionReceipt(job.execution);
+      return receipt ? [receipt] : [];
+    });
     return [
       {
         id: randomUUID(),
@@ -673,6 +1093,7 @@ export class JobRegistry {
         ),
         display: this.redact(taken.map(noticeLine).join('\n'), sessionId),
         internal: 'job_notice',
+        ...(commandExecutions.length ? { commandExecutions } : {}),
       },
     ];
   }

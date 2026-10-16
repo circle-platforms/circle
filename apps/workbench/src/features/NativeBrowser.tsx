@@ -1,3 +1,4 @@
+import { BrowserDiagnostics } from './BrowserDiagnostics';
 import { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
@@ -389,6 +390,13 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
           <Camera size={14} />
         </IconButton>
       </div>
+      {opened && (
+        <BrowserDiagnostics
+          sessionId={id}
+          tab={state?.tab}
+          url={state?.url ?? url}
+        />
+      )}
       {!!state?.downloads?.length && (
         <ul className="browser-downloads" data-testid="browser-downloads">
           {[...state.downloads].reverse().map((download) => (

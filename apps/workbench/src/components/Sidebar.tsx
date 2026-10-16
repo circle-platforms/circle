@@ -1,3 +1,4 @@
+import { extensionStatusText } from '../model/extension-status';
 import { desktopHost, folderOpenMessage, openNativeWorkspace } from '../host';
 import { openHome } from '../features/home-selection';
 import {
@@ -27,6 +28,7 @@ import { Tooltip } from 'radix-ui';
 import { useRuntime } from '../app/context';
 import { usePlugins } from '../plugins/context';
 import { currentSession, sessionTitle } from '../model/state';
+import { workspaceLabel } from '../model/workspace-label';
 import {
   orderedProjects,
   RECENT_SHOWN,
@@ -37,7 +39,6 @@ import {
   type ActivityAge,
 } from '../model/session-management';
 import type { DialogId, Session } from '../model/types';
-import { workspaceLabel } from '../model/workspace-label';
 import { armComposerFocus } from '../model/composer-focus';
 import { IconButton } from './common';
 import { t, tn } from '../i18n';
@@ -522,6 +523,7 @@ export function Sidebar({
           </section>
         )}
         {groups.map(({ workspace, sessions, shown }) => {
+          const label = workspaceLabel(workspace, snapshot.agents);
           const open = all.includes(workspace.id);
           return (
             <section className="project" key={workspace.id}>
@@ -538,20 +540,18 @@ export function Sidebar({
                   aria-expanded={!collapsed.includes(workspace.id)}
                   onClick={() => toggle(workspace.id, collapsed, setCollapsed)}
                 >
-                  {workspaceLabel(workspace)}
+                  {label}
                 </button>
                 <div className="project-actions">
                   <IconButton
-                    label={t('new session in {name}', {
-                      name: workspaceLabel(workspace),
-                    })}
+                    label={t('new session in {name}', { name: label })}
                     tipOpen={scrollClosed ? false : undefined}
                     onClick={() => newSession(workspace.id)}
                   >
                     <Plus size={13} />
                   </IconButton>
                   <WorkspaceMenu
-                    workspace={workspace}
+                    workspace={{ ...workspace, name: label }}
                     tipOpen={scrollClosed ? false : undefined}
                     onNew={() => newSession(workspace.id)}
                     onCollapseAll={() =>
@@ -612,7 +612,7 @@ export function Sidebar({
                 title={item.name}
               >
                 <i />
-                {item.status.text}
+                {extensionStatusText(item)}
               </span>
             ) : null,
           )}

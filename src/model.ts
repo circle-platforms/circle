@@ -19,6 +19,7 @@ import type {
   ToolCall,
 } from './types.js';
 import { emptyUsage } from './types.js';
+import { commandExecutionModelContent } from './command_process.js';
 import { loadCredentials, type CircleSettings } from './settings.js';
 import {
   ModelGuard,
@@ -329,11 +330,15 @@ export class GatewayModel implements ChatModel {
       else if (message.role === 'tool') {
         messages.push({
           role: 'tool',
-          content: message.content,
+          content: commandExecutionModelContent(message),
           tool_call_id: message.tool_call_id!,
         });
         toolMedia.push(...(message.attachments ?? []));
-      } else if (message.role === 'assistant')
+      } else if (message.role === 'assistant') {
+        // A thinking-only/interrupted turn has no Chat Completions content.
+        // Preserve it in history, but do not send a bare assistant null: unlike
+        // tool-call turns, compatible gateways require content for these rows.
+        if (!message.content && !message.tool_calls?.length) continue;
         messages.push({
           role: 'assistant',
           content: message.content || null,
@@ -350,12 +355,15 @@ export class GatewayModel implements ChatModel {
               }
             : {}),
         });
-      else
+      } else
         messages.push({
           role: 'user',
           content: message.attachments?.length
-            ? openAIContent(message.content, message.attachments)
-            : message.content,
+            ? openAIContent(
+                commandExecutionModelContent(message),
+                message.attachments,
+              )
+            : commandExecutionModelContent(message),
         });
     }
     flushToolMedia();
@@ -578,8 +586,11 @@ export class GatewayModel implements ChatModel {
             type: 'tool_result',
             tool_use_id: message.tool_call_id!,
             content: message.attachments?.length
-              ? anthropicContent(message.content, message.attachments)
-              : message.content,
+              ? anthropicContent(
+                  commandExecutionModelContent(message),
+                  message.attachments,
+                )
+              : commandExecutionModelContent(message),
             is_error: message.status === 'error',
           },
         ];
@@ -600,7 +611,10 @@ export class GatewayModel implements ChatModel {
             ];
       } else {
         role = 'user';
-        content = anthropicContent(message.content, message.attachments);
+        content = anthropicContent(
+          commandExecutionModelContent(message),
+          message.attachments,
+        );
       }
       const previous = messages.at(-1);
       if (previous?.role === role && Array.isArray(previous.content))

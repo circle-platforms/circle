@@ -16,6 +16,7 @@ export { toolSummary };
  */
 export function ToolGroup({
   rows,
+  ownerSessionId,
   expanded,
   onFile,
   onAgent,
@@ -23,6 +24,7 @@ export function ToolGroup({
   children,
 }: {
   rows: Message[];
+  ownerSessionId?: string;
   expanded: boolean;
   onFile: (path: string) => void;
   onAgent: (id: string) => void;
@@ -52,6 +54,8 @@ export function ToolGroup({
         'lsp',
       ].includes(tool.name),
   ).length;
+  const cancelled = tools.filter((tool) => tool.status === 'cancelled').length;
+  const rejected = tools.filter((tool) => tool.status === 'rejected').length;
   const [open, setOpen] = useSessionDisclosure(
     'group:' + rows[0]?.id,
     expanded,
@@ -78,6 +82,12 @@ export function ToolGroup({
             {tn(failed, '{n} failed', '{n} failed')}
           </span>
         )}
+        {cancelled > 0 && (
+          <span>{tn(cancelled, '{n} cancelled', '{n} cancelled')}</span>
+        )}
+        {rejected > 0 && (
+          <span>{tn(rejected, '{n} rejected', '{n} rejected')}</span>
+        )}
         {running && !open && (
           <code className="tool-running">
             {String(
@@ -98,6 +108,7 @@ export function ToolGroup({
               <div key={row.id} data-message-id={row.id}>
                 <ToolMessage
                   tool={row.tool}
+                  ownerSessionId={ownerSessionId}
                   expanded={expanded}
                   onAgent={onAgent}
                   onFile={onFile}

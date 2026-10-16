@@ -10,6 +10,7 @@ import {
   sessionOccupied,
   type SessionLease,
 } from './session_lock.js';
+import { InputOutbox } from './input_outbox.js';
 import {
   validateSessionGraph,
   orderedCheckpoints,
@@ -73,6 +74,7 @@ export const emptyContextState = (): ContextState => ({
   offloaded: {},
 });
 export class CheckpointStore {
+  readonly inputs: InputOutbox;
   private db: DatabaseSync;
   private readonly home?: string;
   private readonly ownership = new Map<string, SessionLease>();
@@ -88,6 +90,13 @@ export class CheckpointStore {
     string,
     { head: string | null; messages: Message[] }
   >();
+  // One recent head per session, bounded independently of conversation length.
+  // SQLite's data_version covers other connections; writeVersion covers this one.
+  private contextCache = new Map<
+    string,
+    { head: string | null | undefined; state: ContextState }
+  >();
+  private contextCacheVersion?: { local: number; database: number };
   // Moved on every write, so callers can tell whether a derived view of the store
   // (the subagent rows) is still current without re-querying.
   private writeVersion = 0;
@@ -147,6 +156,17 @@ export class CheckpointStore {
       this.db.exec('ROLLBACK');
       throw error;
     }
+    this.inputs = new InputOutbox(
+      this.db,
+      (id, action) => this.writing([id], action),
+      {
+        deferred: (id) => this.deferred.has(id) && !this.row(id),
+        materialize: (id) => this.materialize(id, true),
+        committed: (id) => {
+          if (this.deferred.delete(id)) this.writeVersion++;
+        },
+      },
+    );
   }
   /** Sessions kept in memory until the first message, so an unused /new leaves no row. */
   private deferred = new Map<string, Session>();
@@ -159,7 +179,7 @@ export class CheckpointStore {
     const ids = (
       this.db
         .prepare(
-          `SELECT id FROM sessions WHERE parent_id IS NULL AND head IS NULL AND title = ''`,
+          `SELECT id FROM sessions WHERE parent_id IS NULL AND head IS NULL AND title = '' AND NOT EXISTS (SELECT 1 FROM input_outbox WHERE session_id = sessions.id AND state IN ('queued','recovery_pending'))`,
         )
         .all() as { id: string }[]
     ).filter(({ id }) => !this.home || !sessionOccupied(this.home, id));
@@ -279,10 +299,10 @@ export class CheckpointStore {
     return this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as
       Session | undefined;
   }
-  private materialize(sessionId: string): void {
+  private materialize(sessionId: string, retainUntilCommit = false): void {
     const pending = this.deferred.get(sessionId);
     if (!pending || this.row(sessionId)) {
-      this.deferred.delete(sessionId);
+      if (!retainUntilCommit) this.deferred.delete(sessionId);
       return;
     }
     this.db
@@ -299,7 +319,7 @@ export class CheckpointStore {
         pending.parent_id,
         pending.title_locked ? 1 : 0,
       );
-    this.deferred.delete(sessionId);
+    if (!retainUntilCommit) this.deferred.delete(sessionId);
   }
   private createOwned(
     workspace: string,
@@ -361,7 +381,7 @@ export class CheckpointStore {
       ? ''
       : empty
         ? 'AND parent_id IS NULL'
-        : "AND parent_id IS NULL AND NOT (head IS NULL AND title = '')";
+        : "AND parent_id IS NULL AND NOT (head IS NULL AND title = '' AND NOT EXISTS (SELECT 1 FROM input_outbox WHERE session_id = sessions.id AND state IN ('queued','recovery_pending')))";
     return (workspace
       ? this.db
           .prepare(
@@ -449,18 +469,34 @@ export class CheckpointStore {
       this.appendOwned(sessionId, messages, expectedHead),
     );
   }
+  /** Commit a queued user message and its consumed receipt in one SQLite transaction. */
+  appendInput(
+    sessionId: string,
+    inputId: string,
+    epoch: string,
+    message: Message,
+  ): string | null {
+    if (message.role !== 'user' || message.id !== inputId)
+      throw new Error('queued input must append its stable user message id');
+    return this.writing([sessionId], () =>
+      this.appendOwned(sessionId, [message], undefined, { id: inputId, epoch }),
+    );
+  }
   private appendOwned(
     sessionId: string,
     messages: Message[],
     expectedHead?: string | null,
+    input?: { id: string; epoch: string },
   ): string | null {
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      this.materialize(sessionId);
+      this.materialize(sessionId, true);
       const session = this.get(sessionId);
       if (!session) throw new Error('unknown session');
       if (expectedHead !== undefined && expectedHead !== session.head)
         throw new Error('session changed in another process');
+      if (input)
+        this.inputs.consumeInTransaction(sessionId, input.id, input.epoch);
       let head = session.head;
       const stored = messages.map((message) => JSON.stringify(message));
       for (const text of stored) {
@@ -474,6 +510,7 @@ export class CheckpointStore {
         .prepare('UPDATE sessions SET head = ?, updated = ? WHERE id = ?')
         .run(head, Date.now(), sessionId);
       this.db.exec('COMMIT');
+      this.deferred.delete(sessionId);
       // When the cache holds the head this append started from, the new messages extend
       // it; otherwise the chain is walked again on the next read. It extends with what was
       // written, decoded, not the caller's objects: a read returns what the database holds.
@@ -1016,7 +1053,43 @@ export class CheckpointStore {
     });
   }
   contextState(sessionId: string, head?: string | null): ContextState {
-    let cursor = head === undefined ? this.get(sessionId)?.head : head;
+    const session = this.get(sessionId);
+    const selected = head === undefined ? session?.head : head;
+    // An explicit transaction may observe a different database snapshot from
+    // an earlier autocommit read. Never cache that transaction's intermediate state.
+    if (!session || this.db.isTransaction)
+      return this.readContextState(sessionId, selected);
+    const database = this.db.prepare('PRAGMA data_version').get()?.data_version;
+    if (typeof database !== 'number' || !Number.isSafeInteger(database))
+      throw new Error('context database version is unavailable');
+    if (
+      this.contextCacheVersion?.local !== this.writeVersion ||
+      this.contextCacheVersion.database !== database
+    ) {
+      this.contextCache.clear();
+      this.contextCacheVersion = { local: this.writeVersion, database };
+    }
+    const cached = this.contextCache.get(sessionId);
+    if (cached && cached.head === selected) {
+      this.contextCache.delete(sessionId);
+      this.contextCache.set(sessionId, cached);
+      return structuredClone(cached.state);
+    }
+    const state = this.readContextState(sessionId, selected);
+    this.contextCache.delete(sessionId);
+    this.contextCache.set(sessionId, {
+      head: selected,
+      state: structuredClone(state),
+    });
+    if (this.contextCache.size > 64)
+      this.contextCache.delete(this.contextCache.keys().next().value!);
+    return state;
+  }
+  private readContextState(
+    sessionId: string,
+    head: string | null | undefined,
+  ): ContextState {
+    let cursor = head;
     const seen = new Set<string>();
     while (cursor) {
       if (seen.has(cursor)) throw new Error('checkpoint ancestry cycle');
@@ -1082,6 +1155,7 @@ export class CheckpointStore {
         )
         .run(session.head, JSON.stringify(state), Date.now());
       this.db.exec('COMMIT');
+      this.writeVersion++;
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;

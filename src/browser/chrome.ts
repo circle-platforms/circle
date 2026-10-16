@@ -141,6 +141,8 @@ export interface ChromeOptions {
    * fixed three-second execution deadline.
    */
   closeTimeout?: number;
+  /** Each owned-process inspection is bounded separately from the exit grace period. */
+  processInspectionTimeout?: number;
   /**
    * Host names mapped to addresses, as Chrome's --host-resolver-rules: for tests, which reach
    * a local site by a public name.
@@ -525,8 +527,15 @@ export class ChromeBrowser implements BrowserPort {
     // live owned descendants remain. Read actual process state instead: a zombie
     // cannot run or write. Failure to read state or stop a live member still rejects.
     const output = await new Promise<string>((resolve, reject) =>
-      execFile('ps', ['-A', '-o', 'pgid=,stat='], (error, stdout) =>
-        error ? reject(error) : resolve(stdout),
+      execFile(
+        'ps',
+        ['-A', '-o', 'pgid=,stat='],
+        {
+          timeout: Math.max(1, this.options.processInspectionTimeout ?? 3000),
+          // A stalled inspector must not outlive this check by ignoring SIGTERM.
+          killSignal: 'SIGKILL',
+        },
+        (error, stdout) => (error ? reject(error) : resolve(stdout)),
       ),
     );
     return output.split('\n').some((line) => {
@@ -1255,10 +1264,20 @@ export class ChromeBrowser implements BrowserPort {
     what = 'Runtime.evaluate',
   ): Promise<T> {
     for (let attempt = 0; ; attempt++) {
-      const world = await this.world(tab);
+      const dialog = this.dialogOpens(tab);
+      let active = true;
       try {
-        const { result, exceptionDetails } = await this.limit(
-          this.send<{
+        if (tab.closed) throw Error('the tab was closed');
+        if (tab.dialogs.length) throw Error('the page is waiting on a dialog');
+        const operation = (async () => {
+          const world = await this.world(tab);
+          // A blocked CDP world request can finish after a modal was answered.
+          // Its former caller has already returned: never execute its page code.
+          if (!active) throw Error('the page command is no longer active');
+          signal?.throwIfAborted();
+          if (tab.dialogs.length)
+            throw Error('the page is waiting on a dialog');
+          return this.send<{
             result: { value?: unknown };
             exceptionDetails?: { text?: string };
           }>(
@@ -1270,7 +1289,17 @@ export class ChromeBrowser implements BrowserPort {
               returnByValue: true,
             },
             tab.session,
-          ),
+          );
+        })();
+        const interrupted = dialog.opened.then(() => {
+          throw Error(
+            tab.closed
+              ? 'the tab was closed'
+              : 'the page is waiting on a dialog',
+          );
+        });
+        const { result, exceptionDetails } = await this.limit(
+          Promise.race([operation, interrupted]),
           signal,
           5000,
           what,
@@ -1279,7 +1308,7 @@ export class ChromeBrowser implements BrowserPort {
           throw Error(exceptionDetails.text || 'browser page action failed');
         return result.value as T;
       } catch (error) {
-        // The document changed under the call: its world went with it
+        // The document changed under the call: its world went with it.
         if (
           attempt === 0 &&
           error instanceof Error &&
@@ -1289,9 +1318,13 @@ export class ChromeBrowser implements BrowserPort {
           continue;
         }
         throw error;
+      } finally {
+        active = false;
+        dialog.stop();
       }
     }
   }
+
   private async js<T = unknown>(
     tab: Tab,
     command: string,

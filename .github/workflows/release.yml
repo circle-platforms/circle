@@ -137,7 +137,23 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.dotnet\tools"
           & "$env:USERPROFILE\.dotnet\tools\wix.exe" extension add --global WixToolset.UI.wixext/5.0.2
       - run: npm --prefix apps/workbench test
+      # Runtime discovery includes the real Electron sandbox guard. Configure
+      # its development binary before runtime tests, not only the packaged app.
+      - name: Prepare the Linux development display and Chromium sandbox
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          node -e "console.log(require('./apps/desktop/node_modules/electron'))"
+          sudo apt-get update
+          sudo apt-get install -y xvfb xauth libgtk-3-0 libnss3 libasound2t64
+          Xvfb :99 -screen 0 1920x1080x24 > "$RUNNER_TEMP/circle-release-xvfb.log" 2>&1 &
+          echo 'DISPLAY=:99' >> "$GITHUB_ENV"
+          helper="$GITHUB_WORKSPACE/apps/desktop/node_modules/electron/dist/chrome-sandbox"
+          sudo chown root:root "$helper"
+          sudo chmod 4755 "$helper"
       - run: npm --prefix apps/desktop run test:runtime
+        # Bound leaked native handles without forcing tests to report success.
+        timeout-minutes: 10
       - run: npm --prefix apps/desktop run package
       # Built and installed before the packaged folder is started, so both hold exactly what
       # package wrote

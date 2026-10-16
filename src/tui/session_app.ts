@@ -2144,7 +2144,11 @@ export class SessionApp {
       if (this.state.draft && !this.runtime?.busy) {
         // What you typed is cleared but stays in the history
         this.jobWakeSnoozed = true;
-        this.history.add(this.state.draft);
+        if (!this.history.add(this.state.draft))
+          this.fail(
+            this.history.persistenceError ??
+              new Error('input history could not be saved'),
+          );
         this.composer.clear();
         this.lastCtrlC = 0;
       } else this.ctrlC();
@@ -2529,7 +2533,11 @@ export class SessionApp {
     this.composer.take();
     const message = this.composer.modelText(shown);
     const pastes = this.composer.pastesOf(shown);
-    this.history.add(this.composer.historyText(shown));
+    if (!this.history.add(this.composer.historyText(shown)))
+      this.fail(
+        this.history.persistenceError ??
+          new Error('input history could not be saved'),
+      );
     if (kind === 'followUp' && this.runtime?.busy) {
       if (message !== shown)
         this.runtime.harness.shown.set(message, { display: shown, pastes });

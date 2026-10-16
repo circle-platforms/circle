@@ -1,0 +1,44 @@
+/* Git uses the existing inspector, buttons, fields and diff components.
+   These rules arrange content only; they do not define another control skin. */
+.native-git {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.native-git-files,
+.native-delivery-checks {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.native-git-files > li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.native-git-files .change-file {
+  min-width: 0;
+  flex: 1;
+}
+.native-git-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-block: 12px;
+}
+.native-git-scopes {
+  margin-block: 12px;
+}
+.native-git .diff-block pre {
+  overflow: auto;
+}
+.native-git .field-label,
+.native-delivery .field-label {
+  align-items: stretch;
+}
+.native-delivery > .button {
+  margin-block: 4px;
+  margin-inline-end: 6px;
+}
+.native-delivery .activity-row {
+  flex-wrap: wrap;
+}

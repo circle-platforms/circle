@@ -1927,7 +1927,7 @@ test(
       if (req.url === '/two')
         return page(
           res,
-          `<title>Two</title><button onclick="location = '${otherBase}/download'; setTimeout(() => location = '/download', 400)">Both</button>`,
+          `<title>Two</title><iframe name="firstDownload" hidden></iframe><iframe name="secondDownload" hidden></iframe><button onclick="frames.firstDownload.location = '${otherBase}/download'; setTimeout(() => frames.secondDownload.location = '/download', 400)">Both</button>`,
         );
       if (req.url === '/alert')
         return page(
@@ -1937,7 +1937,13 @@ test(
       page(res, '<title>Home</title><p>home</p>');
     });
     const other = createHttp((req, res) => {
-      if (req.url === '/download') return file(res, 'theirs.bin');
+      if (req.url === '/download') {
+        // A second navigation of the same main frame can cancel this first
+        // response. Independent frames test two real downloads, even when the
+        // first response arrives after the unchanged 400 ms second trigger.
+        setTimeout(() => file(res, 'theirs.bin'), 1000);
+        return;
+      }
       page(
         res,
         `<title>Asks</title><script>setTimeout(() => confirm('Delete everything?'), 300)</script>`,
@@ -2056,7 +2062,7 @@ test(
       ref: ref(two.text, /\[(e\d+)\] button "Both"/),
       element: 'both',
     });
-    // The second starts 400 ms after the first
+    // The second starts 400 ms after the first, in a distinct request frame.
     const first = await held(both);
     assert.equal(first.approval?.kind, 'download');
     const firstSite = (first.approval as { site: string }).site;

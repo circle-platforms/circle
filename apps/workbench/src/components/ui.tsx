@@ -108,6 +108,7 @@ export function Modal({
   description,
   children,
   wide = false,
+  onCloseAutoFocus,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -115,6 +116,7 @@ export function Modal({
   description?: string;
   children: ReactNode;
   wide?: boolean;
+  onCloseAutoFocus?: (event: Event) => void;
 }) {
   const content = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -139,6 +141,7 @@ export function Modal({
         <Dialog.Content
           ref={content}
           className={`dialog-content ${wide ? 'wide' : ''}`}
+          onCloseAutoFocus={onCloseAutoFocus}
           aria-describedby={description ? 'dialog-description' : undefined}
           onOpenAutoFocus={(event) => {
             // The close button is the first tab stop. Leaving focus there drops
@@ -212,11 +215,24 @@ export function PermissionState() {
     </div>
   );
 }
-export function DataBlock({ title, value }: { title: string; value: unknown }) {
+export function DataBlock({
+  title,
+  value,
+  tabIndex,
+  wrap,
+}: {
+  title: string;
+  value: unknown;
+  tabIndex?: number;
+  wrap?: boolean;
+}) {
   return (
     <div className="data-block">
       <h4>{title}</h4>
-      <pre>
+      <pre
+        tabIndex={tabIndex}
+        style={wrap === false ? { whiteSpace: 'pre' } : undefined}
+      >
         {typeof value === 'string' ? value : JSON.stringify(value, null, 2)}
       </pre>
     </div>

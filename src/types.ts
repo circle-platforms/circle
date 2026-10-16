@@ -48,6 +48,8 @@ export interface Message {
   model?: string;
   request_model?: string;
   content: string;
+  /** A desktop host-authored notice; content itself remains unchanged in history. */
+  runtimeNotice?: import('./runtime_notice.js').GitHubRuntimeNotice;
   attachments?: MediaAttachment[];
   shell?: { command: string; output: string; exit_code: number };
   thinking?: string;
@@ -77,6 +79,8 @@ export interface Message {
   truncated?: boolean;
   completion?: ModelCompletion;
   recoverable?: boolean;
+  /** Host-recorded bounded command facts; never a claim of arbitrary tree cleanup. */
+  commandExecutions?: import('./command_process.js').CommandExecutionReceipt[];
   legacy_data?: { type: string; data: Record<string, unknown> };
 }
 export type Effect = 'read' | 'write' | 'execute' | 'unknown';
@@ -104,6 +108,11 @@ export interface Tool {
     args: Record<string, unknown>,
     sessionId: string,
   ) => Record<string, unknown> | undefined;
+  /** Snapshot authorized inputs before waiting for approval; never perform writes here. */
+  prepare?: (
+    args: Record<string, unknown>,
+    context: ToolContext,
+  ) => Promise<Tool['run']>;
   run(args: Record<string, unknown>, context: ToolContext): Promise<string>;
 }
 export interface ToolContext {
