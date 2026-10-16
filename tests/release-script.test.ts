@@ -36,7 +36,7 @@ function project(base: string, version: string, unreleased: string): string {
   );
   writeFileSync(
     join(root, 'CHANGELOG.md'),
-    `# Changelog\n\n## Unreleased\n${unreleased}\n## 0.5.0 - 2026-10-08\n\n- Python.\n`,
+    `# Changelog\n\n## Unreleased\n${unreleased}\n## 0.9.0 - 2026-10-08\n\n- Earlier.\n`,
   );
   return root;
 }
@@ -74,7 +74,7 @@ test('the release script refuses an older version, disagreeing files and a secti
   assert.throws(() => check(root, '1.0.0'), /src\/version\.ts has 0\.9\.0/);
   writeFileSync(
     join(root, 'CHANGELOG.md'),
-    '## Unreleased\n\n## 1.0.0 - 2026-10-10\n\n## 0.5.0\n- x\n',
+    '## Unreleased\n\n## 1.0.0 - 2026-10-10\n\n## 0.9.0\n- x\n',
   );
   writeFileSync(
     join(root, 'src/version.ts'),
@@ -89,9 +89,12 @@ test('the release script refuses an older version, disagreeing files and a secti
 test('the release script prints the notes for the release page from the command line', () => {
   const result = spawnSync(
     process.execPath,
-    ['--import', 'tsx', 'scripts/release.ts', '--notes', 'v0.5.0'],
+    ['--import', 'tsx', 'scripts/release.ts', '--notes', 'v1.2.1'],
     { encoding: 'utf8' },
   );
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /^### Added\n\n- \*\*Background jobs\.\*\*/);
+  assert.match(
+    result.stdout,
+    /^### Added\n\n- \*\*The desktop application updates itself\*\*/,
+  );
 });

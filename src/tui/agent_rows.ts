@@ -1,7 +1,6 @@
-// A subagent in the conversation and on its own page (ported from transcript_view.py's
-// subagent lines and agent_detail.py). Under its `Agent(…)` row: one faint line with its
-// type, calls, time and tokens and, while it runs, its last three calls; ctrl+o lists them
-// all. Its page: a band on the panel background (lamp, name, position among its siblings,
+// A subagent in the conversation and on its own page. Under its `Agent(…)` row: one faint
+// line with its type, calls, time and tokens and, while it runs, its last three calls;
+// ctrl+o lists them all. Its page: a band on the panel background (lamp, name, position among its siblings,
 // status, calls, tokens, time, and the text buttons `main · prev · next`), then its record
 // top to bottom: a row per call with the first line it returned, each round's reasoning
 // where it happened, and how it ended. Colours come from the palette at every paint.
@@ -236,7 +235,7 @@ export function detailBand(
     total: number;
     width: number;
     now?: number;
-    // the button under the mouse: on `sel_bg`, brighter, as in 0.5.0
+    // the button under the mouse: on `sel_bg`, brighter
     hover?: BandAction;
   },
 ): DetailBand {

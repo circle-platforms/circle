@@ -731,7 +731,7 @@ export function renderScreen(
       result,
     });
   } else transcript = transcriptRows(state, width);
-  // A job's page: its band stays under the header (0.5.0's), its output scrolls under it.
+  // A job's page: its band stays under the header, its output scrolls under it.
   let bandRows = band?.rows ?? [];
   if (state.jobDetail) {
     const job = state.jobDetail;

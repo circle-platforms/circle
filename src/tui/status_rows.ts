@@ -1,6 +1,6 @@
 // The rows that say what is true now: the header, the busy word on the frame, the footer's
 // meters, the line under each turn, and the window title. Colours come from the palette
-// each time a row is drawn (ported from session_app.py, footer.py and agent_strip.py).
+// each time a row is drawn.
 import { homedir } from 'node:os';
 import { basename, sep } from 'node:path';
 import { palette, statusLight, type LampState } from '../ink/theme.js';

@@ -7,7 +7,6 @@ import {
   writeFileSync,
   rmSync,
   cpSync,
-  symlinkSync,
 } from 'node:fs';
 import { delimiter, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -25,7 +24,6 @@ import {
 } from '../src/install_layout.js';
 import { VERSION } from '../src/version.js';
 import { TITLE_MAX_TOKENS } from '../src/session_title.js';
-import { verifyRelocatedWindowsQuery } from './verify-windows-query-package.js';
 import {
   defaultSettings,
   saveSettings,
@@ -43,8 +41,9 @@ assert.equal(
   createHash('sha256').update(bytes).digest('hex'),
 );
 const temporary = mkdtempSync(join(tmpdir(), 'circle-dist-smoke-'));
-// The installer removes Python copies of circle it finds through HOME and PATH. Give it a home
-// of its own and a PATH without any circle, so a developer's real installation is never seen.
+// The installer writes to the default location under HOME and to the shell startup files there.
+// Give it a home of its own and a PATH without any circle, so a developer's real installation is
+// never seen or changed.
 const fakeHome = join(temporary, 'home');
 const fakeAppData = join(fakeHome, 'AppData', 'Local');
 mkdirSync(fakeAppData, { recursive: true });
@@ -264,9 +263,6 @@ try {
       bytes: readFileSync(join(home, name)),
     }),
   );
-  const nativeProcessQuery = windows
-    ? await verifyRelocatedWindowsQuery(root, temporary, home, env)
-    : undefined;
   const prefix = join(temporary, 'install space');
   const bin = join(temporary, 'bin space');
   const installEnv = {
@@ -355,34 +351,13 @@ try {
   assert.equal(activeVersion(prefix), upgraded);
   for (const row of preserved)
     assert.deepEqual(readFileSync(row.path), row.bytes);
-  // A Python circle at the default location is replaced when no location is given.
-  const pythonPrefix = windows
+  // With no location given, the installer uses the default one under the home folder.
+  const defaultPrefix = windows
     ? join(fakeAppData, 'circle')
     : join(fakeHome, '.local', 'share', 'circle');
-  const pythonBin = windows
-    ? join(pythonPrefix, 'bin')
+  const defaultBin = windows
+    ? join(defaultPrefix, 'bin')
     : join(fakeHome, '.local', 'bin');
-  const frozen = join(pythonPrefix, 'versions', '0.5.0', 'circle');
-  mkdirSync(join(frozen, '_internal'), { recursive: true });
-  writeFileSync(join(frozen, windows ? 'circle.exe' : 'circle'), 'frozen');
-  symlinkSync(
-    join(pythonPrefix, 'versions', '0.5.0'),
-    join(pythonPrefix, 'current'),
-    windows ? 'junction' : 'dir',
-  );
-  if (!windows) {
-    mkdirSync(pythonBin, { recursive: true });
-    symlinkSync(
-      join(pythonPrefix, 'current', 'circle', 'circle'),
-      join(pythonBin, 'circle'),
-    );
-  }
-  const replaceEnv: NodeJS.ProcessEnv = {
-    ...env,
-    CIRCLE_VERSION: VERSION,
-    CIRCLE_ASSET_DIR: output,
-    CIRCLE_NO_PATH: '1',
-  };
   sync(
     windows ? 'powershell.exe' : 'bash',
     windows
@@ -394,14 +369,17 @@ try {
           resolve('install.ps1'),
         ]
       : [resolve('install.sh')],
-    replaceEnv,
+    {
+      ...env,
+      CIRCLE_VERSION: VERSION,
+      CIRCLE_ASSET_DIR: output,
+      CIRCLE_NO_PATH: '1',
+    },
   );
-  assert.equal(existsSync(join(pythonPrefix, 'versions', '0.5.0')), false);
-  assert.equal(existsSync(join(pythonPrefix, 'current')), false);
-  assert.equal(activeVersion(pythonPrefix), VERSION);
+  assert.equal(activeVersion(defaultPrefix), VERSION);
   assert.equal(
     sync(
-      join(pythonBin, windows ? 'circle.cmd' : 'circle'),
+      join(defaultBin, windows ? 'circle.cmd' : 'circle'),
       ['--version'],
       env,
     ).trim(),
@@ -418,10 +396,9 @@ try {
       upgraded: true,
       checksumRejected: true,
       dataPreserved: true,
-      pythonReplaced: true,
+      defaultLocation: true,
       modelRequests: calls,
       sideEffect: 'receipt.txt',
-      ...(nativeProcessQuery ? { nativeProcessQuery } : {}),
     }) + '\n',
   );
 } catch (error) {

@@ -1,5 +1,5 @@
 // Tool rows: the short name and one short phrase for the arguments, declared in one place
-// so the transcript only looks things up (ported from circle/display_lexicon.py).
+// so the transcript only looks things up.
 import type { ToolCall } from '../types.js';
 
 export const TOOL_SHORT_NAMES: Record<string, string> = {
