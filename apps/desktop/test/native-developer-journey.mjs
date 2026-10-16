@@ -1707,7 +1707,7 @@ try {
         await (
           await visibleNavigation()
         )
-          .locator(`.session-link[href="#/session/${sessionId}"]`)
+          .locator(`.session-link[href="#/session/${sessionId}"][tabindex="0"]`)
           .click();
         currentLocale = locale;
       };
