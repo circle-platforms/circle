@@ -42,6 +42,7 @@ import {
   homeProjects,
   rememberHomeComposer,
   selectedHomeProject,
+  startPath,
 } from '../src/features/home-selection.ts';
 import type { Workspace } from '../src/model/types.ts';
 function storage() {
@@ -605,6 +606,50 @@ test('the home picker lists known projects and the sidebar choice wins', () => {
   assert.equal(homePath(), '/home');
   assert.equal(homePath('circle'), '/home?workspace=circle');
   assert.equal(homePath(null), '/home?workspace=');
+});
+
+test('the first route opens home only when there is nothing to resume', () => {
+  const snapshot = new PreviewRuntime().getSnapshot();
+  const active = currentSession(snapshot);
+  const empty = {
+    ...active,
+    title: 'new session',
+    state: 'idle' as const,
+    queue: [],
+    messages: [],
+  };
+  const ready = { connected: true, configured: true };
+  const start = (session: typeof active, runtime: typeof snapshot.runtime) =>
+    startPath({
+      sessions: [session],
+      activeSessionId: session.id,
+      runtime,
+    });
+  // App shows this same view at `/` and on the route it redirects to, so the
+  // redirect does not swap the composer the window opened with.
+  assert.equal(start(empty, ready), homePath());
+  assert.equal(
+    start(
+      {
+        ...empty,
+        messages: [
+          { id: 'asked', parentId: null, role: 'user', text: 'resume', at: '' },
+        ],
+      },
+      ready,
+    ),
+    `/session/${active.id}`,
+  );
+  assert.equal(
+    start({ ...empty, title: 'named before it was used' }, ready),
+    `/session/${active.id}`,
+  );
+  assert.equal(
+    start(empty, { connected: true, configured: false }),
+    `/session/${active.id}`,
+  );
+  // Before the runtime reports, the app counts as configured.
+  assert.equal(start(empty, undefined), homePath());
 });
 
 test('a home draft is kept until the message is sent, and the route wins over it', () => {
