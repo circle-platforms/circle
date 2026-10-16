@@ -366,10 +366,7 @@ const screenshot = async (name) => {
 // over the conversation instead, so size it as on a desktop. The last phase
 // checks the narrow window.
 const desktopViewport = () =>
-  setViewport(app, page, {
-    width: 1400,
-    height: 900,
-  });
+  setViewport(app, page, { width: 1400, height: 900 }, { show: true });
 try {
   app = await electron.launch({
     chromiumSandbox: true,
@@ -1312,6 +1309,11 @@ try {
           page.on('pageerror', (error) =>
             errors.push({ phase, error: String(error), stack: error.stack }),
           );
+          // Resize the restarted window once it is shown, or showing it later
+          // fits it to a small screen again.
+          await page
+            .getByRole('textbox', { name: 'message', exact: true })
+            .waitFor();
           await desktopViewport();
         },
       });
