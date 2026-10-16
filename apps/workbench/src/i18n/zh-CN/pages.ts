@@ -255,4 +255,97 @@ export const pages: Record<string, string> = {
     '变量名只能用大写字母、数字和下划线，并以字母开头',
   '{name} is already a variable': '已有名为 {name} 的变量',
   '{name} is already a secret': '已有名为 {name} 的密钥',
+  // settings: workspace trust, protected files, network trust, keyboard
+  'Circle reads a folder and runs in it only after you trust it. Trusting a folder lets Circle load the instructions, skills, commands and extensions that live in it.':
+    '只有你信任一个文件夹，Circle 才会读取它并在里面运行。信任后，Circle 会加载文件夹里的指令、技能、命令和扩展。',
+  'remove…': '删除…',
+  'Circle is working in this folder now': 'Circle 正在这个文件夹里工作',
+  'remove {name}?': '删除 {name}？',
+  'remove workspace': '删除工作区',
+  'Circle stops trusting this folder and hides its conversations from the sidebar. The files stay where they are, and so does the history: archived sessions stay under all sessions, and opening the folder again trusts it once you confirm.':
+    'Circle 不再信任这个文件夹，侧栏也不再显示它的会话。文件都留在原处，记录也还在：归档的会话在“所有会话”里能看到，重新打开这个文件夹并确认后才会再次信任。',
+  '{n} conversation': '{n} 个会话',
+  '{n} conversations': '{n} 个会话',
+  '{name} is no longer trusted and its sessions are archived':
+    '{name} 已不再受信任，它的会话已归档',
+  'Circle will not read, copy or change a file whose name matches one of these patterns. * is any run of characters and ? is one character, and only the name counts: write *.key, never secrets/*.key.':
+    '名字符合下面任一样式的文件，Circle 不会读取、复制或修改。* 表示任意多个字符，? 表示一个字符，而且只比对文件名：写 *.key，不要写 secrets/*.key。',
+  'new file pattern': '新文件样式',
+  'for example *.key': '例如 *.key',
+  'for example deploy.key': '例如 deploy.key',
+  add: '添加',
+  'a pattern is a file name, not a path: drop the folders':
+    '样式是文件名，不是路径：请去掉文件夹',
+  '{pattern} is already on the list': '{pattern} 已经在列表里',
+  '{pattern} is on the always protected list, so it needs no pattern':
+    '{pattern} 本来就一直受保护，不需要再加样式',
+  'remove {pattern}': '删除 {pattern}',
+  'no extra patterns yet': '还没有添加样式',
+  '{n} extra pattern': '另外 {n} 个样式',
+  '{n} extra patterns': '另外 {n} 个样式',
+  'Circle reads these when it starts, so restart the application for a change to take effect.':
+    'Circle 启动时读取这些设置，改动后要重启应用才会生效。',
+  'check a file name': '检查一个文件名',
+  '{name} is protected by {pattern}': '{pattern} 正在保护 {name}',
+  '{name} is not protected': '{name} 不受保护',
+  'always protected · {n} patterns': '一直受保护 · {n} 个样式',
+  "Circle's own list. An extra pattern adds to it and can never take a name away from it.":
+    'Circle 自己的列表。添加的样式只能往里加，不能从里面去掉任何一个。',
+  'Circle checks a server against these before it sends anything: its model, the model list, updates, a page it opens, and a server it reaches by URL. Certificates are never accepted without this check, and Circle never changes the trust of the operating system itself.':
+    'Circle 发出任何请求前都会拿这些证书核对服务器：它的模型、模型列表、更新、它打开的页面，以及它按 URL 访问的服务器。核对不过的证书一律不接受，Circle 也不会改动操作系统本身的信任。',
+  'trusted in total': '一共信任',
+  '{n} added by Circle': 'Circle 另外添加 {n} 个',
+  'none added by Circle': 'Circle 没有另外添加',
+  route: '连接路径',
+  'through a proxy': '经过代理',
+  'at {host}': '位于 {host}',
+  'no proxy: Circle reaches the server itself':
+    '没有代理：Circle 自己连到服务器',
+  certificates: '证书',
+  '{n} certificate': '{n} 张证书',
+  '{n} certificates': '{n} 张证书',
+  'the roots Node.js ships with': 'Node.js 自带的根证书',
+  'the PEM bundle named by SSL_CERT_FILE': 'SSL_CERT_FILE 指定的 PEM 证书包',
+  'the PEM files in the folder named by SSL_CERT_DIR':
+    'SSL_CERT_DIR 指定文件夹里的 PEM 文件',
+  'the file named by NODE_EXTRA_CA_CERTS': 'NODE_EXTRA_CA_CERTS 指定的文件',
+  'the files named by trust_cert_files in settings':
+    '设置里 trust_cert_files 指定的文件',
+  'the files named by CIRCLE_TRUST_CERTS for this run':
+    'CIRCLE_TRUST_CERTS 为本次运行指定的文件',
+  'named by a setting': '由设置指定',
+  'Circle adds these to the roots it already trusts, and hands the whole set to every command and tool it starts.':
+    'Circle 把这些加进本来就信任的根证书，并把它信任的整套交给它启动的每个命令和工具。',
+  'Nothing of your own is trusted yet beyond the defaults. Name a PEM file in trust_cert_files, or set SSL_CERT_FILE, and restart Circle to add your own.':
+    '除了默认的那些，还没有你信任的证书。在 trust_cert_files 里写一个 PEM 文件，或者设置 SSL_CERT_FILE，然后重启 Circle。',
+  'Every action starts on its default key. Choose change… and press the keys you want instead; esc gives up. These keys belong to this application; the terminal reads keybindings.json.':
+    '每个动作一开始都用它的默认按键。点“更改…”后按下你想要的按键，按 esc 放弃。这些按键只属于这个应用；终端读的是 keybindings.json。',
+  key: '按键',
+  'press a key…': '请按一个键…',
+  reset: '还原',
+  'back to {key}': '改回 {key}',
+  'one key on two actions:': '一个按键对应多个动作：',
+  'reset every key': '还原所有按键',
+  'edit the bindings as JSON': '用 JSON 编辑按键绑定',
+  apply: '应用',
+  'The same spelling as keybindings.json: an action and its key, or a list of keys. Applying this replaces every change made above.':
+    '写法与 keybindings.json 相同：一个动作配一个按键，或者一个按键列表。应用这里的内容会替换上面所做的全部改动。',
+  'a letter or a number needs ctrl, alt, shift or cmd with it':
+    '字母或数字要和 ctrl、alt、shift 或 cmd 一起用',
+  'stop the current turn': '停止当前这一轮',
+  'close Circle': '关闭 Circle',
+  'pause Circle and go back to the shell': '暂停 Circle 并返回 shell',
+  'choose a model': '选择模型',
+  'switch to the next model': '切换到下一个模型',
+  'switch to the next approval mode': '切换到下一个审批模式',
+  'switch to the next thinking depth': '切换到下一个思考深度',
+  'focus the plan': '聚焦计划',
+  'show or fold the thinking': '显示或折叠思考',
+  'show or fold tool output': '显示或折叠工具输出',
+  'copy the last answer': '复制上一条回答',
+  'paste a picture': '粘贴图片',
+  'search earlier messages': '搜索之前的消息',
+  'enter a secret': '输入密钥',
+  'start a new line': '换行',
+  'move the running command to the background': '把正在运行的命令转到后台',
 };

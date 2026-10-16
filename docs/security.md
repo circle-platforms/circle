@@ -94,7 +94,7 @@ This reading is textual and it has gaps. `perl -e 'unlink q(a)'`, `mv a /dev/nul
 
 These file names are refused: `.env`, `.env.*`, `*.env`, `.netrc`, `.pgpass`, `.git-credentials`, `credentials.json`, `secrets.json`, `*.secrets.json` (where [extensions keep secrets](extensions.md#secrets)), `token.json`, `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `*.pem`, `*.p12`, `*.pfx`. A shell command that names one is refused, and the file tools (`read_file`, `write_file`, `edit_file`, `apply_patch`, `delete`, `grep`, `lsp`) and `@` mentions in the input box refuse or skip such a file. A file you name with `@` on the command line is read, since you named it. Only the name is checked: `ls` and `glob` still list them, and a command that reaches one without naming it is not stopped.
 
-Add names with `credential_files` in [settings](settings.md), or in a project's `.circle/settings.json`. Patterns use `*` and `?`. What you add comes on top of the list above; it cannot remove a name from it. In 0.5.0 a list there replaced the default list. Circle reads it when it starts; `/reload` does not change it.
+Add names with `credential_files` in [settings](settings.md), or in a project's `.circle/settings.json`. The desktop application edits the same list under settings → protected files ([Protected files and network trust](desktop.md#protected-files-and-network-trust)). Patterns use `*` and `?` and name a file, not a path: `*.key` matches `secrets/app.key`, while `secrets/*.key` matches nothing. What you add comes on top of the list above; it cannot remove a name from it. In 0.5.0 a list there replaced the default list. Circle reads it when it starts; `/reload` does not change it.
 
 ## Read-only mode
 

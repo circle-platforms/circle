@@ -1,5 +1,4 @@
 import { desktopHost, setDefaultWorkspace } from '../host';
-import { validateKeybindings } from '../model/shortcuts';
 import { usePlugins } from '../plugins/context';
 import { pairing } from '../plugins/registry';
 import { useState } from 'react';
@@ -71,6 +70,9 @@ import { VariablesSettings } from './VariablesSettings';
 import { SessionMenu } from '../components/SessionMenus';
 import { canArchiveSession } from '../model/session-management';
 import { NetworkStatus } from './NetworkStatus';
+import { WorkspaceTrustSettings } from './WorkspaceTrustSettings';
+import { ProtectedFilesSettings } from './ProtectedFilesSettings';
+import { KeyboardSettings } from './KeyboardSettings';
 import { BUILTIN_TOOL_INFO } from '../model/tool-info';
 import { TEXT_SIZES, textSizes } from '../theme';
 import { LANGUAGES, languageChoice, setLanguage, t, tn } from '../i18n';
@@ -1194,9 +1196,6 @@ const THEME_LABELS: Record<'auto' | 'light' | 'dark', () => string> = {
 function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
   const { snapshot, runtime, perform, notify } = useRuntime();
   const settings = snapshot.settings;
-  const [bindings, setBindings] = useState(
-    JSON.stringify(settings.keybindings, null, 2),
-  );
   const [launch, setLaunch] = useState('--mode rpc --no-tools');
   const save = (update: (draft: WorkbenchSnapshotSettings) => void) =>
     perform(() => runtime.change((state) => update(state.settings)));
@@ -1268,15 +1267,17 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
             ))}
           </div>
         </div>
-        <Switch
-          label={t('hide thinking in new sessions')}
-          checked={settings.hideThinking}
-          onChange={(checked) =>
-            save((value) => {
-              value.hideThinking = checked;
-            })
-          }
-        />
+        <div className="setting-row">
+          <Switch
+            label={t('hide thinking in new sessions')}
+            checked={settings.hideThinking}
+            onChange={(checked) =>
+              save((value) => {
+                value.hideThinking = checked;
+              })
+            }
+          />
+        </div>
       </section>
       <section className="settings-block">
         <h2>{t('session defaults')}</h2>
@@ -1364,77 +1365,13 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
           </p>
         )}
       </section>
-      <section className="settings-block">
-        <h2>{t('workspace trust')}</h2>
-        {snapshot.workspaces.map((workspace) => (
-          <div className="setting-row" key={workspace.id}>
-            <span>
-              {workspace.name}
-              <small>{workspace.path}</small>
-            </span>
-            <Status value={workspace.trusted ? 'trusted' : 'not trusted'} />
-            <Button onClick={() => onDialog('trust', workspace.id)}>
-              {t('review')}
-            </Button>
-          </div>
-        ))}
-      </section>
-      <section className="settings-block">
-        <h2>{t('protected files')}</h2>
-        <label className="field-label" htmlFor="credential-patterns">
-          {t('additional file patterns')}
-        </label>
-        <textarea
-          id="credential-patterns"
-          className="input short"
-          value={settings.credentialFiles.join('\n')}
-          onChange={(event) =>
-            save((value) => {
-              value.credentialFiles = event.target.value
-                .split('\n')
-                .filter(Boolean);
-            })
-          }
-        />
-        <p className="panel-note">
-          {t(
-            "Circle's built-in protections remain in force when a runtime is connected.",
-          )}
-        </p>
-      </section>
+      <WorkspaceTrustSettings onReview={(id) => onDialog('trust', id)} />
+      <ProtectedFilesSettings />
       <section className="settings-block">
         <NetworkStatus />
       </section>
       <VariablesSettings />
-      <section className="settings-block">
-        <h2>{t('keyboard')}</h2>
-        <Button onClick={() => onDialog('hotkeys')}>
-          {t('view shortcuts')}
-        </Button>
-        <textarea
-          aria-label={t('keybindings json')}
-          className="code-editor short"
-          value={bindings}
-          onChange={(event) => setBindings(event.target.value)}
-        />
-        <Button
-          onClick={() =>
-            perform(() => {
-              const parsed = validateKeybindings(JSON.parse(bindings));
-              save((value) => {
-                value.keybindings = parsed;
-              });
-              notify(
-                runtime.mode === 'live'
-                  ? t('key preferences saved')
-                  : 'preview key preferences saved',
-              );
-            })
-          }
-        >
-          {t('save key preferences')}
-        </Button>
-      </section>
+      <KeyboardSettings onShowShortcuts={() => onDialog('hotkeys')} />
       {runtime.mode === 'preview' && (
         <section className="settings-block">
           <h2>launch options</h2>
@@ -1471,15 +1408,17 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
                 : 'this browser only',
           }}
         />
-        <Switch
-          label={t('check for updates')}
-          checked={settings.updateCheck}
-          onChange={(checked) =>
-            save((value) => {
-              value.updateCheck = checked;
-            })
-          }
-        />
+        <div className="setting-row">
+          <Switch
+            label={t('check for updates')}
+            checked={settings.updateCheck}
+            onChange={(checked) =>
+              save((value) => {
+                value.updateCheck = checked;
+              })
+            }
+          />
+        </div>
         {desktopHost() ? (
           <UpdateControl />
         ) : (

@@ -338,16 +338,126 @@ try {
   checks.push(
     'the preview settings name the default workspace without a picker',
   );
-  await page
-    .getByRole('textbox', { name: 'keybindings json', exact: true })
-    .fill('{"model.select":"f3"}');
-  await page
-    .getByRole('button', { name: 'save key preferences', exact: true })
+  // The settings page explains itself: a pattern you can check a name against, a
+  // workspace you can take away, and a key you change by pressing it.
+  const trust = page.locator('section.settings-block', {
+    has: page.getByRole('heading', { name: 'workspace trust', exact: true }),
+  });
+  const docsRow = trust
+    .locator('.setting-row')
+    .filter({ has: page.getByText('docs-site') });
+  await docsRow.getByRole('button', { name: 'remove…', exact: true }).click();
+  const removeDialog = page.getByRole('dialog', {
+    name: 'remove docs-site?',
+  });
+  await removeDialog.getByText('/workspace/docs-site').waitFor();
+  await removeDialog
+    .getByRole('button', { name: 'cancel', exact: true })
     .click();
+  await removeDialog.waitFor({ state: 'hidden' });
+  assert.equal(await docsRow.count(), 1);
+  await docsRow.getByRole('button', { name: 'remove…', exact: true }).click();
+  await removeDialog
+    .getByRole('button', { name: 'remove workspace', exact: true })
+    .click();
+  await docsRow.waitFor({ state: 'hidden' });
+  assert.equal(
+    await trust
+      .locator('.setting-row')
+      .filter({ has: page.getByText('orbit-api') })
+      .getByRole('button', { name: 'remove…', exact: true })
+      .isDisabled(),
+    true,
+  );
+  checks.push(
+    'a workspace is removed from settings through a confirmation, and the active one is not',
+  );
+  const protectedFiles = page.locator('section.settings-block', {
+    has: page.getByRole('heading', { name: 'protected files', exact: true }),
+  });
+  const patternField = protectedFiles.getByRole('textbox', {
+    name: 'new file pattern',
+    exact: true,
+  });
+  const items = protectedFiles.getByRole('listitem');
+  const patternsBefore = await items.count();
+  await patternField.fill('secrets/*.key');
+  await protectedFiles
+    .getByRole('button', { name: 'add', exact: true })
+    .click();
+  await protectedFiles
+    .getByText('a pattern is a file name, not a path')
+    .waitFor();
+  assert.equal(await items.count(), patternsBefore);
+  await patternField.fill('.env');
+  await protectedFiles
+    .getByRole('button', { name: 'add', exact: true })
+    .click();
+  await protectedFiles
+    .getByText('.env is on the always protected list')
+    .waitFor();
+  assert.equal(await items.count(), patternsBefore);
+  await patternField.fill('*.crt');
+  await protectedFiles
+    .getByRole('button', { name: 'add', exact: true })
+    .click();
+  await items.filter({ hasText: '*.crt' }).waitFor();
+  assert.equal(await items.count(), patternsBefore + 1);
+  await protectedFiles
+    .getByRole('textbox', { name: 'check a file name', exact: true })
+    .fill('server.crt');
+  await protectedFiles.getByText('server.crt is protected by *.crt').waitFor();
+  await protectedFiles
+    .getByRole('textbox', { name: 'check a file name', exact: true })
+    .fill('notes.txt');
+  await protectedFiles.getByText('notes.txt is not protected').waitFor();
+  await protectedFiles
+    .getByRole('button', { name: 'remove *.crt', exact: true })
+    .click();
+  assert.equal(await items.count(), patternsBefore);
+  checks.push(
+    'a file pattern is refused, added, checked against a name and removed',
+  );
+  const keyboard = page.locator('section.settings-block', {
+    has: page.getByRole('heading', { name: 'keyboard', exact: true }),
+  });
+  const modelRow = keyboard
+    .locator('.key-action')
+    .filter({ has: page.getByText('choose a model') });
+  await modelRow.getByRole('button', { name: 'change…', exact: true }).click();
+  await page.keyboard.press('F3');
+  await modelRow.getByText('F3').waitFor();
   await route('/session/session1');
   await page.getByRole('textbox', { name: 'message', exact: true }).press('F3');
   await page.getByRole('heading', { name: 'models', exact: true }).waitFor();
-  checks.push('custom key binding invokes its configured action');
+  checks.push('a key recorded in settings invokes its action');
+  await route('/page/settings');
+  await modelRow.getByRole('button', { name: 'reset', exact: true }).click();
+  assert.equal(
+    (await state()).settings.keybindings['model.select'] ?? null,
+    null,
+  );
+  checks.push('a recorded key resets to its default');
+  await keyboard
+    .getByRole('button', { name: 'edit the bindings as JSON' })
+    .click();
+  await page
+    .getByRole('textbox', { name: 'keybindings json', exact: true })
+    .fill('{"nope":"x"}');
+  await keyboard.getByRole('button', { name: 'apply', exact: true }).click();
+  await keyboard.getByText('unknown key action: nope').waitFor();
+  await page
+    .getByRole('textbox', { name: 'keybindings json', exact: true })
+    .fill('{"find":["ctrl+f","f4"]}');
+  await keyboard.getByRole('button', { name: 'apply', exact: true }).click();
+  const findRow = keyboard
+    .locator('.key-action')
+    .filter({ has: page.getByText('find in conversation') });
+  await findRow.getByText('Ctrl+F / F4').waitFor();
+  assert.deepEqual((await state()).settings.keybindings, {
+    find: ['ctrl+f', 'f4'],
+  });
+  checks.push('bindings applied as JSON replace the recorded ones');
   await reset();
   await page.getByRole('button', { name: 'new session', exact: true }).click();
   await page

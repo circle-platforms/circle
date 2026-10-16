@@ -31,6 +31,8 @@ The app starts in a folder of its own, `workspace` inside its data folder, which
 
 The ⋯ beside a folder creates a session, reveals the folder in Finder or the system file manager, collapses the sidebar groups, or archives all its sessions. A session's ⋯ pins, renames, archives, restores or deletes it. Deleting still asks for confirmation and preserves the workspace folder.
 
+Settings → workspace trust lists the folders, each with **review** and **remove…**. Removing one takes away its trust and archives its conversations, so it leaves the sidebar; it deletes no file, and the history stays under all sessions → archived sessions. The folder Circle is working in cannot be removed. **Review** on another folder trusts that folder, not the one in use.
+
 Archiving hides a session from the sidebar. All sessions → archived sessions shows it again; its history stays readable, and restore conversation enables the composer. Until restored, it cannot change the saved branch, labels or conversation mode. A fork or clone can start a separate conversation from it. Archive state is kept in desktop metadata, without deleting the folder or changing the terminal's checkpoint history.
 
 A running turn, pending request or running background job prevents archiving and deletion, including after switching to another conversation. Archive all checks every session first and changes none when one is busy. Archive state survives restarting the application.
@@ -106,6 +108,17 @@ Session history, the `projects/` offload folders and updates stay in the data fo
 
 Settings → variables lists names and values as Windows lists environment variables, with **new…**, **edit…** and **delete** under each table; double-click a row to edit it. The model writes `%NAME%` in any tool's arguments and Circle puts the value in when the tool runs. The first table holds plain variables, whose values the model is told; they are `variables` in `settings.json`. The second holds secrets, whose values the model never sees and the page never shows again: to change one, enter a new value, or leave the value empty to keep it when you only rename it. In the dialog, **secret** decides which: it is ticked by itself for a name with a part such as `PASSWORD`, `TOKEN` or `KEY`, and ticking it while you edit a plain variable moves that variable to the secrets in one step. See [Secrets by name](security.md#secrets-by-name).
 
+## Protected files and network trust
+
+Settings → protected files adds to the file names Circle refuses to read, copy or change ([Credential files](security.md#credential-files)). Each pattern is a **file name**, not a path: `*` is any run of characters and `?` is one character, so `*.key` is right and `secrets/*.key` would never match anything — the page says so when you type one. A pattern already on Circle's own list is refused as unnecessary, and the list under **always protected** shows that list. **Check a file name** answers whether a name would be protected and by which pattern. Circle reads these when it starts, so a change takes effect after a restart.
+
+Settings → network trust is the transport the connected runtime actually uses: how many authorities a server's certificate is checked against, how many of them Circle added itself, which file or setting each group came from, whether requests go through a proxy (and which variable named it, without any key in its value), and, when there is one, the bundle given to everything Circle starts. Anything it could not use is named under it.
+
+## Keyboard
+
+Settings → keyboard lists Circle's actions with their default key and the key in use. **change…** then a key press records a new one; `esc` gives up. A letter or a digit alone is refused, because it would swallow ordinary typing — it needs a modifier. Two actions left sharing one key are named under the list, and **reset** puts one back while **reset every key** puts all of them back. **edit the bindings as JSON** is the same thing written as [`keybindings.json`](keybindings.md#your-own-keys) does, with the same names and the same errors; applying it replaces what the rows recorded.
+
+These keys belong to the desktop application and are kept with its window. The terminal reads `keybindings.json`; a key you record here does not change that file. **view shortcuts** lists the keys as the application handles them.
 ## Language and text size
 
 Settings → appearance:

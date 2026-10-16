@@ -239,6 +239,8 @@ A key named there does that action everywhere, in a card or a list too, and no l
 
 Key names are written as on this page: `ctrl+k`, `alt+up`, `shift+tab`, `f1` to `f12`. `/hotkeys` lists the default keys.
 
+The desktop application records these keys for you instead: settings → keyboard lists every action, and [the page there](desktop.md#keyboard) keeps its own copy of what you record. It does not read or write `keybindings.json`.
+
 ## Which key wins
 
 When several places could take a key, the first of these does: a subagent's record, a card, a list, find, search, a selection, the subagent strip, a job's page, `ctrl+s`, `ctrl+d` on an empty box, the completion list, the other global keys, then the input box. A card passes on the control keys it does not use, which is why `ctrl+c` still stops a turn while a card is up and plain letters do not.

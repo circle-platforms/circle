@@ -354,6 +354,32 @@ try {
     const network = (await state()).runtime.network;
     assert(network.authorities > 0);
     await page.getByText('network trust', { exact: false }).waitFor();
+    // The panel says what the number means: the total, what Circle added of
+    // its own, how requests leave the machine, and each source by name.
+    const panel = page.locator('.network-status');
+    await panel
+      .getByText(`${network.authorities} authorities`, { exact: false })
+      .first()
+      .waitFor();
+    await panel
+      .getByText(
+        network.proxy
+          ? 'through a proxy'
+          : 'no proxy: Circle reaches the server itself',
+        { exact: false },
+      )
+      .first()
+      .waitFor();
+    await panel.getByText('the roots Node.js ships with').waitFor();
+    assert.equal(
+      await panel.locator('.source-table tbody tr').count(),
+      network.sources.length,
+    );
+    for (const source of network.sources)
+      await panel
+        .getByRole('cell', { name: `${source.certificates} certificates` })
+        .first()
+        .waitFor();
     await page.screenshot({ path: join(output, `network-trust-${theme}.png`) });
     await route(`/session/${a}`);
   }
