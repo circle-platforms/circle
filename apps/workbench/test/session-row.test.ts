@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  pointerOnSidebarChrome,
+  runControlAction,
   selectRenameText,
   sessionCardVisible,
   shouldOpenSession,
@@ -39,6 +41,26 @@ test('a session card closes when the page suppresses it', () => {
     }),
     true,
   );
+});
+
+test('a control runs on the press and skips the click that follows it', () => {
+  assert.equal(
+    runControlAction({ kind: 'press', button: 0, actedOnPress: false }),
+    true,
+  );
+  assert.equal(
+    runControlAction({ kind: 'press', button: 2, actedOnPress: false }),
+    false,
+  );
+  assert.equal(
+    runControlAction({ kind: 'click', button: 0, actedOnPress: true }),
+    false,
+  );
+  assert.equal(
+    runControlAction({ kind: 'click', button: 0, actedOnPress: false }),
+    true,
+  );
+  assert.equal(pointerOnSidebarChrome(null), false);
 });
 
 test('a press opens a session only when it lands on that row', () => {

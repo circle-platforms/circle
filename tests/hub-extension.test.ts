@@ -1609,7 +1609,12 @@ test('inbox, a content view and a rejection reason use the general approval rout
             requestId: 'apr_9',
             taskId: 'task_ask',
             approvalId: 'apr_9',
-            asset: { name: 'mindmap', kind: 'skill-package' },
+            title: 'Review asset change set',
+            asset: {
+              name: 'mindmap',
+              kind: 'skill-package',
+              titleZh: '审核资产变更集',
+            },
           },
         ],
       });
@@ -1726,9 +1731,14 @@ test('inbox, a content view and a rejection reason use the general approval rout
   assert.equal(inbox[0]!.requestId, 'aprq_1');
   assert.equal(inbox[0]!.title, 'export the register');
   assert.equal(inbox[1]!.taskId, 'task_ask');
+  assert.equal(inbox[1]!.titleZh, '审核资产变更集');
+  assert.equal(
+    inbox[1]!.title,
+    'Review asset change set · mindmap skill-package',
+  );
   assert.match(
     lines.at(-1)!,
-    /governance aprq_1 · export the register[\s\S]*\/hub show aprq_1[\s\S]*\/hub approve aprq_1[\s\S]*change-set task_ask · apr_9 · mindmap/,
+    /governance aprq_1 · export the register[\s\S]*\/hub show aprq_1[\s\S]*\/hub approve aprq_1[\s\S]*change-set task_ask · apr_9 · Review asset change set · mindmap/,
   );
   await command.handler('show 1', context);
   assert.match(

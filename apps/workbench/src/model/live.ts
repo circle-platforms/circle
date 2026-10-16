@@ -201,6 +201,18 @@ export class LiveRuntime implements RuntimePort {
     };
     for (const listener of this.listeners) listener();
   }
+  dismissActionError = (sessionId = this.snapshot.activeSessionId) => {
+    if (!this.sessionErrors.delete(sessionId)) return;
+    this.snapshot = {
+      ...this.snapshot,
+      sessions: this.snapshot.sessions.map((session) =>
+        session.id === sessionId
+          ? { ...session, actionError: undefined }
+          : session,
+      ),
+    };
+    for (const listener of this.listeners) listener();
+  };
   dispose() {
     this.unsubscribe();
   }

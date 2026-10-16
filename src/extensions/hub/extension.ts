@@ -4467,17 +4467,42 @@ export async function register(api: ExtensionAPI): Promise<void> {
     approvalId: string;
     title: string;
     messageZh: string;
+    titleZh: string;
     status: string;
   }
   // The server's Chinese sentence when it sent one. Kind and phase stay raw
   // on the view; the desktop translates them. Lines printed here use the
   // process language.
+  function fieldText(value: unknown): string {
+    return typeof value === 'string' ? value.trim() : '';
+  }
+  function relatedRecords(
+    item: Record<string, unknown>,
+  ): Record<string, unknown>[] {
+    const assets = Array.isArray(item.assets)
+      ? item.assets.filter(isRecord)
+      : [];
+    return isRecord(item.asset) ? [...assets, item.asset] : assets;
+  }
+  function fieldFrom(
+    item: Record<string, unknown>,
+    key: 'messageZh' | 'titleZh',
+  ): string {
+    const own = fieldText(item[key]);
+    if (own) return own;
+    for (const related of relatedRecords(item)) {
+      const text = fieldText(related[key]);
+      if (text) return text;
+    }
+    return '';
+  }
   function preferredTitle(item: Record<string, unknown>): string {
-    const chinese =
-      hubLocaleChinese() && typeof item.messageZh === 'string'
-        ? item.messageZh.trim()
-        : '';
-    return chinese || String(item.title ?? item.name ?? item.summary ?? '');
+    if (hubLocaleChinese()) {
+      const chinese =
+        fieldFrom(item, 'messageZh') || fieldFrom(item, 'titleZh');
+      if (chinese) return chinese;
+    }
+    return String(item.title ?? item.name ?? item.summary ?? '');
   }
   function preferredKind(kind: string): string {
     return kind === 'change-set' || kind === 'governance'
@@ -4519,15 +4544,14 @@ export async function register(api: ExtensionAPI): Promise<void> {
           .join(', ');
         const kind = String(item.kind ?? 'change-set');
         const title = String(item.title ?? item.name ?? item.summary ?? '');
-        const messageZh =
-          typeof item.messageZh === 'string' ? item.messageZh.trim() : '';
         return {
           kind,
           requestId: String(item.requestId ?? ''),
           taskId: String(item.taskId ?? ''),
           approvalId: String(item.approvalId ?? item.requestId ?? ''),
           title: [title, assetLabel].filter(Boolean).join(' · '),
-          messageZh,
+          messageZh: fieldFrom(item, 'messageZh'),
+          titleZh: fieldFrom(item, 'titleZh'),
           status: String(item.status ?? item.phase ?? ''),
         };
       });
@@ -4545,7 +4569,9 @@ export async function register(api: ExtensionAPI): Promise<void> {
         inboxItems
           .map((item, index) => {
             const n = index + 1;
-            const title = (hubLocaleChinese() && item.messageZh) || item.title;
+            const title =
+              (hubLocaleChinese() && (item.messageZh || item.titleZh)) ||
+              item.title;
             if (item.kind === 'governance' || (!item.taskId && item.requestId))
               return hubText(
                 '  {n}. governance {id} · {title}\n    /hub show {id}\n    /hub approve {id}\n    /hub reject {id} <reason>',
@@ -4602,8 +4628,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
         taskId,
         approvalId: '',
         title: String(task.title ?? task.name ?? task.summary ?? ''),
-        messageZh:
-          typeof task.messageZh === 'string' ? task.messageZh.trim() : '',
+        messageZh: fieldFrom(task, 'messageZh'),
+        titleZh: fieldFrom(task, 'titleZh'),
         status: phase,
       });
     }

@@ -5,9 +5,11 @@ import {
   useRef,
   useState,
   type ButtonHTMLAttributes,
+  type MouseEvent,
   type ReactNode,
   type Ref,
 } from 'react';
+import { runControlAction } from '../model/session-row';
 import { focusMarkedField } from '../model/dialog-focus';
 import { t } from '../i18n';
 export function Button({
@@ -34,6 +36,7 @@ export function IconButton({
   ref?: Ref<HTMLButtonElement>;
 }) {
   const [hovered, setHovered] = useState(false);
+  const actedOnPress = useRef(false);
   useEffect(() => {
     if (tipOpen === false) setHovered(false);
   }, [tipOpen]);
@@ -48,7 +51,35 @@ export function IconButton({
       }}
     >
       <Tooltip.Trigger asChild>
-        <button ref={ref} className="icon-button" aria-label={label} {...props}>
+        <button
+          ref={ref}
+          className="icon-button"
+          aria-label={label}
+          {...props}
+          onPointerDown={(event) => {
+            props.onPointerDown?.(event);
+            if (!shown) return;
+            if (
+              !runControlAction({
+                kind: 'press',
+                button: event.button,
+                actedOnPress: false,
+              })
+            )
+              return;
+            actedOnPress.current = true;
+            props.onClick?.(event as unknown as MouseEvent<HTMLButtonElement>);
+          }}
+          onClick={(event) => {
+            const again = runControlAction({
+              kind: 'click',
+              button: 0,
+              actedOnPress: actedOnPress.current,
+            });
+            actedOnPress.current = false;
+            if (again) props.onClick?.(event);
+          }}
+        >
           {children}
         </button>
       </Tooltip.Trigger>

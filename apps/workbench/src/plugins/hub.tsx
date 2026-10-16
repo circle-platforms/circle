@@ -1,14 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Server } from 'lucide-react';
 import { useRuntime } from '../app/context';
-import {
-  Button,
-  DataBlock,
-  EmptyState,
-  Facts,
-  Page,
-  Status,
-} from '../components/common';
+import { Button, EmptyState, Facts, Page, Status } from '../components/common';
 import type { RuntimeExtension } from '../model/types';
 import type { PluginViewProps, WorkbenchPlugin } from './types';
 import { locale, t } from '../i18n';
@@ -72,6 +65,7 @@ interface HubInboxItem {
   approvalId: string;
   title: string;
   messageZh?: string;
+  titleZh?: string;
   status?: string;
 }
 interface HubKnowledgeHit {
@@ -169,8 +163,59 @@ function hubStatus(status: string): string {
   }
 }
 function inboxTitle(item: HubInboxItem): string {
-  if (locale() === 'zh-CN' && item.messageZh) return item.messageZh;
+  if (locale() === 'zh-CN') {
+    const chinese = item.messageZh?.trim() || item.titleZh?.trim();
+    if (chinese) return chinese;
+  }
   return item.title;
+}
+const APPROVAL_LINE =
+  /\/hub approve\b|需要别人批准|someone else approves|waiting for approval/i;
+function signedOutLine(line: string): boolean {
+  const text = line.replace(/^[●○]\s*/, '').trim();
+  return (
+    text === '已退出' ||
+    text === 'Signed out' ||
+    text === '未登录' ||
+    text === 'Not signed in' ||
+    text.startsWith('已退出：') ||
+    text.startsWith('已退出:') ||
+    /^signed out\b/i.test(text) ||
+    text.startsWith('枢纽 · 已退出') ||
+    text.startsWith('hub · signed out')
+  );
+}
+function proseLine(line: string): string {
+  const sep = locale() === 'zh-CN' ? '，' : ', ';
+  return line
+    .trim()
+    .replace(/^[●○]\s*/, '')
+    .replace(/\s*·\s*/g, sep);
+}
+/** Terminal lines as the hub page shows them. A sign-out is dropped once
+ * signed in again. An approval command becomes one plain sentence. */
+export function hubRecentItems(
+  lines: readonly string[],
+  signedIn: boolean,
+): { kind: 'note' | 'approval'; text: string }[] {
+  const items: { kind: 'note' | 'approval'; text: string }[] = [];
+  let approval = false;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (signedIn && signedOutLine(line)) continue;
+    if (APPROVAL_LINE.test(line)) {
+      approval = true;
+      continue;
+    }
+    items.push({ kind: 'note', text: proseLine(line) });
+  }
+  if (approval)
+    items.push({
+      kind: 'approval',
+      text: '',
+    });
+  return items;
 }
 function rejectArgs(item: HubInboxItem, reason: string): string {
   if (item.kind === 'governance' || (!item.taskId && item.requestId))
@@ -186,6 +231,7 @@ export function HubPage({
 }) {
   const { snapshot, runtime, perform } = useRuntime();
   const view = hubView(snapshot.extensions);
+  const recentItems = view ? hubRecentItems(view.recent, view.signedIn) : [];
   const box = storage ?? loginStorage();
   const [address, setAddress] = useState(() => offeredLogin(view, box).url);
   const [user, setUser] = useState(() => offeredLogin(view, box).username);
@@ -283,6 +329,7 @@ export function HubPage({
                 });
                 setPassword('');
               } catch (caught) {
+                runtime.dismissActionError?.();
                 setError(
                   caught instanceof Error
                     ? hubSignInError(caught.message)
@@ -341,7 +388,7 @@ export function HubPage({
       ) : null}
       {view?.signedIn ? (
         <>
-          <section className="extension-list">
+          <section className="extension-list" id="hub-inbox">
             <div className="detail-title">
               <h2>{t('inbox')}</h2>
               <Button onClick={() => run('inbox')}>
@@ -477,8 +524,29 @@ export function HubPage({
         </div>
       ) : null}
       <HubProjectionNotice projection={view?.projection} />
-      {view?.recent.length ? (
-        <DataBlock title={t('recent')} value={view.recent.join('\n')} />
+      {recentItems.length ? (
+        <section className="hub-log-block">
+          <h2>{t('recent')}</h2>
+          <ul className="hub-log">
+            {recentItems.map((item, index) =>
+              item.kind === 'approval' ? (
+                <li key={`approval-${index}`}>
+                  <p>{t('Someone else still has to approve this.')}</p>
+                  <Button
+                    onClick={() => {
+                      document.getElementById('hub-inbox')?.scrollIntoView();
+                      run('inbox');
+                    }}
+                  >
+                    {t('open inbox')}
+                  </Button>
+                </li>
+              ) : (
+                <li key={`${index}-${item.text}`}>{item.text}</li>
+              ),
+            )}
+          </ul>
+        </section>
       ) : null}
     </Page>
   );

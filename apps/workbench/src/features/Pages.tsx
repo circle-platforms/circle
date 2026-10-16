@@ -8,7 +8,7 @@ import {
   platformDescription,
   platformTitle,
 } from '../plugins/labels';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { CUSTOMIZE, NAVIGATION } from '../components/Sidebar';
 import {
@@ -51,6 +51,7 @@ import {
 import { EFFORT_TEXT, MODE_TEXT } from './Composer';
 import { shownTime } from '../model/time';
 import { armComposerFocus } from '../model/composer-focus';
+import { runControlAction } from '../model/session-row';
 import { workspaceLabel } from '../model/workspace-label';
 import type {
   DialogId,
@@ -153,6 +154,7 @@ function SessionsPage({ onSession, onDialog }: Props) {
   const [all, setAll] = useState(false);
   const [archived, setArchived] = useState(false);
   const current = currentSession(snapshot);
+  const openedOnPress = useRef(false);
   const sessions = visibleSessions(snapshot.sessions).filter(
     (session) =>
       (all || session.workspaceId === current.workspaceId) &&
@@ -169,7 +171,27 @@ function SessionsPage({ onSession, onDialog }: Props) {
       )}
       action={
         <Button
+          onPointerDown={(event) => {
+            if (
+              !runControlAction({
+                kind: 'press',
+                button: event.button,
+                actedOnPress: false,
+              })
+            )
+              return;
+            openedOnPress.current = true;
+            armComposerFocus();
+            openHome(navigate, `${location.pathname}${location.search}`);
+          }}
           onClick={() => {
+            const again = runControlAction({
+              kind: 'click',
+              button: 0,
+              actedOnPress: openedOnPress.current,
+            });
+            openedOnPress.current = false;
+            if (!again) return;
             armComposerFocus();
             openHome(navigate, `${location.pathname}${location.search}`);
           }}

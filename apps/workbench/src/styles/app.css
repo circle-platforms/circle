@@ -567,6 +567,20 @@ pre {
 .hub-actions {
   margin: 18px 0 28px;
 }
+.hub-log {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-family: inherit;
+}
+.hub-log li {
+  margin: 0 0 10px;
+  font-size: var(--ui-small);
+  line-height: 1.55;
+}
+.hub-log li p {
+  margin: 0 0 6px;
+}
 .resize-handle {
   width: 5px;
   flex-shrink: 0;
@@ -2581,7 +2595,8 @@ pre {
   color: var(--fg);
 }
 /* Read-only tips must not block the control beneath Radix's positioning box. */
-[data-radix-popper-content-wrapper]:has(> .tooltip) {
+[data-radix-popper-content-wrapper]:has(.tooltip),
+[data-radix-popper-content-wrapper]:has(.session-hover) {
   pointer-events: none !important;
 }
 .tooltip {

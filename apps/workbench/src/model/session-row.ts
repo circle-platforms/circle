@@ -22,6 +22,30 @@ export function sessionCardVisible(input: {
   return input.hovered || (input.focused && input.pointerIdle);
 }
 
+/** The pointer is over the sidebar controls above the session list. */
+export function pointerOnSidebarChrome(target: EventTarget | null): boolean {
+  return (
+    !!target &&
+    typeof Element !== 'undefined' &&
+    target instanceof Element &&
+    !!target.closest('.sidebar-primary, .sidebar-search, .brand')
+  );
+}
+
+/**
+ * A control whose tip is open runs its action on the pointer press.
+ * The click after that press is the same action. A click with no press,
+ * such as Enter on the focused control, still runs.
+ */
+export function runControlAction(input: {
+  kind: 'press' | 'click';
+  button: number;
+  actedOnPress: boolean;
+}): boolean {
+  if (input.kind === 'press') return input.button === 0;
+  return !input.actedOnPress;
+}
+
 /** A press opens its row only when it lands on that row.
  * `detail` 0 is a keyboard activation, which has no pointer position. */
 export function shouldOpenSession(input: {

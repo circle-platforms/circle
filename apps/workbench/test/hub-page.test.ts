@@ -7,7 +7,11 @@ import { setLanguage } from '../src/i18n/index.ts';
 import { PreviewRuntime } from '../src/model/state.ts';
 import type { RuntimeExtension } from '../src/model/types.ts';
 import { Markdown } from '../src/components/Markdown.tsx';
-import { HubPage, hubSignInError } from '../src/plugins/hub.tsx';
+import {
+  HubPage,
+  hubRecentItems,
+  hubSignInError,
+} from '../src/plugins/hub.tsx';
 import { shellPageTitle } from '../src/plugins/labels.ts';
 
 const memoryStorage = (initial: Record<string, string> = {}) => {
@@ -185,6 +189,82 @@ test('the hub page title is the translated name', () => {
       hubSignInError('无法连接服务器 http://127.0.0.1:9'),
       '无法连接服务器 http://127.0.0.1:9',
     );
+  } finally {
+    setLanguage('en', box as unknown as Storage);
+  }
+});
+test('the hub page says an approval in ordinary words and drops a stale sign-out', () => {
+  const box = memoryStorage();
+  setLanguage('zh-CN', box as unknown as Storage);
+  try {
+    assert.deepEqual(
+      hubRecentItems(
+        [
+          '已退出',
+          '● 已登录 http://127.0.0.1:7410 · 用户 ada',
+          '  等待审批 pin_9（任务 task_ask）· 需要别人批准：/hub approve task_ask pin_9',
+        ],
+        true,
+      ),
+      [
+        { kind: 'note', text: '已登录 http://127.0.0.1:7410，用户 ada' },
+        { kind: 'approval', text: '' },
+      ],
+    );
+    assert.deepEqual(hubRecentItems(['已退出'], false), [
+      { kind: 'note', text: '已退出' },
+    ]);
+    const html = draw(
+      hub({
+        url: 'http://hub.example:9',
+        username: 'ada',
+        scopeId: '',
+        signedIn: true,
+        following: [],
+        tasks: [],
+        recent: [
+          '已退出',
+          '  waiting for approval pin_9 in task_ask · someone else approves: /hub approve task_ask pin_9',
+        ],
+        inbox: [
+          {
+            kind: 'change-set',
+            requestId: 'apr_9',
+            taskId: 'task_ask',
+            approvalId: 'apr_9',
+            title: 'Review asset change set',
+            titleZh: '审核资产变更集',
+            status: 'waiting-review',
+          },
+        ],
+      }),
+      box,
+    );
+    assert.match(html, /这项改动还需要别人批准/);
+    assert.match(html, /打开收件箱/);
+    assert.match(html, /class="hub-log"/);
+    assert.match(html, /id="hub-inbox"/);
+    assert.match(html, /审核资产变更集/);
+    assert.equal(html.includes('Review asset change set'), false);
+    assert.equal(html.includes('已退出'), false);
+    assert.equal(html.includes('/hub approve'), false);
+    assert.equal(html.includes('pin_9'), false);
+    assert.equal(html.includes('<pre'), false);
+    const onlyOut = draw(
+      hub({
+        url: 'http://hub.example:9',
+        username: 'ada',
+        scopeId: '',
+        signedIn: true,
+        following: [],
+        tasks: [],
+        recent: ['hub · signed out'],
+        inbox: [],
+      }),
+      memoryStorage(),
+    );
+    assert.equal(onlyOut.includes('最近'), false);
+    assert.equal(onlyOut.includes('已退出'), false);
   } finally {
     setLanguage('en', box as unknown as Storage);
   }

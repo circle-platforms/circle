@@ -55,6 +55,7 @@ export const plugins: Record<string, string> = {
   'sign out': '退出',
   inbox: '收件箱',
   'open inbox': '打开收件箱',
+  'Someone else still has to approve this.': '这项改动还需要别人批准。',
   show: '查看',
   'rejection reason': '拒绝理由',
   'a rejection needs a reason': '拒绝需要理由',

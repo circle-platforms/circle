@@ -42,6 +42,8 @@ import { workspaceLabel } from '../model/workspace-label';
 import { platformTitle } from '../plugins/labels';
 import { armComposerFocus } from '../model/composer-focus';
 import {
+  pointerOnSidebarChrome,
+  runControlAction,
   selectRenameText,
   sessionCardVisible,
   shouldOpenSession,
@@ -170,6 +172,7 @@ export function Sidebar({
   const routeHold = useRef(false);
   const pressOutside = useRef(false);
   const pointerOpening = useRef(false);
+  const openedOnPress = useRef(false);
   const path = `${location.pathname}${location.search}`;
   const pathRef = useRef(path);
   useEffect(() => {
@@ -502,6 +505,22 @@ export function Sidebar({
     <aside
       ref={asideRef}
       className="sidebar"
+      onPointerMove={(event) => {
+        // Moving onto 新会话 while a session card is open used to spend the
+        // first click closing that card. Fold it before the press.
+        if (!pointerOnSidebarChrome(event.target)) return;
+        if (scrollClosedRef.current && hoveredKey === null) return;
+        scrollClosedRef.current = true;
+        pointerAtScroll.current = { x: event.clientX, y: event.clientY };
+        setHoveredKey(null);
+        setScrollClosed(true);
+        const active = document.activeElement;
+        if (
+          active instanceof HTMLElement &&
+          active.closest('.session-link, .session-row')
+        )
+          active.blur();
+      }}
       onPointerLeave={() => {
         // The card is drawn over the page. Leaving the sidebar drops it,
         // including when the row stays focused.
@@ -521,7 +540,30 @@ export function Sidebar({
         <span>{t('search')}</span>
       </button>
       <nav className="sidebar-primary">
-        <button className="sidebar-item" onClick={() => newSession()}>
+        <button
+          className="sidebar-item"
+          onPointerDown={(event) => {
+            if (
+              !runControlAction({
+                kind: 'press',
+                button: event.button,
+                actedOnPress: false,
+              })
+            )
+              return;
+            openedOnPress.current = true;
+            newSession();
+          }}
+          onClick={() => {
+            const again = runControlAction({
+              kind: 'click',
+              button: 0,
+              actedOnPress: openedOnPress.current,
+            });
+            openedOnPress.current = false;
+            if (again) newSession();
+          }}
+        >
           <Plus size={15} />
           <span>{t('new session')}</span>
         </button>
@@ -1050,14 +1092,6 @@ function RecentHover({
           align="start"
           sideOffset={8}
           avoidCollisions={false}
-          onPointerDown={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-          }}
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-          }}
         >
           {details.project ? <span>{details.project}</span> : null}
           <span>{activityLabel(details.age)}</span>

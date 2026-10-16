@@ -415,6 +415,8 @@ export interface RuntimePort {
     payload?: Record<string, unknown>,
     sessionId?: string,
   ) => string | Promise<unknown>;
+  /** Drop a session error the page is already showing, so it is not also a toast. */
+  dismissActionError?: (sessionId?: string) => void;
   newSession: (workspaceId?: string) => string | Promise<string>;
   beginConversation: (
     input: BeginConversation,
