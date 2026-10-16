@@ -95,12 +95,15 @@ export class NativeGitHubConnection {
       if (data.resume === true) {
         this.state.state = 'authorizing';
         this.state.storage = 'encrypted';
+        this.state.authorizationPhase = 'verifying-account';
         this.restoreEpoch = this.state.epoch;
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         this.active = false;
         this.state.state = 'error';
+        delete this.state.authorizationPhase;
+        this.state.lastAuthorizationOutcome = 'failed';
         this.state.error = 'saved GitHub connection could not be verified';
       }
     }
@@ -114,6 +117,8 @@ export class NativeGitHubConnection {
       this.state.scopeVerification =
         account.grantedScopes === undefined ? 'not-reported' : 'reported';
       this.state.state = 'connected';
+      delete this.state.authorizationPhase;
+      this.state.lastAuthorizationOutcome = 'connected';
       delete this.state.error;
       this.active = true;
       this.emit();
@@ -121,6 +126,8 @@ export class NativeGitHubConnection {
       if (epoch === this.state.epoch && !this.disposed) {
         this.active = false;
         this.state.state = 'error';
+        delete this.state.authorizationPhase;
+        this.state.lastAuthorizationOutcome = 'failed';
         this.state.error = 'saved GitHub connection could not be verified';
         this.emit();
       }
@@ -402,6 +409,8 @@ export class NativeGitHubConnection {
     delete this.state.error;
     delete this.state.authorization;
     this.state.state = 'authorizing';
+    this.state.authorizationPhase = 'preparing-code';
+    delete this.state.lastAuthorizationOutcome;
     this.state.storage = input.storage;
     this.emit();
     let phase: 'start' | 'metadata' = 'start';
@@ -418,6 +427,8 @@ export class NativeGitHubConnection {
         return this.snapshot();
       }
       this.attempt = { id: login.id, epoch };
+      this.state.authorizationPhase =
+        login.code && login.url ? 'waiting-for-user' : 'preparing-code';
       this.state.authorization = {
         id: login.id,
         url: login.url,
@@ -432,6 +443,8 @@ export class NativeGitHubConnection {
       if (epoch === this.state.epoch) {
         this.active = false;
         this.state.state = 'error';
+        delete this.state.authorizationPhase;
+        this.state.lastAuthorizationOutcome = 'failed';
         this.state.error =
           phase === 'metadata'
             ? 'GitHub connection settings could not be saved'
@@ -468,7 +481,11 @@ export class NativeGitHubConnection {
         code: login.code,
         status: login.status,
       };
+      this.state.authorizationPhase =
+        login.code && login.url ? 'waiting-for-user' : 'preparing-code';
       if (login.status === 'complete') {
+        this.state.authorizationPhase = 'verifying-account';
+        this.emit();
         const account = await this.verify(epoch);
         if (epoch !== this.state.epoch || !account) return;
         this.state.storage = login.storage;
@@ -480,6 +497,8 @@ export class NativeGitHubConnection {
         this.state.scopeVerification =
           account.grantedScopes === undefined ? 'not-reported' : 'reported';
         this.state.state = 'connected';
+        delete this.state.authorizationPhase;
+        this.state.lastAuthorizationOutcome = 'connected';
         delete this.state.error;
         this.active = true;
         clearInterval(this.timer);
@@ -488,6 +507,9 @@ export class NativeGitHubConnection {
       } else if (['failed', 'cancelled'].includes(login.status)) {
         this.active = false;
         this.state.state = login.status === 'failed' ? 'error' : 'disconnected';
+        delete this.state.authorizationPhase;
+        this.state.lastAuthorizationOutcome =
+          login.status === 'failed' ? 'failed' : 'cancelled';
         this.state.error = login.error;
         delete this.state.account;
         delete this.state.grantedScopes;
@@ -505,6 +527,8 @@ export class NativeGitHubConnection {
       if (epoch === this.state.epoch) {
         this.active = false;
         this.state.state = 'error';
+        delete this.state.authorizationPhase;
+        this.state.lastAuthorizationOutcome = 'failed';
         this.state.error =
           phase === 'metadata'
             ? 'GitHub connection settings could not be saved'
@@ -562,15 +586,32 @@ export class NativeGitHubConnection {
   async disconnect(epoch: number) {
     await this.ready;
     if (epoch !== this.state.epoch) throw Error('GitHub connection changed');
+    const cancelling = this.state.state === 'authorizing';
+    const beforeCode =
+      cancelling &&
+      this.state.authorizationPhase === 'preparing-code' &&
+      !this.state.authorization?.code &&
+      !(this.attempt && this.login.poll(this.attempt.id).code);
+    const priorGrant =
+      this.active ||
+      Boolean(this.state.account) ||
+      this.state.remoteRevocation === 'unconfirmed';
     this.state.epoch++;
     this.active = false;
     this.state.state = 'disconnected';
+    delete this.state.authorizationPhase;
+    this.state.lastAuthorizationOutcome = cancelling
+      ? beforeCode
+        ? 'cancelled-before-code'
+        : 'cancelled'
+      : 'disconnected';
     delete this.state.account;
     delete this.state.grantedScopes;
     this.state.scopeVerification = 'not-reported';
     delete this.state.authorization;
     delete this.state.error;
-    this.state.remoteRevocation = 'unconfirmed';
+    this.state.remoteRevocation =
+      beforeCode && !priorGrant ? 'not-requested' : 'unconfirmed';
     this.emit();
     const cleanup = await Promise.allSettled([
       this.persist(false),

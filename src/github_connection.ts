@@ -12,6 +12,14 @@ export interface GitHubConnectionState {
   account?: { login: string; id: number };
   repositories: string[];
   storage?: 'encrypted' | 'session';
+  authorizationPhase?:
+    'preparing-code' | 'waiting-for-user' | 'verifying-account';
+  lastAuthorizationOutcome?:
+    | 'cancelled-before-code'
+    | 'cancelled'
+    | 'connected'
+    | 'failed'
+    | 'disconnected';
   authorization?: { id: string; url?: string; code?: string; status: string };
   error?: string;
   remoteRevocation: 'not-requested' | 'unconfirmed';

@@ -1701,3 +1701,29 @@ test('workflow is an explicit additional device scope while granted scopes come 
     );
   }
 });
+
+test('authorization phases and cancellation outcomes reflect actual code preparation without claiming a remote revocation', async () => {
+  const f = await fixture();
+  try {
+    await f.connection.connect({ storage: 'session', repositories: [] });
+    assert.equal(f.connection.snapshot().authorizationPhase, 'preparing-code');
+    const cancelled = await f.connection.cancel(f.connection.snapshot().epoch);
+    assert.equal(cancelled.lastAuthorizationOutcome, 'cancelled-before-code');
+    assert.equal(cancelled.remoteRevocation, 'not-requested');
+    assert.equal(cancelled.authorizationPhase, undefined);
+    assert(f.helpers[0].killed);
+    await f.connection.connect({ storage: 'session', repositories: [] });
+    f.helpers[1].emit('First copy your one-time code: ABCD-1234');
+    // Cancel before the profile's polling tick: the helper already owns a code.
+    const afterCode = await f.connection.cancel(f.connection.snapshot().epoch);
+    assert.equal(afterCode.lastAuthorizationOutcome, 'cancelled');
+    assert.equal(afterCode.remoteRevocation, 'unconfirmed');
+    await f.connection.connect({ storage: 'session', repositories: [] });
+    const historical = await f.connection.cancel(f.connection.snapshot().epoch);
+    assert.equal(historical.lastAuthorizationOutcome, 'cancelled-before-code');
+    assert.equal(historical.remoteRevocation, 'unconfirmed');
+    assert(f.helpers.every((helper) => helper.killed));
+  } finally {
+    await f.close();
+  }
+});
