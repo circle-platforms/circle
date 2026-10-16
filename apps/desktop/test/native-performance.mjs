@@ -365,6 +365,38 @@ try {
         (row) => row.phase === 'write-frame',
       ),
     );
+    const probeReplay = await service('terminal', 'replay', {
+      id: terminalId,
+      afterSequence: 0,
+      limit: 1000,
+    });
+    const probeEvent = probeReplay.events.find(
+      (event) =>
+        event.kind === 'data' &&
+        /NATIVE_PERF\s+\d{13}\s+999/.test(event.data ?? ''),
+    );
+    assert.ok(probeEvent, 'probe raw record contains actual producer output');
+    await page.waitForFunction(
+      ({ id, seq }) =>
+        window.__circleNativePerfTerminalTiming.some(
+          (row) =>
+            row.terminalId === id &&
+            row.eventSequence === seq &&
+            row.phase === 'write-frame',
+        ),
+      { id: terminalId, seq: probeEvent.sequence },
+    );
+    report.probeTerminalStages = terminalObservationRows(
+      probeReplay.events,
+      await page.evaluate(() => window.__circleNativePerfTerminalTiming),
+      [],
+    );
+    assert.ok(
+      report.probeTerminalStages.some(
+        (row) => Number.isFinite(row.parsedAt) && Number.isFinite(row.frameAt),
+      ),
+      'probe producer record joins actual parser and frame callbacks',
+    );
     report.originalEntryProbe = await page.evaluate(async () => {
       await document.fonts.ready;
       const screen = document.querySelector(
