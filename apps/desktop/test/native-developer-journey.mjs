@@ -408,6 +408,7 @@ for (const file of [
     'native-continuity-journey',
     'native-command-handoff-journey',
     'native-child-command-handoff-journey',
+    'native-terminal-rendered-match',
     'native-paste-cleanup',
     'native-github-settings-journey',
     'native-debug-journey',
@@ -419,6 +420,8 @@ for (const file of [
     'native-clipboard-checkpoint',
     'native-task-fixture',
     'native-browser-debug-journey',
+    'native-devtools-bridge-handoff',
+    'devtools-resume-control',
   ].map((name) => 'helpers/' + name + '.mjs'),
 ]) {
   buildIdentity.driverFiles[file] = createHash('sha256')
@@ -1605,6 +1608,8 @@ try {
           'actual web debug fixture stream connected',
         );
         await runNativeBrowserDebugJourney({
+          getApp: () => app,
+          pageURL: origin,
           page,
           sessionId,
           sourceURL: pathToFileURL(join(repo, 'browser-source.js')).href,
