@@ -57,6 +57,10 @@ import { t, tn } from '../i18n';
 import {
   saveSessionScroll,
   useSessionPresentation,
+  transcriptScroll,
+  restoreTranscriptAnchor,
+  sessionScrollAnchor,
+  type SessionScroll,
 } from '../model/presentation';
 interface Props {
   onDialog: (dialog: DialogId, selection?: string) => void;
@@ -113,11 +117,13 @@ function TranscriptList({
   renderItem,
   scrollRef,
   revealIndex,
+  initialAnchor,
 }: {
   items: TranscriptItem[];
   renderItem: (item: TranscriptItem, index: number) => ReactNode;
   scrollRef: RefObject<HTMLElement | null>;
   revealIndex?: number;
+  initialAnchor?: { index: number; offset: number };
 }) {
   return items.length < 500 ? (
     items.map(renderItem)
@@ -128,6 +134,7 @@ function TranscriptList({
       renderItem={renderItem}
       scrollRef={scrollRef}
       revealIndex={revealIndex}
+      initialAnchor={initialAnchor}
     />
   );
 }
@@ -340,15 +347,16 @@ export function Conversation({
   // a window behind others gets no frames.
   const stuck = useRef(true);
   const height = useRef(0);
-  const position = useRef({ top: 0, follow: true });
+  const position = useRef<SessionScroll>({ top: 0, follow: true });
   const follow = (force = false) => {
     const box = scroller.current;
     if (!box) return;
     if (force) stuck.current = true;
     if (stuck.current)
       box.scrollTo({ top: box.scrollHeight, behavior: 'instant' });
+    else restoreTranscriptAnchor(box, position.current.anchor);
     height.current = box.scrollHeight;
-    position.current = { top: box.scrollTop, follow: stuck.current };
+    position.current = transcriptScroll(box, stuck.current);
   };
   useEffect(() => {
     const box = scroller.current;
@@ -357,7 +365,7 @@ export function Conversation({
     const scrolled = () => {
       // Only the actual end follows new content; a reader just above it stays put.
       stuck.current = height.current - box.scrollTop - box.clientHeight <= 1;
-      position.current = { top: box.scrollTop, follow: stuck.current };
+      position.current = transcriptScroll(box, stuck.current);
     };
     box.addEventListener('scroll', scrolled, { passive: true });
     const resized = new ResizeObserver(() => follow());
@@ -381,13 +389,17 @@ export function Conversation({
         behavior: 'instant',
       });
       height.current = box.scrollHeight;
-      position.current = { top: box.scrollTop, follow: stuck.current };
+      position.current = saved ?? transcriptScroll(box, stuck.current);
       follow();
     }
-    return () => {
+    const save = () =>
       saveSessionScroll(runtime, session.id, presentationEpoch, {
         ...position.current,
       });
+    window.addEventListener('pagehide', save);
+    return () => {
+      window.removeEventListener('pagehide', save);
+      save();
     };
   }, [session.id, runtime, presentationEpoch]);
   // A message you just sent brings the end back into view
@@ -610,6 +622,21 @@ export function Conversation({
   // The turn's clock goes on the row of its latest tools, as Claude's does; before any, on
   // a row of its own. Waiting for you, it stops.
   const items = useMemo(() => groupMessages(messages), [messages]);
+  const savedAnchor = sessionScrollAnchor(session.presentation?.scroll?.anchor);
+  const initialAnchor = useMemo(() => {
+    if (!savedAnchor || session.presentation?.scroll?.follow) return undefined;
+    const index = items.findIndex((item) =>
+      item.kind === 'tools'
+        ? item.rows.some((row) => row.id === savedAnchor.messageId)
+        : item.message.id === savedAnchor.messageId,
+    );
+    return index < 0 ? undefined : { index, offset: savedAnchor.offset };
+  }, [
+    items,
+    savedAnchor?.messageId,
+    savedAnchor?.offset,
+    session.presentation?.scroll?.follow,
+  ]);
   const clock = pending.length ? undefined : session.turn;
   const asked = items.findLastIndex(
     (item) => item.kind !== 'tools' && item.message.role === 'user',
@@ -696,7 +723,9 @@ export function Conversation({
             </div>
           ) : (
             <TranscriptList
+              key={session.id}
               items={items}
+              initialAnchor={initialAnchor}
               scrollRef={scroller}
               revealIndex={
                 find && matches.length

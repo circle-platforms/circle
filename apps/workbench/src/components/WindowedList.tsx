@@ -36,6 +36,7 @@ export function WindowedList<T>({
   estimate = 180,
   overscan = 800,
   revealIndex,
+  initialAnchor,
 }: {
   items: readonly T[];
   itemKey: (item: T, index: number) => string;
@@ -44,18 +45,34 @@ export function WindowedList<T>({
   estimate?: number;
   overscan?: number;
   revealIndex?: number;
+  initialAnchor?: { index: number; offset: number };
 }) {
   const root = useRef<HTMLDivElement>(null);
   const heights = useRef(new Map<string, number>());
+  const measurementAnchor = useRef<{ key: string; offset: number } | undefined>(
+    undefined,
+  );
   const [revision, measure] = useState(0);
-  const [viewport, setViewport] = useState({ top: 0, height: 800 });
   const keys = useMemo(() => items.map(itemKey), [items, itemKey]);
+  const initialMeasurement = useRef(
+    initialAnchor
+      ? { key: keys[initialAnchor.index], offset: initialAnchor.offset }
+      : undefined,
+  );
   const offsets = useMemo(() => {
     const values = [0];
     for (const key of keys)
       values.push(values.at(-1)! + (heights.current.get(key) ?? estimate));
     return values;
   }, [keys, estimate, revision]);
+  // Mount the saved row before the parent restores its exact DOM-relative offset.
+  // Starting at zero would measure unrelated rows and lose the reading identity.
+  const [viewport, setViewport] = useState(() => ({
+    top: initialAnchor
+      ? Math.max(0, (offsets[initialAnchor.index] ?? 0) - initialAnchor.offset)
+      : 0,
+    height: 800,
+  }));
   // A parent's host ref attaches after child layout effects. Subscribe after
   // the full commit, then read the parent's already-restored scroll position.
   useEffect(() => {
@@ -76,6 +93,12 @@ export function WindowedList<T>({
         }),
       );
     };
+    const interrupt = () => {
+      initialMeasurement.current = undefined;
+      measurementAnchor.current = undefined;
+    };
+    for (const event of ['wheel', 'pointerdown', 'touchstart', 'keydown'])
+      scroller.addEventListener(event, interrupt, { passive: true });
     const observer = new ResizeObserver(update);
     observer.observe(scroller);
     scroller.addEventListener('scroll', update, { passive: true });
@@ -84,6 +107,8 @@ export function WindowedList<T>({
       cancelAnimationFrame(frame);
       observer.disconnect();
       scroller.removeEventListener('scroll', update);
+      for (const event of ['wheel', 'pointerdown', 'touchstart', 'keydown'])
+        scroller.removeEventListener(event, interrupt);
     };
   }, [scrollRef]);
   useEffect(() => {
@@ -108,6 +133,21 @@ export function WindowedList<T>({
     for (const key of heights.current.keys())
       if (!valid.has(key)) heights.current.delete(key);
   }, [keys]);
+  useLayoutEffect(() => {
+    const anchor = measurementAnchor.current;
+    measurementAnchor.current = undefined;
+    if (anchor) initialMeasurement.current = undefined;
+    const box = scrollRef.current;
+    if (!anchor || !box || !root.current) return;
+    const row = [
+      ...root.current.querySelectorAll<HTMLElement>('[data-windowed-key]'),
+    ].find((row) => row.dataset.windowedKey === anchor.key);
+    if (row)
+      box.scrollTop +=
+        row.getBoundingClientRect().top -
+        box.getBoundingClientRect().top -
+        anchor.offset;
+  }, [revision, scrollRef]);
   const range = windowedRange(offsets, viewport.top, viewport.height, overscan);
   return (
     <div ref={root} data-windowed-count={items.length}>
@@ -118,13 +158,37 @@ export function WindowedList<T>({
         return (
           <MeasuredRow
             key={key}
+            rowKey={key}
             onHeight={(height) => {
               const previous = heights.current.get(key) ?? estimate;
               if (Math.abs(previous - height) < 1) return;
+              // Keep the real visible row fixed across the next measured commit.
+              // Summing estimated deltas before that commit can overshoot and emit
+              // a scroll event that replaces the conversation's reading anchor.
+              const box = scrollRef.current;
+              if (initialMeasurement.current)
+                measurementAnchor.current = initialMeasurement.current;
+              if (!measurementAnchor.current && box && root.current) {
+                const frame = box.getBoundingClientRect();
+                const row = [
+                  ...root.current.querySelectorAll<HTMLElement>(
+                    '[data-windowed-key]',
+                  ),
+                ].find((row) => {
+                  const rect = row.getBoundingClientRect();
+                  return (
+                    rect.height > 0 &&
+                    rect.bottom > frame.top &&
+                    rect.top < frame.bottom
+                  );
+                });
+                if (row)
+                  measurementAnchor.current = {
+                    key: row.dataset.windowedKey!,
+                    offset: row.getBoundingClientRect().top - frame.top,
+                  };
+              }
               heights.current.set(key, height);
-              // Changes above the visible anchor must not move the text being read.
-              if (offsets[index + 1] < viewport.top && scrollRef.current)
-                scrollRef.current.scrollTop += height - previous;
               measure((value) => value + 1);
             }}
           >
@@ -146,9 +210,11 @@ export function WindowedList<T>({
 }
 
 function MeasuredRow({
+  rowKey,
   children,
   onHeight,
 }: {
+  rowKey: string;
   children: ReactNode;
   onHeight: (height: number) => void;
 }) {
@@ -166,7 +232,7 @@ function MeasuredRow({
     return () => observer.disconnect();
   }, []);
   return (
-    <div ref={ref} style={{ display: 'flow-root' }}>
+    <div ref={ref} data-windowed-key={rowKey} style={{ display: 'flow-root' }}>
       {children}
     </div>
   );

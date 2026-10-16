@@ -6,6 +6,10 @@ import type { DesktopBridge } from '../../desktop/src/contracts.ts';
 import type { RuntimeUpdate } from '../../desktop/src/runtime-protocol.ts';
 import type { SessionViewPatch } from '../src/model/types.ts';
 import { branchMessages, visibleMessages } from '../src/model/state.ts';
+import {
+  saveSessionScroll,
+  sessionScrollAnchor,
+} from '../src/model/presentation.ts';
 function fixture() {
   const snapshot = createFixtures();
   snapshot.runtime = { connected: true, configured: true };
@@ -183,4 +187,88 @@ test('failed local view persistence reports false while retaining recoverable me
   const restored = new LiveRuntime(host, initial, storage);
   assert.equal(restored.getSnapshot().sessions[0].draft, patch.draft);
   restored.dispose();
+});
+
+test('reading identity updates persist even at the same pixel position and stay with the original session', () => {
+  const { runtime, saved, update } = fixture();
+  try {
+    const [owner, other] = runtime.getSnapshot().sessions;
+    const history = owner.messages;
+    const initial = {
+      top: 120,
+      follow: false,
+      anchor: { messageId: 'history-4', offset: -12.75 },
+    };
+    saveSessionScroll(runtime, owner.id, undefined, initial);
+    const changed = {
+      ...initial,
+      anchor: { messageId: 'history-5', offset: -6.25 },
+    };
+    saveSessionScroll(runtime, owner.id, undefined, changed);
+    assert.equal(
+      runtime.getSnapshot().sessions.find((session) => session.id === owner.id)
+        ?.messages,
+      history,
+      'local reading updates retain the native history identity',
+    );
+    update();
+    assert.deepEqual(
+      runtime.getSnapshot().sessions.find((session) => session.id === owner.id)
+        ?.presentation?.scroll,
+      changed,
+    );
+    assert.deepEqual(
+      runtime.getSnapshot().sessions.find((session) => session.id === other.id)
+        ?.presentation?.scroll,
+      other.presentation?.scroll,
+    );
+    assert.deepEqual(
+      runtime.getSnapshot().sessions.find((session) => session.id === owner.id)
+        ?.messages,
+      history,
+      'the following authoritative snapshot retains all actual message content',
+    );
+    assert.ok([...saved.values()].some((text) => text.includes('history-5')));
+    assert.ok([...saved.values()].every((text) => !text.includes('history-4')));
+    saveSessionScroll(runtime, 'removed-owner', undefined, initial);
+    assert.equal(
+      runtime
+        .getSnapshot()
+        .sessions.some((session) => session.id === 'removed-owner'),
+      false,
+    );
+  } finally {
+    runtime.dispose();
+  }
+});
+
+test('legacy and invalid optional reading anchors fall back without replacing the old pixel view', () => {
+  for (const value of [
+    undefined,
+    null,
+    {},
+    { messageId: '', offset: 0 },
+    { messageId: 'history-4', offset: null },
+    { messageId: 'history-4', offset: Infinity },
+    { messageId: 'history-4', offset: '12' },
+  ])
+    assert.equal(sessionScrollAnchor(value), undefined);
+  assert.deepEqual(
+    sessionScrollAnchor({ messageId: 'history-4', offset: -12.75 }),
+    { messageId: 'history-4', offset: -12.75 },
+  );
+  const { runtime } = fixture();
+  try {
+    const owner = runtime.getSnapshot().sessions[0];
+    saveSessionScroll(runtime, owner.id, undefined, {
+      top: 120,
+      follow: false,
+    });
+    assert.deepEqual(runtime.getSnapshot().sessions[0].presentation?.scroll, {
+      top: 120,
+      follow: false,
+    });
+  } finally {
+    runtime.dispose();
+  }
 });

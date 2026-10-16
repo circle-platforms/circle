@@ -111,7 +111,11 @@ export interface Session {
   actionError?: string;
   /** Renderer-only state; never changes the core conversation or execution. */
   presentation?: {
-    scroll?: { top: number; follow: boolean };
+    scroll?: {
+      top: number;
+      follow: boolean;
+      anchor?: { messageId: string; offset: number };
+    };
     planCollapsed?: boolean;
     disclosures?: Record<string, { open: boolean; defaultOpen: boolean }>;
     toolTabs?: Record<string, 'input' | 'output'>;
