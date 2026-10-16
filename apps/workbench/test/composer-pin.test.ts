@@ -82,8 +82,9 @@ test(
       await page.evaluate(() => localStorage.clear());
       await page.reload();
       await page.locator('.composer textarea').waitFor();
-      const inside = async () => {
-        const box = await page.locator('.composer-area').boundingBox();
+      // A session's composer, or the home composer after new session.
+      const inside = async (composerBox = '.composer-area') => {
+        const box = await page.locator(composerBox).boundingBox();
         assert.ok(box, 'composer is missing');
         assert.ok(box.y >= 0, `composer top ${box.y}`);
         assert.ok(
@@ -108,11 +109,14 @@ test(
         await composer.fill(note);
         await composer.press('Enter');
         await page.getByText(note, { exact: true }).first().waitFor();
+        await inside();
+        // New session opens home. Its message makes the next session.
         await page
           .locator('nav.sidebar-primary')
           .getByRole('button', { name: 'new session', exact: true })
           .click();
-        await inside();
+        await page.locator('.home-composer').waitFor();
+        await inside('.home-composer');
       }
       const rows = await page.locator('.session-link').count();
       assert.ok(rows >= 6, `expected several sessions, saw ${rows}`);

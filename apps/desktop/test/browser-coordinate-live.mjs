@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { _electron as electron } from 'playwright';
+import { captureFailure } from './helpers/diagnostics.mjs';
 
 // A local model gateway reads the real preceding screenshot result. It never calls a model.
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -156,6 +157,8 @@ for (const key of Object.keys(env))
     delete env[key];
 delete env.ELECTRON_RUN_AS_NODE;
 let app;
+let page;
+const errors = [];
 try {
   app = await electron.launch({
     executablePath:
@@ -167,18 +170,39 @@ try {
     timeout: 45000,
   });
   app.context().on('page', (page) => page.on('dialog', () => {}));
-  const page = await app.firstWindow();
+  page = await app.firstWindow();
   page.setDefaultTimeout(20000);
-  const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await app.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows()[0];
     window.show();
     window.setContentSize(1400, 900);
   });
-  await page
-    .getByRole('textbox', { name: 'base url', exact: true })
-    .fill(url + 'v1');
+  const endpoint = page.getByRole('textbox', { name: 'base url', exact: true });
+  const connect = page
+    .getByRole('button', { name: 'connect a model', exact: true })
+    .first();
+  await endpoint.or(connect).first().waitFor();
+  // This is a coordinate-action check, not a test of the automatic setup dialog.
+  // The visible connection entry is also the normal way to open it explicitly.
+  if (
+    process.env.CIRCLE_DESKTOP_TEST_EXPLICIT_CONNECT &&
+    (await endpoint.isVisible())
+  ) {
+    await page.getByRole('button', { name: 'cancel', exact: true }).click();
+    await endpoint.waitFor({ state: 'hidden' });
+  }
+  let connectionEntry = 'automatic';
+  if (!(await endpoint.isVisible())) {
+    connectionEntry = 'explicit';
+    try {
+      await connect.click({ timeout: 2000 });
+    } catch (error) {
+      // The automatic dialog can win the race with this click.
+      if (!(await endpoint.isVisible())) throw error;
+    }
+  }
+  await endpoint.fill(url + 'v1');
   await page
     .getByRole('textbox', { name: 'api key', exact: true })
     .fill('coordinate-fixture-key');
@@ -288,6 +312,7 @@ try {
     JSON.stringify(
       {
         packaged: info.packaged,
+        connectionEntry,
         checks: [
           'real screenshot metadata reaches gateway',
           'manual unknown target waits once',
@@ -303,6 +328,9 @@ try {
     ),
   );
   console.log(JSON.stringify({ checks: 5, packaged: info.packaged, output }));
+} catch (error) {
+  await captureFailure(page, error, errors, output);
+  throw error;
 } finally {
   if (app) await app.close();
   server.closeAllConnections();

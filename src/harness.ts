@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { orderModeToolResults } from './tool_history.js';
 import type {
   ChatModel,
   Message,
@@ -579,9 +580,11 @@ export class Harness {
                   ? '\nRead-only mode: inspect and plan; only plan.md or plan files may be changed, subject to approval. Do not run shell commands.'
                   : '\nRead-only mode: inspect and plan; do not change files or run commands.'
                 : ''),
-            messages: this.options.prepareMessages
-              ? await this.options.prepareMessages(signal)
-              : this.options.store.projectedMessages(this.sessionId),
+            messages: orderModeToolResults(
+              this.options.prepareMessages
+                ? await this.options.prepareMessages(signal)
+                : this.options.store.projectedMessages(this.sessionId),
+            ),
             tools: this.tools,
             signal: stepSignal,
             notice: (event) =>

@@ -11,7 +11,7 @@ const chrome = [
 ].find((path) => existsSync(path));
 
 test(
-  'a new session takes keyboard focus in the composer',
+  'new session takes keyboard focus in the home composer',
   { skip: chrome ? false : 'chrome is not installed' },
   async () => {
     const root = fileURLToPath(new URL('..', import.meta.url));
@@ -92,6 +92,11 @@ test(
         page.evaluate(
           () => document.activeElement?.matches('.composer textarea') ?? false,
         );
+      // Keys typed while the composer is opening are held until it is there.
+      const settled = () =>
+        page.waitForFunction(
+          () => !document.documentElement.dataset.composerFocus,
+        );
       const focusRow = () =>
         page.evaluate(() => {
           const link = document.querySelector('.session-link');
@@ -112,11 +117,12 @@ test(
       });
       assert.equal(await focused(), true);
       await page.keyboard.type('focus test');
+      await settled();
       assert.equal(await composer.inputValue(), 'focus test');
       assert.equal(await focused(), true);
 
       // Keys in the same turn as Ctrl+N, while a row is focused, are kept.
-      // An empty session stays open and the leftover draft is cleared first.
+      await composer.fill('');
       await focusRow();
       await page.evaluate(() => {
         window.dispatchEvent(
@@ -147,7 +153,10 @@ test(
         const node = document.querySelector('.composer textarea');
         return node instanceof HTMLTextAreaElement && node.value === 'fast';
       });
+      await settled();
+      assert.equal(await composer.inputValue(), 'fast');
 
+      // Home keeps its draft. New session puts the caret after it.
       await composer.fill('leftover');
       await page
         .locator('nav.sidebar-primary')
@@ -157,13 +166,16 @@ test(
         const node = document.querySelector('.composer textarea');
         return (
           node instanceof HTMLTextAreaElement &&
-          node.value === '' &&
-          document.activeElement === node
+          node.value === 'leftover' &&
+          document.activeElement === node &&
+          node.selectionStart === node.value.length
         );
       });
-      await page.keyboard.type('fresh');
-      assert.equal(await composer.inputValue(), 'fresh');
+      await settled();
+      await page.keyboard.type(' fresh');
+      assert.equal(await composer.inputValue(), 'leftover fresh');
       assert.equal(await focused(), true);
+      await composer.fill('');
 
       await send('second note about focusing the composer');
       await page.getByRole('link', { name: 'all sessions' }).click();
@@ -175,6 +187,7 @@ test(
       await page.waitForFunction(() =>
         document.activeElement?.matches('.composer textarea'),
       );
+      await settled();
       await page.keyboard.type('from the list');
       assert.equal(await composer.inputValue(), 'from the list');
 

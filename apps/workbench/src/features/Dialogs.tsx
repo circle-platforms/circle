@@ -1107,7 +1107,10 @@ export function DialogHost({
               onClick={() =>
                 perform(async () => {
                   if (runtime.mode === 'live') {
-                    await runtime.request('trust-workspace', { enabled: true });
+                    await runtime.request('trust-workspace', {
+                      enabled: true,
+                      workspaceId: workspace.id,
+                    });
                     onClose();
                     notify(t('workspace trusted'));
                     return;

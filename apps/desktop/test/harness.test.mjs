@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { assertViewport, setViewport } from './helpers/viewport.mjs';
+import './model-request-frames.test.mjs';
 
 for (const { entryName, overridden } of [
   'browser-coordinate-live.mjs',

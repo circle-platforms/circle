@@ -4,7 +4,7 @@ import { KeybindingsEditor } from './KeybindingsEditor';
 import { usePlugins } from '../plugins/context';
 import { pairing } from '../plugins/registry';
 import { useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { CUSTOMIZE, NAVIGATION } from '../components/Sidebar';
 import {
   Plus,
@@ -40,17 +40,12 @@ import {
   currentSession,
   EFFORTS,
   MODES,
-  sessionListed,
   sessionMode,
   sessionTitle,
 } from '../model/state';
 import { EFFORT_TEXT, MODE_TEXT } from './Composer';
 import { shownTime } from '../model/time';
-import {
-  armComposerFocus,
-  cancelComposerFocus,
-  sealComposerFocus,
-} from '../model/composer-focus';
+import { armComposerFocus } from '../model/composer-focus';
 import { workspaceLabel } from '../model/workspace-label';
 import type {
   DialogId,
@@ -78,7 +73,11 @@ import { Markdown } from '../components/Markdown';
 import { UpdateControl } from './Update';
 import { VariablesSettings } from './VariablesSettings';
 import { SessionMenu } from '../components/SessionMenus';
-import { canArchiveSession } from '../model/session-management';
+import {
+  canArchiveSession,
+  visibleSessions,
+} from '../model/session-management';
+import { openHome } from './home-selection';
 import { NetworkStatus } from './NetworkStatus';
 import { BUILTIN_TOOL_INFO } from '../model/tool-info';
 import { TEXT_SIZES, textSizes } from '../theme';
@@ -142,13 +141,14 @@ function PageContent(props: Props) {
 }
 function SessionsPage({ onSession, onDialog }: Props) {
   const { snapshot, runtime, perform } = useRuntime();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [search, setSearch] = useState('');
   const [all, setAll] = useState(false);
   const [archived, setArchived] = useState(false);
   const current = currentSession(snapshot);
-  const sessions = snapshot.sessions.filter(
+  const sessions = visibleSessions(snapshot.sessions).filter(
     (session) =>
-      sessionListed(session) &&
       (all || session.workspaceId === current.workspaceId) &&
       Boolean(session.archivedAt) === archived &&
       (session.title + ' ' + session.id)
@@ -165,16 +165,7 @@ function SessionsPage({ onSession, onDialog }: Props) {
         <Button
           onClick={() => {
             armComposerFocus();
-            perform(async () => {
-              try {
-                await runtime.newSession();
-                onSession();
-                sealComposerFocus();
-              } catch (error) {
-                cancelComposerFocus();
-                throw error;
-              }
-            });
+            openHome(navigate, `${location.pathname}${location.search}`);
           }}
         >
           <Plus size={14} />

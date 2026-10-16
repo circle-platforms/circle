@@ -37,7 +37,15 @@ export function subscribeComposerFocus(listener: () => void): () => void {
 }
 
 function notify(): void {
+  mark();
   for (const listener of listeners) listener();
+}
+
+/** While keys are held for the composer that is opening, the page says so. */
+function mark(): void {
+  if (typeof document === 'undefined') return;
+  if (pending) document.documentElement.dataset.composerFocus = 'pending';
+  else delete document.documentElement.dataset.composerFocus;
 }
 
 function composerNode(): HTMLTextAreaElement | null {
@@ -208,6 +216,7 @@ export function claimComposerFocus(): void {
   buffer = '';
   removeCapture();
   restoreTab();
+  mark();
 }
 
 /** The gesture failed before the empty session was shown. Release the keyboard. */
@@ -219,6 +228,7 @@ export function cancelComposerFocus(): void {
   buffer = '';
   removeCapture();
   restoreTab();
+  mark();
   if (raf) {
     cancelAnimationFrame(raf);
     raf = 0;

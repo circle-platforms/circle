@@ -3,7 +3,9 @@ import {
   useRef,
   useState,
   type ComponentProps,
+  type KeyboardEvent,
   type ReactNode,
+  type Ref,
 } from 'react';
 import { DropdownMenu } from 'radix-ui';
 import {
@@ -31,16 +33,40 @@ import '../styles/session-management.css';
 function Menu({
   label,
   children,
+  tabIndex,
+  buttonRef,
+  tipOpen,
+  open,
+  onOpenChange,
+  onFocus,
+  onBlur,
+  onKeyDown,
   onCloseAutoFocus,
 }: {
   label: string;
   children: ReactNode;
+  tabIndex?: number;
+  buttonRef?: Ref<HTMLButtonElement>;
+  tipOpen?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  onFocus?: () => void;
+  onBlur?: () => void;
+  onKeyDown?: (event: KeyboardEvent<HTMLButtonElement>) => void;
   onCloseAutoFocus?: (event: Event) => void;
 }) {
   return (
-    <DropdownMenu.Root>
+    <DropdownMenu.Root {...(open === undefined ? {} : { open, onOpenChange })}>
       <DropdownMenu.Trigger asChild>
-        <IconButton label={label}>
+        <IconButton
+          label={label}
+          tabIndex={tabIndex}
+          ref={buttonRef}
+          tipOpen={tipOpen}
+          onFocus={onFocus}
+          onBlur={onBlur}
+          onKeyDown={onKeyDown}
+        >
           <MoreHorizontal size={13} />
         </IconButton>
       </DropdownMenu.Trigger>
@@ -107,11 +133,25 @@ export function SessionMenu({
   session,
   onDialog,
   onRename,
+  buttonRef,
+  tipOpen,
+  open,
+  onOpenChange,
+  onFocus,
+  onBlur,
+  onKeyDown,
 }: {
   session: Session;
   onDialog: (dialog: DialogId, selection?: string) => void;
   /** When set, rename edits the sidebar row instead of opening a dialog. */
   onRename?: () => void;
+  buttonRef?: Ref<HTMLButtonElement>;
+  tipOpen?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  onFocus?: () => void;
+  onBlur?: () => void;
+  onKeyDown?: (event: KeyboardEvent<HTMLButtonElement>) => void;
 }) {
   const { snapshot, runtime, perform } = useRuntime();
   const holdFocus = useRef(false);
@@ -133,6 +173,14 @@ export function SessionMenu({
   return (
     <Menu
       label={t('session actions for {title}', { title: session.title })}
+      tabIndex={-1}
+      buttonRef={buttonRef}
+      tipOpen={tipOpen}
+      open={open}
+      onOpenChange={onOpenChange}
+      onFocus={onFocus}
+      onBlur={onBlur}
+      onKeyDown={onKeyDown}
       onCloseAutoFocus={(event) => {
         if (!holdFocus.current) return;
         holdFocus.current = false;
@@ -195,10 +243,12 @@ export function WorkspaceMenu({
   workspace,
   onNew,
   onCollapseAll,
+  tipOpen,
 }: {
   workspace: Workspace;
   onNew: () => void;
   onCollapseAll: () => void;
+  tipOpen?: boolean;
 }) {
   const { snapshot, runtime, perform } = useRuntime();
   const sessions = workspaceSessions(snapshot, workspace.id);
@@ -207,6 +257,7 @@ export function WorkspaceMenu({
       label={t('workspace actions for {name}', {
         name: workspaceLabel(workspace),
       })}
+      tipOpen={tipOpen}
     >
       <Item
         icon={Plus}

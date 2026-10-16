@@ -23,6 +23,11 @@ export const conversation: Record<string, string> = {
   // the transcript
   'what are we working on?': '我们要做什么？',
   'work without a project': '不在项目中工作',
+  'what should we build in {name}?': '你想让我们在 {name} 中构建什么？',
+  'search projects': '搜索项目',
+  'no matching projects': '没有匹配的项目',
+  'no project': '不选择项目',
+  'choose a project': '选择项目',
   'Start with a message, a file, or a question about your project.':
     '从一条消息、一个文件或一个关于项目的问题开始。',
   you: '你',

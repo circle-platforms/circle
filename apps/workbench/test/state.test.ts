@@ -19,9 +19,31 @@ import { PlatformPreviewService } from '../src/plugins/platform/store.ts';
 import { PluginRegistry } from '../src/plugins/registry.ts';
 import type { WorkbenchPlugin } from '../src/plugins/types.ts';
 import {
+  activityAge,
   canArchiveSession,
+  historyMessages,
+  orderedProjects,
+  projectTag,
+  RECENT_SHOWN,
+  recentDetails,
+  recentSessions,
+  sessionActivityAt,
+  sessionHasContent,
+  sidebarProjects,
+  visibleSessions,
+  workspaceListed,
   workspaceSessions,
 } from '../src/model/session-management.ts';
+import {
+  forgetHomeComposer,
+  homeComposerMemory,
+  homePath,
+  homeProjectRequest,
+  homeProjects,
+  rememberHomeComposer,
+  selectedHomeProject,
+} from '../src/features/home-selection.ts';
+import type { Workspace } from '../src/model/types.ts';
 function storage() {
   const values = new Map<string, string>();
   return {
@@ -457,4 +479,505 @@ test('an empty new session is not listed, and hi keeps that title', () => {
     runtime.getSnapshot().sessions.some((session) => session.id === again),
     false,
   );
+});
+
+test('the first message from home creates one session in the chosen project', () => {
+  const runtime = new PreviewRuntime();
+  const before = runtime.getSnapshot().sessions.map((session) => session.id);
+  assert.deepEqual(
+    runtime.beginConversation({
+      workspaceId: 'workspace2',
+      text: 'edit the docs',
+    }),
+    { dialog: 'trust' },
+  );
+  assert.deepEqual(
+    runtime.getSnapshot().sessions.map((session) => session.id),
+    before,
+  );
+  runtime.change((state) => {
+    state.workspaces.find((item) => item.id === 'workspace2')!.trusted = true;
+  });
+  const started = runtime.beginConversation({
+    workspaceId: 'workspace2',
+    text: 'edit the docs',
+  });
+  assert.ok('sessionId' in started);
+  const created = runtime
+    .getSnapshot()
+    .sessions.filter((session) => !before.includes(session.id));
+  assert.equal(created.length, 1);
+  assert.equal(created[0]!.id, started.sessionId);
+  assert.equal(created[0]!.workspaceId, 'workspace2');
+  assert.deepEqual(
+    created[0]!.messages.map((message) => message.text),
+    ['edit the docs'],
+  );
+  assert.equal(sessionHasContent(created[0]!), true);
+  assert.equal(
+    sessionHasContent({
+      ...created[0]!,
+      title: 'new session',
+      messages: [],
+      queue: [],
+      state: 'idle',
+    }),
+    false,
+  );
+});
+
+function folder(
+  id: string,
+  name: string,
+  kind: Workspace['kind'] = 'project',
+): Workspace {
+  return {
+    id,
+    name,
+    path: '/folders/' + name,
+    branch: '',
+    trusted: true,
+    kind,
+    instructions: [],
+  };
+}
+
+test('the first message keeps the home composer model, effort and mode', () => {
+  const runtime = new PreviewRuntime();
+  assert.throws(
+    () =>
+      runtime.beginConversation({
+        workspaceId: 'workspace1',
+        text: 'bad depth',
+        effort: 'ludicrous' as 'high',
+      }),
+    /unknown thinking depth/,
+  );
+  const started = runtime.beginConversation({
+    workspaceId: 'workspace1',
+    text: 'think harder',
+    model: 'sample-fast-model',
+    effort: 'xhigh',
+    mode: 'plan',
+  });
+  assert.ok('sessionId' in started);
+  const created = runtime
+    .getSnapshot()
+    .sessions.find((session) => session.id === started.sessionId)!;
+  assert.equal(created.model, 'sample-fast-model');
+  assert.equal(created.effort, 'xhigh');
+  assert.equal(created.mode, 'plan');
+  assert.equal(created.readOnly, true);
+  assert.equal(created.auto, false);
+  assert.equal(created.messages[0]!.text, 'think harder');
+});
+
+test('the home picker lists known projects and the sidebar choice wins', () => {
+  const circle = folder('circle', 'circle');
+  const docs = folder('docs', 'docs-site');
+  const loose = folder('loose', 'unscoped', 'scratch');
+  const workspaces = [docs, loose, circle];
+  assert.deepEqual(
+    homeProjects(workspaces).map((item) => item.name),
+    ['circle', 'docs-site'],
+  );
+  const sessions = [{ id: 'current', workspaceId: 'circle' }];
+  assert.equal(
+    selectedHomeProject(workspaces, sessions, 'current', null)?.id,
+    'circle',
+  );
+  assert.equal(
+    selectedHomeProject(workspaces, sessions, 'current', 'circle')?.id,
+    'circle',
+  );
+  assert.equal(
+    selectedHomeProject(workspaces, sessions, 'current', 'docs')?.id,
+    'docs',
+  );
+  assert.equal(
+    selectedHomeProject(workspaces, sessions, 'current', ''),
+    undefined,
+  );
+  assert.equal(
+    selectedHomeProject(workspaces, sessions, 'current', 'loose'),
+    undefined,
+  );
+  assert.equal(homePath(), '/home');
+  assert.equal(homePath('circle'), '/home?workspace=circle');
+  assert.equal(homePath(null), '/home?workspace=');
+});
+
+test('a home draft is kept until the message is sent, and the route wins over it', () => {
+  forgetHomeComposer();
+  assert.equal(homeComposerMemory(), null);
+  assert.equal(homeProjectRequest(null, null), null);
+  assert.equal(homeProjectRequest('docs', null), 'docs');
+  assert.equal(homeProjectRequest('', null), '');
+  rememberHomeComposer({
+    text: 'hold this',
+    attachments: [],
+    model: 'sample-fast-model',
+    effort: 'xhigh',
+    mode: 'plan',
+    projectId: 'docs',
+  });
+  assert.equal(homeComposerMemory()?.text, 'hold this');
+  assert.equal(homeComposerMemory()?.effort, 'xhigh');
+  assert.equal(homeProjectRequest(null, homeComposerMemory()), 'docs');
+  assert.equal(homeProjectRequest(null, { projectId: null }), '');
+  assert.equal(homeProjectRequest('circle', homeComposerMemory()), 'circle');
+  forgetHomeComposer();
+  assert.equal(homeComposerMemory(), null);
+});
+
+test('the picker choice decides where the first message is stored', () => {
+  const runtime = new PreviewRuntime();
+  runtime.change((state) => {
+    state.workspaces.push(folder('circle', 'circle'));
+  });
+  const inCircle = runtime.beginConversation({
+    workspaceId: 'circle',
+    text: 'build in circle',
+  });
+  assert.ok('sessionId' in inCircle);
+  const circleSession = runtime
+    .getSnapshot()
+    .sessions.find((session) => session.id === inCircle.sessionId)!;
+  assert.equal(circleSession.workspaceId, 'circle');
+  const loose = runtime.beginConversation({
+    workspaceId: null,
+    text: 'a loose question',
+  });
+  assert.ok('sessionId' in loose);
+  const looseSession = runtime
+    .getSnapshot()
+    .sessions.find((session) => session.id === loose.sessionId)!;
+  const looseWorkspace = runtime
+    .getSnapshot()
+    .workspaces.find((item) => item.id === looseSession.workspaceId)!;
+  assert.notEqual(looseSession.workspaceId, 'circle');
+  assert.equal(looseWorkspace.kind, 'scratch');
+  assert.equal(looseSession.messages[0]!.text, 'a loose question');
+});
+
+test('the first home message keeps files chosen beside the box', () => {
+  const runtime = new PreviewRuntime();
+  const started = runtime.beginConversation({
+    text: 'see this',
+    attachments: [
+      {
+        id: 'note',
+        name: 'note.txt',
+        kind: 'file',
+        content: 'hello',
+      },
+    ],
+  });
+  assert.ok('sessionId' in started);
+  const message = runtime
+    .getSnapshot()
+    .sessions.find((session) => session.id === started.sessionId)!.messages[0]!;
+  assert.equal(message.text, 'see this');
+  assert.equal(message.attachments?.[0]?.name, 'note.txt');
+  assert.equal(message.attachments?.[0]?.content, 'hello');
+});
+
+test('search and session counts omit a placeholder session', () => {
+  const runtime = new PreviewRuntime();
+  const real = runtime.getSnapshot().sessions[0]!;
+  const placeholder = {
+    ...real,
+    id: 'placeholder',
+    title: 'new session',
+    messages: [],
+    queue: [],
+    state: 'idle' as const,
+  };
+  const sessions = [placeholder, real];
+  const shown = visibleSessions(sessions);
+  assert.deepEqual(
+    shown.map((session) => session.id),
+    [real.id],
+  );
+  const indexed = shown.flatMap((session) => historyMessages(session));
+  assert.ok(indexed.length > 0);
+  assert.equal(
+    indexed.some((message) => message.text.includes('placeholder')),
+    false,
+  );
+  assert.equal(historyMessages(placeholder).length, 0);
+  assert.equal(sessionHasContent(placeholder), false);
+});
+
+test('search history includes assistant replies and skips tool rows', () => {
+  const runtime = new PreviewRuntime();
+  const session = runtime.getSnapshot().sessions[0]!;
+  const hits = historyMessages(session);
+  assert.ok(hits.some((message) => message.role === 'user'));
+  assert.ok(
+    hits.some(
+      (message) =>
+        message.role === 'assistant' && message.text.includes('pending buffer'),
+    ),
+  );
+  assert.equal(
+    hits.some((message) => message.role === 'tool'),
+    false,
+  );
+});
+
+test('working without a project creates one scratch session, and an empty project stays unlisted', () => {
+  const runtime = new PreviewRuntime();
+  const before = runtime.getSnapshot().sessions.length;
+  const started = runtime.beginConversation({
+    workspaceId: null,
+    text: 'a loose question',
+  });
+  assert.ok('sessionId' in started);
+  const snapshot = runtime.getSnapshot();
+  assert.equal(snapshot.sessions.length, before + 1);
+  const created = snapshot.sessions.find(
+    (session) => session.id === started.sessionId,
+  )!;
+  const workspace = snapshot.workspaces.find(
+    (item) => item.id === created.workspaceId,
+  )!;
+  assert.equal(workspace.kind, 'scratch');
+  assert.equal(created.messages[0]!.text, 'a loose question');
+  assert.equal(workspaceListed(workspace, snapshot.sessions), true);
+  assert.equal(
+    sidebarProjects(snapshot.workspaces, snapshot.sessions).some(
+      (item) => item.id === workspace.id,
+    ),
+    false,
+  );
+  assert.ok(
+    recentSessions(snapshot.sessions).some(
+      (session) => session.id === created.id,
+    ),
+  );
+  const placeholder = {
+    ...created,
+    title: 'new session',
+    messages: [],
+    queue: [],
+    state: 'idle' as const,
+  };
+  assert.equal(sessionHasContent(placeholder), false);
+  assert.equal(workspaceListed(workspace, [placeholder]), false);
+  const opened = { ...workspace, id: 'opened', kind: 'project' as const };
+  const openedPlaceholder = { ...placeholder, workspaceId: 'opened' };
+  assert.equal(workspaceListed(opened, [openedPlaceholder]), false);
+  assert.equal(workspaceListed(opened, []), false);
+  assert.equal(
+    homeProjects([opened, workspace]).some((item) => item.id === 'opened'),
+    true,
+  );
+  const again = runtime.beginConversation({ text: 'another question' });
+  assert.ok('sessionId' in again);
+  assert.notEqual(again.sessionId, started.sessionId);
+  const scratch = runtime
+    .getSnapshot()
+    .sessions.filter((session) => session.workspaceId === workspace.id);
+  assert.equal(scratch.length, 2);
+  assert.ok(scratch.every((session) => session.messages.length === 1));
+});
+
+test('recent lists every context newest first, and its hover names only a project', () => {
+  const runtime = new PreviewRuntime();
+  const sample = runtime
+    .getSnapshot()
+    .sessions.find((session) => sessionHasContent(session))!;
+  const project: Workspace = {
+    id: 'proj',
+    name: 'docs-site',
+    path: '/docs',
+    branch: '',
+    trusted: true,
+    kind: 'project',
+    instructions: [],
+  };
+  const scratch: Workspace = {
+    id: 'loose',
+    name: 'unscoped',
+    path: 'unscoped',
+    branch: '',
+    trusted: true,
+    kind: 'scratch',
+    instructions: [],
+  };
+  const older = {
+    ...sample,
+    id: 'older',
+    title: 'older work',
+    workspaceId: project.id,
+    updatedAt: '2020-01-01T00:00:00.000Z',
+    archivedAt: undefined,
+    pinned: true,
+  };
+  const newer = {
+    ...sample,
+    id: 'newer',
+    title: 'newer question',
+    workspaceId: scratch.id,
+    updatedAt: '2024-06-01T00:00:00.000Z',
+    archivedAt: undefined,
+    pinned: false,
+  };
+  const archived = {
+    ...sample,
+    id: 'archived',
+    workspaceId: project.id,
+    updatedAt: '2025-01-01T00:00:00.000Z',
+    archivedAt: '2025-01-02T00:00:00.000Z',
+  };
+  const placeholder = {
+    ...sample,
+    id: 'placeholder',
+    title: 'new session',
+    workspaceId: project.id,
+    messages: [],
+    queue: [],
+    state: 'idle' as const,
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    archivedAt: undefined,
+  };
+  const sessions = [older, newer, archived, placeholder];
+  const workspaces = [project, scratch];
+  assert.equal(RECENT_SHOWN, 5);
+  assert.deepEqual(
+    recentSessions(sessions).map((session) => session.id),
+    ['newer', 'older'],
+  );
+  const now = new Date(2026, 9, 15, 12, 0, 0);
+  const withAt = (session: typeof older, at: string) => ({
+    ...session,
+    messages: [{ ...session.messages[0]!, id: `${session.id}-m`, at }],
+  });
+  const talked = withAt(
+    {
+      ...older,
+      id: 'talked',
+      updatedAt: '2019-01-01T00:00:00.000Z',
+      pinned: false,
+    },
+    new Date(now.getTime() - 3 * 60 * 1000).toISOString(),
+  );
+  const quiet = withAt(
+    {
+      ...newer,
+      id: 'quiet',
+      updatedAt: '2026-10-15T12:00:00.000Z',
+    },
+    '2020-01-01T00:00:00.000Z',
+  );
+  assert.equal(
+    sessionActivityAt(talked),
+    new Date(now.getTime() - 3 * 60 * 1000).toISOString(),
+  );
+  assert.deepEqual(
+    recentSessions([quiet, talked]).map((session) => session.id),
+    ['talked', 'quiet'],
+  );
+  const filed = recentDetails(talked, workspaces, now);
+  const loose = recentDetails(quiet, workspaces, now);
+  assert.equal(filed.project, 'docs-site');
+  assert.deepEqual(filed.age, { kind: 'minutes', n: 3 });
+  assert.ok(filed.absolute);
+  assert.equal(loose.project, undefined);
+  assert.equal(loose.age.kind, 'days');
+  assert.ok(loose.age.kind === 'days' && loose.age.n >= 1);
+  assert.ok(loose.absolute);
+  assert.deepEqual(activityAge('today', now), { kind: 'raw', text: 'today' });
+  assert.deepEqual(
+    activityAge(new Date(now.getTime() - 30_000).toISOString(), now),
+    { kind: 'just now' },
+  );
+  assert.deepEqual(
+    activityAge(
+      new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString(),
+      now,
+    ),
+    { kind: 'hours', n: 2 },
+  );
+  // 4h45m floors to 4 hours, the same count the terminal shows as `4h`.
+  assert.deepEqual(
+    activityAge(
+      new Date(now.getTime() - (4 * 60 + 45) * 60 * 1000).toISOString(),
+      now,
+    ),
+    { kind: 'hours', n: 4 },
+  );
+  assert.equal(
+    projectTag({ ...older, workspaceId: 'missing' }, workspaces),
+    undefined,
+  );
+  const preview = recentDetails(
+    { ...older, updatedAt: 'today' },
+    workspaces,
+    now,
+  );
+  assert.deepEqual(preview.age, { kind: 'raw', text: 'today' });
+  assert.equal(preview.absolute, undefined);
+  assert.deepEqual(
+    sidebarProjects(workspaces, sessions).map((item) => item.id),
+    ['proj'],
+  );
+  const late = { ...project, id: 'late', name: 'zeta' };
+  const early = { ...project, id: 'early', name: 'alpha' };
+  assert.deepEqual(
+    orderedProjects(
+      [late, early],
+      [
+        withAt(
+          { ...older, id: 'late-session', workspaceId: 'late' },
+          '2026-10-15T11:00:00.000Z',
+        ),
+        {
+          ...withAt(
+            { ...older, id: 'early-session', workspaceId: 'early' },
+            '2026-10-15T08:00:00.000Z',
+          ),
+          updatedAt: '2026-10-15T12:00:00.000Z',
+        },
+      ],
+    ).map((item) => item.id),
+    ['late', 'early'],
+  );
+  assert.deepEqual(
+    orderedProjects(
+      [
+        { ...project, id: 'b', name: 'zeta' },
+        { ...project, id: 'a', name: 'alpha' },
+      ],
+      [
+        {
+          ...older,
+          id: 's1',
+          workspaceId: 'b',
+          messages: [],
+          updatedAt: 'today',
+        },
+        {
+          ...older,
+          id: 's2',
+          workspaceId: 'a',
+          messages: [],
+          updatedAt: 'today',
+        },
+      ],
+    ).map((item) => item.name),
+    ['alpha', 'zeta'],
+  );
+  const inRecent = recentSessions(sessions).some(
+    (session) => session.id === older.id,
+  );
+  const inProject = sessions.some(
+    (session) =>
+      session.id === older.id &&
+      session.workspaceId === project.id &&
+      sessionHasContent(session),
+  );
+  assert.equal(inRecent, true);
+  assert.equal(inProject, true);
 });
