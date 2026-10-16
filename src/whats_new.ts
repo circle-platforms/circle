@@ -41,9 +41,9 @@ export const WHATS_NEW_ITEMS: WhatsNewItem[] = [
     id: 'keys',
     since: '1.7.4',
     text: {
-      en: 'Some keys moved. The model list is alt+l (L). Every change is in the release notes.',
+      en: 'Some shortcuts changed. Press alt+l (L) to open the model list. Every change is in the release notes.',
       'zh-CN':
-        '部分快捷键已更换。模型列表是 alt+l (L)。每一项都写在发布说明里。',
+        '部分快捷键已调整。按 alt+l (L) 打开模型列表。每一项变更都写在发布说明里。',
     },
   },
   {

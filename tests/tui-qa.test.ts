@@ -186,7 +186,7 @@ test('a partial reply reports the same output on the turn line and in the footer
   assert.equal(footer.includes('cache 0.0%'), false);
   assert.match(footer, /cache N\/A/);
   assert.equal(answer?.cost?.amount, 0.0035);
-  assert.equal(formatCosts([messageCosts([answer!])]), '~$0.0035');
+  assert.equal(formatCosts([messageCosts([answer!])]), '$0.0035~');
   const unpriced = messageCosts([
     answer!,
     {
@@ -198,7 +198,7 @@ test('a partial reply reports the same output on the turn line and in the footer
       cost: { ...answer!.cost!, amount: null, currency: '' },
     },
   ]);
-  assert.equal(formatCosts([unpriced]), '~$0.0035+');
+  assert.equal(formatCosts([unpriced]), '$0.0035~+');
   const estimateOnly = messageCosts([
     {
       ...answer!,

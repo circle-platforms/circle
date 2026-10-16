@@ -86,6 +86,8 @@ export interface Message {
     output: number;
     cost: number | null;
     elapsed: string;
+    /** Stopped-turn estimate. The dollar figure then ends with `~`. */
+    estimated?: boolean;
   };
 }
 export interface Todo {

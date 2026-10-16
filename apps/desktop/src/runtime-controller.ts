@@ -693,6 +693,8 @@ export class RuntimeController {
               input: turns[raw.id]!.input,
               output: turns[raw.id]!.output,
               cost: turns[raw.id]!.cost ?? null,
+              // A stop prices an estimate. The mark follows the amount (`$0.0182~`).
+              ...(raw.interrupted ? { estimated: true } : {}),
               elapsed: formatElapsed(turns[raw.id]!.seconds),
             }
           : raw.usage
@@ -704,6 +706,7 @@ export class RuntimeController {
                   raw.cost?.currency === 'USD'
                     ? (raw.cost.amount ?? null)
                     : null,
+                ...(raw.interrupted ? { estimated: true } : {}),
                 elapsed: gapElapsed(markedAt, node.created),
               }
             : undefined,

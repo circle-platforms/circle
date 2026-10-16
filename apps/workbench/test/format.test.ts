@@ -6,7 +6,9 @@ import { agentActivityText } from '../src/model/activity.ts';
 import {
   completionFailureText,
   completionNoticeText,
+  withoutDuplicateStops,
 } from '../src/model/completion.ts';
+import type { Message } from '../src/model/types.ts';
 import { setLanguage } from '../src/i18n/index.ts';
 import { planVisible } from '../../../src/plan_state.ts';
 import {
@@ -87,6 +89,44 @@ test('only typed completion diagnostics translate; model and provider text stay 
   assert.equal(
     completionNoticeText({ text, completionFailure: 'empty_response' }),
     '✖ 模型返回了空响应',
+  );
+});
+
+test('a stopped reply keeps one interrupt mark, under the stats', () => {
+  const row = (
+    role: Message['role'],
+    text: string,
+    extra: Partial<Message> = {},
+  ): Message => ({
+    id: role + ':' + text,
+    parentId: null,
+    role,
+    text,
+    at: '2026-10-16T00:00:00.000Z',
+    ...extra,
+  });
+  const assistant = row('assistant', 'partial answer', { interrupted: true });
+  const notice = row('notice', '✖ Interrupted', { interrupted: true });
+  const tool = row('tool', '');
+  const shown = withoutDuplicateStops([
+    row('user', 'hello'),
+    assistant,
+    tool,
+    notice,
+    row('user', 'again'),
+    row('notice', '✖ 已中断', { interrupted: true }),
+  ]);
+  assert.deepEqual(
+    shown.map((message) => message.text),
+    ['hello', 'partial answer', '', 'again', '✖ 已中断'],
+  );
+  assert.equal(shown.filter((message) => message.interrupted).length, 2);
+  assert.equal(
+    withoutDuplicateStops([
+      row('assistant', '', { interrupted: true, thinking: 'only' }),
+      notice,
+    ]).some((message) => message.role === 'notice'),
+    true,
   );
 });
 

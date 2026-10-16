@@ -8,6 +8,7 @@ import { Markdown } from './Markdown';
 import { t } from '../i18n';
 import { interruptedLabel } from '../model/completion';
 import { useSessionDisclosure } from '../model/presentation';
+import { formatUsdAmount } from '../../../../src/pricing.ts';
 
 /**
  * A message as Claude shows one: yours in a bubble on the right, Circle's as plain text
@@ -54,9 +55,6 @@ export function MessageView({
           </div>
         ) : null}
       </div>
-      {message.interrupted && (
-        <div className="transcript-notice">{interruptedLabel()}</div>
-      )}
       <div className="message-meta">
         {message.label && <span className="label">{message.label}</span>}
         <time
@@ -82,6 +80,9 @@ export function MessageView({
           </IconButton>
         )}
       </div>
+      {message.interrupted && (
+        <div className="transcript-notice">{interruptedLabel()}</div>
+      )}
     </article>
   );
 }
@@ -91,7 +92,9 @@ const usageText = (usage: NonNullable<Message['usage']>) =>
     usage.elapsed,
     `↑ ${usage.input.toLocaleString()}`,
     `↓ ${usage.output.toLocaleString()}`,
-    usage.cost === null ? t('cost N/A') : '$' + usage.cost.toFixed(4),
+    usage.cost === null || !Number.isFinite(usage.cost)
+      ? t('cost N/A')
+      : formatUsdAmount(usage.cost, usage.estimated === true),
   ]
     .filter(Boolean)
     .join(' · ');

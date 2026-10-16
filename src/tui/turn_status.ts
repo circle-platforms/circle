@@ -76,6 +76,8 @@ export class TurnStatus {
               ? calls.map((call) => call.cost)
               : [undefined];
         // Hosted tool charges can be unknown even when token prices are known.
+        // A receipt is a price, never a credit: a negative amount is not
+        // subtracted, so a stopped turn cannot show a minus before its estimate.
         for (const cost of receipts)
           turn.cost =
             turn.cost === null ||
@@ -84,7 +86,10 @@ export class TurnStatus {
             cost.amount === null ||
             cost.tool_fee_unknown
               ? null
-              : turn.cost + cost.amount;
+              : turn.cost +
+                (typeof cost.amount === 'number' && cost.amount < 0
+                  ? 0
+                  : cost.amount);
       }
     }
     if (subagent) {
