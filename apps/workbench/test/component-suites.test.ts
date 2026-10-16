@@ -90,6 +90,7 @@ test('the component gate preserves prior journeys and includes each native regre
           'fullview-browser-shell-ui.mjs',
           'github-authorization-phase-ui.mjs',
           'terminal-accessibility-ui.mjs',
+          'git-owner-ui.mjs',
         ].includes(name),
     ),
     original,
@@ -136,7 +137,8 @@ test('the component gate preserves prior journeys and includes each native regre
     'fullview-browser-shell-ui.mjs',
     'github-authorization-phase-ui.mjs',
     'terminal-accessibility-ui.mjs',
+    'git-owner-ui.mjs',
   ])
     assert.equal(COMPONENT_SUITES.filter((item) => item === name).length, 1);
-  assert.equal(new Set(COMPONENT_SUITES).size, 39);
+  assert.equal(new Set(COMPONENT_SUITES).size, 40);
 });
