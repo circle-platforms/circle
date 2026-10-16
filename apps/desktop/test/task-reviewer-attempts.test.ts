@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -54,7 +54,7 @@ test('deferred reviewer callbacks update their captured attempt and immutable sc
     dataDir,
     emit() {},
     autoStart: false,
-    createRuntime(record, ctx) {
+    async createRuntime(record, ctx) {
       contexts.push(ctx);
       const artifactPath = join(
         ctx.artifactDirectory,
@@ -62,6 +62,7 @@ test('deferred reviewer callbacks update their captured attempt and immutable sc
       );
       // The task artifact directory exists before invoking this runtime factory.
       writeFileSync(artifactPath, 'actual reviewer evidence\n');
+      const artifact = await ctx.artifact(artifactPath, 'verification');
       const input = {
         sessionId: `review-${record.attempt}`,
         workspace: ctx.worktree,
@@ -70,9 +71,9 @@ test('deferred reviewer callbacks update their captured attempt and immutable sc
         patchSha256: sha(git(ctx.worktree, 'diff', '--binary', 'HEAD')),
         state: 'running' as const,
         artifact: {
-          id: `review-artifact-${record.attempt}`,
-          path: artifactPath,
-          sha256: sha('actual reviewer evidence\n'),
+          id: artifact.id,
+          path: artifact.path,
+          sha256: artifact.sha256,
         },
       };
       reviewerInputs.push(input);
@@ -82,6 +83,7 @@ test('deferred reviewer callbacks update their captured attempt and immutable sc
       const model = new ScriptedModel([
         {
           message: {
+            id: randomUUID(),
             role: 'assistant',
             content: 'actual scripted runtime response',
           },
@@ -126,6 +128,17 @@ test('deferred reviewer callbacks update their captured attempt and immutable sc
     () =>
       contexts[0]!.reviewer!({ ...reviewerInputs[0]!, workspace: scratch(t) }),
     /invalid reviewer provenance/,
+  );
+  assert.throws(
+    () =>
+      contexts[0]!.reviewer!({
+        ...reviewerInputs[0]!,
+        artifact: {
+          ...reviewerInputs[0]!.artifact!,
+          id: 'unregistered-reference',
+        },
+      }),
+    /artifact|provenance/,
   );
   contexts[0]!.reviewer!({
     ...reviewerInputs[0]!,
