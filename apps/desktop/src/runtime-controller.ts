@@ -343,6 +343,29 @@ export class RuntimeController {
       this.active = this.runtime(workspace);
     }
   }
+  /** Load trusted startup integrations without starting a model turn. The worker
+   * publishes its first frame before this work, so a slow MCP connection cannot
+   * make a running core look disconnected. Commands remain serialized with it. */
+  initialize(): Promise<void> {
+    const runtime = this.active;
+    const ready = this.mutation.then(async () => {
+      if (this.closing) return;
+      try {
+        if (
+          !isFolderTrusted(loadSettings(this.home), runtime.options.workspace)
+        )
+          return;
+        await runtime.initialize();
+      } catch (error) {
+        if (!this.closing)
+          this.error = error instanceof Error ? error.message : String(error);
+      } finally {
+        this.publish();
+      }
+    });
+    this.mutation = ready;
+    return ready;
+  }
   private scratchPath(): string {
     return join(this.home, 'workspace');
   }
