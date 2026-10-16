@@ -27,8 +27,26 @@ function fixture(t: test.TestContext) {
   writeFileSync(join(workspace, 'AGENTS.md'), 'NESTED RULES');
   return { base, repo, workspace, home };
 }
-test('prompt callback records exact included project context once and respects repository discovery boundaries', (t) => {
-  const { repo, workspace, home } = fixture(t);
+function assertPromptCatalog(
+  prompt: string,
+  expected: readonly ContextInstruction[],
+) {
+  assert.deepEqual(
+    [
+      ...prompt.matchAll(
+        /<project_instructions path="([^"]+)">\n([\s\S]*?)\n<\/project_instructions>/g,
+      ),
+    ].map(([, path, content]) => ({ path, content })),
+    expected,
+  );
+  for (const excluded of ['OUTSIDE REPOSITORY', 'ROOT RULES', 'PARENT CLAUDE'])
+    assert.ok(
+      !prompt.includes(excluded),
+      `parent context stays out: ${excluded}`,
+    );
+}
+test('prompt callback records exact included project context once and confines discovery to the open folder', (t) => {
+  const { workspace, home } = fixture(t);
   const calls: readonly ContextInstruction[][] = [];
   const captured: ContextInstruction[][] = calls as ContextInstruction[][];
   const prompt = buildSystemPrompt(
@@ -43,16 +61,8 @@ test('prompt callback records exact included project context once and respects r
   assert.deepEqual(captured[0], [
     { path: join(workspace, 'AGENTS.override.md'), content: 'OVERRIDE RULES' },
     { path: join(workspace, 'AGENTS.md'), content: 'NESTED RULES' },
-    { path: join(repo, 'src', 'CLAUDE.md'), content: 'PARENT CLAUDE' },
-    { path: join(repo, 'AGENTS.md'), content: 'ROOT RULES' },
   ]);
-  for (const file of captured[0]!)
-    assert.ok(
-      prompt.includes(
-        `<project_instructions path="${file.path}">\n${file.content}\n</project_instructions>`,
-      ),
-    );
-  assert.ok(!prompt.includes('OUTSIDE REPOSITORY'));
+  assertPromptCatalog(prompt, captured[0]!);
 });
 test('disabled local context reports an empty catalog rather than discovered but unloaded files', (t) => {
   const { workspace, home } = fixture(t);
@@ -93,6 +103,13 @@ test('runtime catalog changes only when prompt is rebuilt and matches the next s
   const { workspace, home } = fixture(t);
   const model = new ScriptedModel([
     { message: { id: 'reply', role: 'assistant', content: 'ok' } as Message },
+    {
+      message: {
+        id: 'after-delete',
+        role: 'assistant',
+        content: 'ok',
+      } as Message,
+    },
   ]);
   const runtime = new AgentRuntime({
     workspace,
@@ -102,7 +119,17 @@ test('runtime catalog changes only when prompt is rebuilt and matches the next s
   });
   cleanup(t, () => runtime.close());
   const initial = runtime.loadedInstructions;
-  assert.equal(initial.length, 4);
+  assert.deepEqual(initial, [
+    {
+      path: join(runtime.options.workspace, 'AGENTS.override.md'),
+      content: 'OVERRIDE RULES',
+    },
+    {
+      path: join(runtime.options.workspace, 'AGENTS.md'),
+      content: 'NESTED RULES',
+    },
+  ]);
+  assertPromptCatalog(runtime.harness.system, initial);
   const leaf = join(workspace, 'AGENTS.md');
   writeFileSync(leaf, 'CHANGED AFTER BUILD');
   const newFile = join(workspace, 'CLAUDE.md');
@@ -125,8 +152,11 @@ test('runtime catalog changes only when prompt is rebuilt and matches the next s
     runtime.loadedInstructions.some((file) => file.path === expectedNewFile),
   );
   await runtime.harness.run('verify instructions');
-  for (const file of runtime.loadedInstructions)
-    assert.ok(model.requests[0]!.system.includes(file.content));
+  assert.equal(model.requests.length, 1);
+  const firstRequest = model.requests[0]!.system;
+  assertPromptCatalog(firstRequest, runtime.loadedInstructions);
+  assert.ok(firstRequest.includes('CHANGED AFTER BUILD'));
+  assert.ok(firstRequest.includes('NEW AFTER BUILD'));
   unlinkSync(newFile);
   assert.ok(
     runtime.loadedInstructions.some((file) => file.path === expectedNewFile),
@@ -136,4 +166,10 @@ test('runtime catalog changes only when prompt is rebuilt and matches the next s
   assert.ok(
     !runtime.loadedInstructions.some((file) => file.path === expectedNewFile),
   );
+  await runtime.harness.run('verify instructions after deletion');
+  assert.equal(model.requests.length, 2);
+  assertPromptCatalog(model.requests[1]!.system, runtime.loadedInstructions);
+  assert.ok(model.requests[1]!.system.includes('CHANGED AFTER BUILD'));
+  assert.ok(!model.requests[1]!.system.includes('NEW AFTER BUILD'));
+  assert.ok(model.requests[0]!.system.includes('NEW AFTER BUILD'));
 });
