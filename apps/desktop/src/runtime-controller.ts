@@ -189,6 +189,22 @@ const FILE_TOOLS = [
   'delete',
   'browser_record',
 ];
+const TASK_STATUS_EVENTS = new Set([
+  'task.queued',
+  'task.preparing',
+  'task.running',
+  'task.waiting',
+  'task.cancelling',
+  'task.succeeded',
+  'task.failed',
+  'task.blocked',
+  'task.cancelled',
+  'task.interrupted',
+  'task.needs_review',
+  'task.session',
+  'task.runtime-state',
+  'task.reviewer',
+]);
 const diffView = (lines: CardLine[]): DiffView | undefined =>
   lines.length
     ? {
@@ -335,6 +351,7 @@ export class RuntimeController {
       worktrees: string;
     }
   >();
+  private taskProjectionPending = false;
   private taskResources = new CollaborationResources();
   private taskVerifiers = new Map<
     string,
@@ -1056,11 +1073,20 @@ export class RuntimeController {
             at: new Date(event.createdAt).toISOString(),
             data: { ...event },
           });
+          if (TASK_STATUS_EVENTS.has(event.type)) this.queueTaskProjection();
         },
       });
       this.taskServices.set(root, service);
     }
     return service;
+  }
+  private queueTaskProjection(): void {
+    if (this.closing || this.taskProjectionPending) return;
+    this.taskProjectionPending = true;
+    queueMicrotask(() => {
+      this.taskProjectionPending = false;
+      if (!this.closing) this.publish();
+    });
   }
   private taskAgentAttempts(ownerSessionId: string): {
     records: readonly TaskRecord[];

@@ -28,7 +28,10 @@ import {
   saveSettings,
 } from '../../../src/settings';
 import { agentState, isAgentActive } from '../../workbench/src/model/activity';
-import type { RuntimeCommandName } from '../src/runtime-protocol';
+import type {
+  RuntimeCommandName,
+  RuntimeUpdate,
+} from '../src/runtime-protocol';
 import { TaskStore, type TaskRecord } from '../src/workspace/task-store';
 
 const assistant = (
@@ -162,7 +165,16 @@ test('the real reviewer is durably identified before its request and owns read-o
     };
   };
   const model = new ScriptedModel(Array(12).fill(handler));
-  const options = { home, workspace, userHome: home, model, emit() {} };
+  const updates: RuntimeUpdate[] = [];
+  const options = {
+    home,
+    workspace,
+    userHome: home,
+    model,
+    emit(update: RuntimeUpdate) {
+      updates.push(update);
+    },
+  };
   let controller = new RuntimeController(options);
   t.after(async () => {
     held.release();
@@ -244,6 +256,25 @@ test('the real reviewer is durably identified before its request and owns read-o
   assert.equal(reviewAgent.workspaceId, workerAgent.workspaceId);
   assert.notEqual(reviewAgent.name, workerAgent.name);
   assert.match(reviewAgent.name, /^review:/);
+  await delay(0);
+  assert.equal(
+    updates
+      .at(-1)!
+      .snapshot.agents.find((agent) => agent.id === reviewer.sessionId)?.task
+      ?.runtimeState,
+    'running',
+    'reviewer identity reaches the original renderer while the model is held',
+  );
+  assert.equal(
+    agentState(
+      updates
+        .at(-1)!
+        .snapshot.agents.find(
+          (agent) => agent.id === durable.runtimeSessionId,
+        )!,
+    ),
+    'completed',
+  );
   const childRead = await service(
     'documents',
     'read',
@@ -292,6 +323,20 @@ test('the real reviewer is durably identified before its request and owns read-o
   assert.equal(finished.runtimeSessionId, durable.runtimeSessionId);
   assert.equal(finished.runtimeState, 'succeeded');
   assert.equal(finished.reviewers![0]!.state, 'succeeded');
+  await delay(0);
+  const emittedReviewer = updates
+    .at(-1)!
+    .snapshot.agents.find((agent) => agent.id === reviewer.sessionId)!;
+  assert.ok(
+    emittedReviewer,
+    'completion projects the actual reviewer to the original renderer',
+  );
+  assert.equal(
+    emittedReviewer.task!.state,
+    'succeeded',
+    'completion must reach the existing renderer snapshot without a new user command',
+  );
+  assert.equal(agentState(emittedReviewer), 'completed');
   const artifact = finished.reviewers![0]!.artifact!;
   const bytes = await readFile(artifact.path);
   assert.equal(
