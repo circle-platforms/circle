@@ -565,7 +565,17 @@ pre {
   gap: 8px;
 }
 .hub-actions {
-  margin: 18px 0 28px;
+  margin: 18px 0 0;
+}
+.hub-page > .extension-list,
+.hub-page > .form-stack,
+.hub-page > .hub-log-block,
+.hub-page > .panel-note {
+  margin-top: 28px;
+}
+.hub-page .form-stack > .button,
+.hub-page .form-stack > .inline-actions {
+  align-self: flex-start;
 }
 .hub-log {
   margin: 8px 0 0;
@@ -1503,6 +1513,9 @@ pre {
   overflow-wrap: anywhere;
   flex: 1;
   color: var(--secondary);
+}
+.facts-note dd {
+  flex: none;
 }
 .context-source {
   border: 1px solid var(--border);

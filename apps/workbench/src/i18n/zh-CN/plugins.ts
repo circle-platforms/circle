@@ -38,6 +38,8 @@ export const plugins: Record<string, string> = {
   state: '状态',
   following: '正在跟随',
   'nothing followed': '没有',
+  'no task is being followed': '暂无跟踪的任务',
+  'refresh status': '刷新状态',
   refresh: '刷新',
   'Work handed to a hub from here. The server keeps each task; closing Circle does not stop it.':
     '从这里交给枢纽的工作。服务器保存每个任务；关闭 Circle 不会停止它。',

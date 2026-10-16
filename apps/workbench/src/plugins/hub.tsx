@@ -233,6 +233,10 @@ export function hubRecentItems(
     });
   return items;
 }
+/** Escape closes the rejection form. */
+export function rejectDismissed(key: string): boolean {
+  return key === 'Escape';
+}
 /** Load the inbox once the page is signed in and has not read it yet. */
 export function inboxNeedsLoad(input: {
   live: boolean;
@@ -351,11 +355,14 @@ export function HubPage({
     });
   return (
     <Page
+      className="hub-page"
       title={t('hub')}
       description={t(
         'Work handed to a hub from here. The server keeps each task; closing Circle does not stop it.',
       )}
-      action={<Button onClick={() => run('tasks')}>{t('refresh')}</Button>}
+      action={
+        <Button onClick={() => run('tasks')}>{t('refresh status')}</Button>
+      }
     >
       {view ? (
         <Facts
@@ -366,10 +373,11 @@ export function HubPage({
             [t('state')]: (
               <Status value={view.signedIn ? 'signed in' : 'signed out'} />
             ),
-            [t('following')]: view.following.length
-              ? view.following.join(', ')
-              : t('nothing followed'),
+            ...(view.following.length
+              ? { [t('following')]: view.following.join(', ') }
+              : {}),
           }}
+          notes={view.following.length ? [] : [t('no task is being followed')]}
         />
       ) : (
         <EmptyState title={t('not signed in yet')} />
@@ -531,6 +539,11 @@ export function HubPage({
                           setError('');
                           run(rejectArgs(item, reason));
                         }}
+                        onKeyDown={(event) => {
+                          if (!rejectDismissed(event.key)) return;
+                          event.preventDefault();
+                          setRejecting(undefined);
+                        }}
                       >
                         <label>
                           {t('rejection reason')}
@@ -546,7 +559,15 @@ export function HubPage({
                             }
                           />
                         </label>
-                        <Button type="submit">{t('reject')}</Button>
+                        <div className="inline-actions">
+                          <Button type="submit">{t('reject')}</Button>
+                          <Button
+                            type="button"
+                            onClick={() => setRejecting(undefined)}
+                          >
+                            {t('cancel')}
+                          </Button>
+                        </div>
                       </form>
                     ) : null}
                   </article>
@@ -578,7 +599,9 @@ export function HubPage({
                 onChange={(event) => setQuery(event.target.value)}
               />
             </label>
-            <Button type="submit">{t('search')}</Button>
+            <div className="inline-actions">
+              <Button type="submit">{t('search')}</Button>
+            </div>
             {view.knowledge?.items.length ? (
               <div className="extension-list">
                 {view.knowledge.items.map((item) => (

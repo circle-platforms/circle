@@ -71,13 +71,24 @@ export function SearchInput({
     </div>
   );
 }
-export function Facts({ values }: { values: Record<string, ReactNode> }) {
+export function Facts({
+  values,
+  notes = [],
+}: {
+  values: Record<string, ReactNode>;
+  notes?: readonly string[];
+}) {
   return (
     <dl className="facts">
       {Object.entries(values).map(([key, value]) => (
         <div key={key}>
           <dt>{key}</dt>
           <dd>{value}</dd>
+        </div>
+      ))}
+      {notes.map((note) => (
+        <div key={note} className="facts-note">
+          <dd>{note}</dd>
         </div>
       ))}
     </dl>

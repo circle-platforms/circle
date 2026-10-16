@@ -13,6 +13,7 @@ import {
   hubSignInError,
   inboxIds,
   inboxNeedsLoad,
+  rejectDismissed,
 } from '../src/plugins/hub.tsx';
 import { shellPageTitle } from '../src/plugins/labels.ts';
 
@@ -235,6 +236,8 @@ test('the hub page says an approval in ordinary words and drops a stale sign-out
       inboxNeedsLoad({ live: false, signedIn: true, loaded: false }),
       false,
     );
+    assert.equal(rejectDismissed('Escape'), true);
+    assert.equal(rejectDismissed('Enter'), false);
     const html = draw(
       hub({
         url: 'http://hub.example:9',
@@ -262,6 +265,10 @@ test('the hub page says an approval in ordinary words and drops a stale sign-out
       }),
       box,
     );
+    assert.match(html, /暂无跟踪的任务/);
+    assert.equal(html.includes('正在跟随'), false);
+    assert.match(html, /刷新状态/);
+    assert.match(html, /hub-page/);
     assert.match(html, /这项改动还需要别人批准/);
     assert.match(html, /打开收件箱/);
     assert.match(html, /class="hub-log"/);
