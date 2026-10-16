@@ -19,6 +19,8 @@ export const COMPONENT_SUITES = Object.freeze([
   'native-terminal-search-ui.mjs',
   'original-shell-ui.mjs',
   'debug-panel-embedded.mjs',
+  'original-browser-shell-ui.mjs',
+  'native-terminal-fit-ui.mjs',
 ]);
 
 /** Explicit suites run serially; a failed suite prevents later execution. */
@@ -69,6 +71,8 @@ export async function runComponentSuites({
       CIRCLE_TERMINAL_SEARCH_EVIDENCE: join(directory, 'terminal-search'),
       CIRCLE_UI_EVIDENCE: join(directory, 'original-shell'),
       CIRCLE_DEBUG_EMBEDDED_EVIDENCE: join(directory, 'debug-embedded'),
+      CIRCLE_BROWSER_SHELL_EVIDENCE: join(directory, 'browser-shell'),
+      CIRCLE_TERMINAL_FIT_EVIDENCE: join(directory, 'terminal-fit'),
     };
     const child = spawn(process.execPath, [...nodeArguments, file], {
       cwd: root,

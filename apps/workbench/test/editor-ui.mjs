@@ -374,6 +374,18 @@ try {
   await page.locator('.view-lines').first().click();
   await page.keyboard.press(`${modifier}+End`);
   await page.keyboard.type('// language undo');
+  // EditContext input and React's onChange projection settle asynchronously.
+  // Capture the already-confirmed dirty content, never a pre-input output.
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector('output[aria-label="content"]')
+        ?.textContent.includes('// language undo') &&
+      document
+        .querySelector('.native-code-editor .view-lines')
+        ?.textContent.replaceAll('\u00a0', ' ')
+        .includes('// language undo'),
+  );
   await page.keyboard.press('Shift+ArrowLeft');
   await page.keyboard.press('Shift+ArrowLeft');
   await page

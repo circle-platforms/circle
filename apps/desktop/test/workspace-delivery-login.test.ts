@@ -1,4 +1,6 @@
-import { execFile } from 'node:child_process';
+import fsPromises from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -113,3 +115,193 @@ test('cancel removes temporary credentials and terminates only login helper', as
   await assert.rejects(access(dir));
   await login.dispose();
 });
+
+test('explicit cancellation shares one real directory cleanup with the exit callback', async (t) => {
+  const child = fake();
+  let directory = '';
+  const login = new DeliveryLogin(
+    (_file, _args, options) => {
+      directory = (options.env as Record<string, string>).GH_CONFIG_DIR;
+      return child.pty;
+    },
+    'unused',
+    tmpdir(),
+  );
+  const state = await login.start();
+  const originalRm = fsPromises.rm.bind(fsPromises);
+  let release!: () => void, started!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const entered = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let cleaning = false,
+    calls = 0;
+  const interception = t.mock.method(
+    fsPromises,
+    'rm',
+    async (
+      target: Parameters<typeof fsPromises.rm>[0],
+      options: Parameters<typeof fsPromises.rm>[1],
+    ) => {
+      if (String(target) !== directory) return originalRm(target, options);
+      calls++;
+      if (cleaning)
+        throw Object.assign(Error('overlapping Windows directory cleanup'), {
+          code: 'EPERM',
+        });
+      cleaning = true;
+      started();
+      await gate;
+      return originalRm(target, options);
+    },
+  );
+  syncBuiltinESMExports();
+  try {
+    let settled = false;
+    const cancelling = login.cancel(state.id).then(
+      (value) => {
+        settled = true;
+        return { value, error: undefined };
+      },
+      (error) => {
+        settled = true;
+        return { value: undefined, error };
+      },
+    );
+    await entered;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      settled,
+      false,
+      'cancel waits for actual temporary directory removal',
+    );
+    release();
+    const result = await cancelling;
+    assert.equal(result.error, undefined);
+    assert.equal(result.value?.status, 'cancelled');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(login.poll(state.id).status, 'cancelled');
+    assert.equal(
+      calls,
+      1,
+      'exit and cancel must not race separate filesystem removals',
+    );
+    await assert.rejects(access(directory));
+  } finally {
+    release();
+    interception.mock.restore();
+    syncBuiltinESMExports();
+    await login.dispose();
+    await originalRm(directory, { recursive: true, force: true });
+  }
+});
+
+test('two cancellation callers wait for the delayed exit and share cleanup', async () => {
+  const child = fake();
+  let kills = 0,
+    directory = '';
+  child.pty.kill = () => {
+    kills++;
+  };
+  const login = new DeliveryLogin(
+    (_file, _args, options) => {
+      directory = (options.env as Record<string, string>).GH_CONFIG_DIR;
+      return child.pty;
+    },
+    'unused',
+    tmpdir(),
+  );
+  try {
+    const state = await login.start();
+    child.emit('First copy your one-time code: ABCD-1234');
+    assert.equal(login.poll(state.id).status, 'waiting');
+    let completed = 0;
+    const first = login.cancel(state.id).then((value) => {
+      completed++;
+      return value;
+    });
+    const second = login.cancel(state.id).then((value) => {
+      completed++;
+      return value;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(kills, 1);
+    assert.equal(completed, 0);
+    await access(directory);
+    child.finish();
+    const states = await Promise.all([first, second]);
+    assert.ok(states.every((value) => value.status === 'cancelled'));
+    await assert.rejects(access(directory));
+  } finally {
+    child.finish();
+    await login.dispose();
+  }
+});
+
+for (const phase of ['before-code', 'waiting-code']) {
+  test(`cancel ${phase} waits for a real local helper PID and removes its config`, async () => {
+    const root = await mkdtemp(
+      path.join(tmpdir(), 'circle-login-real-cancel-'),
+    );
+    let pid: number | undefined,
+      directory = '';
+    const login = new DeliveryLogin(
+      (_file, args, options) => {
+        assert.ok(args.includes('--web'));
+        directory = (options.env as Record<string, string>).GH_CONFIG_DIR;
+        const child = spawn(
+          process.execPath,
+          [
+            '-e',
+            "setTimeout(()=>process.stdout.write('First copy your one-time code: ABCD-1234\\nPress Enter to open browser\\n'),50);setInterval(()=>{},1000)",
+          ],
+          {
+            cwd: root,
+            env: options.env as NodeJS.ProcessEnv,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          },
+        );
+        pid = child.pid;
+        return {
+          onData: (cb) => child.stdout.on('data', (data) => cb(String(data))),
+          onExit: (cb) =>
+            child.once('close', (code) => cb({ exitCode: code ?? 1 })),
+          write: (value) => {
+            child.stdin.write(value);
+          },
+          kill: () => {
+            child.kill();
+          },
+        };
+      },
+      'synthetic-gh',
+      root,
+      undefined,
+      async () => {
+        throw Error('cancelled helper must never request a credential');
+      },
+    );
+    try {
+      const state = await login.start();
+      assert.ok(pid);
+      assert.doesNotThrow(() => process.kill(pid!, 0));
+      if (phase === 'waiting-code') {
+        for (
+          let n = 0;
+          n < 100 && login.poll(state.id).status !== 'waiting';
+          n++
+        )
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        assert.equal(login.poll(state.id).status, 'waiting');
+      }
+      assert.equal((await login.cancel(state.id)).status, 'cancelled');
+      assert.throws(() => process.kill(pid!, 0));
+      await assert.rejects(access(directory));
+    } finally {
+      await login.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
