@@ -1,3 +1,4 @@
+import { clickReadyDevToolsResume } from './helpers/devtools-resume-control.mjs';
 // Serialized native-driver regression, synthetic loopback page and isolated profile.
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -196,6 +197,12 @@ try {
   const gapReference = result.state.debugger.stackFrames[0].scopes.find(
     (scope) => scope.name === 'local',
   ).variablesReference;
+  await app.evaluate(() => {
+    globalThis.fixture.devToolsOpened = false;
+    globalThis.fixture.guest.once('devtools-opened', () => {
+      globalThis.fixture.devToolsOpened = true;
+    });
+  });
   await app.evaluate(() =>
     globalThis.fixture.browser.diagnostics('test', { action: 'devtools' }),
   );
@@ -203,23 +210,47 @@ try {
     globalThis.fixture.browser.diagnostics('test', { action: 'read' }),
   );
   assert.equal(result.state.owner, 'devtools');
-  // The new DevTools client may resume on initialization. Otherwise use its
-  // real frontend shortcut, never a second CDP connection to the guest.
-  await new Promise((resolve) => setTimeout(resolve, 250));
-  if (await app.evaluate(() => globalThis.fixture.gapResult === undefined)) {
-    await app.evaluate(() => {
-      const guest = globalThis.fixture.guest;
-      const frontend = guest.devToolsWebContents;
-      if (!frontend) throw Error('owned DevTools frontend missing');
-      frontend.focus();
-      frontend.sendInputEvent({ type: 'keyDown', keyCode: 'F8' });
-      frontend.sendInputEvent({ type: 'keyUp', keyCode: 'F8' });
-    });
-  }
-  for (let i = 0; i < 50; i++) {
+  // Keep the original 250ms + 50×50ms budget, but wait for actual frontend
+  // readiness and its visible Resume control. Input sent during load can vanish.
+  const resumeDeadline = Date.now() + 2750;
+  let frontendObservation;
+  let clickedResume = false;
+  while (Date.now() < resumeDeadline) {
     if (await app.evaluate(() => globalThis.fixture.gapResult === 4)) break;
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    if (!clickedResume) {
+      frontendObservation = await app.evaluate(async (_, expression) => {
+        const fixture = globalThis.fixture;
+        const frontend = fixture.guest.devToolsWebContents;
+        if (
+          !fixture.devToolsOpened ||
+          !frontend ||
+          frontend.isDestroyed() ||
+          frontend.isLoadingMainFrame()
+        )
+          return {
+            clicked: false,
+            opened: fixture.devToolsOpened,
+            loading: frontend?.isLoadingMainFrame(),
+          };
+        return frontend.executeJavaScript(expression);
+      }, `(${clickReadyDevToolsResume.toString()})()`);
+      clickedResume = frontendObservation.clicked === true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
+  if (output)
+    await writeFile(
+      join(output, 'devtools-resume-observation.json'),
+      JSON.stringify(
+        {
+          clickedResume,
+          frontendObservation,
+          actualResult: await app.evaluate(() => globalThis.fixture.gapResult),
+        },
+        null,
+        2,
+      ),
+    );
   assert.equal(
     await app.evaluate(() => globalThis.fixture.gapResult),
     4,
