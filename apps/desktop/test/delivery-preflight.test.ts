@@ -58,6 +58,18 @@ test('dirty candidate publish remains a safe actionable rejection through the re
           error.code === 'DELIVERY_WORKSPACE_DIRTY' &&
           /remaining workspace changes.*nothing was pushed/.test(error.message),
       );
+    await assert.rejects(
+      delivery.publishPushed({
+        revision: before.revision,
+        head: before.head,
+        title: 'Fixture',
+        body: 'Fixture',
+      }),
+      (error: unknown) =>
+        error instanceof Error &&
+        !(error instanceof DeliveryPreflightError) &&
+        !error.message.includes('nothing was pushed'),
+    );
     assert.equal(attempts, 1);
     assert.equal(externalCalls, 0);
     assert.equal(ledger.list({ sessionId: 'session' })[0]?.state, 'rejected');
