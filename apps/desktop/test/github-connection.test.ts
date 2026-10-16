@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, mkdir, rm, writeFile, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { NativeGitHubConnection } from '../src/workspace/github-connection.ts';
 import { githubWorkspaceBackend } from '../src/workspace/github-backend.ts';
@@ -269,7 +270,9 @@ test('one explicit local connection verifies actual HTTP identity and feeds real
       settings,
       model,
       githubConnection: backend,
-      bundledExtensions: path.resolve('src/extensions'),
+      bundledExtensions: fileURLToPath(
+        new URL('../../../src/extensions', import.meta.url),
+      ),
     });
     runtime.policy.setYolo(runtime.session.id, true);
     await runtime.harness.run('inspect connected GitHub capabilities');
@@ -809,7 +812,9 @@ test('account connects without a repository and explicit repository configuratio
       settings,
       model,
       githubConnection: backend,
-      bundledExtensions: path.resolve('src/extensions'),
+      bundledExtensions: fileURLToPath(
+        new URL('../../../src/extensions', import.meta.url),
+      ),
     });
     await runtime.initialize();
     await backend.call('connect', { storage: 'session', repositories: [] });
@@ -917,7 +922,9 @@ test('disable during pending extension registration cannot publish late GitHub t
       settings,
       model,
       githubConnection: backend,
-      bundledExtensions: path.resolve('src/extensions'),
+      bundledExtensions: fileURLToPath(
+        new URL('../../../src/extensions', import.meta.url),
+      ),
     });
     const loading = runtime.initialize();
     await until(async () => (entered ? true : false));

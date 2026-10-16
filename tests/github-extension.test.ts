@@ -10,6 +10,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ExtensionHost } from '../src/extensions.js';
 import type {
   GitHubConnectionBackend,
@@ -97,7 +98,7 @@ test('native GitHub capability is withheld from project shadow and symlinked bun
       home,
       workspace,
       trusted: true,
-      bundledRoot: path.resolve('src/extensions'),
+      bundledRoot: fileURLToPath(new URL('../src/extensions', import.meta.url)),
       settings: { github: { enabled: true } },
     });
     hosts.push(cli);

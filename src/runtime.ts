@@ -744,7 +744,6 @@ export class AgentRuntime {
       },
       beforeTurn: () => this.requireTurnConnection(),
       beforeStep: () => {
-        this.refreshIntegrationTools();
         this.userShells.flush();
         const messages = this.jobs.takeNotices(this.harness.sessionId);
         if (messages.length)
