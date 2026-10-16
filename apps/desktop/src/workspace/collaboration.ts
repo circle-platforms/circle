@@ -5,6 +5,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -21,6 +22,7 @@ import {
   type TaskResource,
   type TaskSpec,
   type TaskState,
+  type TaskReviewerUpdate,
 } from './task-store.js';
 import { resolveTaskBaseline, TaskWorktrees } from './task-worktrees.js';
 export type {
@@ -53,6 +55,8 @@ export interface TaskExecutionContext {
   worktree: string;
   artifactDirectory: string;
   bindRuntimeSession(sessionId: string): void;
+  runtimeState?(state: TaskState): void;
+  reviewer?(record: TaskReviewerUpdate): void;
   /** Enforce this in the injected runtime's permissions; Git worktrees are not security sandboxes. */
   access: TaskSpec['access'];
   dependencies: { task: TaskRecord; artifacts: TaskArtifact[] }[];
@@ -314,7 +318,8 @@ export class CollaborationScheduler {
     this.pools = this.resources.pools;
     this.unsubscribeResources = this.resources.subscribe(() => this.schedule());
     this.store.transaction(() => {
-      for (const task of this.store.list())
+      for (const task of this.store.list()) {
+        let changed = false;
         if (
           ['preparing', 'running', 'waiting', 'cancelling'].includes(task.state)
         ) {
@@ -322,9 +327,35 @@ export class CollaborationScheduler {
           task.reason =
             'previous process ended; review effects before retrying';
           task.updatedAt = Date.now();
-          this.store.put(task);
-          this.store.event('task.interrupted', { reason: task.reason }, task);
+          changed = true;
         }
+        if (
+          task.runtimeState &&
+          ['running', 'waiting', 'cancelling'].includes(task.runtimeState)
+        ) {
+          task.runtimeState = 'interrupted';
+          changed = true;
+        }
+        for (const reviewer of task.reviewers ?? [])
+          if (['running', 'waiting', 'cancelling'].includes(reviewer.state)) {
+            reviewer.state = 'interrupted';
+            reviewer.reason =
+              'previous process ended; review effects before retrying';
+            reviewer.updatedAt = Date.now();
+            changed = true;
+          }
+        if (changed) {
+          this.store.put(task);
+          this.store.event(
+            'task.interrupted',
+            {
+              reason:
+                task.reason ?? 'previous runtime ended; review before retrying',
+            },
+            task,
+          );
+        }
+      }
       for (const operation of this.store.operations())
         if (operation.state === 'running')
           this.store.putOperation({ ...operation, state: 'needs_review' });
@@ -435,6 +466,26 @@ export class CollaborationScheduler {
     });
     this.publish(event);
     return task;
+  }
+  private updateAttempt(
+    id: string,
+    attempt: number,
+    mutate: (record: TaskRecord) => void,
+    type: string,
+    payload: Json,
+  ): void {
+    const task = this.store
+      .attempts(id)
+      .find((record) => record.attempt === attempt);
+    if (!task) throw Error('task attempt is missing');
+    mutate(task);
+    task.updatedAt = Date.now();
+    const event = this.store.transaction(() => {
+      if (this.store.get(id)?.attempt === attempt) this.store.put(task);
+      else this.store.putHistoricalAttempt(task);
+      return this.store.event(type, payload, task);
+    });
+    this.publish(event);
   }
   async enqueue(
     specs: TaskSpec[],
@@ -660,14 +711,108 @@ export class CollaborationScheduler {
         bindRuntimeSession: (sessionId) => {
           if (!sessionId.trim())
             throw new Error('runtime session id is required');
-          const current = this.store.get(id)!;
-          this.update(id, current.state, { runtimeSessionId: sessionId });
-          this.event(
+          this.updateAttempt(
+            id,
+            task.attempt,
+            (record) => {
+              if (
+                record.runtimeSessionId &&
+                record.runtimeSessionId !== sessionId
+              )
+                throw Error('worker runtime session identity changed');
+              record.runtimeSessionId = sessionId;
+              record.runtimeState = 'running';
+            },
             'task.session',
             { runtimeSessionId: sessionId },
-            this.store.get(id),
           );
         },
+        runtimeState: (state) =>
+          this.updateAttempt(
+            id,
+            task.attempt,
+            (record) => {
+              record.runtimeState = state;
+            },
+            'task.runtime-state',
+            { state },
+          ),
+        reviewer: (input) =>
+          this.updateAttempt(
+            id,
+            task.attempt,
+            (record) => {
+              const normalized = {
+                ...input,
+                workspace: realpathSync.native(input.workspace),
+              };
+              if (
+                !input.sessionId.trim() ||
+                input.sessionId === record.runtimeSessionId ||
+                input.sessionId === record.spec.sessionId ||
+                !record.worktree ||
+                realpathSync.native(input.workspace) !==
+                  realpathSync.native(record.worktree) ||
+                input.baseline !== record.spec.baseline ||
+                !/^[0-9a-f]{40,64}$/.test(input.head) ||
+                !/^[0-9a-f]{64}$/.test(input.patchSha256)
+              )
+                throw Error('invalid reviewer provenance');
+              if (
+                input.artifact &&
+                !this.store
+                  .artifacts(id)
+                  .some(
+                    (artifact) =>
+                      artifact.id === input.artifact!.id &&
+                      artifact.attempt === task.attempt &&
+                      artifact.baseline === record.spec.baseline &&
+                      artifact.path === input.artifact!.path &&
+                      artifact.sha256 === input.artifact!.sha256,
+                  )
+              )
+                throw Error(
+                  'reviewer artifact is not registered to this attempt',
+                );
+              const reviewers = (record.reviewers ??= []);
+              const previous = reviewers.find(
+                (reviewer) => reviewer.sessionId === input.sessionId,
+              );
+              if (
+                previous &&
+                ['workspace', 'baseline', 'head', 'patchSha256'].some(
+                  (key) =>
+                    previous[key as keyof typeof previous] !==
+                    normalized[key as keyof typeof normalized],
+                )
+              )
+                throw Error('reviewer provenance changed');
+              if (
+                previous?.artifact &&
+                input.artifact &&
+                ['id', 'path', 'sha256'].some(
+                  (key) =>
+                    previous.artifact![
+                      key as keyof typeof previous.artifact
+                    ] !== input.artifact![key as keyof typeof input.artifact],
+                )
+              )
+                throw Error('reviewer artifact identity changed');
+              const now = Date.now();
+              const next = {
+                ...normalized,
+                ...(previous?.artifact && !input.artifact
+                  ? { artifact: previous.artifact }
+                  : {}),
+                createdAt: previous?.createdAt ?? now,
+                updatedAt: now,
+              };
+              if (previous) reviewers[reviewers.indexOf(previous)] = next;
+              else reviewers.push(next);
+            },
+            'task.reviewer',
+            { sessionId: input.sessionId, state: input.state },
+          ),
         access: task.spec.access,
         dependencies: task.spec.dependencies.map((dependency) => ({
           task: this.store.get(dependency)!,
@@ -676,11 +821,14 @@ export class CollaborationScheduler {
         emit: (type, payload) => this.event(type, payload, this.store.get(id)),
         waiting: (reason) => {
           if (!controller.signal.aborted)
-            this.update(id, 'waiting', { reason });
+            this.update(id, 'waiting', { reason, runtimeState: 'waiting' });
         },
         running: () => {
           if (!controller.signal.aborted)
-            this.update(id, 'running', { reason: undefined });
+            this.update(id, 'running', {
+              reason: undefined,
+              runtimeState: 'running',
+            });
         },
         withResource: (name, action) =>
           track(this.resources.withResource(name, action, controller.signal)),

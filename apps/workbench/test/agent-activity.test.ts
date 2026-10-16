@@ -96,3 +96,28 @@ test('unreconciled history keeps its ledger state but never reports an active ag
   assert.equal(isAgentActive(agent), false);
   assert.equal(agentActivityText(agent), 'needs review');
 });
+
+test('worker execution can finish while acceptance and an independent reviewer remain active', () => {
+  const worker = taskAgent('running');
+  worker.task!.runtimeState = 'succeeded';
+  worker.task!.role = 'worker';
+  assert.equal(agentState(worker), 'completed');
+  assert.equal(agentActivityText(worker), 'done');
+  assert.equal(isAgentActive(worker), false);
+  assert.equal(worker.task!.state, 'running');
+  const reviewer = taskAgent('running');
+  reviewer.task!.runtimeState = 'running';
+  reviewer.task!.role = 'reviewer';
+  assert.equal(agentState(reviewer), 'running');
+  assert.equal(isAgentActive(reviewer), true);
+  worker.task!.state = 'needs_review';
+  assert.equal(agentState(worker), 'completed');
+  assert.equal(
+    worker.task!.state,
+    'needs_review',
+    'completion never changes the acceptance result',
+  );
+  worker.task!.runtimeState = 'needs_review';
+  assert.equal(agentState(worker), 'needs_review');
+  assert.notEqual(agentActivityText(worker), 'done');
+});

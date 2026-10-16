@@ -179,8 +179,12 @@ test('native delegation reuses real agent sessions, retains child approval owner
   );
   await wait(
     () =>
-      controller.snapshot().agents.filter((agent) => agent.sessionId === parent)
-        .length === 2,
+      controller
+        .snapshot()
+        .agents.filter(
+          (agent) =>
+            agent.sessionId === parent && agent.task?.role !== 'reviewer',
+        ).length === 2,
     'two real child agents',
   );
   await wait(
@@ -192,9 +196,10 @@ test('native delegation reuses real agent sessions, retains child approval owner
         ),
     'child write approval',
   );
-  const agents = controller
-      .snapshot()
-      .agents.filter((agent) => agent.sessionId === parent),
+  const initialSnapshot = controller.snapshot();
+  const agents = initialSnapshot.agents.filter(
+      (agent) => agent.sessionId === parent && agent.task?.role !== 'reviewer',
+    ),
     writer = agents.find((agent) => agent.task?.id === 'writer')!,
     reader = agents.find((agent) => agent.task?.id === 'reader')!;
   for (const agent of agents) {
@@ -207,16 +212,22 @@ test('native delegation reuses real agent sessions, retains child approval owner
   }
   assert.equal(writer.readOnly, false);
   assert.equal(reader.readOnly, true);
-  const parentSession = controller
-    .snapshot()
-    .sessions.find((session) => session.id === parent)!;
+  const parentSession = initialSnapshot.sessions.find(
+    (session) => session.id === parent,
+  )!;
   assert.deepEqual(
     new Set(
       parentSession.messages.find(
         (message) => message.tool?.name === 'native_tasks_enqueue',
       )!.tool!.agentIds,
     ),
-    new Set([writer.id, reader.id]),
+    new Set(
+      initialSnapshot.agents
+        .filter(
+          (agent) => agent.sessionId === parent && agent.task?.attempt === 1,
+        )
+        .map((agent) => agent.id),
+    ),
   );
   const pending = controller
     .snapshot()
@@ -360,7 +371,14 @@ test('native delegation reuses real agent sessions, retains child approval owner
     .messages.find((message) => message.tool?.name === 'native_tasks_enqueue')!;
   assert.deepEqual(
     new Set(originalCard.tool!.agentIds),
-    new Set([writer.id, reader.id]),
+    new Set(
+      controller
+        .snapshot()
+        .agents.filter(
+          (agent) => agent.sessionId === parent && agent.task?.attempt === 1,
+        )
+        .map((agent) => agent.id),
+    ),
     'original scheduling card retains its original attempts',
   );
   assert.equal(
@@ -476,7 +494,7 @@ test('native delegation reuses real agent sessions, retains child approval owner
   // must not reconcile it, declare it running, or replay its unknown command.
   let ledger = new TaskStore(ledgerPath);
   const unfinished = ledger.get('writer')!;
-  ledger.put({ ...unfinished, state: 'running' });
+  ledger.put({ ...unfinished, state: 'running', runtimeState: 'running' });
   ledger.putOperation({
     id: 'unknown-side-effect',
     kind: 'task',

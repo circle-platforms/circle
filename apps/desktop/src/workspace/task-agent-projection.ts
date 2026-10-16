@@ -128,12 +128,19 @@ export function taskToolAgentIds(
       (task) =>
         task.spec.id === selected.id && task.attempt === selected.attempt,
     );
-    return task?.runtimeSessionId ? [task.runtimeSessionId] : [];
+    return task
+      ? [
+          task.runtimeSessionId,
+          ...(task.reviewers ?? []).map((reviewer) => reviewer.sessionId),
+        ].filter((id): id is string => !!id)
+      : [];
   });
   return ids.length ? [...new Set(ids)] : undefined;
 }
 
-export const taskNeedsReconciliation = (task: TaskRecord): boolean =>
+export const taskNeedsReconciliation = (
+  task: Pick<TaskRecord, 'state'>,
+): boolean =>
   ['queued', 'preparing', 'running', 'waiting', 'cancelling'].includes(
     task.state,
   );

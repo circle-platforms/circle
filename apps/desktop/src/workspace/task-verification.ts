@@ -31,6 +31,7 @@ import { shellEnvironment } from '../../../../src/sandbox.ts';
 import { commandTokens } from '../../../../src/approvals.ts';
 import type { Message } from '../../../../src/types.ts';
 import type { TaskRecord } from './collaboration.ts';
+import type { TaskReviewerUpdate } from './task-store.ts';
 import { WorkspaceDocuments } from './documents.ts';
 import type {
   TaskVerificationCheck,
@@ -662,40 +663,74 @@ async function review(
   const runtime = await options.createReviewer(task, context);
   const originalIds = new Set([
     task.spec.sessionId,
+    context.workerSessionId,
     ...context.events.map((event) => event.run_id),
   ]);
-  if (
-    originalIds.has(runtime.session.id) ||
-    runtime.busy ||
-    runtime.harness.messages.some((message) => message.role !== 'system') ||
-    runtime.jobs.list().some((job) => job.status === 'running')
-  )
-    throw Error('verification requires a fresh independent reviewer session');
-  if ((await realpath(runtime.options.workspace)) !== reviewRoot) {
-    await runtime.close();
-    throw Error('reviewer must inspect this task workspace');
-  }
-  runtime.options.headless = true;
-  runtime.options.integrations = false;
-  runtime.harness.options.planFileMutation = () => false;
-  const originalStep = runtime.harness.options.beforeStep;
-  const restrict = () => {
-    runtime.harness.planMode = true;
-    runtime.harness.tools = runtime.harness.tools.filter(
-      (tool) => READ_TOOLS.has(tool.name) && tool.effect === 'read',
-    );
+  const provenance = {
+    sessionId: runtime.session.id,
+    workspace: reviewRoot,
+    baseline: context.changes.baseline,
+    head: context.changes.head,
+    patchSha256: context.changes.sha256,
   };
-  runtime.harness.options.beforeStep = () => {
-    originalStep?.();
-    restrict();
+  let bound = false,
+    closed = false;
+  let outcome: TaskReviewerUpdate['state'] = 'failed';
+  let reason: string | undefined;
+  let artifactBinding: TaskReviewerUpdate['artifact'];
+  const report = (state: TaskReviewerUpdate['state']) =>
+    context.reviewer?.({
+      ...provenance,
+      state,
+      reason,
+      ...(artifactBinding ? { artifact: artifactBinding } : {}),
+    });
+  const close = async () => {
+    if (closed) return;
+    try {
+      await runtime.close();
+    } catch (error) {
+      reason = `reviewer cleanup failed: ${error instanceof Error ? error.message : String(error)}`;
+      if (bound) report('cancelling');
+      throw error;
+    }
+    closed = true;
+    if (bound) report(context.signal.aborted ? 'cancelled' : outcome);
   };
-  restrict();
+  context.onCleanup?.(close);
   const abort = () => {
     void runtime.cancel().catch(() => {});
   };
-  context.signal.addEventListener('abort', abort, { once: true });
   try {
+    if (
+      originalIds.has(runtime.session.id) ||
+      runtime.busy ||
+      runtime.harness.messages.some((message) => message.role !== 'system') ||
+      runtime.jobs.list().some((job) => job.status === 'running')
+    )
+      throw Error('verification requires a fresh independent reviewer session');
+    if ((await realpath(runtime.options.workspace)) !== reviewRoot) {
+      throw Error('reviewer must inspect this task workspace');
+    }
+    runtime.options.headless = true;
+    runtime.options.integrations = false;
+    runtime.harness.options.planFileMutation = () => false;
+    const originalStep = runtime.harness.options.beforeStep;
+    const restrict = () => {
+      runtime.harness.planMode = true;
+      runtime.harness.tools = runtime.harness.tools.filter(
+        (tool) => READ_TOOLS.has(tool.name) && tool.effect === 'read',
+      );
+    };
+    runtime.harness.options.beforeStep = () => {
+      originalStep?.();
+      restrict();
+    };
+    restrict();
+    context.signal.addEventListener('abort', abort, { once: true });
     context.signal.throwIfAborted();
+    report('running');
+    bound = true;
     const result = await runtime.harness.run(
       [
         'Independently review this candidate. You may inspect files but must not change files, execute commands or spawn agents.',
@@ -721,13 +756,33 @@ async function review(
       artifact,
       runtime.redact(
         JSON.stringify(
-          { sessionId: runtime.session.id, messages, answer: result.answer },
+          {
+            sessionId: runtime.session.id,
+            provenance: {
+              role: 'reviewer',
+              taskId: task.spec.id,
+              attempt: task.attempt,
+              ownerSessionId: task.spec.sessionId,
+              workerSessionId: context.workerSessionId,
+              ...provenance,
+            },
+            messages,
+            answer: result.answer,
+          },
           null,
           2,
         ),
       ),
       { mode: 0o600 },
     );
+    if (context.artifact) {
+      const registered = await context.artifact(artifact, 'verification');
+      artifactBinding = {
+        id: registered.id,
+        path: registered.path,
+        sha256: registered.sha256,
+      };
+    }
     let parsed: Record<string, unknown>[] = [];
     try {
       const data = object(
@@ -739,7 +794,7 @@ async function review(
     } catch {
       /* A free-form model answer is not an acceptance oracle. */
     }
-    return criteria.map((criterion) => {
+    const checks = criteria.map((criterion): TaskVerificationCheck => {
       const check = parsed.find((entry) => entry.criterion === criterion);
       const references = Array.isArray(check?.sources)
         ? check.sources.flatMap((source) => {
@@ -777,9 +832,19 @@ async function review(
         artifactPaths: [artifact],
       };
     });
+    outcome = checks.some((check) => check.status === 'failed')
+      ? 'failed'
+      : checks.some((check) => check.status === 'needs_review')
+        ? 'needs_review'
+        : 'succeeded';
+    return checks;
+  } catch (error) {
+    reason = error instanceof Error ? error.message : String(error);
+    outcome = context.signal.aborted ? 'cancelled' : 'failed';
+    throw error;
   } finally {
     context.signal.removeEventListener('abort', abort);
-    await runtime.close();
+    await close();
   }
 }
 

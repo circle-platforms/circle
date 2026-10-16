@@ -1,14 +1,13 @@
 import type { AgentRecord } from './types';
 import { t } from '../i18n/index.ts';
 
-/** Keep the legacy coarse status contract while displaying the real task state. */
+/** Execution state is separate from task acceptance; legacy agents retain their contract. */
 export function agentState(
   agent: Pick<AgentRecord, 'status' | 'task'>,
 ): string {
   if (agent.task?.recovery === 'needs_reconciliation') return 'needs_review';
-  return agent.task?.state === 'succeeded'
-    ? 'completed'
-    : (agent.task?.state ?? agent.status);
+  const state = agent.task?.runtimeState ?? agent.task?.state ?? agent.status;
+  return state === 'succeeded' ? 'completed' : state;
 }
 export function isAgentActive(
   agent: Pick<AgentRecord, 'status' | 'task'>,
@@ -16,7 +15,7 @@ export function isAgentActive(
   if (agent.task?.recovery === 'needs_reconciliation') return false;
   return agent.task
     ? ['queued', 'preparing', 'running', 'waiting', 'cancelling'].includes(
-        agent.task.state,
+        agent.task.runtimeState ?? agent.task.state,
       )
     : agent.status !== 'completed';
 }
@@ -34,8 +33,13 @@ export function agentActivityText(
   if (state === 'queued') return t('queued');
   if (state === 'preparing') return t('preparing workspace');
   if (state === 'cancelling') return t('stopping…');
-  if (agent.task?.state === 'succeeded') return t('done');
-  if (agent.task?.state === 'waiting') return t('waiting for you');
+  if (
+    state === 'completed' &&
+    (agent.task?.runtimeState === 'succeeded' ||
+      agent.task?.state === 'succeeded')
+  )
+    return t('done');
+  if (state === 'waiting') return t('waiting for you');
   if (agent.status === 'waiting' || agent.activity === 'waiting for you')
     return t('waiting for you');
   if (!agent.activity || agent.activity === 'working') return t('working');

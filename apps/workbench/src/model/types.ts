@@ -197,6 +197,7 @@ export interface AgentRecord {
   resourceSessionId?: string;
   readOnly?: boolean;
   task?: {
+    role?: 'worker' | 'reviewer';
     id: string;
     attempt: number;
     state:
@@ -213,6 +214,8 @@ export interface AgentRecord {
       | 'needs_review';
     access: 'write' | 'readonly';
     baseline: string;
+    /** The actual runtime execution, distinct from overall acceptance state. */
+    runtimeState?: NonNullable<AgentRecord['task']>['state'];
     /** History is visible, but an old in-flight process has not been reconciled. */
     recovery?: 'needs_reconciliation';
   };

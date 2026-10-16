@@ -140,7 +140,12 @@ export class TaskService {
         this.records.set(`${attempt.spec.id}:${attempt.attempt}`, attempt);
     this.unsubscribe = this.scheduler.subscribe((event) => {
       if (event.taskId) {
-        const task = this.scheduler.get(event.taskId);
+        const task =
+          event.attempt === undefined
+            ? this.scheduler.get(event.taskId)
+            : this.scheduler
+                .attempts(event.taskId)
+                .find((record) => record.attempt === event.attempt);
         if (task) this.records.set(`${task.spec.id}:${task.attempt}`, task);
       }
       options.emit(event);
@@ -152,16 +157,21 @@ export class TaskService {
     let changed: boolean;
     do {
       changed = false;
-      for (const task of this.records.values())
+      for (const task of this.records.values()) {
+        const ids = [
+          task.runtimeSessionId,
+          ...(task.reviewers ?? []).map((reviewer) => reviewer.sessionId),
+        ].filter((id): id is string => !!id);
         if (
-          task.runtimeSessionId &&
-          (sessions.has(task.spec.sessionId ?? '') ||
-            sessions.has(task.runtimeSessionId)) &&
-          !sessions.has(task.runtimeSessionId)
-        ) {
-          sessions.add(task.runtimeSessionId);
-          changed = true;
-        }
+          sessions.has(task.spec.sessionId ?? '') ||
+          ids.some((id) => sessions.has(id))
+        )
+          for (const id of ids)
+            if (!sessions.has(id)) {
+              sessions.add(id);
+              changed = true;
+            }
+      }
     } while (changed);
     return sessions;
   }
@@ -171,11 +181,18 @@ export class TaskService {
     const owned = this.ownedSessionIds(sessionId),
       sessions = new Map<string, { sessionId: string; worktree?: string }>();
     for (const task of this.records.values())
-      if (task.runtimeSessionId && owned.has(task.runtimeSessionId))
-        sessions.set(task.runtimeSessionId, {
-          sessionId: task.runtimeSessionId,
-          ...(task.worktree ? { worktree: task.worktree } : {}),
-        });
+      for (const source of [
+        { sessionId: task.runtimeSessionId, worktree: task.worktree },
+        ...(task.reviewers ?? []).map((reviewer) => ({
+          sessionId: reviewer.sessionId,
+          worktree: reviewer.workspace,
+        })),
+      ])
+        if (source.sessionId && owned.has(source.sessionId))
+          sessions.set(source.sessionId, {
+            sessionId: source.sessionId,
+            ...(source.worktree ? { worktree: source.worktree } : {}),
+          });
     return [...sessions.values()];
   }
   hasActiveSession(sessionId: string): boolean {

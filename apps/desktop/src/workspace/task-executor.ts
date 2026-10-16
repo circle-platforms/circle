@@ -39,6 +39,10 @@ export interface TaskChanges {
   dirty: boolean;
 }
 export interface TaskVerificationContext {
+  workerSessionId?: string;
+  reviewer?: TaskExecutionContext['reviewer'];
+  onCleanup?: TaskExecutionContext['onCleanup'];
+  artifact?: TaskExecutionContext['artifact'];
   worktree: string;
   signal: AbortSignal;
   answer: string;
@@ -222,14 +226,27 @@ export function createAgentTaskExecutor(
     context.signal.throwIfAborted();
     const runtime = await options.createRuntime(task, context);
     let closed = false;
+    let workerCompleted = false;
     let unsubscribe = () => {};
     const close = async () => {
       if (closed) return;
       // close is idempotent in AgentRuntime and awaits only processes owned by this runtime.
-      await runtime.close();
+      try {
+        await runtime.close();
+      } catch (error) {
+        context.runtimeState?.('needs_review');
+        throw error;
+      }
       closed = true;
       unsubscribe();
       options.onRuntimeClosed?.(task, runtime);
+      context.runtimeState?.(
+        context.signal.aborted
+          ? 'cancelled'
+          : workerCompleted
+            ? 'succeeded'
+            : 'failed',
+      );
     };
     const abort = () => {
       void runtime.cancel().catch(() => {});
@@ -327,6 +344,7 @@ export function createAgentTaskExecutor(
     options.onRuntimeCreated?.(task, runtime);
     context.signal.throwIfAborted();
     const run = await runtime.harness.run(prompt(task, context));
+    workerCompleted = true;
     context.signal.throwIfAborted();
     const transcript = runtime.redact(
       JSON.stringify(runtime.harness.messages, null, 2),
@@ -339,6 +357,7 @@ export function createAgentTaskExecutor(
       context.worktree,
       context.artifactDirectory,
     );
+    const registeredVerificationArtifacts = new Set<string>();
     let checks = options.verify
       ? await options.verify(task, {
           worktree: context.worktree,
@@ -348,6 +367,14 @@ export function createAgentTaskExecutor(
           events,
           artifactDirectory: context.artifactDirectory,
           withResource: context.withResource,
+          workerSessionId: runtime.session.id,
+          reviewer: context.reviewer,
+          onCleanup: context.onCleanup,
+          artifact: async (path, kind) => {
+            const artifact = await context.artifact(path, kind);
+            registeredVerificationArtifacts.add(artifact.path);
+            return artifact;
+          },
         })
       : [];
     if (!Array.isArray(checks))
@@ -408,8 +435,11 @@ export function createAgentTaskExecutor(
       [eventsPath, 'runtime-events'],
     ] as const)
       await context.artifact(path, kind);
-    for (const path of checks.flatMap((check) => check.artifactPaths ?? []))
-      await context.artifact(path, 'verification');
+    for (const path of new Set(
+      checks.flatMap((check) => check.artifactPaths ?? []),
+    ))
+      if (!registeredVerificationArtifacts.has(await realpath(path)))
+        await context.artifact(path, 'verification');
     context.signal.throwIfAborted();
     return {
       passed: accepted.verdict === 'passed',

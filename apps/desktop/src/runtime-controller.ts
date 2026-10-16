@@ -993,7 +993,7 @@ export class RuntimeController {
         withBuildResource: (run, _signal, context) =>
           context.withResource('build', run),
         createReviewer: (task, context) =>
-          this.createRuntime(context.worktree, undefined, task),
+          this.createRuntime(context.worktree, undefined, task, 'reviewer'),
       });
       this.taskVerifiers.set(key, verifier);
     }
@@ -1109,49 +1109,70 @@ export class RuntimeController {
     for (const owner of this.store.list(undefined, true)) {
       const { records, archived } = this.taskAgentAttempts(owner.id);
       for (const task of records) {
-        if (!task.runtimeSessionId) continue;
-        const child = this.store.get(task.runtimeSessionId);
-        if (
-          !child ||
-          !task.worktree ||
-          child.workspace !== canonicalPath(task.worktree)
-        )
-          continue;
-        // Native tasks intentionally retain their own top-level session row. The
-        // durable task ledger supplies parent identity without altering approvals.
-        const recovery = archived && taskNeedsReconciliation(task);
-        this.taskWorkspaces.set(child.workspace, task.spec.workspace);
-        agents.set(child.id, {
-          id: child.id,
-          sessionId: owner.id,
-          name:
-            child.title || task.spec.prompt.split(/\r\n|\r|\n/u)[0] || 'agent',
-          description: task.spec.prompt,
-          activity: this.activities.get(child.id),
-          status:
-            recovery ||
-            ['waiting', 'blocked', 'needs_review'].includes(task.state)
-              ? 'waiting'
-              : ['queued', 'preparing', 'running', 'cancelling'].includes(
-                    task.state,
-                  )
-                ? 'running'
-                : 'completed',
-          model: child.model,
-          tokens: 0,
-          messages: this.projectMessages(runtime, child.id),
-          workspaceId: identity(child.workspace),
-          resourceSessionId: child.id,
-          readOnly: task.spec.access === 'readonly',
-          task: {
-            id: task.spec.id,
-            attempt: task.attempt,
-            state: task.state,
+        const sources = [
+          {
+            sessionId: task.runtimeSessionId,
+            workspace: task.worktree,
+            role: 'worker' as const,
             access: task.spec.access,
-            baseline: task.spec.baseline,
-            ...(recovery ? { recovery: 'needs_reconciliation' as const } : {}),
+            state: task.runtimeState ?? task.state,
           },
-        });
+          ...(task.reviewers ?? []).map((reviewer) => ({
+            sessionId: reviewer.sessionId,
+            workspace: reviewer.workspace,
+            role: 'reviewer' as const,
+            access: 'readonly' as const,
+            state: reviewer.state,
+          })),
+        ];
+        for (const source of sources) {
+          if (!source.sessionId || !source.workspace) continue;
+          const child = this.store.get(source.sessionId);
+          if (!child || child.workspace !== canonicalPath(source.workspace))
+            continue;
+          // Native tasks intentionally retain their own top-level session row. The
+          // durable task ledger supplies parent identity without altering approvals.
+          const recovery =
+            archived && taskNeedsReconciliation({ state: source.state });
+          this.taskWorkspaces.set(child.workspace, task.spec.workspace);
+          agents.set(child.id, {
+            id: child.id,
+            sessionId: owner.id,
+            name:
+              child.title ||
+              task.spec.prompt.split(/\r\n|\r|\n/u)[0] ||
+              'agent',
+            description: task.spec.prompt,
+            activity: this.activities.get(child.id),
+            status:
+              recovery ||
+              ['waiting', 'blocked', 'needs_review'].includes(source.state)
+                ? 'waiting'
+                : ['queued', 'preparing', 'running', 'cancelling'].includes(
+                      source.state,
+                    )
+                  ? 'running'
+                  : 'completed',
+            model: child.model,
+            tokens: 0,
+            messages: this.projectMessages(runtime, child.id),
+            workspaceId: identity(child.workspace),
+            resourceSessionId: child.id,
+            readOnly: source.access === 'readonly',
+            task: {
+              id: task.spec.id,
+              role: source.role,
+              attempt: task.attempt,
+              state: task.state,
+              access: source.access,
+              baseline: task.spec.baseline,
+              runtimeState: source.state,
+              ...(recovery
+                ? { recovery: 'needs_reconciliation' as const }
+                : {}),
+            },
+          });
+        }
       }
     }
     return [...agents.values()];
@@ -1163,13 +1184,20 @@ export class RuntimeController {
       const { records } = this.taskAgentAttempts(owner.id);
       const task = records.find(
         (task) =>
-          task.runtimeSessionId === sessionId &&
-          task.worktree &&
-          canonicalPath(task.worktree) === child.workspace,
+          (task.runtimeSessionId === sessionId &&
+            task.worktree &&
+            canonicalPath(task.worktree) === child.workspace) ||
+          (task.reviewers ?? []).some(
+            (reviewer) =>
+              reviewer.sessionId === sessionId &&
+              canonicalPath(reviewer.workspace) === child.workspace,
+          ),
       );
       if (task) {
         this.taskWorkspaces.set(child.workspace, task.spec.workspace);
-        return task;
+        return task.runtimeSessionId === sessionId
+          ? task
+          : { ...task, spec: { ...task.spec, access: 'readonly' } };
       }
     }
     // A corrupt ledger cannot identify an old child's access mode. Fail closed
@@ -1383,18 +1411,21 @@ export class RuntimeController {
     workspace: string,
     sessionId?: string,
     task?: TaskRecord,
+    role: 'worker' | 'reviewer' = 'worker',
   ): AgentRuntime {
     this.bindWorkspace(workspace);
     const settings = settingsForRun(this.home, workspace).settings;
     const taskTitle = task
-      ? Array.from(
+      ? (role === 'reviewer' ? 'review: ' : '') +
+        Array.from(
           task.spec.prompt
             .trim()
             .split(/\r\n|\r|\n/u)[0]!
             .replace(/\s+/gu, ' '),
         )
           .slice(0, task.attempt > 1 ? 90 : 100)
-          .join('') + (task.attempt > 1 ? ` · #${task.attempt}` : '')
+          .join('') +
+        (task.attempt > 1 ? ` · #${task.attempt}` : '')
       : undefined;
     const create = (session?: string) =>
       new AgentRuntime({

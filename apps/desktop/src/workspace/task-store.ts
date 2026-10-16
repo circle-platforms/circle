@@ -38,12 +38,31 @@ export interface TaskRecord {
   attempt: number;
   worktree?: string;
   runtimeSessionId?: string;
+  /** Execution is separate from the task's acceptance result. */
+  runtimeState?: TaskState;
+  reviewers?: TaskReviewerRecord[];
   branch?: string;
   reason?: string;
   result?: Json;
   createdAt: number;
   updatedAt: number;
 }
+export interface TaskReviewerRecord {
+  sessionId: string;
+  workspace: string;
+  baseline: string;
+  head: string;
+  patchSha256: string;
+  state: TaskState;
+  reason?: string;
+  artifact?: { id: string; path: string; sha256: string };
+  createdAt: number;
+  updatedAt: number;
+}
+export type TaskReviewerUpdate = Omit<
+  TaskReviewerRecord,
+  'createdAt' | 'updatedAt'
+>;
 export interface TaskArtifact {
   id: string;
   taskId: string;
@@ -150,6 +169,13 @@ export class TaskStore {
       .prepare('SELECT record FROM attempts WHERE task_id=? ORDER BY attempt')
       .all(id)
       .map((row) => JSON.parse(String(row.record)) as TaskRecord);
+  }
+  /** Update an existing historical attempt without replacing the current one. */
+  putHistoricalAttempt(task: TaskRecord): void {
+    const result = this.db
+      .prepare('UPDATE attempts SET record=? WHERE task_id=? AND attempt=?')
+      .run(JSON.stringify(task), task.spec.id, task.attempt);
+    if (result.changes !== 1) throw Error('task attempt is missing');
   }
   operation(id: string): OperationRecord | undefined {
     const row = this.db
