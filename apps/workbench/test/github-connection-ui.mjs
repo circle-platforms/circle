@@ -241,6 +241,40 @@ try {
             .count(),
           0,
         );
+        await page.evaluate(() => window.githubFixture.integrationLoading());
+        await card
+          .getByText(
+            label('loading GitHub integration', '正在加载 GitHub 集成…'),
+            { exact: true },
+          )
+          .waitFor();
+        assert.equal(
+          await card.getByRole('link').count(),
+          0,
+          'register pending must not tell the user to enable again',
+        );
+        assert.equal(
+          await card.getByRole('button').count(),
+          0,
+          'register pending cannot start OAuth',
+        );
+        await page.evaluate(() => window.githubFixture.integrationFailure());
+        await card
+          .getByText(
+            label(
+              'GitHub integration could not be loaded.',
+              '无法加载 GitHub 集成。',
+            ),
+            { exact: true },
+          )
+          .waitFor();
+        assert.doesNotMatch(
+          await card.innerText(),
+          /synthetic GitHub module/,
+          'raw module failure stays folded',
+        );
+        await page.evaluate(() => window.githubFixture.integrationReady());
+        await connect.waitFor();
         await page.evaluate(() => window.githubFixture.unavailable());
         await card.getByRole('link').waitFor();
         assert.equal(await card.getByRole('button').count(), 0);

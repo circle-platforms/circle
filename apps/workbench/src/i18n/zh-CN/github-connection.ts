@@ -1,4 +1,6 @@
 export const githubConnection: Record<string, string> = {
+  'loading GitHub integration': '正在加载 GitHub 集成…',
+  'GitHub integration could not be loaded.': '无法加载 GitHub 集成。',
   'Secure credential storage is unavailable.': '安全凭据存储暂不可用。',
   'GitHub action could not be completed.': '未能完成 GitHub 操作。',
   'Choose this session only if you want to continue without saving credentials, then start authorization again.':

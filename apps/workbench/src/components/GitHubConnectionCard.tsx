@@ -14,6 +14,10 @@ export function GitHubConnectionCard() {
   const candidate = extension?.view as GitHubConnectionState | undefined;
   const view = candidate?.provider === 'github' ? candidate : undefined;
   const available = runtime.mode === 'live' && extension?.enabled && !!view;
+  const loading =
+    runtime.mode === 'live' && extension?.enabled && !extension.error && !view;
+  const loadFailed =
+    runtime.mode === 'live' && extension?.enabled && !!extension.error && !view;
   const [storage, setStorage] = useState<'encrypted' | 'session'>('encrypted');
   const [repositories, setRepositories] = useState('');
   const [repositoryEpoch, setRepositoryEpoch] = useState<number>();
@@ -78,12 +82,18 @@ export function GitHubConnectionCard() {
       <h2 id="github-connection-title">GitHub</h2>
       {!available ? (
         <>
-          <p className="panel-note">
-            {t(
-              'GitHub connection is unavailable; enable the bundled GitHub extension in Circle desktop.',
-            )}
-          </p>
-          <NavLink to="/page/extensions">{t('extensions')}</NavLink>
+          {!loadFailed && (
+            <p className="panel-note" role={loading ? 'status' : undefined}>
+              {loading
+                ? t('loading GitHub integration')
+                : t(
+                    'GitHub connection is unavailable; enable the bundled GitHub extension in Circle desktop.',
+                  )}
+            </p>
+          )}
+          {!loading && (
+            <NavLink to="/page/extensions">{t('extensions')}</NavLink>
+          )}
         </>
       ) : (
         <>
@@ -258,9 +268,11 @@ export function GitHubConnectionCard() {
       {failure && (
         <div role="alert">
           <p>
-            {storageUnavailable
-              ? t('Secure credential storage is unavailable.')
-              : t('GitHub action could not be completed.')}
+            {loadFailed
+              ? t('GitHub integration could not be loaded.')
+              : storageUnavailable
+                ? t('Secure credential storage is unavailable.')
+                : t('GitHub action could not be completed.')}
           </p>
           <p className="panel-note">
             {storageUnavailable

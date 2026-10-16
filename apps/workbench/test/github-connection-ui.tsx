@@ -129,6 +129,21 @@ Object.assign(window, {
       state = { ...state, epoch: state.epoch + 1 };
       publish();
     },
+    integrationLoading: () =>
+      runtime.change((snapshot) => {
+        const extension = snapshot.extensions[0];
+        extension.enabled = true;
+        delete extension.view;
+        delete extension.error;
+      }),
+    integrationFailure: () =>
+      runtime.change((snapshot) => {
+        const extension = snapshot.extensions[0];
+        extension.enabled = true;
+        delete extension.view;
+        extension.error = 'synthetic GitHub module initialization failure';
+      }),
+    integrationReady: publish,
     unavailable: () =>
       runtime.change((s) => {
         s.extensions = [];
