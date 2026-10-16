@@ -395,6 +395,9 @@ export function runningCopies(
         )
           pids.add(pid);
       }
+      // The query helper runs this program's own node, which may be inside the copy (circle
+      // uninstall), and so may list itself: it is never a running copy.
+      if (typeof result.pid === 'number') pids.delete(result.pid);
       // A program in use that no listed process runs: removing it would fail halfway, after
       // the new release is staged.
       const busy = held
