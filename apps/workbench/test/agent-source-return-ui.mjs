@@ -66,7 +66,11 @@ try {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.goto(server.resolvedUrls.local[0] + '__source_return_seed');
-  assert.equal(await page.locator('.workbench').count(), 0, 'seed writes before any App runtime mounts');
+  assert.equal(
+    await page.locator('.workbench').count(),
+    0,
+    'seed writes before any App runtime mounts',
+  );
   const { second, childId } = await page.evaluate(async (theme) => {
     const { PreviewRuntime } = await import('/src/model/state.ts');
     const runtime = new PreviewRuntime(localStorage);
