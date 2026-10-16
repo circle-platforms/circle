@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { FileText, Save, X } from 'lucide-react';
+import { Tooltip } from 'radix-ui';
 import type { IRange } from 'monaco-editor';
 import { useRuntime } from '../app/context';
 import { currentSession } from '../model/state';
@@ -115,6 +116,68 @@ export function FileViewer({
     ? resourceOwner.readOnly
     : session.readOnly &&
       !['plan', 'plan.md'].includes(path.split('/').at(-1)!);
+  const sourceWorkspace = snapshot.workspaces.find(
+    (item) => item.id === workspaceId,
+  );
+  const sourceAgent =
+    resourceOwner &&
+    snapshot.agents.find(
+      (item) =>
+        item.resourceSessionId === resourceOwner.sessionId &&
+        item.workspaceId === resourceOwner.workspaceId &&
+        item.id === resourceOwner.sessionId,
+    );
+  const sourceLabel = resourceOwner
+    ? sourceAgent
+      ? t('agent source: {name}', { name: sourceAgent.name })
+      : t('agent source')
+    : t('workspace source: {name}', {
+        name: sourceWorkspace?.name ?? t('workspace'),
+      });
+  const sourceDirectory = sourceWorkspace?.path;
+  const sourceHeading = (
+    <div className="file-view-title">
+      <div className="file-view-filename">
+        <FileText size={16} />
+        <strong>{path}</strong>
+        {projected?.status && <Status value={projected.status} />}
+      </div>
+      <div className="file-source-summary">
+        <Tooltip.Root>
+          <Tooltip.Trigger asChild>
+            <span
+              tabIndex={0}
+              className="file-source-origin"
+              aria-label={
+                sourceDirectory
+                  ? `${sourceLabel}: ${sourceDirectory}`
+                  : sourceLabel
+              }
+            >
+              {sourceLabel}
+              {resourceOwner && sourceWorkspace
+                ? ` · ${sourceWorkspace.name}`
+                : ''}
+            </span>
+          </Tooltip.Trigger>
+          <Tooltip.Portal>
+            <Tooltip.Content
+              className="tooltip file-source-directory"
+              sideOffset={7}
+            >
+              {sourceLabel}
+              <br />
+              {sourceDirectory ?? t('source directory is not available')}
+              <Tooltip.Arrow />
+            </Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
+        {readOnly && (
+          <span className="file-source-readonly">{t('read-only source')}</span>
+        )}
+      </div>
+    </div>
+  );
   const showDocument = (doc: EditorDocument) => {
     const uri = editorUri(workspaceId, doc.path).toString();
     const model = retainedModel(
@@ -530,7 +593,7 @@ export function FileViewer({
     return (
       <section className="file-view">
         <header className="file-view-heading">
-          <strong>{path}</strong>
+          {sourceHeading}
           <IconButton label={t('close file')} onClick={onClose}>
             <X size={15} />
           </IconButton>
@@ -551,11 +614,7 @@ export function FileViewer({
   return (
     <section className="file-view">
       <header className="file-view-heading">
-        <div>
-          <FileText size={16} />
-          <strong>{path}</strong>
-          {projected?.status && <Status value={projected.status} />}
-        </div>
+        {sourceHeading}
         <IconButton label={t('close file')} onClick={onClose}>
           <X size={15} />
         </IconButton>

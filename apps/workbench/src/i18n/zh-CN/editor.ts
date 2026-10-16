@@ -1,4 +1,9 @@
 export const editor: Record<string, string> = {
+  'agent source: {name}': 'Agent 来源：{name}',
+  'agent source': 'Agent 来源',
+  'workspace source: {name}': '工作区来源：{name}',
+  'source directory is not available': '暂时无法查看来源目录',
+  'read-only source': '只读来源',
   'source workspace is not available': '暂时无法确认来源工作区',
   'save queued': '保存已排队',
   'language service needs attention': '语言服务需要处理',
