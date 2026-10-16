@@ -341,3 +341,8 @@ export function captureNativeEditorInput(phase) {
       })),
   };
 }
+
+export function terminalAxDiagnosticRequired(state) {
+  // Unknown/older hosts retain coverage; only a supported explicit OFF opts out.
+  return !(state?.supported === true && state.enabled === false);
+}

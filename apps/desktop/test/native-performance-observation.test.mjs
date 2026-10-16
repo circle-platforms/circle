@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runInNewContext } from 'node:vm';
 import {
+  terminalAxDiagnosticRequired,
   appendNativeEditorText,
   armNativeFeedback,
   captureNativeTranscriptAnchor,
@@ -473,4 +474,21 @@ test('editor append clicks the visible Monaco surface and uses native keyboard i
     'Enter',
     ['insert', 'saved performance 1'],
   ]);
+});
+
+test('AX diagnostics only opt out for actual supported host OFF, not unknown or ON states', () => {
+  assert.equal(
+    terminalAxDiagnosticRequired({ supported: true, enabled: false }),
+    false,
+  );
+  assert.equal(
+    terminalAxDiagnosticRequired({ supported: true, enabled: true }),
+    true,
+  );
+  assert.equal(
+    terminalAxDiagnosticRequired({ supported: false, enabled: false }),
+    true,
+  );
+  assert.equal(terminalAxDiagnosticRequired(null), true);
+  assert.equal(terminalAxDiagnosticRequired({ supported: true }), true);
 });

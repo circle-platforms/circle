@@ -40,6 +40,7 @@ import {
   verifyNativeBuildManifest,
 } from './helpers/native-build-manifest.mjs';
 import {
+  terminalAxDiagnosticRequired,
   appendNativeEditorText,
   captureNativeEditorInput,
   armNativeFeedback,
@@ -649,10 +650,41 @@ try {
 
   // Explicit steady-visible window: panel toggle recovery is a separate cohort.
   await page.waitForTimeout(2000);
+  const nativeAccessibility = await page.evaluate(async () =>
+    window.circleDesktop.nativeAccessibility
+      ? await window.circleDesktop.nativeAccessibility()
+      : null,
+  );
+  const axRequired = terminalAxDiagnosticRequired(nativeAccessibility);
+  report.accessibilityDiagnostic = {
+    actualHost: nativeAccessibility,
+    preference: await page.evaluate(
+      () => localStorage.getItem('circle-terminal-accessibility') ?? 'auto',
+    ),
+    status: axRequired ? 'coverage-required' : 'not-active',
+  };
+  // A user preference can keep AX active even when native detection is off.
+  const requireAx =
+    axRequired || report.accessibilityDiagnostic.preference === 'always';
+  report.accessibilityDiagnostic.status = requireAx
+    ? 'coverage-required'
+    : 'not-active';
+  if (requireAx)
+    await waitFor(
+      async () =>
+        await page.evaluate(() => window.__circleNativePerfEvents.length >= 60),
+      '60 accessibility diagnostic observations',
+      20000,
+    );
   await waitFor(
     async () =>
-      await page.evaluate(() => window.__circleNativePerfEvents.length >= 60),
-    '60 accessibility diagnostic observations',
+      await page.evaluate(
+        () =>
+          window.__circleNativePerfTerminalTiming.filter(
+            (row) => row.phase === 'write-frame',
+          ).length >= 20,
+      ),
+    '20 actual xterm parser/frame observations',
     20000,
   );
   const events = await page.evaluate(() => {
