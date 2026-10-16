@@ -85,6 +85,8 @@ export async function withGitHubPushCredentials(
           'http.followRedirects=false',
           '-c',
           'http.sslVerify=true',
+          '-c',
+          'push.gpgSign=false',
         ],
       );
       options.signal?.throwIfAborted();

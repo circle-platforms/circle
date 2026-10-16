@@ -338,3 +338,88 @@ test('private credential context strips injected command and tracing settings an
   );
   assert.equal(callbackCount, 1);
 });
+
+test('private push configuration suppresses repository push signing programs while a real nonce-advertising bare remote receives the branch', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-push-signing-'));
+  const env = {
+    ...process.env,
+    HOME: root,
+    USERPROFILE: root,
+    GIT_TERMINAL_PROMPT: '0',
+  };
+  const remote = path.join(root, 'remote.git');
+  try {
+    await git(['init'], env, root);
+    await git(
+      [
+        '-c',
+        'user.name=Fixture',
+        '-c',
+        'user.email=fixture@example.invalid',
+        'commit',
+        '--allow-empty',
+        '-m',
+        'Seed',
+      ],
+      env,
+      root,
+    );
+    await git(['init', '--bare', remote], env, root);
+    await git(
+      [
+        '--git-dir',
+        remote,
+        'config',
+        'receive.certNonceSeed',
+        'synthetic-nonce',
+      ],
+      env,
+      root,
+    );
+    await git(['config', 'push.gpgSign', 'true'], env, root);
+    await git(['config', 'gpg.program', process.execPath], env, root);
+    await git(['config', 'user.signingKey', 'fixture'], env, root);
+    // Node is deliberately not a GPG signer. A nonce-advertising remote makes
+    // unguarded Git actually attempt that configured external program.
+    await assert.rejects(
+      git(['push', remote, 'HEAD:refs/heads/accepted'], env, root),
+      /signed push|gpg|sign/i,
+    );
+    await withGitHubPushCredentials(
+      {
+        repository: 'fixture/repo',
+        token: TOKEN,
+        ghPath: bundledGh,
+        env,
+        assertActive() {},
+      },
+      async (childEnv, config) => {
+        assert(config.includes('push.gpgSign=false'));
+        return git(
+          [
+            ...config,
+            '-c',
+            'protocol.file.allow=always',
+            'push',
+            remote,
+            'HEAD:refs/heads/accepted',
+          ],
+          childEnv,
+          root,
+        );
+      },
+    );
+    assert.equal(
+      (
+        await git(
+          ['--git-dir', remote, 'rev-parse', 'refs/heads/accepted'],
+          env,
+          root,
+        )
+      ).trim(),
+      (await git(['rev-parse', 'HEAD'], env, root)).trim(),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
