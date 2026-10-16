@@ -170,8 +170,18 @@ export function App() {
     setDialogSelection(choice);
     setDialog(kind);
   };
+  // A secret belongs to one session. Open it only in the live app, and only
+  // while that session is the one on screen. The preview's sample request,
+  // and a request for a session the home page is not showing, stay closed.
+  const viewedSessionId = location.pathname.startsWith('/session/')
+    ? location.pathname.slice(9)
+    : undefined;
   const pendingSecret = snapshot.interactions.find(
-    (item) => item.kind === 'secret' && item.status === 'pending',
+    (item) =>
+      runtime.mode === 'live' &&
+      item.kind === 'secret' &&
+      item.status === 'pending' &&
+      item.sessionId === viewedSessionId,
   );
   useEffect(() => {
     if (pendingSecret) onDialog('secret');
