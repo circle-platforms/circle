@@ -462,10 +462,13 @@ try {
         .count(),
       0,
     );
+    // A configured app with nothing to resume opens the home composer; the
+    // first message there starts the conversation in the default project.
+    await send('Prepare native journey');
     await page
       .locator('.main-stack .conversation')
       .waitFor({ state: 'visible' });
-    await send('Prepare native journey');
+    sessionId = (await state()).activeSessionId;
     await page
       .getByText('Native journey ready: README.md and debug.cjs', {
         exact: true,
