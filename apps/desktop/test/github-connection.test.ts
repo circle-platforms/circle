@@ -47,6 +47,7 @@ async function fixture() {
     emit: (text: string) => void;
     directory: string;
     killed: boolean;
+    args: string[];
   }[] = [];
   const calls: {
     args: string[];
@@ -62,6 +63,7 @@ async function fixture() {
     deletes = 0,
     head = '',
     failRerun = false;
+  let scopeHeader: string | undefined;
   let requestGate: Promise<void> | undefined;
   const server = createServer(async (req, res) => {
     const chunks = [];
@@ -89,7 +91,11 @@ async function fixture() {
     else if (call.args[0] === 'pr' && call.args[1] === 'checks')
       result = [{ name: 'test', bucket: 'pass', state: 'SUCCESS' }];
     else result = { ok: true };
-    res.end(JSON.stringify(result));
+    res.end(
+      call.args[0] === 'api' && scopeHeader !== undefined
+        ? `HTTP/2.0 200 OK\r\nX-OAuth-Scopes: ${scopeHeader}\r\nX-Fixture: ignored\r\n\r\n${JSON.stringify(result)}\n`
+        : JSON.stringify(result),
+    );
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
@@ -113,7 +119,7 @@ async function fixture() {
       },
     },
     credentialCommand: async () => ({ stdout: TOKEN }),
-    spawn: (_file, _args, options) => {
+    spawn: (_file, args, options) => {
       let data = (_text: string) => {},
         exit = (_event: { exitCode: number }) => {};
       const helper = {
@@ -121,6 +127,7 @@ async function fixture() {
         emit: (text: string) => data(text),
         directory: (options.env as NodeJS.ProcessEnv).GH_CONFIG_DIR!,
         killed: false,
+        args: [...args],
       };
       helpers.push(helper);
       const pty: LoginPty = {
@@ -163,6 +170,9 @@ async function fixture() {
     set failPut(value: boolean) {
       failPut = value;
     },
+    set scopeHeader(value: string | undefined) {
+      scopeHeader = value;
+    },
     get puts() {
       return puts;
     },
@@ -187,6 +197,7 @@ async function fixture() {
 }
 test('one explicit local connection verifies actual HTTP identity and feeds real Harness tools, state and disconnect', async () => {
   const f = await fixture();
+  f.scopeHeader = 'repo, read:org, gist, workflow';
   let runtime: AgentRuntime | undefined;
   const ledger = await OperationLedger.open({
     directory: path.join(f.root, 'operations'),
@@ -245,6 +256,14 @@ test('one explicit local connection verifies actual HTTP identity and feeds real
       return s.state === 'connected' ? s : false;
     });
     assert.equal(connected.account?.login, 'fixture');
+    assert.deepEqual(connected.requestedAdditionalScopes, ['workflow']);
+    assert.deepEqual(connected.grantedScopes, [
+      'repo',
+      'read:org',
+      'gist',
+      'workflow',
+    ]);
+    assert.equal(connected.scopeVerification, 'reported');
     assert.equal(f.puts, 0);
     assert.equal(connected.storage, 'session');
     await assert.rejects(access(f.helpers[0]!.directory), { code: 'ENOENT' });
@@ -255,6 +274,11 @@ test('one explicit local connection verifies actual HTTP identity and feeds real
           role: 'assistant',
           content: 'connected tools inspected',
           tool_calls: [
+            {
+              id: 'actual-scope-metadata',
+              name: 'github_connection',
+              args: {},
+            },
             {
               id: 'actual-harness-call',
               name: 'github_retry',
@@ -310,6 +334,11 @@ test('one explicit local connection verifies actual HTTP identity and feeds real
           tool.effect === 'unknown',
       ),
     );
+    assert(
+      JSON.stringify(model.requests).includes('requestedAdditionalScopes'),
+    );
+    assert(JSON.stringify(model.requests).includes('grantedScopes'));
+    assert(JSON.stringify(model.requests).includes('workflow'));
     assert(!JSON.stringify(model.requests).includes(TOKEN));
     assert(!JSON.stringify(model.requests).includes('ABCD-EFGH'));
     const checks = await backend.call('checks', {
@@ -1555,4 +1584,78 @@ test('cancellation drains a held connection startup and a failed startup release
       await f.close();
     }
   });
+});
+
+test('workflow is an explicit additional device scope while granted scopes come only from verified response headers', async (t) => {
+  for (const header of [
+    undefined,
+    'repo, read:org, gist, workflow',
+    'repo',
+    '',
+    TOKEN,
+  ] as const) {
+    await t.test(
+      header === undefined
+        ? 'legacy JSON is unknown'
+        : header === TOKEN
+          ? 'secret-shaped header is not exposed'
+          : 'reported ' + header,
+      async () => {
+        const f = await fixture();
+        f.scopeHeader = header;
+        try {
+          const starting = await f.connection.connect({
+            storage: 'session',
+            repositories: [],
+          });
+          assert.deepEqual(starting.requestedAdditionalScopes, ['workflow']);
+          assert.equal(starting.scopeVerification, 'not-reported');
+          const args = f.helpers[0]!.args;
+          assert.equal(args[args.indexOf('--scopes') + 1], 'workflow');
+          f.helpers[0]!.finish();
+          const state = await until(async () => {
+            const s = await f.connection.status();
+            return s.state === 'connected' ? s : false;
+          });
+          assert.equal(state.account?.login, 'fixture');
+          assert.deepEqual(f.calls[0]!.args, [
+            'api',
+            'user',
+            '--include',
+            '--jq',
+            '{login: .login, id: .id}',
+          ]);
+          const valid = header !== undefined && header !== TOKEN;
+          assert.equal(
+            state.scopeVerification,
+            valid ? 'reported' : 'not-reported',
+          );
+          assert.deepEqual(
+            state.grantedScopes,
+            valid
+              ? header
+                  .split(',')
+                  .map((s) => s.trim())
+                  .filter(Boolean)
+              : undefined,
+          );
+          assert(!JSON.stringify(state).includes(TOKEN));
+          if (header === 'repo')
+            assert(
+              !state.grantedScopes!.includes('workflow'),
+              'a request is never presented as a grant',
+            );
+          await f.connection.disconnect(state.epoch);
+          const disconnected = f.connection.snapshot();
+          assert.equal(disconnected.grantedScopes, undefined);
+          assert.equal(disconnected.scopeVerification, 'not-reported');
+          assert.deepEqual(disconnected.requestedAdditionalScopes, [
+            'workflow',
+          ]);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+  }
 });

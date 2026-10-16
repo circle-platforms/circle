@@ -29,7 +29,7 @@ export async function register(api: ExtensionAPI) {
     clear();
     api.registerTool(
       'github_connection',
-      'Read the current GitHub connection account, allowed repositories and epoch. Authorization is managed by the human in settings.',
+      'Read the current GitHub connection account, allowed repositories and epoch. Authorization is managed by the human in the GitHub plugin.',
       { type: 'object', properties: {}, additionalProperties: false },
       async () => {
         const current = await backend.call(
@@ -40,6 +40,9 @@ export async function register(api: ExtensionAPI) {
         return {
           provider: current.provider,
           client: current.client,
+          requestedAdditionalScopes: current.requestedAdditionalScopes,
+          grantedScopes: current.grantedScopes,
+          scopeVerification: current.scopeVerification,
           epoch: current.epoch,
           state: current.state,
           account: current.account,

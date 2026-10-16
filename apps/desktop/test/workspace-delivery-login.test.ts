@@ -56,6 +56,7 @@ test('device code flow encrypts then removes dedicated config before completion'
     const login = new DeliveryLogin(
       (_file, args, opts) => {
         assert.ok(args.includes('--insecure-storage'));
+        assert.equal(args[args.indexOf('--scopes') + 1], 'workflow');
         dir = (opts.env as Record<string, string>).GH_CONFIG_DIR;
         return child.pty;
       },

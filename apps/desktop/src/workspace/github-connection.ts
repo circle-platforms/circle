@@ -2,7 +2,10 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import type { GitHubConnectionState } from '../../../../src/github_connection.js';
+import {
+  GITHUB_ADDITIONAL_SCOPES,
+  type GitHubConnectionState,
+} from '../../../../src/github_connection.js';
 import {
   DeliveryLogin,
   type CredentialStore,
@@ -24,6 +27,8 @@ export class NativeGitHubConnection {
   private state: GitHubConnectionState = {
     provider: 'github',
     client: 'GitHub CLI',
+    requestedAdditionalScopes: [...GITHUB_ADDITIONAL_SCOPES],
+    scopeVerification: 'not-reported',
     epoch: 0,
     state: 'disconnected',
     repositories: [],
@@ -104,7 +109,10 @@ export class NativeGitHubConnection {
     try {
       const account = await this.verify(epoch);
       if (epoch !== this.state.epoch || this.disposed || !account) return;
-      this.state.account = account;
+      this.state.account = account.account;
+      this.state.grantedScopes = account.grantedScopes;
+      this.state.scopeVerification =
+        account.grantedScopes === undefined ? 'not-reported' : 'reported';
       this.state.state = 'connected';
       delete this.state.error;
       this.active = true;
@@ -292,6 +300,8 @@ export class NativeGitHubConnection {
         this.state.error =
           'GitHub authorization expired; reconnect in settings';
         delete this.state.account;
+        delete this.state.grantedScopes;
+        this.state.scopeVerification = 'not-reported';
         this.emit();
         await Promise.allSettled([
           this.persist(false),
@@ -312,14 +322,39 @@ export class NativeGitHubConnection {
     if (epoch !== this.state.epoch || this.state.state === 'disconnected')
       throw Error('connection changed');
     if (!token) throw Error('authorization unavailable');
-    const data = JSON.parse(
+    const response = (
       await this.command(
-        ['api', 'user', '--jq', '{login: .login, id: .id}'],
+        ['api', 'user', '--include', '--jq', '{login: .login, id: .id}'],
         this.env(token),
         this.options.dataDir,
         this.lifetime.signal,
-      ),
+      )
+    ).replaceAll('\r\n', '\n');
+    const separator = response.lastIndexOf('\n\n');
+    const included = /^HTTP\/[\d.]+\s+\d{3}/.test(response) && separator >= 0;
+    const data = JSON.parse(
+      included ? response.slice(separator + 2) : response,
     );
+    const scopeHeader = included
+      ? /^x-oauth-scopes:[ \t]*([^\n]*)$/im.exec(
+          response.slice(0, separator),
+        )?.[1]
+      : undefined;
+    let grantedScopes: string[] | undefined;
+    if (scopeHeader !== undefined) {
+      const scopes = scopeHeader
+        .split(',')
+        .map((scope) => scope.trim())
+        .filter(Boolean);
+      if (
+        scopes.length <= 100 &&
+        scopes.every(
+          (scope) =>
+            /^[a-z][a-z0-9:_-]{0,63}$/.test(scope) && !scope.includes(token),
+        )
+      )
+        grantedScopes = [...new Set(scopes)];
+    }
     if (epoch !== this.state.epoch) return;
     if (
       typeof data.login !== 'string' ||
@@ -327,7 +362,7 @@ export class NativeGitHubConnection {
       !Number.isSafeInteger(data.id)
     )
       throw Error('invalid GitHub identity');
-    return { login: data.login, id: data.id };
+    return { account: { login: data.login, id: data.id }, grantedScopes };
   }
   async status() {
     await this.ready;
@@ -360,6 +395,8 @@ export class NativeGitHubConnection {
     this.active = false;
     this.state.repositories = repositories;
     delete this.state.account;
+    delete this.state.grantedScopes;
+    this.state.scopeVerification = 'not-reported';
     delete this.state.error;
     delete this.state.authorization;
     this.state.state = 'authorizing';
@@ -398,6 +435,8 @@ export class NativeGitHubConnection {
             ? 'GitHub connection settings could not be saved'
             : 'GitHub authorization could not start';
         delete this.state.account;
+        delete this.state.grantedScopes;
+        this.state.scopeVerification = 'not-reported';
         delete this.state.authorization;
         await this.login.disconnect().catch(() => {
           this.state.error =
@@ -434,7 +473,10 @@ export class NativeGitHubConnection {
         phase = 'metadata';
         await this.persist(login.storage === 'encrypted');
         if (epoch !== this.state.epoch) return;
-        this.state.account = account;
+        this.state.account = account.account;
+        this.state.grantedScopes = account.grantedScopes;
+        this.state.scopeVerification =
+          account.grantedScopes === undefined ? 'not-reported' : 'reported';
         this.state.state = 'connected';
         delete this.state.error;
         this.active = true;
@@ -446,6 +488,8 @@ export class NativeGitHubConnection {
         this.state.state = login.status === 'failed' ? 'error' : 'disconnected';
         this.state.error = login.error;
         delete this.state.account;
+        delete this.state.grantedScopes;
+        this.state.scopeVerification = 'not-reported';
         await this.login.disconnect().catch(() => {
           this.state.error =
             (this.state.error ? this.state.error + '; ' : '') +
@@ -464,6 +508,8 @@ export class NativeGitHubConnection {
             ? 'GitHub connection settings could not be saved'
             : 'GitHub authorization could not be verified';
         delete this.state.account;
+        delete this.state.grantedScopes;
+        this.state.scopeVerification = 'not-reported';
         delete this.state.authorization;
         clearInterval(this.timer);
         this.attempt = undefined;
@@ -518,6 +564,8 @@ export class NativeGitHubConnection {
     this.active = false;
     this.state.state = 'disconnected';
     delete this.state.account;
+    delete this.state.grantedScopes;
+    this.state.scopeVerification = 'not-reported';
     delete this.state.authorization;
     delete this.state.error;
     this.state.remoteRevocation = 'unconfirmed';

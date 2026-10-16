@@ -1,7 +1,12 @@
+/** Explicit additions to the bundled GitHub CLI device grant, not its default scope set. */
+export const GITHUB_ADDITIONAL_SCOPES = ['workflow'] as const;
 /** Sanitized native capability injected only into Circle's bundled GitHub extension. */
 export interface GitHubConnectionState {
   provider: 'github';
   client: 'GitHub CLI';
+  requestedAdditionalScopes?: string[];
+  grantedScopes?: string[];
+  scopeVerification?: 'reported' | 'not-reported';
   epoch: number;
   state: 'disconnected' | 'authorizing' | 'connected' | 'error';
   account?: { login: string; id: number };

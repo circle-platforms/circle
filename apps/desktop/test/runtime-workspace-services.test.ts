@@ -1564,6 +1564,7 @@ if(process.argv[2]==='--ipc'){
     assert.deepEqual(identityRecords[0].args, [
       'api',
       'user',
+      '--include',
       '--jq',
       '{login: .login, id: .id}',
     ]);

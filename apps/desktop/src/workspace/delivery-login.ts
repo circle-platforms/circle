@@ -1,3 +1,4 @@
+import { GITHUB_ADDITIONAL_SCOPES } from '../../../../src/github_connection.js';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, chmod, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -107,6 +108,8 @@ export class DeliveryLogin {
           '--git-protocol',
           'https',
           '--web',
+          '--scopes',
+          GITHUB_ADDITIONAL_SCOPES.join(','),
           '--insecure-storage',
         ],
         { name: 'xterm-256color', cols: 100, rows: 30, cwd: this.cwd, env },
