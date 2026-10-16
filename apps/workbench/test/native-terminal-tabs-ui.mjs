@@ -186,10 +186,12 @@ try {
         exact: true,
       });
       if (await navigation.isVisible()) await navigation.click();
-      await page.getByRole('link', { name: 'alternate', exact: true }).click();
+      await page
+        .locator('.sidebar:visible [data-row-key="recent:B"] .session-link')
+        .click();
       if (await navigation.isVisible()) await navigation.click();
       await page
-        .getByRole('link', { name: 'terminal tab geometry', exact: true })
+        .locator('.sidebar:visible [data-row-key="recent:A"] .session-link')
         .click();
       if ((await toggle.getAttribute('aria-pressed')) !== 'true')
         await toggle.click();
