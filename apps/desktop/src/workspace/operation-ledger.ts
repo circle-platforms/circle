@@ -1,3 +1,4 @@
+import { DeliveryPreflightError } from './delivery-preflight.ts';
 import {
   createCipheriv,
   createDecipheriv,
@@ -233,7 +234,11 @@ export class OperationLedger {
     if (saved) {
       if (saved.identity_hash !== identity)
         throw new OperationIdentityConflictError();
-      if (saved.state === 'rejected') throw new OperationRejectedError();
+      if (saved.state === 'rejected')
+        throw (
+          DeliveryPreflightError.fromCode(saved.error_code) ??
+          new OperationRejectedError()
+        );
       if (saved.state !== 'completed')
         throw new OperationNeedsReviewError(
           saved.state === 'reconciled'
@@ -321,6 +326,20 @@ export class OperationLedger {
         return value;
       } catch (error) {
         const rawCode = (error as { code?: unknown })?.code;
+        if (
+          !effectReturned &&
+          operation.method === 'publish' &&
+          ['delivery', 'github'].includes(operation.service) &&
+          error instanceof DeliveryPreflightError
+        ) {
+          this.db
+            .prepare(
+              "UPDATE operations SET state='rejected',error_code=?,updated_at=? WHERE id=?",
+            )
+            .run(error.code, Date.now(), operation.id);
+          throw error;
+        }
+
         // WorkspaceDocuments.save raises this typed CAS conflict before rename;
         // never extend this rule to multi-file edits that may have partial effects.
         if (

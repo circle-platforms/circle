@@ -1,0 +1,21 @@
+const messages = {
+  DELIVERY_WORKSPACE_DIRTY:
+    'commit remaining workspace changes or move them to another branch, then refresh before publishing; nothing was pushed',
+  DELIVERY_CANDIDATE_CHANGED:
+    'repository changed; refresh and review the current changes before publishing; nothing was pushed',
+  DELIVERY_FEATURE_BRANCH_REQUIRED:
+    'switch to a feature branch before publishing; nothing was pushed',
+} as const;
+export type DeliveryPreflightCode = keyof typeof messages;
+/** Only the initial, side-effect-free delivery checks may construct this error. */
+export class DeliveryPreflightError extends Error {
+  constructor(readonly code: DeliveryPreflightCode) {
+    super(messages[code]);
+    this.name = 'DeliveryPreflightError';
+  }
+  static fromCode(code: unknown): DeliveryPreflightError | undefined {
+    return typeof code === 'string' && Object.hasOwn(messages, code)
+      ? new DeliveryPreflightError(code as DeliveryPreflightCode)
+      : undefined;
+  }
+}

@@ -1,3 +1,4 @@
+import { DeliveryPreflightError } from './delivery-preflight.ts';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { realpath } from 'node:fs/promises';
@@ -507,11 +508,11 @@ export class DeliveryService {
       state.revision !== params.revision ||
       (pushedHead !== undefined && state.head !== pushedHead)
     )
-      throw Error('repository changed; refresh before publishing');
+      throw new DeliveryPreflightError('DELIVERY_CANDIDATE_CHANGED');
     if (state.entries.length)
-      throw Error('commit or preserve workspace changes before publishing');
+      throw new DeliveryPreflightError('DELIVERY_WORKSPACE_DIRTY');
     if (state.branch === 'detached' || /^(main|master)$/.test(state.branch))
-      throw Error('publish from a feature branch');
+      throw new DeliveryPreflightError('DELIVERY_FEATURE_BRANCH_REQUIRED');
     const preparePublishedHead = async () => {
       if (pushedHead === undefined) {
         const repository = this.connection
