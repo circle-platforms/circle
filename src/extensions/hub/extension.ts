@@ -7,7 +7,7 @@
 // type stripping accepts. The interface words live in the compiled module beside the
 // program (`hub_text.js`); that module has no interface of its own.
 import { createHash, randomUUID } from 'node:crypto';
-import { hubText } from '../../hub_text.js';
+import { hubLocaleChinese, hubText } from '../../hub_text.js';
 import {
   existsSync,
   mkdirSync,

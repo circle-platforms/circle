@@ -455,10 +455,12 @@ async function headlessSettings(
       throw new UsageError(
         `This folder is not trusted yet: ${options.workspace}\nRun \`circle\` there once in a terminal and trust it, or pass --trust to trust it and remember it.`,
       );
-    const { runLineTrust } = await import('./line_setup.js');
-    const trusted = await runLineTrust(settings, options.workspace, home);
-    if (!trusted) throw new Declined();
-    settings = trusted;
+    else {
+      const { runLineTrust } = await import('./line_setup.js');
+      const trusted = await runLineTrust(settings, options.workspace, home);
+      if (!trusted) throw new Declined();
+      settings = trusted;
+    }
   }
   const { problems } = applyProjectSettings(settings, options.workspace, home);
   for (const problem of problems) process.stderr.write(problem + '\n');

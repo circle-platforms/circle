@@ -718,7 +718,7 @@ test('approval previews: a patch names its files, an edit the file cannot confir
     new ApprovalCard(
       approvalRequest(
         { id: 'long', name: 'execute', args: { command } },
-        policy.review('execute', { command }),
+        defaultPolicy(root, root).review('execute', { command }),
       ),
     ).state(),
     40,

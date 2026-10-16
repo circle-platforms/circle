@@ -403,13 +403,13 @@ test('after signing in, the connector offers the server tools to the model, runs
   // Asking again with nothing changed costs one 304 and changes nothing.
   await command.handler('refresh', context);
   assert.equal(server.reads().notModified, 1);
-  assert.equal(names().length, 4);
+  assert.equal(names().length, 5);
 
   // A changed catalog removes what the server no longer offers.
   server.changeCatalog();
   await command.handler('tools', context);
   assert.ok(!names().includes('hub_tool_docs_list'));
-  assert.equal(names().length, 3);
+  assert.equal(names().length, 4);
   assert.ok(
     lines.some((line) =>
       /hub_tool_knowledge_claim_submit ← knowledge\.claim_submit · asks first/.test(
