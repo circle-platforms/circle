@@ -4,6 +4,10 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+### Changed
+
+- **The folder you start a desktop session in stays on the sidebar while you write the first message.** New session, a folder's + and opening a folder show that folder in the sidebar with its group, highlighted while the draft is aimed at it; still nothing is saved until the first message is sent. Deleting a folder's last conversation goes back to that folder's home page instead of an empty conversation.
+
 ## 1.7.4 - 2026-10-16
 
 Circle 1.7.0, 1.7.1, 1.7.2 and 1.7.3 were tagged but never published, so this is the first release since 1.6.0 and it includes all of their changes. Coming from 1.6.0, one of them needs you to act: since 1.7.0 the bundled hub extension is named `hub`, with `/hub` commands and `hub_*` tools, and the former `circle-server` extension and `/server` commands no longer work. Enable `hub` and sign in again; [1.7.0](https://github.com/circle-platforms/circle/blob/main/CHANGELOG.md#170---2026-10-15) has the details.
@@ -21,7 +25,6 @@ Circle 1.7.0, 1.7.1, 1.7.2 and 1.7.3 were tagged but never published, so this is
 - **Renaming a session, or going back to an earlier message, no longer moves it to the top** of the desktop sidebar or of the terminal's `/resume` list: sessions are ordered by their last message. In the desktop application the open folder no longer jumps to the top either.
 - **Browser clicks wait for what covers their target.** `browser_click`, `browser_type` and `browser_select` wait up to 3 seconds for a loading mask or a message over the element to go, then refuse and name it; a dialog or drawer is named as soon as the page is still. A click aims at a part of the element nothing covers, such as one line of a link that wraps or a checkbox's label, and its result comes once the page stops changing, at most 1.5 seconds after the network is quiet. `browser_click_at` no longer calls a screenshot stale because something elsewhere on the page changed, such as a clock; it still does when the page scrolled or resized, or changed where it clicks. In the desktop application and in the terminal's browser. See [The browser](docs/tools.md#the-browser).
 - **A conversation open in one Circle terminal is read-only in another.** Several terminals can use the same data folder and project with different conversations, but a conversation runs in only one of them at a time. Another can read its saved history but cannot continue, change or delete it, and says `session is in use by another Circle runtime; stop and release it there, or fork it`; the desktop application shows such a conversation view only. A normal exit releases it; after a crash, allow up to 30 seconds. See [Concurrent conversations](docs/sessions.md#concurrent-conversations).
-- Desktop sidebar: opening the home composer for a project (new session, a folder's +, or opening a folder) now keeps that project's folder on the bar, with a folder icon that opens with the group, a hover shade and a highlight while the draft aims it; opening a session still creates nothing until the first message. Deleting a folder's last conversation returns to that folder's home instead of an empty conversation.
 
 ### Added
 
@@ -59,6 +62,7 @@ Circle 1.7.0, 1.7.1, 1.7.2 and 1.7.3 were tagged but never published, so this is
 - **Open folder on Linux could show a file chooser, close at once, or open nothing** after you chose a folder. The desktop application now uses a folder chooser that returns the folder, and says `folder could not be opened` when none comes back. On every system, a folder holding a subfolder Circle cannot read now opens.
 - **The desktop application named its own workspace `workspace` instead of `circle`** when its data folder was reached through a symbolic link.
 - **Replacing the Python circle on Windows was slow, and could go ahead while one of its programs was still in use**, then fail halfway. The installer now looks for running processes only when a program of the old copy is in use, asks Windows directly instead of through PowerShell, and gives up after 30 seconds. When it cannot tell which process holds the program, it names the program and stops without changing anything; close those sessions and run it again. See [Replacing the Python circle](docs/installation.md#replacing-the-python-circle).
+
 ## 1.7.0 - 2026-10-15
 
 ### Changed
