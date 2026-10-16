@@ -1,7 +1,7 @@
 // Which startup file should gain the launcher's folder. The installer used to
 // trust $SHELL alone and write ~/.zshrc whenever the name was not bash, including
 // on a machine with no zsh. A candidate counts only when that shell is installed.
-import { join } from 'node:path';
+import { posix } from 'node:path';
 
 export type ShellFamily = 'bash' | 'zsh';
 const BARE_DIRS = ['/bin', '/usr/bin', '/usr/local/bin'];
@@ -17,7 +17,8 @@ function installed(shell: string, exists: (path: string) => boolean): boolean {
   const name = shell.trim();
   if (!name) return false;
   if (name.startsWith('/') || /^[A-Za-z]:[\\/]/.test(name)) return exists(name);
-  return BARE_DIRS.some((dir) => exists(join(dir, name)));
+  // `/usr/bin/zsh` is a Unix path. path.join on Windows would ask for `\usr\bin\zsh`.
+  return BARE_DIRS.some((dir) => exists(posix.join(dir, name)));
 }
 
 /**
@@ -41,7 +42,7 @@ export function shellStartupFile(options: {
     if (!family || !installed(candidate, options.exists)) continue;
     return {
       family,
-      file: join(options.home, family === 'bash' ? '.bashrc' : '.zshrc'),
+      file: posix.join(options.home, family === 'bash' ? '.bashrc' : '.zshrc'),
     };
   }
   return undefined;

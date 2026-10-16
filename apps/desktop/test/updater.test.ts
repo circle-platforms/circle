@@ -694,7 +694,9 @@ test('a writable Linux copy is checked, swapped, and does not restart while chro
   writeFileSync(executable, '#!/bin/sh\n', { mode: 0o755 });
   writeFileSync(join(target, 'chrome-sandbox'), '');
   chmodSync(join(target, 'chrome-sandbox'), 0o4755);
-  assert.equal(sandboxIsSetuid(target), true);
+  // Windows does not store the setuid bit, so the flag below follows the real mode.
+  const setuid = sandboxIsSetuid(target);
+  if (!setuid) assert.equal(process.platform, 'win32');
   const folder = join(root, 'updates');
   const launched: [string, string[]][] = [];
   let quit = 0;
@@ -709,6 +711,8 @@ test('a writable Linux copy is checked, swapped, and does not restart while chro
       asset: (next) => `circle-desktop-${next}-linux-x64.tar.gz`,
     },
     releases,
+    // The Linux installer is chosen from this, not from the machine running the test.
+    platform: 'linux',
     launch: (command, args) => {
       launched.push([command, args]);
     },
@@ -721,7 +725,7 @@ test('a writable Linux copy is checked, swapped, and does not restart while chro
   assert.equal(found.phase === 'available' ? found.page : 'skipped', undefined);
   assert.deepEqual(found.phase === 'available' ? found.linux : undefined, {
     folder: target,
-    sandbox: true,
+    sandbox: setuid,
   });
   assert.equal((await updater.download()).phase, 'ready');
   assert.equal(
@@ -735,11 +739,11 @@ test('a writable Linux copy is checked, swapped, and does not restart while chro
   assert.equal(quit, 1);
   const [command, args] = launched[0]!;
   assert.equal(command, '/bin/sh');
-  assert.equal(args[6], '1');
-  assert.match(
-    readFileSync(args[0]!, 'utf8'),
-    /chrome-sandbox must belong to root/,
-  );
+  assert.equal(args[6], setuid ? '1' : '0');
+  assert.equal(readFileSync(args[0]!, 'utf8'), LINUX_INSTALLER);
+  // The script needs a Unix shell and, for the setuid case, a mode bit Windows
+  // does not keep. The launch command above is the decision either way.
+  if (!setuid || !existsSync('/bin/sh')) return;
   args[1] = '999999';
   assert.equal(spawnSync(command, args, { stdio: 'inherit' }).status, 0);
   assert.equal(
@@ -796,6 +800,7 @@ test('a Linux update starts again when chrome-sandbox is not setuid', async (t) 
   const executable = join(target, 'Circle');
   writeFileSync(executable, '#!/bin/sh\n', { mode: 0o755 });
   const folder = join(root, 'updates');
+  let command = '';
   let args: string[] = [];
   const updater = new Updater({
     version: '1.0.0',
@@ -808,7 +813,9 @@ test('a Linux update starts again when chrome-sandbox is not setuid', async (t) 
       asset: (next) => `circle-desktop-${next}-linux-x64.tar.gz`,
     },
     releases,
-    launch: (_command, launched) => {
+    platform: 'linux',
+    launch: (launchedCommand, launched) => {
+      command = launchedCommand;
       args = launched;
     },
     quit: () => {},
@@ -817,7 +824,9 @@ test('a Linux update starts again when chrome-sandbox is not setuid', async (t) 
   await updater.check();
   await updater.download();
   await updater.install();
+  assert.equal(command, '/bin/sh');
   assert.equal(args[6], '0');
+  if (!existsSync('/bin/sh')) return;
   args[1] = '999999';
   spawn('/bin/sh', args, { stdio: 'inherit' });
   await until(() => existsSync(marker));

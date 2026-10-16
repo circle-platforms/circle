@@ -48,6 +48,23 @@ const msiexec = (...args) => {
 };
 // Each stage says when it starts, so a run that hangs shows where
 const stage = (text) => console.log(`-- ${text}`);
+// The packaged folder's helper is setuid. A copy, and the folder an update
+// swaps in, are not: Electron stops when the helper is there but not root 4755.
+const ensureSandbox = (folder) => {
+  if (process.platform !== 'linux') return;
+  const helper = join(folder, 'chrome-sandbox');
+  if (!existsSync(helper)) return;
+  for (const args of [
+    ['chown', 'root:root', helper],
+    ['chmod', '4755', helper],
+  ]) {
+    const result = spawnSync('sudo', args, { encoding: 'utf8' });
+    if (result.status !== 0)
+      throw Error(
+        `sudo ${args.join(' ')} exited with ${result.status ?? result.error}: ${result.stderr ?? ''}`,
+      );
+  }
+};
 const { version } = JSON.parse(
   await readFile(join(root, '../../package.json'), 'utf8'),
 );
@@ -129,6 +146,9 @@ try {
     await cp(appPath, installed, { recursive: true, verbatimSymlinks: true });
   installedPath = installed;
   const program = join(installed, relative(appPath, executable));
+  // cp drops root ownership, and a present chrome-sandbox that is not root
+  // and mode 4755 makes Electron abort instead of starting.
+  ensureSandbox(dirname(program));
   // The newer version, packaged as a release is
   const release = join(temp, 'release');
   const build = (script) => {
@@ -289,6 +309,7 @@ try {
     assert.match(log, /installed/);
     assert.match(log, /sudo chmod 4755/);
     stage('starting the replaced copy; a setuid update does not');
+    ensureSandbox(dirname(program));
     running = spawn(program, [`--remote-debugging-port=${port}`], {
       env,
       stdio: ['ignore', output, output],
