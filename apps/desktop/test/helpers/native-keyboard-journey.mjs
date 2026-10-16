@@ -68,6 +68,13 @@ export async function runNativeKeyboardJourney({
         ? [context.selectionStart, context.selectionEnd]
         : [node.selectionStart, node.selectionEnd];
     });
+  await page.waitForFunction(() => {
+    const node = document.querySelector(
+      '.native-code-editor .native-edit-context, .native-code-editor textarea.inputarea',
+    );
+    const state = node?.editContext ?? node;
+    return state && state.selectionStart !== state.selectionEnd;
+  });
   const selected = await selection();
   assert.notEqual(selected[0], selected[1], 'a real editor range is selected');
   await editor.evaluate((node) => {

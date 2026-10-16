@@ -374,9 +374,56 @@ try {
   await page.locator('.view-lines').first().click();
   await page.keyboard.press(`${modifier}+End`);
   await page.keyboard.type('// language undo');
+  await page.keyboard.press('Shift+ArrowLeft');
+  await page.keyboard.press('Shift+ArrowLeft');
+  await page
+    .locator('.monaco-editor')
+    .evaluate((node) => (window.localeEditorView = node));
+  const editorBeforeLocale = await page
+    .locator('output[aria-label="content"]')
+    .textContent();
+  await page.waitForFunction(() => {
+    const node = document.querySelector(
+      '.native-code-editor .native-edit-context, .native-code-editor textarea.inputarea',
+    );
+    const state = node?.editContext ?? node;
+    return state && state.selectionStart !== state.selectionEnd;
+  });
+  const rangeBeforeLocale = await page
+    .locator('.native-edit-context, textarea.inputarea')
+    .first()
+    .evaluate((node) =>
+      node.editContext
+        ? [node.editContext.selectionStart, node.editContext.selectionEnd]
+        : [node.selectionStart, node.selectionEnd],
+    );
+  assert.notEqual(rangeBeforeLocale[0], rangeBeforeLocale[1]);
+
   await page
     .getByRole('button', { name: 'toggle language', exact: true })
     .click();
+  assert.equal(
+    await page
+      .locator('.monaco-editor')
+      .evaluate((node) => node === window.localeEditorView),
+    true,
+    'locale switch keeps active Monaco view',
+  );
+  assert.equal(
+    await page.locator('output[aria-label="content"]').textContent(),
+    editorBeforeLocale,
+  );
+  assert.deepEqual(
+    await page
+      .locator('.native-edit-context, textarea.inputarea')
+      .first()
+      .evaluate((node) =>
+        node.editContext
+          ? [node.editContext.selectionStart, node.editContext.selectionEnd]
+          : [node.selectionStart, node.selectionEnd],
+      ),
+    rangeBeforeLocale,
+  );
   await page.locator('.view-lines').first().click({ button: 'right' });
   await page.getByRole('menuitem', { name: /^复制/ }).waitFor();
   await page.keyboard.press('Escape');

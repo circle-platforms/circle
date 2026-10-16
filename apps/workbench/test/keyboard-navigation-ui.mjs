@@ -82,6 +82,88 @@ try {
     Math.abs(following.top - following.max) <= 2,
     'actual bottom follows viewport reflow ' + JSON.stringify(following),
   );
+  await page.keyboard.press('ControlOrMeta+p');
+  const sourceSearch = page.getByRole('textbox', {
+    name: 'global search',
+    exact: true,
+  });
+  await sourceSearch.fill('README.md');
+  await sourceSearch.press('Enter');
+  await page.getByRole('button', { name: 'edit', exact: true }).click();
+  const sourceInput = page
+    .locator(
+      '.native-code-editor .native-edit-context, .native-code-editor textarea.inputarea',
+    )
+    .first();
+  await sourceInput.focus();
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.insertText('ξ');
+  await page.waitForFunction(() =>
+    document
+      .querySelector('.native-code-editor .view-lines')
+      ?.textContent.includes('ξ'),
+  );
+  await page.getByText('unsaved buffer', { exact: true }).waitFor();
+  await page.keyboard.press('Shift+ArrowLeft');
+  const sourceSelection = () =>
+    sourceInput.evaluate((node) =>
+      node.editContext
+        ? [node.editContext.selectionStart, node.editContext.selectionEnd]
+        : [node.selectionStart, node.selectionEnd],
+    );
+  await page.waitForFunction(() => {
+    const node = document.querySelector(
+      '.native-code-editor .native-edit-context, .native-code-editor textarea.inputarea',
+    );
+    const state = node?.editContext ?? node;
+    return state && state.selectionStart !== state.selectionEnd;
+  });
+  const selected = await sourceSelection();
+  assert.notEqual(selected[0], selected[1]);
+  const sourceText = await page
+    .locator('.native-code-editor .view-lines')
+    .first()
+    .textContent();
+  await page
+    .locator('.native-code-editor .monaco-editor')
+    .evaluate((node) => (window.localeAppEditor = node));
+  await page.evaluate(async () => {
+    const { setLanguage } = await import('/src/i18n/index.ts');
+    setLanguage('zh-CN');
+  });
+  await page.getByRole('button', { name: '编辑', exact: true }).waitFor();
+  assert.equal(
+    await page
+      .locator('.native-code-editor .monaco-editor')
+      .evaluate((node) => node === window.localeAppEditor),
+    true,
+    'real App language switch preserves the editor view',
+  );
+  assert.equal(
+    await page.locator('.native-code-editor .view-lines').first().textContent(),
+    sourceText,
+  );
+  assert.deepEqual(await sourceSelection(), selected);
+  await page.evaluate(async () => {
+    const { setLanguage } = await import('/src/i18n/index.ts');
+    setLanguage('en');
+  });
+  await page.getByRole('button', { name: 'edit', exact: true }).waitFor();
+  assert.equal(
+    await page
+      .locator('.native-code-editor .monaco-editor')
+      .evaluate((node) => node === window.localeAppEditor),
+    true,
+  );
+  await sourceInput.focus();
+  await page.keyboard.press('ControlOrMeta+z');
+  await page.waitForFunction(
+    () =>
+      !document
+        .querySelector('.native-code-editor .view-lines')
+        ?.textContent.includes('ξ'),
+  );
   assert.deepEqual(errors, []);
   console.log(
     'original-shell quick open, file/Inspector continuity, palette focus, draft/selection and exact reading scroll passed',

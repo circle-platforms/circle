@@ -1,6 +1,5 @@
 import { useLayoutEffect, useRef } from 'react';
 import { applyMonacoLocale } from './monaco-locale';
-import { useLocale } from '../i18n';
 import * as monaco from 'monaco-editor/editor/editor.api';
 import 'monaco-editor/editor/contrib/bracketMatching/browser/bracketMatching';
 import 'monaco-editor/editor/contrib/clipboard/browser/clipboard';
@@ -173,7 +172,6 @@ export function NativeCodeEditor({
   onSave: () => void;
   onNavigate: (path: string, range?: Range) => Promise<void>;
 }) {
-  const languageChoice = useLocale();
   const container = useRef<HTMLDivElement>(null);
   const owner = JSON.stringify([workspaceId, sessionId, path]);
   const selectionIdentity = selection
@@ -551,16 +549,7 @@ export function NativeCodeEditor({
       view.dispose();
       themeWatcher.disconnect();
     };
-  }, [
-    workspaceId,
-    sessionId,
-    path,
-    language,
-    readOnly,
-    diff,
-    live,
-    languageChoice,
-  ]);
+  }, [workspaceId, sessionId, path, language, readOnly, diff, live]);
   // Source location updates reposition the existing view. Recreating it here
   // disposes transient widgets (notably Rename) after asynchronous navigation.
   useLayoutEffect(() => {
