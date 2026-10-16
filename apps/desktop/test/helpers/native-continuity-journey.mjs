@@ -39,6 +39,24 @@ const currentSession = (snapshot, sessionId) => {
   return session;
 };
 
+// Drafts and attachments belong to LiveRuntime's renderer-local view. The worker
+// runtimeState snapshot deliberately does not contain this overlay.
+const persistedSessionView = (page, sessionId) =>
+  page.evaluate((id) => {
+    const text = localStorage.getItem('circle.workbench.live.views.v1');
+    if (text === null) return null;
+    const stored = JSON.parse(text);
+    if (!Array.isArray(stored.views))
+      throw Error('native journey renderer view store is invalid');
+    return (
+      stored.views.find(
+        (entry) => Array.isArray(entry) && entry[0] === id,
+      )?.[1] ?? null
+    );
+  }, sessionId);
+const composer = (page) =>
+  page.getByRole('textbox', { name: 'message', exact: true });
+
 /** UI mutations only; state/query observe actual runtime effects. No clipboard or model calls. */
 export async function runNativeTerminalContextJourney({
   page,
@@ -66,8 +84,11 @@ export async function runNativeTerminalContextJourney({
   };
   try {
     const before = currentSession(await state(), sessionId);
-    const originalDraft = before.draft;
-    const originalAttachments = before.attachments.map((a) => a.id);
+    const originalDraft = await composer(page).inputValue();
+    const originalView = await persistedSessionView(page, sessionId);
+    const originalAttachments = (
+      originalView?.attachments ?? before.attachments
+    ).map((a) => a.id);
     const originalMessages = before.messages.map((m) => m.id);
     const panel = await openNativeTerminalInspector(page);
     const prior = new Set((await query('terminal', 'list')).map((t) => t.id));
@@ -135,10 +156,9 @@ export async function runNativeTerminalContextJourney({
     await until(
       async () =>
         Boolean(
-          (attachment = currentSession(
-            await state(),
-            sessionId,
-          ).attachments.find(
+          (attachment = (
+            await persistedSessionView(page, sessionId)
+          )?.attachments?.find(
             (a) =>
               !originalAttachments.includes(a.id) &&
               a.name.endsWith(' · selection'),
@@ -146,6 +166,10 @@ export async function runNativeTerminalContextJourney({
         ),
       'selection becomes an original composer attachment',
     );
+    await page
+      .locator('.attachment-strip')
+      .getByRole('button', { name: attachment.name, exact: true })
+      .waitFor();
     assert.equal(attachment.kind, 'file');
     const parts = attachment.content.split(
       '\n\n--- terminal capture source ---\n',
@@ -167,7 +191,11 @@ export async function runNativeTerminalContextJourney({
       'zero-based, end exclusive',
     );
     const afterAdd = currentSession(await state(), sessionId);
-    assert.equal(afterAdd.draft, originalDraft);
+    assert.equal(await composer(page).inputValue(), originalDraft);
+    assert.equal(
+      (await persistedSessionView(page, sessionId))?.draft,
+      originalView?.draft,
+    );
     assert.deepEqual(
       afterAdd.messages.map((m) => m.id),
       originalMessages,
@@ -256,14 +284,40 @@ export async function runNativeTerminalContextJourney({
       .locator('.attachment-strip')
       .getByRole('button', { name: `remove ${attachment.name}`, exact: true })
       .click();
-    await until(
-      async () =>
-        !currentSession(await state(), sessionId).attachments.some(
-          (a) => a.id === attachment.id,
-        ),
-      'existing attachment remove takes effect',
+    await until(async () => {
+      const view = await persistedSessionView(page, sessionId);
+      return (
+        Array.isArray(view?.attachments) &&
+        !view.attachments.some((a) => a.id === attachment.id)
+      );
+    }, 'existing attachment remove takes effect');
+    await page
+      .locator('.attachment-strip')
+      .getByRole('button', { name: attachment.name, exact: true })
+      .waitFor({ state: 'detached' });
+    assert.equal(await composer(page).inputValue(), originalDraft);
+    assert.equal(
+      (await persistedSessionView(page, sessionId))?.draft,
+      originalView?.draft,
     );
-    assert.equal(currentSession(await state(), sessionId).draft, originalDraft);
+    const afterRemove = currentSession(await state(), sessionId);
+    assert.deepEqual(
+      afterRemove.messages.map((m) => m.id),
+      originalMessages,
+    );
+    assert.deepEqual(
+      (await persistedSessionView(page, sessionId)).attachments.map(
+        (a) => a.id,
+      ),
+      originalAttachments,
+      'removing this capture preserves all prior local attachments',
+    );
+    receipt.localViewOracle = {
+      source: 'actual composer and persisted circle.workbench.live.views.v1',
+      sessionId,
+      draftPreserved: true,
+      attachmentAddedAndRemoved: true,
+    };
     receipt.checks.push(
       'actual PTY selection to original composer chip and exact original context preview',
       'hide/reopen preserves actual shell and child process',
@@ -387,7 +441,8 @@ export async function runNativeChildSourceJourney({
     // Deliberately create the same relative path only after isolated tasks have finished.
     // wx refuses an existing file; this helper cannot overwrite prior fixture or user data.
     await writeFile(join(workspace, sourcePath), parentContent, { flag: 'wx' });
-    const previousDraft = parent.draft;
+    const previousDraft = await composer(page).inputValue();
+    const previousView = await persistedSessionView(page, sessionId);
     if (entry === 'tool') {
       const sourceTool = parent.messages.find(
         (m) =>
@@ -454,9 +509,14 @@ export async function runNativeChildSourceJourney({
     });
     await page.getByRole('button', { name: 'close file', exact: true }).click();
     await record.getByText(agent.id, { exact: true }).waitFor();
-    assert.equal(currentSession(await state(), sessionId).draft, previousDraft);
+    currentSession(await state(), sessionId);
+    assert.equal(
+      (await persistedSessionView(page, sessionId))?.draft,
+      previousView?.draft,
+    );
     await record.getByRole('button', { name: 'main', exact: true }).click();
-    await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
+    await composer(page).waitFor();
+    assert.equal(await composer(page).inputValue(), previousDraft);
     await page.keyboard.press('ControlOrMeta+p');
     const search = page.getByRole('textbox', {
       name: 'search workspace files',
@@ -496,6 +556,12 @@ export async function runNativeChildSourceJourney({
       childContent,
     );
     await page.getByRole('button', { name: 'close file', exact: true }).click();
+    await composer(page).waitFor();
+    assert.equal(await composer(page).inputValue(), previousDraft);
+    assert.equal(
+      (await persistedSessionView(page, sessionId))?.draft,
+      previousView?.draft,
+    );
     receipt.checks.push(
       'actual projected child opens from original navigation',
       'child tool source opens actual child worktree file',
