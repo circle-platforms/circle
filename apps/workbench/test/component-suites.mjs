@@ -41,6 +41,9 @@ export const COMPONENT_SUITES = Object.freeze([
   'github-permissions-ui.mjs',
   'github-feedback-ui.mjs',
   'reading-live-pressure-ui.mjs',
+  'fullview-resource-ui.mjs',
+  'fullview-browser-shell-ui.mjs',
+  'github-authorization-phase-ui.mjs',
 ]);
 
 /** Explicit suites run serially; a failed suite prevents later execution. */
