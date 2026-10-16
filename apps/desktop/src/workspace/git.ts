@@ -1,7 +1,15 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
-import { readFile, realpath } from 'node:fs/promises';
+import {
+  readFile,
+  realpath,
+  lstat,
+  readlink,
+  open,
+  stat,
+} from 'node:fs/promises';
+import { constants } from 'node:fs';
 import path from 'node:path';
 const exec = promisify(execFile);
 const locks = new Map<string, Promise<unknown>>();
@@ -214,11 +222,7 @@ export class GitWorkspaceService {
     for (const entry of entries)
       hash
         .update(entry.path)
-        .update(
-          await readFile(path.resolve(root, entry.path)).catch(() =>
-            Buffer.from('missing'),
-          ),
-        );
+        .update(await this.fileFingerprint(root, entry.path));
     return {
       root,
       head,
@@ -227,6 +231,141 @@ export class GitWorkspaceService {
       entries,
       merging,
     };
+  }
+  private async regularFile(root: string, relative: string) {
+    const target = path.resolve(root, relative);
+    const info = await lstat(target);
+    if (!info.isFile())
+      return {
+        kind: info.isSymbolicLink() ? 'symlink' : 'special',
+        target,
+      } as const;
+    const canonical = await realpath(target),
+      local = path.relative(root, canonical);
+    if (
+      path.isAbsolute(local) ||
+      local === '..' ||
+      local.startsWith('..' + path.sep)
+    )
+      return { kind: 'outside', target } as const;
+    const handle = await open(
+      canonical,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+    );
+    try {
+      const opened = await handle.stat(),
+        current = await stat(canonical);
+      const resolved = await realpath(canonical),
+        after = path.relative(root, resolved);
+      if (
+        !opened.isFile() ||
+        opened.dev !== current.dev ||
+        opened.ino !== current.ino ||
+        path.isAbsolute(after) ||
+        after === '..' ||
+        after.startsWith('..' + path.sep)
+      )
+        throw Error('file identity changed while opening Git preview');
+      return { kind: 'file', handle, info: opened, target: canonical } as const;
+    } catch (error) {
+      await handle.close();
+      throw error;
+    }
+  }
+  private async fileFingerprint(
+    root: string,
+    relative: string,
+  ): Promise<Buffer> {
+    try {
+      const opened = await this.regularFile(root, relative);
+      if (opened.kind === 'symlink')
+        return Buffer.from('symlink:' + (await readlink(opened.target)));
+      if (opened.kind !== 'file')
+        return Buffer.from('unreadable:' + opened.kind);
+      try {
+        return await opened.handle.readFile();
+      } finally {
+        await opened.handle.close();
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+        return Buffer.from('missing');
+      throw error;
+    }
+  }
+  private async untrackedPreview(root: string, relative: string) {
+    const quote = (value: string) =>
+      '"' +
+      Array.from(Buffer.from(value), (byte) =>
+        byte === 34
+          ? '\\"'
+          : byte === 92
+            ? '\\\\'
+            : byte < 32 || byte >= 127
+              ? '\\' + byte.toString(8).padStart(3, '0')
+              : String.fromCharCode(byte),
+      ).join('') +
+      '"';
+    const label = quote('b/' + relative),
+      prefix = `diff --git ${quote('a/' + relative)} ${label}\nnew file mode 100644\n`;
+    const opened = await this.regularFile(root, relative);
+    if (opened.kind !== 'file')
+      return {
+        path: relative,
+        status: opened.kind,
+        text: prefix + `Preview unavailable: ${opened.kind}\n`,
+      };
+    try {
+      if (opened.info.size > 1024 * 1024)
+        return {
+          path: relative,
+          status: 'too-large',
+          text: prefix + 'Preview unavailable: file exceeds 1 MiB\n',
+        };
+      // Read at most the preview budget, even if a producer grows this file after stat.
+      const bytes = Buffer.alloc(1024 * 1024 + 1);
+      let bytesRead = 0;
+      while (bytesRead < bytes.length) {
+        const chunk = await opened.handle.read(
+          bytes,
+          bytesRead,
+          bytes.length - bytesRead,
+          bytesRead,
+        );
+        if (!chunk.bytesRead) break;
+        bytesRead += chunk.bytesRead;
+      }
+      if (bytesRead > 1024 * 1024)
+        return {
+          path: relative,
+          status: 'too-large',
+          text: prefix + 'Preview unavailable: file exceeds 1 MiB\n',
+        };
+      const content = bytes.subarray(0, bytesRead);
+      let text: string;
+      try {
+        if (content.includes(0)) throw Error('binary');
+        text = new TextDecoder('utf-8', { fatal: true }).decode(content);
+      } catch {
+        return {
+          path: relative,
+          status: 'binary',
+          text: prefix + `Binary files /dev/null and ${label} differ\n`,
+        };
+      }
+      const lines = text ? text.split('\n') : [];
+      if (text.endsWith('\n')) lines.pop();
+      const header = `--- /dev/null\n+++ ${label}\n`;
+      const body = lines.length
+        ? `@@ -0,0 +1,${lines.length} @@\n` +
+          lines.map((line) => '+' + line).join('\n') +
+          '\n' +
+          (text.endsWith('\n') ? '' : '\\ No newline at end of file\n')
+        : '';
+      return { path: relative, status: 'text', text: prefix + header + body };
+    } finally {
+      await opened.handle.close();
+    }
   }
   private paths(value: unknown): string[] {
     if (
@@ -288,10 +427,33 @@ export class GitWorkspaceService {
       }
       args.push('--');
       if (params.paths) args.push(...this.paths(params.paths));
-      return {
-        text: await this.git(args),
-        revision: (await this.snapshot()).revision,
-      };
+      let text = await this.git(args);
+      const previews = [];
+      if (scope === 'working' && params.paths) {
+        const explicit = this.paths(params.paths);
+        const root = await realpath(this.root);
+        const untracked = (
+          await this.git([
+            'ls-files',
+            '--others',
+            '--exclude-standard',
+            '-z',
+            '--',
+            ...explicit,
+          ])
+        )
+          .split('\0')
+          .filter(Boolean);
+        // A selected directory must never implicitly disclose its descendants.
+        for (const file of untracked.filter((file) =>
+          explicit.includes(file),
+        )) {
+          const preview = await this.untrackedPreview(root, file);
+          text += preview.text;
+          previews.push({ path: file, status: preview.status });
+        }
+      }
+      return { text, previews, revision: (await this.snapshot()).revision };
     }
     const common = (await this.git(['rev-parse', '--git-common-dir'])).trim();
     return serializeGitMutation(path.resolve(this.root, common), async () => {

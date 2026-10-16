@@ -682,3 +682,130 @@ test('only read-only configuration sharing failures retry with a strict bound', 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('explicit untracked previews show real added text without changing index or reading external links', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-git-untracked-'));
+  const outside = await mkdtemp(path.join(tmpdir(), 'circle-git-outside-'));
+  const s = new ObservedGit(root);
+  try {
+    await s.git(['init']);
+    await s.git(['config', 'core.autocrlf', 'false']);
+    await s.git(['config', 'user.name', 'Fixture']);
+    await s.git(['config', 'user.email', 'fixture@example.invalid']);
+    await writeFile(path.join(root, 'base'), 'base\n');
+    await s.git(['add', '--', 'base']);
+    await s.git(['commit', '-m', 'Create baseline']);
+    const indexPath = path.join(root, '.git', 'index');
+    const beforeIndex = await readFile(indexPath);
+    const filename = 'new [file] 中文.txt';
+    await writeFile(path.join(root, filename), 'first\nsecond');
+    await writeFile(path.join(root, 'private-unselected'), 'DO_NOT_INCLUDE');
+    await writeFile(path.join(root, 'binary'), Buffer.from([1, 0, 3]));
+    await writeFile(
+      path.join(root, 'huge'),
+      Buffer.alloc(1024 * 1024 + 1, 120),
+    );
+    const result = (await s.call('diff', { paths: [filename] })) as {
+      text: string;
+      previews: { path: string; status: string }[];
+    };
+    assert.match(result.text, /--- \/dev\/null/);
+    assert.match(
+      result.text,
+      /\+first\n\+second\n\\ No newline at end of file/,
+    );
+    assert(!result.text.includes('DO_NOT_INCLUDE'));
+    assert.deepEqual(result.previews, [{ path: filename, status: 'text' }]);
+    assert.deepEqual(await readFile(indexPath), beforeIndex);
+    assert.equal(
+      await readFile(path.join(root, filename), 'utf8'),
+      'first\nsecond',
+    );
+    const bounded = (await s.call('diff', { paths: ['binary', 'huge'] })) as {
+      text: string;
+      previews: { status: string }[];
+    };
+    assert.deepEqual(bounded.previews.map((p) => p.status).sort(), [
+      'binary',
+      'too-large',
+    ]);
+    assert.match(bounded.text, /Binary files/);
+    assert.match(bounded.text, /1 MiB/);
+    const { mkdir, symlink } = await import('node:fs/promises');
+    await mkdir(path.join(root, 'directory'));
+    await writeFile(path.join(root, 'directory', 'nested'), 'NESTED_SECRET');
+    assert.equal(
+      ((await s.call('diff', { paths: ['directory'] })) as { text: string })
+        .text,
+      '',
+    );
+    await writeFile(path.join(outside, 'secret'), 'EXTERNAL_SECRET');
+    await symlink(
+      outside,
+      path.join(root, 'external'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const linked = (await s.call('diff', { paths: ['external'] })) as {
+      text: string;
+      previews: { status: string }[];
+    };
+    assert(!linked.text.includes('EXTERNAL_SECRET'));
+    // Snapshot fingerprints link identity, not the external target content.
+    const revision = (await s.snapshot()).revision;
+    await writeFile(path.join(outside, 'secret'), 'EXTERNAL_SECRET_CHANGED');
+    assert.equal((await s.snapshot()).revision, revision);
+    await assert.rejects(s.call('diff', { paths: ['../secret'] }), /relative/);
+    assert.deepEqual(await readFile(indexPath), beforeIndex);
+    // The generated quoted UTF-8 patch is accepted by actual Git's existing hunk stage path.
+    const partial = result.text
+      .replace('@@ -0,0 +1,2 @@', '@@ -0,0 +1,1 @@')
+      .replace('+second\n\\ No newline at end of file\n', '');
+    await s.call('applyHunk', {
+      revision: (await s.snapshot()).revision,
+      patch: partial,
+      action: 'stage',
+    });
+    assert.equal(await s.git(['show', `:${filename}`]), 'first\n');
+    assert.equal(
+      await readFile(path.join(root, filename), 'utf8'),
+      'first\nsecond',
+    );
+    await s.call('unstage', {
+      revision: (await s.snapshot()).revision,
+      paths: [filename],
+    });
+    const fresh = await s.snapshot();
+    await s.call('applyHunk', {
+      revision: fresh.revision,
+      patch: result.text,
+      action: 'stage',
+    });
+    assert.equal(await s.git(['show', `:${filename}`]), 'first\nsecond');
+    if (process.platform !== 'win32') {
+      const control = 'line\nbreak\t.txt';
+      await writeFile(path.join(root, control), 'controlled\n');
+      const preview = (await s.call('diff', { paths: [control] })) as {
+        text: string;
+      };
+      assert(preview.text.includes('\\012') && preview.text.includes('\\011'));
+      await s.call('applyHunk', {
+        revision: (await s.snapshot()).revision,
+        patch: preview.text,
+        action: 'stage',
+      });
+      assert.equal(await s.git(['show', `:${control}`]), 'controlled\n');
+    }
+
+    assert.equal(
+      (
+        (await s.call('diff', { scope: 'index', paths: [filename] })) as {
+          text: string;
+        }
+      ).text.includes('+first'),
+      true,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
