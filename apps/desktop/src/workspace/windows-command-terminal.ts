@@ -180,18 +180,30 @@ export function createWindowsTerminalCommandLauncher(
               Number(message.pid) > 0
             ) {
               startedPid = Number(message.pid);
+              // A quick natural exit may already have passed. Its actual Node
+              // wait code remains usable; signal-only Stop needs a captured handle.
+              try {
+                job.captureRoot(startedPid);
+              } catch {
+                /* No PID fallback. */
+              }
               ready.resolve(startedPid);
               void record();
             } else if (
               message.kind === 'root-exit' &&
               initialized &&
               !rootObserved &&
-              Number.isInteger(message.exitCode)
+              (Number.isInteger(message.exitCode) ||
+                (message.exitCode === null &&
+                  typeof message.signal === 'string'))
             ) {
               const members = job.members();
               rootObserved = true;
               const value: CommandPtyRootExit = {
-                exitCode: Number(message.exitCode),
+                exitCode:
+                  message.exitCode === null
+                    ? job.actualRootExitCode()
+                    : Number(message.exitCode),
                 controlledGroupAtExit: members.some(
                   (id) => id !== terminal!.snapshot.pid,
                 )
@@ -208,9 +220,20 @@ export function createWindowsTerminalCommandLauncher(
                 .catch(() =>
                   fail('Windows actual command exit acknowledgement failed'),
                 );
-            } else if (message.kind === 'failure')
-              fail('Windows command supervisor failed');
-            else throw Error('Windows command control was out of sequence');
+            } else if (message.kind === 'failure') {
+              const reasons = [
+                'spawn',
+                'stop-signal',
+                'exit-unobserved',
+                'out-of-sequence',
+              ];
+              fail(
+                'Windows command supervisor failed' +
+                  (reasons.includes(String(message.reason))
+                    ? ': ' + String(message.reason)
+                    : ''),
+              );
+            } else throw Error('Windows command control was out of sequence');
           } catch (error) {
             fail(
               error instanceof Error
@@ -416,11 +439,13 @@ export function createWindowsTerminalCommandLauncher(
         }
         // Return failed allocated handle: Registry must retain unknown resources.
       }
+      const rootExit = Promise.race([root.promise, failure.promise]);
+      void rootExit.catch(() => {});
       return {
         kind: 'pty-group',
         pid: startedPid,
         terminal: { id: current.snapshot.id, epoch: current.snapshot.epoch },
-        rootExit: Promise.race([root.promise, failure.promise]),
+        rootExit,
         controlledGroupEmpty: empty.promise,
         transportAndLogClosed: io,
         descendantCoverage: {

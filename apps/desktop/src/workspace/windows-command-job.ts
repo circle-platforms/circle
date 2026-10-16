@@ -10,6 +10,7 @@ export interface WindowsJobApi {
   creationTime(process: bigint): bigint;
   image(process: bigint): string;
   exited(process: bigint): boolean;
+  exitCode(process: bigint): number;
   assign(job: bigint, process: bigint): void;
   contains(job: bigint, process: bigint): boolean;
   members(job: bigint): number[];
@@ -19,6 +20,8 @@ export interface WindowsJobApi {
 export class WindowsCommandJob {
   private wrapper?: bigint;
   private wrapperId?: number;
+  private root?: bigint;
+  private wrapperCreated?: bigint;
   private disposed = false;
   private readonly job: bigint;
   constructor(private readonly api: WindowsJobApi) {
@@ -70,12 +73,46 @@ export class WindowsCommandJob {
       this.api.assign(this.job, handle);
       if (!this.api.contains(this.job, handle) || this.api.exited(handle))
         throw Error('Windows supervisor Job assignment was not confirmed');
+      this.wrapperCreated = created;
       this.wrapper = handle;
       this.wrapperId = options.pid;
     } catch (error) {
       this.api.close(handle);
       throw error;
     }
+  }
+  /** Capture only the authenticated supervisor's live actual root, before Stop. */
+  captureRoot(pid: number): void {
+    if (
+      this.disposed ||
+      !this.wrapper ||
+      this.root ||
+      !Number.isSafeInteger(pid) ||
+      pid <= 0 ||
+      pid === this.wrapperId
+    )
+      throw Error('Windows command root is not capturable');
+    const handle = this.api.open(pid);
+    try {
+      if (
+        this.api.processId(handle) !== pid ||
+        this.api.exited(handle) ||
+        this.api.creationTime(handle) < this.wrapperCreated! ||
+        !this.api.contains(this.job, handle)
+      )
+        throw Error(
+          'Windows actual command root handle identity is unconfirmed',
+        );
+      this.root = handle;
+    } catch (error) {
+      this.api.close(handle);
+      throw error;
+    }
+  }
+  actualRootExitCode(): number {
+    if (this.disposed || !this.root || !this.api.exited(this.root))
+      throw Error('Windows actual command exit handle is unconfirmed');
+    return this.api.exitCode(this.root);
   }
   members(): number[] {
     if (this.disposed || !this.wrapper)
@@ -100,6 +137,7 @@ export class WindowsCommandJob {
     // KILL_ON_JOB_CLOSE also covers host failure; the handle is never inherited.
     this.api.close(this.job);
     this.disposed = true;
+    if (this.root) this.api.close(this.root);
     if (this.wrapper) this.api.close(this.wrapper);
   }
 }
@@ -143,6 +181,9 @@ export async function loadWindowsJobApi(): Promise<WindowsJobApi> {
   );
   const wait = fn(
     'uint32_t __stdcall WaitForSingleObject(void *handle, uint32_t timeout)',
+  );
+  const processExitCode = fn(
+    'int __stdcall GetExitCodeProcess(void *process, void *code)',
   );
   const lastError = fn('uint32_t __stdcall GetLastError()');
   const check = (result: unknown, stage: string) => {
@@ -203,6 +244,11 @@ export async function loadWindowsJobApi(): Promise<WindowsJobApi> {
       if (status === 0) return true;
       if (status === 258) return false;
       throw Error(`Windows command wait failed (code ${lastError()})`);
+    },
+    exitCode: (process) => {
+      const code = Buffer.alloc(4);
+      check(processExitCode(process, code), 'actual process exit code');
+      return code.readUInt32LE();
     },
     assign: (job, process) => check(assign(job, process), 'assign'),
     contains: (job, process) => {

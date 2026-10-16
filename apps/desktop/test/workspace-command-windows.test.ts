@@ -1,4 +1,5 @@
 import { test, type TestContext } from 'node:test';
+import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { join, dirname, delimiter } from 'node:path';
@@ -49,16 +50,62 @@ async function fixture(t: TestContext, supervisorOverride?: string) {
     executionEpoch: 'windows-real-job-test',
     windowsJobObject: true,
     stopExecution: async () => {
-      if (!active) throw Error('fixture has no original handle');
+      if (!active) {
+        // A pre-command launcher rejection is returned only after actual PTY/IO
+        // closure. No Registry handle exists to stop; assert the real closure.
+        const entries = await terminals.list('owner');
+        assert.ok(
+          entries.every((entry) => entry.status === 'exited'),
+          'unallocated command has no live original PTY',
+        );
+        return;
+      }
       await active.stop('fixture cleanup');
     },
   });
   t.after(async () => {
+    const errors: unknown[] = [];
     try {
       await active?.stop('fixture cleanup');
-    } finally {
-      await terminals.dispose();
+    } catch (error) {
+      errors.push(error);
     }
+    try {
+      await terminals.dispose();
+    } catch (error) {
+      errors.push(error);
+    }
+    const evidence = join(
+      process.env.CIRCLE_NATIVE_TEST_PROGRESS_DIR ??
+        fileURLToPath(
+          new URL('../artifacts/runtime-progress', import.meta.url),
+        ),
+      'windows-command-' + randomUUID(),
+    );
+    await mkdir(evidence, { recursive: true });
+    let raw = '';
+    try {
+      raw = await readFile(output, 'utf8');
+    } catch {}
+    await writeFile(join(evidence, 'original.log'), raw);
+    await writeFile(
+      join(evidence, 'receipt.json'),
+      JSON.stringify(
+        {
+          test: t.name,
+          root,
+          terminals: await terminals.list('owner'),
+          cleanupErrors: errors.map((error) => String(error)),
+        },
+        null,
+        2,
+      ),
+    );
+    if (errors.length)
+      throw new AggregateError(
+        errors,
+        'Windows command fixture cleanup failed; evidence ' + evidence,
+      );
     await rm(root, { recursive: true, force: true });
   });
   const run = async (body: string, extraEnv: NodeJS.ProcessEnv = {}) => {
@@ -183,24 +230,27 @@ test(
       preload = join(f.workspace, 'preload.cjs');
     await writeFile(
       preload,
-      "require('fs').appendFileSync('preloaded-pids',String(process.pid)+'\\n');",
+      "require('fs').appendFileSync('preloaded-pids',String(process.pid)+' ');",
     );
     const handle = await f.run("console.log('preloaded command done');", {
-      NODE_OPTIONS: '--require="' + preload + '"',
+      NODE_OPTIONS: '--require=' + JSON.stringify(preload),
     });
     if (handle.kind !== 'pty-group') throw Error('wrong process handle');
-    await handle.rootExit;
+    const actualExit = await handle.rootExit;
     await handle.controlledGroupEmpty;
     await handle.transportAndLogClosed;
+    assert.equal(actualExit.exitCode, 0, await readFile(f.output, 'utf8'));
     const pids = (await readFile(join(f.workspace, 'preloaded-pids'), 'utf8'))
       .trim()
-      .split('\n')
+      .split(/\s+/)
       .map(Number);
     assert.ok(
-      pids.length > 0,
+      pids.length > 0 &&
+        pids.every((pid) => Number.isSafeInteger(pid) && pid > 0),
       'actual command preserves its own Node options after assignment',
     );
     const wrapper = (await f.terminals.list('owner'))[0]!.pid;
+    assert.ok(Number.isSafeInteger(wrapper));
     assert.equal(
       pids.includes(wrapper!),
       false,

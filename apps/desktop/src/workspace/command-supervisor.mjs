@@ -381,16 +381,18 @@ async function windowsSupervisor() {
           ),
         );
         child.once('error', () =>
-          socket.write(JSON.stringify({ kind: 'failure' }) + '\n'),
-        );
-        child.once('exit', (code) => {
-          exited = true;
-          if (code === null) {
-            socket.write(JSON.stringify({ kind: 'failure' }) + '\n');
-            return;
-          }
           socket.write(
-            JSON.stringify({ kind: 'root-exit', exitCode: code }) + '\n',
+            JSON.stringify({ kind: 'failure', reason: 'spawn' }) + '\n',
+          ),
+        );
+        child.once('exit', (code, signal) => {
+          exited = true;
+          socket.write(
+            JSON.stringify({
+              kind: 'root-exit',
+              exitCode: code,
+              ...(signal ? { signal } : {}),
+            }) + '\n',
           );
         });
       } else if (message.kind === 'abort-before-start' && !started) {
@@ -399,14 +401,18 @@ async function windowsSupervisor() {
         try {
           child.kill('SIGKILL');
         } catch {
-          socket.write(JSON.stringify({ kind: 'failure' }) + '\n');
+          socket.write(
+            JSON.stringify({ kind: 'failure', reason: 'stop-signal' }) + '\n',
+          );
         }
       } else if (message.kind === 'root-exit-ack' && exited)
         acknowledged = true;
       else if (message.kind === 'finish' && exited && acknowledged) {
         socket.end();
       } else {
-        socket.write(JSON.stringify({ kind: 'failure' }) + '\n');
+        socket.write(
+          JSON.stringify({ kind: 'failure', reason: 'out-of-sequence' }) + '\n',
+        );
       }
     }
   });

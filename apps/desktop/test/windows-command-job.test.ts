@@ -24,6 +24,7 @@ function fake(overrides: Partial<WindowsJobApi> = {}) {
     creationTime: () => BigInt(Date.now()) * 10000n + 116444736000000000n,
     image: () => process.execPath,
     exited: () => false,
+    exitCode: () => 1,
     assign: () => {
       calls.push('assign');
       assigned = true;
@@ -151,3 +152,28 @@ test(
     assert.deepEqual(job.members(), []);
   },
 );
+
+test('Windows actual root exit code comes only from a retained Job-member handle after its native wait is signalled', () => {
+  let exited = false;
+  const f = fake({
+    open: (pid) => (pid === 43 ? 3n : 2n),
+    processId: (handle) => (handle === 3n ? 43 : 42),
+    exited: () => exited,
+    exitCode: () => 0xc000013a,
+  });
+  const job = new WindowsCommandJob(f.api);
+  job.assignWrapper(options());
+  job.captureRoot(43);
+  assert.throws(() => job.actualRootExitCode(), /unconfirmed/);
+  exited = true;
+  assert.equal(job.actualRootExitCode(), 0xc000013a);
+  job.dispose();
+  assert.equal(
+    f.calls.filter((call) => call === 'close:2' || call === 'close:3').length,
+    2,
+    'both retained process handles are closed',
+  );
+  const unbound = new WindowsCommandJob(fake().api);
+  assert.throws(() => unbound.actualRootExitCode(), /unconfirmed/);
+  unbound.dispose();
+});
