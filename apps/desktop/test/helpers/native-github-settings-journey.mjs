@@ -119,11 +119,15 @@ export async function runNativeGitHubSettingsJourney({
     });
     const toggle = await openExtensions(card);
     assert.equal(await toggle.isChecked(), false);
-    await toggle.check();
+    await toggle.click();
     await until(async () => {
       const item = extension(await state());
       return item?.enabled === true && item.view?.provider === 'github';
     }, 'original extension UI enables the actual native GitHub provider');
+    await until(
+      () => toggle.isChecked(),
+      'the original GitHub switch reflects the confirmed enabled state',
+    );
     const enabled = await state();
     const github = extension(enabled);
     assert.equal(github.view.client, 'GitHub CLI');
@@ -214,10 +218,18 @@ export async function runNativeGitHubSettingsJourney({
       commands: github.commands,
     };
     const disable = await openExtensions(card);
-    await disable.uncheck();
+    await until(
+      () => disable.isChecked(),
+      'the original GitHub switch is enabled before the explicit disable click',
+    );
+    await disable.click();
     await until(
       async () => extension(await state())?.enabled === false,
       'original extension UI disables GitHub',
+    );
+    await until(
+      async () => !(await disable.isChecked()),
+      'the original GitHub switch reflects the confirmed disabled state',
     );
     const disabled = await state();
     verifyDisabled(disabled);
@@ -287,6 +299,24 @@ export async function runNativeGitHubSettingsJourney({
           .map((tool) => tool.name),
       }))
       .catch((error) => ({ error: String(error) }));
+    receipt.preference = await readFile(settingsFile, 'utf8')
+      .then((text) => JSON.parse(text).extensions?.github ?? null)
+      .catch((error) => ({ error: String(error) }));
+    receipt.ui = await page
+      .evaluate(() => ({
+        route: location.hash,
+        errors: [
+          ...document.querySelectorAll('[role=alert],.inline-error,.notice'),
+        ].map((node) => node.textContent),
+      }))
+      .catch((error) => ({ error: String(error) }));
+    const failedToggle = page.getByRole('checkbox', {
+      name: 'enable github',
+      exact: true,
+    });
+    receipt.uiSwitch = (await failedToggle.count())
+      ? { checked: await failedToggle.isChecked() }
+      : { present: false };
     await page
       .screenshot({ path: join(output, 'github-settings-native-failure.png') })
       .catch(() => {});
@@ -302,10 +332,18 @@ export async function runNativeGitHubSettingsJourney({
         try {
           const card = await openSettings();
           const toggle = await openExtensions(card);
-          await toggle.uncheck();
+          await until(
+            () => toggle.isChecked(),
+            'the enabled GitHub switch is visible before cleanup',
+          );
+          await toggle.click();
           await until(
             async () => extension(await state())?.enabled === false,
             'restore the initial disabled extension state',
+          );
+          await until(
+            async () => !(await toggle.isChecked()),
+            'cleanup is reflected by the original GitHub switch',
           );
           receipt.cleanup = 'GitHub extension restored to disabled';
         } catch (error) {
