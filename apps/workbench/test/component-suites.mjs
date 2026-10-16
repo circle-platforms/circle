@@ -39,6 +39,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'github-plugin-ui.mjs',
   'command-terminal-handoff-ui.mjs',
   'github-permissions-ui.mjs',
+  'github-feedback-ui.mjs',
 ]);
 
 /** Explicit suites run serially; a failed suite prevents later execution. */
