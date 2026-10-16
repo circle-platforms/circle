@@ -6,10 +6,12 @@ import {
   removeOwnedBrowserWitness,
 } from './helpers/native-devtools-bridge-handoff.mjs';
 
-function guest(id, url = 'http://127.0.0.1:32101/', type = 'browserView') {
+const partition = {};
+function guest(id, url = 'http://127.0.0.1:32101/', type = 'window') {
   const target = new EventEmitter();
   return Object.assign(target, {
     id,
+    session: partition,
     getURL: () => url,
     getType: () => type,
     isDestroyed: () => false,
@@ -20,19 +22,27 @@ function guest(id, url = 'http://127.0.0.1:32101/', type = 'browserView') {
   });
 }
 const host = (...targets) => ({
+  session: {
+    fromPartition: (name) => {
+      assert.equal(name, 'circle-browser-owner');
+      return partition;
+    },
+  },
   webContents: { getAllWebContents: () => targets },
 });
 
-test('owned actual guest requires exact normalized fixture URL and unique browserView', () => {
+test('owned actual guest requires exact normalized fixture URL and unique owned WebContentsView window', () => {
   const main = guest(1, 'http://127.0.0.1:32101/', 'window');
+  main.session = {};
   const other = guest(2, 'http://127.0.0.1:32102/');
   const owned = guest(3);
   assert.deepEqual(
     installOwnedBrowserWitness(host(main, other, owned), {
       id: 'unique',
+      sessionId: 'owner',
       pageURL: 'http://127.0.0.1:32101',
     }),
-    { guestId: 3, pageURL: 'http://127.0.0.1:32101/' },
+    { guestId: 3, sessionId: 'owner', pageURL: 'http://127.0.0.1:32101/' },
   );
   assert.equal(main.listenerCount('console-message'), 0);
   assert.equal(other.listenerCount('console-message'), 0);
@@ -41,6 +51,7 @@ test('owned actual guest requires exact normalized fixture URL and unique browse
     () =>
       installOwnedBrowserWitness(host(main, other), {
         id: 'missing',
+        sessionId: 'owner',
         pageURL: 'http://127.0.0.1:32101/',
       }),
     /not unique/,
@@ -49,6 +60,7 @@ test('owned actual guest requires exact normalized fixture URL and unique browse
     () =>
       installOwnedBrowserWitness(host(owned, guest(4)), {
         id: 'duplicate',
+        sessionId: 'owner',
         pageURL: 'http://127.0.0.1:32101/',
       }),
     /not unique/,
@@ -61,6 +73,7 @@ test('gap witness observes real console effect and removes only owned listeners/
   owned.on('console-message', unrelated);
   installOwnedBrowserWitness(host(owned), {
     id: 'effect',
+    sessionId: 'owner',
     pageURL: owned.getURL(),
   });
   const witness = globalThis.__circleOwnedBrowserWitnesses.get('effect');

@@ -3,13 +3,19 @@ import { randomUUID } from 'node:crypto';
 import { clickReadyDevToolsResume } from './devtools-resume-control.mjs';
 
 /** Standalone trusted-main callback. Never opens a second debugger client. */
-export function installOwnedBrowserWitness({ webContents }, { id, pageURL }) {
+export function installOwnedBrowserWitness(
+  { webContents, session },
+  { id, pageURL, sessionId },
+) {
   const expected = new URL(pageURL).href;
+  const partition = session.fromPartition('circle-browser-' + sessionId);
   const candidates = webContents
     .getAllWebContents()
     .filter(
       (contents) =>
-        contents.getType() === 'browserView' && contents.getURL() === expected,
+        contents.getType() === 'window' &&
+        contents.session === partition &&
+        contents.getURL() === expected,
     );
   if (candidates.length !== 1)
     throw Error('exact owned fixture browser target is not unique');
@@ -27,7 +33,7 @@ export function installOwnedBrowserWitness({ webContents }, { id, pageURL }) {
   guest.on('console-message', witness.consoleListener);
   guest.on('devtools-opened', witness.openListener);
   (globalThis.__circleOwnedBrowserWitnesses ??= new Map()).set(id, witness);
-  return { guestId: guest.id, pageURL: expected };
+  return { guestId: guest.id, sessionId, pageURL: expected };
 }
 
 export function removeOwnedBrowserWitness(_, id) {
@@ -67,6 +73,7 @@ export async function runActualBridgeDevToolsHandoff({
     evidence.target = await app.evaluate(installOwnedBrowserWitness, {
       id,
       pageURL,
+      sessionId,
     });
     emit('JOURNEY_BROWSER_DEBUG_TRIGGER');
     await until(
