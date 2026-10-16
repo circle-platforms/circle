@@ -20,6 +20,8 @@ import {
   Plus,
   RotateCcw,
   ExternalLink,
+  Maximize2,
+  Minimize2,
   Search,
   Play,
   Users,
@@ -67,6 +69,10 @@ interface Props {
   selection: string;
   onPanel: (panel: PanelId, selection?: string) => void;
   onClose: () => void;
+  /** The panel across the whole workspace, and the way back to the split. */
+  whole: boolean;
+  canBeWhole: boolean;
+  onWhole: () => void;
   onFile: (path: string) => void;
   onAgent: (id: string) => void;
   onInteraction: (item: Interaction) => void;
@@ -151,9 +157,21 @@ export function Inspector(props: Props) {
               ? selected.panel.title
               : t('context')}
         </h2>
-        <IconButton label={t('close inspector')} onClick={props.onClose}>
-          <X size={15} />
-        </IconButton>
+        <span className="inspector-actions">
+          {props.canBeWhole && (
+            <IconButton
+              label={props.whole ? t('exit full view') : t('full view')}
+              aria-pressed={props.whole}
+              className={`icon-button ${props.whole ? 'active' : ''}`}
+              onClick={props.onWhole}
+            >
+              {props.whole ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            </IconButton>
+          )}
+          <IconButton label={t('close inspector')} onClick={props.onClose}>
+            <X size={15} />
+          </IconButton>
+        </span>
       </header>
       <div className={`inspector-body ${terminal ? 'flush' : ''}`}>
         {terminal ? (
@@ -390,7 +408,7 @@ export function ContextPanel({ onDialog }: Pick<Props, 'onDialog'>) {
         values={{
           [t('workspace')]: workspace.path,
           [t('model')]: session.model,
-          [t('effort')]: EFFORT_TEXT[session.effort]?.() ?? session.effort,
+          [t('effort')]: EFFORT_TEXT[session.effort]?.label() ?? session.effort,
           [t('mode')]: MODE_TEXT[sessionMode(session)].label(),
           [t('connection')]: snapshot.runtime?.configured
             ? t('configured')

@@ -3,6 +3,44 @@ export interface SlashCommand {
   description: string;
   aliases?: string[];
 }
+/**
+ * The system the words are for. The desktop window and its browser preview
+ * load this list too, and they have no `process`.
+ */
+function hostPlatform(): string {
+  if (typeof process !== 'undefined' && process.platform)
+    return process.platform;
+  const agent = globalThis.navigator?.userAgent ?? '';
+  return /Windows/i.test(agent) ? 'win32' : 'browser';
+}
+/**
+ * What /variables and /secrets say. The value is still written `%NAME%` in a tool's
+ * arguments; on Windows the commands say so, and elsewhere they do not show that form.
+ */
+export function variableCopy(platform: string = hostPlatform()): {
+  variables: string;
+  secrets: string;
+  saved(name: string): string;
+  secretCard(name: string): string;
+} {
+  const windows = platform === 'win32';
+  return {
+    variables: windows
+      ? 'Values the model uses as %NAME%: /variables [NAME=value]'
+      : 'Named values Circle fills in: /variables [NAME=value]',
+    secrets: windows
+      ? 'Values the model uses as %NAME% unseen: /secrets [NAME]'
+      : 'Named values Circle fills in unseen: /secrets [NAME]',
+    saved: (name) =>
+      windows
+        ? `the model writes %${name}% to use it`
+        : `Circle fills ${name} in when a tool runs`,
+    secretCard: (name) =>
+      windows
+        ? `The model knows only the name and writes %${name}% in a tool's arguments; Circle puts this value in when the tool runs.`
+        : `The model knows only the name. Circle puts this value in a tool's arguments when the tool runs.`,
+  };
+}
 export const BUILTIN_SLASH: SlashCommand[] = [
   { name: 'help', description: 'List slash commands' },
   { name: 'hotkeys', description: 'Show keyboard shortcuts' },
@@ -17,11 +55,11 @@ export const BUILTIN_SLASH: SlashCommand[] = [
   { name: 'settings', description: 'Show current settings' },
   {
     name: 'variables',
-    description: 'Values the model uses as %NAME%: /variables [NAME=value]',
+    description: variableCopy().variables,
   },
   {
     name: 'secrets',
-    description: 'Values the model uses as %NAME% unseen: /secrets [NAME]',
+    description: variableCopy().secrets,
   },
   {
     name: 'themes',
@@ -50,7 +88,11 @@ export const BUILTIN_SLASH: SlashCommand[] = [
     aliases: ['sessions'],
   },
   { name: 'continue', description: 'Resume the previous session' },
-  { name: 'name', description: 'Set session display name: /name <title>' },
+  {
+    name: 'name',
+    description: 'Set session display name: /name <title>',
+    aliases: ['rename'],
+  },
   {
     name: 'session',
     description: 'Show the session: id, title, messages, tokens',
@@ -230,8 +272,8 @@ export function hotkeysText(): string {
     '  ctrl+q          queue a follow-up: sent when the turn ends (also alt+enter)',
     '  alt+up          take back messages the model has not read yet',
     '  ctrl+v          paste the picture on the clipboard (also alt+v)',
-    '  esc             cancel turn / clear prompt',
-    '  esc esc         the session tree (/tree), with an empty prompt',
+    '  esc             stop the turn; with a draft, press again to clear (ctrl+y restores)',
+    '  esc esc         clear a draft, or the session tree (/tree) when the box is empty',
     '  ctrl+c          abort turn; clear the prompt; on an empty prompt twice to exit',
     '  ctrl+d          exit (with an empty prompt; otherwise delete forward)',
     '  ctrl+z          suspend to the shell; fg comes back',
@@ -240,18 +282,22 @@ export function hotkeysText(): string {
     '  ctrl+t          expand/collapse thinking',
     '  ctrl+o          expand/collapse tool output',
     '  ctrl+r          reverse-i-search history',
-    '  ctrl+l          choose a model (/models); also redraws the screen',
+    '  ctrl+l          redraw the screen',
+    '  alt+l           choose a model (/models)',
     '  alt+s           switch sessions, including while an approval waits',
-    '  ctrl+p          next model, for this session',
+    '  alt+m           next model, for this session',
+    '  ctrl+p / ctrl+n earlier / next prompt (also up / down)',
     '  shift+tab       next session mode (manual, accept edits, read-only, auto)',
     '  alt+t           next thinking depth, for this session',
     '  ctrl+g          edit the draft in $VISUAL / $EDITOR (/editor)',
-    '  ctrl+x          copy the last answer (/copy)',
+    '  alt+c           copy the last answer (/copy)',
+    '  alt+k           enter a secret a task left waiting',
     '  ctrl+f          find in the conversation; enter next, esc closes',
     '  alt+left/right  move by word (also ctrl+left/right, alt+b / alt+f)',
     '  ctrl+w          delete the word before the cursor (also alt+backspace)',
     '  alt+d           delete the word after the cursor',
-    '  ctrl+k / ctrl+u delete to the end / the whole line; ctrl+y puts back the last cut',
+    '  ctrl+k / ctrl+u delete to the end / back to the start of the line; ctrl+y restores',
+    '  in a list       alt+d saves a default · ctrl+k deletes or stops · ctrl+r renames',
     '  up/down         prompt history; with an empty prompt and no more history,',
     '                  scroll the transcript',
     '  down (empty)    select a running subagent; up/down move, enter opens it',

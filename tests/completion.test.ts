@@ -236,10 +236,14 @@ test('user cancellation after streaming does not save or retry a late response',
   await state.harness.cancel();
   await rejected;
   assert.equal(state.model.requests.length, 1);
-  assert.equal(
-    state.store.messages(state.session.id).filter((m) => m.role === 'assistant')
-      .length,
-    0,
+  // The late response is dropped. What streamed before the stop is kept as
+  // an interrupted partial, as a stop in the terminal shows it.
+  assert.deepEqual(
+    state.store
+      .messages(state.session.id)
+      .filter((m) => m.role === 'assistant')
+      .map((m) => [m.content, m.interrupted, m.completion]),
+    [['partial', true, undefined]],
   );
   assert.equal(state.events.filter((e) => e.kind === 'run_end').length, 0);
   assert.equal(

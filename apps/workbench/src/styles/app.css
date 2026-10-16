@@ -64,8 +64,14 @@
 * {
   box-sizing: border-box;
 }
+html {
+  height: 100%;
+  overflow: hidden;
+}
 body {
   margin: 0;
+  height: 100%;
+  overflow: hidden;
 }
 button,
 input,
@@ -142,23 +148,50 @@ pre {
 .workbench {
   display: grid;
   grid-template-columns: 228px minmax(0, 1fr);
+  /* One row, and it cannot grow with the session list. A content-sized row
+     clips the composer at the bottom of the window, a little further each
+     time a session is added, and the page itself does not scroll. */
+  grid-template-rows: minmax(0, 1fr);
   height: 100dvh;
   overflow: hidden;
 }
-.workspace {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-}
-.workspace-content {
+/* The panel seen whole takes the workspace; the columns step aside but stay mounted, so
+   the conversation keeps what it holds for the way back. */
+.workspace-content > .columns {
   flex: 1;
   min-height: 0;
-}
-.main-stack {
   display: flex;
   flex-direction: column;
-  height: 100%;
+}
+/* Seen whole: the panel takes the workspace, and the conversation keeps its own input
+   below it, as the chat stays in Codex's full view. Only the record steps aside. */
+.workspace-content > .columns.whole-under {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+.workspace-content > .columns.whole-under .conversation > :not(.composer-area) {
+  display: none;
+}
+/* Every level under the input then takes its height from it. The pinned layout
+   below fills the window instead, and would squeeze the input to nothing. */
+.workspace-content > .columns.whole-under > [data-group],
+.workspace-content > .columns.whole-under [data-panel],
+.workspace-content > .columns.whole-under [data-panel] > div,
+.workspace-content > .columns.whole-under .main-stack,
+.workspace-content > .columns.whole-under .conversation {
+  flex: 0 0 auto;
+  height: auto !important;
+  max-height: none !important;
+}
+.inspector-full {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.inspector-full > .inspector {
+  flex: 1;
   min-height: 0;
 }
 /* The grid item has to be allowed to shrink. Otherwise the session list grows
@@ -168,12 +201,37 @@ pre {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+.workspace {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.workspace-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.main-stack {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  flex: 1 1 0;
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
 }
 .sidebar {
   display: flex;
   flex-direction: column;
-  flex: 1;
+  flex: 1 1 auto;
   height: 100%;
   background: var(--sidebar);
   border-right: 1px solid var(--border);
@@ -524,6 +582,7 @@ pre {
   flex: 1;
   min-height: 0;
   min-width: 0;
+  overflow: hidden;
 }
 .conversation-heading {
   display: flex;
@@ -652,6 +711,48 @@ pre {
 .markdown pre code {
   padding: 0;
   background: none;
+}
+.code-block {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.code-block-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px 4px 12px;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  border-bottom: 1px solid var(--border);
+}
+.code-block-bar button {
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+}
+.code-block-bar button:hover {
+  color: var(--fg);
+}
+.code-block pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.token-comment {
+  color: var(--muted);
+}
+.token-string {
+  color: var(--accent);
+}
+.token-keyword {
+  color: var(--violet);
+}
+.token-number {
+  color: var(--attention);
 }
 .markdown a {
   color: var(--accent);
@@ -2020,7 +2121,14 @@ pre {
   border-top: 1px solid var(--border);
   margin-top: 28px;
   padding-top: 23px;
-  max-width: 850px;
+}
+.page.settings-page {
+  width: 100%;
+  align-self: stretch;
+}
+.page.settings-page > * {
+  width: min(720px, 100%);
+  margin-inline: auto;
 }
 .settings-block.first {
   margin-top: 0;
@@ -2037,6 +2145,13 @@ pre {
   color: var(--muted);
   line-height: 1.8;
   margin-bottom: 15px;
+}
+.settings-block > .toggle {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
 }
 .effort-options {
   display: flex;
@@ -2444,6 +2559,17 @@ pre {
   cursor: pointer;
   color: var(--secondary);
 }
+.app-menu [role='menuitem'] {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.app-menu kbd {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--ui-tiny);
+}
 .dropdown [data-highlighted] {
   background: var(--active);
   color: var(--fg);
@@ -2472,9 +2598,14 @@ pre {
   gap: 2px;
   line-height: 1.35;
 }
-.toast {
+.toast.whole {
   position: fixed;
   bottom: 25px;
+}
+.toast {
+  position: absolute;
+  /* Above the composer, centered on the main pane. */
+  bottom: 140px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 120;
@@ -3488,6 +3619,83 @@ pre {
   line-height: 1.5;
   margin-top: 2px;
 }
+.effort-menu {
+  min-width: 260px;
+}
+.effort-menu [role='menuitem'] {
+  display: grid;
+  grid-template-columns: 1fr 14px;
+  align-items: start;
+  gap: 9px;
+}
+.effort-menu strong {
+  display: block;
+  font-weight: 550;
+}
+.effort-menu small {
+  display: block;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  line-height: 1.5;
+  margin-top: 2px;
+}
+.record-main > span.viewing-tag {
+  flex: 0 0 auto;
+  margin-left: auto;
+  align-self: center;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+  white-space: nowrap;
+}
+.session-rename {
+  width: 100%;
+  min-width: 0;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--fg);
+}
+.session-row > .session-rename {
+  width: auto;
+  min-width: 0;
+  flex: 1;
+  height: 30px;
+  margin: 2px 0;
+  padding: 0 10px 0 22px;
+  border-radius: 7px;
+  font-size: var(--ui-size);
+  line-height: 30px;
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.session-row > .session-rename:focus,
+.session-row > .session-rename:focus-visible {
+  outline: none;
+}
+.session-menu [role='menuitem'] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--ui-small);
+}
+.session-menu [role='menuitem'].danger,
+.session-menu [role='menuitem'].danger svg {
+  color: var(--negative);
+}
+.session-menu kbd {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--ui-tiny);
+}
+.keybinding-list kbd {
+  font-family: var(--mono);
+  font-size: var(--ui-tiny);
+  color: var(--muted);
+}
+.skill-draft {
+  margin-bottom: 18px;
+}
 
 /* A request where it happens in the conversation. */
 .inline-request {
@@ -3714,6 +3922,14 @@ pre {
    plain text and folded tool calls, and a round input box with a footbar under it. */
 .workbench {
   grid-template-columns: 252px minmax(0, 1fr);
+}
+.workbench.sidebar-collapsed {
+  /* Hiding the sidebar takes it out of the grid. A zero first track would then
+     put the conversation in that track, so the transcript and composer vanish. */
+  grid-template-columns: minmax(0, 1fr);
+}
+.workbench.sidebar-collapsed .desktop-sidebar {
+  display: none;
 }
 .sidebar {
   padding: 0 10px;
@@ -3997,6 +4213,7 @@ pre {
   opacity: 0;
   transition: opacity 0.15s ease;
 }
+.message .message-meta,
 .message:hover .message-meta,
 .message-meta:focus-within {
   opacity: 1;
@@ -4107,9 +4324,10 @@ pre {
   }
 }
 
-/* The input box and the footbar under it. */
+/* The input box and the footbar under it. The transcript scrolls; this stays. */
 .composer-area {
   padding: 0 28px 14px;
+  flex: 0 0 auto;
 }
 .composer-area > * {
   width: 100%;
@@ -4209,6 +4427,13 @@ pre {
   min-width: 220px;
   max-height: 360px;
   overflow: auto;
+}
+/* Seven effort rows, each with a description, are taller than the shared menu cap.
+   The later shared rule would otherwise scroll a list that already fits. */
+.footbar-menu.effort-menu {
+  min-width: 260px;
+  max-height: none;
+  overflow: visible;
 }
 .footbar-menu [role='menuitem'] {
   display: flex;
@@ -4514,6 +4739,25 @@ pre {
 .workspace-content {
   position: relative;
 }
+/* The resizable panel otherwise grows with the transcript and scrolls the
+   composer off a window that is not maximized. Pin the column and scroll
+   the transcript. The library sets height and overflow inline. */
+.workspace-content > .columns > [data-group] {
+  flex: 1 1 0;
+  min-height: 0;
+}
+.workspace-content [data-panel] {
+  height: 100% !important;
+  max-height: 100% !important;
+  overflow: hidden !important;
+}
+.workspace-content [data-panel] > div {
+  display: flex !important;
+  flex-direction: column;
+  height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
 .inspector-overlay {
   position: absolute;
   top: 0;
@@ -4530,6 +4774,11 @@ pre {
 .inspector-overlay > .inspector {
   flex: 1;
   min-height: 0;
+}
+.inspector-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
 /* The application's own update: a line and its next step in settings, a chip in the sidebar. */
@@ -4620,11 +4869,22 @@ pre {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.variable-table td.variable-empty {
+  font-family: inherit;
+  color: var(--muted);
+  text-align: center;
+  padding: 22px 10px;
+}
 .variable-table tbody tr {
   cursor: default;
 }
 .variable-table tbody tr:hover {
   background: var(--hover);
+}
+.variable-table tbody tr.variable-empty-row,
+.variable-table tbody tr.variable-empty-row:hover {
+  background: transparent;
+  cursor: default;
 }
 .variable-table tbody tr[aria-selected='true'] {
   background: color-mix(in srgb, var(--accent) 24%, transparent);

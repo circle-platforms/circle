@@ -21,6 +21,11 @@ import {
 import { VERSION } from '../../../../src/version';
 import { useRuntime } from '../app/context';
 import { t, tn } from '../i18n';
+import {
+  DESKTOP_SEARCH_CHORD,
+  DESKTOP_SETTINGS_CHORD,
+  formatChord,
+} from '../model/shortcuts';
 import { DiffBlock } from '../components/DiffBlock';
 import { BrowserApproval, requestReason } from './InlineRequest';
 import { hasToolInput } from '../model/browser';
@@ -80,17 +85,22 @@ function desktopShortcuts(): [string, string][] {
     ['↑ ↓', t('earlier messages, at the start of the box')],
     ['Alt+↑', t('take back queued messages')],
     ['?', t('this list, with an empty box')],
-    [mod + 'K', t('search')],
+    [formatChord(DESKTOP_SEARCH_CHORD), t('search')],
+    // ctrl+r is history.search. It opens this same search on purpose.
+    [formatChord('ctrl+r'), t('search')],
     [mod + 'F', t('find in conversation')],
     [mod + 'N', t('new session')],
     [mod + 'O', t('open folder')],
-    [mod + ',', t('settings')],
-    [mod + 'P', t('next model')],
-    [mod + 'L', t('models')],
+    [formatChord(DESKTOP_SETTINGS_CHORD), t('settings')],
+    ['Alt+M', t('next model')],
+    [mod + 'Shift+M', t('models')],
+    [mod + 'B', t('show or hide the sidebar')],
+    ['Alt+B', t('background the turn')],
     [mod + 'T', t('show or hide thinking')],
     [mod + 'G', t('write the message in a larger editor')],
-    [mod + 'S', t('enter a secret')],
-    [mod + 'X', t('copy the last answer, when nothing is selected')],
+    ['Ctrl+Alt+S', t('enter a secret')],
+    ['Alt+C', t('copy the last answer, when nothing is selected')],
+    ['F2', t('rename session')],
   ];
 }
 // What the runtime's probe-connection answers (src/probe.ts resolveEndpoint): the kind of

@@ -154,11 +154,11 @@ Circle writes nothing of its own into your workspace. Older messages after a sum
 
 Circle works only in folders you have trusted: the first time, it asks, and it does not start until you say yes. Trusting a folder lets Circle use what the folder supplies: its instruction files, skills, custom commands, `.circle/settings.json` and extensions, which run their own code. It is an exact match: trusting `/a` does not trust `/a/b`. Trust does not limit what the model does in the folder.
 
-Instruction files and `.agents/skills` in the folders above the workspace, up to the git root, are read too, without being trusted on their own. Do not trust a folder you have not read.
+Instruction files and skills are read from the workspace folder you trusted, not from the folders above it. Your personal instruction files still apply. Do not trust a folder you have not read.
 
 ## Secrets
 
-The model asks for a secret with the `question` tool, naming a variable such as `API_TOKEN` and the file to write it to. A card shows both. You type the value with `ctrl+s`, masked. Circle writes it straight to that file as `NAME=value`, keeping the file's other lines, at mode `0600`, and tells the model only that it was collected. The value never enters the conversation, and a value that could not be collected is never asked for in chat. The model chooses the file: read the card before you enter a value. See [Secrets](usage.md#secrets).
+The model asks for a secret with the `question` tool, naming a variable such as `API_TOKEN` and the file to write it to. A card shows both. You choose `enter secret` and type the value, masked. `alt+k` opens a request that is already waiting. Circle writes it straight to that file as `NAME=value`, keeping the file's other lines, at mode `0600`, and tells the model only that it was collected. The value never enters the conversation, and a value that could not be collected is never asked for in chat. The model chooses the file: read the card before you enter a value. See [Secrets](usage.md#secrets).
 
 ### Secrets by name
 

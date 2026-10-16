@@ -8,6 +8,7 @@ import {
   type ReactNode,
   type Ref,
 } from 'react';
+import { focusMarkedField } from '../model/dialog-focus';
 import { t } from '../i18n';
 export function Button({
   children,
@@ -64,6 +65,12 @@ function placeFocus(node: HTMLElement) {
   node.focus({ focusVisible: true });
 }
 function focusDialogField(content: HTMLElement) {
+  // A dialog can name the field that starts with the keyboard (search).
+  const marked = content.querySelector('[data-initial-focus]');
+  if (marked instanceof HTMLElement) {
+    placeFocus(marked);
+    return;
+  }
   const field = content.querySelector(
     'input:not([type="hidden"]), textarea, select',
   );
@@ -137,6 +144,8 @@ export function Modal({
             // The close button is the first tab stop. Leaving focus there drops
             // keystrokes, and the composer behind the dialog receives them.
             event.preventDefault();
+            if (event.currentTarget instanceof Element)
+              focusMarkedField(event.currentTarget, event);
           }}
           onKeyDown={(event) => {
             if (event.key !== 'Escape') event.stopPropagation();
@@ -180,13 +189,15 @@ export function Badge({
 export function EmptyState({
   title,
   children,
+  icon,
 }: {
   title: string;
   children?: ReactNode;
+  icon?: ReactNode;
 }) {
   return (
     <div className="empty-state">
-      <Search size={25} />
+      {icon ?? <Search size={25} />}
       <h3>{title}</h3>
       {children && <p>{children}</p>}
     </div>

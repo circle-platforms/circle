@@ -235,7 +235,7 @@ export async function runRpc(
             .trim()
             .replace(/\s+/g, ' ');
           if (!name) throw new Error('name is required');
-          runtime.store.rename(runtime.session.id, name);
+          runtime.store.rename(runtime.session.id, name, true);
           response();
         } else throw new Error(`Unknown command: ${type || '(none)'}`);
       } catch (error) {

@@ -3,6 +3,7 @@ import { useRuntime } from '../app/context';
 import { Button, Modal, Status } from '../components/common';
 import { workspaceSessions } from '../model/session-management';
 import { currentSession } from '../model/state';
+import { workspaceLabel } from '../model/workspace-label';
 import type { Workspace } from '../model/types';
 import { t, tn } from '../i18n';
 
@@ -40,7 +41,7 @@ export function WorkspaceTrustSettings({
     notify(
       runtime.mode === 'live'
         ? t('{name} is no longer trusted and its sessions are archived', {
-            name: workspace.name,
+            name: workspaceLabel(workspace),
           })
         : 'sample workspace removed from this preview',
     );
@@ -59,7 +60,7 @@ export function WorkspaceTrustSettings({
       {snapshot.workspaces.map((workspace) => (
         <div className="setting-row" key={workspace.id}>
           <span>
-            {workspace.name}
+            {workspaceLabel(workspace)}
             <small>{workspace.path}</small>
           </span>
           <Status value={workspace.trusted ? 'trusted' : 'not trusted'} />
@@ -83,7 +84,9 @@ export function WorkspaceTrustSettings({
         onOpenChange={(open) => {
           if (!open) setRemoving(null);
         }}
-        title={t('remove {name}?', { name: removing?.name ?? '' })}
+        title={t('remove {name}?', {
+          name: removing ? workspaceLabel(removing) : '',
+        })}
       >
         {removing && (
           <>

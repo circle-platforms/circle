@@ -33,6 +33,7 @@ import {
 import { SessionRuntimeManager } from '../session_manager.js';
 import { fromJsonl } from '../session_export.js';
 import { sessionOccupied, SessionOccupiedError } from '../session_lock.js';
+import { friendlyModelError } from '../model_error.js';
 import { agentName } from './strip_rows.js';
 import type { CircleSettings } from '../settings.js';
 import {
@@ -80,7 +81,7 @@ import { nextAgentActivity } from '../session_activity.js';
 import { networkSummary } from '../net.js';
 import { terminalText } from '../ink/components/markdown_renderer.js';
 import { WelcomeState } from './welcome_state.js';
-import { windowTitle } from './status_rows.js';
+import { contextInputOf, windowTitle } from './status_rows.js';
 import { loadRemap } from '../keybindings.js';
 import { emptyUsage, type ToolCall } from '../types.js';
 import { ScreenRenderer } from '../ink/screen.js';
@@ -115,7 +116,7 @@ import {
 } from '../update.js';
 import { PlanPanel } from '../ink/components/plan_panel.js';
 import { stripAnsi, truncate } from '../ink/string_width.js';
-import { modelScope } from '../model_scope.js';
+import { modelScope, sameModel } from '../model_scope.js';
 import { resumeHint, runningJobs, stoppedJobsLine } from './exit_lines.js';
 import { ChromeBrowser, findBrowser } from '../browser/chrome.js';
 import { browserTools, runtimeBrowserOptions } from '../browser/tools.js';
@@ -550,7 +551,9 @@ export class SessionApp {
         this.runtime.policy.mode(this.runtime.session.id) === 'accept-edits';
       this.state.busy = this.runtime.busy;
       const stats = this.runtime.stats();
-      this.state.usage = stats.usage;
+      this.state.usage = { ...stats.usage };
+      if (this.state.busy && this.turns.pendingOutput)
+        this.state.usage.output_tokens += this.turns.pendingOutput;
       const facts =
         this.runtime.harness.model.modelFacts ??
         this.runtime.catalog.facts(
@@ -564,11 +567,10 @@ export class SessionApp {
       const lastAnswer = this.runtime.harness.messages
         .filter((message) => message.role === 'assistant' && message.usage)
         .at(-1);
-      this.state.contextInput =
-        !lastAnswer?.request_model ||
-        lastAnswer.request_model === this.runtime.harness.model.model
-          ? lastAnswer?.usage?.input_tokens
-          : undefined;
+      this.state.contextInput = contextInputOf(
+        lastAnswer,
+        this.runtime.harness.model.model,
+      );
       // After /undo or /redo the meter is unknown until the next answer, as in 0.5.0.
       if (this.meterCleared !== undefined) {
         if ((lastAnswer?.id ?? '') === this.meterCleared)
@@ -779,6 +781,34 @@ export class SessionApp {
     this.addNotice(text);
     this.repaint();
   }
+  /** The resume line is written before a title repair returns. Replace it. */
+  private retitleNotice(sessionId: string, title: string): void {
+    const line = title.replace(/\s+/g, ' ').trim().slice(0, 40);
+    if (!sessionId || !line) return;
+    const escaped = sessionId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(
+      `^((?:Resumed|Continued) ${escaped})(?: · .*|)$`,
+    );
+    // The repair can finish on the runtime that started it, after the screen
+    // has moved to the opened session.
+    const states = [this.selectedView.state];
+    if (this.view.state !== this.selectedView.state)
+      states.push(this.view.state);
+    let changed = false;
+    for (const state of states) {
+      for (let index = state.notices.length - 1; index >= 0; index--) {
+        const note = state.notices[index];
+        const match = note?.match(pattern);
+        if (!match?.[1]) continue;
+        const next = `${match[1]} · ${line}`;
+        if (note === next) return;
+        state.notices[index] = next;
+        changed = true;
+        break;
+      }
+    }
+    if (changed) this.repaint();
+  }
   private projectedCompletionNotices = new WeakMap<SessionView, Set<string>>();
   private get persistedCompletionNotices(): Set<string> {
     let notices = this.projectedCompletionNotices.get(this.view);
@@ -833,7 +863,9 @@ export class SessionApp {
             .visible(this.runtime.harness.messages)
             .filter(
               (message) =>
-                !message.internal || message.internal === 'job_notice',
+                !message.internal ||
+                message.internal === 'job_notice' ||
+                message.internal === 'interrupted',
             )
             .at(-1)?.id ?? '')
         : undefined,
@@ -948,6 +980,9 @@ export class SessionApp {
       ),
     );
     const runtime = this.createRuntime(options, this.view);
+    // Old builds inserted a row on startup and on every /new. Drop the ones
+    // nobody is using; a leased empty session stays until that runtime ends.
+    runtime.store.purgeEmptySessions();
     this.sessions.register(runtime);
     this.off = () => {
       for (const off of this.subscriptions.values()) off();
@@ -977,6 +1012,7 @@ export class SessionApp {
       this.fail(
         `Could not migrate ${error.thread || 'legacy data'}: ${error.message}`,
       );
+    runtime.repairRecentTitles();
     this.repaint();
   }
   private createRuntime(
@@ -1001,22 +1037,23 @@ export class SessionApp {
       : undefined;
     runtime = new AgentRuntime({
       ...options,
-      extraTools: [
-        ...(options.extraTools ?? []),
-        ...(browser
-          ? browserTools(browser, {
-              confirm: (_session, approval, signal) =>
-                view.interactions.run(
-                  () =>
-                    this.inView(view, () =>
-                      this.confirmBrowser(approval, signal),
-                    ),
-                  signal,
-                ),
-              ...runtimeBrowserOptions(() => runtime),
-            })
-          : []),
-      ],
+      deferSession: true,
+      extraTools: [...(options.extraTools ?? [])],
+      // Browser manuals are thousands of tokens. A greeting does not send them;
+      // the turn that asks for a page, or one that already used the browser, does.
+      deferredTools: browser
+        ? browserTools(browser, {
+            confirm: (_session, approval, signal) =>
+              view.interactions.run(
+                () =>
+                  this.inView(view, () =>
+                    this.confirmBrowser(approval, signal),
+                  ),
+                signal,
+              ),
+            ...runtimeBrowserOptions(() => runtime),
+          })
+        : [],
       settings: structuredClone(this.settings),
       beforeDelete: async () => {
         await browser?.close();
@@ -1148,7 +1185,10 @@ export class SessionApp {
             ) as (keyof typeof this.state.usage)[])
               this.state.usage[key] += event.usage?.[key] ?? 0;
           } else if (event.kind === 'run_error') {
-            // A key the endpoint turned down (401, 403) says where to change it, as in 0.5.0.
+            // A stop is a dim marker. A key the endpoint turned down (401, 403)
+            // says where to change it, as in 0.5.0.
+            this.state.streaming = '';
+            this.state.thinking = '';
             const assistant = event.payload.completion_message_id
               ? this.runtime?.harness.messages.find(
                   (message) =>
@@ -1160,17 +1200,20 @@ export class SessionApp {
               assistant && (assistant.completion || assistant.truncated)
                 ? completionFailure(assistant)
                 : undefined;
-            if (
+            if (event.payload.interrupted) this.addNotice('✖ Interrupted');
+            else if (
               !event.payload.completion_failure ||
               persisted?.code !== event.payload.completion_failure
-            )
+            ) {
+              const status = Number(event.payload.status);
               this.addNotice(
                 '✖ ' +
-                  String(event.payload.message) +
-                  ([401, 403].includes(Number(event.payload.status))
+                  friendlyModelError(String(event.payload.message), status) +
+                  ([401, 403].includes(status)
                     ? ' · /login to change the key'
                     : ''),
               );
+            }
           } else if (event.kind === 'info' && event.payload.model_notice) {
             const notice = event.payload.model_notice as {
               event: string;
@@ -1183,6 +1226,10 @@ export class SessionApp {
               this.flash(
                 `Retry ${notice.attempt}/${notice.max} in ${(Number(notice.wait_ms) / 1000).toFixed(1)}s`,
               );
+            } else if (notice.event === 'title_failed') {
+              const text = `title failed · ${String(notice.message).replace(/\s+/g, ' ').slice(0, 120)}`;
+              this.notice(text);
+              this.flash(text, 5000);
             } else if (notice.event === 'param_dropped')
               this.notice(
                 `Endpoint does not support ${notice.param}; continuing without it`,
@@ -1203,7 +1250,14 @@ export class SessionApp {
               this.flash('Retrying model request');
             }
             // Completion failures are rendered from saved evidence and run_error once.
-          }
+          } else if (
+            event.kind === 'info' &&
+            typeof event.payload.title === 'string'
+          )
+            this.retitleNotice(
+              String(event.payload.session_id ?? event.run_id ?? ''),
+              String(event.payload.title),
+            );
           if (coalesce) this.requestRender();
           else this.repaint();
         });
@@ -1254,6 +1308,9 @@ export class SessionApp {
     return this.sessions;
   }
   private changeSession(id?: string): Promise<void> {
+    // /new always opens another runtime. An unused one stays deferred (no
+    // sqlite row) until its first message, so startup and /new do not persist
+    // empty sessions, and a live conversation can still sit beside it.
     this.ensureSessions();
     const work = this.selecting.then(async () => {
       const runtime = id
@@ -1267,12 +1324,15 @@ export class SessionApp {
   private async deleteSession(id: string): Promise<boolean> {
     this.ensureSessions();
     const active = this.runtime;
-    const source = active!.store.get(id);
+    // A session that has never been written lives only on the runtime that
+    // created it. The selected runtime's store does not have that deferred row.
+    const owned = this.sessions!.get(id);
+    const source = owned?.store.get(id) ?? active!.store.get(id);
     if (!source) throw new Error('unknown session');
     const runtime =
       this.sessions!.get(id) ?? this.sessions!.open(source.workspace, id);
     const view = this.views.get(runtime)!;
-    const nextId =
+    const listed =
       active === runtime
         ? runtime.store
             .list(this.workspace)
@@ -1284,6 +1344,17 @@ export class SessionApp {
                   !sessionOccupied(this.home, session.id)),
             )?.id
         : undefined;
+    // Another /new may still be deferred, so it is absent from the table.
+    const nextId =
+      listed ??
+      (active === runtime
+        ? [...this.sessions!.values()].find(
+            (other) =>
+              other.session.id !== id &&
+              other.options.workspace === runtime.options.workspace &&
+              this.sessions!.lifecycle(other.session.id) === 'open',
+          )?.session.id
+        : undefined);
     await this.sessions!.delete(id, { confirmed: true });
     view.interactions.close();
     view.selection.close();
@@ -1422,7 +1493,7 @@ export class SessionApp {
     try {
       const choice = await this.askChoice(
         'secret',
-        `${request.question}\n${secretDestination(request)}\nctrl+s enters a masked value`,
+        `${request.question}\n${secretDestination(request)}\nenter secret, then type the value`,
         ['enter secret', 'cancel'],
         signal,
       );
@@ -1762,6 +1833,14 @@ export class SessionApp {
           query: this.history.query!,
           match: match !== undefined,
         };
+      } else if (
+        this.card instanceof ApprovalCard &&
+        this.card.explaining &&
+        this.state.dialog
+      ) {
+        this.composer.paste(event.text);
+        this.composer.update();
+        this.publishExplain(this.card);
       } else if (this.card && this.state.dialog) {
         this.card.paste(event.text);
         this.state.dialog = this.card.state();
@@ -1958,7 +2037,7 @@ export class SessionApp {
       if (key === 'escape') {
         this.state.jobDetail = undefined;
         void this.command('jobs', '');
-      } else if (key === 'ctrl+d')
+      } else if (key === 'ctrl+k')
         void (async () => {
           if (job.status === 'running') {
             if (
@@ -1988,7 +2067,21 @@ export class SessionApp {
       }
       const dialog = this.state.dialog;
       if (this.card) {
+        // Reject and explain is the composer: esc returns to the options and keeps
+        // the draft, enter rejects (empty is plain), and a /command runs.
+        if (this.card instanceof ApprovalCard && this.card.explaining) {
+          this.explainKey(this.card, key, char);
+          this.repaint();
+          return;
+        }
         const result = this.card.handle(key, char);
+        if (this.card instanceof ApprovalCard && this.card.explaining) {
+          this.composer.set(this.card.draft);
+          this.composer.update();
+          this.publishExplain(this.card);
+          this.repaint();
+          return;
+        }
         if (result === 'pass') {
           // not the card's business: ctrl+c stops the turn, page keys scroll
           if (key === 'ctrl+c' && this.runtime?.busy) this.ctrlC();
@@ -1998,11 +2091,6 @@ export class SessionApp {
           }
         } else if (result) this.pending?.complete(result.answer);
         else this.state.dialog = this.card.state();
-        this.repaint();
-        return;
-      }
-      if (key === 'ctrl+s' && this.secretReady && dialog.input === undefined) {
-        this.pending?.complete('enter secret');
         this.repaint();
         return;
       }
@@ -2034,17 +2122,18 @@ export class SessionApp {
       this.repaint();
       return;
     }
-    if (key === 'ctrl+s') {
+    if (key === 'ctrl+d' && !this.state.draft) {
+      this.exit(0);
+      return;
+    }
+    // alt+k, not ctrl+s: ctrl+s is XOFF and freezes a terminal that has ixon on.
+    // Idle presses do nothing; a waiting request opens its card.
+    if (key === 'alt+k') {
       const request = listPending(this.home)[0];
       if (request)
         void this.enterSecret(request, new AbortController().signal).catch(
           (error) => this.fail(error),
         );
-      else this.flash('No secret request');
-      return;
-    }
-    if (key === 'ctrl+d' && !this.state.draft) {
-      this.exit(0);
       return;
     }
     if (this.composer.completionKey(key)) {
@@ -2065,16 +2154,24 @@ export class SessionApp {
     } else if (key === 'escape') {
       this.jobWakeSnoozed = true;
       if (this.runtime?.busy) this.interrupt();
-      else if (
-        !this.state.draft &&
+      else if (this.state.draft) {
+        // One esc is not enough to throw the draft away. The second clears it,
+        // and ctrl+y puts that draft back.
+        if (Date.now() - this.lastEscape < 800) {
+          this.composer.stashClear();
+          this.flash('cleared · ctrl+y restores');
+          this.lastEscape = 0;
+        } else {
+          this.lastEscape = Date.now();
+          this.flash('press esc again to clear · ctrl+y restores');
+        }
+      } else if (
         Date.now() - this.lastEscape < 500 &&
         this.settings.double_escape !== 'none'
-      )
+      ) {
+        this.lastEscape = 0;
         void this.command(this.settings.double_escape, '');
-      // Only an esc on an empty box counts toward esc esc: the one that clears your
-      // text must not open the tree as well
-      this.lastEscape = this.state.draft ? 0 : Date.now();
-      if (!this.runtime?.busy) this.composer.clear();
+      } else this.lastEscape = Date.now();
     } else if (key === 'ctrl+b') {
       const count = this.runtime?.jobs.backgroundForeground() ?? 0;
       this.flash(
@@ -2101,15 +2198,17 @@ export class SessionApp {
           : 'Thinking collapsed',
       );
     } else if (key === 'ctrl+l') {
-      // The screen is drawn again from scratch, then the model list opens
+      // readline: redraw. The model list is alt+l (/models).
       this.terminal.write('\x1b[2J');
       this.screen.invalidate();
+      this.repaint();
+    } else if (key === 'alt+l')
       void this.command('models', '').catch((error) => this.fail(error));
-    } else if (key === 'ctrl+g')
+    else if (key === 'ctrl+g')
       void this.command('editor', '').catch((error) => this.fail(error));
-    else if (key === 'ctrl+x')
+    else if (key === 'alt+c')
       void this.command('copy', '').catch((error) => this.fail(error));
-    else if (key === 'ctrl+p')
+    else if (key === 'alt+m')
       void this.cycleModel().catch((error) => this.fail(error));
     else if (key === 'shift+tab' && this.runtime)
       // cycles the session mode, as shift+tab does in other coding agents
@@ -2288,6 +2387,138 @@ export class SessionApp {
     if (this.state.picker === open.list) {
       if (!open.list.asking) open.list.setItems(open.rows());
     } else if (!this.state.dialog) this.jobsList = undefined;
+  }
+  /** The open reason row, drawn from the composer so the cursor and completions match. */
+  private publishExplain(card: ApprovalCard): void {
+    card.draft = this.state.draft;
+    const dialog = card.state();
+    if (dialog.input !== undefined) dialog.inputCursor = this.state.draftCursor;
+    this.state.dialog = dialog;
+  }
+  /**
+   * Keys for `Reject and explain`. The row is the composer: esc returns to the
+   * options and keeps the draft, an empty enter is a plain rejection, and a
+   * slash command runs without answering the card.
+   */
+  private explainKey(card: ApprovalCard, key: string, char: string): void {
+    if (key === 'escape') {
+      card.explaining = false;
+      card.focus = card.options.length - 1;
+      card.draft = this.state.draft;
+      this.state.completion = undefined;
+      this.state.dialog = card.state();
+      return;
+    }
+    if (key === 'ctrl+c') {
+      if (this.runtime?.busy) this.ctrlC();
+      return;
+    }
+    if (key === 'pageup' || key === 'pagedown') {
+      const page = Math.max(1, (process.stdout.rows || 24) - 8);
+      this.scrollBy(key === 'pageup' ? page : -page);
+      return;
+    }
+    if (key === 'ctrl+d' && !this.state.draft) {
+      this.exit(0);
+      return;
+    }
+    if (key === 'enter') {
+      const list = this.state.completion;
+      if (
+        list?.kind === 'command' &&
+        list.value === this.state.draft &&
+        list.cursor === this.state.draftCursor
+      ) {
+        const chosen = list.items[list.focus]?.value;
+        if (chosen) {
+          this.state.completion = undefined;
+          this.composer.set(chosen);
+          void this.runExplainCommand(chosen);
+          return;
+        }
+      }
+      if (this.composer.completionKey(key)) {
+        this.publishExplain(card);
+        return;
+      }
+      const message = this.state.draft.trim();
+      if (!message) {
+        this.pending?.complete('reject');
+        return;
+      }
+      if (
+        message === '?' ||
+        (message.startsWith('/') && commandWord(this.state.draft))
+      ) {
+        void this.runExplainCommand(this.state.draft);
+        return;
+      }
+      this.pending?.complete({ decision: 'reject', message });
+      return;
+    }
+    if (this.composer.completionKey(key)) {
+      this.publishExplain(card);
+      return;
+    }
+    this.composer.key(key, char);
+    this.publishExplain(card);
+  }
+  /**
+   * A slash command typed in the reason row. The card stays; a command that
+   * opens a list takes the keys until that list closes.
+   */
+  private async runExplainCommand(raw: string): Promise<void> {
+    const view = this.view;
+    const card = this.card;
+    if (!(card instanceof ApprovalCard) || !card.explaining) return;
+    const shown = raw.trim();
+    view.suspendedDialog = card.state();
+    view.state.dialog = undefined;
+    view.state.completion = undefined;
+    try {
+      if (shown === '?') {
+        await this.command('hotkeys', '');
+        this.composer.set('');
+      } else if (shown.startsWith('/')) {
+        const extra = new Set([
+          ...discoverCustomCommands(this.workspace, this.home).map(
+            (command) => command.name,
+          ),
+          ...(this.runtime?.extensions.commands().keys() ?? []),
+        ]);
+        const slash = parseSlash(shown, extra);
+        if (slash) {
+          this.composer.set('');
+          await this.command(slash.name, slash.args);
+        } else {
+          const word = commandWord(raw);
+          const close = word
+            ? closeMatch(word, [...knownSlashNames(), ...extra])
+            : '';
+          this.composer.set(raw);
+          this.flash(
+            `Unknown command /${word}` +
+              (close ? ` · did you mean /${close}?` : ' · /help lists them'),
+            4000,
+          );
+        }
+      }
+    } catch (error) {
+      this.inView(view, () => this.fail(error));
+    }
+    if (this.view !== view || view.card !== card) return;
+    card.draft = view.state.draft;
+    if (view.state.picker) {
+      view.suspendedDialog = card.state();
+      this.repaint();
+      return;
+    }
+    view.suspendedDialog = undefined;
+    if (card.explaining) {
+      this.composer.update();
+      this.publishExplain(card);
+    }
+    this.repaint();
   }
   /** Send the draft: the model reads the long pastes, the screen and the history keep it as shown. */
   private send(kind: 'steer' | 'followUp'): void {
@@ -2470,8 +2701,10 @@ export class SessionApp {
         return owner.runtime!;
       },
       createSession: async () => {
+        const before = this.runtime?.session.id;
         await this.changeSession();
         owner = this.selectedView;
+        return this.runtime?.session.id !== before;
       },
       openSession: async (id) => {
         await this.changeSession(id);
@@ -2568,7 +2801,13 @@ export class SessionApp {
         this.repaint();
       },
       trustWorkspace: () => this.trustWorkspace(),
-      clipboard: (text) => this.clipboard.copyNative(text),
+      clipboard: async (text) => {
+        if (await this.clipboard.copyNative(text)) return true;
+        // No local tool (a Linux terminal without wl-copy or xclip). OSC 52 still
+        // reaches the terminal; the file fallback remains when that is all we have.
+        await this.clipboard.copySelection(text);
+        return false;
+      },
       followJobs: (list, rows) => {
         owner.jobsList = { list, rows };
       },
@@ -2715,16 +2954,38 @@ export class SessionApp {
     const view = this.view;
     if (!runtime) return;
     if (name === 'models') {
-      const choose = (model: string): void => {
+      const choose = (model: string, extra = ''): void => {
         if (runtime.harness.busy) throw new Error('a turn is running');
         runtime.setModel(model);
-        this.flash(
-          `Model → ${model} · this session (ctrl+s in /models saves it)`,
-          4000,
+        // One space around each separator. The footer flash goes away; the
+        // transcript line stays, including `not listed by this endpoint`.
+        const line = `model set to ${model}${extra} · this session`.replace(
+          / {2,}/g,
+          ' ',
         );
+        this.notice(line);
+        this.flash(`${line} (alt+d in /models saves it)`, 4000);
       };
-      if (args.trim()) choose(args.trim());
-      else {
+      if (args.trim()) {
+        const model = args.trim();
+        let extra = '';
+        try {
+          const endpoint =
+            runtime.options.settings.auth.protocol +
+            ':' +
+            runtime.options.settings.auth.base_url;
+          // alt+m calls this with an id from the list just loaded. Ask the
+          // endpoint again only when that list is missing.
+          if (!this.knownModels || this.knownModelsEndpoint !== endpoint)
+            await this.loadModels(runtime);
+          if (runtime.isClosing) return;
+          if (!(this.knownModels ?? []).some((item) => sameModel(item, model)))
+            extra = ' · not listed by this endpoint';
+        } catch {
+          extra = '';
+        }
+        choose(model, extra);
+      } else {
         const models = await this.loadModels(runtime);
         if (runtime.isClosing) return;
         this.inView(view, () => {
@@ -2733,14 +2994,14 @@ export class SessionApp {
             models.map((model) => ({
               key: model,
               label: model,
-              current: model === runtime.harness.model.model,
+              current: sameModel(model, runtime.harness.model.model),
               meta: [
                 model === this.settings.auth.model ? 'default' : '',
                 (this.runScopeOnly
                   ? runtime.runOptions.models
                   : this.settings.enabled_models
                 ).length && this.scopedModels().includes(model)
-                  ? 'in ctrl+p'
+                  ? 'in alt+m'
                   : '',
               ]
                 .filter(Boolean)
@@ -2748,13 +3009,16 @@ export class SessionApp {
             }));
           this.picker('Model', rows(), (item) => choose(item.key), {
             hint:
-              'enter uses it in this session · ctrl+s also makes it the default · ' +
-              'tab adds it to ctrl+p or takes it out',
+              'enter uses it in this session · alt+d also makes it the default · ' +
+              'tab adds it to alt+m or takes it out',
             empty:
               'No model matches · /models <id> uses an id the endpoint does not list',
-            focusKey: runtime.harness.model.model,
+            focusKey:
+              models.find((model) =>
+                sameModel(model, runtime.harness.model.model),
+              ) ?? runtime.harness.model.model,
             keys: {
-              'ctrl+s': (item) => {
+              'alt+d': (item) => {
                 if (!item) return;
                 runtime.setModel(item.key);
                 this.settings.auth.model = item.key;
@@ -2783,8 +3047,8 @@ export class SessionApp {
                 this.state.picker?.setItems(rows());
                 this.flash(
                   next.length
-                    ? `ctrl+p goes through ${next.length} model${next.length === 1 ? '' : 's'}`
-                    : 'ctrl+p goes through every listed model',
+                    ? `alt+m goes through ${next.length} model${next.length === 1 ? '' : 's'}`
+                    : 'alt+m goes through every listed model',
                   2000,
                 );
               },

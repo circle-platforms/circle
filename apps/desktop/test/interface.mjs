@@ -882,17 +882,26 @@ try {
   checks.push(
     'a file pattern is refused, added, checked against a name and removed',
   );
-  const keyboard = page.locator('section.settings-block', {
-    has: page.getByRole('heading', { name: 'keyboard', exact: true }),
+  // Key preferences are one row per action: change…, then the new key.
+  const modelsKey = page.locator('.keybinding-list .setting-row', {
+    has: page.getByText('models', { exact: true }),
   });
-  const modelRow = keyboard
-    .locator('.key-action')
-    .filter({ has: page.getByText('choose a model') });
-  await modelRow
-    .getByRole('button', { name: 'change the key for choose a model' })
+  await modelsKey
+    .getByRole('button', { name: 'change the key for models' })
     .click();
+  await modelsKey.getByText('press the new key', { exact: true }).waitFor();
   await page.keyboard.press('F3');
-  await modelRow.getByText('F3').waitFor();
+  await modelsKey.getByText('f3', { exact: true }).waitFor();
+  await modelsKey
+    .getByRole('button', { name: 'reset the key for models' })
+    .waitFor();
+  // A keyboard row answers to the action it changes, so the page keeps exactly one
+  // button named "change…": the default workspace's picker (live.mjs clicks it).
+  assert.equal(
+    await page.getByRole('button', { name: 'change…', exact: true }).count(),
+    0,
+    "a keyboard row answers to the workspace picker's name",
+  );
   await route('/session/session1');
   await page.getByRole('textbox', { name: 'message', exact: true }).press('F3');
   await page.getByRole('heading', { name: 'models', exact: true }).waitFor();
@@ -1015,8 +1024,8 @@ try {
     () => document.activeElement?.getAttribute('aria-label') === 'message',
   );
   await thinking.click();
-  await page.getByRole('menuitem', { name: 'extra high', exact: true }).click();
-  assert.match(await thinking.innerText(), /extra high/);
+  await page.getByRole('menuitem', { name: 'very high', exact: true }).click();
+  assert.match(await thinking.innerText(), /very high/);
   checks.push('home composer has the session controls');
   const projectButton = page.getByRole('button', {
     name: 'choose a project',
@@ -1084,7 +1093,7 @@ try {
     })
     .waitFor();
   assert.equal(await heldDraft.inputValue(), 'hold this');
-  assert.match(await thinking.innerText(), /extra high/);
+  assert.match(await thinking.innerText(), /very high/);
   checks.push(
     'leaving home and opening new session keeps the draft, project and thinking depth',
   );
@@ -1301,6 +1310,150 @@ try {
     'preview reset cancel, confirmation, reopen and persisted data effects',
   );
   await reset();
+  // The panel seen whole, as Codex lets a preview be: the shell offers it, a file list
+  // does not, and the conversation underneath keeps what the person had typed.
+  const boxes = () =>
+    page.evaluate(() => {
+      const at = (selector) => {
+        const node = document.querySelector(selector);
+        if (!node) return null;
+        const box = node.getBoundingClientRect();
+        return {
+          x: Math.round(box.x),
+          y: Math.round(box.y),
+          width: Math.round(box.width),
+          height: Math.round(box.height),
+          shown: node.checkVisibility(),
+        };
+      };
+      return {
+        content: at('.workspace-content'),
+        panel: at('.inspector'),
+        composer: at('.composer-area'),
+        transcript: at('.transcript'),
+        sidebar: at('.sidebar'),
+        draft: document.querySelector('[aria-label="message"]').value,
+      };
+    });
+  const wholeButton = (name) => page.getByRole('button', { name, exact: true });
+  await page
+    .getByRole('button', { name: 'terminal panel', exact: true })
+    .click();
+  await page.locator('.inspector').waitFor();
+  // A display narrower than the split (a macOS runner's screen is 1024 pixels wide) lays
+  // the panel over the conversation, where the full view has nothing to fill: there it is
+  // not offered, and the split checks below need a wider window.
+  const besideChat = await page.evaluate(
+    () => !document.querySelector('.inspector-overlay'),
+  );
+  if (!besideChat) {
+    assert.equal(
+      await wholeButton('full view').count(),
+      0,
+      'a window narrower than the split does not offer the full view',
+    );
+    checks.push(
+      'a window narrower than the split does not offer the full view (the split checks need a wider display)',
+    );
+  } else {
+    assert.equal(
+      await wholeButton('full view').count(),
+      1,
+      'the terminal offers the full view',
+    );
+    await page
+      .getByRole('button', { name: 'files panel', exact: true })
+      .click();
+    assert.equal(
+      await wholeButton('full view').count(),
+      0,
+      'a file list does not',
+    );
+    await page
+      .getByRole('button', { name: 'terminal panel', exact: true })
+      .click();
+    const draft = 'kept while the panel is whole';
+    await page
+      .getByRole('textbox', { name: 'message', exact: true })
+      .fill(draft);
+    const split = await boxes();
+    assert.ok(
+      split.panel.width < split.content.width - 100,
+      'the panel starts split: ' + JSON.stringify(split.panel),
+    );
+    await wholeButton('full view').click();
+    const whole = await boxes();
+    assert.equal(
+      whole.panel.width,
+      whole.content.width,
+      'the panel fills the workspace: ' + JSON.stringify(whole),
+    );
+    // The chat and its waiting cards stay below, so the panel trades some height for the
+    // width it was asking for: most of the workspace is still page.
+    assert.ok(
+      whole.panel.height > whole.content.height * 0.5,
+      'the panel keeps the height it can: ' +
+        JSON.stringify([whole.panel, whole.content]),
+    );
+    assert.ok(
+      whole.composer.height > 40 &&
+        whole.composer.height < whole.content.height / 2,
+      'the chat is a bar below, not a wall: ' + JSON.stringify(whole.composer),
+    );
+    assert.ok(
+      whole.composer.shown && whole.composer.width === whole.content.width,
+      'the chat stays below it: ' + JSON.stringify(whole.composer),
+    );
+    assert.ok(
+      whole.composer.y >= whole.panel.y + whole.panel.height - 2,
+      'below, not under: ' + JSON.stringify([whole.panel, whole.composer]),
+    );
+    assert.ok(!whole.transcript.shown, 'only the record steps aside');
+    assert.ok(whole.sidebar.shown, 'the sidebar stays beside the whole panel');
+    // The session's own row in its project group: it is also listed under recent, and its
+    // row menu button carries its title too.
+    assert.ok(
+      await page
+        .locator('.sidebar .project-list > .project')
+        .filter({
+          has: page.getByRole('button', { name: 'orbit-api', exact: true }),
+        })
+        .locator('a.session-link', { hasText: 'Review the request lifecycle' })
+        .isVisible(),
+      'another session can still be chosen from the full view',
+    );
+    assert.equal(whole.draft, draft, 'the full view keeps the draft');
+    await page
+      .getByRole('textbox', { name: 'message', exact: true })
+      .fill('typed in the full view');
+    assert.equal(
+      await page
+        .getByRole('textbox', { name: 'message', exact: true })
+        .inputValue(),
+      'typed in the full view',
+      'the input still takes what the person types',
+    );
+    await page
+      .getByRole('textbox', { name: 'message', exact: true })
+      .fill(draft);
+    await page.screenshot({ path: join(output, 'inspector-full-view.png') });
+    await wholeButton('exit full view').click();
+    const back = await boxes();
+    assert.ok(back.panel.width < back.content.width - 100, 'the split returns');
+    assert.ok(back.transcript.shown, 'the record comes back');
+    assert.equal(back.draft, draft);
+    await wholeButton('full view').click();
+    await page.keyboard.press('Escape');
+    assert.equal(
+      await page.evaluate(() => !!document.querySelector('.inspector-full')),
+      false,
+      'Escape leaves the full view',
+    );
+    checks.push(
+      'the panel fills the workspace in the full view with the chat kept below it, and back',
+    );
+  }
+  await reset();
   const narrowViewport = await setViewport(application, page, {
     width: 800,
     height: 650,
@@ -1308,6 +1461,20 @@ try {
   await page
     .getByRole('dialog', { name: 'inspector', exact: true })
     .waitFor({ state: 'hidden' });
+  // A narrow window already lays the panel over the conversation: there is nothing
+  // left to fill, so the view is not offered there.
+  const terminalButton = page.getByRole('button', {
+    name: 'terminal panel',
+    exact: true,
+  });
+  if (await terminalButton.isVisible()) {
+    await terminalButton.click();
+    assert.equal(
+      await page.getByRole('button', { name: 'full view' }).count(),
+      0,
+      'a narrow window offers a view it cannot fill',
+    );
+  }
   await page.keyboard.press('Escape');
   assert.ok(
     await page.evaluate(

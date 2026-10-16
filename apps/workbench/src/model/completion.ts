@@ -31,5 +31,12 @@ export function completionNoticeText(
   const failure =
     message.completionFailure &&
     completionFailureText(message.completionFailure);
-  return failure ? `✖ ${failure}` : message.text;
+  if (failure) return `✖ ${failure}`;
+  // The runtime's own words for a failed turn and a failed session title.
+  if (message.text === '✖ the turn failed') return t('✖ the turn failed');
+  if (message.text.startsWith('title failed · '))
+    return t('title failed · {message}', {
+      message: message.text.slice('title failed · '.length),
+    });
+  return message.text;
 }

@@ -1,17 +1,21 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { platform } from 'node:os';
 import { currentBranch } from './git_info.js';
 import type { RunOptions } from './run_options.js';
-import { formatMemorySources } from './memory_sources.js';
+import { formatMemorySources, readCappedText } from './memory_sources.js';
 const prompts = fileURLToPath(new URL('./prompts/', import.meta.url));
 export function readPrompt(...parts: string[]): string {
   return readFileSync(join(prompts, ...parts), 'utf8').trim();
 }
 export function loadToolPrompt(name: string): string {
   const path = join(prompts, 'tools', name + '.md');
-  return existsSync(path) ? readFileSync(path, 'utf8').trim() : name;
+  if (!existsSync(path)) return name;
+  return readFileSync(path, 'utf8')
+    .replace(/\n## Examples\b[\s\S]*$/i, '')
+    .replaceAll('{{year}}', String(new Date().getFullYear()))
+    .trim();
 }
 export function selectSessionPromptName(model: string): string {
   const name = model.toLowerCase();
@@ -35,35 +39,27 @@ export function selectSessionPromptName(model: string): string {
 export function discoverContextFiles(workspace: string): [string, string][] {
   const files: [string, string][] = [];
   const seen = new Set<string>();
-  const root = resolve(workspace);
-  for (let directory = root; ; directory = dirname(directory)) {
-    for (const name of [
-      'AGENTS.override.md',
-      'AGENTS.md',
-      'AGENTS.MD',
-      'CLAUDE.md',
-      'CLAUDE.MD',
-    ]) {
-      const path = join(directory, name);
-      try {
-        // bigint: see fileIdentity in memory_sources.ts
-        const stat = statSync(path, { bigint: true });
-        const identity = `${stat.dev}:${stat.ino}`;
-        if (!stat.isFile() || seen.has(identity)) continue;
-        seen.add(identity);
-        files.push([
-          path,
-          readFileSync(path).subarray(0, 120000).toString('utf8').trim(),
-        ]);
-      } catch {
-        /* No instruction file here. */
-      }
+  // This folder only. A parent checkout's AGENTS.md must not describe a
+  // different repository to a session opened in a subdirectory.
+  const directory = resolve(workspace);
+  for (const name of [
+    'AGENTS.override.md',
+    'AGENTS.md',
+    'AGENTS.MD',
+    'CLAUDE.md',
+    'CLAUDE.MD',
+  ]) {
+    const path = join(directory, name);
+    try {
+      // bigint: see fileIdentity in memory_sources.ts
+      const stat = statSync(path, { bigint: true });
+      const identity = `${stat.dev}:${stat.ino}`;
+      if (!stat.isFile() || seen.has(identity)) continue;
+      seen.add(identity);
+      files.push([path, readCappedText(path)]);
+    } catch {
+      /* No instruction file here. */
     }
-    if (
-      dirname(directory) === directory ||
-      (existsSync(join(directory, '.git')) && directory !== root)
-    )
-      break;
   }
   return files;
 }
@@ -84,7 +80,12 @@ function sessionPrompt(model: string): string {
     ['`Grep`', '`grep`'],
   ])
     session = session.replaceAll(from!, to!);
-  return session;
+  // Worked examples are long and untested. The rules above them stay.
+  return session
+    .replace(/<example>[\s\S]*?<\/example>/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 // `.circle/<name>` in the project, else `<name>` in the data folder, as 0.5.0 read them.
 function promptFile(
@@ -133,6 +134,14 @@ export interface PromptCatalog {
   variables?: Record<string, string>;
   /** Names of the saved secrets: the model never sees a value. */
   secrets?: string[];
+}
+function skillLine(skill: { name: string; description: string }): string {
+  const description = skill.description.replace(/\s+/g, ' ').trim();
+  const brief =
+    description.length > 160
+      ? `${description.slice(0, 159).trimEnd()}…`
+      : description;
+  return `- ${skill.name}: ${brief}`;
 }
 export function buildSystemPrompt(
   workspace: string,
@@ -195,15 +204,13 @@ export function buildSystemPrompt(
   if (catalog.skills?.length)
     sections.push(
       'Available skills:\n' +
-        catalog.skills
-          .map((skill) => `- ${skill.name}: ${skill.description}`)
-          .join('\n'),
+        catalog.skills.map((skill) => skillLine(skill)).join('\n'),
     );
   const variables = Object.entries(catalog.variables ?? {});
   if (variables.length || catalog.secrets?.length)
     sections.push(
       '<variables>\n' +
-        "Variables the user keeps in Circle. Write %NAME% in a tool's arguments (a command, a browser field, an MCP tool's input) and Circle puts the value in when the tool runs, as Windows does with environment variables. Files you write keep %NAME% as text." +
+        "Variables the user keeps in Circle. Write %NAME% in a tool's arguments (a command, a browser field, an MCP tool's input) and Circle puts the value in when the tool runs. Files you write keep %NAME% as text." +
         (variables.length
           ? '\n' +
             variables.map(([name, value]) => `- ${name} = ${value}`).join('\n')

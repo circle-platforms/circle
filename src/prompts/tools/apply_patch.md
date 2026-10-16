@@ -1,4 +1,4 @@
-Use the `apply_patch` tool to edit files. Your patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:
+Edit files with `apply_patch`. The patch is a small diff inside this envelope:
 
 *** Begin Patch
 [ one or more file sections ]

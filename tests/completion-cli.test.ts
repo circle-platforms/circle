@@ -13,6 +13,7 @@ import {
   trustFolder,
 } from '../src/settings.js';
 import { cleanup, scratch } from './helpers.js';
+import { TITLE_MAX_TOKENS } from '../src/session_title.js';
 
 const CLI = join(process.cwd(), 'src', 'cli.ts');
 const TSX = pathToFileURL(
@@ -26,11 +27,22 @@ async function fixture(
   const home = scratch(t);
   const workspace = scratch(t);
   const requests: Record<string, any>[] = [];
+  const titles: Record<string, any>[] = [];
   const server = createServer(async (request, response) => {
     let text = '';
     for await (const chunk of request) text += chunk;
     assert.equal(request.url, '/v1/chat/completions');
-    requests.push(JSON.parse(text));
+    const body = JSON.parse(text);
+    // The session title is a side request after the turn, not a replay of it.
+    if (body.max_tokens === TITLE_MAX_TOKENS) {
+      titles.push(body);
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.end(
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'Completion check' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`,
+      );
+      return;
+    }
+    requests.push(body);
     answer(response);
   });
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
@@ -55,7 +67,7 @@ async function fixture(
   settings = trustFolder(settings, workspace);
   saveSettings(settings, home);
   saveCredentials({ api_key: 'synthetic-test-key' }, home);
-  return { home, workspace, requests };
+  return { home, workspace, requests, titles };
 }
 
 function stream(
