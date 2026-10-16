@@ -48,6 +48,8 @@ export interface Message {
   model?: string;
   request_model?: string;
   content: string;
+  /** A desktop host-authored notice; content itself remains unchanged in history. */
+  runtimeNotice?: import('./runtime_notice.js').GitHubRuntimeNotice;
   attachments?: MediaAttachment[];
   shell?: { command: string; output: string; exit_code: number };
   thinking?: string;

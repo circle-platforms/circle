@@ -1,3 +1,4 @@
+import { formatRuntimeNotice } from '../model/runtime-notice';
 import { Brain, ChevronRight, Copy } from 'lucide-react';
 import { useRuntime } from '../app/context';
 import { copyText } from '../host';
@@ -121,7 +122,7 @@ export function RuntimeNotice({
     return (
       <div className="transcript-notice">
         {message.planCompleted === undefined
-          ? message.text
+          ? formatRuntimeNotice(message)
           : t('plan completed · {n} steps', { n: message.planCompleted })}
       </div>
     );

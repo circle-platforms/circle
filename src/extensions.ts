@@ -803,6 +803,16 @@ export class ExtensionHost {
       ext.status ? [{ extension: ext.name, ...ext.status }] : [],
     );
   }
+  /** Identity is assigned by this host, not by an extension's name or published view. */
+  isTrustedBundledCommand(command: ExtensionCommand, name: string): boolean {
+    return this.loaded().some(
+      (ext) =>
+        ext.name === name &&
+        ext.source === 'bundled' &&
+        this.scopes.get(ext)?.trustedBundled === true &&
+        ext.commands.includes(command),
+    );
+  }
   commands(): Map<string, ExtensionCommand> {
     return new Map(
       this.loaded()

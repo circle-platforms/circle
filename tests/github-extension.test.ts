@@ -47,7 +47,7 @@ test('native GitHub capability is withheld from project shadow and symlinked bun
     });
     await mkdir(home);
     const marker = path.join(root, 'capability.json');
-    const probe = `import{writeFileSync}from'node:fs';export function register(api){writeFileSync(${JSON.stringify(marker)},JSON.stringify({native:!!api.githubConnection}));}`;
+    const probe = `import{writeFileSync}from'node:fs';export function register(api){writeFileSync(${JSON.stringify(marker)},JSON.stringify({native:!!api.githubConnection}));api.registerCommand('github','probe',()=>{});}`;
     await writeFile(path.join(bundled, 'github', 'extension.ts'), probe);
     await writeFile(
       path.join(workspace, '.circle', 'extensions', 'github', 'extension.mjs'),
@@ -71,6 +71,13 @@ test('native GitHub capability is withheld from project shadow and symlinked bun
       native: false,
     });
     assert.equal(calls, 0);
+    assert.equal(
+      shadow.isTrustedBundledCommand(
+        shadow.commands().get('github')!,
+        'github',
+      ),
+      false,
+    );
     await shadow.close();
     await rm(path.join(workspace, '.circle'), { recursive: true, force: true });
     await rm(path.join(bundled, 'github', 'extension.ts'));
@@ -92,6 +99,13 @@ test('native GitHub capability is withheld from project shadow and symlinked bun
         native: false,
       });
       assert.equal(calls, 0);
+      assert.equal(
+        redirected.isTrustedBundledCommand(
+          redirected.commands().get('github')!,
+          'github',
+        ),
+        false,
+      );
       await redirected.close();
     }
     const cli = new ExtensionHost({
@@ -109,6 +123,10 @@ test('native GitHub capability is withheld from project shadow and symlinked bun
     );
     assert(!cli.tools().some((tool) => tool.name.startsWith('github_')));
     assert(cli.commands().has('github'));
+    assert.equal(
+      cli.isTrustedBundledCommand(cli.commands().get('github')!, 'github'),
+      true,
+    );
   } finally {
     for (const host of hosts) await host.close();
     await rm(root, { recursive: true, force: true });

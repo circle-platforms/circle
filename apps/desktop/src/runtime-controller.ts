@@ -1,3 +1,7 @@
+import {
+  githubStatusNotice,
+  storedGitHubStatusNotice,
+} from '../../../src/runtime_notice.js';
 import { commandExecutionReceipt } from '../../../src/command_process.js';
 import { canonicalPath } from '../../../src/paths.js';
 import type { ResolveInputsRequest } from '../../../src/input_outbox.js';
@@ -1929,10 +1933,15 @@ export class RuntimeController {
           });
         continue;
       }
+      const runtimeNotice =
+        raw.role === 'assistant'
+          ? storedGitHubStatusNotice(raw.content, raw.runtimeNotice)
+          : undefined;
       const base: Message = {
         id: node.id,
         parentId: node.parent,
-        role: raw.role,
+        role: runtimeNotice ? 'notice' : raw.role,
+        ...(runtimeNotice ? { runtimeNotice } : {}),
         text: raw.display ?? raw.content,
         thinking: raw.thinking,
         label: labels[raw.id],
@@ -4355,10 +4364,24 @@ export class RuntimeController {
               this.notices.set(id, rows);
               this.publish();
             },
-            append: (content) =>
+            append: (content) => {
+              const runtimeNotice = githubStatusNotice(
+                content,
+                name === 'github' &&
+                  runtime.extensions.isTrustedBundledCommand(
+                    extension,
+                    'github',
+                  ),
+              );
               runtime.store.append(runtime.session.id, [
-                { id: randomUUID(), role: 'assistant', content },
-              ]),
+                {
+                  id: randomUUID(),
+                  role: 'assistant',
+                  content,
+                  ...(runtimeNotice ? { runtimeNotice } : {}),
+                },
+              ]);
+            },
             sendUserMessage: (prompt) => {
               this.track(runtime.harness.run(prompt), runtime);
             },

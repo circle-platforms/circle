@@ -1,4 +1,6 @@
 export const githubConnection: Record<string, string> = {
+  'GitHub disconnected': 'GitHub 已断开连接',
+  'GitHub authorization in progress': '正在进行 GitHub 授权',
   'verifying GitHub account': '正在核验 GitHub 账户…',
   'GitHub authorization was cancelled before a code was ready. No new connection was established.':
     'GitHub 授权已在授权码生成前取消，尚未建立新连接。',

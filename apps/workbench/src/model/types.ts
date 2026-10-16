@@ -84,6 +84,7 @@ export interface Message {
   tool?: ToolCall;
   label?: string;
   attachments?: Attachment[];
+  runtimeNotice?: import('../../../../src/runtime_notice').GitHubRuntimeNotice;
   /** A runtime notice, separate from user/model text, for interface translation. */
   planCompleted?: number;
   /** A core completion diagnostic; arbitrary model/provider text stays untranslated. */
