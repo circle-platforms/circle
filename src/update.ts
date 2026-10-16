@@ -19,7 +19,7 @@ import {
 } from './install_layout.js';
 import { VERSION, validVersion, compareVersions } from './version.js';
 
-// ── the daily reminder ── shares update-check.json with the Python releases.
+// ── the daily reminder ── remembers the last answer in update-check.json.
 const CACHE_FILE = 'update-check.json';
 const CHECK_INTERVAL_S = 24 * 60 * 60;
 export function updateCheckEnabled(settings: {
@@ -221,7 +221,7 @@ export async function updateInstalled(
   }: { root?: string; out?: UpdateOutput } = {},
 ): Promise<number> {
   const check = args.includes('--check');
-  // `--version X` is how the Python releases took a version.
+  // The version comes alone or after `--version`.
   const versions = args.flatMap((arg, index) =>
     arg === '--check' || arg === '--version'
       ? []

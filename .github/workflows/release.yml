@@ -1,7 +1,7 @@
 name: release
 
 # Every push to main builds the runtime-inclusive package on six targets and smoke-tests it:
-# install, relocation, upgrade, checksum rejection, replacing a Python circle, a real tool turn.
+# install, relocation, upgrade, checksum rejection, the default location, a real tool turn.
 # It also packages the desktop application on four targets and runs each package; on Windows it
 # also builds the MSI, installs it and removes it again.
 # A pull request runs it only when it changes how Circle is packaged or installed; the Check
@@ -20,7 +20,6 @@ on:
       - 'install.sh'
       - 'install.ps1'
       - 'src/install_*.ts'
-      - 'src/legacy_install.ts'
       - 'src/update.ts'
       - 'src/version.ts'
       - 'scripts/build-release.ts'
