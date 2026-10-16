@@ -49,7 +49,11 @@ export async function resolveTaskBaseline(
 /** Isolation for concurrent edits, not a permission or process security sandbox. */
 export class TaskWorktrees {
   constructor(readonly directory: string) {}
-  async prepare(task: TaskRecord): Promise<{ path: string; branch?: string }> {
+  async prepare(
+    task: TaskRecord,
+    signal?: AbortSignal,
+  ): Promise<{ path: string; branch?: string }> {
+    signal?.throwIfAborted();
     const key = createHash('sha256')
       .update(this.directory)
       .update('\0')
@@ -62,14 +66,17 @@ export class TaskWorktrees {
         ? `codex/task-${key}-${task.attempt}`
         : undefined;
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
-    await serializeTaskRepositoryMutation(task.spec.workspace, () =>
-      git(
+    await serializeTaskRepositoryMutation(task.spec.workspace, () => {
+      signal?.throwIfAborted();
+      // Once Git starts, settle it so the caller can record ownership even if
+      // cancellation arrives during registration rather than during this wait.
+      return git(
         task.spec.workspace,
         branch
           ? ['worktree', 'add', '-b', branch, path, task.spec.baseline]
           : ['worktree', 'add', '--detach', path, task.spec.baseline],
-      ),
-    );
+      );
+    });
     return { path, ...(branch ? { branch } : {}) };
   }
   /** Refuses dirty or non-owned trees. Output is retained unless explicitly discarded elsewhere. */

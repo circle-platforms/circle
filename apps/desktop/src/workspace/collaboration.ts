@@ -696,7 +696,7 @@ export class CollaborationScheduler {
     try {
       if (controller.signal.aborted) throw aborted();
       const task = this.store.get(id)!;
-      const prepared = await this.trees.prepare(task);
+      const prepared = await this.trees.prepare(task, controller.signal);
       this.update(id, controller.signal.aborted ? 'cancelling' : 'running', {
         worktree: prepared.path,
         branch: prepared.branch,
