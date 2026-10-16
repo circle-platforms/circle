@@ -71,83 +71,100 @@ try {
       },
     );
   });
-  await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
-  await page
-    .getByRole('button', { name: 'browser panel', exact: true })
-    .click();
-  await page
-    .getByRole('button', { name: 'page diagnostics', exact: true })
-    .waitFor();
-  for (const expanded of [false, true]) {
-    if (expanded)
-      await page
-        .getByRole('button', { name: 'page diagnostics', exact: true })
-        .click();
-    await page.evaluate(
-      () =>
-        new Promise((r) =>
-          requestAnimationFrame(() => requestAnimationFrame(r)),
-        ),
-    );
-    const geometry = await page.evaluate(() => {
-      const selectors = [
-        '.inspector-body',
-        '.inspector-resource-view[data-inspector-resource=browser]:not([hidden])',
-        '.native-browser',
-        '.native-browser-viewport',
-        '.native-browser-footer',
-        '.browser-diagnostics',
-      ];
-      return selectors.map((selector) => {
-        const node = document.querySelector(selector);
-        if (!node) return { selector, missing: true };
-        const r = node.getBoundingClientRect(),
-          s = getComputedStyle(node);
-        return {
-          selector,
-          top: r.top,
-          bottom: r.bottom,
-          height: r.height,
-          paddingBottom: Number.parseFloat(s.paddingBottom),
-          cssheight: s.height,
-          display: s.display,
-          flex: s.flex,
-        };
+  for (const height of [684, 970]) {
+    await page.setViewportSize({ width: 1400, height });
+    await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
+    const browserPanel = page.getByRole('button', {
+      name: 'browser panel',
+      exact: true,
+    });
+    if ((await browserPanel.getAttribute('aria-pressed')) !== 'true')
+      await browserPanel.click();
+    await page
+      .getByRole('button', { name: 'page diagnostics', exact: true })
+      .waitFor();
+    for (const expanded of [false, true]) {
+      const diagnosticToggle = page.getByRole('button', {
+        name: 'page diagnostics',
+        exact: true,
       });
-    });
-    await page.screenshot({
-      path: out + `/whole-app-${expanded ? 'expanded' : 'closed'}.png`,
-    });
-    const [body, wrapper, native, viewport, footer, diagnostics] = geometry;
-    assert.equal(body.paddingBottom, 20, 'preserve original inspector padding');
+      if (
+        (await diagnosticToggle.getAttribute('aria-expanded')) !==
+        String(expanded)
+      )
+        await diagnosticToggle.click();
+      await page.evaluate(
+        () =>
+          new Promise((r) =>
+            requestAnimationFrame(() => requestAnimationFrame(r)),
+          ),
+      );
+      const geometry = await page.evaluate(() => {
+        const selectors = [
+          '.inspector-body',
+          '.inspector-resource-view[data-inspector-resource=browser]:not([hidden])',
+          '.native-browser',
+          '.native-browser-viewport',
+          '.native-browser-footer',
+          '.browser-diagnostics',
+        ];
+        return selectors.map((selector) => {
+          const node = document.querySelector(selector);
+          if (!node) return { selector, missing: true };
+          const r = node.getBoundingClientRect(),
+            s = getComputedStyle(node);
+          return {
+            selector,
+            top: r.top,
+            bottom: r.bottom,
+            height: r.height,
+            paddingBottom: Number.parseFloat(s.paddingBottom),
+            cssheight: s.height,
+            display: s.display,
+            flex: s.flex,
+          };
+        });
+      });
+      await page.screenshot({
+        path:
+          out + `/whole-app-${height}-${expanded ? 'expanded' : 'closed'}.png`,
+      });
+      const [body, wrapper, native, viewport, footer, diagnostics] = geometry;
+      assert.equal(
+        body.paddingBottom,
+        20,
+        'preserve original inspector padding',
+      );
+      assert(
+        Math.abs(wrapper.bottom - (body.bottom - body.paddingBottom)) <= 1,
+        'browser wrapper fills original inspector content box',
+      );
+      assert(
+        Math.abs(native.bottom - wrapper.bottom) <= 1,
+        'native browser fills its bounded parent',
+      );
+      assert(
+        Math.abs(diagnostics.bottom - native.bottom) <= 1,
+        'diagnostics end at bounded browser bottom',
+      );
+      assert(viewport.height >= 80, 'guest retains usable actual viewport');
+      assert(footer.bottom <= body.bottom, 'page footer remains visible');
+      assert(
+        diagnostics.bottom <= body.bottom,
+        'expanded diagnostics never overflow inspector',
+      );
+      assert(
+        body.bottom - diagnostics.bottom <= 32,
+        'do not weaken native blank-under-panel acceptance',
+      );
+      checks.push({ height, expanded, geometry });
+    }
+    const pair = checks.slice(-2);
     assert(
-      Math.abs(wrapper.bottom - (body.bottom - body.paddingBottom)) <= 1,
-      'browser wrapper fills original inspector content box',
+      pair[0].geometry[3].height > pair[1].geometry[3].height,
+      'expanded diagnostics resize the actual guest within the same fixed parent',
     );
-    assert(
-      Math.abs(native.bottom - wrapper.bottom) <= 1,
-      'native browser fills its bounded parent',
-    );
-    assert(
-      Math.abs(diagnostics.bottom - native.bottom) <= 1,
-      'diagnostics end at bounded browser bottom',
-    );
-    assert(viewport.height >= 80, 'guest retains usable actual viewport');
-    assert(footer.bottom <= body.bottom, 'page footer remains visible');
-    assert(
-      diagnostics.bottom <= body.bottom,
-      'expanded diagnostics never overflow inspector',
-    );
-    assert(
-      body.bottom - diagnostics.bottom <= 32,
-      'do not weaken native blank-under-panel acceptance',
-    );
-    checks.push({ expanded, geometry });
   }
-  assert(
-    checks[0].geometry[3].height > checks[1].geometry[3].height,
-    'expanded diagnostics resize the actual guest within the same fixed parent',
-  );
   assert.deepEqual(errors, [], 'full application renders without page errors');
   console.log(
     'PASS original full-app browser inspector bounds closed and expanded',
