@@ -6,6 +6,8 @@ export interface PickerItem {
   label: string;
   meta?: string;
   search?: string;
+  /** Message text a search can quote, shown beside a match. */
+  detail?: string;
   current?: boolean;
 }
 export interface PickerOptions {
@@ -14,6 +16,8 @@ export interface PickerOptions {
   /** Shown when the filter matches nothing. A function can tell a search miss from an empty list. */
   empty?: string | ((query: string, total: number) => string);
   focusKey?: string;
+  /** `top`: the marked row is the first visible row, not the last. */
+  pinFocus?: 'top';
   /** false: typing does not search. The keys the list does not use go on to the input box,
    * and ctrl+c closes the list before the session takes it (`/approvals`, as 0.5.0's). */
   search?: boolean;
@@ -32,6 +36,19 @@ interface Asked {
 }
 function dropLast(text: string): string {
   return Array.from(text).slice(0, -1).join('');
+}
+/** A short quote around the first word of `query` found in `text`. */
+export function matchSnippet(text: string, query: string): string {
+  const word = query.toLowerCase().split(/\s+/).find(Boolean);
+  if (!word) return '';
+  const at = text.toLowerCase().indexOf(word);
+  if (at < 0) return '';
+  const start = Math.max(0, at - 16);
+  const slice = text
+    .slice(start, start + 42)
+    .replace(/\s+/g, ' ')
+    .trim();
+  return `${start > 0 ? '…' : ''}${slice}${start + 42 < text.length ? '…' : ''}`;
 }
 /**
  * A searchable list above the frame (0.5.0's picker.py). Type to narrow it (every word must
@@ -215,7 +232,10 @@ export class Picker {
     const p = palette();
     this.window = Math.max(1, maximum);
     const shown = this.matches();
-    const top = Math.max(0, this.focus - maximum + 1);
+    const top =
+      this.options.pinFocus === 'top'
+        ? Math.min(this.focus, Math.max(0, shown.length - this.window))
+        : Math.max(0, this.focus - maximum + 1);
     const info = (text: string, tone: string): string =>
       sgrJoin(p.panel_bg, tone) + pad(truncate(text, width), width) + p.reset;
     const rows = [info(`   ${this.title}`, p.faint)];
@@ -258,7 +278,10 @@ export class Picker {
       const marked = index + top === this.focus;
       const head = headOf(item);
       const body = metas ? pad(truncate(head, column), column) : head;
-      const meta = item.meta ? `  ${item.meta}` : '';
+      const snippet =
+        this.query && item.detail ? matchSnippet(item.detail, this.query) : '';
+      const meta =
+        (item.meta ? `  ${item.meta}` : '') + (snippet ? `  ${snippet}` : '');
       rows.push(
         sgrJoin(marked ? p.sel_bg : p.panel_bg, p.text) +
           pad(truncate(` ${marked ? '>' : ' '} ${body}${meta}`, width), width) +

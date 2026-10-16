@@ -372,10 +372,7 @@ export function NativeBrowser({ target }: { target?: string } = {}) {
         ) : (
           <Status value={opened ? 'native browser' : 'not opened'} />
         )}
-        <code>
-          {(state?.sessionId ?? 'browser:' + id) +
-            (state?.tab ? ' · ' + state.tab : '')}
-        </code>
+        {state?.title ? <span>{state.title}</span> : null}
         <IconButton
           label={t('capture browser')}
           disabled={!opened || !!failure || !!dialog}

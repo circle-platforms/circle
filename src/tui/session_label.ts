@@ -6,6 +6,19 @@ export function shortSessionId(id: string): string {
   return id.startsWith('circle-') ? id.slice('circle-'.length) : id.slice(-8);
 }
 
+/** A reply preview with markdown marks removed, so `**title**` is not the hint. */
+export function plainPreview(text: string, limit = 18): string {
+  const plain = text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/!\[[^\]]*]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]*)]\([^)]*\)/g, '$1')
+    .replace(/[`*_~>#]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!plain) return '';
+  return plain.length <= limit ? plain : `${plain.slice(0, limit).trimEnd()}…`;
+}
+
 function replySnippet(
   store: {
     messages(id: string): {
@@ -26,11 +39,7 @@ function replySnippet(
           !message.internal &&
           (message.display || message.content),
       );
-    const text = (reply?.display || reply?.content || '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (!text) return '';
-    return text.length <= 18 ? text : `${text.slice(0, 18).trimEnd()}…`;
+    return plainPreview(reply?.display || reply?.content || '');
   } catch {
     return '';
   }

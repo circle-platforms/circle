@@ -28,6 +28,7 @@ import { useRuntime } from '../app/context';
 import { usePlugins } from '../plugins/context';
 import { currentSession, sessionTitle } from '../model/state';
 import {
+  disambiguatedSessionTitle,
   orderedProjects,
   RECENT_SHOWN,
   recentDetails,
@@ -140,6 +141,8 @@ export function Sidebar({
   const listRef = useRef<HTMLDivElement>(null);
   // The row at the top of the list, and how far it sits from that edge.
   const anchor = useRef<{ key: string; delta: number } | null>(null);
+  // The list's scroll before the latest update. A render must not throw it away.
+  const scrollTop = useRef(0);
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const [menuFocus, setMenuFocus] = useState<string | null>(null);
   const menuFocusRef = useRef<string | null>(null);
@@ -188,10 +191,9 @@ export function Sidebar({
       if (document.querySelector('[role="dialog"]')) return;
       if (document.documentElement.dataset.keyCapture) return;
       const target = event.target;
-      if (
-        target instanceof HTMLElement &&
-        target.closest('input, textarea, [contenteditable="true"]')
-      )
+      // The composer may have focus. F2 still renames the open session.
+      // The rename field itself keeps Escape and typing.
+      if (target instanceof HTMLElement && target.closest('.session-rename'))
         return;
       const rowKey = rowKeysRef.current.find((key) =>
         key.endsWith(`:${snapshot.activeSessionId}`),
@@ -263,7 +265,24 @@ export function Sidebar({
     const previous = seenOrder.current;
     seenOrder.current = orderKey;
     const saved = anchor.current;
-    if (previous === null || previous === orderKey || !list || !saved) return;
+    const remember = () => {
+      if (list) scrollTop.current = list.scrollTop;
+    };
+    if (list && previous !== null && previous !== orderKey) {
+      // Stay with the newest row when the list was already at the top.
+      // Otherwise put back a position the update cleared.
+      if (scrollTop.current <= 1) list.scrollTop = 0;
+      else if (list.scrollTop === 0) list.scrollTop = scrollTop.current;
+    }
+    if (previous === null || previous === orderKey || !list || !saved) {
+      remember();
+      return;
+    }
+    if (list.scrollTop <= 1) {
+      anchor.current = listAnchor(list);
+      remember();
+      return;
+    }
     const row = [...list.querySelectorAll<HTMLElement>('[data-row-key]')].find(
       (item) => item.dataset.rowKey === saved.key,
     );
@@ -273,6 +292,7 @@ export function Sidebar({
     const error = delta - saved.delta;
     if (Math.abs(error) > 1) list.scrollTop += error;
     anchor.current = listAnchor(list);
+    remember();
   });
   const tabKey =
     roving && rowKeys.includes(roving)
@@ -366,6 +386,7 @@ export function Sidebar({
           key={rowKey}
           rowKey={rowKey}
           session={session}
+          label={disambiguatedSessionTitle(session, snapshot.sessions)}
           tabIndex={rowKey === tabKey ? 0 : -1}
           details={recentDetails(session, snapshot.workspaces)}
           renaming={renaming}
@@ -483,6 +504,7 @@ export function Sidebar({
           scrollGesture.current = true;
         }}
         onScroll={(event) => {
+          scrollTop.current = event.currentTarget.scrollTop;
           anchor.current = listAnchor(event.currentTarget);
           if (
             ignoreScrollClose.current ||
@@ -656,6 +678,7 @@ export function Sidebar({
 function SessionRow({
   rowKey,
   session,
+  label,
   tabIndex,
   details,
   renaming,
@@ -682,6 +705,7 @@ function SessionRow({
 }: {
   rowKey: string;
   session: Session;
+  label: string;
   tabIndex: number;
   details: { project?: string; age: ActivityAge; absolute?: string };
   renaming: boolean;
@@ -713,6 +737,8 @@ function SessionRow({
   const active = useMatch({ path: `/session/${session.id}`, end: true });
   const menuButton = useRef<HTMLButtonElement>(null);
   const linkNode = useRef<HTMLAnchorElement>(null);
+  // The press already opened the row. The click that follows must not do it again.
+  const pressed = useRef(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [linkFocused, setLinkFocused] = useState(false);
   const [inView, setInView] = useState(true);
@@ -780,12 +806,16 @@ function SessionRow({
               if (event.button !== 0) return;
               const target = event.target;
               if (target instanceof Element && target.closest('button')) return;
+              // Open on the press. A re-render between press and click used to
+              // drop the first click, so the row looked like it ignored it.
               linkNode.current?.focus({ preventScroll: true });
+              pressed.current = true;
+              onOpen(session.id);
             }}
             onClick={(event) => {
               event.preventDefault();
-              linkNode.current?.focus({ preventScroll: true });
-              onOpen(session.id);
+              if (!pressed.current) onOpen(session.id);
+              pressed.current = false;
               onKeepHover();
             }}
             onFocus={() => {
@@ -809,7 +839,7 @@ function SessionRow({
               } else onKeyDown(event);
             }}
           >
-            <span>{sessionTitle(session.title)}</span>
+            <span>{label}</span>
             {attention ? (
               <i className="attention-dot" />
             ) : running ? (

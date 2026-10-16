@@ -17,7 +17,7 @@ import { messageCosts, formatCosts } from '../src/pricing.js';
 import { contextInputOf, footerRow } from '../src/tui/status_rows.js';
 import { thinkingRows } from '../src/tui/tool_rows.js';
 import { variableCopy, hotkeysText } from '../src/tui/slash_commands.js';
-import { Picker } from '../src/ink/components/picker.js';
+import { matchSnippet, Picker } from '../src/ink/components/picker.js';
 import { DEFAULT_DARK, buildPalette, setPalette } from '../src/ink/theme.js';
 import { SessionApp } from '../src/tui/session_app.js';
 import { AgentRuntime } from '../src/runtime.js';
@@ -445,6 +445,14 @@ test('help text wraps on spaces, code fences name their language, and a narrow f
   const kinds = highlightTokens('ts', 'const n = "hi";');
   assert.equal(kinds.find((token) => token.text === 'const')?.kind, 'keyword');
   assert.equal(kinds.find((token) => token.text === '"hi"')?.kind, 'string');
+  const calls = highlightTokens('py', 'print(len(items))');
+  assert.equal(calls.find((token) => token.text === 'print')?.kind, 'keyword');
+  assert.equal(calls.find((token) => token.text === 'len')?.kind, 'keyword');
+  assert.equal(
+    highlightTokens('ts', 'greet(name)').find((token) => token.text === 'greet')
+      ?.kind,
+    'keyword',
+  );
   const footer = stripAnsi(
     footerRow(
       {
@@ -478,6 +486,23 @@ test('a focused list row is marked and a rename starts with the old name selecte
   const asked = stripAnsi(picker.rows(80).join('\n'));
   assert.match(asked, /Rename: Z/);
   assert.doesNotMatch(asked, /Rename: question/);
+  const found = new Picker(
+    'Sessions',
+    [
+      {
+        key: 'a',
+        label: '中秋节',
+        meta: '3m',
+        search: 'the moon is very round tonight',
+        detail: 'the moon is very round tonight',
+      },
+    ],
+    () => {},
+    () => {},
+  );
+  found.query = 'moon';
+  assert.match(stripAnsi(found.rows(80).join('\n')), /moon is very round/);
+  assert.match(matchSnippet('the moon is very round tonight', 'moon'), /moon/);
 });
 
 test('/variables and /secrets omit the Windows placeholder except on Windows', () => {

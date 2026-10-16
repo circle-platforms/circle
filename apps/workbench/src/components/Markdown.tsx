@@ -1,9 +1,40 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { Code } from 'lucide-react';
 import { copyText } from '../host';
 import { t } from '../i18n';
 import { highlight } from './highlight';
+
+const LANGUAGE_NAMES: Record<string, string> = {
+  ts: 'TypeScript',
+  tsx: 'TSX',
+  js: 'JavaScript',
+  jsx: 'JSX',
+  py: 'Python',
+  python: 'Python',
+  rb: 'Ruby',
+  go: 'Go',
+  rs: 'Rust',
+  sh: 'Shell',
+  bash: 'Shell',
+  zsh: 'Shell',
+  md: 'Markdown',
+  json: 'JSON',
+  yml: 'YAML',
+  yaml: 'YAML',
+  html: 'HTML',
+  css: 'CSS',
+  sql: 'SQL',
+};
+
+function languageName(language?: string): string {
+  if (!language) return t('text');
+  return (
+    LANGUAGE_NAMES[language.toLowerCase()] ??
+    language.slice(0, 1).toUpperCase() + language.slice(1)
+  );
+}
 
 function CodeBlock({ language, code }: { language?: string; code: string }) {
   const [copied, setCopied] = useState(false);
@@ -11,7 +42,10 @@ function CodeBlock({ language, code }: { language?: string; code: string }) {
   return (
     <div className="code-block">
       <div className="code-block-bar">
-        <span>{language || t('text')}</span>
+        <span className="code-lang">
+          <Code size={12} aria-hidden="true" />
+          {languageName(language)}
+        </span>
         <button
           type="button"
           onClick={() => {

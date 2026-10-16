@@ -34,9 +34,15 @@ export function completionNoticeText(
   if (failure) return `✖ ${failure}`;
   // The runtime's own words for a failed turn and a failed session title.
   if (message.text === '✖ the turn failed') return t('✖ the turn failed');
-  if (message.text.startsWith('title failed · '))
+  if (message.text === '✖ Interrupted') return t('✖ Interrupted');
+  if (message.text.startsWith('title failed · ')) {
+    const reason = message.text.slice('title failed · '.length);
     return t('title failed · {message}', {
-      message: message.text.slice('title failed · '.length),
+      message:
+        reason === 'could not reach the endpoint'
+          ? t('could not reach the endpoint')
+          : reason,
     });
+  }
   return message.text;
 }

@@ -3,6 +3,8 @@ import { useRuntime } from '../app/context';
 import { t } from '../i18n';
 import {
   KEY_ACTIONS,
+  DESKTOP_SEARCH_CHORD,
+  DESKTOP_SETTINGS_CHORD,
   chordFromEvent,
   effectiveBindings,
   formatChord,
@@ -30,7 +32,7 @@ const LABELS: Record<KeyAction, () => string> = {
   'message.followup': () => t('queue a follow-up'),
   'image.paste': () => t('paste an image'),
   find: () => t('find in conversation'),
-  'history.search': () => t('search'),
+  'history.search': () => t('search history'),
   'secret.enter': () => t('enter a secret'),
   newline: () => t('new line'),
   'job.background': () => t('background the turn'),
@@ -103,8 +105,19 @@ export function KeybindingsEditor() {
       delete document.documentElement.dataset.keyCapture;
     };
   }, [bindings, capturing, notify, perform, runtime, saved]);
+  const fixed = [
+    [t('search'), DESKTOP_SEARCH_CHORD],
+    [t('rename session'), 'f2'],
+    [t('settings'), DESKTOP_SETTINGS_CHORD],
+  ] as const;
   return (
     <div className="keybinding-list">
+      {fixed.map(([label, chord]) => (
+        <div className="setting-row" key={chord}>
+          <span>{label}</span>
+          <kbd>{formatChord(chord)}</kbd>
+        </div>
+      ))}
       {(Object.keys(KEY_ACTIONS) as KeyAction[]).map((action) => {
         const keys = bindings[action]!;
         const chord = typeof keys === 'string' ? keys : keys[0]!;

@@ -657,3 +657,45 @@ test('settings changes from real concurrent processes retain every read-modify-w
   assert.equal(saved.counter, 30);
   assert.deepEqual(saved.variables, { A: '15', B: '15' });
 });
+
+test('an occupied session opens view-only and a turn names how to fork it', async (t) => {
+  const home = scratch(t),
+    workspace = scratch(t);
+  const owner = new AgentRuntime({
+    workspace,
+    home,
+    settings: defaultSettings(),
+    model: new ScriptedModel([
+      { message: { id: 'ok', role: 'assistant', content: 'stored reply' } },
+    ]),
+    headless: true,
+  });
+  cleanup(t, () => owner.close());
+  await owner.harness.run('hello from the owner');
+  const viewer = new AgentRuntime({
+    workspace,
+    home,
+    session: owner.session.id,
+    settings: defaultSettings(),
+    model: new ScriptedModel(),
+    headless: true,
+    inspect: true,
+  });
+  cleanup(t, () => viewer.close());
+  assert.equal(viewer.viewOnly, true);
+  assert.match(
+    viewer.harness.messages.map((message) => message.content).join('\n'),
+    /hello from the owner/,
+  );
+  assert.match(
+    viewer.harness.messages.map((message) => message.content).join('\n'),
+    /stored reply/,
+  );
+  await assert.rejects(
+    () => viewer.harness.run('continue here'),
+    /circle --fork/,
+  );
+  assert.equal(sessionOccupied(home, owner.session.id), true);
+  await viewer.close();
+  assert.equal(sessionOccupied(home, owner.session.id), true);
+});

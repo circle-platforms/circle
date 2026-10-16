@@ -6,6 +6,7 @@ import { GatewayModel, EFFORT_LEVELS, defaultEffort } from './model.js';
 import { WebSearchService } from './websearch_service.js';
 import type { NativeSearchConnection } from './native_websearch.js';
 import { CheckpointStore, type Session } from './checkpoint_store.js';
+import { occupiedSessionMessage } from './session_lock.js';
 import {
   defaultPolicy,
   DEFAULT_CREDENTIAL_FILES,
@@ -168,11 +169,16 @@ export interface RuntimeOptions {
    */
   deferSession?: boolean;
   /**
-   * Leave a sentence untitled until its generated title arrives, and do not ask
-   * for a title again when a session opens. The desktop shows such a session as
-   * a new session and keeps its own list.
+   * Leave a sentence untitled until its generated title arrives. A stale stored
+   * title is still asked again when the session opens. The desktop shows a new
+   * sentence as a new session until that summary arrives.
    */
   holdTitle?: boolean;
+  /**
+   * Open stored history without taking the lease. Another terminal is running
+   * the session: this one can read it and cannot continue, change or delete it.
+   */
+  inspect?: boolean;
 }
 export class AgentRuntime {
   private readonly searches = new WebSearchService();
@@ -285,8 +291,11 @@ export class AgentRuntime {
       if (options.session) {
         session = this.store.find(options.session);
         if (!session) throw new Error('unknown session');
-        if (session.workspace !== options.workspace)
+        if (session.workspace !== options.workspace) {
+          if (options.inspect)
+            throw new Error('session belongs to a different workspace');
           session = this.store.fork(session.id, options.workspace);
+        }
       } else if (options.continue) {
         session = this.store.list(options.workspace)[0];
         if (!session) throw new Error('no saved session in this folder');
@@ -307,9 +316,10 @@ export class AgentRuntime {
             !this.runOptions.session_name &&
             !options.sessionId,
         );
-      this.store.claimSession(this.session.id, (error) =>
-        this.ownershipLost(error),
-      );
+      if (!options.inspect)
+        this.store.claimSession(this.session.id, (error) =>
+          this.ownershipLost(error),
+        );
       // A delete may have completed between discovery and acquiring the lease.
       const current = this.store.get(this.session.id);
       if (!current) throw new Error('unknown session');
@@ -747,6 +757,7 @@ export class AgentRuntime {
       redact: this.redact,
       model: this.modelWithSearch(model),
       holdTitle: this.options.holdTitle,
+      inspect: this.options.inspect,
       tools,
       store: this.store,
       session: this.session,
@@ -1076,6 +1087,7 @@ export class AgentRuntime {
     await this.initialize();
   }
   setPlanMode(enabled: boolean): void {
+    if (this.viewOnly) throw new Error(occupiedSessionMessage(this.session.id));
     if (this.harness.planMode === enabled) return;
     this.harness.planMode = enabled;
     // /plan between turns rebuilt the agent in 0.5.0; plan_enter and plan_exit run mid-turn.
@@ -1369,6 +1381,10 @@ export class AgentRuntime {
       this.compactionController = undefined;
     }
   }
+  /** Another terminal owns this session. History is readable; nothing may write. */
+  get viewOnly(): boolean {
+    return this.options.inspect === true;
+  }
   get busy(): boolean {
     return (
       this.harness.busy ||
@@ -1482,7 +1498,7 @@ export class AgentRuntime {
    * from /name stays.
    */
   private refreshFallbackTitle(): void {
-    if (this.options.holdTitle) return;
+    if (this.options.inspect) return;
     void this.retitleSession(this.session.id);
   }
   /**
@@ -1493,7 +1509,7 @@ export class AgentRuntime {
   repairRecentTitles(): void {
     if (
       this.closing ||
-      this.options.holdTitle ||
+      this.options.inspect ||
       !this.harness.model.sideRequests
     )
       return;

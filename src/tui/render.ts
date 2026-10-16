@@ -76,6 +76,8 @@ export interface ScreenState {
   busy: boolean;
   waiting: boolean;
   planMode: boolean;
+  /** Another terminal is running this session. The transcript is readable. */
+  viewOnly?: boolean;
   autoMode: boolean;
   acceptEdits?: boolean;
   todos: Todo[];
@@ -336,7 +338,7 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
       state.showThinking ? 1 : 0,
       state.thinkingExpanded ? 1 : 0,
       state.renderToolResult ? 1 : 0,
-      state.thinkingSeconds?.[message.id] ?? '',
+      message.thinking_seconds ?? state.thinkingSeconds?.[message.id] ?? '',
       state.turnUsage?.[message.id]?.seconds ?? '',
       inKind,
       lead,
@@ -599,14 +601,22 @@ export function renderScreen(
           p.reset,
       );
   }
-  const mode = state.planMode
-    ? 'read-only'
-    : state.autoMode
-      ? 'auto'
-      : state.acceptEdits
-        ? 'accept edits'
-        : '';
-  const modeSgr = state.planMode ? p.green : state.autoMode ? p.yellow : p.blue;
+  const mode = state.viewOnly
+    ? 'view only'
+    : state.planMode
+      ? 'read-only'
+      : state.autoMode
+        ? 'auto'
+        : state.acceptEdits
+          ? 'accept edits'
+          : '';
+  const modeSgr = state.viewOnly
+    ? p.yellow
+    : state.planMode
+      ? p.green
+      : state.autoMode
+        ? p.yellow
+        : p.blue;
   // The reason row is the composer, so its completion list sits above the card.
   if (state.dialog?.input !== undefined && state.completion && !state.picker)
     bottom.push(...completionRows(state.completion, width));

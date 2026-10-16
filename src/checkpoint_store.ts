@@ -365,12 +365,12 @@ export class CheckpointStore {
     return (workspace
       ? this.db
           .prepare(
-            `SELECT sessions.*, ${activity} AS activity FROM sessions WHERE workspace = ? ${hidden} ORDER BY activity DESC, sessions.created DESC`,
+            `SELECT sessions.*, ${activity} AS activity FROM sessions WHERE workspace = ? ${hidden} ORDER BY activity DESC, sessions.created DESC, sessions.id`,
           )
           .all(normalizeWorkspace(workspace))
       : this.db
           .prepare(
-            `SELECT sessions.*, ${activity} AS activity FROM sessions WHERE 1 = 1 ${hidden} ORDER BY activity DESC, sessions.created DESC`,
+            `SELECT sessions.*, ${activity} AS activity FROM sessions WHERE 1 = 1 ${hidden} ORDER BY activity DESC, sessions.created DESC, sessions.id`,
           )
           .all()) as unknown as Session[];
   }

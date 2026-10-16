@@ -56,6 +56,9 @@ test('a session column keeps the composer inside the window', () => {
   const workbench = css.match(/^\.workbench \{[^}]*\}/m)?.[0] ?? '';
   assert.match(workbench, /grid-template-rows:\s*minmax\(0,\s*1fr\)/);
   assert.match(workbench, /overflow:\s*hidden/);
+  // 100dvh is taller than a maximized Linux window, so the footer was clipped.
+  assert.match(workbench, /height:\s*100%/);
+  assert.doesNotMatch(workbench, /100dvh/);
   const side = css.match(/^\.desktop-sidebar \{[^}]*\}/m)?.[0] ?? '';
   assert.match(side, /min-height:\s*0/);
   assert.match(side, /overflow:\s*hidden/);

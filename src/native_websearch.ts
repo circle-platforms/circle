@@ -158,6 +158,9 @@ export async function nativeSearchCapability(
     connection.model,
   );
   if (provider.adapter === 'unsupported') return 'unsupported';
+  // Zhipu's Anthropic route has no server-tool declaration. Search is the
+  // OpenAI paas contract, probed by calling it rather than the models endpoint.
+  if (provider.adapter === 'zhipu') return 'unknown';
   if (connection.protocol !== 'anthropic') return 'unknown';
   try {
     const body = await jsonRequest(
@@ -591,6 +594,18 @@ export async function nativeWebSearch(
         body.enable_search = true;
         body.search_options = { forced_search: true, enable_source: true };
       } else if (adapter === 'zhipu') {
+        // GLM on the Anthropic base URL still searches through paas v4 chat completions.
+        if (
+          connection.protocol === 'anthropic' &&
+          new URL(connection.baseUrl).hostname === 'open.bigmodel.cn'
+        ) {
+          url = new URL(
+            'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+          );
+          delete requestHeaders['x-api-key'];
+          delete requestHeaders['anthropic-version'];
+          requestHeaders.authorization = `Bearer ${connection.apiKey}`;
+        }
         body.tools = [
           {
             type: 'web_search',

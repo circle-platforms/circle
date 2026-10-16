@@ -736,7 +736,7 @@ export function TerminalPanel({
   const session = currentSession(snapshot);
   const [input, setInput] = useState('');
   const greeting = () => [
-    runtime.mode === 'live' ? 'Circle shell' : 'terminal not connected',
+    runtime.mode === 'live' ? t('Circle shell') : t('terminal not connected'),
     runtime.mode === 'live'
       ? t('Commands run in this session workspace.')
       : 'commands stay in the preview request log',
