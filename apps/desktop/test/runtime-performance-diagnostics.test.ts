@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   createRuntimePerformanceDiagnostics,
@@ -77,12 +77,20 @@ test('same-profile worker epochs can restart and I/O failures cannot abort measu
     enabled: true,
     dataFolder: nonDirectory,
   })!;
-  assert.match(unavailable.status.unavailable!, /ENOTDIR/);
+  // Windows reports a missing child path when an intermediate component is a
+  // file. POSIX reports that component as not a directory. Neither may succeed.
+  assert.equal(
+    unavailable.status.unavailable,
+    process.platform === 'win32' ? 'ENOENT' : 'ENOTDIR',
+  );
   assert.doesNotThrow(() => {
     unavailable.record('command-start', {});
     unavailable.record('command-end', {});
     unavailable.close();
   });
+  assert.equal(readFileSync(nonDirectory, 'utf8'), 'x');
+  assert.equal(existsSync(unavailable.status.path), false);
+  assert.equal(unavailable.status.bytes, 0);
   const failedWrite = createRuntimePerformanceDiagnostics({
     testProfile: true,
     enabled: true,
