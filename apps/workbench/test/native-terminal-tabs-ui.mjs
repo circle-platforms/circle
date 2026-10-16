@@ -181,18 +181,21 @@ try {
       await page.evaluate(() => window.terminalTabsFixture.reorder());
       if ((await toggle.getAttribute('aria-pressed')) === 'true')
         await toggle.click();
-      const navigation = page.getByRole('button', {
-        name: 'open navigation',
-        exact: true,
-      });
-      if (await navigation.isVisible()) await navigation.click();
-      await page
-        .locator('.sidebar:visible [data-row-key="recent:B"] .session-link')
-        .click();
-      if (await navigation.isVisible()) await navigation.click();
-      await page
-        .locator('.sidebar:visible [data-row-key="recent:A"] .session-link')
-        .click();
+      const chooseSession = async (id) => {
+        const link = page.locator(
+          `.sidebar:visible [data-row-key="recent:${id}"] .session-link`,
+        );
+        if (!(await link.isVisible()))
+          await page
+            .getByRole('button', {
+              name: 'show or hide the sidebar',
+              exact: true,
+            })
+            .click();
+        await link.click();
+      };
+      await chooseSession('B');
+      await chooseSession('A');
       if ((await toggle.getAttribute('aria-pressed')) !== 'true')
         await toggle.click();
       await page.locator('#inspector-terminal-tab-terminal').click();

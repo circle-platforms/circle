@@ -150,7 +150,7 @@ try {
     const selector = `.sidebar [data-row-key="recent:${id}"] .session-link[href="#/session/${id}"]`;
     if (!(await page.locator(selector).isVisible()))
       await page
-        .getByRole('button', { name: 'open navigation', exact: true })
+        .getByRole('button', { name: 'show or hide the sidebar', exact: true })
         .click();
     await page.locator(selector + ':visible').click();
   };
