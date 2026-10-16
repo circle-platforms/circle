@@ -82,6 +82,7 @@ test('the component gate preserves prior journeys and includes each native regre
           'github-sidebar-status-ui.mjs',
           'conversation-reading-anchor-ui.mjs',
           'github-plugin-ui.mjs',
+          'command-terminal-handoff-ui.mjs',
         ].includes(name),
     ),
     original,
@@ -120,7 +121,8 @@ test('the component gate preserves prior journeys and includes each native regre
     'github-sidebar-status-ui.mjs',
     'conversation-reading-anchor-ui.mjs',
     'github-plugin-ui.mjs',
+    'command-terminal-handoff-ui.mjs',
   ])
     assert.equal(COMPONENT_SUITES.filter((item) => item === name).length, 1);
-  assert.equal(new Set(COMPONENT_SUITES).size, 31);
+  assert.equal(new Set(COMPONENT_SUITES).size, 32);
 });
