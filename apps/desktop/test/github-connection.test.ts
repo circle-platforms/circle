@@ -605,7 +605,45 @@ test('known authorization expiry invalidates the epoch while permission failure 
       /permission denied/,
     );
     assert.equal((await f.connection.status()).state, 'connected');
+    assert.equal(
+      (await f.connection.status()).error,
+      'GitHub permission denied for this repository',
+    );
     assert(!JSON.stringify(await f.connection.status()).includes(TOKEN));
+    internals.command = async () => {
+      throw Error('synthetic network detail ' + TOKEN);
+    };
+    await assert.rejects(
+      f.connection.run(['pr', 'checks'], connected.epoch, f.workspace),
+      {
+        message:
+          'GitHub request failed; check the connection and retry the read',
+      },
+    );
+    assert.equal((await f.connection.status()).state, 'connected');
+    assert(!JSON.stringify(await f.connection.status()).includes(TOKEN));
+    const login = (
+      f.connection as unknown as {
+        login: { token(): Promise<string | undefined> };
+      }
+    ).login;
+    const actualToken = login.token.bind(login);
+    login.token = async () => undefined;
+    let dispatched = false;
+    try {
+      await assert.rejects(
+        f.connection
+          .gitPushAuthentication(connected.epoch, 'fixture/repo')
+          .withCredentials(async () => {
+            dispatched = true;
+            return '';
+          }),
+        { message: 'connect GitHub in the GitHub plugin details' },
+      );
+      assert.equal(dispatched, false);
+    } finally {
+      login.token = actualToken;
+    }
     internals.command = async () => {
       throw Object.assign(Error('synthetic expired detail ' + TOKEN), {
         status: 401,
@@ -617,6 +655,10 @@ test('known authorization expiry invalidates the epoch while permission failure 
     );
     const expired = await f.connection.status();
     assert.equal(expired.state, 'error');
+    assert.equal(
+      expired.error,
+      'GitHub authorization expired; reconnect in the GitHub plugin details',
+    );
     assert(expired.epoch > connected.epoch);
     assert.equal(expired.account, undefined);
     assert.equal(f.deletes, 1);

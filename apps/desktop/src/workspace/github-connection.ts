@@ -229,7 +229,7 @@ export class NativeGitHubConnection {
         guard();
         const token = await this.login.token();
         guard();
-        if (!token) throw Error('connect GitHub in settings');
+        if (!token) throw Error('connect GitHub in the GitHub plugin details');
         return withGitHubPushCredentials(
           {
             repository,
@@ -298,7 +298,7 @@ export class NativeGitHubConnection {
         this.state.epoch++;
         this.state.state = 'error';
         this.state.error =
-          'GitHub authorization expired; reconnect in settings';
+          'GitHub authorization expired; reconnect in the GitHub plugin details';
         delete this.state.account;
         delete this.state.grantedScopes;
         this.state.scopeVerification = 'not-reported';
@@ -307,7 +307,9 @@ export class NativeGitHubConnection {
           this.persist(false),
           this.login.disconnect(),
         ]);
-        throw Error('GitHub authorization expired; reconnect in settings');
+        throw Error(
+          'GitHub authorization expired; reconnect in the GitHub plugin details',
+        );
       }
       this.state.error =
         status === 403 || /HTTP 403/i.test(detail)

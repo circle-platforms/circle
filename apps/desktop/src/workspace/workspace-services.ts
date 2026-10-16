@@ -785,11 +785,11 @@ export class WorkspaceServices {
             invocation?.assertActive();
             if (!this.options.githubEnabled?.(sessionId))
               throw Error(
-                'enable GitHub in extensions and connect in settings',
+                'enable GitHub and connect from the GitHub plugin details',
               );
           },
           spawn: () => {
-            throw Error('GitHub login belongs in settings');
+            throw Error('open the GitHub plugin details to connect');
           },
         });
       }

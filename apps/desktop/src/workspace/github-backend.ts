@@ -112,7 +112,7 @@ export function githubWorkspaceBackend(options: {
           signal: context?.signal,
           assertActive: guard,
           spawn: () => {
-            throw Error('login belongs in settings');
+            throw Error('open the GitHub plugin details to connect');
           },
         });
         const remote = (

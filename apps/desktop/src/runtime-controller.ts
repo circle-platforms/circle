@@ -969,7 +969,7 @@ export class RuntimeController {
                 assertActive: () => {
                   scope.invocation.assertActive();
                   if (!githubConnection || scope.epoch === undefined)
-                    throw Error('connect GitHub in settings');
+                    throw Error('connect GitHub in the GitHub plugin details');
                   githubConnection.assertEpoch(scope.epoch);
                 },
               };

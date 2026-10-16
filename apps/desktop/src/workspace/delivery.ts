@@ -125,7 +125,7 @@ export class DeliveryService {
   private scoped() {
     return new DeliveryService(this.root, this.ghPath, {
       spawn: () => {
-        throw Error('connection login belongs in settings');
+        throw Error('open the GitHub plugin details to connect');
       },
       connection: this.connection,
       epoch: this.connection!.snapshot().epoch,
@@ -170,7 +170,8 @@ export class DeliveryService {
     params: Record<string, unknown>,
   ): Promise<unknown> {
     if (method === 'login') {
-      if (this.connection) throw Error('open GitHub connection in settings');
+      if (this.connection)
+        throw Error('open the GitHub plugin details to manage the connection');
       if (!this.login) throw Error('native login helper is unavailable');
       if (params.action === 'poll') return this.login.poll(String(params.id));
       if (params.action === 'cancel')
