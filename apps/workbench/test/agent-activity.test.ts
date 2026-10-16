@@ -6,6 +6,7 @@ import {
   isAgentActive,
 } from '../src/model/activity';
 import type { AgentRecord } from '../src/model/types';
+import { setLanguage } from '../src/i18n/index';
 
 const taskAgent = (
   state: NonNullable<AgentRecord['task']>['state'],
@@ -59,4 +60,30 @@ test('only actual live native states stay in the running strip and core agents r
   assert.equal(isAgentActive(legacy), true);
   legacy.status = 'completed';
   assert.equal(isAgentActive(legacy), false);
+});
+
+test('legacy failure and interruption activity retains priority over a completed coarse status in both languages', () => {
+  try {
+    for (const language of ['en', 'zh-CN'] as const) {
+      setLanguage(language);
+      const agent = taskAgent('failed');
+      delete agent.task;
+      agent.activity = 'failed';
+      assert.equal(
+        agentActivityText(agent),
+        language === 'en' ? 'failed' : '失败',
+      );
+      agent.activity = 'interrupted';
+      assert.equal(
+        agentActivityText(agent),
+        language === 'en' ? 'interrupted' : '已中断',
+      );
+      assert.equal(
+        agentActivityText(taskAgent('waiting')),
+        language === 'en' ? 'waiting for you' : '等待你处理',
+      );
+    }
+  } finally {
+    setLanguage('en');
+  }
 });

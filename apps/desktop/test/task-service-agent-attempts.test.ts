@@ -3,12 +3,19 @@ import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { realpath, symlink } from 'node:fs/promises';
 import { TaskService } from '../src/workspace/task-service';
 import { cleanup, scratch } from '../../../tests/helpers';
 
 test('agent attempts are immutable owner/workspace scoped copies and preserve old attempts after reopening', async (t) => {
   const workspace = scratch(t),
     dataDir = scratch(t);
+  const rawWorkspace = join(scratch(t), 'workspace-alias');
+  await symlink(
+    workspace,
+    rawWorkspace,
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
   const git = (...args: string[]) =>
     execFileSync('git', ['-C', workspace, ...args], { encoding: 'utf8' });
   git('init', '-q');
@@ -25,7 +32,7 @@ test('agent attempts are immutable owner/workspace scoped copies and preserve ol
     'Create fixture',
   );
   const options = {
-    workspace,
+    workspace: rawWorkspace,
     dataDir,
     autoStart: false,
     emit() {},
@@ -50,6 +57,7 @@ test('agent attempts are immutable owner/workspace scoped copies and preserve ol
     tasks: [spec('two')],
   });
   const one = service.taskAttempts('parent-one');
+  assert.equal(one[0]!.spec.workspace, await realpath(rawWorkspace));
   assert.deepEqual(
     one.map((task) => task.spec.id),
     ['one'],
