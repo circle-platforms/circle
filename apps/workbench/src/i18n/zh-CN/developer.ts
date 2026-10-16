@@ -1,4 +1,10 @@
 export const developer: Record<string, string> = {
+  'review completed actions before trying again':
+    '请先核对已执行的操作，再决定是否重试。',
+  'error details': '错误详情',
+  'return to message': '返回输入框',
+  'review connection': '检查连接配置',
+  'copy error details': '复制错误详情',
   'session changes': '会话改动',
   history: '历史',
   'new task': '新建任务',

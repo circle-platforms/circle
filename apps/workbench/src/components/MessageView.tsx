@@ -3,7 +3,8 @@ import { useRuntime } from '../app/context';
 import { copyText } from '../host';
 import type { Message } from '../model/types';
 import { fullTime, shownTime } from '../model/time';
-import { FileChip, IconButton } from './common';
+import { Button, FileChip, IconButton } from './common';
+import './runtime-notice.css';
 import { Markdown } from './Markdown';
 import { t } from '../i18n';
 import { useSources } from './SourceNavigation';
@@ -105,3 +106,52 @@ const usageText = (usage: NonNullable<Message['usage']>) =>
   ]
     .filter(Boolean)
     .join(' · ');
+
+/** Only controller-owned failure identities are errors; quoted error text is ordinary content. */
+export function RuntimeNotice({
+  message,
+  onConnection,
+  onMessage,
+}: {
+  message: Message;
+  onConnection: () => void;
+  onMessage: () => void;
+}) {
+  const { notify } = useRuntime();
+  if (!message.id.startsWith('failure-'))
+    return (
+      <div className="transcript-notice">
+        {message.planCompleted === undefined
+          ? message.text
+          : t('plan completed · {n} steps', { n: message.planCompleted })}
+      </div>
+    );
+  return (
+    <section
+      className="transcript-notice runtime-failure"
+      role="alert"
+      aria-label={t('action failed')}
+    >
+      <strong>{t('action failed')}</strong>
+      <p>{t('review completed actions before trying again')}</p>
+      <details>
+        <summary>{t('error details')}</summary>
+        <pre>{message.text}</pre>
+      </details>
+      <div className="runtime-failure-actions">
+        <Button onClick={onMessage}>{t('return to message')}</Button>
+        <Button onClick={onConnection}>{t('review connection')}</Button>
+        <Button
+          onClick={() =>
+            void copyText(message.text).then(
+              () => notify(t('copied')),
+              () => notify(t('clipboard unavailable')),
+            )
+          }
+        >
+          {t('copy error details')}
+        </Button>
+      </div>
+    </section>
+  );
+}

@@ -35,7 +35,7 @@ import { ToolGroup, TurnRow } from '../components/ToolGroup';
 import { RecoveredInputs } from './RecoveredInputs';
 import { WindowedList } from '../components/WindowedList';
 import type { ReactNode, RefObject } from 'react';
-import { MessageView } from '../components/MessageView';
+import { MessageView, RuntimeNotice } from '../components/MessageView';
 import {
   BrowserDialogRequest,
   BrowserHandoffRequest,
@@ -760,13 +760,11 @@ export function Conversation({
                     }
                   >
                     {item.message.role === 'notice' ? (
-                      <div className="transcript-notice">
-                        {item.message.planCompleted === undefined
-                          ? item.message.text
-                          : t('plan completed · {n} steps', {
-                              n: item.message.planCompleted,
-                            })}
-                      </div>
+                      <RuntimeNotice
+                        message={item.message}
+                        onConnection={() => onDialog('connect')}
+                        onMessage={() => input.current?.focus()}
+                      />
                     ) : (
                       <MessageView
                         message={item.message}
