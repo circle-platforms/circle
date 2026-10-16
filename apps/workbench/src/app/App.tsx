@@ -127,6 +127,8 @@ export function App() {
     if (narrow) setInspectorOpen(false);
   }, [narrow]);
   const [panel, setPanel] = useState<PanelId>('files');
+  // A panel the person wants to see whole, for as long as they want it there.
+  const [fullView, setFullView] = useState(false);
   const [selection, setSelection] = useState('');
   const [file, setFile] = useState<string | null>(null);
   const [agent, setAgent] = useState<string | null>(null);
@@ -146,6 +148,26 @@ export function App() {
     ? (homeQuery.get('workspace') ?? '')
     : null;
   const inspectorVisible = inspectorOpen && !page;
+  // Only a panel worth the whole workspace offers it: the browser's page and the shell,
+  // plus any component that says so on its own panel.
+  const canBeWhole =
+    !narrow &&
+    (panel === 'terminal' ||
+      registry
+        .active(enabled)
+        .flatMap((plugin) => plugin.panels ?? [])
+        .some((item) => item.id === panel && item.fullView));
+  const whole = inspectorVisible && canBeWhole && fullView;
+  // A panel that cannot fill the workspace, or a panel that is gone, ends the view.
+  useEffect(() => {
+    if (!canBeWhole || !inspectorVisible) setFullView(false);
+  }, [canBeWhole, inspectorVisible]);
+  // The view takes the focus when it opens, so Escape is one keystroke away, and the way
+  // out is always in its own header as well.
+  const wholeBox = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (whole) wholeBox.current?.focus();
+  }, [whole]);
   const onSession = () => {
     setFile(null);
     setAgent(null);
@@ -651,6 +673,9 @@ export function App() {
       selection={selection}
       onPanel={onPanel}
       onClose={() => setInspectorOpen(false)}
+      whole={whole}
+      canBeWhole={canBeWhole}
+      onWhole={() => setFullView((on) => !on)}
       onFile={onFile}
       onAgent={setAgent}
       onDialog={onDialog}
@@ -851,39 +876,60 @@ export function App() {
               </DropdownMenu.Root>
             </div>
           </header>
-          <div className="workspace-content">
-            <Group orientation="horizontal" id="workbench-columns">
-              <Panel
-                id="main"
-                defaultSize={inspectorVisible && !narrow ? '68%' : '100%'}
-                minSize="38%"
+          <div
+            className={whole ? 'workspace-content whole' : 'workspace-content'}
+          >
+            {/* Seen whole, the panel takes the workspace above the conversation's own
+                input, which stays where the person left it. The columns are only put
+                aside, never unmounted: what was typed, and where the transcript had been
+                scrolled, are kept for the way back. */}
+            {whole && (
+              <div
+                className="inspector-full"
+                ref={wholeBox}
+                tabIndex={-1}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') setFullView(false);
+                }}
               >
-                <div className="main-stack">
-                  {content}
-                  {notice && (
-                    <div className="toast" role="status">
-                      {notice}
-                    </div>
-                  )}
-                </div>
-              </Panel>
-              {inspectorVisible && !narrow && (
-                <>
-                  <Separator
-                    className="resize-handle"
-                    aria-label={t('resize inspector')}
-                  />
-                  <Panel
-                    id="inspector"
-                    minSize={290}
-                    maxSize="50%"
-                    defaultSize="32%"
-                  >
-                    {inspector}
-                  </Panel>
-                </>
-              )}
-            </Group>
+                {inspector}
+              </div>
+            )}
+            <div className={whole ? 'columns whole-under' : 'columns'}>
+              <Group orientation="horizontal" id="workbench-columns">
+                <Panel
+                  id="main"
+                  defaultSize={inspectorVisible && !narrow ? '68%' : '100%'}
+                  minSize="38%"
+                >
+                  <div className="main-stack">
+                    {content}
+                    {/* Centred on the conversation, above its input. */}
+                    {notice && !whole && (
+                      <div className="toast" role="status">
+                        {notice}
+                      </div>
+                    )}
+                  </div>
+                </Panel>
+                {inspectorVisible && !narrow && !whole && (
+                  <>
+                    <Separator
+                      className="resize-handle"
+                      aria-label={t('resize inspector')}
+                    />
+                    <Panel
+                      id="inspector"
+                      minSize={290}
+                      maxSize="50%"
+                      defaultSize="32%"
+                    >
+                      {inspector}
+                    </Panel>
+                  </>
+                )}
+              </Group>
+            </div>
             {/* A narrow window lays the panel over the conversation, on the right,
                 and keeps the top bar's icons usable. */}
             {inspectorVisible && narrow && (
@@ -968,6 +1014,12 @@ export function App() {
             if (narrow) setInspectorOpen(false);
           }}
         />
+        {/* With the panel seen whole, the conversation shows only its input. */}
+        {notice && whole && (
+          <div className="toast whole" role="status">
+            {notice}
+          </div>
+        )}
       </div>
     </Tooltip.Provider>
   );

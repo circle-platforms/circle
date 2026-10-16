@@ -52,16 +52,17 @@ test('an empty variable or secret row does not highlight on hover', () => {
 });
 
 test('a session column keeps the composer inside the window', () => {
-  const workbench = css.match(/\.workbench \{[^}]*\}/)?.[0] ?? '';
+  // Each rule is the one that starts a line, not a descendant selector ending in it.
+  const workbench = css.match(/^\.workbench \{[^}]*\}/m)?.[0] ?? '';
   assert.match(workbench, /grid-template-rows:\s*minmax\(0,\s*1fr\)/);
   assert.match(workbench, /overflow:\s*hidden/);
-  const side = css.match(/\.desktop-sidebar \{[^}]*\}/)?.[0] ?? '';
+  const side = css.match(/^\.desktop-sidebar \{[^}]*\}/m)?.[0] ?? '';
   assert.match(side, /min-height:\s*0/);
   assert.match(side, /overflow:\s*hidden/);
-  const workspace = css.match(/\.workspace \{[^}]*\}/)?.[0] ?? '';
+  const workspace = css.match(/^\.workspace \{[^}]*\}/m)?.[0] ?? '';
   assert.match(workspace, /overflow:\s*hidden/);
   assert.match(workspace, /min-height:\s*0/);
-  const content = css.match(/\.workspace-content \{[^}]*\}/)?.[0] ?? '';
+  const content = css.match(/^\.workspace-content \{[^}]*\}/m)?.[0] ?? '';
   assert.match(content, /min-height:\s*0/);
   assert.match(content, /overflow:\s*hidden/);
   const panel = css.indexOf('.workspace-content [data-panel]');
@@ -74,7 +75,7 @@ test('a session column keeps the composer inside the window', () => {
   assert.match(innerBlock, /height:\s*100%\s*!important/);
   assert.match(innerBlock, /overflow:\s*hidden\s*!important/);
   assert.match(innerBlock, /flex-direction:\s*column/);
-  const conversation = css.match(/\.conversation \{[^}]*\}/)?.[0] ?? '';
+  const conversation = css.match(/^\.conversation \{[^}]*\}/m)?.[0] ?? '';
   assert.match(conversation, /overflow:\s*hidden/);
   assert.match(conversation, /min-height:\s*0/);
   const mark = css.indexOf('The transcript scrolls; this stays.');

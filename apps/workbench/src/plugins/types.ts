@@ -22,6 +22,8 @@ export interface PluginPanel {
   title: string;
   icon: LucideIcon;
   component: ComponentType<PluginPanelProps>;
+  /** Offered in the full view, which takes the panel across the whole workspace. */
+  fullView?: boolean;
 }
 export interface PluginWidget {
   id: string;

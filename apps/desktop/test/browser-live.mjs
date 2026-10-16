@@ -935,6 +935,59 @@ try {
     checks.push(
       'snapshot and screenshot run without another approval, and the browser PNG reaches the next model request',
     );
+    // The panel seen whole: the page is a native view, not DOM, so it has to follow the
+    // panel across the workspace and back, sitting on the box the person sees.
+    const domBox = () =>
+      page.evaluate(() => {
+        const box = document
+          .querySelector('.native-browser-viewport')
+          ?.getBoundingClientRect();
+        return box
+          ? {
+              width: Math.round(box.width),
+              height: Math.round(box.height),
+            }
+          : null;
+      });
+    const viewBox = () =>
+      app.evaluate(({ BrowserWindow }) => {
+        const views = BrowserWindow.getAllWindows()[0].contentView.children;
+        const tab = views.find(
+          (view) =>
+            view.getVisible() &&
+            !view.webContents.getURL().includes('circle-mask'),
+        );
+        return tab ? tab.getBounds() : null;
+      });
+    const split = { dom: await domBox(), view: await viewBox() };
+    assert(split.dom && split.view, 'the browser page is shown in the panel');
+    await page.getByRole('button', { name: 'full view', exact: true }).click();
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    const whole = { dom: await domBox(), view: await viewBox() };
+    assert(
+      whole.view.width > split.view.width + 40,
+      `the native page grew with the panel: ${JSON.stringify([
+        split.view,
+        whole.view,
+      ])}`,
+    );
+    assert(
+      Math.abs(whole.view.width - whole.dom.width) <= 3 &&
+        Math.abs(whole.view.height - whole.dom.height) <= 3,
+      `the native page left its box: ${JSON.stringify(whole)}`,
+    );
+    await page
+      .getByRole('button', { name: 'exit full view', exact: true })
+      .click();
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    const back = await viewBox();
+    assert(
+      Math.abs(back.width - split.view.width) <= 3,
+      `the split did not take the page back: ${JSON.stringify([split.view, back])}`,
+    );
+    checks.push(
+      'the full view carries the native browser page across the workspace and back, in step with its box',
+    );
 
     await send('open the unavailable local port');
     // Another site: asked again

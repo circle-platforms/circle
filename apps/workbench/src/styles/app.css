@@ -155,6 +155,45 @@ pre {
   height: 100dvh;
   overflow: hidden;
 }
+/* The panel seen whole takes the workspace; the columns step aside but stay mounted, so
+   the conversation keeps what it holds for the way back. */
+.workspace-content > .columns {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* Seen whole: the panel takes the workspace, and the conversation keeps its own input
+   below it, as the chat stays in Codex's full view. Only the record steps aside. */
+.workspace-content > .columns.whole-under {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+.workspace-content > .columns.whole-under .conversation > :not(.composer-area) {
+  display: none;
+}
+/* Every level under the input then takes its height from it. The pinned layout
+   below fills the window instead, and would squeeze the input to nothing. */
+.workspace-content > .columns.whole-under > [data-group],
+.workspace-content > .columns.whole-under [data-panel],
+.workspace-content > .columns.whole-under [data-panel] > div,
+.workspace-content > .columns.whole-under .main-stack,
+.workspace-content > .columns.whole-under .conversation {
+  flex: 0 0 auto;
+  height: auto !important;
+  max-height: none !important;
+}
+.inspector-full {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.inspector-full > .inspector {
+  flex: 1;
+  min-height: 0;
+}
 /* The grid item has to be allowed to shrink. Otherwise the session list grows
    with its rows and the wheel has nothing to scroll. */
 .desktop-sidebar {
@@ -2559,6 +2598,10 @@ pre {
   gap: 2px;
   line-height: 1.35;
 }
+.toast.whole {
+  position: fixed;
+  bottom: 25px;
+}
 .toast {
   position: absolute;
   /* Above the composer, centered on the main pane. */
@@ -4699,7 +4742,7 @@ pre {
 /* The resizable panel otherwise grows with the transcript and scrolls the
    composer off a window that is not maximized. Pin the column and scroll
    the transcript. The library sets height and overflow inline. */
-.workspace-content > [data-group] {
+.workspace-content > .columns > [data-group] {
   flex: 1 1 0;
   min-height: 0;
 }
@@ -4731,6 +4774,11 @@ pre {
 .inspector-overlay > .inspector {
   flex: 1;
   min-height: 0;
+}
+.inspector-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
 /* The application's own update: a line and its next step in settings, a chip in the sidebar. */

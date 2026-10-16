@@ -102,6 +102,7 @@ export const circlePlugins: WorkbenchPlugin[] = [
         },
         icon: Globe,
         component: BrowserPanel,
+        fullView: true,
       },
     ],
   },
