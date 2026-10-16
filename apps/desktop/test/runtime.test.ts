@@ -5539,7 +5539,10 @@ test('trust is given and taken away for the folder the settings page names', asy
   const { root, home, workspace, controller, call } = await setup(t, [
     { message: assistant('trust') },
   ]);
-  const id = workspaceId(workspace);
+  // The id comes from the snapshot rather than from hashing the path here: a temp
+  // folder on macOS is reached through a symlink (/var to /private/var), and the
+  // controller names the folder by the real path it opened.
+  const id = controller.snapshot().workspaces[0]!.id;
   assert.equal(controller.snapshot().workspaces[0]!.trusted, true);
   // Revoking is the other half of the same command, and it is kept on disk.
   assert.equal(
