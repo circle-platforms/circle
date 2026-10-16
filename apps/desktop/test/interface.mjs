@@ -1257,10 +1257,15 @@ try {
   );
   assert.ok(!whole.transcript.shown, 'only the record steps aside');
   assert.ok(whole.sidebar.shown, 'the sidebar stays beside the whole panel');
+  // The session's own row in its project group: it is also listed under recent, and its
+  // row menu button carries its title too.
   assert.ok(
     await page
-      .locator('.sidebar')
-      .getByRole('button', { name: 'Review the request lifecycle' })
+      .locator('.sidebar .project-list > .project')
+      .filter({
+        has: page.getByRole('button', { name: 'orbit-api', exact: true }),
+      })
+      .locator('a.session-link', { hasText: 'Review the request lifecycle' })
       .isVisible(),
     'another session can still be chosen from the full view',
   );
