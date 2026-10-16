@@ -1,3 +1,6 @@
+import { MemoryRouter } from 'react-router-dom';
+import { RuntimeProvider } from '../src/app/context';
+import { PreviewRuntime } from '../src/model/state';
 import { setLanguage } from '../src/i18n';
 import '../src/styles/app.css';
 import { applyTheme } from '../src/theme';
@@ -24,4 +27,11 @@ function Fixture() {
   applyTheme('light');
   return <GitPanel sessionId={sessionId} embedded />;
 }
-createRoot(document.getElementById('root')!).render(<Fixture />);
+const runtime = new PreviewRuntime();
+createRoot(document.getElementById('root')!).render(
+  <MemoryRouter>
+    <RuntimeProvider runtime={runtime}>
+      <Fixture />
+    </RuntimeProvider>
+  </MemoryRouter>,
+);
