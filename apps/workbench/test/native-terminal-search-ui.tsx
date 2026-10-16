@@ -7,6 +7,13 @@ import '../src/styles/app.css';
 const options = new URLSearchParams(location.search);
 const embedded = options.get('embedded') === 'true';
 applyTheme(options.get('theme') === 'dark' ? 'dark' : 'light');
+(window as any).__terminalTimings = [];
+if (options.get('timing') !== 'off')
+  (window as any).__circleNativeTerminalTiming = (record: unknown) => {
+    (window as any).__terminalTimings.push(record);
+    if (options.get('timing') === 'throw')
+      throw Error('synthetic timing observer failure');
+  };
 const lines = Array.from(
   { length: 600 },
   (_, i) => `CIRCLE_TERMINAL_LINE_${String(i + 1).padStart(4, '0')}_中文`,
@@ -52,6 +59,7 @@ const snapshot = (sessionId: string) => ({
         ok: true,
         data: {
           snapshot: item,
+          nextSequence: 1,
           events:
             params.afterSequence < 1
               ? [

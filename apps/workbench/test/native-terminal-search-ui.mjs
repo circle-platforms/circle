@@ -55,6 +55,11 @@ try {
             new URLSearchParams({
               embedded: String(profile.embedded),
               theme: profile.theme,
+              timing: !profile.embedded
+                ? 'off'
+                : profile.theme === 'dark'
+                  ? 'throw'
+                  : 'record',
             }),
         );
         if (profile.embedded) {
@@ -171,6 +176,59 @@ try {
             assert.ok(
               await page.locator('.native-terminal .status').count(),
               'terminal state uses the original status component',
+            );
+            await page.waitForFunction(() =>
+              window.__terminalTimings.some(
+                (record) => record.phase === 'write-frame',
+              ),
+            );
+            const timings = await page.evaluate(() => window.__terminalTimings);
+            for (const record of timings) {
+              assert.ok(
+                Object.keys(record).every((key) =>
+                  [
+                    'terminalId',
+                    'phase',
+                    'at',
+                    'cursor',
+                    'afterSequence',
+                    'eventSequence',
+                  ].includes(key),
+                ),
+                'timing records must never include terminal text',
+              );
+              assert.ok(Number.isSafeInteger(record.at));
+            }
+            for (const phase of [
+              'replay-request',
+              'replay-response',
+              'write-enqueued',
+              'write-parsed',
+              'write-frame',
+            ])
+              assert.ok(
+                timings.some((record) => record.phase === phase),
+                'actual replay/parser/frame timing: ' + phase,
+              );
+            const response = timings.find(
+              (record) =>
+                record.phase === 'replay-response' &&
+                record.afterSequence === 0,
+            );
+            assert.equal(
+              response.cursor,
+              1,
+              'product replay timing carries the exact returned cursor',
+            );
+            assert.ok(
+              timings.find((record) => record.phase === 'write-frame').at >=
+                timings.find((record) => record.phase === 'write-parsed').at,
+            );
+          } else {
+            assert.deepEqual(
+              await page.evaluate(() => window.__terminalTimings),
+              [],
+              'ordinary terminal use installs no timing observer',
             );
           }
           if (output)

@@ -42,6 +42,49 @@ type Controls = {
   selection: () => string;
 };
 
+type TerminalTiming = {
+  terminalId: string;
+  phase:
+    | 'replay-request'
+    | 'replay-response'
+    | 'write-enqueued'
+    | 'write-parsed'
+    | 'write-frame';
+  at: number;
+  eventSequence?: number;
+  cursor?: number;
+  afterSequence?: number;
+};
+
+/** Explicit test instrumentation: metadata only, with no work when no sink is installed. */
+function recordTerminalTiming(
+  terminalId: string,
+  phase: TerminalTiming['phase'],
+  eventSequence?: number,
+  cursor?: number,
+  afterSequence?: number,
+): boolean {
+  const sink = (
+    window as Window & {
+      __circleNativeTerminalTiming?: (record: TerminalTiming) => void;
+    }
+  ).__circleNativeTerminalTiming;
+  if (typeof sink !== 'function') return false;
+  try {
+    sink({
+      terminalId,
+      phase,
+      at: Date.now(),
+      eventSequence,
+      cursor,
+      afterSequence,
+    });
+  } catch {
+    // An optional test observer must never affect terminal input or output.
+  }
+  return true;
+}
+
 function status(snapshot: TerminalSnapshot): string {
   if (snapshot.kind === 'service') {
     if (snapshot.serviceState === 'starting') return t('service starting');
@@ -785,6 +828,15 @@ function TerminalSurface({
     let inFlight: Promise<void> | undefined;
     let dirty = false;
     let cursor = 0;
+    let timingFrames: Set<number> | undefined;
+    const timingFrame = (callback: () => void) => {
+      timingFrames ??= new Set();
+      const frame = requestAnimationFrame(() => {
+        timingFrames?.delete(frame);
+        if (!cancelled) callback();
+      });
+      timingFrames.add(frame);
+    };
     const pendingSearches = new Set<() => void>();
     const notifySearches = () => {
       for (const check of pendingSearches) check();
@@ -804,20 +856,65 @@ function TerminalSurface({
           dirty = false;
           let more: boolean;
           do {
+            const afterSequence = cursor;
+            recordTerminalTiming(
+              snapshot.id,
+              'replay-request',
+              undefined,
+              afterSequence,
+            );
             const page = await workspaceCall<TerminalReplay>(
               snapshot.sessionId,
               'terminal',
               'replay',
               { id: snapshot.id, afterSequence: cursor, limit: 128 },
             );
+            recordTerminalTiming(
+              snapshot.id,
+              'replay-response',
+              undefined,
+              page.nextSequence,
+              afterSequence,
+            );
             if (cancelled) return;
             for (const event of page.events) {
               const next = acceptTerminalEvent(snapshot.id, cursor, event);
               if (next === cursor) continue;
-              if (event.kind === 'data' && event.data)
-                await new Promise<void>((resolve) =>
-                  terminal.write(event.data!, resolve),
+              if (event.kind === 'data' && event.data) {
+                recordTerminalTiming(
+                  snapshot.id,
+                  'write-enqueued',
+                  event.sequence,
                 );
+                await new Promise<void>((resolve) =>
+                  terminal.write(event.data!, () => {
+                    if (
+                      !cancelled &&
+                      recordTerminalTiming(
+                        snapshot.id,
+                        'write-parsed',
+                        event.sequence,
+                      )
+                    )
+                      timingFrame(() =>
+                        timingFrame(() => {
+                          if (
+                            activeRef.current &&
+                            container.current?.isConnected &&
+                            container.current.clientWidth &&
+                            container.current.clientHeight
+                          )
+                            recordTerminalTiming(
+                              snapshot.id,
+                              'write-frame',
+                              event.sequence,
+                            );
+                        }),
+                      );
+                    resolve();
+                  }),
+                );
+              }
               cursor = next;
               notifySearches();
             }
@@ -945,6 +1042,7 @@ function TerminalSurface({
     });
     return () => {
       cancelled = true;
+      for (const frame of timingFrames ?? []) cancelAnimationFrame(frame);
       notifySearches();
       unsubscribe();
       input.dispose();
