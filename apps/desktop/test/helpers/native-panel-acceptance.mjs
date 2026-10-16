@@ -31,6 +31,85 @@ export function assertPanelControlGeometry(result, label) {
   );
 }
 
+export function measurePanelControlGeometry(node) {
+  const r = node.getBoundingClientRect();
+  let clipContains = true;
+  const clippingAncestors = [];
+  for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+    const style = getComputedStyle(parent),
+      clip = parent.getBoundingClientRect();
+    const clientRectCount = parent.getClientRects().length;
+    const noCssBox = style.display === 'contents' && clientRectCount === 0;
+    const clipsX = /(auto|scroll|hidden|clip)/.test(style.overflowX);
+    const clipsY = /(auto|scroll|hidden|clip)/.test(style.overflowY);
+    if (clipsX || clipsY) {
+      clippingAncestors.push({
+        clientRectCount,
+        ignoredReason: noCssBox
+          ? 'display:contents has no CSS clipping box'
+          : null,
+        identity: {
+          tag: parent.tagName,
+          id: parent.id,
+          className: parent.className,
+        },
+        rect: {
+          left: clip.left,
+          right: clip.right,
+          top: clip.top,
+          bottom: clip.bottom,
+          width: clip.width,
+          height: clip.height,
+        },
+        clientRect: {
+          left: clip.left + parent.clientLeft,
+          right: clip.left + parent.clientLeft + parent.clientWidth,
+          top: clip.top + parent.clientTop,
+          bottom: clip.top + parent.clientTop + parent.clientHeight,
+        },
+        style: {
+          display: style.display,
+          position: style.position,
+          overflowX: style.overflowX,
+          overflowY: style.overflowY,
+          transform: style.transform,
+          zoom: style.zoom,
+        },
+        borderContainsX: r.left >= clip.left - 1 && r.right <= clip.right + 1,
+        borderContainsY: r.top >= clip.top - 1 && r.bottom <= clip.bottom + 1,
+      });
+    }
+    if (clipsX && !noCssBox)
+      clipContains &&= r.left >= clip.left - 1 && r.right <= clip.right + 1;
+    if (clipsY && !noCssBox)
+      clipContains &&= r.top >= clip.top - 1 && r.bottom <= clip.bottom + 1;
+  }
+  const hit = document.elementFromPoint(
+    r.left + r.width / 2,
+    r.top + r.height / 2,
+  );
+  return {
+    identity: {
+      tag: node.tagName,
+      id: node.id,
+      type: node.getAttribute('type'),
+      name: node.getAttribute('name'),
+    },
+    clippingAncestors,
+    width: r.width,
+    height: r.height,
+    left: r.left,
+    right: r.right,
+    top: r.top,
+    bottom: r.bottom,
+    viewportWidth: innerWidth,
+    viewportHeight: innerHeight,
+    clipContains,
+    hit: hit === node || node.contains(hit),
+    focused: document.activeElement === node,
+  };
+}
+
 /** Call before final appearance screenshots, with the existing controlled page still open.
  * configureAppearance({locale,theme}) must click original Settings and return to the same session.
  * openPanel(kind) must use original Inspector/Browser toggles, and expose service form or storage tab.
@@ -90,41 +169,9 @@ export async function runNativePanelAcceptance({
             await control.scrollIntoViewIfNeeded();
             await control.focus();
             const before = await control.inputValue();
-            const geometry = await control.evaluate((node) => {
-              const r = node.getBoundingClientRect();
-              let clipContains = true;
-              for (
-                let parent = node.parentElement;
-                parent;
-                parent = parent.parentElement
-              ) {
-                const style = getComputedStyle(parent),
-                  clip = parent.getBoundingClientRect();
-                if (/(auto|scroll|hidden|clip)/.test(style.overflowX))
-                  clipContains &&=
-                    r.left >= clip.left - 1 && r.right <= clip.right + 1;
-                if (/(auto|scroll|hidden|clip)/.test(style.overflowY))
-                  clipContains &&=
-                    r.top >= clip.top - 1 && r.bottom <= clip.bottom + 1;
-              }
-              const hit = document.elementFromPoint(
-                r.left + r.width / 2,
-                r.top + r.height / 2,
-              );
-              return {
-                width: r.width,
-                height: r.height,
-                left: r.left,
-                right: r.right,
-                top: r.top,
-                bottom: r.bottom,
-                viewportWidth: innerWidth,
-                viewportHeight: innerHeight,
-                clipContains,
-                hit: hit === node || node.contains(hit),
-                focused: document.activeElement === node,
-              };
-            });
+            const geometry = await control.evaluate(
+              measurePanelControlGeometry,
+            );
             await control.press('Tab');
             Object.assign(
               geometry,
@@ -143,6 +190,21 @@ export async function runNativePanelAcceptance({
                     r.bottom <= innerHeight + 1,
                 };
               }),
+            );
+            const currentCase = {
+              locale,
+              theme,
+              size,
+              panel: spec.kind,
+              geometry,
+            };
+            receipt.currentCase = currentCase;
+            await writeFile(
+              join(
+                output,
+                `native-panel-geometry-${locale}-${theme}-${size.width}-${spec.kind}.json`,
+              ),
+              JSON.stringify(currentCase, null, 2) + '\n',
             );
             assertPanelControlGeometry(
               geometry,
