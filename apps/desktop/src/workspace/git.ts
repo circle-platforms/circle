@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import {
   readFile,
+  writeFile,
   realpath,
   lstat,
   readlink,
@@ -337,8 +338,14 @@ export class GitWorkspaceService {
   ) {
     const attributes = (
       await this.git([
+        '-c',
+        'core.fsmonitor=false',
         'check-attr',
         '-z',
+        'text',
+        'crlf',
+        'eol',
+        'ident',
         'filter',
         'working-tree-encoding',
         '--',
@@ -348,33 +355,72 @@ export class GitWorkspaceService {
     const values = new Map<string, string>();
     for (let i = 0; i + 2 < attributes.length; i += 3)
       values.set(attributes[i + 1]!, attributes[i + 2]!);
-    let filterKeys: string[] = [];
-    try {
-      filterKeys = (
-        await this.git(['config', '--name-only', '--get-regexp', '^filter\\.'])
-      )
-        .split('\n')
-        .filter(Boolean);
-    } catch (error) {
-      if ((error as { code?: number }).code !== 1) throw error;
-    }
     const filter = values.get('filter') ?? 'unspecified';
     const encoding = values.get('working-tree-encoding') ?? 'unspecified';
     if (
       !['unspecified', 'unset'].includes(filter) ||
-      filterKeys.some((key) => key.startsWith('filter.' + filter + '.')) ||
       !['unspecified', 'unset'].includes(encoding)
     )
       return {
         status: 'unsupported-conversion',
         text: 'Preview unavailable: custom filter or encoding requires explicit review\n',
       };
+    const conversion: string[] = [];
+    for (const name of ['text', 'crlf', 'eol', 'ident']) {
+      const value = values.get(name) ?? 'unspecified';
+      if (value === 'unspecified') continue;
+      if (value === 'set') conversion.push(name);
+      else if (value === 'unset') conversion.push('-' + name);
+      else if (/^[a-zA-Z0-9_-]+$/.test(value))
+        conversion.push(name + '=' + value);
+      else
+        return {
+          status: 'unsupported-conversion',
+          text: 'Preview unavailable: unsupported Git conversion attributes\n',
+        };
+    }
+    const configuration: string[] = [];
+    for (const key of ['core.autocrlf', 'core.eol', 'core.safecrlf']) {
+      try {
+        const value = (await this.git(['config', '--get', key])).trim();
+        configuration.push('-c', key + '=' + value);
+      } catch (error) {
+        if ((error as { code?: number }).code !== 1) throw error;
+      }
+    }
+    const format = (
+      await this.git(['rev-parse', '--show-object-format'])
+    ).trim();
+    if (!['sha1', 'sha256'].includes(format))
+      throw Error('unsupported Git object format');
     const directory = await mkdtemp(path.join(tmpdir(), 'circle-git-preview-'));
     try {
       const objects = path.join(directory, 'objects'),
-        hooks = path.join(directory, 'hooks');
+        hooks = path.join(directory, 'hooks'),
+        repository = path.join(directory, 'repository'),
+        worktree = path.join(directory, 'worktree'),
+        emptyConfig = path.join(directory, 'empty-config');
       await mkdir(objects);
       await mkdir(hooks);
+      await mkdir(worktree);
+      await mkdir(path.join(repository, 'objects'), { recursive: true });
+      await mkdir(path.join(repository, 'refs'));
+      await writeFile(
+        path.join(repository, 'HEAD'),
+        'ref: refs/heads/preview\n',
+      );
+      await writeFile(
+        path.join(repository, 'config'),
+        '[core]\nrepositoryformatversion=' +
+          (format === 'sha256' ? '1' : '0') +
+          '\nbare=false\n' +
+          (format === 'sha256' ? '[extensions]\nobjectformat=sha256\n' : ''),
+      );
+      await writeFile(emptyConfig, '');
+      await writeFile(
+        path.join(worktree, '.gitattributes'),
+        '* ' + conversion.join(' ') + '\n',
+      );
       const canonical = await realpath(directory),
         inside = path.relative(root, canonical);
       if (
@@ -385,51 +431,62 @@ export class GitWorkspaceService {
         throw Error(
           'Git preview temporary files must be outside the repository',
         );
-      // No custom clean/process/smudge driver may run during a read-only preview.
-      const disabled = filterKeys
-        .filter((key) => /\.(clean|process|smudge|required)$/.test(key))
-        .flatMap((key) => [
-          '-c',
-          key + '=' + (key.endsWith('.required') ? 'false' : ''),
-        ]);
+      // Never let a concurrent repository/global configuration or attribute
+      // change introduce executable conversion drivers into a read-only preview.
+      const inherited = { ...process.env };
+      for (const key of Object.keys(inherited))
+        if (key.startsWith('GIT_')) delete inherited[key];
       const env = {
-        ...process.env,
+        ...inherited,
+        GIT_DIR: repository,
+        GIT_WORK_TREE: worktree,
         GIT_INDEX_FILE: path.join(directory, 'index'),
         GIT_OBJECT_DIRECTORY: objects,
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_CONFIG_SYSTEM: emptyConfig,
+        GIT_CONFIG_GLOBAL: emptyConfig,
+        GIT_ATTR_NOSYSTEM: '1',
         GIT_OPTIONAL_LOCKS: '0',
         GIT_TERMINAL_PROMPT: '0',
       };
       const run = (args: string[], input?: string | Buffer) =>
         new Promise<string>((resolve, reject) => {
+          let inputError: Error | undefined;
           const child = execFile(
             'git',
             [
               '--literal-pathspecs',
               '-C',
-              root,
+              worktree,
               '-c',
               'core.fsmonitor=false',
               '-c',
               'core.hooksPath=' + hooks,
-              ...disabled,
+              '-c',
+              'core.attributesFile=' + emptyConfig,
+              ...configuration,
               ...args,
             ],
             { env, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 },
             (error, stdout, stderr) =>
-              error ? reject(Error(stderr || error.message)) : resolve(stdout),
+              error || inputError
+                ? reject(Error(stderr || error?.message || inputError!.message))
+                : resolve(stdout),
           );
+          // Reap the child before cleanup even when it rejects input (for
+          // example core.safecrlf); a pipe error must not escape the main process.
+          child.stdin?.on('error', (error: Error) => {
+            inputError = error;
+          });
           child.stdin?.end(input);
         });
       const empty = (
         await run(['hash-object', '-w', '-t', 'tree', '--stdin'], '')
       ).trim();
-      // Convert the bytes read from the already-validated file descriptor. Git
-      // must not reopen the working-tree path between our identity checks.
+      // Convert only the bytes from the already-validated descriptor, using the
+      // immutable conversion attributes above; never reopen the workspace path.
       const blob = (
-        await run(
-          ['hash-object', '-w', '--path=' + relative, '--stdin'],
-          expected,
-        )
+        await run(['hash-object', '-w', '--path=preview', '--stdin'], expected)
       ).trim();
       let filemode = true;
       try {
@@ -439,7 +496,6 @@ export class GitWorkspaceService {
       } catch (error) {
         if ((error as { code?: number }).code !== 1) throw error;
       }
-      // Git's create_ce_mode uses the owner's execute bit, not any execute bit.
       const mode = filemode && identity.mode & 0o100 ? '100755' : '100644';
       await run(['update-index', '--add', '--cacheinfo', mode, blob, relative]);
       const text = await run([

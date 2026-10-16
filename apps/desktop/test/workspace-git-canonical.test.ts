@@ -185,7 +185,7 @@ test('canonical preview converts the validated bytes instead of reopening a repl
         restored = true;
       }
       const value = await super.git(args, input);
-      if (args[0] === 'check-attr' && !replaced) {
+      if (args.includes('check-attr') && !replaced) {
         await rename(file, backup);
         await writeFile(file, 'later file must not be previewed\r\n');
         replaced = true;
@@ -213,6 +213,104 @@ test('canonical preview converts the validated bytes instead of reopening a repl
       await git.git(['show', ':file.txt']),
       'validated descriptor bytes\n',
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a filter added after attribute inspection cannot execute during a read-only preview', async () => {
+  const { root } = await fixture();
+  const outside = await mkdtemp(path.join(tmpdir(), 'circle-git-filter-'));
+  const marker = path.join(outside, 'CONVERSION_EXECUTED');
+  const program = path.join(outside, 'filter.cjs');
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+  const command = [process.execPath, program, marker].map(quote).join(' ');
+  let attributesRead = false,
+    injected = false;
+  class FilterRace extends GitWorkspaceService {
+    override async git(args: string[], input?: string) {
+      const inject = attributesRead && !injected && args.includes('config');
+      try {
+        return await super.git(args, input);
+      } finally {
+        if (args.includes('check-attr')) attributesRead = true;
+        if (inject) {
+          injected = true;
+          await super.git(['config', 'filter.late.clean', command]);
+          await super.git(['config', 'filter.late.required', 'true']);
+          await writeFile(
+            path.join(root, '.gitattributes'),
+            'file.txt filter=late\n',
+          );
+        }
+      }
+    }
+  }
+  const git = new FilterRace(root);
+  try {
+    await writeFile(
+      program,
+      'require("node:fs").writeFileSync(process.argv[2],"executed");process.stdin.pipe(process.stdout);',
+    );
+    await git.git(['config', 'core.autocrlf', 'true']);
+    await writeFile(path.join(root, 'file.txt'), 'unchanged bytes\r\n');
+    const shown = await preview(git, 'file.txt');
+    assert(
+      injected,
+      'real Git config and attributes must change between inspection and conversion',
+    );
+    await assert.rejects(readFile(marker), { code: 'ENOENT' });
+    assert(shown.text.includes('+unchanged bytes\n'));
+    await assert.rejects(readFile(path.join(root, '.git', 'index')), {
+      code: 'ENOENT',
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test('effective text legacy CRLF and ident attributes match real Git conversion', async () => {
+  const { root, git } = await fixture();
+  try {
+    await git.git(['config', 'core.autocrlf', 'false']);
+    await writeFile(
+      path.join(root, '.gitattributes'),
+      'literal.txt -text\nlegacy.txt crlf=input\nident.txt text eol=lf ident\nauto.txt text=auto eol=lf\n',
+    );
+    for (const [name, content] of [
+      ['literal.txt', 'literal\r\n'],
+      ['legacy.txt', 'legacy\r\n'],
+      ['ident.txt', '$Id: expanded-value $\r\n'],
+      ['auto.txt', 'automatic\r\n'],
+    ]) {
+      await writeFile(path.join(root, name!), content!);
+      const shown = await preview(git, name!);
+      await stage(git, shown.text);
+      const staged = await git.git(['show', ':' + name]);
+      await git.git(['rm', '--cached', '-f', '--', name!]);
+      await git.git(['add', '--', name!]);
+      assert.equal(await git.git(['show', ':' + name]), staged, name);
+      assert.equal(await readFile(path.join(root, name!), 'utf8'), content);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('rejected Git conversion keeps the application process alive and original index absent', async () => {
+  const { root, git } = await fixture();
+  try {
+    await git.git(['config', 'core.autocrlf', 'true']);
+    await git.git(['config', 'core.safecrlf', 'true']);
+    const content = 'mixed\r\nline\n'.repeat(70_000);
+    await writeFile(path.join(root, 'mixed.txt'), content);
+    await assert.rejects(git.git(['add', '--', 'mixed.txt']), /CRLF|LF/i);
+    await assert.rejects(preview(git, 'mixed.txt'), /CRLF|LF/i);
+    assert.equal(await readFile(path.join(root, 'mixed.txt'), 'utf8'), content);
+    await assert.rejects(readFile(path.join(root, '.git', 'index')), {
+      code: 'ENOENT',
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
