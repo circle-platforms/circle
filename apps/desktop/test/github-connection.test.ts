@@ -1729,3 +1729,261 @@ test('authorization phases and cancellation outcomes reflect actual code prepara
     await f.close();
   }
 });
+
+test('Harness inspects the opaque candidate revision before publishing and rejects stale or foreign candidates without dispatch', async (t) => {
+  const f = await fixture();
+  let runtime: AgentRuntime | undefined;
+  const ledger = await OperationLedger.open({
+    directory: path.join(f.root, 'candidate-operations'),
+  });
+  try {
+    const delivery = new DeliveryService(f.workspace, 'synthetic-gh', {
+      connection: f.connection,
+      spawn: () => {
+        throw Error('no separate login');
+      },
+    });
+    await delivery.git.git(['init']);
+    await delivery.git.git(['config', 'user.name', 'Fixture']);
+    await delivery.git.git(['config', 'user.email', 'fixture@example.invalid']);
+    await writeFile(path.join(f.workspace, 'file'), 'base\n');
+    await delivery.git.git(['add', '--', 'file']);
+    await delivery.git.git(['commit', '-m', 'Base']);
+    await delivery.git.git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+    await delivery.git.git(['switch', '-c', 'codex/fixture']);
+    await writeFile(path.join(f.workspace, 'file'), 'changed\n');
+    await delivery.git.git(['add', '--', 'file']);
+    await delivery.git.git(['commit', '-m', 'Feature']);
+    await delivery.git.git([
+      'remote',
+      'add',
+      'origin',
+      'https://github.com/fixture/repo.git',
+    ]);
+    const bare = path.join(f.root, 'remote.git');
+    await delivery.git.git(['init', '--bare', bare]);
+    t.mock.method(f.connection, 'gitPushAuthentication', () => ({
+      repository: 'fixture/repo',
+      withCredentials: async (
+        run: (env: NodeJS.ProcessEnv, config: string[]) => Promise<string>,
+      ) =>
+        run({ ...process.env, GH_TOKEN: undefined, GITHUB_TOKEN: undefined }, [
+          '-c',
+          `url.${bare.replaceAll('\\', '/')}.insteadOf=https://github.com/fixture/repo.git`,
+        ]),
+    }));
+    f.head = (await delivery.git.snapshot()).head;
+    const backend = githubWorkspaceBackend({
+      connection: f.connection,
+      delivery: async () => delivery,
+      runWrite: (method, params, callId, action) =>
+        ledger.run(
+          {
+            id: callId,
+            sessionId: 'candidate-owner',
+            service: 'github',
+            method,
+            paramsHash: createHash('sha256')
+              .update(JSON.stringify(params))
+              .digest('hex'),
+          },
+          action,
+        ),
+    });
+    const release = backend.subscribe(() => {});
+    await backend.call('connect', {
+      storage: 'session',
+      repositories: ['fixture/repo'],
+    });
+    f.helpers[0].finish();
+    const connected = await until(async () => {
+      const s = await backend.call('status', {});
+      return s.state === 'connected' ? s : false;
+    });
+    let inspected:
+      Awaited<ReturnType<typeof backend.call<'candidate'>>> | undefined;
+    const model = new ScriptedModel([
+      {
+        message: {
+          id: 'inspect',
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              id: 'inspect-candidate',
+              name: 'github_candidate',
+              args: { epoch: connected.epoch, repository: 'fixture/repo' },
+            },
+          ],
+        },
+      },
+      async (request) => {
+        const message = request.messages.find(
+          (m) => m.tool_call_id === 'inspect-candidate',
+        );
+        assert(message && message.status !== 'error', message?.content);
+        inspected = JSON.parse(message.content);
+        assert(inspected);
+        assert.notEqual(inspected.revision, inspected.head);
+        assert.deepEqual(inspected.paths, ['file']);
+        assert.equal(inspected.base, 'origin/main');
+        assert.equal(inspected.publishable, true);
+        return {
+          message: {
+            id: 'publish',
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              {
+                id: 'publish-inspected',
+                name: 'github_publish',
+                args: {
+                  epoch: connected.epoch,
+                  repository: 'fixture/repo',
+                  head: inspected.head,
+                  branch: inspected.branch,
+                  revision: inspected.revision,
+                  paths: inspected.paths,
+                  title: 'Fixture',
+                  body: 'Fixture',
+                },
+              },
+            ],
+          },
+          usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0 },
+        };
+      },
+      { message: { id: 'done', role: 'assistant', content: 'done' } },
+    ]);
+    const settings = trustFolder(defaultSettings(), f.workspace);
+    settings.extensions.github = { enabled: true };
+    runtime = new AgentRuntime({
+      home: path.join(f.root, 'candidate-home'),
+      workspace: f.workspace,
+      settings,
+      model,
+      githubConnection: backend,
+      bundledExtensions: fileURLToPath(
+        new URL('../../../src/extensions', import.meta.url),
+      ),
+    });
+    runtime.policy.setYolo(runtime.session.id, true);
+    await runtime.harness.run('inspect then publish the reviewed candidate');
+    assert(
+      model.requests[0].tools.some(
+        (tool) => tool.name === 'github_candidate' && tool.effect === 'read',
+      ),
+    );
+    assert.equal(
+      ledger.list().find((x) => x.id === 'publish-inspected')?.state,
+      'completed',
+    );
+    assert.equal(
+      (
+        await delivery.git.git([
+          '--git-dir',
+          bare,
+          'rev-parse',
+          'refs/heads/codex/fixture',
+        ])
+      ).trim(),
+      inspected?.head,
+    );
+    const beforeCalls = f.calls.length;
+    assert(inspected);
+    for (const [id, head, revision] of [
+      ['sha-is-not-revision', inspected.head, inspected.head],
+      ['old-head', '0'.repeat(40), inspected.revision],
+    ]) {
+      await assert.rejects(
+        backend.call(
+          'publish',
+          {
+            epoch: connected.epoch,
+            repository: 'fixture/repo',
+            head,
+            revision,
+            branch: inspected.branch,
+            paths: inspected.paths,
+            title: 'Fixture',
+            body: 'Fixture',
+          },
+          { signal: new AbortController().signal, callId: id },
+        ),
+        /read github_candidate/,
+      );
+      assert.equal(ledger.list().find((x) => x.id === id)?.state, 'rejected');
+    }
+    const foreignRoot = path.join(f.root, 'foreign-owner');
+    await mkdir(foreignRoot);
+    const foreignDelivery = new DeliveryService(foreignRoot, 'synthetic-gh');
+    await foreignDelivery.git.git(['init']);
+    await foreignDelivery.git.git([
+      'remote',
+      'add',
+      'origin',
+      'https://github.com/fixture/foreign.git',
+    ]);
+    const foreignBackend = githubWorkspaceBackend({
+      connection: f.connection,
+      delivery: async () => foreignDelivery,
+    });
+    const releaseForeign = foreignBackend.subscribe(() => {});
+    try {
+      await assert.rejects(
+        foreignBackend.call('candidate', {
+          epoch: connected.epoch,
+          repository: 'fixture/repo',
+        }),
+        /trusted workspace remote/,
+      );
+    } finally {
+      releaseForeign();
+    }
+    await writeFile(path.join(f.workspace, 'file'), 'later manual edit\n');
+    await assert.rejects(
+      backend.call(
+        'publish',
+        {
+          epoch: connected.epoch,
+          repository: 'fixture/repo',
+          head: inspected.head,
+          branch: inspected.branch,
+          revision: inspected.revision,
+          paths: inspected.paths,
+          title: 'Fixture',
+          body: 'Fixture',
+        },
+        { signal: new AbortController().signal, callId: 'stale-inspected' },
+      ),
+      /read github_candidate/,
+    );
+    assert.equal(
+      ledger.list().find((x) => x.id === 'stale-inspected')?.state,
+      'rejected',
+    );
+    assert.equal(f.calls.length, beforeCalls);
+    assert.equal(
+      (
+        await backend.call('candidate', {
+          epoch: connected.epoch,
+          repository: 'fixture/repo',
+        })
+      ).dirty,
+      true,
+    );
+    await assert.rejects(
+      backend.call('candidate', {
+        epoch: connected.epoch,
+        repository: 'fixture/foreign',
+      }),
+      /permission|repository/,
+    );
+    assert.equal(f.calls.length, beforeCalls);
+    release();
+  } finally {
+    await runtime?.close();
+    await ledger.close();
+    await f.close();
+  }
+});

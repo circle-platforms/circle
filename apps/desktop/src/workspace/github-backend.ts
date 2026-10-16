@@ -1,3 +1,4 @@
+import { DeliveryPreflightError } from './delivery-preflight.ts';
 import type {
   GitHubConnectionBackend,
   GitHubConnectionMethods,
@@ -88,14 +89,25 @@ export function githubWorkspaceBackend(options: {
           method === 'cancel'
             ? await connection.cancel(p.epoch as number)
             : await connection.disconnect(p.epoch as number);
-      } else if (['publish', 'checks', 'logs', 'retry'].includes(method)) {
+      } else if (
+        ['candidate', 'publish', 'checks', 'logs', 'retry'].includes(method)
+      ) {
         const epoch = p.epoch,
           repository = text(p.repository, 'repository', 220),
-          head = text(p.head, 'head', 64);
+          head =
+            method === 'candidate'
+              ? undefined
+              : method === 'publish'
+                ? typeof p.head === 'string'
+                  ? p.head
+                  : ''
+                : text(p.head, 'head', 64);
+        if (method === 'publish' && !/^[a-f\d]{40,64}$/i.test(head ?? ''))
+          throw new DeliveryPreflightError('GITHUB_CANDIDATE_REFRESH_REQUIRED');
         if (
           !Number.isSafeInteger(epoch) ||
           !/^[-\w.]+\/[-\w.]+$/.test(repository) ||
-          !/^[a-f\d]{40,64}$/i.test(head)
+          (head !== undefined && !/^[a-f\d]{40,64}$/i.test(head))
         )
           throw Error('invalid GitHub task scope');
         connection.assertGrant(epoch as number, repository);
@@ -126,7 +138,53 @@ export function githubWorkspaceBackend(options: {
             'GitHub repository differs from the trusted workspace remote',
           );
         const state = await delivery.git.snapshot();
-        if (state.head !== head) throw Error('GitHub candidate head changed');
+        if (method === 'candidate') {
+          const base = 'origin/main';
+          const baseHead = (
+            await delivery.git.git(['rev-parse', '--verify', base])
+          ).trim();
+          const paths = (
+            await delivery.git.git([
+              'diff',
+              '--name-only',
+              '-z',
+              `${baseHead}...${state.head}`,
+            ])
+          )
+            .split('\0')
+            .filter(Boolean)
+            .sort();
+          const after = await delivery.git.snapshot();
+          if (
+            after.revision !== state.revision ||
+            (await delivery.git.git(['rev-parse', '--verify', base])).trim() !==
+              baseHead
+          )
+            throw Error(
+              'GitHub candidate changed; read github_candidate again',
+            );
+          guard();
+          return {
+            head: state.head,
+            branch: state.branch,
+            revision: state.revision,
+            base,
+            baseHead,
+            paths,
+            dirty: state.entries.length > 0,
+            publishable:
+              state.entries.length === 0 &&
+              !['main', 'master', 'detached'].includes(state.branch) &&
+              paths.length > 0,
+          } as never;
+        }
+        if (state.head !== head) {
+          if (method === 'publish')
+            throw new DeliveryPreflightError(
+              'GITHUB_CANDIDATE_REFRESH_REQUIRED',
+            );
+          throw Error('GitHub candidate head changed');
+        }
         if (method === 'publish') {
           if (
             text(p.branch, 'branch', 300) !== state.branch ||
@@ -135,8 +193,10 @@ export function githubWorkspaceBackend(options: {
             throw Error(
               'GitHub publication requires the reviewed feature branch',
             );
-          if (text(p.revision, 'revision', 128) !== state.revision)
-            throw Error('GitHub candidate revision changed');
+          if (typeof p.revision !== 'string' || p.revision !== state.revision)
+            throw new DeliveryPreflightError(
+              'GITHUB_CANDIDATE_REFRESH_REQUIRED',
+            );
           if (
             !Array.isArray(p.paths) ||
             p.paths.some((item) => typeof item !== 'string')

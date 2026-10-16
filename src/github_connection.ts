@@ -62,6 +62,19 @@ export interface GitHubConnectionMethods {
   cancel: { params: { epoch: number }; result: GitHubConnectionState };
   disconnect: { params: { epoch: number }; result: GitHubConnectionState };
   publish: { params: GitHubPublishInput; result: GitHubPR };
+  candidate: {
+    params: { epoch: number; repository: string };
+    result: {
+      head: string;
+      branch: string;
+      revision: string;
+      base: string;
+      baseHead: string;
+      paths: string[];
+      dirty: boolean;
+      publishable: boolean;
+    };
+  };
   checks: {
     params: { epoch: number; repository: string; head: string };
     result: { head: string; checks: GitHubCheck[] };

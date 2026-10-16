@@ -1,4 +1,6 @@
 const messages = {
+  GITHUB_CANDIDATE_REFRESH_REQUIRED:
+    'GitHub candidate changed or the revision is not the inspected opaque revision; read github_candidate and review its current head, revision and paths before publishing; nothing was pushed',
   DELIVERY_WORKSPACE_DIRTY:
     'commit remaining workspace changes or move them to another branch, then refresh before publishing; nothing was pushed',
   DELIVERY_CANDIDATE_CHANGED:
