@@ -17,6 +17,8 @@ Object.defineProperty(runtime, 'mode', { value: 'live' });
 const calls: Array<{ name: string; args?: string }> = [],
   copies: string[] = [],
   opened: string[] = [];
+let holdConnect = false;
+let heldConnectReject: ((reason: Error) => void) | undefined;
 let failEncrypted = true,
   failConfigure = false;
 let state: GitHubConnectionState = {
@@ -72,6 +74,8 @@ runtime.command = (name, args = '') => {
       ...state,
       epoch: state.epoch + 1,
       state: 'authorizing',
+      authorizationPhase: 'waiting-for-user',
+      lastAuthorizationOutcome: undefined,
       storage: params.storage,
       repositories: params.repositories,
       authorization: {
@@ -81,6 +85,15 @@ runtime.command = (name, args = '') => {
         status: 'waiting',
       },
     };
+    if (holdConnect) {
+      holdConnect = false;
+      delete state.authorization;
+      state.authorizationPhase = 'preparing-code';
+      publish();
+      return new Promise<Record<string, never>>((_resolve, reject) => {
+        heldConnectReject = reject;
+      });
+    }
   } else if (verb === 'configure') {
     if (params.epoch !== state.epoch) throw Error('GitHub connection changed');
     if (failConfigure) {
@@ -93,6 +106,12 @@ runtime.command = (name, args = '') => {
       repositories: params.repositories,
     };
   } else if (verb === 'cancel' || verb === 'disconnect') {
+    const outcome =
+      verb === 'disconnect'
+        ? 'disconnected'
+        : state.authorization?.code && state.authorization.url
+          ? 'cancelled'
+          : 'cancelled-before-code';
     if (params.epoch !== state.epoch) throw Error('GitHub connection changed');
     state = {
       provider: 'github',
@@ -100,7 +119,8 @@ runtime.command = (name, args = '') => {
       epoch: state.epoch + 1,
       state: 'disconnected',
       repositories: [],
-      remoteRevocation: 'unconfirmed',
+      remoteRevocation: verb === 'cancel' ? 'not-requested' : 'unconfirmed',
+      lastAuthorizationOutcome: outcome,
     };
   }
   publish();
@@ -109,6 +129,14 @@ runtime.command = (name, args = '') => {
 Object.assign(window, {
   githubFixture: {
     calls,
+    holdNextConnect: () => {
+      holdConnect = true;
+      failEncrypted = false;
+    },
+    rejectHeldConnect: () => {
+      heldConnectReject?.(Error('stale connect cancelled'));
+      heldConnectReject = undefined;
+    },
     copies,
     opened,
     completeAuthorization: () => {
@@ -118,8 +146,43 @@ Object.assign(window, {
         ...state,
         state: 'connected',
         account: { login: 'fixture-account', id: 123 },
+        authorizationPhase: undefined,
+        lastAuthorizationOutcome: 'connected',
       };
       delete state.authorization;
+      publish();
+    },
+    preparingAuthorization: (
+      authorization?: GitHubConnectionState['authorization'],
+    ) => {
+      state = {
+        ...state,
+        epoch: state.epoch + 1,
+        state: 'authorizing',
+        remoteRevocation: 'not-requested',
+        authorization,
+        authorizationPhase: 'preparing-code',
+        lastAuthorizationOutcome: undefined,
+      };
+      publish();
+    },
+    authorizationCode: () => {
+      if (state.state !== 'authorizing')
+        throw Error('fixture requires preparing authorization');
+      state = {
+        ...state,
+        authorizationPhase: 'waiting-for-user',
+        authorization: {
+          id: 'fixture-preparing',
+          code: 'CODE-TEST',
+          url: 'https://github.com/login/device',
+          status: 'waiting',
+        },
+      };
+      publish();
+    },
+    verifyingAuthorization: () => {
+      state = { ...state, authorizationPhase: 'verifying-account' };
       publish();
     },
     failNextConfigure: () => {

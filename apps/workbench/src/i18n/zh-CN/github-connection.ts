@@ -1,4 +1,10 @@
 export const githubConnection: Record<string, string> = {
+  'verifying GitHub account': '正在核验 GitHub 账户…',
+  'GitHub authorization was cancelled before a code was ready. No new connection was established.':
+    'GitHub 授权已在授权码生成前取消，尚未建立新连接。',
+  'GitHub authorization was cancelled.': 'GitHub 授权已取消。',
+
+  'preparing GitHub authorization code': '正在准备 GitHub 授权码…',
   'GitHub account': 'GitHub 账户',
   'GitHub tools are loading or unavailable. Review the integration status above.':
     'GitHub 工具正在加载或暂不可用，请查看上方集成状态。',

@@ -45,7 +45,9 @@ export function GitHubConnectionCard({
       setRepositoryEpoch(view?.epoch);
     }
   }, [view?.epoch, repositoryDirty]);
-  const [busy, setBusy] = useState(false);
+  const [busyAction, setBusyAction] = useState('');
+  const busy = !!busyAction;
+  const commandRevision = useRef(0);
   const [error, setError] = useState('');
   useEffect(() => {
     setError('');
@@ -66,7 +68,8 @@ export function GitHubConnectionCard({
       failure,
     );
   async function command(verb: string, params?: Record<string, unknown>) {
-    setBusy(true);
+    const revision = ++commandRevision.current;
+    setBusyAction(verb);
     setError('');
     try {
       const result = await runtime.command(
@@ -76,11 +79,12 @@ export function GitHubConnectionCard({
       if (result && 'error' in result && result.error)
         throw Error(String(result.error));
     } catch (reason) {
+      if (revision !== commandRevision.current) return;
       if (verb === 'configure' || verb === 'connect')
         pendingRepositories.current = undefined;
       setError(String(reason));
     } finally {
-      setBusy(false);
+      if (revision === commandRevision.current) setBusyAction('');
     }
   }
   const allowed = repositories
@@ -125,7 +129,11 @@ export function GitHubConnectionCard({
             {view.state === 'connected' && view.account
               ? t('connected as {account}', { account: view.account.login })
               : view.state === 'authorizing'
-                ? t('waiting for GitHub authorization')
+                ? view.authorizationPhase === 'verifying-account'
+                  ? t('verifying GitHub account')
+                  : view.authorization?.code && view.authorization.url
+                    ? t('waiting for GitHub authorization')
+                    : t('preparing GitHub authorization code')
                 : t('GitHub login required')}
           </p>
           <details className="context-source github-permissions">
@@ -262,42 +270,48 @@ export function GitHubConnectionCard({
               </Button>
             </>
           )}
-          {view.authorization && view.state === 'authorizing' && (
+          {view.state === 'authorizing' && (
             <>
-              <p>{t('enter this code in your browser')}</p>
-              <div className="inline-actions">
-                {view.authorization.code && (
-                  <>
-                    <code>{view.authorization.code}</code>
-                    <Button
-                      onClick={() =>
-                        perform(() => copyText(view.authorization!.code!))
-                      }
-                    >
-                      {t('copy authorization code')}
-                    </Button>
-                  </>
+              {view.authorizationPhase !== 'verifying-account' &&
+                view.authorization?.code && (
+                  <p>{t('enter this code in your browser')}</p>
                 )}
+              <div className="inline-actions">
+                {view.authorizationPhase !== 'verifying-account' &&
+                  view.authorization?.code && (
+                    <>
+                      <code>{view.authorization.code}</code>
+                      <Button
+                        onClick={() =>
+                          perform(() => copyText(view.authorization!.code!))
+                        }
+                      >
+                        {t('copy authorization code')}
+                      </Button>
+                    </>
+                  )}
               </div>
               <div className="inline-actions">
-                {view.authorization.url && (
-                  <Button
-                    disabled={!desktopHost()?.openExternal}
-                    onClick={async () => {
-                      try {
-                        await desktopHost()?.openExternal?.(
-                          view.authorization!.url!,
-                        );
-                      } catch (reason) {
-                        setError(String(reason));
-                      }
-                    }}
-                  >
-                    {t('open GitHub authorization')}
-                  </Button>
-                )}
+                {view.authorizationPhase !== 'verifying-account' &&
+                  view.authorization?.code &&
+                  view.authorization.url && (
+                    <Button
+                      disabled={!desktopHost()?.openExternal}
+                      onClick={async () => {
+                        try {
+                          await desktopHost()?.openExternal?.(
+                            view.authorization!.url!,
+                          );
+                        } catch (reason) {
+                          setError(String(reason));
+                        }
+                      }}
+                    >
+                      {t('open GitHub authorization')}
+                    </Button>
+                  )}
                 <Button
-                  disabled={busy}
+                  disabled={busy && busyAction !== 'connect'}
                   onClick={() => command('cancel', { epoch: view.epoch })}
                 >
                   {t('cancel login')}
@@ -318,6 +332,16 @@ export function GitHubConnectionCard({
               </Button>
             )}
           </div>
+          {view.lastAuthorizationOutcome === 'cancelled-before-code' && (
+            <p role="status">
+              {t(
+                'GitHub authorization was cancelled before a code was ready. No new connection was established.',
+              )}
+            </p>
+          )}
+          {view.lastAuthorizationOutcome === 'cancelled' && (
+            <p role="status">{t('GitHub authorization was cancelled.')}</p>
+          )}
           {view.remoteRevocation === 'unconfirmed' && (
             <p className="panel-note">
               {t(
