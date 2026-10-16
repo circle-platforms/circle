@@ -1607,6 +1607,24 @@ try {
             .waitFor({ state: 'hidden' });
         }
       };
+      const visibleNavigation = async () => {
+        const sidebar = page.locator('.sidebar:visible');
+        if ((await sidebar.count()) === 0) {
+          await page
+            .getByRole('button', {
+              name: /^(show or hide the sidebar|显示或隐藏侧边栏)$/,
+              exact: true,
+            })
+            .click();
+        }
+        await sidebar.waitFor({ state: 'visible' });
+        assert.equal(
+          await sidebar.count(),
+          1,
+          'navigate using the sole visible original sidebar',
+        );
+        return sidebar;
+      };
       const appearance = async ({ locale, theme }) => {
         await closeServiceForm();
         const close = page.getByRole('button', {
@@ -1614,9 +1632,10 @@ try {
           exact: true,
         });
         if (await close.isVisible()) await close.click();
-        await page
-          .getByRole('button', { name: /^(settings|设置)$/ })
-          .last()
+        await (
+          await visibleNavigation()
+        )
+          .getByRole('button', { name: /^(settings|设置)$/, exact: true })
           .click();
         await page
           .getByRole('button', {
@@ -1630,9 +1649,10 @@ try {
             exact: true,
           })
           .click();
-        await page
-          .locator(`.sidebar .session-link[href="#/session/${sessionId}"]`)
-          .first()
+        await (
+          await visibleNavigation()
+        )
+          .locator(`.session-link[href="#/session/${sessionId}"]`)
           .click();
         currentLocale = locale;
       };
