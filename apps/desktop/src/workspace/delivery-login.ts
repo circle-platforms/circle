@@ -48,6 +48,9 @@ export class DeliveryLogin {
       state: LoginState;
       process: LoginPty;
       directory: string;
+      exited: boolean;
+      exit: Promise<void>;
+      cleanup?: Promise<void>;
       timer: ReturnType<typeof setTimeout>;
     }
   >();
@@ -114,7 +117,19 @@ export class DeliveryLogin {
       void this.cancel(id);
     }, 300_000);
     timer.unref();
-    this.entries.set(id, { state, process: child, directory, timer });
+    let markExited!: () => void;
+    const exit = new Promise<void>((resolve) => {
+      markExited = resolve;
+    });
+    const entry = {
+      state,
+      process: child,
+      directory,
+      timer,
+      exit,
+      exited: false,
+    };
+    this.entries.set(id, entry);
     child.onData((data) => {
       buffer = (buffer + data.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')).slice(
         -16000,
@@ -133,6 +148,8 @@ export class DeliveryLogin {
       }
     });
     child.onExit(({ exitCode }) => {
+      entry.exited = true;
+      markExited();
       clearTimeout(timer);
       void (async () => {
         try {
@@ -163,13 +180,13 @@ export class DeliveryLogin {
               state.storage = 'session';
             }
           }
-          await rm(directory, { recursive: true, force: true });
+          await this.cleanup(id);
           state.status = 'complete';
         } catch {
           state.status = 'failed';
           state.error = 'GitHub authorization did not complete';
         } finally {
-          await rm(directory, { recursive: true, force: true }).catch(() => {
+          await this.cleanup(id).catch(() => {
             state.status = 'failed';
             state.error = 'temporary authorization cleanup failed';
           });
@@ -183,14 +200,25 @@ export class DeliveryLogin {
     if (!item) throw Error('unknown login request');
     return { ...item.state };
   }
+  private cleanup(id: string): Promise<void> {
+    const item = this.entries.get(id);
+    if (!item) return Promise.reject(Error('unknown login request'));
+    return (item.cleanup ??= rm(item.directory, {
+      recursive: true,
+      force: true,
+    }));
+  }
   async cancel(id: string) {
     const item = this.entries.get(id);
     if (!item) throw Error('unknown login request');
     if (['starting', 'waiting'].includes(item.state.status)) {
       item.state.status = 'cancelled';
       clearTimeout(item.timer);
-      item.process.kill();
-      await rm(item.directory, { recursive: true, force: true });
+      if (!item.exited) item.process.kill();
+    }
+    if (item.state.status === 'cancelled') {
+      await item.exit;
+      await this.cleanup(id);
     }
     return { ...item.state };
   }
