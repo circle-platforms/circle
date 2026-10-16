@@ -24,5 +24,5 @@ export function useBrowserState(sessionId: string): BrowserState | null {
       unsubscribe();
     };
   }, [sessionId]);
-  return state;
+  return state && isSessionBrowser(state, sessionId) ? state : null;
 }

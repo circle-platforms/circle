@@ -1,9 +1,12 @@
 name: release
 
-# Every push builds the runtime-inclusive package on six targets and smoke-tests it: install,
-# relocation, upgrade, checksum rejection, replacing a Python circle, a real tool turn. It also
-# packages the desktop application on four targets and runs each package; on Windows it also
-# builds the MSI, installs it and removes it again.
+# Every push to main builds the runtime-inclusive package on six targets and smoke-tests it:
+# install, relocation, upgrade, checksum rejection, replacing a Python circle, a real tool turn.
+# It also packages the desktop application on four targets and runs each package; on Windows it
+# also builds the MSI, installs it and removes it again.
+# A pull request runs it only when it changes how Circle is packaged or installed; the Check
+# workflow builds and smoke-tests the Linux package for every other one, and the Desktop
+# workbench workflow packages the desktop application.
 # Push a tag vX.Y.Z and the same run publishes one GitHub Release once every target passed.
 # Steps to cut one: docs/development/releasing.md. A manual run never publishes.
 
@@ -13,6 +16,27 @@ on:
     tags:
       - 'v*'
   pull_request:
+    paths:
+      - 'install.sh'
+      - 'install.ps1'
+      - 'src/install_*.ts'
+      - 'src/legacy_install.ts'
+      - 'src/update.ts'
+      - 'src/version.ts'
+      - 'scripts/build-release.ts'
+      - 'scripts/smoke-release.ts'
+      - 'scripts/release.ts'
+      - 'scripts/node-runtime.json'
+      - 'scripts/copy-assets.ts'
+      - 'tsconfig.build.json'
+      - 'package.json'
+      - 'package-lock.json'
+      # Not apps/desktop/package.json: most changes there only list a new test, and Desktop
+      # workbench packages the application for every pull request that touches apps/
+      - 'apps/desktop/scripts/**'
+      - 'apps/desktop/package-lock.json'
+      - '.github/release-install.md'
+      - '.github/workflows/release.yml'
   workflow_dispatch:
 
 permissions:

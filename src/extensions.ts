@@ -752,11 +752,21 @@ export class ExtensionHost {
    * api.background have ended. With a bound in milliseconds the wait stops when the time is
    * up; the signal has fired either way. Closing again waits for the same end.
    */
-  async close(timeoutMs = Infinity): Promise<void> {
+  async close(
+    timeoutMs = Infinity,
+    options: { requireSettled?: boolean } = {},
+  ): Promise<void> {
+    // Deletion must not release history ownership while extension work remains. A
+    // strict retry drains the live pending set again, rather than reusing an earlier
+    // bounded close which may have returned before cleanup finished.
+    if (options.requireSettled) return this.drain(timeoutMs, true);
     this.closing ??= this.drain(timeoutMs);
     return this.closing;
   }
-  private async drain(timeoutMs: number): Promise<void> {
+  private async drain(
+    timeoutMs: number,
+    requireSettled = false,
+  ): Promise<void> {
     this.controller.abort(new ExtensionError('the extension was closed'));
     const timer = new AbortController();
     const expired: Promise<'expired'> = Number.isFinite(timeoutMs)
@@ -771,7 +781,13 @@ export class ExtensionHost {
           Promise.allSettled([...this.pending]).then(() => 'settled' as const),
           expired,
         ]);
-        if (outcome === 'expired') return;
+        if (outcome === 'expired') {
+          if (requireSettled && this.pending.size)
+            throw new ExtensionError(
+              'extension cleanup is still running; retry after it finishes',
+            );
+          return;
+        }
       }
     } finally {
       timer.abort();

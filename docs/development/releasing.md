@@ -11,7 +11,8 @@ Until a release exists, none of that reaches anyone. Cut one whenever `## Unrele
 
 ## Before you start
 
-- `main` is green: the `check` and `release` workflows passed on the commit you will tag. Every push to `main` already builds and smoke-tests all six packages; it only skips publishing.
+- `main` is green: the `release` workflow passed on the commit you will tag. It runs the same check as the `Check` workflow on all six targets; every push to `main` already builds and smoke-tests all six packages and only skips publishing.
+- You have the admin role: `main` takes other changes only through the merge queue, and only an admin can push the release commit to it directly.
 - `## Unreleased` in `CHANGELOG.md` says what changed, in the words a user would use. `npm run release` refuses an empty section.
 - `docs/known-issues.md` still describes the current release.
 

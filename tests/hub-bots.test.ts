@@ -5,9 +5,15 @@ import { createServer, type IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { ExtensionHost, bundledExtensionsRoot } from '../src/extensions.js';
+import {
+  ExtensionHost,
+  bundledExtensionsRoot,
+  type ExtensionStatus,
+} from '../src/extensions.js';
+import { ExtensionSecrets } from '../src/extension_secrets.js';
 import { submitAnswer } from '../src/secret_prompt.js';
 
 const PASSWORD = 'pw-bots-3317-zz';
@@ -29,6 +35,8 @@ async function botServer(t: Parameters<typeof scratch>[0]) {
   // Each sign-in gets a new token; expire() turns down every token given so far.
   const tokens = new Map<string, string>();
   const taskQueries: string[] = [];
+  let unauthorizedGate:
+    { requested: () => void; response: Promise<void> } | undefined;
   let issued = 0;
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://x');
@@ -50,7 +58,13 @@ async function botServer(t: Parameters<typeof scratch>[0]) {
     const principalId = tokens.get(
       String(request.headers.authorization).replace(/^Bearer /, ''),
     );
-    if (!principalId) return fail(401, 'UNAUTHENTICATED');
+    if (!principalId) {
+      const gate = unauthorizedGate;
+      unauthorizedGate = undefined;
+      gate?.requested();
+      await gate?.response;
+      return fail(401, 'UNAUTHENTICATED');
+    }
     const caller = { principalId };
     if (request.method === 'POST')
       posted.push({ path: url.pathname, body, by: caller.principalId });
@@ -216,11 +230,46 @@ async function botServer(t: Parameters<typeof scratch>[0]) {
     assets,
     posted,
     expire: () => tokens.clear(),
+    pauseNextUnauthorized() {
+      let requested!: () => void;
+      let release!: () => void;
+      const request = new Promise<void>((resolve) => {
+        requested = resolve;
+      });
+      const response = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      unauthorizedGate = { requested, response };
+      cleanup(t, release);
+      return {
+        async waitForRequest() {
+          let timeout: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([
+              request,
+              new Promise<never>((_resolve, reject) => {
+                timeout = setTimeout(
+                  () =>
+                    reject(
+                      new Error('hub did not request the expired sign-in'),
+                    ),
+                  10_000,
+                );
+              }),
+            ]);
+          } finally {
+            clearTimeout(timeout);
+          }
+        },
+        release,
+      };
+    },
     taskQueries,
   };
 }
 
 async function person(
+  t: Parameters<typeof scratch>[0],
   root: string,
   name: string,
   workspace: string,
@@ -228,18 +277,24 @@ async function person(
   host: ExtensionHost;
   run: (args: string) => Promise<void>;
   lines: string[];
+  waitForStatus: (expected: ExtensionStatus[]) => Promise<void>;
 }> {
   const home = join(root, name);
+  const statusWaiters = new Set<() => void>();
   const host = await new ExtensionHost({
     home,
     workspace,
     trusted: true,
     bundledRoot: bundledExtensionsRoot(),
     settings: { hub: { enabled: true } },
+    onStatus: () => {
+      for (const changed of statusWaiters) changed();
+    },
     secret: async (request) => {
       await submitAnswer(home, request.id, PASSWORD);
     },
   }).load();
+  cleanup(t, () => host.close());
   const lines: string[] = [];
   const context = {
     workspace,
@@ -252,6 +307,25 @@ async function person(
     host,
     run: async (args) => command.handler(args, context),
     lines,
+    waitForStatus: (expected) =>
+      new Promise<void>((resolve, reject) => {
+        const changed = () => {
+          if (!isDeepStrictEqual(host.statuses(), expected)) return;
+          clearTimeout(timeout);
+          statusWaiters.delete(changed);
+          resolve();
+        };
+        const timeout = setTimeout(() => {
+          statusWaiters.delete(changed);
+          reject(
+            new Error(
+              `hub status did not become ${JSON.stringify(expected)}; got ${JSON.stringify(host.statuses())}`,
+            ),
+          );
+        }, 10_000);
+        statusWaiters.add(changed);
+        changed();
+      }),
   };
 }
 
@@ -261,7 +335,7 @@ test('a bot is made from Circle as a schedule and a skill pack, approved by some
   mkdirSync(workspace, { recursive: true });
   writeFileSync(join(workspace, 'mindmap.json'), '[{"data":{}}]');
   const server = await botServer(t);
-  const dev = await person(root, 'dev-home', workspace);
+  const dev = await person(t, root, 'dev-home', workspace);
   await dev.run(`login ${server.url} developer`);
 
   await dev.run(
@@ -304,7 +378,7 @@ test('a bot is made from Circle as a schedule and a skill pack, approved by some
     dev.run('bot start ast_bot'),
     /trigger ast_trigger is draft; someone else approves it first: \/hub bot approve ast_bot/,
   );
-  const approver = await person(root, 'approver-home', workspace);
+  const approver = await person(t, root, 'approver-home', workspace);
   await approver.run(`login ${server.url} approver`);
   await approver.run('bot approve ast_bot');
   const approvals = server.posted.filter(
@@ -371,8 +445,11 @@ test('a bot is made from Circle as a schedule and a skill pack, approved by some
   );
 
   // A window opened later finds the published run and says so in the footer.
-  const later = await person(root, 'dev-home', workspace);
-  await delay(300);
+  const later = await person(t, root, 'dev-home', workspace);
+  const where = `hub · developer@127.0.0.1:${new URL(server.url).port}`;
+  await later.waitForStatus([
+    { extension: 'hub', text: `${where} · 2 bot result(s)`, lamp: 'wait' },
+  ]);
   assert.deepEqual(
     later.host
       .statuses()
@@ -403,8 +480,17 @@ test('a bot is made from Circle as a schedule and a skill pack, approved by some
   // A token that runs out: the background look says so in the footer and asks nothing; a
   // command says to sign in again, and /hub login looks once more.
   server.expire();
-  const stale = await person(root, 'dev-home', workspace);
-  await delay(300);
+  const unauthorized = server.pauseNextUnauthorized();
+  const stale = await person(t, root, 'dev-home', workspace);
+  await unauthorized.waitForRequest();
+  // Stored credentials draw the initial footer while the server response is in flight.
+  // Keep the actual 401 blocked until that state is observed: startup is asynchronous,
+  // so a fixed sleep cannot establish that the background request has finished.
+  await stale.waitForStatus([{ extension: 'hub', text: where, lamp: 'ok' }]);
+  unauthorized.release();
+  await stale.waitForStatus([
+    { extension: 'hub', text: `${where} · sign-in expired`, lamp: 'wait' },
+  ]);
   assert.deepEqual(
     stale.host
       .statuses()
@@ -417,7 +503,7 @@ test('a bot is made from Circle as a schedule and a skill pack, approved by some
     /signed out: the sign-in has expired · \/hub login http:\/\/127\.0\.0\.1:\d+ developer/,
   );
   await stale.run(`login ${server.url} developer`);
-  await delay(300);
+  await stale.waitForStatus([{ extension: 'hub', text: where, lamp: 'ok' }]);
   assert.equal(
     stale.host.statuses().find((item) => item.extension === 'hub')?.lamp,
     'ok',
@@ -445,5 +531,41 @@ test('a bot is made from Circle as a schedule and a skill pack, approved by some
   assert.match(
     dev.lines.at(-2)!,
     /runs skp_1 on source\.changed of ast_builds as you/,
+  );
+});
+
+test('/hub refresh returns once the view shows what it read, however slowly the footer reads the sign-in', async (t) => {
+  const root = scratch(t);
+  const workspace = join(root, 'project');
+  mkdirSync(workspace, { recursive: true });
+  const server = await botServer(t);
+  // The footer and the view are drawn after a read of the sign-in from the secrets file,
+  // behind a lock other windows share. Slow those reads down, and not the ones the
+  // command's own requests make.
+  const get = ExtensionSecrets.prototype.get;
+  let slowed = 0;
+  t.mock.method(
+    ExtensionSecrets.prototype,
+    'get',
+    async function (this: ExtensionSecrets, name: string) {
+      const footer = /\bshowStatus\b/.test(new Error().stack ?? '');
+      const value = await get.call(this, name);
+      if (name === 'token' && footer) {
+        slowed += 1;
+        await delay(200);
+      }
+      return value;
+    },
+  );
+  const dev = await person(t, root, 'dev-home', workspace);
+  await dev.run(`login ${server.url} developer`);
+  // Made after the sign-in read the objects, so only the refresh finds it.
+  await dev.run('bot every skp_1 1h --from 2026-10-12T00:00:00Z');
+  await dev.run('refresh');
+  assert.ok(slowed > 0, 'the footer read the sign-in');
+  const view = dev.host.view('hub') as Record<string, any> | undefined;
+  assert.deepEqual(
+    view?.objects?.bots?.map((item: { assetId: string }) => item.assetId),
+    ['ast_bot'],
   );
 });

@@ -17,6 +17,9 @@ export class InteractionQueue {
     private ready: (background: boolean) => boolean,
     private drafting: () => boolean = () => false,
   ) {}
+  get pendingCount(): number {
+    return this.queue.length + Number(this.active);
+  }
   /** A key reached the session: a card that arrives now waits for typing to pause. */
   typed(): void {
     this.lastKey = Date.now();
