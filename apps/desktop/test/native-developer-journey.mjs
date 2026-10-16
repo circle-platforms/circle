@@ -37,6 +37,10 @@ import {
 } from './helpers/native-debug-journey.mjs';
 import { runNativeKeyboardJourney } from './helpers/native-keyboard-journey.mjs';
 import {
+  createNativeEditorInteractionsFixture,
+  runNativeEditorInteractions,
+} from './helpers/native-editor-interactions.mjs';
+import {
   createNativeEditorSemanticsFixture,
   runNativeEditorSemantics,
 } from './helpers/native-editor-semantics.mjs';
@@ -115,6 +119,7 @@ await Promise.all([
 ]);
 await createNativeGitFixture(repo);
 await createNativeEditorFixture(repo);
+await createNativeEditorInteractionsFixture(repo);
 await createNativeEditorSemanticsFixture(repo);
 const terminalFixture = await createNativeTerminalFixture(repo);
 const continuityFixture = await createNativeContinuityFixture(repo);
@@ -146,6 +151,7 @@ await git(
   debugFixture.program,
   '.circle-native-debug-interaction.json',
   'editor-supplement.ts',
+  'editor-keyboard-interactions.ts',
   'editor-main.ts',
   'editor-lib.ts',
   '.circle-editor-journey.json',
@@ -387,6 +393,7 @@ for (const file of [
     'native-editor-isolation',
     'native-editor-journey',
     'native-editor-semantics',
+    'native-editor-interactions',
     'native-terminal-journey',
     'native-continuity-journey',
     'native-command-handoff-journey',
@@ -669,6 +676,13 @@ try {
           );
         },
       });
+    },
+  );
+  await check(
+    'editor references and completion through keyboard UI',
+    async () => {
+      await runNativeEditorInteractions({ page, workspace: repo, output });
+      await closeFile();
     },
   );
   await check(
