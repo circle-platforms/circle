@@ -114,10 +114,11 @@ export function KeyboardSettings({
           const custom =
             JSON.stringify(key) !== JSON.stringify(KEY_ACTIONS[action]);
           const waiting = recording === action;
+          const label = KEY_ACTION_TEXT[action]();
           return (
             <div className="key-action" key={action}>
               <span>
-                {KEY_ACTION_TEXT[action]()}
+                {label}
                 <small>{action}</small>
               </span>
               <kbd className="muted">{shownAs(KEY_ACTIONS[action], mac)}</kbd>
@@ -128,6 +129,9 @@ export function KeyboardSettings({
                 {custom && !waiting && (
                   <Button
                     onClick={() => set(action, null)}
+                    aria-label={t('reset the key for {action}', {
+                      action: label,
+                    })}
                     title={t('back to {key}', {
                       key: shownAs(KEY_ACTIONS[action], mac),
                     })}
@@ -137,6 +141,11 @@ export function KeyboardSettings({
                 )}
                 <Button
                   className={waiting ? 'primary' : ''}
+                  aria-label={
+                    waiting
+                      ? t('stop recording for {action}', { action: label })
+                      : t('change the key for {action}', { action: label })
+                  }
                   onClick={() => {
                     setProblem('');
                     setRecording(waiting ? null : action);

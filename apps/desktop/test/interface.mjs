@@ -888,15 +888,24 @@ try {
   const modelRow = keyboard
     .locator('.key-action')
     .filter({ has: page.getByText('choose a model') });
-  await modelRow.getByRole('button', { name: 'change…', exact: true }).click();
+  await modelRow
+    .getByRole('button', { name: 'change the key for choose a model' })
+    .click();
   await page.keyboard.press('F3');
   await modelRow.getByText('F3').waitFor();
   await route('/session/session1');
   await page.getByRole('textbox', { name: 'message', exact: true }).press('F3');
   await page.getByRole('heading', { name: 'models', exact: true }).waitFor();
+  assert.equal(
+    await page.getByRole('button', { name: 'change…', exact: true }).count(),
+    0,
+    'a keyboard row must not answer to the workspace picker button',
+  );
   checks.push('a key recorded in settings invokes its action');
   await route('/page/settings');
-  await modelRow.getByRole('button', { name: 'reset', exact: true }).click();
+  await modelRow
+    .getByRole('button', { name: 'reset the key for choose a model' })
+    .click();
   assert.equal(
     (await state()).settings.keybindings['model.select'] ?? null,
     null,
