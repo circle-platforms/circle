@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { createHash } from 'node:crypto';
 import {
   mkdtemp,
   mkdir,
@@ -20,6 +21,7 @@ import {
   trustFolder,
   saveSettings,
 } from '../../../src/settings.ts';
+import { CheckpointStore } from '../../../src/checkpoint_store.ts';
 import { workspaceRuntimePath } from '../src/runtime-tools.ts';
 
 test('worker runtime PATH preparation preserves original entries and is idempotent', () => {
@@ -115,6 +117,15 @@ test('actual scripted desktop worker runs nested npm with strict system PATH thr
         ],
       }),
     );
+    // Match the shipped worker's complete resource layout. A native execute
+    // starts this static supervisor with the bundled Node; it has no fallback
+    // into this checkout or the user's PATH.
+    await cp(
+      fileURLToPath(
+        new URL('../src/workspace/command-supervisor.mjs', import.meta.url),
+      ),
+      join(app, 'tools', 'command-supervisor.mjs'),
+    );
     const bundle = join(app, 'runtime-worker.mjs');
     await build({
       entryPoints: [
@@ -205,7 +216,61 @@ test('actual scripted desktop worker runs nested npm with strict system PATH thr
         message.tool_call_id === 'execute-npm',
     );
     assert.ok(output);
-    assert.equal(output.status, 'success');
+    const history = new CheckpointStore(home);
+    let stored;
+    try {
+      stored = history
+        .list(undefined, true)
+        .flatMap((session) => history.messages(session.id))
+        .find(
+          (message) =>
+            message.role === 'tool' && message.tool_call_id === 'execute-npm',
+        );
+    } finally {
+      history.close();
+    }
+    assert.ok(
+      stored,
+      'the real worker persists its execute result before closing',
+    );
+    assert.equal(stored.status, output.status);
+    assert.equal(stored.content, output.content);
+    assert.deepEqual(stored.commandExecutions, output.commandExecutions);
+    assert.equal(output.status, 'success', JSON.stringify({ output, stored }));
+    if (process.platform !== 'win32') {
+      assert.equal(stored.commandExecutions?.length, 1);
+      const receipt = stored.commandExecutions![0]!;
+      assert.equal(receipt.toolCallId, 'execute-npm');
+      assert.equal(receipt.completion.kind, 'pty-group');
+      assert.equal(receipt.completion.rootExit?.exitCode, 0);
+      assert.ok(receipt.completion.controlledGroupEmpty);
+      assert.ok(receipt.completion.transportAndLogClosed);
+      assert.ok(receipt.terminal);
+      const workspaceHash = createHash('sha256')
+        .update(await realpath(workspace))
+        .digest('hex');
+      const terminal = JSON.parse(
+        await readFile(
+          join(
+            root,
+            'workspace-services',
+            'workspaces',
+            workspaceHash,
+            'terminals',
+            receipt.terminal.id,
+            'metadata.json',
+          ),
+          'utf8',
+        ),
+      );
+      assert.equal(terminal.id, receipt.terminal.id);
+      assert.equal(terminal.epoch, receipt.terminal.epoch);
+      assert.equal(terminal.managedCommand.executionId, receipt.executionId);
+      assert.equal(terminal.managedCommand.executionEpoch, receipt.epoch);
+      assert.equal(terminal.managedCommand.commandPid, receipt.pid);
+      assert.equal(terminal.sessionId, receipt.executionSessionId);
+    }
+
     assert.ok(
       output.content.includes(`BUNDLED_EXEC_PATH=${expected}`),
       output.content,
