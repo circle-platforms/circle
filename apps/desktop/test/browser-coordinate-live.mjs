@@ -179,9 +179,31 @@ try {
     window.show();
     window.setContentSize(1400, 900);
   });
-  await page
-    .getByRole('textbox', { name: 'base url', exact: true })
-    .fill(url + 'v1');
+  const endpoint = page.getByRole('textbox', { name: 'base url', exact: true });
+  const connect = page
+    .getByRole('button', { name: 'connect a model', exact: true })
+    .first();
+  await endpoint.or(connect).first().waitFor();
+  // This is a coordinate-action check, not a test of the automatic setup dialog.
+  // The visible connection entry is also the normal way to open it explicitly.
+  if (
+    process.env.CIRCLE_DESKTOP_TEST_EXPLICIT_CONNECT &&
+    (await endpoint.isVisible())
+  ) {
+    await page.getByRole('button', { name: 'cancel', exact: true }).click();
+    await endpoint.waitFor({ state: 'hidden' });
+  }
+  let connectionEntry = 'automatic';
+  if (!(await endpoint.isVisible())) {
+    connectionEntry = 'explicit';
+    try {
+      await connect.click({ timeout: 2000 });
+    } catch (error) {
+      // The automatic dialog can win the race with this click.
+      if (!(await endpoint.isVisible())) throw error;
+    }
+  }
+  await endpoint.fill(url + 'v1');
   await page
     .getByRole('textbox', { name: 'api key', exact: true })
     .fill('coordinate-fixture-key');
@@ -291,6 +313,7 @@ try {
     JSON.stringify(
       {
         packaged: info.packaged,
+        connectionEntry,
         checks: [
           'real screenshot metadata reaches gateway',
           'manual unknown target waits once',

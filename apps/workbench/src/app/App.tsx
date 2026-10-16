@@ -1,6 +1,7 @@
 import {
   desktopHost,
   copyText,
+  folderOpenMessage,
   nativeAttachment,
   openNativeWorkspace,
   readNativeFile,
@@ -33,6 +34,11 @@ import {
 } from 'lucide-react';
 import { useRuntime } from './context';
 import { currentSession, sessionText, sessionTitle } from '../model/state';
+import {
+  historyMessages,
+  sessionHasContent,
+  visibleSessions,
+} from '../model/session-management';
 import type {
   Attachment,
   DialogId,
@@ -49,10 +55,13 @@ import {
   Status,
   Facts,
   DataBlock,
+  EmptyState,
 } from '../components/common';
 import { Markdown } from '../components/Markdown';
 import { ToolMessage } from '../components/ToolMessage';
 import { Conversation } from '../features/Conversation';
+import { Home } from '../features/Home';
+import { homePath, openHome } from '../features/home-selection';
 import { Inspector, PanelButtons } from '../features/Panels';
 import { FileViewer } from '../features/FileViewer';
 import { ManagementPage } from '../features/Pages';
@@ -113,6 +122,12 @@ export function App() {
   const [search, setSearch] = useState('');
   const page = location.pathname.startsWith('/page/')
     ? (location.pathname.slice(6) as PageId)
+    : null;
+  const home = location.pathname === '/home';
+  const homeQuery = new URLSearchParams(location.search);
+  // No query keeps the current project. An empty value is "work without a project".
+  const homeRequested = homeQuery.has('workspace')
+    ? (homeQuery.get('workspace') ?? '')
     : null;
   const inspectorVisible = inspectorOpen && !page;
   const onSession = () => {
@@ -191,8 +206,21 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot.openUrl?.id, session.id]);
   useEffect(() => {
-    if (location.pathname === '/')
-      navigate(`/session/${session.id}`, { replace: true });
+    if (location.pathname === '/') {
+      const active = snapshot.sessions.find((item) => item.id === session.id);
+      // A configured app with nothing to resume opens the same home as new
+      // session, aimed at this project. Before a model is connected, stay on
+      // the conversation so setup and its commands have the composer.
+      const configured = snapshot.runtime?.configured !== false;
+      navigate(
+        !configured || (active && sessionHasContent(active))
+          ? `/session/${session.id}`
+          : homePath(),
+        { replace: true },
+      );
+      return;
+    }
+    if (location.pathname === '/home') return;
     const id = location.pathname.startsWith('/session/')
       ? location.pathname.slice(9)
       : undefined;
@@ -224,7 +252,10 @@ export function App() {
     media.addEventListener('change', apply);
     return () => media.removeEventListener('change', apply);
   }, [snapshot.settings.theme, snapshot.settings.textSize]);
-  const pickFiles = async (importing = false) => {
+  const pickFiles = async (
+    importing = false,
+    into?: (attachment: Attachment) => void,
+  ) => {
     const originSessionId = runtime.getSnapshot().activeSessionId;
     if (desktopHost()) {
       try {
@@ -279,7 +310,8 @@ export function App() {
               target.leafId = messageId;
             });
             onSession();
-          } else
+          } else if (into) into(nativeAttachment(item));
+          else
             runtime.change((state) => {
               const target = state.sessions.find(
                 (session) => session.id === originSessionId,
@@ -289,7 +321,8 @@ export function App() {
             });
         }
       } catch (error) {
-        if (runtime.getSnapshot().activeSessionId !== originSessionId) return;
+        if (!into && runtime.getSnapshot().activeSessionId !== originSessionId)
+          return;
         notify(
           error instanceof Error
             ? error.message
@@ -391,16 +424,19 @@ export function App() {
             size: item.size,
             truncated: kind === 'file' && item.size > 256000,
           };
-          runtime.change((state) => {
-            const target = state.sessions.find(
-              (session) => session.id === originSessionId,
-            );
-            if (target && target.lifecycle !== 'deleting')
-              target.attachments.push(attachment);
-          });
+          if (into) into(attachment);
+          else
+            runtime.change((state) => {
+              const target = state.sessions.find(
+                (session) => session.id === originSessionId,
+              );
+              if (target && target.lifecycle !== 'deleting')
+                target.attachments.push(attachment);
+            });
         }
       } catch (error) {
-        if (runtime.getSnapshot().activeSessionId !== originSessionId) return;
+        if (!into && runtime.getSnapshot().activeSessionId !== originSessionId)
+          return;
         notify(
           error instanceof Error
             ? error.message
@@ -432,14 +468,21 @@ export function App() {
       if (action === 'open-folder') {
         void openNativeWorkspace(runtime)
           .then((selected) => {
-            if (selected) onSession();
+            if (selected)
+              openHome(
+                navigate,
+                `${location.pathname}${location.search}`,
+                selected,
+              );
           })
-          .catch((error) => notify(String(error)));
-      } else if (action === 'settings') navigate('/page/settings');
+          .catch((error) => notify(folderOpenMessage(error)));
+      } else if (action === 'new')
+        openHome(navigate, `${location.pathname}${location.search}`);
+      else if (action === 'settings') navigate('/page/settings');
       else if (action === 'help') navigate('/page/help');
       else act(() => runtime.command(action));
     });
-  }, [runtime]);
+  }, [runtime, navigate, location.pathname, location.search]);
   useEffect(() => {
     const handle = (event: KeyboardEvent) => {
       if (
@@ -518,6 +561,13 @@ export function App() {
         )}
       </div>
     </section>
+  ) : home ? (
+    <Home
+      requestedId={homeRequested}
+      onDialog={onDialog}
+      onStarted={(id) => navigate(`/session/${id}`)}
+      onAttach={(accept) => void pickFiles(false, accept)}
+    />
   ) : (
     <Conversation
       onDialog={onDialog}
@@ -570,7 +620,7 @@ export function App() {
       detail: t('platform plugin'),
       run: () => navigate('/page/' + page.id),
     })),
-    ...snapshot.sessions.map((item) => ({
+    ...visibleSessions(snapshot.sessions).map((item) => ({
       id: item.id,
       label: sessionTitle(item.title),
       detail: t('session · {workspace}', {
@@ -599,20 +649,23 @@ export function App() {
         detail: t('file'),
         run: () => onFile(item.path),
       })),
-    ...snapshot.sessions.flatMap((item) =>
-      item.messages
-        .filter((message) => message.role === 'user')
-        .map((message) => ({
-          id: message.id,
-          label: message.text,
-          detail: t('message history'),
-          run: () => {
+    ...visibleSessions(snapshot.sessions).flatMap((item) =>
+      historyMessages(item).map((message) => ({
+        id: message.id,
+        label: message.text,
+        detail: t('message history'),
+        run: () => {
+          void runtime.selectSession(item.id);
+          if (message.role === 'user')
             runtime.change((state) => {
-              currentSession(state).draft = message.text;
+              const target = state.sessions.find(
+                (session) => session.id === item.id,
+              );
+              if (target) target.draft = message.text;
             });
-            onSession();
-          },
-        })),
+          onSession();
+        },
+      })),
     ),
   ].filter((item) =>
     (item.label + ' ' + item.detail)
@@ -624,7 +677,11 @@ export function App() {
       <div className="workbench">
         {desktopHost() && <div className="desktop-drag-region" />}
         <div className="desktop-sidebar">
-          <Sidebar onSearch={() => setSearchOpen(true)} onDialog={onDialog} />
+          <Sidebar
+            onSearch={() => setSearchOpen(true)}
+            onDialog={onDialog}
+            renaming={dialog === 'rename'}
+          />
         </div>
         <main className="workspace">
           <header className="topbar">
@@ -637,13 +694,15 @@ export function App() {
                   <PanelLeft size={16} />
                 </IconButton>
               </span>
-              {page || file || agent ? (
+              {page || file || agent || home ? (
                 <span className="page-title">
-                  {page
-                    ? (PAGE_NAMES[page]?.() ?? page)
-                    : file
-                      ? file
-                      : t('agent record')}
+                  {home
+                    ? t('new session')
+                    : page
+                      ? (PAGE_NAMES[page]?.() ?? page)
+                      : file
+                        ? file
+                        : t('agent record')}
                 </span>
               ) : (
                 <DropdownMenu.Root>
@@ -670,19 +729,21 @@ export function App() {
                   </DropdownMenu.Portal>
                 </DropdownMenu.Root>
               )}
-              <span className="project-chip" title={workspace.path}>
-                <Folder size={12} />
-                {workspace.name}
-                {workspace.branch && (
-                  <>
-                    <GitBranch size={11} />
-                    {workspace.branch}
-                  </>
-                )}
-              </span>
+              {!home && (
+                <span className="project-chip" title={workspace.path}>
+                  <Folder size={12} />
+                  {workspace.name}
+                  {workspace.branch && (
+                    <>
+                      <GitBranch size={11} />
+                      {workspace.branch}
+                    </>
+                  )}
+                </span>
+              )}
             </div>
             <div className="topbar-actions">
-              {!page && (
+              {!page && !home && (
                 <PanelButtons
                   panel={panel}
                   open={inspectorOpen}
@@ -790,6 +851,7 @@ export function App() {
             }}
             onNavigate={() => setSidebarOpen(false)}
             onDialog={onDialog}
+            renaming={dialog === 'rename'}
           />
         </Modal>
         <Modal
@@ -804,23 +866,27 @@ export function App() {
             placeholder={t('sessions, files, pages or past messages')}
           />
           <div className="search-results">
-            {searchItems.map((item) => (
-              <button
-                key={item.id}
-                onClick={() => {
-                  item.run();
-                  setSearchOpen(false);
-                  setSearch('');
-                }}
-              >
-                <Search size={14} />
-                <span>
-                  <strong>{item.label}</strong>
-                  <small>{item.detail}</small>
-                </span>
-                <ArrowUpRight size={12} />
-              </button>
-            ))}
+            {search.trim() && searchItems.length === 0 ? (
+              <EmptyState title={t('no results')} />
+            ) : (
+              searchItems.map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => {
+                    item.run();
+                    setSearchOpen(false);
+                    setSearch('');
+                  }}
+                >
+                  <Search size={14} />
+                  <span>
+                    <strong>{item.label}</strong>
+                    <small>{item.detail}</small>
+                  </span>
+                  <ArrowUpRight size={12} />
+                </button>
+              ))
+            )}
           </div>
         </Modal>
         <DialogHost

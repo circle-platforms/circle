@@ -4,6 +4,14 @@
  */
 export function browserPage(command: string, args: Record<string, any>) {
   type Target = Element;
+  // Where an element was, and whether it could be seen and take a click there
+  type Box = [
+    left: number,
+    top: number,
+    right: number,
+    bottom: number,
+    shown: boolean,
+  ];
   type State = {
     refs: Map<string, Target>;
     // A ref stays with its element for the life of the document; numbers are never reused.
@@ -14,8 +22,12 @@ export function browserPage(command: string, args: Record<string, any>) {
     revision: number;
     observer?: MutationObserver;
     observedRoots?: WeakSet<Node>;
-    scrollIds?: WeakMap<Element, number>;
-    nextScroll: number;
+    // The revision of each node's last change, and of its last change beyond the restyling
+    // a hover makes (its class, style or tooltip reference)
+    touched: WeakMap<Node, number>;
+    altered: WeakMap<Node, number>;
+    // Where the elements in view were when the last screenshots were taken
+    captures: { id: string; revision: number; boxes: Map<Element, Box> }[];
     overlay?: HTMLElement;
     pointer?: HTMLElement;
     bubble?: HTMLElement;
@@ -34,33 +46,58 @@ export function browserPage(command: string, args: Record<string, any>) {
     snapshots: 0,
     document: `${Date.now()}-${Math.random()}`,
     revision: 0,
-    nextScroll: 0,
+    touched: new WeakMap(),
+    altered: new WeakMap(),
+    captures: [],
     x: 24,
     y: 24,
   });
+  const HOVER_ATTRIBUTES = [
+    'class',
+    'style',
+    'aria-describedby',
+    'data-state',
+    'data-hover',
+    'data-hovered',
+    'data-highlighted',
+  ];
+  // Each change is kept with the nodes it touched: a coordinate click judges the area it
+  // clicks, not the whole page
   const observe = (records: MutationRecord[]) => {
-    if (
-      records.some((record) => {
-        const target =
-          record.target.nodeType === Node.ELEMENT_NODE
-            ? (record.target as Element)
-            : record.target.parentElement;
-        if (target?.closest('[data-circle-browser-overlay]')) return false;
-        const changed = [
-          ...Array.from(record.addedNodes),
-          ...Array.from(record.removedNodes),
-        ];
-        return (
-          !changed.length ||
-          changed.some(
-            (node) =>
-              node.nodeType !== Node.ELEMENT_NODE ||
-              !(node as Element).hasAttribute('data-circle-browser-overlay'),
-          )
-        );
-      })
-    )
-      state.revision++;
+    let counted = false;
+    for (const record of records) {
+      const target =
+        record.target.nodeType === Node.ELEMENT_NODE
+          ? (record.target as Element)
+          : record.target.parentElement;
+      if (target?.closest('[data-circle-browser-overlay]')) continue;
+      const changed = [
+        ...Array.from(record.addedNodes),
+        ...Array.from(record.removedNodes),
+      ];
+      if (
+        changed.length &&
+        changed.every(
+          (node) =>
+            node.nodeType === Node.ELEMENT_NODE &&
+            (node as Element).hasAttribute('data-circle-browser-overlay'),
+        )
+      )
+        continue;
+      if (!counted) {
+        state.revision++;
+        counted = true;
+      }
+      for (const node of [record.target, target]) {
+        if (!node) continue;
+        state.touched.set(node, state.revision);
+        if (
+          record.type !== 'attributes' ||
+          !HOVER_ATTRIBUTES.includes(record.attributeName ?? '')
+        )
+          state.altered.set(node, state.revision);
+      }
+    }
   };
   if (!state.observer) {
     state.observer = new MutationObserver(observe);
@@ -71,7 +108,6 @@ export function browserPage(command: string, args: Record<string, any>) {
       characterData: true,
     });
     state.observedRoots = new WeakSet([document]);
-    state.scrollIds = new WeakMap();
     document.addEventListener('visibilitychange', () => state.revision++);
     document.addEventListener(
       'scroll',
@@ -83,22 +119,39 @@ export function browserPage(command: string, args: Record<string, any>) {
       true,
     );
   }
-  const captureState = () => {
-    const nestedScroll: [number, number, number][] = [];
+  // Drawn: not hidden by display, visibility or opacity, its own or an ancestor's
+  const seen = (el: Element) =>
+    typeof el.checkVisibility !== 'function' ||
+    el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+  /**
+   * The page as a screenshot shows it: its document, viewport and scroll. With `record`,
+   * also where each element in view is, for coordinate clicks to check their area.
+   */
+  const captureState = (record = false) => {
+    const boxes = new Map<Element, Box>();
     const roots = (root: Document | ShadowRoot, depth = 0) => {
       if (depth > 20) return;
+      const view =
+        root.nodeType === Node.DOCUMENT_NODE
+          ? (root as Document).defaultView
+          : (root as ShadowRoot).host.ownerDocument.defaultView;
       for (const el of Array.from(root.querySelectorAll('*')).slice(0, 15000)) {
         if (el.hasAttribute('data-circle-browser-overlay')) continue;
-        if (
-          el !== document.scrollingElement &&
-          (el.scrollLeft || el.scrollTop)
-        ) {
-          let id = state.scrollIds!.get(el);
-          if (!id) {
-            id = ++state.nextScroll;
-            state.scrollIds!.set(el, id);
-          }
-          nestedScroll.push([id, el.scrollLeft, el.scrollTop]);
+        if (record && view && boxes.size < 20000) {
+          const rect = el.getBoundingClientRect();
+          if (
+            rect.right > 0 &&
+            rect.bottom > 0 &&
+            rect.left < view.innerWidth &&
+            rect.top < view.innerHeight
+          )
+            boxes.set(el, [
+              rect.left,
+              rect.top,
+              rect.right,
+              rect.bottom,
+              view.getComputedStyle(el).pointerEvents !== 'none' && seen(el),
+            ]);
         }
         const child =
           el.shadowRoot ||
@@ -127,17 +180,61 @@ export function browserPage(command: string, args: Record<string, any>) {
     };
     roots(document);
     observe(state.observer!.takeRecords());
-    return {
+    const view = {
       document: state.document,
       revision: state.revision,
       width: innerWidth,
       height: innerHeight,
       scrollX,
       scrollY,
-      nestedScroll,
     };
+    if (!record) return view;
+    const id = `${Date.now()}-${Math.random()}`;
+    state.captures = [
+      ...state.captures.slice(-1),
+      { id, revision: state.revision, boxes },
+    ];
+    return { ...view, geometry: id };
   };
-  if (command === 'capture-state') return captureState();
+  if (command === 'capture-state') return captureState(args.record !== false);
+  // Settled: no change for a moment and no animation that ends on its own still running
+  if (command === 'settled') {
+    observe(state.observer!.takeRecords());
+    const running = (doc: Document, depth = 0): boolean => {
+      if (depth > 5) return false;
+      try {
+        if (
+          doc.getAnimations().some((animation) => {
+            const timing = animation.effect?.getComputedTiming();
+            const target = (animation.effect as KeyframeEffect | null)?.target;
+            // Circle's own pointer and its ripple are not the page's
+            const root = target?.getRootNode();
+            return (
+              animation.playState === 'running' &&
+              !!timing &&
+              Number.isFinite(Number(timing.endTime)) &&
+              !target?.hasAttribute('data-circle-browser-overlay') &&
+              !(
+                root?.nodeType === Node.DOCUMENT_FRAGMENT_NODE &&
+                (root as ShadowRoot).host?.hasAttribute(
+                  'data-circle-browser-overlay',
+                )
+              )
+            );
+          })
+        )
+          return true;
+        for (const frame of Array.from(doc.querySelectorAll('iframe, frame'))) {
+          const child = (frame as HTMLIFrameElement).contentDocument;
+          if (child && running(child, depth + 1)) return true;
+        }
+      } catch {
+        /* a frame from another site keeps its animations to itself */
+      }
+      return false;
+    };
+    return { revision: state.revision, animating: running(document) };
+  }
   const deadline = performance.now() + 2000;
   let visited = 0;
   const clean = (value: string | null | undefined) =>
@@ -154,6 +251,14 @@ export function browserPage(command: string, args: Record<string, any>) {
       return null;
     }
   };
+  const box = (el: Element | null | undefined): el is HTMLInputElement =>
+    el?.localName === 'input' &&
+    ['checkbox', 'radio'].includes((el as HTMLInputElement).type);
+  // A native control made see-through over a styled stand-in still takes the click
+  const seeThrough = (el: Element) =>
+    box(el) ||
+    el.localName === 'select' ||
+    (el.localName === 'input' && (el as HTMLInputElement).type === 'file');
   const hidden = (el: Element): boolean => {
     for (let node: Element | null = el; node; node = parent(node)) {
       const style = node.ownerDocument.defaultView!.getComputedStyle(node);
@@ -164,7 +269,7 @@ export function browserPage(command: string, args: Record<string, any>) {
         style.display === 'none' ||
         style.visibility === 'hidden' ||
         style.visibility === 'collapse' ||
-        Number(style.opacity) === 0 ||
+        (Number(style.opacity) === 0 && !(node === el && seeThrough(el))) ||
         style.contentVisibility === 'hidden'
       )
         return true;
@@ -188,7 +293,7 @@ export function browserPage(command: string, args: Record<string, any>) {
       .map((id) => root.getElementById?.(id)?.textContent ?? '')
       .join(' ');
     const field = el as HTMLInputElement;
-    return clean(
+    const own = clean(
       el.getAttribute('aria-label') ||
         labelled ||
         (field.labels
@@ -204,7 +309,131 @@ export function browserPage(command: string, args: Record<string, any>) {
           : '') ||
         (el as HTMLElement).innerText ||
         el.textContent,
-    ).slice(0, 500);
+    );
+    if (own) return own.slice(0, 500);
+    // A control drawn with an icon only: the name its picture or icon element gives
+    for (const inner of Array.from(
+      el.querySelectorAll('[aria-label], img[alt], [title]'),
+    ).slice(0, 20)) {
+      const text = clean(
+        inner.getAttribute('aria-label') ||
+          inner.getAttribute('alt') ||
+          inner.getAttribute('title'),
+      );
+      if (text) return text.slice(0, 500);
+    }
+    return '';
+  };
+  // What an icon-only control's icon is called, from its class, sprite or file name
+  const ICON =
+    /^(?:el-icon|anticon|ivu-icon|layui-icon|glyphicon|fa[srbl]?|bi|mdi|ri|ti|icon|iconfont|ion|ionicon|feather|lucide|material-icons|i)-(?!(?:lg|xs|sm|[1-9]?x|fw|spin|pulse|solid|regular|light|brands|duotone|inverse|border|fixed-width|pull-[a-z]+|rotate-[a-z0-9]+|flip-[a-z]+|stack(?:-[a-z0-9]+)?)$)([a-z0-9][a-z0-9_-]*)$/i;
+  const icon = (el: Element): string => {
+    for (const node of [
+      ...Array.from(el.querySelectorAll('i, span, svg, use, img')).slice(0, 12),
+      el,
+    ]) {
+      const sprite = (
+        node.getAttribute('href') ||
+        node.getAttribute('xlink:href') ||
+        ''
+      ).replace(/^[^#]*#/, '');
+      for (const token of [
+        ...(node.getAttribute('class') ?? '').split(/\s+/),
+        node.localName === 'use' ? sprite : '',
+      ]) {
+        const found = token.match(ICON)?.[1];
+        if (found) return found.slice(0, 40);
+      }
+      const src =
+        node.localName === 'img' ? (node.getAttribute('src') ?? '') : '';
+      const named =
+        node.getAttribute('data-icon') ||
+        (src && !/^(?:data|blob):/i.test(src)
+          ? (src
+              .split(/[?#]/)[0]!
+              .split('/')
+              .pop()
+              ?.replace(/\.[a-z0-9]+$/i, '') ?? '')
+          : '');
+      if (named) return named.replace(/[^\w.-]+/g, '-').slice(0, 40);
+    }
+    return '';
+  };
+  const KIT_TOGGLE =
+    /^(?:(?:el|ant|ivu|van|mdc|mat|arco|semi|t|n|q|v|md|layui|custom)-)?(?:switch|checkbox|radio|toggle)$/i;
+  /**
+   * What the snapshot says of a control's state: what ARIA and the native control say, or
+   * for a label or a styled stand-in, the see-through or hidden box it works.
+   */
+  const stateOf = (el: Element): string => {
+    const words: string[] = [];
+    const aria = (key: string) => el.getAttribute(`aria-${key}`);
+    const field = el as HTMLInputElement;
+    if (
+      el.matches(':disabled') ||
+      el.closest('[inert]') ||
+      el.closest('[aria-disabled="true"]')
+    )
+      words.push('disabled');
+    let checked = '';
+    if (box(el))
+      checked = field.indeterminate
+        ? 'mixed'
+        : field.checked
+          ? 'checked'
+          : 'unchecked';
+    else if (['true', 'false', 'mixed'].includes(aria('checked') ?? ''))
+      checked =
+        aria('checked') === 'true'
+          ? 'checked'
+          : aria('checked') === 'false'
+            ? 'unchecked'
+            : 'mixed';
+    else {
+      const control =
+        el.localName === 'label'
+          ? (el as HTMLLabelElement).control
+          : el.querySelectorAll('input[type=checkbox], input[type=radio]')
+                .length === 1
+            ? el.querySelector('input[type=checkbox], input[type=radio]')
+            : null;
+      if (box(control) && (el.localName === 'label' || !visible(control)))
+        checked = control.indeterminate
+          ? 'mixed'
+          : control.checked
+            ? 'checked'
+            : 'unchecked';
+      else {
+        // A UI kit's switch or checkbox that says its state by its classes alone
+        const classes = (el.getAttribute('class') ?? '').split(/\s+/);
+        if (
+          ['switch', 'checkbox', 'radio'].includes(
+            el.getAttribute('role') ?? '',
+          ) ||
+          classes.some((token) => KIT_TOGGLE.test(token))
+        )
+          checked = classes.some((token) =>
+            /(?:^|[-_])(?:checked|on)$/i.test(token),
+          )
+            ? 'checked'
+            : 'unchecked';
+      }
+    }
+    if (checked) words.push(checked);
+    if (aria('pressed') === 'true') words.push('pressed');
+    else if (aria('pressed') === 'false') words.push('not pressed');
+    else if (aria('pressed') === 'mixed' && checked !== 'mixed')
+      words.push('mixed');
+    if (aria('selected') === 'true') words.push('selected');
+    const expanded =
+      el.localName === 'summary' && el.parentElement?.localName === 'details'
+        ? String((el.parentElement as HTMLDetailsElement).open)
+        : aria('expanded');
+    if (expanded === 'true') words.push('expanded');
+    else if (expanded === 'false') words.push('collapsed');
+    if (field.required || aria('required') === 'true') words.push('required');
+    if (aria('invalid') && aria('invalid') !== 'false') words.push('invalid');
+    return words.map((word) => ` ${word}`).join('');
   };
   // The name is the field's placeholder, a hint at what to type rather than a label
   const hint = (el: Element) => {
@@ -318,6 +547,216 @@ export function browserPage(command: string, args: Record<string, any>) {
     }
     return el;
   };
+  // The part of the element its document's viewport and its scrolling or clipping
+  // containers show, if any
+  const shown = (
+    el: Element,
+  ): [left: number, top: number, right: number, bottom: number] | null => {
+    const doc = el.ownerDocument;
+    const view = doc.defaultView!;
+    const rect = el.getBoundingClientRect();
+    let [left, top, right, bottom] = [
+      Math.max(0, rect.left),
+      Math.max(0, rect.top),
+      Math.min(view.innerWidth, rect.right),
+      Math.min(view.innerHeight, rect.bottom),
+    ];
+    // A positioned element is clipped by its containing block and what clips that, not by
+    // the containers in between
+    let mode = view.getComputedStyle(el).position;
+    for (
+      let up = parent(el);
+      up && up.ownerDocument === doc && mode !== 'fixed';
+      up = parent(up)
+    ) {
+      const style = view.getComputedStyle(up);
+      if (
+        mode === 'absolute' &&
+        style.position === 'static' &&
+        style.transform === 'none'
+      )
+        continue;
+      // The root's overflow, and the body's when the root leaves it visible, is the
+      // viewport's, which is clipped to already
+      const viewport =
+        up === doc.documentElement ||
+        (up === doc.body &&
+          view.getComputedStyle(doc.documentElement).overflow === 'visible');
+      if (
+        !viewport &&
+        (style.overflowX !== 'visible' || style.overflowY !== 'visible')
+      ) {
+        const clip = up.getBoundingClientRect();
+        if (style.overflowX !== 'visible') {
+          left = Math.max(left, clip.left);
+          right = Math.min(right, clip.right);
+        }
+        if (style.overflowY !== 'visible') {
+          top = Math.max(top, clip.top);
+          bottom = Math.min(bottom, clip.bottom);
+        }
+      }
+      mode = style.position;
+    }
+    return right - left >= 1 && bottom - top >= 1
+      ? [left, top, right, bottom]
+      : null;
+  };
+  // Points a click on the element may land on, in its document's viewport: the middle of
+  // each of its line boxes first (a link that wraps has a gap at the middle of its whole
+  // box), then the middle of the whole box, then points around it
+  const spots = (el: Element, most = 13): [number, number][] => {
+    const area = shown(el);
+    if (!area) return [];
+    const [left, top, right, bottom] = area;
+    const list: [number, number][] = [];
+    const add = (x: number, y: number) => {
+      if (
+        list.length < most &&
+        x >= left &&
+        x < right &&
+        y >= top &&
+        y < bottom &&
+        !list.some(([a, b]) => Math.abs(a - x) < 1 && Math.abs(b - y) < 1)
+      )
+        list.push([x, y]);
+    };
+    for (const line of Array.from(el.getClientRects()))
+      add(
+        (Math.max(left, line.left) + Math.min(right, line.right)) / 2,
+        (Math.max(top, line.top) + Math.min(bottom, line.bottom)) / 2,
+      );
+    add((left + right) / 2, (top + bottom) / 2);
+    for (const [fx, fy] of [
+      [0.25, 0.5],
+      [0.75, 0.5],
+      [0.5, 0.25],
+      [0.5, 0.75],
+      [0.25, 0.25],
+      [0.75, 0.75],
+      [0.25, 0.75],
+      [0.75, 0.25],
+      [0.1, 0.5],
+      [0.9, 0.5],
+    ] as const)
+      add(left + (right - left) * fx, top + (bottom - top) * fy);
+    return list;
+  };
+  // Whether a click that lands on `found` acts on the element: inside it, or for a
+  // checkbox or radio button, on its label (not on a link or another control there)
+  const takes = (el: Element, found: Element | null): boolean => {
+    if (!found) return false;
+    if (composedContains(el, found)) return true;
+    if (!box(el)) return false;
+    const inner = found.closest(
+      'a[href], button, input, select, textarea, summary, [role=button], [role=link]',
+    );
+    return Array.from((el as HTMLInputElement).labels ?? []).some(
+      (label) =>
+        composedContains(label, found) &&
+        (!inner || !composedContains(label, inner)),
+    );
+  };
+  // What lies over the whole viewport, when a dialog, drawer or mask covers the page: an
+  // element outside it is under it, also one scrolled out of view
+  let cover: Element | null | undefined;
+  const coverLayer = (): Element | null => {
+    if (cover !== undefined) return cover;
+    cover = null;
+    try {
+      // A modal <dialog> makes the rest of the page inert, its backdrop over it
+      const modal = document.querySelector('dialog:modal');
+      if (modal) return (cover = modal);
+    } catch {
+      /* a browser without :modal */
+    }
+    // The layout viewport that a fixed element fills: innerWidth and innerHeight also count
+    // the scroll bars that take room where the system always shows them
+    const root =
+      document.compatMode === 'BackCompat'
+        ? document.body
+        : document.documentElement;
+    const width = root?.clientWidth || innerWidth,
+      height = root?.clientHeight || innerHeight;
+    for (const [fx, fy] of [
+      [0.5, 0.5],
+      [0.1, 0.1],
+      [0.9, 0.1],
+      [0.1, 0.9],
+      [0.9, 0.9],
+    ] as const) {
+      // From the top down to the first element of the page's own content
+      for (const node of document.elementsFromPoint(width * fx, height * fy)) {
+        if (node === document.documentElement || node === document.body) break;
+        let fixed: Element | null = null;
+        for (
+          let up: Element | null = node;
+          up && up.ownerDocument === document;
+          up = parent(up)
+        )
+          if (getComputedStyle(up).position === 'fixed') fixed = up;
+        if (!fixed) break;
+        const rect = fixed.getBoundingClientRect();
+        if (
+          rect.left <= 1 &&
+          rect.top <= 1 &&
+          rect.right >= width - 1 &&
+          rect.bottom >= height - 1
+        )
+          return (cover = fixed);
+      }
+    }
+    return cover;
+  };
+  const DIALOG =
+    'dialog[open], [aria-modal="true"], [role="dialog"], [role="alertdialog"]';
+  // The dialog or drawer a node is part of, or that lies in the same layer over the page: it
+  // stays until it is answered or closed
+  const modalOf = (node: Element | null): Element | null => {
+    if (!node) return null;
+    const own = node.closest(DIALOG);
+    if (own) return own;
+    const layer = node.ownerDocument === document ? coverLayer() : null;
+    if (!layer || !composedContains(layer, node)) return null;
+    // A mask of its own beside the dialog or drawer it is for
+    return layer.matches(DIALOG)
+      ? layer
+      : (layer.querySelector(DIALOG) ??
+          Array.from(document.querySelectorAll(DIALOG)).find((dialog) =>
+            visible(dialog),
+          ) ??
+          null);
+  };
+  const dialogName = (dialog: Element) => {
+    const root = dialog.getRootNode() as Document | ShadowRoot;
+    return clean(
+      dialog.getAttribute('aria-label') ||
+        dialog
+          .getAttribute('aria-labelledby')
+          ?.split(/\s+/)
+          .map((id) => root.getElementById?.(id)?.textContent ?? '')
+          .join(' ') ||
+        dialog.querySelector('h1, h2, h3, h4, h5, h6, [class*="title"]')
+          ?.textContent,
+    ).slice(0, 80);
+  };
+  // Whether something on top would take a click meant for the element
+  const covered = (el: Element): boolean => {
+    const points = spots(el, 5);
+    if (points.length)
+      return !points.some(([x, y]) => takes(el, hit(el.ownerDocument, x, y)));
+    // Out of view: the page's own content is under what covers the viewport; what is fixed
+    // (a drawer, a header) is not judged from here
+    const layer = el.ownerDocument === document ? coverLayer() : null;
+    if (!layer || composedContains(layer, el)) return false;
+    for (
+      let up: Element | null = el;
+      up && up.ownerDocument === document;
+      up = parent(up)
+    )
+      if (getComputedStyle(up).position === 'fixed') return false;
+    return true;
+  };
   const field = () => {
     const el = state.refs.get(String(args.ref));
     if (!el?.isConnected)
@@ -364,22 +803,60 @@ export function browserPage(command: string, args: Record<string, any>) {
             ? 'advanced'
             : '';
   if (command === 'snapshot') {
-    state.refs.clear();
     const fresh = state.snapshots++ > 0;
-    let length = 0;
-    let truncated = false;
-    const lines: string[] = [];
+    // Elements that got their ref in this snapshot
+    const added = new WeakSet<Element>();
+    const assigned: Element[] = [];
+    type Out = {
+      lines: string[];
+      length: number;
+      limit: number;
+      truncated: boolean;
+    };
+    let out: Out = { lines: [], length: 0, limit: 30000, truncated: false };
+    let stop = deadline;
     const add = (line: string) => {
-      const remaining = 30000 - length;
+      const remaining = out.limit - out.length;
       if (remaining <= 0) {
-        truncated = true;
+        out.truncated = true;
         return;
       }
-      if (line.length + 1 > remaining) truncated = true;
+      if (line.length + 1 > remaining) out.truncated = true;
       const text = line.slice(0, Math.max(0, remaining - 1));
-      lines.push(text);
-      length += text.length + 1;
+      out.lines.push(text);
+      out.length += text.length + 1;
     };
+    // What may lie on top of the page (dialogs, drawers, menus, popups a page puts at the
+    // end of its body): a long page must not leave them out
+    const all = document.getElementsByTagName('*').length;
+    const layers = new Set<Element>();
+    if (document.body) {
+      const found = [
+        ...Array.from(
+          document.querySelectorAll(
+            'dialog[open], [aria-modal="true"], [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]',
+          ),
+        ).filter((el) => visible(el)),
+        ...Array.from(document.body.children).filter(
+          (el) =>
+            !['script', 'style', 'noscript', 'template'].includes(
+              el.localName,
+            ) &&
+            ['fixed', 'absolute'].includes(getComputedStyle(el).position) &&
+            !hidden(el),
+        ),
+        ...[coverLayer()].filter((el): el is Element => !!el),
+      ];
+      for (const el of found)
+        if (
+          // The app's own frame is the page, not something on top of it
+          el.getElementsByTagName('*').length <= all / 2 &&
+          !found.some((other) => other !== el && composedContains(other, el))
+        )
+          layers.add(el);
+    }
+    const finished = new WeakSet<Element>();
+    let skip = new Set<Element>();
     const walk = (
       node: Node,
       indent = '',
@@ -388,10 +865,10 @@ export function browserPage(command: string, args: Record<string, any>) {
     ) => {
       if (
         ++visited > 15000 ||
-        performance.now() > deadline ||
-        length >= 30000
+        performance.now() > stop ||
+        out.length >= out.limit
       ) {
-        truncated = true;
+        out.truncated = true;
         return;
       }
       if (node.nodeType === Node.TEXT_NODE) {
@@ -417,6 +894,7 @@ export function browserPage(command: string, args: Record<string, any>) {
       if (node.nodeType !== Node.ELEMENT_NODE) return;
       const el = node as Element;
       if (
+        skip.has(el) ||
         ['script', 'style', 'noscript', 'template'].includes(el.localName) ||
         hidden(el)
       )
@@ -425,13 +903,13 @@ export function browserPage(command: string, args: Record<string, any>) {
       const isAction =
         isVisible && actionable(el) && (!inAction || nestedAction(el));
       let ref = '';
-      let added = false;
       if (isAction) {
         ref = state.ids.get(el) ?? '';
         if (!ref) {
           ref = `e${++state.next}`;
           state.ids.set(el, ref);
-          added = fresh;
+          assigned.push(el);
+          if (fresh) added.add(el);
         }
         state.refs.set(ref, el);
       }
@@ -455,11 +933,14 @@ export function browserPage(command: string, args: Record<string, any>) {
             : ['input', 'textarea', 'select'].includes(el.localName)
               ? ` value=${JSON.stringify(clean(value.value))}`
               : '';
+        const label = name(el);
+        const drawn = label ? '' : icon(el);
+        const under = covered(el);
         // On a certificate warning, what its advanced button and its link to proceed are,
         // in any language: a replayed script's proceed step finds them so
         const warning = warningAction(el);
         add(
-          `${indent}[${ref}] ${role(el)} ${JSON.stringify(name(el))}${content}${value.disabled ? ' disabled' : ''}${value.checked ? ' checked' : ''}${added ? ' [new]' : ''}${warning === 'advanced' || warning === 'proceed' ? ` [warning: ${warning}]` : ''}`,
+          `${indent}[${ref}] ${role(el)} ${JSON.stringify(label)}${drawn ? ` icon=${drawn}` : ''}${content}${stateOf(el)}${added.has(el) ? ' [new]' : ''}${under ? ' [covered]' : ''}${warning === 'advanced' || warning === 'proceed' ? ` [warning: ${warning}]` : ''}`,
         );
       } else if (
         isVisible &&
@@ -498,12 +979,12 @@ export function browserPage(command: string, args: Record<string, any>) {
         return;
       }
       if (el.localName === 'tr') {
-        const start = lines.length;
-        const before = length;
+        const start = out.lines.length;
+        const before = out.length;
         for (const child of Array.from(el.childNodes))
           walk(child, '', false, inAction);
-        const cells = lines.splice(start);
-        length = before;
+        const cells = out.lines.splice(start);
+        out.length = before;
         add(indent + '| ' + cells.join(' | ') + ' |');
         return;
       }
@@ -519,14 +1000,59 @@ export function browserPage(command: string, args: Record<string, any>) {
       for (const child of nodes) {
         walk(child, indent, suppressText || isAction, inAction || isAction);
       }
+      if (layers.has(el) && !out.truncated) finished.add(el);
     };
-    walk(document.body || document.documentElement);
+    const page = document.body || document.documentElement;
+    state.refs.clear();
+    walk(page);
+    let lines = out.lines;
+    let truncated = out.truncated;
+    // Cut short before what lies on top was read: that first, then the page with the room left
+    const pending = [...layers].filter((el) => !finished.has(el));
+    if (truncated && pending.length) {
+      state.refs.clear();
+      visited = 0;
+      stop = performance.now() + 1000;
+      out = { lines: [], length: 0, limit: 15000, truncated: false };
+      for (const layer of pending) walk(layer);
+      const top = out;
+      skip = new Set(pending);
+      visited = 0;
+      out = {
+        lines: [],
+        length: 0,
+        limit: 30000 - top.length - 100,
+        truncated: false,
+      };
+      walk(page);
+      lines = [
+        ...out.lines,
+        '… the rest of the page is left out; what lies on top of it follows',
+        ...top.lines,
+      ];
+      truncated = true;
+      // An element the first reading gave a ref and this one left out is new when it shows
+      const kept = new Set(state.refs.values());
+      for (const el of assigned) if (!kept.has(el)) state.ids.delete(el);
+    }
     return lines.join('\n') + (truncated ? '\n… snapshot truncated' : '');
   }
   if (command === 'point') {
-    const current = captureState();
-    if (JSON.stringify(current) !== JSON.stringify(args.capture))
-      throw Error('the screenshot is stale; take a new browser_screenshot');
+    const capture = (args.capture ?? {}) as Record<string, unknown>;
+    const stale = (why = '') =>
+      Error(`the screenshot is stale${why}; take a new browser_screenshot`);
+    // Another document, viewport or scroll position: nothing is where the picture shows it
+    const current: Record<string, unknown> = captureState();
+    if (
+      ['document', 'width', 'height', 'scrollX', 'scrollY'].some(
+        (key) => current[key] !== capture[key],
+      )
+    )
+      throw stale();
+    const recorded = state.captures.find(
+      (entry) => entry.id === capture.geometry,
+    );
+    if (!recorded) throw stale();
     const x = Number(args.x),
       y = Number(args.y);
     if (
@@ -541,6 +1067,9 @@ export function browserPage(command: string, args: Record<string, any>) {
     let doc = document,
       localX = x,
       localY = y;
+    // The point in each document the click goes through, and the frames on the way
+    const at = new Map<Document, [number, number]>([[document, [x, y]]]);
+    const frames: Element[] = [];
     let el = hit(doc, localX, localY);
     for (
       let depth = 0;
@@ -562,7 +1091,9 @@ export function browserPage(command: string, args: Record<string, any>) {
         (localY - rect.top) /
           (rect.height / (frame.offsetHeight || rect.height)) -
         frame.clientTop;
+      frames.push(frame);
       doc = child;
+      at.set(doc, [localX, localY]);
       el = hit(doc, localX, localY);
     }
     if (!el || hidden(el))
@@ -577,6 +1108,76 @@ export function browserPage(command: string, args: Record<string, any>) {
         target = node;
         break;
       }
+    }
+    // What the screenshot showed at the point is still there as it was: the element hit and
+    // the control it is part of, in place and unchanged, and what lay over the point not
+    // gone. Changes elsewhere on the page (a list that refreshes, a tooltip, a clock) do not
+    // matter. Once the pointer is there (`hover`), a hover may restyle or move the target;
+    // a change of its content or of what it does still counts.
+    const since = recorded.revision;
+    const changes = args.hover ? state.altered : state.touched;
+    const changed = (node: Node) => (changes.get(node) ?? 0) > since;
+    const moved = (node: Element) => {
+      const was = recorded.boxes.get(node);
+      if (!was) return true;
+      const now = node.getBoundingClientRect();
+      return (
+        Math.abs(now.left - was[0]) > 1 ||
+        Math.abs(now.top - was[1]) > 1 ||
+        Math.abs(now.right - was[2]) > 1 ||
+        Math.abs(now.bottom - was[3]) > 1
+      );
+    };
+    const chain: Element[] = [];
+    for (let node: Element | null = el; node; node = parent(node)) {
+      chain.push(node);
+      if (node === target) break;
+    }
+    if (
+      [...chain, ...frames].some((node) =>
+        args.hover ? !recorded.boxes.has(node) : moved(node),
+      )
+    )
+      throw stale(': what is at these coordinates moved or is new');
+    // Inside the control (or, for a large one, the element hit), any change since
+    const small = (node: Element) =>
+      node.getElementsByTagName('*').length <= 1000;
+    const region = small(target) ? target : small(el) ? el : null;
+    let count = 0;
+    const changedIn = (node: Element | ShadowRoot): boolean => {
+      if (++count > 3000 || changed(node)) return true;
+      const shadow = (node as Element).shadowRoot;
+      if (shadow && changedIn(shadow)) return true;
+      return Array.from(node.children).some(changedIn);
+    };
+    if (chain.some(changed) || (region && changedIn(region)))
+      throw stale(': what is at these coordinates changed');
+    // What could be seen and clicked at the point then and is not on the way to the element
+    // now (a mask, a message, a menu): gone, moved, hidden or changed, the click would reach
+    // what it covered
+    const onPath = (node: Element) =>
+      composedContains(node, el) ||
+      frames.some((frame) => composedContains(node, frame));
+    for (const [node, was] of recorded.boxes) {
+      const point = at.get(node.ownerDocument);
+      if (
+        !was[4] ||
+        !point ||
+        point[0] < was[0] ||
+        point[0] >= was[2] ||
+        point[1] < was[1] ||
+        point[1] >= was[3] ||
+        onPath(node)
+      )
+        continue;
+      let gone = !node.isConnected || moved(node) || !seen(node);
+      for (
+        let up: Element | null = node;
+        up && !gone && !onPath(up);
+        up = parent(up)
+      )
+        gone = changed(up);
+      if (gone) throw stale(': what lay over these coordinates changed');
     }
     if (target.matches(':disabled') || target.closest('[inert]'))
       throw Error('the element is disabled');
@@ -622,52 +1223,63 @@ export function browserPage(command: string, args: Record<string, any>) {
       frames.push(frame);
       view = frame.ownerDocument.defaultView!;
     }
-    const rect = el.getBoundingClientRect();
-    const own = el.ownerDocument.defaultView!;
-    const left = Math.max(0, rect.left),
-      right = Math.min(own.innerWidth, rect.right);
-    const top = Math.max(0, rect.top),
-      bottom = Math.min(own.innerHeight, rect.bottom);
-    if (right <= left || bottom <= top)
+    const points = spots(el);
+    const area = shown(el);
+    if (!points.length || !area)
       throw Error('the element is outside the viewport');
-    let x = (left + right) / 2,
-      y = (top + bottom) / 2;
-    let width = right - left,
-      height = bottom - top;
-    const obstruction = hit(el.ownerDocument, x, y);
-    if (!composedContains(el, obstruction))
-      throw Error(
-        `the element is covered by ${obstruction ? `${role(obstruction)} ${JSON.stringify(name(obstruction))}` : 'another element'}`,
-      );
-    for (const frame of frames) {
-      const bounds = frame.getBoundingClientRect();
-      const scaleX = bounds.width / (frame.offsetWidth || bounds.width);
-      const scaleY = bounds.height / (frame.offsetHeight || bounds.height);
-      x = bounds.left + (frame.clientLeft + x) * scaleX;
-      y = bounds.top + (frame.clientTop + y) * scaleY;
-      width *= scaleX;
-      height *= scaleY;
-      const obstruction = hit(frame.ownerDocument, x, y);
-      if (!composedContains(frame, obstruction))
-        throw Error(
-          `the frame is covered by ${obstruction ? `${role(obstruction)} ${JSON.stringify(name(obstruction))}` : 'another element'}`,
-        );
+    const describe = (obstruction: Element | null) =>
+      obstruction
+        ? `${role(obstruction)} ${JSON.stringify(name(obstruction).slice(0, 80))}`
+        : 'another element';
+    // The first point where a click reaches the element, through the frames it is in
+    let blocked = '';
+    for (const [left, top] of points) {
+      const obstruction = hit(el.ownerDocument, left, top);
+      if (!takes(el, obstruction)) {
+        if (!blocked) {
+          const modal = modalOf(obstruction);
+          blocked = `the element is covered by ${describe(obstruction)}${modal ? ` of dialog ${JSON.stringify(dialogName(modal))}` : ''}`;
+        }
+        continue;
+      }
+      let x = left,
+        y = top,
+        width = area[2] - area[0],
+        height = area[3] - area[1];
+      let through = true;
+      for (const frame of frames) {
+        const bounds = frame.getBoundingClientRect();
+        const scaleX = bounds.width / (frame.offsetWidth || bounds.width);
+        const scaleY = bounds.height / (frame.offsetHeight || bounds.height);
+        x = bounds.left + (frame.clientLeft + x) * scaleX;
+        y = bounds.top + (frame.clientTop + y) * scaleY;
+        width *= scaleX;
+        height *= scaleY;
+        const obstruction = hit(frame.ownerDocument, x, y);
+        if (!composedContains(frame, obstruction)) {
+          blocked ||= `the frame is covered by ${describe(obstruction)}`;
+          through = false;
+          break;
+        }
+      }
+      if (through)
+        return {
+          x,
+          y,
+          width,
+          height,
+          // The element as the snapshot shows it, read as the action uses it
+          role: role(el),
+          name: name(el),
+          hint: hint(el),
+          origin: el.ownerDocument.location.origin,
+          password:
+            el.localName === 'input' &&
+            (el as HTMLInputElement).type === 'password',
+          action: warningAction(el),
+        };
     }
-    return {
-      x,
-      y,
-      width,
-      height,
-      // The element as the snapshot shows it, read as the action uses it
-      role: role(el),
-      name: name(el),
-      hint: hint(el),
-      origin: el.ownerDocument.location.origin,
-      password:
-        el.localName === 'input' &&
-        (el as HTMLInputElement).type === 'password',
-      action: warningAction(el),
-    };
+    throw Error(blocked);
   }
   if (command === 'focus') {
     const el = field();
@@ -919,4 +1531,110 @@ export function browserPage(command: string, args: Record<string, any>) {
  */
 export function pageCall(command: string, args: Record<string, unknown>) {
   return `(async () => { const __name = (target) => target; try { return { ok: true, value: await (${browserPage.toString()})(${JSON.stringify(command)},${JSON.stringify(args)}) }; } catch (error) { return { ok: false, error: String(error.message || error) }; } })()`;
+}
+
+/** A page command run in a tab, the way its browser runs one. */
+export type PageRun = <T>(
+  command: string,
+  args?: Record<string, unknown>,
+) => Promise<T>;
+const COVERED = /^the (?:element|frame) is covered by /;
+const pause = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    signal.throwIfAborted();
+    const done = () => {
+      signal.removeEventListener('abort', stop);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    const stop = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    signal.addEventListener('abort', stop, { once: true });
+  });
+/** How long an action waits for what covers its element to go. */
+export const COVER_WAIT = 3000;
+
+/**
+ * Where an action's element takes the input (`prepare`). While something covers it (a
+ * loading mask, a message, an animation) it is asked again until `wait` runs out; a dialog
+ * or drawer stays until it is answered, so it is said once the page has stopped changing.
+ * `stopped` ends the wait (a dialog the page opened, a closed tab); `busy` is the page's
+ * network still loading.
+ */
+export async function reachElement<T>(
+  run: PageRun,
+  args: Record<string, unknown>,
+  page: { stopped: () => boolean; busy: () => boolean },
+  signal: AbortSignal,
+  wait = COVER_WAIT,
+): Promise<T> {
+  const started = Date.now();
+  let quiet: { revision: number; since: number } | undefined;
+  for (;;) {
+    try {
+      return await run<T>('prepare', args);
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      if (!COVERED.test(text) || page.stopped()) throw error;
+      const waited = Date.now() - started;
+      if (waited >= wait)
+        throw Error(
+          `${text}, still after ${Math.round(waited / 100) / 10} s; take a new browser_snapshot`,
+        );
+      if (/ of dialog "/.test(text)) {
+        const now = await run<{ revision: number; animating: boolean }>(
+          'settled',
+        ).catch(() => {
+          // A page that answers nothing now (a dialog of its own, a closed tab)
+          throw error;
+        });
+        if (
+          !quiet ||
+          quiet.revision !== now.revision ||
+          now.animating ||
+          page.busy()
+        )
+          quiet = { revision: now.revision, since: Date.now() };
+        else if (Date.now() - quiet.since >= 500)
+          throw Error(
+            `${text}: close the dialog or act in it first; take a new browser_snapshot`,
+          );
+      }
+      await pause(150, signal);
+    }
+  }
+}
+
+/**
+ * After an action, until the page stops changing: no change to its document for a moment
+ * and no transition or animation that ends still running (a drawer sliding in, a mask
+ * fading), for at most `most`.
+ */
+export async function settlePage(
+  run: PageRun,
+  page: { stopped: () => boolean; busy: () => boolean },
+  signal: AbortSignal,
+  most = 1500,
+): Promise<void> {
+  const end = Date.now() + most;
+  let last: number | undefined;
+  let since = Date.now();
+  while (Date.now() < end) {
+    if (page.stopped()) return;
+    let now: { revision: number; animating: boolean };
+    try {
+      now = await run('settled');
+    } catch {
+      // A page that answers nothing now (a dialog, a document on its way) is not waited on
+      signal.throwIfAborted();
+      return;
+    }
+    if (now.revision !== last || page.busy()) {
+      last = now.revision;
+      since = Date.now();
+    } else if (!now.animating && Date.now() - since >= 200) return;
+    await pause(80, signal);
+  }
 }

@@ -1,11 +1,268 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import fs, { readFileSync, readdirSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
 import { InputHistory } from '../src/tui/input_history.js';
 import { scratch } from './helpers.js';
+import lockfile from 'proper-lockfile';
+
+const ioError = (code: string) =>
+  Object.assign(new Error(`injected ${code}`), { code });
+
+for (const code of ['EPERM', 'EBUSY', 'EACCES']) {
+  test(`a transient ${code} atomic publish does not lose an entry or another view's browsing state`, (t) => {
+    const directory = scratch(t);
+    const path = join(directory, 'history');
+    const writer = new InputHistory(path);
+    writer.add('first');
+    const observer = new InputHistory(path);
+    assert.equal(observer.up('parked draft'), 'first');
+    const peer = new InputHistory(path);
+    peer.add('peer entry');
+    const rename = fs.renameSync;
+    let failures = 0;
+    const mocked = t.mock.method(
+      fs,
+      'renameSync',
+      (...[source, target]: Parameters<typeof fs.renameSync>) => {
+        if (target === path && failures++ === 0) throw ioError(code);
+        return rename(source, target);
+      },
+    );
+    syncBuiltinESMExports();
+    t.after(() => {
+      mocked.mock.restore();
+      syncBuiltinESMExports();
+    });
+    writer.add('retried entry');
+    assert.deepEqual(new InputHistory(path).items, [
+      'first',
+      'peer entry',
+      'retried entry',
+    ]);
+    assert.equal(observer.down(), 'parked draft');
+    assert.equal(observer.up('new draft'), 'retried entry');
+    assert.deepEqual(readdirSync(directory), ['history']);
+  });
+}
+
+test('a transient locked read never replaces newer peer entries with a stale browsing snapshot', (t) => {
+  const path = join(scratch(t), 'history');
+  const stale = new InputHistory(path);
+  stale.add('first');
+  const peer = new InputHistory(path);
+  peer.add('peer entry');
+  const read = fs.readFileSync;
+  let failures = 0;
+  const mocked = t.mock.method(
+    fs,
+    'readFileSync',
+    (...args: Parameters<typeof fs.readFileSync>) => {
+      if (args[0] === path && failures++ === 0) throw ioError('EBUSY');
+      return Reflect.apply(read, fs, args);
+    },
+  );
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
+  stale.add('new entry');
+  assert.deepEqual(new InputHistory(path).items, [
+    'first',
+    'peer entry',
+    'new entry',
+  ]);
+});
+
+test('a transient lock acquisition failure retries the history transaction', (t) => {
+  const path = join(scratch(t), 'history');
+  const history = new InputHistory(path);
+  history.add('first');
+  const lock = lockfile.lockSync;
+  let attempts = 0;
+  t.mock.method(
+    lockfile,
+    'lockSync',
+    (...[target, options]: Parameters<typeof lockfile.lockSync>) => {
+      if (target === path && attempts++ === 0) throw ioError('EPERM');
+      return lock(target, options);
+    },
+  );
+  history.add('new entry');
+  assert.deepEqual(new InputHistory(path).items, ['first', 'new entry']);
+  assert.equal(attempts, 2);
+});
+
+test('persistent failures stay bounded and pending entries survive browsing and a later peer merge', (t) => {
+  const path = join(scratch(t), 'history');
+  const history = new InputHistory(path);
+  history.add('first');
+  const rename = fs.renameSync;
+  let blocked = true;
+  let attempts = 0;
+  const mocked = t.mock.method(
+    fs,
+    'renameSync',
+    (...[source, target]: Parameters<typeof fs.renameSync>) => {
+      if (blocked && target === path) {
+        attempts++;
+        throw ioError('EBUSY');
+      }
+      return rename(source, target);
+    },
+  );
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
+  const started = performance.now();
+  assert.doesNotThrow(() => history.add('pending one'));
+  const elapsed = performance.now() - started;
+  // Each refused operation is retried within the one-second window the history
+  // shares with the settings lock; the synchronous Enter path still returns.
+  assert.ok(attempts > 1, 'a transient refusal is retried');
+  assert.ok(elapsed < 5000, `transient retries are bounded (${elapsed} ms)`);
+  assert.equal(history.up('unsent draft'), 'pending one');
+  assert.equal(history.down(), 'unsent draft');
+  blocked = false;
+  const peer = new InputHistory(path);
+  peer.add('peer entry');
+  history.add('pending two');
+  assert.deepEqual(new InputHistory(path).items, [
+    'first',
+    'peer entry',
+    'pending one',
+    'pending two',
+  ]);
+});
+
+test('non-transient read failures preserve the file and retry pending input only on a later add', (t) => {
+  const path = join(scratch(t), 'history');
+  const history = new InputHistory(path);
+  history.add('first');
+  const peer = new InputHistory(path);
+  peer.add('peer entry');
+  const original = readFileSync(path, 'utf8');
+  const read = fs.readFileSync;
+  let blocked = true;
+  let attempts = 0;
+  const mocked = t.mock.method(
+    fs,
+    'readFileSync',
+    (...args: Parameters<typeof fs.readFileSync>) => {
+      if (blocked && args[0] === path) {
+        attempts++;
+        throw ioError('EIO');
+      }
+      return Reflect.apply(read, fs, args);
+    },
+  );
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
+  assert.doesNotThrow(() => history.add('pending entry'));
+  assert.equal(attempts, 1);
+  assert.equal(Reflect.apply(read, fs, [path, 'utf8']), original);
+  blocked = false;
+  history.add('next entry');
+  assert.deepEqual(new InputHistory(path).items, [
+    'first',
+    'peer entry',
+    'pending entry',
+    'next entry',
+  ]);
+});
+
+test('pending history keeps its maximum, multiline entries and consecutive duplicate behavior', (t) => {
+  const path = join(scratch(t), 'history');
+  const history = new InputHistory(path, 3);
+  history.add('first');
+  const rename = fs.renameSync;
+  let blocked = true;
+  let attempts = 0;
+  const mocked = t.mock.method(
+    fs,
+    'renameSync',
+    (...[source, target]: Parameters<typeof fs.renameSync>) => {
+      if (blocked && target === path) {
+        attempts++;
+        throw ioError('EROFS');
+      }
+      return rename(source, target);
+    },
+  );
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
+  for (const entry of ['second', 'third\nline', 'third\nline', 'fourth'])
+    history.add(entry);
+  assert.equal(attempts, 4, 'non-transient failures are not retried');
+  assert.deepEqual(history.items, ['second', 'third\nline', 'fourth']);
+  assert.equal(history.beginSearch('third'), 'third\nline');
+  assert.equal(history.endSearch(true), 'third');
+  blocked = false;
+  history.add('fifth');
+  assert.deepEqual(new InputHistory(path, 3).items, [
+    'third\nline',
+    'fourth',
+    'fifth',
+  ]);
+});
+
+test('temporary cleanup failure cannot duplicate a successfully published pending batch', (t) => {
+  const directory = scratch(t);
+  const path = join(directory, 'history');
+  const history = new InputHistory(path);
+  const rename = fs.renameSync;
+  let blocked = true;
+  const renamed = t.mock.method(
+    fs,
+    'renameSync',
+    (...[source, target]: Parameters<typeof fs.renameSync>) => {
+      if (blocked && target === path) throw ioError('EROFS');
+      return rename(source, target);
+    },
+  );
+  syncBuiltinESMExports();
+  history.add('pending one');
+  blocked = false;
+  const remove = fs.rmSync;
+  const removed = t.mock.method(
+    fs,
+    'rmSync',
+    (...args: Parameters<typeof fs.rmSync>) => {
+      if (
+        String(args[0]).startsWith(path + '.') &&
+        String(args[0]).endsWith('.tmp')
+      )
+        throw ioError('EBUSY');
+      return Reflect.apply(remove, fs, args);
+    },
+  );
+  syncBuiltinESMExports();
+  t.after(() => {
+    renamed.mock.restore();
+    removed.mock.restore();
+    syncBuiltinESMExports();
+  });
+  history.add('pending two');
+  history.add('last');
+  assert.deepEqual(new InputHistory(path).items, [
+    'pending one',
+    'pending two',
+    'last',
+  ]);
+  assert.deepEqual(readdirSync(directory), ['history']);
+});
 
 async function historyFault(
   path: string,
@@ -135,7 +392,73 @@ test('independent terminal processes append every history entry without stale sn
     ),
   );
   const actual = new InputHistory(path).items;
-  assert.equal(actual.length, 60);
+  const expected = ['A', 'B', 'C'].flatMap((prefix) =>
+    Array.from({ length: 20 }, (_, index) => prefix + ' ' + index),
+  );
+  assert.equal(
+    actual.length,
+    60,
+    JSON.stringify({
+      missing: expected.filter((entry) => !actual.includes(entry)),
+      duplicates: actual.filter(
+        (entry, index) => actual.indexOf(entry) !== index,
+      ),
+    }),
+  );
+  for (const prefix of ['A', 'B', 'C'])
+    assert.deepEqual(
+      actual.filter((entry) => entry.startsWith(prefix + ' ')),
+      Array.from({ length: 20 }, (_, index) => prefix + ' ' + index),
+    );
+});
+
+test('independent terminal processes retain all 60 entries after each suffers a transient publish failure', async (t) => {
+  const path = join(scratch(t), 'history');
+  const module = new URL('../src/tui/input_history.ts', import.meta.url).href;
+  const script = `
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { InputHistory } from ${JSON.stringify(module)};
+    const original = fs.renameSync;
+    let failed = false;
+    fs.renameSync = (source, target) => {
+      if (target === process.argv[1] && !failed) {
+        failed = true;
+        throw Object.assign(new Error('injected Windows sharing error'), { code: 'EPERM' });
+      }
+      return original(source, target);
+    };
+    syncBuiltinESMExports();
+    const history = new InputHistory(process.argv[1]);
+    for (let index = 0; index < 20; index++) history.add(process.argv[2] + ' ' + index);
+  `;
+  await Promise.all(
+    ['A', 'B', 'C'].map((prefix) =>
+      promisify(execFile)(process.execPath, [
+        '--import',
+        'tsx',
+        '--input-type=module',
+        '-e',
+        script,
+        path,
+        prefix,
+      ]),
+    ),
+  );
+  const actual = new InputHistory(path).items;
+  const expected = ['A', 'B', 'C'].flatMap((prefix) =>
+    Array.from({ length: 20 }, (_, index) => prefix + ' ' + index),
+  );
+  assert.equal(
+    actual.length,
+    60,
+    JSON.stringify({
+      missing: expected.filter((entry) => !actual.includes(entry)),
+      duplicates: actual.filter(
+        (entry, index) => actual.indexOf(entry) !== index,
+      ),
+    }),
+  );
   for (const prefix of ['A', 'B', 'C'])
     assert.deepEqual(
       actual.filter((entry) => entry.startsWith(prefix + ' ')),

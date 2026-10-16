@@ -29,6 +29,12 @@ import {
   relative,
   resolve,
 } from 'node:path';
+import {
+  readWindowsQueryMarkers,
+  readWindowsProcessRecords,
+  windowsProcessQuery,
+  WindowsProcessQueryObservation,
+} from './windows_process_query.js';
 
 export interface InstallerCopy {
   kind: 'installer';
@@ -52,11 +58,12 @@ export interface Surroundings {
   prefix?: string;
   binDir?: string;
 }
-type Run = (
+export type Run = (
   command: string,
   args: string[],
   timeout?: number,
-) => Pick<SpawnSyncReturns<string>, 'status' | 'stdout' | 'stderr' | 'error'>;
+) => Pick<SpawnSyncReturns<string>, 'status' | 'stdout' | 'stderr' | 'error'> &
+  Partial<Pick<SpawnSyncReturns<string>, 'pid' | 'signal'>>;
 
 const runCommand: Run = (command, args, timeout = 120_000) =>
   spawnSync(command, args, { encoding: 'utf8', timeout });
@@ -115,7 +122,7 @@ const real = (path: string): string | undefined => {
     return undefined;
   }
 };
-const inside = (path: string, folder: string): boolean => {
+export const inside = (path: string, folder: string): boolean => {
   const rest = relative(resolve(folder), resolve(path));
   return rest === '' || (!rest.startsWith('..') && !isAbsolute(rest));
 };
@@ -307,6 +314,9 @@ export function runningCopies(
   where: Surroundings,
   run: Run = runCommand,
   opened: (path: string) => string | undefined = openError,
+  report: (summary: string) => void = (summary) => {
+    process.stderr.write(`[circle-install] ${summary}\n`);
+  },
 ): number[] {
   const pids = new Set<number>();
   const folders = copies.flatMap((copy) =>
@@ -338,8 +348,8 @@ export function runningCopies(
         pids.add(Number(name));
     }
   } else if (where.platform === 'win32') {
-    // Windows will not open a running program for writing. Listing processes starts PowerShell,
-    // which took 15 to 20 s on a loaded machine, so it runs only when a program of a copy is held.
+    // Windows will not open a running program for writing. Query processes only when
+    // a program is held or a copy's directory could not be inspected.
     const programs = [...scripts];
     let unread = false;
     for (const folder of folders)
@@ -358,44 +368,46 @@ export function runningCopies(
       return code ? [{ path, code }] : [];
     });
     if (held.length || unread) {
-      const result = run(
-        join(
-          process.env.SystemRoot || 'C:\\Windows',
-          'System32',
-          'WindowsPowerShell',
-          'v1.0',
-          'powershell.exe',
+      const names = [
+        ...new Set(
+          programs.map((path) => basename(path).replace(/\.exe$/i, '')),
         ),
-        [
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          // Paths in Base64, so letters outside the console code page come back as they are
-          'Get-CimInstance -ClassName Win32_Process -Property ProcessId,ExecutablePath | ' +
-            'Where-Object { $_.ExecutablePath } | ForEach-Object { "$($_.ProcessId) ' +
-            '$([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($_.ExecutablePath)))" }',
-        ],
-        LIST_TIMEOUT,
-      );
-      for (const line of (result.stdout || '').split(/\r?\n/)) {
-        const [pid = '', encoded] = line.trim().split(' ');
-        if (!/^\d+$/.test(pid) || !encoded) continue;
-        const path = Buffer.from(encoded, 'base64').toString('utf8');
+      ];
+      // A bounded owned Node worker queries the native process APIs directly.
+      const query = windowsProcessQuery(names, unread);
+      const queryStarted = performance.now();
+      const result = run(process.execPath, query.args, LIST_TIMEOUT);
+      const queryElapsedMs = performance.now() - queryStarted;
+      const markers = readWindowsQueryMarkers(result.stderr || '', query.nonce);
+      const records = readWindowsProcessRecords(result.stdout || '');
+      const outputProblem =
+        records.invalidRecords > 0 || records.incompleteRecords > 0;
+      for (const { pid, path } of records.entries) {
         if (
-          folders.some((folder) => inside(path, folder)) ||
+          folders.some((folder) =>
+            inside(real(path) ?? path, real(folder) ?? folder),
+          ) ||
           scripts.some(
             (script) =>
-              resolve(path).toLowerCase() === resolve(script).toLowerCase(),
+              resolve(real(path) ?? path).toLowerCase() ===
+              resolve(real(script) ?? script).toLowerCase(),
           )
         )
-          pids.add(Number(pid));
+          pids.add(pid);
       }
+      // The query helper runs this program's own node, which may be inside the copy (circle
+      // uninstall), and so may list itself: it is never a running copy.
+      if (typeof result.pid === 'number') pids.delete(result.pid);
       // A program in use that no listed process runs: removing it would fail halfway, after
       // the new release is staged.
       const busy = held
         .filter((entry) => entry.code === 'EBUSY')
         .map((entry) => entry.path);
-      if (!pids.size && busy.length) {
+      if (
+        !pids.size &&
+        (busy.length ||
+          (unread && (result.error || result.status !== 0 || outputProblem)))
+      ) {
         const timedOut =
           (result.error as NodeJS.ErrnoException | undefined)?.code ===
           'ETIMEDOUT';
@@ -404,14 +416,31 @@ export function runningCopies(
           : result.error
             ? result.error.message
             : result.status !== 0
-              ? result.stderr?.trim() || `exit status ${result.status}`
-              : undefined;
-        const files = `${busy.join(', ')} ${busy.length > 1 ? 'are' : 'is'} in use`;
-        throw new Error(
+              ? markers.cleaned.trim() || `exit status ${result.status}`
+              : outputProblem
+                ? `unknown process output: invalid ${records.invalidRecords}, incomplete ${records.incompleteRecords}`
+                : undefined;
+        const files = busy.length
+          ? `${busy.join(', ')} ${busy.length > 1 ? 'are' : 'is'} in use`
+          : 'The existing installation could not be inspected';
+        const observation = new WindowsProcessQueryObservation(
+          markers,
+          queryElapsedMs,
+          result,
+          records,
+        );
+        const error = new Error(
           reason
             ? `${files}, and the running programs could not be listed (${reason})`
             : `${files} by another program`,
+          { cause: observation },
         );
+        try {
+          report(observation.message);
+        } catch {
+          // A diagnostic sink cannot replace the original installation failure.
+        }
+        throw error;
       }
     }
   } else {

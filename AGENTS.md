@@ -49,6 +49,10 @@ Read `docs/development/tui-contract.md` before you change anything on screen. It
 Several agents and people may work in this checkout at once.
 
 - Do not commit or push unless the user asked you to.
+- Use `gh pr merge <number> --merge` to merge through the merge queue. Use `--admin` only for releases.
+- Do not cancel and rerun queued CI runs; rerunning sends them to the back of the queue.
+- When main turns red, revert the commit confirmed to have caused the failure before merging other work. Do not guess which commit caused it.
+- Open an issue for each flaky test, assign an owner, and fix the cause instead of relying on retries.
 - Stage explicit paths. Never `git add -A` or `git add .`, and never `git commit -a`.
 - Do not reset, checkout over, stash or delete files you did not create. Look at `git status` and `git diff` before you touch a file that is already modified.
 - For a separate line of work, use a worktree (`git worktree add ../circle-<topic> -b <branch>`) rather than switching branches in a shared checkout.

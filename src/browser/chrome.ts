@@ -5,6 +5,7 @@ import {
   screenshotCapture,
   screenshotDescription,
   screenshotMetadata,
+  sameView,
   type CoordinateTarget,
   type PageCaptureState,
   type ScreenshotCapture,
@@ -56,7 +57,7 @@ import {
   sizeText,
   uploadFiles,
 } from './files.js';
-import { pageCall } from './page.js';
+import { pageCall, reachElement, settlePage, type PageRun } from './page.js';
 import {
   BROWSER_KEYS,
   type BrowserAction,
@@ -549,19 +550,35 @@ export class ChromeBrowser implements BrowserPort {
         if (process.platform !== 'win32' && child.pid)
           this.processGroups.add(child.pid);
         if (!(await this.waitForExit(child, timeout))) {
-          // Windows taskkill can refuse a graceful stop and require /F. Still give the
-          // process its bounded grace period, then escalate; a forced-stop failure rejects.
+          // Windows taskkill can refuse a graceful stop and require /F. Keep its
+          // bounded grace period and observe the owned root after escalation.
           await this.stopProcess(child, false).catch(() => {});
           if (!(await this.waitForExit(child, Math.min(timeout, 1000)))) {
-            await this.stopProcess(child, true);
+            let forceFailed = false;
+            let forceError: unknown;
+            try {
+              await this.stopProcess(child, true);
+            } catch (error) {
+              if (process.platform !== 'win32') throw error;
+              forceFailed = true;
+              forceError = error;
+            }
             // A successful tree command is not an observed root exit. Stop the
             // same owned handle once, then retain the existing exit verification.
-            if (process.platform === 'win32' && !this.exited(child))
+            if (
+              !forceFailed &&
+              process.platform === 'win32' &&
+              !this.exited(child)
+            )
               child.kill('SIGKILL');
-            if (!(await this.waitForExit(child, timeout)))
+            // A failed taskkill callback can precede the owned root's exit.
+            // Observe the same bounded exit phase before retaining its error.
+            if (!(await this.waitForExit(child, timeout))) {
+              if (forceFailed) throw forceError;
               throw new Error(
                 'the browser process did not stop; retry closing the session',
               );
+            }
           }
         }
         this.ownedRoots.delete(child);
@@ -1293,6 +1310,21 @@ export class ChromeBrowser implements BrowserPort {
     if (!result?.ok) throw Error(result?.error || 'browser page action failed');
     return result.value;
   }
+  /** A tab's page commands and state, for the waits around an action. */
+  private pageOf(tab: Tab, signal: AbortSignal) {
+    const run: PageRun = (command, args = {}) =>
+      this.js(tab, command, args, signal);
+    return {
+      run,
+      page: {
+        stopped: () => tab.closed || tab.dialogs.length > 0,
+        busy: () =>
+          tab.loading ||
+          tab.network.size > 0 ||
+          Date.now() - tab.lastNetwork < 400,
+      },
+    };
+  }
   /**
    * A page behind another tab (another conversation's, or one the person chose) gets no
    * input and no picture: it comes to the front first.
@@ -1848,6 +1880,8 @@ export class ChromeBrowser implements BrowserPort {
       conversation.tabsChanged = true;
       return { text: await this.result(conversation, text, signal) };
     }
+    if (action === 'handoff' && !this.options.handoff)
+      throw Error('there is no one to hand the browser to here');
     const tab = await this.activeTab(conversation);
     await this.onScreen(tab, signal);
     if (action === 'handoff') {
@@ -2013,7 +2047,7 @@ export class ChromeBrowser implements BrowserPort {
         const capturedState = await this.js<PageCaptureState>(
           tab,
           'capture-state',
-          {},
+          { record: true },
           signal,
         );
         const { data } = await this.limit(
@@ -2026,9 +2060,18 @@ export class ChromeBrowser implements BrowserPort {
           10000,
           'Page.captureScreenshot',
         );
+        // Another document, viewport or scroll meanwhile: the picture is of no use. A change
+        // within the page is the coordinate click's to judge, where it clicks.
         if (
-          JSON.stringify(capturedState) !==
-          JSON.stringify(await this.js(tab, 'capture-state', {}, signal))
+          !sameView(
+            capturedState,
+            await this.js<PageCaptureState>(
+              tab,
+              'capture-state',
+              { record: false },
+              signal,
+            ),
+          )
         )
           throw Error(
             'the page changed during capture; take a new browser_screenshot',
@@ -2300,10 +2343,11 @@ export class ChromeBrowser implements BrowserPort {
       signal,
     );
     // A real mouseenter may replace the action; never press based on the pre-hover target.
+    // A hover style may restyle it: only its content and what it does count then.
     const hovered = await this.js<CoordinateTarget>(
       tab,
       'point',
-      { x: args.x, y: args.y, capture: capture.state },
+      { x: args.x, y: args.y, capture: capture.state, hover: true },
       signal,
     );
     checkCoordinateTarget(point, hovered);
@@ -2321,6 +2365,8 @@ export class ChromeBrowser implements BrowserPort {
         signal,
       );
     await this.idle(tab, signal);
+    const { run, page } = this.pageOf(tab, signal);
+    await settlePage(run, page, signal);
     await this.downloadsDone(conversation, signal);
     return {
       text: await this.result(
@@ -2371,7 +2417,9 @@ export class ChromeBrowser implements BrowserPort {
           !args.values.every((value) => typeof value === 'string'))
       )
         throw Error('invalid browser options');
-      const target = await this.js<
+      // Something on top of the element (a loading mask, a message) may go in a moment
+      const { run, page } = this.pageOf(tab, signal);
+      const target = await reachElement<
         PageElement & {
           x: number;
           y: number;
@@ -2380,9 +2428,9 @@ export class ChromeBrowser implements BrowserPort {
           action: string;
         }
       >(
-        tab,
-        'prepare',
+        run,
         { ref: args.ref, typing: action === 'type', secret: !!secret },
+        page,
         signal,
       );
       let trust: 'once' | 'always' | 'auto' | undefined;
@@ -2429,10 +2477,10 @@ export class ChromeBrowser implements BrowserPort {
         signal,
       );
       // Read again as the input goes in: the result names this element, not the model's words
-      const point = await this.js<PageElement & { x: number; y: number }>(
-        tab,
-        'prepare',
+      const point = await reachElement<PageElement & { x: number; y: number }>(
+        run,
         { ref: args.ref, typing: action === 'type', secret: !!secret },
+        page,
         signal,
       );
       const which = actedOn(args.ref, point);
@@ -2507,6 +2555,11 @@ export class ChromeBrowser implements BrowserPort {
     }
     tab.lastNetwork = Date.now();
     await this.idle(tab, signal);
+    // A drawer sliding in or a mask fading out: the result shows the page once it is still
+    {
+      const { run, page } = this.pageOf(tab, signal);
+      await settlePage(run, page, signal);
+    }
     await this.notice(tab, signal);
     // A tab the action opened is adopted when the browser says so; wait for it to settle
     await Promise.all(

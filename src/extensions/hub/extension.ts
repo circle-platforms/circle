@@ -191,6 +191,157 @@ function answerOf(text: string): Record<string, unknown> {
   return { answer: text };
 }
 
+// The host's limit covers the complete JSON view, not just its object lists.
+// Keep small views byte-for-byte equivalent. Large views select rows fairly
+// across lists, retain every object page, and disclose what is not displayed.
+export function projectHubView(
+  view: Record<string, unknown>,
+  byteLimit = 65536,
+): Record<string, unknown> {
+  const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+  const originalBytes = bytes(view);
+  if (originalBytes <= byteLimit) return view;
+  const counts = (
+    value: unknown,
+    path = '',
+    result: Record<string, number> = {},
+  ) => {
+    if (Array.isArray(value)) {
+      result[path] = (result[path] ?? 0) + value.length;
+      for (const item of value) counts(item, `${path}[]`, result);
+    } else if (isRecord(value))
+      for (const [key, item] of Object.entries(value))
+        counts(item, path ? `${path}.${key}` : key, result);
+    return result;
+  };
+  type Queue = {
+    source: unknown[];
+    selected: unknown[];
+    path: string;
+    next: number;
+  };
+  // Identity pins and actions are never rewritten to fit. An oversized action
+  // is omitted whole; its omission is counted alongside its parent list.
+  const identity =
+    /(?:Id|Sha256|Version)$|^(?:sha256|targetIdentity|action|version|url|username)$/;
+  function build(
+    value: unknown,
+    path: string,
+    key = '',
+  ): {
+    value: unknown;
+    queues: Queue[];
+    shortened: number;
+  } {
+    if (identity.test(key)) return { value, queues: [], shortened: 0 };
+    if (Array.isArray(value)) {
+      const selected: unknown[] = [];
+      return {
+        value: selected,
+        queues: [{ source: value, selected, path, next: 0 }],
+        shortened: 0,
+      };
+    }
+    if (isRecord(value)) {
+      const result: Record<string, unknown> = {},
+        queues: Queue[] = [];
+      let shortened = 0;
+      for (const [name, item] of Object.entries(value)) {
+        const made = build(item, path ? `${path}.${name}` : name, name);
+        result[name] = made.value;
+        queues.push(...made.queues);
+        shortened += made.shortened;
+      }
+      return { value: result, queues, shortened };
+    }
+    if (typeof value === 'string' && Buffer.byteLength(value) > 1024) {
+      let selected = '',
+        size = 0;
+      for (const character of value) {
+        const next = Buffer.byteLength(character);
+        if (size + next > 1021) break;
+        selected += character;
+        size += next;
+      }
+      return { value: selected + '…', queues: [], shortened: 1 };
+    }
+    return { value, queues: [], shortened: 0 };
+  }
+  const totals = counts(view),
+    made = build(view, ''),
+    result = made.value as Record<string, unknown>,
+    queues = made.queues;
+  const projection = {
+    byteLimit,
+    originalBytes,
+    viewBytes: byteLimit,
+    shownItems: 0,
+    omittedItems: Object.values(totals).reduce((sum, n) => sum + n, 0),
+    shortenedFields: made.shortened,
+    collections: Object.fromEntries(
+      Object.entries(totals).map(([path, total]) => [
+        path,
+        { shown: 0, total, omitted: total },
+      ]),
+    ),
+  };
+  result.projection = projection;
+  let size = bytes(result),
+    projectionBytes = bytes(projection);
+  if (size > byteLimit)
+    throw new Error('hub view metadata exceeds its byte budget');
+  while (queues.some((queue) => queue.next < queue.source.length)) {
+    // New child lists join the next round, so one task's large history cannot
+    // consume the budget before methods or the other object pages get a row.
+    const round = queues.length;
+    for (let index = 0; index < round; index++) {
+      const queue = queues[index]!;
+      if (queue.next >= queue.source.length) continue;
+      const candidate = build(queue.source[queue.next++], `${queue.path}[]`);
+      const additions = counts(candidate.value, `${queue.path}[]`);
+      additions[queue.path] = (additions[queue.path] ?? 0) + 1;
+      const addedItems = Object.values(additions).reduce(
+        (sum, n) => sum + n,
+        0,
+      );
+      for (const [path, n] of Object.entries(additions)) {
+        const held = projection.collections[path]!;
+        held.shown += n;
+        held.omitted -= n;
+      }
+      projection.shownItems += addedItems;
+      projection.omittedItems -= addedItems;
+      projection.shortenedFields += candidate.shortened;
+      const nextProjectionBytes = bytes(projection),
+        increment = bytes(candidate.value) + (queue.selected.length ? 1 : 0),
+        nextSize = size + increment + nextProjectionBytes - projectionBytes;
+      if (nextSize <= byteLimit) {
+        queue.selected.push(candidate.value);
+        queues.push(...candidate.queues);
+        size = nextSize;
+        projectionBytes = nextProjectionBytes;
+      } else {
+        for (const [path, n] of Object.entries(additions)) {
+          const held = projection.collections[path]!;
+          held.shown -= n;
+          held.omitted += n;
+        }
+        projection.shownItems -= addedItems;
+        projection.omittedItems += addedItems;
+        projection.shortenedFields -= candidate.shortened;
+      }
+    }
+  }
+  projection.viewBytes = size;
+  for (
+    let actual = bytes(result);
+    actual !== projection.viewBytes;
+    actual = bytes(result)
+  )
+    projection.viewBytes = actual;
+  return result;
+}
+
 export async function register(api: ExtensionAPI): Promise<void> {
   const following = new Map<string, AbortController>();
   let failure = '';
@@ -260,8 +411,12 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // window has not shown yet; and whether the last look found the token expired.
   let botNews: { bot: Asset; run: BotRun }[] = [];
   let expired = false;
-  // The four platform objects as the server last reported them (/hub refresh).
+  // The four platform objects as the server last reported them (/hub refresh). Reads of
+  // them overlap (a refresh, a decision, a followed task ending) and are numbered as they
+  // start, so one that started earlier and finished later does not replace a newer one.
   let objects: Record<string, unknown> | undefined;
+  let objectsStarted = 0;
+  let objectsShown = 0;
   function publishView(signedIn: boolean): void {
     const config = readConfig();
     const view = {
@@ -282,12 +437,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         occurrenceKey: run.occurrenceKey,
       })),
     };
-    try {
-      api.setView(view);
-    } catch {
-      // Too much to show: keep the connection and tasks, drop the objects.
-      api.setView({ ...view, objects: undefined });
-    }
+    api.setView(projectHubView(view));
   }
   async function optional<T>(path: string, fallback: T): Promise<T> {
     try {
@@ -307,6 +457,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // artifacts, evidence and the server's own check; E: the capability packs. Read from the
   // server for the most recent tasks you may read; the server decides what you may see.
   async function collectObjects(): Promise<{ tasks: number; packs: number }> {
+    const run = ++objectsStarted;
     // Each server tool call, and the knowledge indexing of what it read, is a task of its
     // own: the server lists them apart (kind=tool, kind=index) and they are counted here
     // rather than listed among the work. A server without that filter sends every task, so
@@ -470,7 +621,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         ).length,
       });
     }
-    objects = {
+    const found = {
       refreshedAt: new Date().toISOString(),
       work,
       execution,
@@ -495,6 +646,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
       bots: botViews,
       background,
     };
+    if (run > objectsShown) {
+      objectsShown = run;
+      objects = found;
+    }
     // A command that read them (/hub refresh) returns once the view shows them: the
     // desktop's pages read the view, not the command's lines.
     await showStatus();
@@ -543,6 +698,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     } catch {
       return;
     }
+    if (api.signal.aborted) return;
     if (run !== statusRun) return latestStatus;
     publishView(signedIn);
     if (!config || !signedIn) {
