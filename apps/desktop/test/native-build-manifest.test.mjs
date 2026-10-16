@@ -62,6 +62,9 @@ test('executed evidence reads bytes only from the actual app identity and preloa
   try {
     await mkdir(join(root, 'dist', 'renderer'), { recursive: true });
     await mkdir(join(root, 'dist', 'tools'), { recursive: true });
+    await mkdir(join(root, 'dist', 'node_modules', 'koffi'), {
+      recursive: true,
+    });
     await writeFile(
       join(root, 'package.json'),
       JSON.stringify({ main: 'dist/main.cjs' }),
@@ -69,6 +72,7 @@ test('executed evidence reads bytes only from the actual app identity and preloa
     const entries = [
       ['main.cjs', 'executed main'],
       ['tools/command-supervisor.mjs', 'executed supervisor'],
+      ['node_modules/koffi/index.cjs', 'executed Koffi loader'],
       ['preload.cjs', 'executed preload'],
       ['renderer/index.html', 'executed renderer'],
     ];

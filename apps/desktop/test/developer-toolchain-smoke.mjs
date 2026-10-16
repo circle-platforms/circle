@@ -28,6 +28,11 @@ const dist = ${JSON.stringify(dist)};
 // node-pty rewrites virtual app.asar to its unpacked helper path itself.
 const moduleDist = dist.replace('app.asar.unpacked', 'app.asar');
 const load = require('node:module').createRequire(path.join(moduleDist, 'probe.cjs'));
+const koffi = load('koffi');
+assert.equal(koffi.version, '3.3.3');
+const ffiLibrary = koffi.load(process.platform === 'win32' ? 'kernel32.dll' : null);
+const ffiPID = ffiLibrary.func(process.platform === 'win32' ? 'uint32_t __stdcall GetCurrentProcessId()' : 'int getpid()');
+assert.equal(Number(ffiPID()), process.pid);
 const ts = load('typescript');
 assert.ok(fs.existsSync(ts.getDefaultLibFilePath({})));
 assert.ok(fs.existsSync(path.join(dist, 'tools/js-debug/src/dapDebugServer.js')));

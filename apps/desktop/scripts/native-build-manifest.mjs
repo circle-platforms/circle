@@ -96,6 +96,12 @@ export async function generateNativeBuildManifest({
       }
     };
     await walk(join(appPath, 'dist', 'renderer'));
+    for (const folder of ['koffi', '@koromix'])
+      await walk(join(appPath, 'dist', 'node_modules', folder)).catch(
+        (error) => {
+          if (error.code !== 'ENOENT') throw error;
+        },
+      );
   }
   const pkg = JSON.parse(
     (await read(join(appPath, 'package.json'))).toString(),
@@ -113,11 +119,17 @@ export async function generateNativeBuildManifest({
     join(dist, 'renderer', 'index.html'),
   ];
   const renderer = join(dist, 'renderer') + sep;
+  const nativeRoots = ['koffi', '@koromix'].map(
+    (folder) => join(dist, 'node_modules', folder) + sep,
+  );
   const selected = [
     ...new Set([
       ...required,
       ...files.filter(
-        (file) => file.startsWith(renderer) && !file.endsWith('.map'),
+        (file) =>
+          (file.startsWith(renderer) ||
+            nativeRoots.some((root) => file.startsWith(root))) &&
+          !file.endsWith('.map'),
       ),
     ]),
   ].sort();

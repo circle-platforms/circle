@@ -35,11 +35,19 @@ test('pre-build source receipt binds both development files and actual packaged 
       JSON.stringify({ main: 'dist/main.cjs' }),
     );
     await mkdir(join(app, 'dist', 'tools'), { recursive: true });
+    await mkdir(join(app, 'dist', 'node_modules', 'koffi'), {
+      recursive: true,
+    });
+    await mkdir(join(app, 'dist', 'node_modules', '@koromix', 'koffi-target'), {
+      recursive: true,
+    });
     for (const name of [
       'main.cjs',
       'preload.cjs',
       'runtime-worker.mjs',
       'tools/command-supervisor.mjs',
+      'node_modules/koffi/index.cjs',
+      'node_modules/@koromix/koffi-target/koffi.node',
       'renderer/index.html',
       'renderer/assets/asset.js',
     ])
@@ -50,7 +58,7 @@ test('pre-build source receipt binds both development files and actual packaged 
       appPath: app,
       output: join(root, 'dev.json'),
     });
-    assert.equal(dev.artifacts.length, 6);
+    assert.equal(dev.artifacts.length, 8);
     assert.ok(dev.artifacts.every((entry) => entry.path.startsWith(app)));
     const require = createRequire(import.meta.url);
     const nested = createRequire(require.resolve('@electron/packager'));
@@ -59,7 +67,7 @@ test('pre-build source receipt binds both development files and actual packaged 
     );
     const archive = join(root, 'app.asar');
     await asar.createPackageWithOptions(app, archive, {
-      unpack: '**/tools/**',
+      unpack: '**/{tools,node_modules}/**',
     });
     const packaged = await generateNativeBuildManifest({
       root,

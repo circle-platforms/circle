@@ -90,6 +90,39 @@ export async function prepareNativeDependencies(root, dist) {
     const source = dirname(require.resolve(`${name}/package.json`));
     await cp(source, join(dist, 'node_modules', name), { recursive: true });
   }
+  const version = '3.3.3';
+  const platform = process.env.CIRCLE_DESKTOP_PLATFORM ?? process.platform;
+  const arch = process.env.CIRCLE_DESKTOP_ARCH ?? process.arch;
+  const nativeName = `@koromix/koffi-${platform}-${arch}`;
+  const packages = ['koffi', nativeName];
+  const files = {};
+  for (const name of packages) {
+    const source = dirname(require.resolve(name));
+    const pkg = JSON.parse(
+      await readFile(join(source, 'package.json'), 'utf8'),
+    );
+    if (pkg.version !== version)
+      throw Error(`unexpected ${name} native version`);
+    const destination = join(dist, 'node_modules', name);
+    await rm(destination, { recursive: true, force: true });
+    await cp(source, destination, { recursive: true });
+    for (const [file, hash] of Object.entries(await fileHashes(destination)))
+      files[join('node_modules', name, file)] = hash;
+  }
+  await mkdir(join(dist, 'tools'), { recursive: true });
+  await writeFile(
+    join(dist, 'tools', 'koffi-native.json'),
+    JSON.stringify(
+      {
+        format: 1,
+        version,
+        target: `${platform}-${arch}`,
+        files,
+      },
+      null,
+      2,
+    ) + '\n',
+  );
   await ensureNativeDependencyPermissions(dist);
 }
 export async function ensureNativeDependencyPermissions(root) {

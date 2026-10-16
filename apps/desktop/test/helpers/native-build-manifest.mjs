@@ -92,6 +92,10 @@ export async function executedNativeBuildEvidence(app, manifest) {
         /([\\/])app\.asar([\\/])/,
         '$1app.asar.unpacked$2',
       );
+      const nativeRoots = ['koffi', '@koromix'].map(
+        (folder) =>
+          path.join(path.dirname(mainPath), 'node_modules', folder) + path.sep,
+      );
       const artifacts = [];
       for (const entry of requested.artifacts ?? []) {
         if (
@@ -109,7 +113,8 @@ export async function executedNativeBuildEvidence(app, manifest) {
           ![mainPath, preloadPath, workerPath, supervisorManifestPath].includes(
             entry.path,
           ) &&
-          !rendererAsset
+          !rendererAsset &&
+          !nativeRoots.some((root) => entry.path.startsWith(root))
         )
           throw Error('manifest artifact is outside the executed application');
         artifacts.push({
@@ -118,8 +123,12 @@ export async function executedNativeBuildEvidence(app, manifest) {
             .createHash('sha256')
             .update(
               await fs.readFile(
-                entry.path === supervisorManifestPath
-                  ? commandSupervisorPath
+                entry.path === supervisorManifestPath ||
+                  nativeRoots.some((root) => entry.path.startsWith(root))
+                  ? entry.path.replace(
+                      /([\\/])app\.asar([\\/])/,
+                      '$1app.asar.unpacked$2',
+                    )
                   : entry.path,
               ),
             )

@@ -23,7 +23,7 @@ await build({
     js: "import { createRequire as circleCreateRequire } from 'node:module'; const require = circleCreateRequire(import.meta.url);",
   },
   sourcemap: true,
-  external: ['node-pty', 'typescript-language-server', 'typescript'],
+  external: ['koffi', 'node-pty', 'typescript-language-server', 'typescript'],
 });
 await cp(join(root, '../../src/prompts'), join(dist, 'prompts'), {
   recursive: true,
@@ -44,6 +44,7 @@ await build({
   external: [
     'electron',
     'original-fs',
+    'koffi',
     'node-pty',
     'typescript-language-server',
     'typescript',

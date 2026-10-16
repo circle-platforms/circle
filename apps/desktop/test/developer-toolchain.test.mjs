@@ -85,6 +85,12 @@ test('staged native runtime includes target addons, executable helper and TypeSc
       `
     const assert = require('node:assert/strict');
     const load = require('node:module').createRequire(${JSON.stringify(join(dist, 'probe.cjs'))});
+    const koffi = load('koffi');
+    assert.equal(koffi.version, '3.3.3');
+    const library = koffi.load(process.platform === 'win32' ? 'kernel32.dll' : null);
+    const getpid = library.func(process.platform === 'win32' ? 'uint32_t __stdcall GetCurrentProcessId()' : 'int getpid()');
+    assert.equal(Number(getpid()), process.pid);
+    console.log('STAGED_KOFFI_LOADED');
     const pty = load('node-pty');
     const {installWindowsPtyExitCleanup} = require(${JSON.stringify(cleanupPath)});
     const terminal = pty.spawn(process.execPath, ['-e', "console.log('STAGED_TTY:'+process.stdin.isTTY+':'+process.stdout.isTTY)"], {cwd:${JSON.stringify(dist)},cols:80,rows:24});
@@ -98,6 +104,44 @@ test('staged native runtime includes target addons, executable helper and TypeSc
     { encoding: 'utf8', timeout: 12000 },
   );
   assert.match(output, /STAGED_PTY_RELEASED/);
+  assert.match(output, /STAGED_KOFFI_LOADED/);
+  const hostRequire = createRequire(join(root, 'package.json'));
+  const electronOutput = execFileSync(
+    hostRequire('electron'),
+    [
+      '-e',
+      `
+    const assert = require('node:assert/strict');
+    const load = require('node:module').createRequire(${JSON.stringify(join(dist, 'probe.cjs'))});
+    const koffi = load('koffi');
+    assert.equal(koffi.version, '3.3.3');
+    const library = koffi.load(process.platform === 'win32' ? 'kernel32.dll' : null);
+    const getpid = library.func(process.platform === 'win32' ? 'uint32_t __stdcall GetCurrentProcessId()' : 'int getpid()');
+    assert.equal(Number(getpid()), process.pid);
+    console.log('STAGED_ELECTRON_KOFFI_LOADED');
+  `,
+    ],
+    {
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      encoding: 'utf8',
+      timeout: 12000,
+    },
+  );
+  assert.match(electronOutput, /STAGED_ELECTRON_KOFFI_LOADED/);
+
+  const receipt = JSON.parse(
+    await readFile(join(dist, 'tools/koffi-native.json'), 'utf8'),
+  );
+  assert.equal(receipt.version, '3.3.3');
+  assert.equal(receipt.target, `${process.platform}-${process.arch}`);
+  assert.ok(Object.keys(receipt.files).some((file) => file.endsWith('.node')));
+  for (const [file, hash] of Object.entries(receipt.files))
+    assert.equal(
+      createHash('sha256')
+        .update(await readFile(join(dist, file)))
+        .digest('hex'),
+      hash,
+    );
   if (process.platform === 'darwin') {
     const helper = await stat(
       join(
