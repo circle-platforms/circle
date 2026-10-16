@@ -1059,3 +1059,143 @@ test('the Windows fake-gh route runs a real Node subprocess and preserves litera
     f.originalIndex,
   );
 });
+
+test('a retired provider generation blocks its old cycle while a newly created record in the same session completes a real local delivery', async (t) => {
+  const f = await fixture(t),
+    resources = new CollaborationResources();
+  const verify = createTaskVerifier({
+    workspace: f.workspace,
+    dataDir: join(f.dataDir, 'verify-generation'),
+    runtimeExecutable: process.execPath,
+    checks: [{ criterion, script: 'test', oraclePaths: ['oracle.cjs'] }],
+    withBuildResource: (run, _signal, ctx) => ctx.withResource('build', run),
+  });
+  const tasks = new TaskService({
+    workspace: f.workspace,
+    dataDir: join(f.dataDir, 'generation-tasks'),
+    identity,
+    resources,
+    settingsPath: join(f.dataDir, 'generation-settings.json'),
+    emit: () => {},
+    verify,
+    createRuntime: async (task, ctx) => {
+      const home = join(f.dataDir, 'generation-homes', task.spec.id);
+      await mkdir(home, { recursive: true });
+      return new AgentRuntime({
+        home,
+        userHome: home,
+        workspace: ctx.worktree,
+        settings: trustFolder(defaultSettings(), ctx.worktree),
+        headless: true,
+        bundledExtensions: false,
+        screenshot: false,
+        approve: async () => 'approve',
+        model: new ScriptedModel([
+          {
+            message: message('', [
+              {
+                id: 'implement',
+                name: 'write_file',
+                args: {
+                  file_path: 'app.cjs',
+                  content:
+                    "exports.greeting='hello';exports.readyForCI=true;\n",
+                },
+              },
+            ]),
+          },
+          { message: message('verified') },
+        ]),
+      });
+    },
+  });
+  cleanup(t, () => tasks.close());
+  let current = new AbortController();
+  const scopes = new Map<string, AbortController>();
+  const ports = createWorkspaceCyclePorts({
+    workspace: f.workspace,
+    dataDir: join(f.dataDir, 'generation-ports'),
+    sessionId: 'same-real-session',
+    identity,
+    getTaskService: () => tasks,
+    verify,
+    withResource: (resource, run) => resources.withResource(resource, run),
+    bindCycle: (record) => {
+      if (!scopes.has(record.id)) scopes.set(record.id, current);
+    },
+    invocation: (record) => {
+      const captured = scopes.get(record.id);
+      assert(captured);
+      return {
+        signal: captured.signal,
+        assertActive: () => {
+          captured.signal.throwIfAborted();
+          if (captured !== current) throw Error('retired generation');
+        },
+      };
+    },
+    createDelivery: (path) => fixtureDelivery(path, f.ghPath),
+  });
+  const cycles = await DeliveryCycleService.open({
+    dataDir: join(f.dataDir, 'generation-cycles'),
+    ports,
+  });
+  cleanup(t, () => cycles.close());
+  const spec = (id: string) => ({
+    id,
+    workspace: f.workspace,
+    title: 'Implement greeting',
+    body: 'Independent verified generation',
+    acceptanceCriteria: [criterion],
+  });
+  let old = await cycles.create(spec('old-generation'), {
+    operationId: 'create-old-generation',
+  });
+  current.abort();
+  current = new AbortController();
+  old = await cycles.advance(old.id);
+  assert.equal(old.state, 'needs_review');
+  assert.equal(
+    (
+      await git(
+        f.root,
+        '--git-dir',
+        f.remote,
+        'for-each-ref',
+        'refs/heads/codex',
+      )
+    ).trim(),
+    '',
+  );
+  const state = JSON.parse(await readFile(f.ghState, 'utf8'));
+  state.holdCI = false;
+  await writeFile(f.ghState, JSON.stringify(state));
+  let fresh = await cycles.create(spec('fresh-generation'), {
+    operationId: 'create-fresh-generation',
+  });
+  assert.notEqual(scopes.get(old.id), scopes.get(fresh.id));
+  for (let i = 0; i < 150; i++) {
+    fresh = await cycles.advance(fresh.id);
+    if (['pending_human_merge', 'needs_review'].includes(fresh.state)) break;
+    await delay(10);
+  }
+  assert.equal(fresh.state, 'pending_human_merge', JSON.stringify(fresh));
+  assert(fresh.pr?.head);
+  assert(
+    (
+      await git(
+        f.root,
+        '--git-dir',
+        f.remote,
+        'for-each-ref',
+        '--format=%(objectname)',
+        'refs/heads/codex',
+      )
+    ).includes(fresh.pr.head),
+  );
+  await assert.rejects(
+    ports.git.snapshot(cycles.snapshot(old.id)),
+    /abort|retired/i,
+  );
+  assert.equal(cycles.snapshot(old.id).state, 'needs_review');
+});

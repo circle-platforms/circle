@@ -43,7 +43,15 @@ export interface WorkspaceCyclePortsOptions {
   ): Promise<TaskVerificationCheck[]>;
   withResource: TaskVerificationContext['withResource'];
   createGit?: (ownedWorkspace: string) => GitWorkspaceService;
-  createDelivery?: (ownedWorkspace: string) => DeliveryService;
+  createDelivery?: (
+    ownedWorkspace: string,
+    cycle: CycleRecord,
+  ) => DeliveryService;
+  bindCycle?: (cycle: CycleRecord, mode: 'created' | 'restored') => void;
+  invocation?: (cycle: CycleRecord) => {
+    signal: AbortSignal;
+    assertActive: () => void;
+  };
   identity: { name: string; email: string };
   signal?: AbortSignal;
   assertActive?: () => void;
@@ -143,10 +151,13 @@ export function createWorkspaceCyclePorts(
     }
     return service;
   }
-  async function delivery(owner: Ownership): Promise<DeliveryService> {
+  async function delivery(
+    owner: Ownership,
+    cycle: CycleRecord,
+  ): Promise<DeliveryService> {
     let service = deliveryCache.get(owner.integration.path);
     if (!service) {
-      service = deliveryFor(owner.integration.path);
+      service = deliveryFor(owner.integration.path, cycle);
       if (
         (await realpath(service.root)) !==
         (await realpath(owner.integration.path))
@@ -157,7 +168,7 @@ export function createWorkspaceCyclePorts(
     return service;
   }
   async function owned(cycle: CycleRecord): Promise<Ownership> {
-    signal.throwIfAborted();
+    guard(cycle);
     const original = await source;
     const owner = JSON.parse(
       await readFile(pathFor(cycle), 'utf8'),
@@ -203,6 +214,7 @@ export function createWorkspaceCyclePorts(
       throw Error(
         'cycle integration branch changed; inspect before continuing',
       );
+    guard(cycle);
     return owner;
   }
   async function initialize(cycle: CycleRecord): Promise<Ownership> {
@@ -250,12 +262,31 @@ export function createWorkspaceCyclePorts(
     await (await git(target)).git(['switch', '-c', branch]);
     return owned(cycle);
   }
+  function invocation(cycle: CycleRecord) {
+    return (
+      options.invocation?.(cycle) ?? {
+        signal,
+        assertActive: options.assertActive,
+      }
+    );
+  }
+  function guard(cycle: CycleRecord) {
+    signal.throwIfAborted();
+    const scope = invocation(cycle);
+    scope.signal.throwIfAborted();
+    scope.assertActive?.();
+  }
   async function serial<T>(
     cycle: CycleRecord,
     action: () => Promise<T>,
   ): Promise<T> {
     const previous = locks.get(cycle.id) ?? Promise.resolve();
-    const running = previous.catch(() => {}).then(action);
+    const running = previous
+      .catch(() => {})
+      .then(() => {
+        guard(cycle);
+        return action();
+      });
     locks.set(cycle.id, running);
     try {
       return await running;
@@ -317,10 +348,11 @@ export function createWorkspaceCyclePorts(
   }
   async function pr(
     owner: Ownership,
+    cycle: CycleRecord,
   ): Promise<{ url: string; number?: number; head: string }> {
     const value = JSON.parse(
       await (
-        await delivery(owner)
+        await delivery(owner, cycle)
       ).gh([
         'pr',
         'view',
@@ -348,6 +380,7 @@ export function createWorkspaceCyclePorts(
     };
   }
   return {
+    bind: options.bindCycle,
     tasks: {
       create: (cycle, request, operation) =>
         serial(cycle, async () => {
@@ -502,7 +535,7 @@ export function createWorkspaceCyclePorts(
       const checks = await options.verify(task, {
         worktree: owner.integration.path,
         changes,
-        signal,
+        signal: AbortSignal.any([signal, invocation(cycle).signal]),
         artifactDirectory,
         answer: '',
         events: [],
@@ -596,7 +629,10 @@ export function createWorkspaceCyclePorts(
           await service.call(
             'push',
             { revision: input.revision },
-            { signal, assertActive: options.assertActive },
+            {
+              signal: AbortSignal.any([signal, invocation(cycle).signal]),
+              assertActive: () => guard(cycle),
+            },
           );
         }),
     },
@@ -607,24 +643,26 @@ export function createWorkspaceCyclePorts(
           // publishPushed independently checks this exact revision/head, a clean
           // feature branch and the remote SHA using fresh candidate snapshots.
           await (
-            await delivery(owner)
+            await delivery(owner, cycle)
           ).publishPushed({
             revision: input.revision,
             head: input.head,
             title: cycle.title,
             body: cycle.body,
           });
-          return pr(owner);
+          return pr(owner, cycle);
         }),
       checks: async (cycle) => {
         const owner = await owned(cycle),
-          before = await pr(owner);
-        const result = (await (await delivery(owner)).call('checks')) as {
+          before = await pr(owner, cycle);
+        const result = (await (
+          await delivery(owner, cycle)
+        ).call('checks')) as {
           name: string;
           bucket: string;
           link?: string;
         }[];
-        const after = await pr(owner);
+        const after = await pr(owner, cycle);
         if (before.head !== after.head)
           throw Error('PR head changed while reading CI checks');
         const checks: CycleCheck[] = result.map((check) => {
@@ -648,23 +686,23 @@ export function createWorkspaceCyclePorts(
       logs: async (cycle, runId) => {
         const owner = await owned(cycle);
         const result = (await (
-          await delivery(owner)
+          await delivery(owner, cycle)
         ).call('logs', { runId })) as { text: string };
         return redacted(result.text);
       },
       retry: (cycle, runId) =>
         serial(cycle, async () => {
           const owner = await owned(cycle);
-          await (await delivery(owner)).call('retry', { runId });
+          await (await delivery(owner, cycle)).call('retry', { runId });
         }),
       ready: (cycle, input) =>
         serial(cycle, async () => {
           const { owner } = await state(cycle, input);
-          const candidate = await pr(owner);
+          const candidate = await pr(owner, cycle);
           if (candidate.head !== input.head)
             throw Error('PR candidate changed before review');
           await (
-            await delivery(owner)
+            await delivery(owner, cycle)
           ).call('ready', { revision: input.revision });
         }),
     },

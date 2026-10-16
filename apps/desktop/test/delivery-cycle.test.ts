@@ -384,3 +384,36 @@ test('conditional skipped jobs are neutral but cannot alone satisfy CI', async (
     assert.equal(f.effects.diagnosis, 0);
   }
 });
+
+test('cycle scope binding is tied to durable record identity and a failed binding never dispatches side effects', async (t) => {
+  const f = await fixture(t),
+    bindings: string[] = [];
+  f.ports.bind = (record, mode) => {
+    bindings.push(mode + ':' + record.id);
+    throw Error('synthetic unavailable scope');
+  };
+  const first = await f.cycle.create(f.spec, { operationId: 'bind-create' });
+  assert.equal(first.state, 'needs_review');
+  const repeated = await f.cycle.create(f.spec, { operationId: 'bind-create' });
+  assert.equal(repeated.state, 'needs_review');
+  assert.deepEqual(bindings, ['created:web']);
+  assert.equal((await f.cycle.advance(first.id)).state, 'needs_review');
+  assert.deepEqual(f.effects, { commit: 0, push: 0, repair: 0, diagnosis: 0 });
+  await f.cycle.close();
+  const reopened = await DeliveryCycleService.open({
+    dataDir: f.dataDir,
+    ports: f.ports,
+  });
+  try {
+    assert.equal(reopened.snapshot(first.id).state, 'needs_review');
+    assert.deepEqual(bindings, ['created:web', 'restored:web']);
+    assert.deepEqual(f.effects, {
+      commit: 0,
+      push: 0,
+      repair: 0,
+      diagnosis: 0,
+    });
+  } finally {
+    await reopened.close();
+  }
+});

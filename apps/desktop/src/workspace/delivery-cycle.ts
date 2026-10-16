@@ -66,6 +66,7 @@ export interface CycleRecord extends CycleSpec {
   updatedAt: string;
 }
 export interface CyclePorts {
+  bind?(record: CycleRecord, mode: 'created' | 'restored'): void;
   tasks: {
     create(
       cycle: CycleRecord,
@@ -209,6 +210,14 @@ export class DeliveryCycleService {
           cycle.reason = `${operation.kind} result is unknown after restart; inspect effects before continuing`;
         }
       }
+    for (const cycle of service.ledger.cycles) {
+      try {
+        options.ports.bind?.(copy(cycle), 'restored');
+      } catch {
+        cycle.state = 'needs_review';
+        cycle.reason = 'cycle authorization scope could not be restored';
+      }
+    }
     await service.save();
     return service;
   }
@@ -343,6 +352,12 @@ export class DeliveryCycleService {
       failureCounts: {},
       updatedAt: now(),
     };
+    try {
+      this.options.ports.bind?.(copy(cycle), 'created');
+    } catch {
+      cycle.state = 'needs_review';
+      cycle.reason = 'cycle authorization scope could not be created';
+    }
     this.ledger.cycles.push(cycle);
     this.ledger.operations.push({
       id: operation.operationId,

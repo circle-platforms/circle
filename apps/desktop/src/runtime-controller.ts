@@ -848,6 +848,18 @@ export class RuntimeController {
           const githubInvocation = this.githubInvocation(sessionId);
           const githubConnection = this.githubConnection();
           const githubEpoch = githubConnection?.snapshot().epoch;
+          const cycleScopes = new Map<
+            string,
+            {
+              invocation: ReturnType<RuntimeController['githubInvocation']>;
+              epoch: number | undefined;
+            }
+          >();
+          const scopeFor = (cycle: { id: string }) => {
+            const scope = cycleScopes.get(cycle.id);
+            if (!scope) throw Error('cycle authorization scope is missing');
+            return scope;
+          };
           const git = new GitWorkspaceService(root);
           const [name, email] = await Promise.all([
             git.git(['config', '--get', 'user.name']),
@@ -856,7 +868,31 @@ export class RuntimeController {
           return createWorkspaceCyclePorts({
             workspace: root,
             sessionId,
-            ...githubInvocation,
+            bindCycle: (cycle, mode) => {
+              if (!cycleScopes.has(cycle.id))
+                cycleScopes.set(cycle.id, {
+                  invocation:
+                    mode === 'created'
+                      ? this.githubInvocation(sessionId)
+                      : githubInvocation,
+                  epoch:
+                    mode === 'created'
+                      ? githubConnection?.snapshot().epoch
+                      : githubEpoch,
+                });
+            },
+            invocation: (cycle) => {
+              const scope = scopeFor(cycle);
+              return {
+                signal: scope.invocation.signal,
+                assertActive: () => {
+                  scope.invocation.assertActive();
+                  if (!githubConnection || scope.epoch === undefined)
+                    throw Error('connect GitHub in settings');
+                  githubConnection.assertEpoch(scope.epoch);
+                },
+              };
+            },
             dataDir: join(
               this.options.dataFolder ?? this.home,
               'cycle-adapters',
@@ -868,12 +904,12 @@ export class RuntimeController {
               this.taskVerifier(root, task.spec.baseline)(task, context),
             withResource: (resource, run) =>
               this.taskResources.withResource(resource, run),
-            createDelivery: (ownedPath) =>
+            createDelivery: (ownedPath, cycle) =>
               new DeliveryService(ownedPath, tools.ghPath, {
                 spawn: (file, args, options) => spawnPty(file, args, options),
                 connection: githubConnection,
-                epoch: githubEpoch,
-                ...githubInvocation,
+                epoch: scopeFor(cycle).epoch,
+                ...scopeFor(cycle).invocation,
                 credentialStore: this.options.credentialStore
                   ? {
                       get: () =>
