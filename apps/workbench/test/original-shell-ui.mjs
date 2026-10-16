@@ -14,6 +14,43 @@ const server = await createServer({
 await server.listen();
 let browser;
 const receipts = [];
+async function actualTheme(page, theme) {
+  await page.waitForFunction(
+    (theme) => {
+      const root = document.documentElement;
+      const style = getComputedStyle(root);
+      const channels = style.backgroundColor.match(/[\d.]+/g)?.map(Number);
+      if (!channels || channels.length < 3 || channels[3] === 0) return false;
+      const brightness =
+        channels.slice(0, 3).reduce((sum, n) => sum + n, 0) / 3;
+      return (
+        root.dataset.theme === theme &&
+        (theme === 'dark' ? brightness < 128 : brightness > 128)
+      );
+    },
+    theme,
+    { timeout: 5000 },
+  );
+  const state = await page.evaluate(() => {
+    const root = document.documentElement;
+    const style = getComputedStyle(root);
+    return {
+      theme: root.dataset.theme,
+      background: style.backgroundColor,
+      foreground: style.color,
+      token: style.getPropertyValue('--bg').trim(),
+    };
+  });
+  assert.equal(state.theme, theme);
+  const brightness =
+    state.background
+      .match(/[\d.]+/g)
+      .slice(0, 3)
+      .map(Number)
+      .reduce((sum, n) => sum + n, 0) / 3;
+  assert.equal(brightness < 128, theme === 'dark', JSON.stringify(state));
+  return state;
+}
 try {
   browser = await chromium.launch({
     headless: true,
@@ -29,26 +66,17 @@ try {
       await page.addInitScript(() =>
         localStorage.setItem('circle.workbench.language', 'en'),
       );
+      await page.goto(server.resolvedUrls.local[0] + '#/page/settings');
+      // Change the mounted owner's settings. A second PreviewRuntime followed
+      // by reload races the original conversation's pagehide persistence.
+      await page.getByRole('button', { name: theme, exact: true }).click();
+      await actualTheme(page, theme);
       await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
       await page
         .getByRole('textbox', { name: 'message', exact: true })
         .waitFor();
-      await page.evaluate(async (theme) => {
-        const { PreviewRuntime } = await import('/src/model/state.ts');
-        const runtime = new PreviewRuntime(localStorage);
-        runtime.change((snapshot) => {
-          snapshot.settings.theme = theme;
-        });
-      }, theme);
-      await page.reload();
-      await page
-        .getByRole('textbox', { name: 'message', exact: true })
-        .waitFor();
-      const paletteBefore = await page.evaluate(() =>
-        getComputedStyle(document.documentElement)
-          .getPropertyValue('--bg')
-          .trim(),
-      );
+      const themeBefore = await actualTheme(page, theme);
+      const paletteBefore = themeBefore.token;
       assert.equal(
         await page
           .locator(
@@ -161,11 +189,8 @@ try {
         await page.locator('.composer textarea').inputValue(),
         'Original shell preserved draft',
       );
-      const paletteAfter = await page.evaluate(() =>
-        getComputedStyle(document.documentElement)
-          .getPropertyValue('--bg')
-          .trim(),
-      );
+      const themeAfter = await actualTheme(page, theme);
+      const paletteAfter = themeAfter.token;
       assert.equal(
         await composerOwner.evaluate((el) => el.isConnected),
         true,
@@ -192,6 +217,9 @@ try {
         geometry,
         paletteBefore,
         paletteAfter,
+        themeBefore,
+        themeAfter,
+        themeVerified: true,
         native: false,
         passed: true,
       });
