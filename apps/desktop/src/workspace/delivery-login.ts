@@ -156,6 +156,7 @@ export class DeliveryLogin {
       markExited();
       clearTimeout(timer);
       const completion = (async () => {
+        let securePersistenceFailed = false;
         try {
           if (this.poll(id).status === 'cancelled') return;
           if (exitCode !== 0) throw Error('authorization failed');
@@ -175,9 +176,13 @@ export class DeliveryLogin {
           if (this.poll(id).status === 'cancelled') return;
           state.status = 'saving';
           if (options.storage === 'encrypted') {
-            if (!this.store)
-              throw Error('secure credential persistence is unavailable');
-            await this.store.put(token);
+            try {
+              if (!this.store) throw Error('secure persistence unavailable');
+              await this.store.put(token);
+            } catch {
+              securePersistenceFailed = true;
+              throw Error('secure credential storage is unavailable');
+            }
             if (this.poll(id).status === 'cancelled') {
               await this.store.delete?.();
               return;
@@ -189,9 +194,17 @@ export class DeliveryLogin {
           await this.cleanup(id);
           state.status = 'complete';
         } catch {
+          this.sessionToken = undefined;
+          const removed = await Promise.allSettled([
+            Promise.resolve().then(() => this.store?.delete?.()),
+          ]);
           if (state.status !== 'cancelled') {
             state.status = 'failed';
-            state.error = 'GitHub authorization did not complete';
+            state.error = securePersistenceFailed
+              ? 'secure credential storage is unavailable'
+              : 'GitHub authorization did not complete';
+            if (removed.some((item) => item.status === 'rejected'))
+              state.error += '; local credential removal requires attention';
           }
         } finally {
           await this.cleanup(id).catch(() => {

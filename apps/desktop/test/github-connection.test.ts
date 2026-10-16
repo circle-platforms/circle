@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, mkdir, rm, writeFile, access } from 'node:fs/promises';
+import {
+  mkdtemp,
+  mkdir,
+  rm,
+  writeFile,
+  access,
+  readFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,6 +53,7 @@ async function fixture() {
     config: string;
     repo?: string;
   }[] = [];
+  let failPut = false;
   let persisted: string | undefined,
     puts = 0,
     deletes = 0,
@@ -91,6 +99,10 @@ async function fixture() {
       put: async (token) => {
         puts++;
         persisted = token;
+        if (failPut)
+          throw Object.assign(Error('ENCRYPTION_UNAVAILABLE ' + TOKEN), {
+            code: 'ENCRYPTION_UNAVAILABLE',
+          });
       },
       delete: async () => {
         deletes++;
@@ -145,6 +157,9 @@ async function fixture() {
     connection,
     helpers,
     calls,
+    set failPut(value: boolean) {
+      failPut = value;
+    },
     get puts() {
       return puts;
     },
@@ -1019,4 +1034,155 @@ test('trusted Git push rechecks the frozen invocation after the actual repositor
     unlock?.();
     await f.close();
   }
+});
+
+test('actual secure persistence failure reaches the extension view without secrets and only an explicit session grant can recover', async () => {
+  const f = await fixture();
+  let runtime: AgentRuntime | undefined;
+  try {
+    f.failPut = true;
+    const backend = githubWorkspaceBackend({
+      connection: f.connection,
+      delivery: async () => {
+        throw Error('must not dispatch');
+      },
+    });
+    const settings = trustFolder(defaultSettings(), f.workspace);
+    settings.extensions.github = { enabled: true };
+    const model = new ScriptedModel([
+      {
+        message: {
+          id: 'storage-error',
+          role: 'assistant',
+          content: 'inspect state',
+        },
+      },
+    ]);
+    runtime = new AgentRuntime({
+      home: path.join(f.root, 'home'),
+      workspace: f.workspace,
+      settings,
+      model,
+      githubConnection: backend,
+      bundledExtensions: fileURLToPath(
+        new URL('../../../src/extensions', import.meta.url),
+      ),
+    });
+    await runtime.initialize();
+    await backend.call('connect', { storage: 'encrypted', repositories: [] });
+    f.helpers[0]!.finish();
+    const failed = await until(async () => {
+      const state = await backend.call('status', {});
+      return state.state === 'error' ? state : false;
+    });
+    assert.equal(failed.error, 'secure credential storage is unavailable');
+    assert.equal(failed.account, undefined);
+    assert.equal(failed.storage, 'encrypted');
+    assert.equal(f.puts, 1);
+    assert(f.deletes > 0);
+    const view = runtime.extensions.extensions.find(
+      (e) => e.name === 'github',
+    )!.view;
+    assert.equal((view as { error: string }).error, failed.error);
+    assert(!JSON.stringify(view).includes(TOKEN));
+    assert.equal(
+      await (
+        f.connection as unknown as {
+          login: { token(): Promise<string | undefined> };
+        }
+      ).login.token(),
+      undefined,
+    );
+    assert.equal(f.calls.length, 0);
+    await runtime.harness.run('inspect failed storage');
+    assert(!model.requests[0]!.tools.some((t) => t.name === 'github_publish'));
+    assert(!JSON.stringify(model.requests).includes(TOKEN));
+    assert.equal(
+      JSON.parse(
+        await readFile(
+          path.join(f.root, 'profile', 'github-connection.json'),
+          'utf8',
+        ),
+      ).resume,
+      false,
+    );
+    await backend.call('connect', { storage: 'session', repositories: [] });
+    f.helpers[1]!.finish();
+    const recovered = await until(async () => {
+      const state = await backend.call('status', {});
+      return state.state === 'connected' ? state : false;
+    });
+    assert.equal(recovered.storage, 'session');
+    assert.equal(recovered.account?.login, 'fixture');
+    assert.equal(f.puts, 1);
+  } finally {
+    await runtime?.close();
+    await f.close();
+  }
+});
+
+test('metadata persistence failures stay distinct from secure storage and never expose a connected account or retain its grant', async (t) => {
+  for (const phase of ['before-helper', 'after-verification'])
+    await t.test(phase, async () => {
+      const f = await fixture();
+      const states: string[] = [];
+      const backend = githubWorkspaceBackend({
+        connection: f.connection,
+        delivery: async () => {
+          throw Error('must not dispatch');
+        },
+      });
+      const release = backend.subscribe((state) => states.push(state.state));
+      try {
+        await backend.call('status', {});
+        const metadata = path.join(f.root, 'profile', 'github-connection.json');
+        if (phase === 'before-helper') {
+          await mkdir(metadata);
+          await assert.rejects(
+            backend.call('connect', { storage: 'encrypted', repositories: [] }),
+            /connection settings could not be saved/,
+          );
+          assert.equal(f.helpers.length, 0);
+        } else {
+          await backend.call('connect', {
+            storage: 'encrypted',
+            repositories: [],
+          });
+          await rm(metadata);
+          await mkdir(metadata);
+          f.helpers[0]!.finish();
+          await until(async () => {
+            const state = await backend.call('status', {});
+            return state.state === 'error' ? state : false;
+          });
+          assert.equal(f.puts, 1);
+          assert(f.deletes > 0);
+          assert.equal(f.calls.length, 1);
+        }
+        const failed = await backend.call('status', {});
+        assert.equal(failed.state, 'error');
+        assert.equal(failed.account, undefined);
+        assert.equal(
+          failed.error,
+          'GitHub connection settings could not be saved',
+        );
+        assert(!states.includes('connected'));
+        assert(!JSON.stringify(failed).includes(TOKEN));
+        assert.equal(
+          await (
+            f.connection as unknown as {
+              login: { token(): Promise<string | undefined> };
+            }
+          ).login.token(),
+          undefined,
+        );
+        await assert.rejects(
+          f.connection.run(['pr', 'view'], failed.epoch, f.workspace),
+          /disconnected|expired/,
+        );
+      } finally {
+        release();
+        await f.close();
+      }
+    });
 });

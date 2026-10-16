@@ -97,8 +97,11 @@ export class NativeGitHubConnection {
   }
   private async restore(epoch: number) {
     try {
-      await this.verify(epoch);
-      if (epoch !== this.state.epoch || this.disposed) return;
+      const account = await this.verify(epoch);
+      if (epoch !== this.state.epoch || this.disposed || !account) return;
+      this.state.account = account;
+      this.state.state = 'connected';
+      delete this.state.error;
       this.active = true;
       this.emit();
     } catch {
@@ -286,9 +289,7 @@ export class NativeGitHubConnection {
       !Number.isSafeInteger(data.id)
     )
       throw Error('invalid GitHub identity');
-    this.state.account = { login: data.login, id: data.id };
-    this.state.state = 'connected';
-    delete this.state.error;
+    return { login: data.login, id: data.id };
   }
   async status() {
     await this.ready;
@@ -324,10 +325,13 @@ export class NativeGitHubConnection {
     this.state.state = 'authorizing';
     this.state.storage = input.storage;
     this.emit();
+    let phase: 'start' | 'metadata' = 'start';
     try {
       await this.cancelCurrent();
       if (epoch !== this.state.epoch || this.disposed) return this.snapshot();
+      phase = 'metadata';
       await this.persist(false);
+      phase = 'start';
       if (epoch !== this.state.epoch || this.disposed) return this.snapshot();
       const login = await this.login.start({ storage: input.storage });
       if (epoch !== this.state.epoch || this.disposed) {
@@ -349,16 +353,31 @@ export class NativeGitHubConnection {
       if (epoch === this.state.epoch) {
         this.active = false;
         this.state.state = 'error';
-        this.state.error = 'GitHub authorization could not start';
+        this.state.error =
+          phase === 'metadata'
+            ? 'GitHub connection settings could not be saved'
+            : 'GitHub authorization could not start';
+        delete this.state.account;
+        delete this.state.authorization;
+        await this.login.disconnect().catch(() => {
+          this.state.error =
+            (this.state.error ? this.state.error + '; ' : '') +
+            'local credential removal requires attention';
+        });
         this.emit();
       }
-      throw Error('GitHub authorization could not start');
+      throw Error(
+        phase === 'metadata'
+          ? 'GitHub connection settings could not be saved'
+          : 'GitHub authorization could not start',
+      );
     }
   }
   private async poll() {
     if (this.polling || !this.attempt) return;
     this.polling = true;
     const { id, epoch } = this.attempt;
+    let phase: 'verification' | 'metadata' = 'verification';
     try {
       const login = this.login.poll(id);
       if (epoch !== this.state.epoch) return;
@@ -369,11 +388,16 @@ export class NativeGitHubConnection {
         status: login.status,
       };
       if (login.status === 'complete') {
-        await this.verify(epoch);
-        if (epoch !== this.state.epoch) return;
-        this.active = true;
+        const account = await this.verify(epoch);
+        if (epoch !== this.state.epoch || !account) return;
         this.state.storage = login.storage;
+        phase = 'metadata';
         await this.persist(login.storage === 'encrypted');
+        if (epoch !== this.state.epoch) return;
+        this.state.account = account;
+        this.state.state = 'connected';
+        delete this.state.error;
+        this.active = true;
         clearInterval(this.timer);
         this.attempt = undefined;
         delete this.state.authorization;
@@ -381,6 +405,12 @@ export class NativeGitHubConnection {
         this.active = false;
         this.state.state = login.status === 'failed' ? 'error' : 'disconnected';
         this.state.error = login.error;
+        delete this.state.account;
+        await this.login.disconnect().catch(() => {
+          this.state.error =
+            (this.state.error ? this.state.error + '; ' : '') +
+            'local credential removal requires attention';
+        });
         clearInterval(this.timer);
         this.attempt = undefined;
       }
@@ -389,7 +419,20 @@ export class NativeGitHubConnection {
       if (epoch === this.state.epoch) {
         this.active = false;
         this.state.state = 'error';
-        this.state.error = 'GitHub authorization could not be verified';
+        this.state.error =
+          phase === 'metadata'
+            ? 'GitHub connection settings could not be saved'
+            : 'GitHub authorization could not be verified';
+        delete this.state.account;
+        delete this.state.authorization;
+        clearInterval(this.timer);
+        this.attempt = undefined;
+        await this.login.disconnect().catch(() => {
+          this.state.error =
+            (this.state.error ? this.state.error + '; ' : '') +
+            'local credential removal requires attention';
+        });
+        await this.persist(false).catch(() => {});
         this.emit();
       }
     } finally {
