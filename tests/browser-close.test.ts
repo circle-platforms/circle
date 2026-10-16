@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { ChromeBrowser } from '../src/browser/chrome.js';
 import { CheckpointStore } from '../src/checkpoint_store.js';
@@ -50,6 +50,98 @@ test('browser close waits for its actual owned descendant to exit before returni
   assert(child.exitCode !== null || child.signalCode !== null);
   assert.equal(await fixture.release(), 'closed');
 });
+
+test(
+  'browser close verifies actual descendants when a process group existence probe is refused',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const root = scratch(t);
+    const fixture = await cancellationFixture(t, root);
+    writeFileSync(
+      join(root, 'grandchild.cjs'),
+      readFileSync(join(root, 'grandchild.cjs'), 'utf8') +
+        "\nprocess.on('SIGTERM',()=>{});\n",
+    );
+    const child = spawn(process.execPath, [join(root, 'parent.cjs')], {
+      cwd: root,
+      detached: true,
+      stdio: 'ignore',
+    });
+    const browser = browserWithChild(child);
+    cleanup(t, () => browser.close());
+    await fixture.ready();
+    const kill = process.kill.bind(process);
+    const probe = t.mock.method(
+      process,
+      'kill',
+      (pid: number, signal?: NodeJS.Signals | number) => {
+        if (pid === -child.pid! && signal === 0)
+          throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+        return kill(pid, signal);
+      },
+    );
+    try {
+      await browser.close();
+    } finally {
+      probe.mock.restore();
+    }
+    assert(child.exitCode !== null || child.signalCode !== null);
+    assert.equal(await fixture.release(), 'closed');
+    assert.equal(existsSync(join(root, 'late')), false);
+  },
+);
+
+test(
+  'refused descendant termination keeps browser cleanup retryable until the actual process exits',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const root = scratch(t);
+    const fixture = await cancellationFixture(t, root);
+    writeFileSync(
+      join(root, 'grandchild.cjs'),
+      readFileSync(join(root, 'grandchild.cjs'), 'utf8') +
+        "\nprocess.on('SIGTERM',()=>{});\n",
+    );
+    const child = spawn(process.execPath, [join(root, 'parent.cjs')], {
+      cwd: root,
+      detached: true,
+      stdio: 'ignore',
+    });
+    const browser = browserWithChild(child);
+    const state = browser as any;
+    let closed = false;
+    state.cdp.close = () => {
+      closed = true;
+    };
+    cleanup(t, () => browser.close());
+    const { pid: descendant } = await fixture.ready();
+    const kill = process.kill.bind(process);
+    const denied = Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+    const stop = t.mock.method(
+      process,
+      'kill',
+      (pid: number, signal?: NodeJS.Signals | number) => {
+        if (pid === -child.pid! && signal === 'SIGKILL') throw denied;
+        return kill(pid, signal);
+      },
+    );
+    try {
+      await assert.rejects(browser.close(), denied);
+      assert.equal(closed, false);
+      assert.equal(
+        kill(descendant, 0),
+        true,
+        'the owned descendant is still alive',
+      );
+    } finally {
+      stop.mock.restore();
+    }
+    await browser.close();
+    assert.equal(closed, true);
+    assert.equal(await fixture.release(), 'closed');
+    assert.equal(existsSync(join(root, 'late')), false);
+  },
+);
 
 test(
   'browser close escalates an ignored graceful signal and awaits the actual exit',

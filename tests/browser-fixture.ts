@@ -1,3 +1,5 @@
+import { ChildProcess } from 'node:child_process';
+
 export interface BrowserFixturePhase {
   phase: string;
   action?: string;
@@ -22,6 +24,82 @@ export class BrowserFixtureDeadline extends Error {
   }
 }
 
+/** Test-only emergency disposal; a successful signal is not an exit verdict. */
+async function disposeOwnedRoot(child: ChildProcess): Promise<void> {
+  const exited = () =>
+    child.pid === undefined ||
+    child.exitCode !== null ||
+    child.signalCode !== null;
+  if (exited()) return;
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (result: { ok: true } | { ok: false; error: unknown }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.off('exit', stopped);
+      child.off('error', failed);
+      if (result.ok) resolve();
+      else reject(result.error);
+    };
+    const stopped = () => {
+      if (exited()) finish({ ok: true });
+    };
+    const failed = (error: unknown) => finish({ ok: false, error });
+    // The production close bounds remain unchanged. This is a separate last-resort
+    // test disposal after a failure that will still be reported as a failure.
+    const timer = setTimeout(
+      () =>
+        failed(
+          Error(
+            'the owned fixture browser did not exit during emergency disposal',
+          ),
+        ),
+      3000,
+    );
+    child.on('exit', stopped);
+    child.once('error', failed);
+    try {
+      child.kill('SIGKILL');
+      if (exited()) finish({ ok: true });
+    } catch (error) {
+      failed(error);
+    }
+  });
+}
+
+async function disposeAfterFailure(
+  error: unknown,
+  roots: ChildProcess[],
+): Promise<unknown> {
+  const results = await Promise.allSettled(roots.map(disposeOwnedRoot));
+  const errors = results.flatMap((result) =>
+    result.status === 'rejected' ? [result.reason] : [],
+  );
+  return errors.length
+    ? new AggregateError(
+        [error, ...errors],
+        'browser fixture close and emergency disposal failed',
+      )
+    : error;
+}
+
+function preservePhaseFailure(phase: unknown, cleanup: unknown): unknown {
+  if (
+    phase instanceof Error &&
+    Reflect.defineProperty(phase, 'browserFixtureCleanup', {
+      value: cleanup,
+      enumerable: true,
+      configurable: true,
+    })
+  )
+    return phase;
+  return new AggregateError(
+    [phase, cleanup],
+    'browser fixture phase and cleanup failed',
+  );
+}
+
 /** A test's owned browser and metadata only; page contents never enter records. */
 export class BrowserFixture {
   private controller = new AbortController();
@@ -37,6 +115,7 @@ export class BrowserFixture {
       budgetMs: number;
       state: () => Record<string, unknown>;
       close: () => Promise<void>;
+      ownedRoots?: () => Iterable<ChildProcess | undefined>;
       report: (record: BrowserFixtureRecord) => void;
     },
   ) {
@@ -114,12 +193,19 @@ export class BrowserFixture {
       clearTimeout(this.timer);
       this.controller.abort(this.failure?.error ?? Error('fixture closed'));
       this.record('cleanup-before');
+      // Capture objects before production cleanup changes its current connection.
+      const roots = [...new Set(this.options.ownedRoots?.() ?? [])].filter(
+        (child): child is ChildProcess => child instanceof ChildProcess,
+      );
       try {
         await this.options.close();
         this.record('cleanup-after');
       } catch (error) {
         this.record('cleanup-error');
-        if (!this.failure) throw error;
+        const cleanup = await disposeAfterFailure(error, roots);
+        throw this.failure
+          ? preservePhaseFailure(this.failure.error, cleanup)
+          : cleanup;
       }
     })());
   }

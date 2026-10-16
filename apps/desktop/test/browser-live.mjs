@@ -13,6 +13,10 @@ import { promisify } from 'node:util';
 import { sourceEvidence, rendererEvidence } from './helpers/evidence.mjs';
 import { captureFailure } from './helpers/diagnostics.mjs';
 import { setViewport } from './helpers/viewport.mjs';
+import {
+  parseModelRequestFrames,
+  readModelRequests,
+} from './helpers/model-requests.mjs';
 
 // The conversation's browser, driven by a scripted model and by the person, against local
 // HTTPS sites with a self-signed certificate: everything a page asks for reaches both.
@@ -451,8 +455,7 @@ if (process.env.CIRCLE_DESKTOP_EXECUTABLE)
       ? process.env.SystemRoot + '\\System32'
       : '/usr/bin:/bin:/usr/sbin:/sbin';
 
-const requests = async () =>
-  (await readFile(requestsPath, 'utf8')).trim().split('\n').map(JSON.parse);
+const requests = (options) => readModelRequests(requestsPath, options);
 const state = async () =>
   (await page.evaluate(() => window.circleDesktop.runtimeState())).snapshot;
 const browserState = (sessionId) =>
@@ -1506,6 +1509,7 @@ try {
     await page.screenshot({ path: join(output, 'browser-live.png') });
     await app.close();
     app = undefined;
+    await requests({ requireComplete: true });
 
     // ---- after a restart: allowed once is forgotten; the person's way back reaches the model
     requestsPath = join(temp, 'restart-requests.jsonl');
@@ -1569,6 +1573,7 @@ try {
     );
     await app.close();
     app = undefined;
+    await requests({ requireComplete: true });
 
     requestsPath = join(temp, 'trusted-requests.jsonl');
     // A recorded script for the form on the other port, whose certificate this start has
@@ -1663,6 +1668,7 @@ try {
     );
     assert.deepEqual(errors, []);
   }
+  await requests({ requireComplete: true });
   await writeFile(
     join(
       output,
@@ -1694,21 +1700,30 @@ try {
     ),
   );
 } catch (error) {
-  const model = await readFile(requestsPath, 'utf8').catch(() => '');
-  await writeFile(join(output, 'failure-model.jsonl'), model);
-  // A failure seen only in a CI log shows what the model last read
-  const last = model.trim().split('\n').filter(Boolean).at(-1);
-  if (last)
-    console.error(
-      JSON.parse(last)
-        .messages.filter((row) => row.role === 'tool')
-        .slice(-3)
-        .map(
-          (row) => `${row.tool_call_id}: ${String(row.content).slice(0, 1500)}`,
-        )
-        .join('\n---\n'),
-    );
-  await captureFailure(page, error, errors, output);
+  try {
+    const model = await readFile(requestsPath);
+    await writeFile(join(output, 'failure-model.jsonl'), model);
+    // Retain raw bytes, including any in-flight tail; diagnose complete records only.
+    const last = parseModelRequestFrames(model).at(-1);
+    if (last)
+      console.error(
+        last.messages
+          .filter((row) => row.role === 'tool')
+          .slice(-3)
+          .map(
+            (row) =>
+              `${row.tool_call_id}: ${String(row.content).slice(0, 1500)}`,
+          )
+          .join('\n---\n'),
+      );
+  } catch (diagnosticError) {
+    console.error('model request diagnostic failed:', String(diagnosticError));
+  }
+  try {
+    await captureFailure(page, error, errors, output);
+  } catch (diagnosticError) {
+    console.error('failure capture failed:', String(diagnosticError));
+  }
   throw error;
 } finally {
   if (app) await app.close();

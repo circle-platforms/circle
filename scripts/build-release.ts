@@ -21,6 +21,7 @@ import {
   validateRelease,
   type ReleaseManifest,
 } from '../src/install_layout.js';
+import { verifyWindowsQueryPackage } from './verify-windows-query-package.js';
 const runtimes = JSON.parse(
   readFileSync('scripts/node-runtime.json', 'utf8'),
 ) as {
@@ -121,6 +122,7 @@ try {
     app,
   );
   rmSync(join(app, 'node_modules', '.bin'), { recursive: true, force: true });
+  verifyWindowsQueryPackage(packageRoot, target, run);
   const release: ReleaseManifest = {
     schema: RELEASE_SCHEMA,
     version: VERSION,

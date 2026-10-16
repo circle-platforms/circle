@@ -347,3 +347,107 @@ test('background job requests and delayed imports carry their actual target sess
   assert.equal(host.commands[1]!.name, 'import');
   assert.equal(host.commands[1]!.sessionId, a);
 });
+
+test('the first home message begins one session and does not call new-session', async () => {
+  const { runtime, host } = live();
+  host.runtimeCommand = async (command) => {
+    host.commands.push(command);
+    return {
+      id: command.id,
+      ok: true,
+      data:
+        command.name === 'begin-session'
+          ? { sessionId: 'session-home' }
+          : undefined,
+    };
+  };
+  assert.deepEqual(
+    await runtime.beginConversation({
+      workspaceId: 'workspace1',
+      text: 'fix the parser',
+    }),
+    { sessionId: 'session-home' },
+  );
+  assert.deepEqual(
+    host.commands.map((command) => command.name),
+    ['begin-session'],
+  );
+  assert.equal(host.commands[0]!.payload.workspaceId, 'workspace1');
+  assert.equal(host.commands[0]!.payload.text, 'fix the parser');
+  assert.equal(host.commands[0]!.payload.display, 'fix the parser');
+  assert.deepEqual(
+    await runtime.beginConversation({ text: 'without a project' }),
+    { sessionId: 'session-home' },
+  );
+  assert.equal(host.commands[1]!.payload.workspaceId, undefined);
+});
+
+test('a home message sends the chosen model, effort and mode', async () => {
+  const { runtime, host } = live();
+  host.runtimeCommand = async (command) => {
+    host.commands.push(command);
+    return { id: command.id, ok: true, data: { sessionId: 'session-home' } };
+  };
+  assert.deepEqual(
+    await runtime.beginConversation({
+      workspaceId: 'workspace1',
+      text: 'think harder',
+      model: 'sample-fast-model',
+      effort: 'xhigh',
+      mode: 'plan',
+    }),
+    { sessionId: 'session-home' },
+  );
+  assert.equal(host.commands[0]!.name, 'begin-session');
+  assert.equal(host.commands[0]!.payload.modelId, 'sample-fast-model');
+  assert.equal(host.commands[0]!.payload.effort, 'xhigh');
+  assert.equal(host.commands[0]!.payload.mode, 'plan');
+});
+
+test('a home message inlines text files and sends pictures as attachments', async () => {
+  const { runtime, host } = live();
+  host.runtimeCommand = async (command) => {
+    host.commands.push(command);
+    return { id: command.id, ok: true, data: { sessionId: 'session-home' } };
+  };
+  await runtime.beginConversation({
+    workspaceId: 'workspace1',
+    text: 'see this',
+    attachments: [
+      { id: 'note', name: 'note.txt', kind: 'file', content: 'hello' },
+      {
+        id: 'pic',
+        name: 'pic.png',
+        kind: 'image',
+        content: 'data:image/png;base64,aaaa',
+        mime: 'image/png',
+      },
+    ],
+  });
+  assert.equal(
+    host.commands[0]!.payload.text,
+    'see this\n\n<attachment name="note.txt">\nhello\n</attachment>',
+  );
+  assert.equal(host.commands[0]!.payload.display, 'see this');
+  assert.deepEqual(host.commands[0]!.payload.attachments, [
+    {
+      id: 'pic',
+      name: 'pic.png',
+      kind: 'image',
+      content: 'data:image/png;base64,aaaa',
+      mime: 'image/png',
+    },
+  ]);
+});
+
+test('an untrusted project is not given a session from home', async () => {
+  const { runtime, host } = live();
+  assert.deepEqual(
+    await runtime.beginConversation({
+      workspaceId: 'workspace2',
+      text: 'edit the docs',
+    }),
+    { dialog: 'trust' },
+  );
+  assert.deepEqual(host.commands, []);
+});

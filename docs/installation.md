@@ -72,6 +72,8 @@ Circle 0.5.0 and older were written in Python. Running the one-command installer
 
 The installer first downloads and checks the new release, so a failed download leaves the old copy in place. If a Python circle is still running, it stops before changing anything; close those sessions and run it again. On Windows it lists the running programs only when a program of the old copy is in use. If that list takes longer than 30 seconds, or no process in it runs the program in use, it names the program and stops the same way. If a pip uninstall fails, it stops and names the command that failed.
 
+When the Windows process check stops because an executable is in use and no process was identified, its error includes the last captured query boundary, bounded marker counts and the native exit or timeout code. A missing marker is `unknown`; a count of 32 may be capped. These observations do not identify the operation that stalled, and reaching `COMPLETE` does not establish a successful query.
+
 The data folder is shared and not touched. Settings, keys, MCP servers, skills, custom commands, prompt history and trusted folders carry over; saved sessions are imported on the first start (see [Sessions from 0.5.0](sessions.md#sessions-from-050)). Python extensions do not load in this version and have to be rewritten; see [Coming from 0.5.0](extensions.md#coming-from-050).
 
 `circle update` in a Python version cannot install 1.0.0 or later: it stops with `release v1.0.0 has no circle-<os>-<arch>.tar.gz` (`.zip` on Windows), because release files now carry the version in their names. Run the one-command installer instead.
