@@ -20,6 +20,7 @@ This page lists what does not work as you might expect in the current version, w
 - **`auto` and `accept edits` turn themselves off** on `/new`, `/fork`, `/clone`, `/import` and restart; the session falls back to the `default_mode` saved in the settings, or asks again (`manual`) without one. `read-only` stays with the conversation.
 - **`projects/` in the data folder is mostly not cleaned up.** It keeps the messages that summaries replaced, very long tool results, pasted pictures and screenshots, for every project; only command and job output is removed, a day after its run ended. Delete old folders by hand.
 - **Circle 0.5.0 cannot import the JSONL exports of this version.** This version imports 0.5.0's.
+- **Every `enter` in the terminal pauses for a second or two when Circle cannot write the input history**, as when `history` in the data folder belongs to another user. Circle tries again for about a second each time, then keeps the history for this run only. Make the file yours again (`sudo chown "$USER" ~/.circle/history`) or delete it.
 
 ## Safety
 
