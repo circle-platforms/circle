@@ -1,0 +1,119 @@
+import assert from 'node:assert/strict';
+import { chromium } from 'playwright';
+import { createServer } from 'vite';
+import { fileURLToPath } from 'node:url';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+const output = process.env.CIRCLE_COMPONENT_UI_EVIDENCE;
+const server = await createServer({
+  root: fileURLToPath(new URL('..', import.meta.url)),
+  server: { host: '127.0.0.1', port: 0 },
+  logLevel: 'error',
+});
+await server.listen();
+let browser;
+try {
+  browser = await chromium.launch({
+    headless: true,
+    ...(process.env.CIRCLE_TEST_BROWSER_CHANNEL
+      ? { channel: process.env.CIRCLE_TEST_BROWSER_CHANNEL }
+      : {}),
+  });
+  for (const language of ['en', 'zh-CN'])
+    for (const theme of ['light', 'dark'])
+      for (const width of [375, 1000]) {
+        const page = await browser.newPage({
+          viewport: { width, height: 750 },
+        });
+        const errors = [];
+        page.on('pageerror', (error) => errors.push(String(error)));
+        await page.goto(
+          `${server.resolvedUrls.local[0]}test/task-config-recovery-ui.html?language=${language}&theme=${theme}`,
+        );
+        const zh = language === 'zh-CN';
+        const name = `${language}-${theme}-${width}`;
+        if (output) await mkdir(output, { recursive: true });
+        await page
+          .getByRole('alert')
+          .filter({ hasText: 'invalid agents' })
+          .waitFor();
+        await page
+          .getByRole('button', {
+            name: zh ? '新建任务' : 'new task',
+            exact: true,
+          })
+          .click();
+        await page
+          .getByLabel(zh ? '任务指令' : 'task instruction', { exact: true })
+          .fill('recover real task creation');
+        await page
+          .getByLabel(zh ? '验收条件' : 'acceptance criteria', { exact: true })
+          .fill('preserve the draft');
+        const submit = page.getByRole('button', {
+          name: zh ? '加入任务队列' : 'queue task',
+          exact: true,
+        });
+        assert(await submit.isDisabled());
+        if (output)
+          await page.screenshot({ path: join(output, name + '-error.png') });
+        await page
+          .getByText(zh ? '协作设置' : 'collaboration settings', {
+            exact: true,
+          })
+          .click();
+        await page
+          .getByLabel(zh ? '活跃代理' : 'active agents', { exact: true })
+          .fill('4');
+        await page
+          .getByRole('button', {
+            name: zh ? '保存上限' : 'save limits',
+            exact: true,
+          })
+          .click();
+        await page.waitForFunction(
+          () => !document.querySelector('[role="alert"]'),
+        );
+        assert(await submit.isEnabled());
+        assert.equal(
+          await page.locator('.task-create-form textarea').first().inputValue(),
+          'recover real task creation',
+        );
+        const settings = await page.evaluate(() =>
+          window.calls.filter(
+            (c) => c.payload.method === 'settings' && c.payload.params.limits,
+          ),
+        );
+        assert.equal(settings.length, 1);
+        assert.deepEqual(settings[0].payload.params, {
+          limits: { agents: 4, builds: 1, ui: 1, browsers: 1 },
+        });
+        await submit.click();
+        await page.waitForFunction(() =>
+          window.calls.some((c) => c.payload.method === 'enqueue'),
+        );
+        assert.equal(
+          await page.evaluate(
+            () =>
+              window.calls.filter((c) => c.payload.method === 'enqueue').length,
+          ),
+          1,
+        );
+        assert.deepEqual(errors, []);
+        if (output) {
+          await page.screenshot({
+            path: join(output, name + '-recovered.png'),
+          });
+          await writeFile(
+            join(output, name + '-calls.json'),
+            JSON.stringify(await page.evaluate(() => window.calls), null, 2),
+          );
+        }
+        await page.close();
+      }
+  console.log(
+    'PASS: task configuration recovery, 8 language/theme/width combinations',
+  );
+} finally {
+  await browser?.close();
+  await server.close();
+}

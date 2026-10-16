@@ -131,6 +131,8 @@ export const developer: Record<string, string> = {
   cancelled: '已取消',
   interrupted: '已中断',
   'active agents': '活跃代理',
+  'fix collaboration limits in settings before starting tasks':
+    '请先在协作设置中修正并发上限，再启动任务',
   'save limits': '保存上限',
   'builds {builds} · browsers {browsers} · foreground {ui}':
     '构建 {builds} · 浏览器 {browsers} · 前台 {ui}',

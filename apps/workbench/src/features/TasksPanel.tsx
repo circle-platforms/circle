@@ -45,6 +45,8 @@ export function TasksPanel({
     'agent' | 'build' | 'ui' | 'browser'
   >('agent');
   const [error, setError] = useState('');
+  const [configurationError, setConfigurationError] = useState('');
+  const [tasksReady, setTasksReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const instruction = useRef<HTMLTextAreaElement>(null);
@@ -73,26 +75,35 @@ export function TasksPanel({
   const refresh = useCallback(async () => {
     const epoch = generation.current;
     const revision = ++refreshRevision.current;
-    try {
-      const [records, settings] = await Promise.all([
-        workspaceCall<TaskRecord[]>(sessionId, 'tasks', 'list'),
-        workspaceCall<Limits>(sessionId, 'tasks', 'settings'),
-      ]);
-      if (epoch !== generation.current || revision !== refreshRevision.current)
-        return;
-      setTasks(records);
-      setLimits(settings);
-      setError('');
-    } catch (err) {
-      if (epoch === generation.current && revision === refreshRevision.current)
-        setError(String(err));
+    const [records, settings] = await Promise.allSettled([
+      workspaceCall<TaskRecord[]>(sessionId, 'tasks', 'list'),
+      workspaceCall<Limits & { error?: string }>(
+        sessionId,
+        'tasks',
+        'settings',
+      ),
+    ]);
+    if (epoch !== generation.current || revision !== refreshRevision.current)
+      return;
+    setTasksReady(records.status === 'fulfilled');
+    if (records.status === 'fulfilled') setTasks(records.value);
+    if (settings.status === 'fulfilled') {
+      const { agents, builds, ui, browsers, error } = settings.value;
+      setLimits({ agents, builds, ui, browsers });
+      setConfigurationError(error ?? '');
+    } else {
+      setLimits(null);
+      setConfigurationError(String(settings.reason));
     }
+    setError(records.status === 'rejected' ? String(records.reason) : '');
   }, [sessionId]);
   useEffect(() => {
     generation.current++;
     setBusy(false);
     setTasks([]);
     setLimits(null);
+    setConfigurationError('');
+    setTasksReady(false);
     setError('');
     setDependencies([]);
     void refresh();
@@ -144,7 +155,12 @@ export function TasksPanel({
         <Button onClick={() => void refresh()}>{t('refresh')}</Button>
         <Button
           type="button"
-          disabled={busy || !tasks.some((task) => task.state === 'queued')}
+          disabled={
+            busy ||
+            !!configurationError ||
+            !tasksReady ||
+            !tasks.some((task) => task.state === 'queued')
+          }
           onClick={() =>
             void run(() => workspaceCall(sessionId, 'tasks', 'start'))
           }
@@ -157,6 +173,7 @@ export function TasksPanel({
           className="task-create-form"
           onSubmit={(event) => {
             event.preventDefault();
+            if (!limits || configurationError || !tasksReady) return;
             void run(async () => {
               const epoch = generation.current;
               await workspaceCall(sessionId, 'tasks', 'enqueue', {
@@ -253,14 +270,27 @@ export function TasksPanel({
           <div>
             <Button
               type="submit"
-              disabled={busy || !prompt.trim() || !criteria.trim()}
+              disabled={
+                busy ||
+                !limits ||
+                !!configurationError ||
+                !tasksReady ||
+                !prompt.trim() ||
+                !criteria.trim()
+              }
             >
               {t('queue task')}
             </Button>
           </div>
         </form>
       </div>
-      {error && (
+      {configurationError && (
+        <p role="alert" className="tasks-error">
+          {t('fix collaboration limits in settings before starting tasks')}{' '}
+          {configurationError}
+        </p>
+      )}
+      {error && !configurationError && (
         <p role="alert" className="tasks-error">
           {error}
         </p>
@@ -424,7 +454,12 @@ export function TasksPanel({
             onClick={() =>
               void run(() =>
                 workspaceCall(sessionId, 'tasks', 'settings', {
-                  limits: { ...limits, agents: Number(agents) },
+                  limits: {
+                    agents: Number(agents),
+                    builds: limits!.builds,
+                    ui: limits!.ui,
+                    browsers: limits!.browsers,
+                  },
                 }),
               )
             }
