@@ -1101,7 +1101,9 @@ function TerminalSurface({
           </Button>
         </div>
       )}
-      <div ref={container} className="native-terminal-screen" />
+      <div className="native-terminal-screen">
+        <div ref={container} className="native-terminal-fit" />
+      </div>
     </div>
   );
 }
