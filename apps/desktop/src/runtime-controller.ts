@@ -303,6 +303,9 @@ export class RuntimeController {
   private keySaved?: boolean;
   // A workspace's git branch, read at most every two seconds: snapshots follow tokens.
   private branches = new Map<string, { branch: string; at: number }>();
+  // Folders chosen on home before a message is sent. Remembering one does not
+  // write a session. The first message creates that session.
+  private opened = new Set<string>();
   private branch(path: string): string {
     const cached = this.branches.get(path);
     if (cached && Date.now() - cached.at < 2000) return cached.branch;
@@ -757,6 +760,7 @@ export class RuntimeController {
       ...new Set([
         ...rows.map((row) => row.workspace),
         runtime.options.workspace,
+        ...this.opened,
       ]),
     ];
     const sessions: Session[] = rows.map((row) => {
@@ -879,11 +883,16 @@ export class RuntimeController {
       },
       workspaces: paths.map((path) => ({
         id: identity(path),
-        name: path === join(this.home, 'workspace') ? 'circle' : basename(path),
+        name: this.isScratch(path) ? 'circle' : basename(path),
         path,
         branch: this.branch(path),
         trusted: isFolderTrusted(savedSettings, path),
-        origin: 'native',
+        origin: 'native' as const,
+        // The default circle folder is a project the person can pick. Scratch is
+        // only the separate folder used by "work without a project".
+        kind: this.isUnscoped(path)
+          ? ('scratch' as const)
+          : ('project' as const),
         instructions: [],
       })),
       sessions,
@@ -1800,6 +1809,163 @@ export class RuntimeController {
     tracker.reset(runtime.todos);
     this.planCompletions.set(runtime.session.id, tracker);
   }
+  // Conversations with no project live here, not in the default circle workspace.
+  // That folder is a project of its own; sharing it made "no project" look like circle.
+  private unscopedPath(): string {
+    return join(this.home, 'unscoped');
+  }
+  private isUnscoped(target: string): boolean {
+    const unscoped = this.unscopedPath();
+    if (target === unscoped) return true;
+    try {
+      return target === realpathSync(unscoped);
+    } catch {
+      return false;
+    }
+  }
+  private ensureUnscoped(): string {
+    const folder = this.unscopedPath();
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    const resolved = realpathSync(folder);
+    saveSettingsChange(this.home, (saved) => {
+      Object.assign(saved, trustFolder(saved, resolved));
+    });
+    return resolved;
+  }
+  private workspaceById(id: string): string {
+    for (const row of this.store.list(undefined, true))
+      if (identity(row.workspace) === id) return row.workspace;
+    if (identity(this.active.options.workspace) === id)
+      return this.active.options.workspace;
+    for (const owner of this.runtimes.values())
+      if (identity(owner.options.workspace) === id)
+        return owner.options.workspace;
+    for (const folder of this.opened)
+      if (identity(folder) === id) return folder;
+    try {
+      const scratch = realpathSync(this.scratchPath());
+      if (identity(scratch) === id || identity(this.scratchPath()) === id)
+        return scratch;
+    } catch {
+      /* The scratch folder is not there yet. */
+    }
+    throw Error('workspace not found');
+  }
+  // The home composer chooses these before a session exists. Apply them to the
+  // runtime that will run the first message, so the turn uses that choice.
+  private applyHomeChoices(
+    runtime: AgentRuntime,
+    p: Record<string, unknown>,
+  ): void {
+    if (
+      typeof p.modelId === 'string' &&
+      p.modelId !== runtime.harness.model.model
+    )
+      runtime.setModel(text(p.modelId, 'model', 500));
+    if (p.effort !== undefined) {
+      const effort = text(p.effort, 'effort', 20);
+      if (effort !== 'default') runtime.setThinkingLevel(effort);
+    }
+    if (p.mode !== undefined) {
+      if (!isSessionMode(p.mode)) throw Error('invalid mode');
+      runtime.setMode(p.mode);
+    }
+  }
+  // A leftover untitled session with no messages is reused so the first message
+  // does not sit beside it. Opening a folder does not create one.
+  private conversationRuntime(workspace: string): AgentRuntime {
+    const empty = this.store
+      .list(workspace)
+      .find(
+        (row) =>
+          !row.parent_id &&
+          !row.title &&
+          !this.metadata.archivedAt(row.id) &&
+          this.store.messages(row.id).length === 0 &&
+          this.runtimes.lifecycle(row.id) !== 'deleting' &&
+          !this.runtimes.get(row.id)?.busy,
+      );
+    return empty
+      ? this.runtimes.open(workspace, empty.id)
+      : this.runtimes.create(workspace);
+  }
+  private async submitPrompt(
+    runtime: AgentRuntime,
+    p: Record<string, unknown>,
+    untilStored = false,
+  ): Promise<{ sessionId?: string }> {
+    await this.reloadTrustedRuntime(runtime);
+    if (!isFolderTrusted(runtime.options.settings, runtime.options.workspace))
+      throw Error('trust the workspace before running Circle');
+    if (!this.options.model && !isReady(runtime.options.settings))
+      throw Error('connect an API URL, key and model first');
+    const prompt = text(p.text, 'prompt');
+    if (!prompt.trim()) throw Error('prompt is empty');
+    const kind = p.kind ?? 'steering';
+    if (!['steering', 'follow-up'].includes(String(kind)))
+      throw Error('invalid queue kind');
+    if (
+      p.attachments !== undefined &&
+      (!Array.isArray(p.attachments) || p.attachments.length > 16)
+    )
+      throw Error('invalid attachments');
+    const attachments = (
+      (p.attachments ?? []) as {
+        content: string;
+        mime: MediaAttachment['mime_type'];
+        name: string;
+      }[]
+    ).map((item) =>
+      attachmentFromBase64(
+        // up to the core's 20 MiB, as base64 behind a data: prefix
+        text(
+          item.content,
+          'attachment',
+          Math.ceil(MAX_MEDIA_BYTES / 3) * 4 + 100,
+        ).replace(/^data:[^;]+;base64,/, ''),
+        item.mime,
+        text(item.name, 'filename', 500),
+      ),
+    );
+    if (runtime.busy) {
+      if (untilStored) throw Error('a turn is running');
+      runtime.harness.queue(
+        prompt,
+        kind === 'follow-up' ? 'followUp' : 'steer',
+        attachments,
+      );
+      return {};
+    }
+    const display =
+      p.display === undefined ? undefined : text(p.display, 'display');
+    const run = runtime.harness.run(prompt, display, attachments);
+    this.track(run, runtime);
+    if (!untilStored) return {};
+    const failed = run.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    const deadline = Date.now() + 8000;
+    while (
+      !this.store
+        .messages(runtime.session.id)
+        .some((message) => message.role === 'user')
+    ) {
+      const error = await Promise.race([
+        failed,
+        new Promise((resolve) => setTimeout(resolve, 15)).then(() => undefined),
+      ]);
+      if (
+        this.store
+          .messages(runtime.session.id)
+          .some((message) => message.role === 'user')
+      )
+        break;
+      if (error) throw error;
+      if (Date.now() > deadline) throw Error('the first message was not saved');
+    }
+    return { sessionId: runtime.session.id };
+  }
   private async execute(command: RuntimeCommand): Promise<unknown> {
     this.metadata.refresh();
     this.synchronizeSharedSettings(loadSettings(this.home));
@@ -1812,6 +1978,7 @@ export class RuntimeController {
         'close',
         'select-session',
         'new-session',
+        'begin-session',
         'open-workspace',
         'set-default-workspace',
         'delete-session',
@@ -1841,6 +2008,7 @@ export class RuntimeController {
         'close',
         'select-session',
         'new-session',
+        'begin-session',
         'delete-session',
         'answer',
       ].includes(command.name)
@@ -1869,57 +2037,23 @@ export class RuntimeController {
     switch (command.name) {
       case 'state':
         return this.snapshot();
-      case 'prompt': {
-        await this.reloadTrustedRuntime(runtime);
-        if (
-          !isFolderTrusted(runtime.options.settings, runtime.options.workspace)
-        )
-          throw Error('trust the workspace before running Circle');
-        if (!this.options.model && !isReady(runtime.options.settings))
-          throw Error('connect an API URL, key and model first');
-        const prompt = text(p.text, 'prompt');
-        if (!prompt.trim()) throw Error('prompt is empty');
-        const kind = p.kind ?? 'steering';
-        if (!['steering', 'follow-up'].includes(String(kind)))
-          throw Error('invalid queue kind');
-        if (
-          p.attachments !== undefined &&
-          (!Array.isArray(p.attachments) || p.attachments.length > 16)
-        )
-          throw Error('invalid attachments');
-        const attachments = (
-          (p.attachments ?? []) as {
-            content: string;
-            mime: MediaAttachment['mime_type'];
-            name: string;
-          }[]
-        ).map((item) =>
-          attachmentFromBase64(
-            // up to the core's 20 MiB, as base64 behind a data: prefix
-            text(
-              item.content,
-              'attachment',
-              Math.ceil(MAX_MEDIA_BYTES / 3) * 4 + 100,
-            ).replace(/^data:[^;]+;base64,/, ''),
-            item.mime,
-            text(item.name, 'filename', 500),
-          ),
-        );
-        if (runtime.busy)
-          runtime.harness.queue(
-            prompt,
-            kind === 'follow-up' ? 'followUp' : 'steer',
-            attachments,
-          );
-        else {
-          const display =
-            p.display === undefined ? undefined : text(p.display, 'display');
-          this.track(
-            runtime.harness.run(prompt, display, attachments),
-            runtime,
-          );
-        }
+      case 'prompt':
+        await this.submitPrompt(runtime, p);
         return {};
+      case 'begin-session': {
+        const promptText = text(p.text, 'prompt');
+        if (!promptText.trim()) throw Error('prompt is empty');
+        const workspace =
+          p.workspaceId === undefined
+            ? this.ensureUnscoped()
+            : this.workspaceById(text(p.workspaceId, 'workspace', 200));
+        if (!isFolderTrusted(loadSettings(this.home), workspace))
+          throw Error('trust the workspace before running Circle');
+        const owner = this.conversationRuntime(workspace);
+        this.selectRuntime(owner);
+        this.applyHomeChoices(owner, p);
+        const started = await this.submitPrompt(owner, p, true);
+        return { sessionId: started.sessionId ?? owner.session.id };
       }
       case 'abort': {
         const id = runtime.session.id;
@@ -2263,14 +2397,20 @@ export class RuntimeController {
       case 'trust': {
         if (p.enabled !== true)
           throw Error('explicit trust confirmation required');
+        // Home can ask to trust the project in the menu while another session
+        // is the one open. The id names that project; otherwise it is the open one.
+        const folder =
+          p.workspaceId === undefined
+            ? runtime.options.workspace
+            : this.workspaceById(text(p.workspaceId, 'workspace', 200));
         const settings = saveSettingsChange(this.home, (saved) => {
-          Object.assign(saved, trustFolder(saved, runtime.options.workspace));
+          Object.assign(saved, trustFolder(saved, folder));
         });
         this.synchronizeSharedSettings(settings);
         const reloads: Promise<void>[] = [];
         for (const owner of this.runtimes.values())
           if (
-            owner.options.workspace === runtime.options.workspace &&
+            owner.options.workspace === folder &&
             this.pendingTrustReloads.has(owner) &&
             !owner.isClosing
           ) {
@@ -2543,12 +2683,12 @@ export class RuntimeController {
       }
       case 'open-workspace': {
         const workspace = realpathSync(text(p.path, 'workspace', 8000));
-        const owner = this.runtime(workspace);
-        this.selectRuntime(owner);
-        return {
-          workspaceId: identity(workspace),
-          sessionId: owner.session.id,
-        };
+        if (!statSync(workspace).isDirectory())
+          throw Error('workspace is not a folder');
+        // Home state only. The session is created by begin-session, with the
+        // first message, and not before.
+        this.opened.add(workspace);
+        return { workspaceId: identity(workspace) };
       }
       case 'set-default-workspace': {
         // The path comes from the native dialog through the main process, exactly

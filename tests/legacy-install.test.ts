@@ -14,6 +14,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import { activeVersion, pruneVersions } from '../src/install_layout.js';
 import {
   chooseLocation,
@@ -353,9 +354,14 @@ async function startPython(
   const started = throughCurrent
     ? join(prefix, 'current', 'circle', program)
     : frozen;
-  const child = spawn(started, ['-e', 'setTimeout(() => {}, 60000)'], {
-    stdio: 'ignore',
-  });
+  const child = spawn(
+    started,
+    [
+      '-e',
+      "process.stdout.write('R'); process.stdin.resume(); process.stdin.on('end', () => process.exit(0));",
+    ],
+    { stdio: ['pipe', 'pipe', 'ignore'] },
+  );
   // Windows cannot delete the folder while the program in it still runs: wait for its exit.
   cleanup(t, async () => {
     if (child.exitCode !== null || child.signalCode !== null) return;
@@ -363,7 +369,15 @@ async function startPython(
     child.kill();
     await exited;
   });
-  await new Promise((resolve) => child.once('spawn', resolve));
+  await once(child, 'spawn');
+  const [ready] = await once(child.stdout, 'data', {
+    signal: AbortSignal.timeout(15000),
+  });
+  assert.equal(
+    ready.toString(),
+    'R',
+    'the copied program reached its own code',
+  );
   return { prefix, frozen, child, path: windows ? [pathEntry] : [bin] };
 }
 
@@ -480,10 +494,12 @@ test('on Windows a held program is looked up, and the list names the processes r
   assert.deepEqual(running, [41, 57]);
   assert.deepEqual(probed.sort(), [frozen, script].sort());
   assert.equal(asked.length, 1);
-  assert.match(asked[0]!.command, /powershell\.exe$/);
-  assert.match(
-    asked[0]!.args.at(-1)!,
-    /^Get-CimInstance -ClassName Win32_Process -Property ProcessId,ExecutablePath /,
+  assert.equal(asked[0]!.command, process.execPath);
+  assert.match(asked[0]!.args[0]!, /windows_process_native\.[jt]s$/);
+  assert.equal(asked[0]!.args[2], 'names');
+  assert.deepEqual(
+    JSON.parse(Buffer.from(asked[0]!.args[1]!, 'base64').toString('utf8')),
+    ['circle'],
   );
   assert.equal(asked[0]!.timeout, 30_000);
 });
@@ -619,4 +635,22 @@ test('installing keeps the newest three versions and the one it replaces', (t) =
     '1.1.0',
     'notes',
   ]);
+});
+
+test('Windows process lookup matches the same held program through a directory alias', (t) => {
+  const base = scratch(t);
+  const { copies, where, frozen } = windowsCopies(base);
+  const alias = join(base, 'version alias');
+  symlinkSync(
+    join(base, '用户 prefix', 'versions', '0.5.0'),
+    alias,
+    windows ? 'junction' : 'dir',
+  );
+  const running = runningCopies(
+    copies,
+    where,
+    () => processList([[41, join(alias, 'circle', 'circle.exe')]]),
+    (path) => (path === frozen ? 'EBUSY' : undefined),
+  );
+  assert.deepEqual(running, [41]);
 });

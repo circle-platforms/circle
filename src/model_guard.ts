@@ -292,7 +292,16 @@ export function backoffMs(
     Math.min(budget.capMs, base * (1 + (random() * 2 - 1) * budget.jitter)),
   );
 }
+/** A rejected historical block is not an unsupported thinking setting. */
+export function isThinkingSignatureError(error: unknown): boolean {
+  if (statusOf(error) !== 400) return false;
+  const text = String(record(error).message || error);
+  return /invalid\s+[`'"]?signature[`'"]?\s+in\s+[`'"]?(?:redacted_)?thinking[`'"]?\s+block/i.test(
+    text,
+  );
+}
 export function rejectedParameters(error: unknown): string[] {
+  if (isThinkingSignatureError(error)) return [];
   if (![400, 422].includes(statusOf(error) ?? 0)) return [];
   const text = String(record(error).message || error).toLowerCase();
   if (
