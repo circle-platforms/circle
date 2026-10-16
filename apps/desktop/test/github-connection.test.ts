@@ -1987,3 +1987,80 @@ test('Harness inspects the opaque candidate revision before publishing and rejec
     await f.close();
   }
 });
+
+test('cancelling held account verification aborts only that attempt and a fresh login progresses before its stale reply', async (t) => {
+  const f = await fixture();
+  let releaseOld!: () => void, releaseNew!: () => void;
+  const oldGate = new Promise<void>((resolve) => (releaseOld = resolve)),
+    newGate = new Promise<void>((resolve) => (releaseNew = resolve));
+  const signals: AbortSignal[] = [];
+  const internal = f.connection as unknown as {
+    command: (
+      args: string[],
+      env: NodeJS.ProcessEnv,
+      cwd: string,
+      signal: AbortSignal,
+    ) => Promise<string>;
+    poll: () => Promise<void>;
+    attempt?: { id: string };
+    login: DeliveryLogin;
+  };
+  t.mock.method(internal, 'command', async (_args, _env, _cwd, signal) => {
+    signals.push(signal);
+    const number = signals.length;
+    // Deliberately ignore abort to simulate a late reply from an uncooperative transport.
+    await (number === 1 ? oldGate : newGate);
+    return JSON.stringify({
+      login: number === 1 ? 'stale-account' : 'fresh-account',
+      id: number,
+    });
+  });
+  const helperComplete = async (index: number) => {
+    f.helpers[index].finish();
+    await until(async () =>
+      internal.attempt &&
+      internal.login.poll(internal.attempt.id).status === 'complete'
+        ? true
+        : false,
+    );
+  };
+  try {
+    await f.connection.connect({ storage: 'session', repositories: [] });
+    await helperComplete(0);
+    const oldPoll = internal.poll();
+    await until(async () => (signals.length === 1 ? true : false));
+    await f.connection.cancel(f.connection.snapshot().epoch);
+    assert.equal(
+      signals[0].aborted,
+      true,
+      'cancel must abort the verification transport',
+    );
+    assert.equal(f.connection.snapshot().state, 'disconnected');
+    await f.connection.connect({ storage: 'session', repositories: [] });
+    await helperComplete(1);
+    const newPoll = internal.poll();
+    await until(async () => (signals.length === 2 ? true : false));
+    assert.equal(
+      signals[1].aborted,
+      false,
+      'old cancellation must not abort the fresh attempt',
+    );
+    releaseOld();
+    await oldPoll;
+    assert.equal(f.connection.snapshot().state, 'authorizing');
+    await internal.poll();
+    assert.equal(
+      signals.length,
+      2,
+      'stale finally must not clear fresh polling ownership',
+    );
+    releaseNew();
+    await newPoll;
+    assert.equal(f.connection.snapshot().account?.login, 'fresh-account');
+    assert.equal(f.connection.snapshot().state, 'connected');
+  } finally {
+    releaseOld();
+    releaseNew();
+    await f.close();
+  }
+});

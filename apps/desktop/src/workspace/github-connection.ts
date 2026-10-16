@@ -45,7 +45,8 @@ export class NativeGitHubConnection {
   private disposal?: Promise<void>;
   private children = new Set<Promise<void>>();
   private connecting?: Promise<GitHubConnectionState>;
-  private polling = false;
+  private polling?: { id: string; epoch: number };
+  private verification?: { epoch: number; controller: AbortController };
   private restoreEpoch?: number;
   private command: Runner;
   private persistence: Promise<void> = Promise.resolve();
@@ -352,51 +353,63 @@ export class NativeGitHubConnection {
     }
   }
   private async verify(epoch: number) {
-    const token = await this.login.token();
-    if (epoch !== this.state.epoch || this.state.state === 'disconnected')
-      throw Error('connection changed');
-    if (!token) throw Error('authorization unavailable');
-    const response = (
-      await this.command(
-        ['api', 'user', '--include', '--jq', '{login: .login, id: .id}'],
-        this.env(token),
-        this.options.dataDir,
-        this.lifetime.signal,
-      )
-    ).replaceAll('\r\n', '\n');
-    const separator = response.lastIndexOf('\n\n');
-    const included = /^HTTP\/[\d.]+\s+\d{3}/.test(response) && separator >= 0;
-    const data = JSON.parse(
-      included ? response.slice(separator + 2) : response,
-    );
-    const scopeHeader = included
-      ? /^x-oauth-scopes:[ \t]*([^\n]*)$/im.exec(
-          response.slice(0, separator),
-        )?.[1]
-      : undefined;
-    let grantedScopes: string[] | undefined;
-    if (scopeHeader !== undefined) {
-      const scopes = scopeHeader
-        .split(',')
-        .map((scope) => scope.trim())
-        .filter(Boolean);
-      if (
-        scopes.length <= 100 &&
-        scopes.every(
-          (scope) =>
-            /^[a-z][a-z0-9:_-]{0,63}$/.test(scope) && !scope.includes(token),
+    const verification = { epoch, controller: new AbortController() };
+    this.verification = verification;
+    const signal = AbortSignal.any([
+      this.lifetime.signal,
+      verification.controller.signal,
+    ]);
+    try {
+      const token = await this.login.token();
+      signal.throwIfAborted();
+      if (epoch !== this.state.epoch || this.state.state === 'disconnected')
+        throw Error('connection changed');
+      if (!token) throw Error('authorization unavailable');
+      const response = (
+        await this.command(
+          ['api', 'user', '--include', '--jq', '{login: .login, id: .id}'],
+          this.env(token),
+          this.options.dataDir,
+          signal,
         )
+      ).replaceAll('\r\n', '\n');
+      const separator = response.lastIndexOf('\n\n');
+      const included = /^HTTP\/[\d.]+\s+\d{3}/.test(response) && separator >= 0;
+      const data = JSON.parse(
+        included ? response.slice(separator + 2) : response,
+      );
+      const scopeHeader = included
+        ? /^x-oauth-scopes:[ \t]*([^\n]*)$/im.exec(
+            response.slice(0, separator),
+          )?.[1]
+        : undefined;
+      let grantedScopes: string[] | undefined;
+      if (scopeHeader !== undefined) {
+        const scopes = scopeHeader
+          .split(',')
+          .map((scope) => scope.trim())
+          .filter(Boolean);
+        if (
+          scopes.length <= 100 &&
+          scopes.every(
+            (scope) =>
+              /^[a-z][a-z0-9:_-]{0,63}$/.test(scope) && !scope.includes(token),
+          )
+        )
+          grantedScopes = [...new Set(scopes)];
+      }
+      signal.throwIfAborted();
+      if (epoch !== this.state.epoch) return;
+      if (
+        typeof data.login !== 'string' ||
+        !/^[-\w]{1,100}$/.test(data.login) ||
+        !Number.isSafeInteger(data.id)
       )
-        grantedScopes = [...new Set(scopes)];
+        throw Error('invalid GitHub identity');
+      return { account: { login: data.login, id: data.id }, grantedScopes };
+    } finally {
+      if (this.verification === verification) this.verification = undefined;
     }
-    if (epoch !== this.state.epoch) return;
-    if (
-      typeof data.login !== 'string' ||
-      !/^[-\w]{1,100}$/.test(data.login) ||
-      !Number.isSafeInteger(data.id)
-    )
-      throw Error('invalid GitHub identity');
-    return { account: { login: data.login, id: data.id }, grantedScopes };
   }
   async status() {
     await this.ready;
@@ -493,9 +506,10 @@ export class NativeGitHubConnection {
     }
   }
   private async poll() {
-    if (this.polling || !this.attempt) return;
-    this.polling = true;
-    const { id, epoch } = this.attempt;
+    const attempt = this.attempt;
+    if (!attempt || this.polling === attempt) return;
+    this.polling = attempt;
+    const { id, epoch } = attempt;
     let phase: 'verification' | 'metadata' = 'verification';
     try {
       const login = this.login.poll(id);
@@ -573,11 +587,13 @@ export class NativeGitHubConnection {
         this.emit();
       }
     } finally {
-      this.polling = false;
+      if (this.polling === attempt) this.polling = undefined;
     }
   }
   private async cancelCurrent() {
     clearInterval(this.timer);
+    const verification = this.verification;
+    verification?.controller.abort();
     if (this.attempt) {
       const id = this.attempt.id;
       this.attempt = undefined;
