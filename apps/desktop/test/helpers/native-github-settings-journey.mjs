@@ -185,7 +185,7 @@ export async function runNativeGitHubSettingsJourney({
       .waitFor();
     await card.getByText('GitHub login required', { exact: true }).waitFor();
     await card
-      .getByRole('heading', { name: 'connected account', exact: true })
+      .getByRole('heading', { name: 'GitHub account', exact: true })
       .waitFor();
     await expand(card, 'connection options');
     const repositories = card.getByPlaceholder('owner/repository', {
