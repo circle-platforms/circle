@@ -1,3 +1,7 @@
+import {
+  createNativeCommandHandoffFixture,
+  runNativeCommandHandoffJourney,
+} from './helpers/native-command-handoff-journey.mjs';
 import { runNativeGitHubSettingsJourney } from './helpers/native-github-settings-journey.mjs';
 import {
   createNativeContinuityFixture,
@@ -61,6 +65,7 @@ import { setViewport } from './helpers/viewport.mjs';
 const require = createRequire(import.meta.url);
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const packaged = !!process.env.CIRCLE_DESKTOP_EXECUTABLE;
+const launchRoot = resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? root);
 const diagnostic = process.env.CIRCLE_NATIVE_JOURNEY_DIAGNOSTIC === '1';
 const output = resolve(
   process.env.CIRCLE_NATIVE_JOURNEY_EVIDENCE ??
@@ -107,6 +112,14 @@ await createNativeEditorFixture(repo);
 await createNativeEditorSemanticsFixture(repo);
 const terminalFixture = await createNativeTerminalFixture(repo);
 const continuityFixture = await createNativeContinuityFixture(repo);
+const commandHandoffFixture = await createNativeCommandHandoffFixture(
+  repo,
+  join(
+    launchRoot.replace(/([\\/])app\.asar$/, '$1app.asar.unpacked'),
+    'dist/tools/node/bin',
+    process.platform === 'win32' ? 'node.exe' : 'node',
+  ),
+);
 const debugFixture = await createNativeDebugFixture(repo);
 const isolationFiles = await createNativeEditorIsolationFixture(repo);
 const git = async (...args) =>
@@ -118,6 +131,7 @@ await git(
   '.circle-editor-isolation-fixture.json',
   ...terminalFixture.files,
   ...continuityFixture.files,
+  ...commandHandoffFixture.files,
   debugFixture.program,
   '.circle-native-debug-interaction.json',
   'editor-supplement.ts',
@@ -146,7 +160,13 @@ const fixture = join(temp, 'model.json');
 const requestsPath = join(temp, 'requests.jsonl');
 await writeFile(
   fixture,
-  JSON.stringify(nativeTaskJourneyFixture(requestsPath)),
+  JSON.stringify(
+    (() => {
+      const fixture = nativeTaskJourneyFixture(requestsPath);
+      fixture.routes.push(commandHandoffFixture.route);
+      return fixture;
+    })(),
+  ),
 );
 const browserStreams = new Set();
 const server = createServer((request, response) => {
@@ -335,7 +355,6 @@ const check = async (name, action) => {
     );
   }
 };
-const launchRoot = resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? root);
 const buildIdentity = {
   sourceBuildHead: process.env.CIRCLE_NATIVE_JOURNEY_SOURCE_BUILD_HEAD ?? null,
   appPath: launchRoot,
@@ -343,7 +362,7 @@ const buildIdentity = {
   driverFiles: {},
   fixtureFiles: {},
 };
-for (const file of continuityFixture.files)
+for (const file of [...continuityFixture.files, ...commandHandoffFixture.files])
   buildIdentity.fixtureFiles[file] = createHash('sha256')
     .update(await readFile(join(repo, file)))
     .digest('hex');
@@ -357,6 +376,7 @@ for (const file of [
     'native-editor-semantics',
     'native-terminal-journey',
     'native-continuity-journey',
+    'native-command-handoff-journey',
     'native-github-settings-journey',
     'native-debug-journey',
     'native-keyboard-journey',
@@ -1395,6 +1415,24 @@ try {
     },
   );
   await check(
+    'original command card opens the same interactive PTY without respawn',
+    async () => {
+      await closeFile();
+      assert.equal(
+        resolve(commandHandoffFixture.nodePath),
+        resolve(buildIdentity.bundledNode.path),
+      );
+      return runNativeCommandHandoffJourney({
+        page,
+        workspace: repo,
+        parentSessionId: sessionId,
+        state,
+        until,
+        output,
+      });
+    },
+  );
+  await check(
     'whole app restart preserves inputs without automatic sending',
     async () => {
       await runNativeInputRecovery({
@@ -1591,6 +1629,7 @@ try {
     'debug.cjs',
     'browser-source.js',
     ...continuityFixture.files,
+    ...commandHandoffFixture.files,
     'agent-result.txt',
   ]) {
     try {
