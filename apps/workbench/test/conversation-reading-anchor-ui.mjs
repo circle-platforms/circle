@@ -106,8 +106,8 @@ try {
       'switching history preserves exact visible message identity',
     );
     assert(
-      Math.abs(after.offset - before.offset) <= 4,
-      'switching history preserves reading anchor within 4px',
+      Math.abs(after.offset - before.offset) <= 2,
+      'switching history preserves reading anchor within 2px',
     );
   }
   await page
@@ -116,12 +116,12 @@ try {
   await page.getByRole('button', { name: 'close source', exact: true }).click();
   const remounted = await frame('remounted');
   assert.equal(remounted.id, before.id);
-  assert(Math.abs(remounted.offset - before.offset) <= 4);
+  assert(Math.abs(remounted.offset - before.offset) <= 2);
   await page.reload();
   await page.locator('[data-windowed-count="10000"]').waitFor();
   const restored = await frame('reload');
   assert.equal(restored.id, before.id);
-  assert(Math.abs(restored.offset - before.offset) <= 4);
+  assert(Math.abs(restored.offset - before.offset) <= 2);
   await page.locator('.transcript').evaluate((node) => {
     node.scrollTo({ top: node.scrollHeight, behavior: 'instant' });
   });
