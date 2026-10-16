@@ -161,11 +161,17 @@ test('session factories isolate matching cycle ids and stop only the released ow
   const progressed = new Set<string>();
   const actions: string[] = [];
   const created: string[] = [];
+  const bound = new Set<string>();
   const factory = (owner: string): CyclePorts => {
     created.push(owner);
     return {
+      bind: (record, mode) => {
+        assert.equal(mode, 'created');
+        bound.add(owner + ':' + record.id);
+      },
       tasks: {
-        create: async () => {
+        create: async (record) => {
+          assert(bound.has(owner + ':' + record.id));
           actions.push(owner + ':create');
           return ['task-' + owner];
         },
@@ -243,6 +249,7 @@ test('session factories isolate matching cycle ids and stop only the released ow
         acceptanceCriteria: ['works'],
       });
     assert.deepEqual(created, ['a', 'b']);
+    assert.deepEqual([...bound].sort(), ['a:same-cycle-id', 'b:same-cycle-id']);
     for (let i = 0; i < 100; i++) {
       const allA = (await service.call('a', 'cycles', 'list')) as CycleRecord[];
       const allB = (await service.call('b', 'cycles', 'list')) as CycleRecord[];

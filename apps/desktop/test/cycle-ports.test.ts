@@ -1110,8 +1110,44 @@ test('a retired provider generation blocks its old cycle while a newly created r
     },
   });
   cleanup(t, () => tasks.close());
+  const { NativeGitHubConnection } =
+    await import('../src/workspace/github-connection.ts');
+  let finish!: () => void,
+    grants = 0;
+  const connection = new NativeGitHubConnection({
+    dataDir: join(f.dataDir, 'native-connection'),
+    ghPath: 'synthetic-gh',
+    spawn: () => ({
+      onData: () => {},
+      onExit: (callback) => {
+        finish = () => callback({ exitCode: 0 });
+      },
+      write: () => {},
+      kill: () => finish?.(),
+    }),
+    credentialCommand: async () => ({ stdout: 'synthetic-cycle-grant' }),
+    command: async () => JSON.stringify({ login: 'fixture', id: 7 }),
+  });
+  cleanup(t, () => connection.dispose());
+  const grant = async () => {
+    await connection.connect({
+      storage: 'session',
+      repositories: ['fixture/repo'],
+    });
+    grants++;
+    finish();
+    for (let i = 0; i < 100; i++) {
+      if ((await connection.status()).state === 'connected') return;
+      await delay(5);
+    }
+    throw Error('explicit fixture grant did not finish');
+  };
+  await grant();
   let current = new AbortController();
-  const scopes = new Map<string, AbortController>();
+  const scopes = new Map<
+    string,
+    { controller: AbortController; epoch: number }
+  >();
   const ports = createWorkspaceCyclePorts({
     workspace: f.workspace,
     dataDir: join(f.dataDir, 'generation-ports'),
@@ -1121,16 +1157,22 @@ test('a retired provider generation blocks its old cycle while a newly created r
     verify,
     withResource: (resource, run) => resources.withResource(resource, run),
     bindCycle: (record) => {
-      if (!scopes.has(record.id)) scopes.set(record.id, current);
+      if (!scopes.has(record.id))
+        scopes.set(record.id, {
+          controller: current,
+          epoch: connection.snapshot().epoch,
+        });
     },
     invocation: (record) => {
       const captured = scopes.get(record.id);
       assert(captured);
       return {
-        signal: captured.signal,
+        signal: captured.controller.signal,
         assertActive: () => {
-          captured.signal.throwIfAborted();
-          if (captured !== current) throw Error('retired generation');
+          captured.controller.signal.throwIfAborted();
+          connection.assertEpoch(captured.epoch);
+          if (captured.controller !== current)
+            throw Error('retired generation');
         },
       };
     },
@@ -1151,8 +1193,11 @@ test('a retired provider generation blocks its old cycle while a newly created r
   let old = await cycles.create(spec('old-generation'), {
     operationId: 'create-old-generation',
   });
+  await connection.disconnect(connection.snapshot().epoch);
   current.abort();
   current = new AbortController();
+  await grant();
+  assert.equal(grants, 2);
   old = await cycles.advance(old.id);
   assert.equal(old.state, 'needs_review');
   assert.equal(

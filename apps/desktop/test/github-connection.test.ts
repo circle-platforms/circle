@@ -613,6 +613,9 @@ test('profile disable unloads only GitHub in two controller runtimes and freezes
     ): ReturnType<typeof githubWorkspaceBackend>;
     githubInvocation(id: string): { signal: AbortSignal; assertActive(): void };
     githubAvailable(id: string): boolean;
+    services(
+      workspace: string,
+    ): import('../src/workspace/workspace-services.ts').WorkspaceServices;
   };
   internal.githubProfile = f.connection;
   controller.options.workspaceTools = {
@@ -751,6 +754,25 @@ test('profile disable unloads only GitHub in two controller runtimes and freezes
     assert.doesNotThrow(internal.githubInvocation(a.session.id).assertActive);
     await assert.rejects(oldUI.gh(['pr', 'view']));
     await assert.rejects(oldCycle.gh(['pr', 'view']));
+    await oldUI.git.git(['config', 'user.name', 'Fixture']);
+    await oldUI.git.git(['config', 'user.email', 'fixture@example.invalid']);
+    const services = internal.services(a.options.workspace);
+    const record = (await services.call(a.session.id, 'cycles', 'create', {
+      id: 'controller-bound-cycle',
+      operationId: 'controller-bind-create',
+      title: 'Check native cycle binding',
+      body: '',
+      acceptanceCriteria: ['exercise actual controller bridge'],
+    })) as { id: string };
+    const advanced = (await services.call(a.session.id, 'cycles', 'advance', {
+      id: record.id,
+    })) as { state: string; reason?: string };
+    assert.equal(advanced.state, 'needs_review');
+    assert(
+      !/authorization scope is missing/.test(advanced.reason ?? ''),
+      advanced.reason,
+    );
+
     await assert.rejects(backendA.call('status', {}), /disabled/);
     release();
     assert.equal(f.calls.length, before);

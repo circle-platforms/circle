@@ -211,6 +211,10 @@ export class WorkspaceServices {
             createHash('sha256').update(sessionId).digest('hex'),
           ),
           ports: {
+            bind: (cycle, mode) => {
+              check();
+              ports.bind?.(cycle, mode);
+            },
             tasks: guarded(ports.tasks),
             git: guarded(ports.git),
             delivery: guarded(ports.delivery),
