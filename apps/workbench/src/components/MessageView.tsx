@@ -1,4 +1,4 @@
-import { Brain, Copy } from 'lucide-react';
+import { Brain, ChevronRight, Copy } from 'lucide-react';
 import { useRuntime } from '../app/context';
 import { copyText } from '../host';
 import type { Message } from '../model/types';
@@ -39,6 +39,11 @@ export function MessageView({
               setThinkingOpen(!thinkingOpen);
             }}
           >
+            <ChevronRight
+              size={12}
+              className="thinking-chevron"
+              aria-hidden="true"
+            />
             <Brain size={13} />
             <span>{t('thinking')}</span>
             <span className="thinking-preview">{preview}</span>

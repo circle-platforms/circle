@@ -1,4 +1,5 @@
 export const developer: Record<string, string> = {
+  'response table': '回答表格',
   'review completed actions before trying again':
     '请先核对已执行的操作，再决定是否重试。',
   'error details': '错误详情',

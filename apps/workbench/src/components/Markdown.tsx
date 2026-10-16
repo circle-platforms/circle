@@ -1,3 +1,5 @@
+import { t } from '../i18n';
+import './markdown.css';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useSources, sourceLocation } from './SourceNavigation';
@@ -12,6 +14,16 @@ export function Markdown({ text }: { text: string }) {
           sourceLocation(url) ? url : defaultUrlTransform(url)
         }
         components={{
+          table: ({ children }) => (
+            <div
+              className="markdown-table-scroll"
+              role="region"
+              aria-label={t('response table')}
+              tabIndex={0}
+            >
+              <table>{children}</table>
+            </div>
+          ),
           a: ({ children, href }) => (
             <a
               href={href}
