@@ -10,7 +10,7 @@ import {
 } from 'node:fs/promises';
 import { existsSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { RuntimeController } from '../src/runtime-controller.ts';
@@ -3936,6 +3936,103 @@ test('the default workspace refuses the data folder and cannot be set through sa
   assert.equal(loadSettings(f.home).workspace_folder, '');
 });
 
+test('a task started outside a project gets a trusted folder of its own under the task folder', async (t) => {
+  const f = await setupScratch(t, [
+    { message: assistant('answered in the task') },
+  ]);
+  assert.equal(
+    f.controller.snapshot().settings.taskFolder,
+    join(f.home, 'tasks'),
+  );
+  const seeded = f.controller.snapshot().sessions.length;
+  const initial = f.controller.snapshot().activeSessionId;
+  assert.equal(activeWorkspacePath(f.controller), f.scratch);
+  // A new session with no project open: a folder of Circle's own, made, trusted and
+  // marked, rather than more litter in the one default workspace.
+  assert.equal((await f.call('new-session', {})).ok, true);
+  const task = activeWorkspacePath(f.controller);
+  assert.ok(
+    task.startsWith(join(f.home, 'tasks') + sep),
+    'under the task folder: ' + task,
+  );
+  assert.notEqual(task, f.scratch);
+  assert.ok(existsSync(task), 'the folder is there');
+  const row = f.controller
+    .snapshot()
+    .workspaces.find((entry) => entry.path === task)!;
+  assert.equal(row.task, true);
+  assert.equal(row.trusted, true, 'Circle owns the folder: no trust question');
+  assert.ok(loadSettings(f.home).trusted_folders.includes(task));
+  // One conversation for the task, not an empty one left beside it.
+  assert.equal(
+    f.controller.snapshot().sessions.length,
+    seeded + 1,
+    JSON.stringify(f.controller.snapshot().sessions.map((row) => row.id)),
+  );
+  // Each task its own folder, so one can be deleted whole.
+  assert.equal((await f.call('new-session', {})).ok, true);
+  const next = activeWorkspacePath(f.controller);
+  assert.equal(f.controller.snapshot().sessions.length, seeded + 2);
+  assert.notEqual(next, task, 'a second task does not share the first folder');
+  assert.ok(existsSync(next));
+  // A project the person opened keeps its sessions together, and is no task. The
+  // app opens a project by showing its home; the first message starts the session
+  // there, and new sessions from it stay in it.
+  const project = join(f.root, 'project');
+  await mkdir(project);
+  saveSettingsChange(f.home, (saved) => {
+    Object.assign(saved, trustFolder(saved, realpathSync(project)));
+  });
+  const known = await f.call('open-workspace', { path: project });
+  assert.equal(known.ok, true);
+  const opened = await f.call('begin-session', {
+    workspaceId: (known.data as { workspaceId: string }).workspaceId,
+    text: 'in the project',
+  });
+  assert.equal(opened.ok, true, String(opened.error));
+  assert.equal(activeWorkspacePath(f.controller), realpathSync(project));
+  assert.equal(
+    f.controller
+      .snapshot()
+      .workspaces.find((entry) => entry.path === realpathSync(project))!.task,
+    undefined,
+    'a project is not a task',
+  );
+  const inProject = await f.call('new-session', {});
+  assert.equal(inProject.ok, true);
+  assert.equal(
+    activeWorkspacePath(f.controller),
+    realpathSync(project),
+    'a new session in an opened project stays in it',
+  );
+  // The task folder may live elsewhere, but not where the app keeps its own data, and
+  // never through the generic settings command.
+  const elsewhere = join(f.root, 'loose');
+  await mkdir(elsewhere);
+  assert.equal((await f.call('set-task-folder', { path: elsewhere })).ok, true);
+  assert.equal(loadSettings(f.home).task_folder, realpathSync(elsewhere));
+  assert.equal(
+    f.controller.snapshot().settings.taskFolder,
+    realpathSync(elsewhere),
+  );
+  const refused = await f.call('set-task-folder', { path: f.home });
+  assert.equal(refused.ok, false);
+  assert.match(String(refused.error), /data folder/);
+  const mixed = await f.call('save-settings', {
+    settings: { theme: 'dark', taskFolder: join(f.root, 'anywhere') },
+  });
+  assert.equal(mixed.ok, false);
+  assert.match(String(mixed.error), /native folder dialog/);
+  // Back on the draft conversation, where no project is open, the next task
+  // lands in the moved folder.
+  const back = await f.call('select-session', { id: initial });
+  assert.equal(back.ok, true, String(back.error));
+  assert.equal((await f.call('new-session', {})).ok, true);
+  assert.ok(
+    activeWorkspacePath(f.controller).startsWith(realpathSync(elsewhere) + sep),
+    'the new task lands in the moved folder',
+  );
+});
 test('the whole application data folder is refused, not only its runtime home', async (t) => {
   // As the runtime worker runs: home is runtime-home inside the data folder, beside the
   // updates folder the updater clears

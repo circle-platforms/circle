@@ -9,6 +9,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   writeFileSync,
@@ -552,6 +553,54 @@ test('parsing: -n collapses spaces and cuts to 80, @files are kept apart, a fold
   assert.deepEqual(typo.prompts, []);
 });
 
+test("--task works in a folder of Circle's own and leaves a plain start alone", async (t) => {
+  const home = scratch(t);
+  const workspace = realpathSync(scratch(t));
+  // Without the flag, the folder the process sits in is still the workspace.
+  assert.equal(parseCli([], workspace).task, undefined);
+  assert.equal(parseCli([], workspace).workspace, workspace);
+  const named = parseCli(['--task', 'slb-check', 'what is up?'], workspace);
+  assert.equal(named.task, 'slb-check');
+  assert.deepEqual(named.prompts, ['what is up?']);
+  assert.equal(parseCli(['--task'], workspace).task, '');
+  const endpoint = await gateway(t, [{ content: 'done' }]);
+  setUp(home, endpoint.base, []);
+  // Nothing is trusted here, so only a workspace of Circle's own can answer.
+  const run = await circle(home, ['--task', 'slb-check', '-p', 'hello'], {
+    cwd: workspace,
+  });
+  assert.equal(run.code, 0, run.stderr);
+  assert.ok(
+    existsSync(join(realpathSync(home), 'tasks', 'slb-check')),
+    'the task folder was made under the task root',
+  );
+  const trusted = loadSettings(home).trusted_folders;
+  assert.ok(
+    trusted.some((folder) => folder.endsWith(join('tasks', 'slb-check'))),
+    'Circle trusts its own task folder: ' + JSON.stringify(trusted),
+  );
+  const plain = await circle(home, ['-p', 'hello'], { cwd: workspace });
+  assert.notEqual(plain.code, 0);
+  assert.match(plain.stderr, /not trusted/);
+  // A name is a name, not a path: nothing escapes the task root.
+  const escaped = await circle(
+    home,
+    ['--task', '../../outside', '-p', 'hello'],
+    { cwd: workspace },
+  );
+  assert.equal(escaped.code, 0, escaped.stderr);
+  const made = readdirSync(join(realpathSync(home), 'tasks'));
+  assert.equal(made.length, 2, JSON.stringify(made));
+  assert.ok(made.includes('slb-check'));
+  assert.ok(
+    made.every((name) => !name.includes('..')),
+    'a task name never climbs out of the task root',
+  );
+  assert.ok(
+    !existsSync(join(realpathSync(home), 'outside')),
+    'the task stayed under the task root',
+  );
+});
 test('-n names the saved conversation with its spaces collapsed', async (t) => {
   const home = scratch(t);
   const workspace = realpathSync(scratch(t));

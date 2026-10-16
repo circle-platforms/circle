@@ -19,6 +19,13 @@ export const panels: Record<string, string> = {
     '应用打开期间这个会话改动过的文件，每个都与第一次改动前的版本对比。',
   configured: '已配置',
   'not configured': '未配置',
+  // tasks with no project
+  'no project': '无项目',
+  'tasks with no project': '无项目任务',
+  'task folder changed': '任务文件夹已更改',
+  'a task you start outside a project gets a folder of its own here, and is listed apart from your projects':
+    '在项目外启动的任务会在这里得到自己的文件夹，并在侧栏里与项目分开列出',
+
   // the inspector
   'context panel': '上下文面板',
   context: '上下文',

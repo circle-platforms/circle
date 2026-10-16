@@ -305,6 +305,11 @@ try {
     0,
   );
   await route('/page/sessions');
+  // The archived session sits in the folder the app fell back to, while a session
+  // started after it belongs to its own task folder: list the workspaces together.
+  await page
+    .getByRole('checkbox', { name: 'all workspaces', exact: true })
+    .check();
   await page
     .getByRole('checkbox', { name: 'archived sessions', exact: true })
     .check();
@@ -371,22 +376,32 @@ try {
     .filter({ hasText: 'managed fixture A' })
     .first()
     .click();
+  // The row belongs to another folder now, so opening it moves the app between the
+  // runtimes of the two workspaces: wait for that to land rather than assume it.
   await until(
     async () => (await state()).activeSessionId === a,
     'approval session selected',
   );
-  const decision = (await state()).interactions.find(
-    (row) => row.status === 'pending',
-  );
-  assert.equal(
-    (
-      await command('answer', {
+  // The switch re-publishes the interaction: answer it on the runtime that now
+  // owns it, re-reading the record whenever a re-publish has made it stale.
+  let answered = false;
+  for (let tries = 0; tries < 20 && !answered; tries++) {
+    const decision = (await state()).interactions.find(
+      (row) => row.status === 'pending',
+    );
+    if (decision) {
+      const reply = await command('answer', {
         id: decision.id,
         revision: decision.revision,
         answer: 'approve',
-      })
-    ).ok,
-    true,
+      });
+      if (reply.ok) answered = true;
+    }
+    if (!answered) await new Promise((done) => setTimeout(done, 150));
+  }
+  assert.ok(
+    answered,
+    'the approval card was never answerable on its new runtime',
   );
   await page.getByText('approved fixture answer', { exact: true }).waitFor();
   assert.equal(
@@ -474,7 +489,18 @@ try {
         .every((session) => session.archivedAt),
     'whole workspace archived',
   );
-  assert.equal(await page.locator('.sidebar .project').count(), 0);
+  // Archiving a workspace takes the sessions of that folder only. The task started
+  // outside it lives in a folder of its own, so its group stays: that is what a task
+  // having its own folder means.
+  assert.equal(
+    await page
+      .locator('.sidebar .project')
+      .filter({ hasText: 'managed fixture A' })
+      .count(),
+    0,
+    'the archived workspace lost its group',
+  );
+  assert.equal(await page.locator('.sidebar .project').count(), 1);
   assert.equal(
     await readFile(join(workspace.path, 'kept.txt'), 'utf8'),
     'approved fixture bytes',
