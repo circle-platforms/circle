@@ -1,4 +1,4 @@
-import { matchingAction } from '../model/shortcuts';
+import { effectiveBindings, matchingAction } from '../model/shortcuts';
 import { planVisible } from '../../../../src/plan_state';
 import { agentActivityText, isAgentActive } from '../model/activity';
 import { completionNoticeText } from '../model/completion';
@@ -28,6 +28,8 @@ import { BUILTIN_SLASH } from '../../../../src/tui/slash_commands';
 import { slashText } from '../model/slash-text';
 import { useRuntime } from '../app/context';
 import { currentSession, visibleMessages, EFFORTS } from '../model/state';
+import { showTurnClock } from '../model/turn-line';
+import { workspaceLabel } from '../model/workspace-label';
 import { fullTime, shownTime } from '../model/time';
 import type { Attachment, DialogId, Message, PanelId } from '../model/types';
 import { Button, IconButton, FileChip, Status } from '../components/common';
@@ -62,6 +64,15 @@ import {
   sessionScrollAnchor,
   type SessionScroll,
 } from '../model/presentation';
+import {
+  claimComposerFocus,
+  composerFocusPending,
+  composerFocusSealed,
+  composerHasBuffer,
+  composerTextPlaced,
+  subscribeComposerFocus,
+  takeComposerText,
+} from '../model/composer-focus';
 interface Props {
   focusComposer?: number;
   onDialog: (dialog: DialogId, selection?: string) => void;
@@ -81,6 +92,19 @@ const MEDIA_TYPES = new Set([
   'application/pdf',
 ]);
 const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
+/** Scroll a transcript item inside the transcript. scrollIntoView also scrolls
+    every ancestor, which walks the composer off the window. */
+function revealIn(scroller: HTMLElement, target: Element): void {
+  const box = scroller.getBoundingClientRect();
+  const item = target.getBoundingClientRect();
+  if (item.top >= box.top && item.bottom <= box.bottom) return;
+  scroller.scrollTo({
+    top: Math.max(
+      0,
+      scroller.scrollTop + item.top - box.top - (box.height - item.height) / 2,
+    ),
+  });
+}
 const mediaFiles = (files: FileList): File[] =>
   Array.from(files).filter((file) => MEDIA_TYPES.has(file.type));
 // A transcript item: a message, or the tool calls between two messages, folded together.
@@ -256,7 +280,7 @@ export function Conversation({
       });
     }
     if (runtime.getSnapshot().activeSessionId === session.id)
-      input.current?.focus();
+      input.current?.focus({ preventScroll: true });
   };
   const lastEscape = useRef(0);
   const savedDraft = useRef('');
@@ -268,6 +292,59 @@ export function Conversation({
     setFind('');
     setFindIndex(0);
   }, [session.id]);
+  // Ctrl+N and new session ask for this box once the empty view is committed,
+  // including when that view is the session already open. Keys typed during
+  // the switch were buffered and land here before paint. Selecting a listed
+  // session does not ask, so it does not move the keyboard.
+  const placeCaret = useRef(false);
+  useLayoutEffect(() => {
+    const apply = () => {
+      if (!composerFocusPending()) return;
+      const node = input.current;
+      if (!node) return;
+      if (!composerFocusSealed()) {
+        node.focus({ preventScroll: true });
+        if (!composerHasBuffer() && node.value)
+          node.setSelectionRange(0, node.value.length);
+        return;
+      }
+      const text = takeComposerText();
+      if (text) {
+        const live = currentSession(runtime.getSnapshot());
+        if (
+          !live.messages.some((message) => message.role === 'user') &&
+          live.draft !== text
+        ) {
+          placeCaret.current = true;
+          runtime.change((state) => {
+            const target = currentSession(state);
+            if (target.messages.some((message) => message.role === 'user'))
+              return;
+            target.draft = text;
+          });
+        }
+      }
+      const field = input.current;
+      if (!field) return;
+      field.focus({ preventScroll: true });
+      const end = field.value.length;
+      if (text || composerTextPlaced()) field.setSelectionRange(end, end);
+      else if (end) field.setSelectionRange(0, end);
+      claimComposerFocus();
+    };
+    apply();
+    return subscribeComposerFocus(apply);
+  }, [session.id, runtime]);
+  // The buffered draft commits on the next render. Put the caret after it
+  // once that value is in the box, then leave the caret where the person moves it.
+  useLayoutEffect(() => {
+    if (!placeCaret.current) return;
+    const field = input.current;
+    if (!field || (field.value.length === 0 && composerTextPlaced())) return;
+    placeCaret.current = false;
+    field.focus({ preventScroll: true });
+    field.setSelectionRange(field.value.length, field.value.length);
+  }, [session.draft, session.id]);
   const latestView = useRef({ session, onDialog, onPanel });
   latestView.current = { session, onDialog, onPanel };
   const matches = useMemo(
@@ -334,7 +411,7 @@ export function Conversation({
       if (send) act(() => runtime.send());
     }
     setDismissed(true);
-    input.current?.focus();
+    input.current?.focus({ preventScroll: true });
   };
   useEffect(() => {
     if (input.current) {
@@ -429,19 +506,38 @@ export function Conversation({
           const target = scroller.current?.querySelector(
             `[data-message-id="${CSS.escape(id)}"]`,
           );
-          target?.scrollIntoView({ block: 'center' });
+          if (target && scroller.current) revealIn(scroller.current, target);
         });
       });
       return () => cancelAnimationFrame(frame);
     }
   }, [find, findIndex]);
   useEffect(() => {
+    // Capture runs before a menu can close and unmount. Escape then still dismisses
+    // the menu, and the later handler does not treat it as stopping the turn.
+    const markMenu = (event: KeyboardEvent) => {
+      if (
+        event.key === 'Escape' &&
+        document.querySelector('[role="dialog"], [role="menu"]')
+      )
+        (event as KeyboardEvent & { menuOpen?: boolean }).menuOpen = true;
+    };
     const handler = (event: KeyboardEvent) => {
-      if (document.querySelector('[role="dialog"]')) return;
+      if ((event as KeyboardEvent & { menuOpen?: boolean }).menuOpen) return;
+      if (document.documentElement.dataset.keyCapture) return;
+      // A menu or dialog takes Escape itself. It must not also stop the turn.
+      if (document.querySelector('[role="dialog"], [role="menu"]')) return;
       const current = latestView.current.session;
-      const control = event.ctrlKey || event.metaKey;
-      const mapped = matchingAction(event, snapshot.settings.keybindings);
+      const mapped = matchingAction(
+        event,
+        effectiveBindings(snapshot.settings.keybindings),
+      );
       if (current.archivedAt && mapped !== 'find') return;
+      // A copy chord over a selection stays a cut or a copy.
+      if (mapped === 'message.copy' && window.getSelection()?.toString())
+        return;
+      // The window handles the sidebar, including settings and home.
+      if (mapped === 'sidebar.toggle') return;
       if (mapped) {
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -459,12 +555,18 @@ export function Conversation({
         else if (mapped === 'plan.focus') {
           setPlanCollapsed(false);
           requestAnimationFrame(() => planItems.current?.focus());
-        } else if (mapped === 'history.search') onCommand();
+        }
+        // history.search is ctrl+r. It opens the same search as ctrl+k.
+        else if (mapped === 'history.search') onCommand();
         else if (mapped === 'exit') onDialog('exit');
         else if (mapped === 'secret.enter') onDialog('secret');
         else if (mapped === 'suspend' || mapped === 'job.background') {
           runtime.request(mapped === 'suspend' ? 'suspend' : 'background');
-          notify(t('host request recorded; no process changed'));
+          notify(
+            mapped === 'job.background'
+              ? t('background request recorded; no process was changed')
+              : t('host request recorded; no process changed'),
+          );
         } else if (mapped === 'message.followup')
           act(() => runtime.send('follow-up'));
         else if (mapped === 'message.dequeue')
@@ -499,14 +601,17 @@ export function Conversation({
         else if (mapped === 'mode.cycle')
           setMode(nextMode(sessionMode(current)));
         else if (mapped === 'model.cycle') {
-          const next =
-            snapshot.models[
-              (snapshot.models.findIndex(
-                (model) => model.id === current.model,
-              ) +
-                1) %
-                snapshot.models.length
-            ];
+          const models = snapshot.models.filter(
+            (model) =>
+              !snapshot.settings.enabledModels.length ||
+              snapshot.settings.enabledModels.includes(model.id),
+          );
+          const next = models.length
+            ? models[
+                (models.findIndex((model) => model.id === current.model) + 1) %
+                  models.length
+              ]
+            : undefined;
           if (next)
             perform(() =>
               runtime.change((state) => {
@@ -516,82 +621,13 @@ export function Conversation({
         }
         return;
       }
-      if (
-        event.altKey &&
-        !event.ctrlKey &&
-        !event.metaKey &&
-        !event.shiftKey &&
-        event.key.toLowerCase() === 'p'
-      ) {
-        event.preventDefault();
-        setPlanCollapsed(false);
-        requestAnimationFrame(() => planItems.current?.focus());
-        return;
-      }
-      if (control && event.key.toLowerCase() === 'f') {
-        event.preventDefault();
-        setFinding((value) => !value);
-        return;
-      }
-      if (control && event.key.toLowerCase() === 'o') {
-        event.preventDefault();
-        act(() => runtime.command('details'));
-      }
-      if (control && event.key.toLowerCase() === 't') {
-        event.preventDefault();
-        act(() => runtime.command('thinking'));
-      }
-      if (control && event.key.toLowerCase() === 'l') {
-        event.preventDefault();
-        act(() => runtime.command('models'));
-      }
-      if (control && event.key.toLowerCase() === 'r') {
-        event.preventDefault();
-        onCommand();
-      }
-      if (control && event.key.toLowerCase() === 'g') {
-        event.preventDefault();
-        onDialog('editor');
-      }
-      if (control && event.key.toLowerCase() === 's') {
-        event.preventDefault();
-        onDialog('secret');
-      }
-      if (control && event.key.toLowerCase() === 'p') {
-        event.preventDefault();
-        const models = snapshot.models.filter(
-          (model) =>
-            !snapshot.settings.enabledModels.length ||
-            snapshot.settings.enabledModels.includes(model.id),
-        );
-        const next =
-          models[
-            (models.findIndex((model) => model.id === current.model) + 1) %
-              models.length
-          ];
-        if (next)
-          perform(() =>
-            runtime.change((state) => {
-              currentSession(state).model = next.id;
-            }),
-          );
-      }
-      if (control && event.key.toLowerCase() === 'b') {
-        event.preventDefault();
-        runtime.request('background');
-        notify(t('background request recorded; no process was changed'));
-      }
-      if (
-        control &&
-        event.key.toLowerCase() === 'x' &&
-        !window.getSelection()?.toString()
-      ) {
-        event.preventDefault();
-        act(() => runtime.command('copy'));
-      }
     };
+    addEventListener('keydown', markMenu, true);
     addEventListener('keydown', handler);
-    return () => removeEventListener('keydown', handler);
+    return () => {
+      removeEventListener('keydown', markMenu, true);
+      removeEventListener('keydown', handler);
+    };
   }, [
     runtime,
     snapshot.models,
@@ -643,17 +679,20 @@ export function Conversation({
     savedAnchor?.offset,
     session.presentation?.scroll?.follow,
   ]);
-  const clock = pending.length ? undefined : session.turn;
+  const clock = showTurnClock(messages, pending.length, session.turn)
+    ? session.turn
+    : undefined;
   const asked = items.findLastIndex(
     (item) => item.kind !== 'tools' && item.message.role === 'user',
   );
   const clockAt = items.findLastIndex(
     (item, index) => index > asked && item.kind === 'tools',
   );
-  const showRequest = () =>
-    scroller.current
-      ?.querySelector('.inline-request')
-      ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  const showRequest = () => {
+    const box = scroller.current;
+    const target = box?.querySelector('.inline-request');
+    if (box && target) revealIn(box, target);
+  };
   return (
     <section className="conversation">
       {finding && (
@@ -715,7 +754,7 @@ export function Conversation({
                 title={workspace.path}
               >
                 <Status value={workspace.trusted ? 'trusted' : 'not trusted'} />
-                <strong>{workspace.name}</strong>
+                <strong>{workspaceLabel(workspace)}</strong>
                 <span>{workspace.path}</span>
               </button>
               <div className="welcome-context">
@@ -779,6 +818,11 @@ export function Conversation({
                             key={request.id}
                             item={request}
                             onSecret={() => onDialog('secret')}
+                            onSettled={() =>
+                              requestAnimationFrame(() =>
+                                input.current?.focus({ preventScroll: true }),
+                              )
+                            }
                           />
                         ))}
                     </ToolGroup>
@@ -825,6 +869,11 @@ export function Conversation({
               key={item.id}
               item={item}
               onSecret={() => onDialog('secret')}
+              onSettled={() =>
+                requestAnimationFrame(() =>
+                  input.current?.focus({ preventScroll: true }),
+                )
+              }
             />
           ))}
           {session.turn &&
@@ -956,7 +1005,7 @@ export function Conversation({
                     } else if (event.key === 'Escape') {
                       event.preventDefault();
                       event.stopPropagation();
-                      input.current?.focus();
+                      input.current?.focus({ preventScroll: true });
                     } else if (
                       event.key.length === 1 &&
                       !event.ctrlKey &&
@@ -966,7 +1015,7 @@ export function Conversation({
                       event.preventDefault();
                       event.stopPropagation();
                       setDraft(session.draft + event.key);
-                      input.current?.focus();
+                      input.current?.focus({ preventScroll: true });
                     }
                   }}
                 >

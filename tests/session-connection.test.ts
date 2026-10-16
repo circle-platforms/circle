@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { test } from 'node:test';
 import { AgentRuntime } from '../src/runtime.js';
+import { TITLE_MAX_TOKENS } from '../src/session_title.js';
 import { SessionRuntimeManager } from '../src/session_manager.js';
 import { ScriptedModel } from '../src/testing.js';
 import {
@@ -20,13 +21,16 @@ async function gateway(
   name: string,
   hold?: () => Promise<void>,
 ) {
-  const requests: { model: string; authorization?: string }[] = [];
+  const requests: { model: string; authorization?: string; title?: true }[] =
+    [];
   const server = createServer(async (request, response) => {
     let body = '';
     for await (const chunk of request) body += chunk;
+    const parsed = JSON.parse(body) as { model: string; max_tokens?: number };
     requests.push({
-      model: JSON.parse(body).model,
+      model: parsed.model,
       authorization: request.headers.authorization,
+      ...(parsed.max_tokens === TITLE_MAX_TOKENS ? { title: true } : {}),
     });
     await hold?.();
     response.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -85,13 +89,16 @@ test('refreshing a connection replaces every local session SDK; logout cannot re
   changed.auth.model = 'new-model';
   saveCredentials({ api_key: 'synthetic-next' }, home);
   for (const runtime of sessions.values()) runtime.refreshConnection(changed);
-  await a.harness.run('after A');
-  await b.harness.run('after B');
-  assert.deepEqual(old.requests, [
+  await a.harness.run('A after login');
+  await b.harness.run('B after login');
+  // The sentences ask for a title. Those calls use the same connection and
+  // are not the user turns this test is counting.
+  const turns = (rows: { title?: true }[]) => rows.filter((row) => !row.title);
+  assert.deepEqual(turns(old.requests), [
     { model: 'old-model', authorization: 'Bearer synthetic-old' },
     { model: 'old-model', authorization: 'Bearer synthetic-old' },
   ]);
-  assert.deepEqual(next.requests, [
+  assert.deepEqual(turns(next.requests), [
     { model: 'new-model', authorization: 'Bearer synthetic-next' },
     { model: 'new-model', authorization: 'Bearer synthetic-next' },
   ]);
@@ -111,8 +118,8 @@ test('refreshing a connection replaces every local session SDK; logout cannot re
     a.harness.run('new session after logout'),
     /connect an API/,
   );
-  assert.equal(old.requests.length, 2);
-  assert.equal(next.requests.length, 2);
+  assert.equal(turns(old.requests).length, 2);
+  assert.equal(turns(next.requests).length, 2);
 });
 
 test('connection refresh refuses an active turn without replacing its current settings or model', async (t) => {

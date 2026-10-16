@@ -4,9 +4,11 @@ const GENERATED_TASK_DIRECTORY = /^[a-f0-9]{24}-\d+$/i;
 /** Only an actual projected task owner can identify a generated workspace.
  * Ordinary user folders, paths, permissions and session routes remain unchanged. */
 export function workspaceLabel(
-  workspace: Pick<Workspace, 'id' | 'name'>,
-  agents: AgentRecord[],
+  workspace: Pick<Workspace, 'name'> & Partial<Pick<Workspace, 'id' | 'kind'>>,
+  agents: AgentRecord[] = [],
 ): string {
+  if (workspace.kind === 'scratch' || workspace.name === 'unscoped')
+    return t('work without a project');
   if (!GENERATED_TASK_DIRECTORY.test(workspace.name)) return workspace.name;
   const owners = agents.filter(
     (agent) =>

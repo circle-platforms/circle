@@ -79,6 +79,7 @@ export function ModeMenu({
           data-mode={mode}
           aria-label={t('approval mode')}
           title={MODE_TEXT[mode].detail()}
+          onMouseDown={(event) => event.preventDefault()}
         >
           <Icon size={13} />
           {MODE_TEXT[mode].label()}
@@ -120,14 +121,38 @@ export function ModeMenu({
 }
 
 // How deep the model thinks, as the menu names the levels; the value stays the core's.
-export const EFFORT_TEXT: Record<Effort, () => string> = {
-  default: () => t('default'),
-  minimal: () => t('minimal'),
-  low: () => t('low'),
-  medium: () => t('medium'),
-  high: () => t('high'),
-  xhigh: () => t('extra high'),
-  max: () => t('max'),
+export const EFFORT_TEXT: Record<
+  Effort,
+  { label: () => string; detail: () => string }
+> = {
+  default: {
+    label: () => t('default'),
+    detail: () => t("the endpoint's usual depth"),
+  },
+  minimal: {
+    label: () => t('minimal'),
+    detail: () => t('shortest reasoning'),
+  },
+  low: {
+    label: () => t('low'),
+    detail: () => t('a little reasoning'),
+  },
+  medium: {
+    label: () => t('medium'),
+    detail: () => t('balanced, the usual default'),
+  },
+  high: {
+    label: () => t('high'),
+    detail: () => t('deeper reasoning for harder problems'),
+  },
+  xhigh: {
+    label: () => t('very high'),
+    detail: () => t('long reasoning, slower and uses more tokens'),
+  },
+  max: {
+    label: () => t('maximum'),
+    detail: () => t('the longest reasoning the endpoint allows'),
+  },
 };
 
 /** The model of this session, chosen from the endpoint's models, as Claude's picker. */
@@ -156,7 +181,11 @@ export function ModelMenu({
   return (
     <DropdownMenu.Root modal={false}>
       <DropdownMenu.Trigger asChild>
-        <button className="footbar-button" aria-label={t('model')}>
+        <button
+          className="footbar-button"
+          aria-label={t('model')}
+          onMouseDown={(event) => event.preventDefault()}
+        >
           <span className="footbar-model">{session.model}</span>
           <ChevronDown size={11} />
         </button>
@@ -204,14 +233,18 @@ export function EffortMenu({
   return (
     <DropdownMenu.Root modal={false}>
       <DropdownMenu.Trigger asChild>
-        <button className="footbar-button" aria-label={t('thinking depth')}>
-          {EFFORT_TEXT[session.effort]?.() ?? session.effort}
+        <button
+          className="footbar-button"
+          aria-label={t('thinking depth')}
+          onMouseDown={(event) => event.preventDefault()}
+        >
+          {EFFORT_TEXT[session.effort]?.label() ?? session.effort}
           <ChevronDown size={11} />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
-          className={`dropdown footbar-menu${side === 'bottom' ? ' home-menu' : ''}`}
+          className={`dropdown footbar-menu effort-menu${side === 'bottom' ? ' home-menu' : ''}`}
           side={side}
           {...(side === 'bottom'
             ? { avoidCollisions: false, collisionPadding: 8 }
@@ -221,8 +254,17 @@ export function EffortMenu({
           onCloseAutoFocus={closeMenu(onCloseFocus)}
         >
           {(['default', ...EFFORTS] as Effort[]).map((effort) => (
-            <DropdownMenu.Item key={effort} onSelect={() => onEffort(effort)}>
-              <span>{EFFORT_TEXT[effort]()}</span>
+            <DropdownMenu.Item
+              key={effort}
+              // Named by the depth; the line under it describes it.
+              aria-label={EFFORT_TEXT[effort].label()}
+              aria-description={EFFORT_TEXT[effort].detail()}
+              onSelect={() => onEffort(effort)}
+            >
+              <span>
+                <strong>{EFFORT_TEXT[effort].label()}</strong>
+                <small>{EFFORT_TEXT[effort].detail()}</small>
+              </span>
               {effort === session.effort && <Check size={13} />}
             </DropdownMenu.Item>
           ))}

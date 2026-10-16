@@ -12,7 +12,7 @@ import { useSessionDisclosure } from '../model/presentation';
 
 /**
  * A message as Claude shows one: yours in a bubble on the right, Circle's as plain text
- * with its thinking folded. The time, the usage and a copy button show under it on hover.
+ * with its thinking folded. The time, the usage and a copy button sit on one row under it.
  */
 export function MessageView({
   message,
@@ -67,12 +67,6 @@ export function MessageView({
           </div>
         ) : null}
       </div>
-      {message.usage?.elapsed && (
-        // The turn's last answer: the whole turn, shown without hovering
-        <footer className="turn-summary" data-testid="turn-summary">
-          {usageText(message.usage)}
-        </footer>
-      )}
       <div className="message-meta">
         {message.label && <span className="label">{message.label}</span>}
         <time
@@ -81,8 +75,8 @@ export function MessageView({
         >
           {shownTime(message.at)}
         </time>
-        {message.usage && !message.usage.elapsed && (
-          <footer>{usageText(message.usage)}</footer>
+        {message.usage && (
+          <footer data-testid="turn-summary">{usageText(message.usage)}</footer>
         )}
         {message.text && (
           <IconButton

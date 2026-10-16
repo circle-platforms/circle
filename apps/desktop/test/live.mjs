@@ -965,10 +965,17 @@ try {
     location.hash = '/page/settings';
   });
   await page.waitForURL((url) => url.hash === '#/page/settings');
-  await page
-    .getByRole('heading', { name: 'default workspace', exact: true })
-    .waitFor();
-  await page.getByRole('button', { name: 'change…', exact: true }).click();
+  const defaultWorkspace = page.locator('section.settings-block', {
+    has: page.getByRole('heading', {
+      name: 'default workspace',
+      exact: true,
+    }),
+  });
+  await defaultWorkspace.waitFor();
+  // Key preferences use the same label on every row. This is the folder button.
+  await defaultWorkspace
+    .getByRole('button', { name: 'change…', exact: true })
+    .click();
   // The move crosses three processes, and perform() shows a failure only as a
   // toast for four seconds: collect them so a timeout says what the app saw.
   const toasts = new Set();

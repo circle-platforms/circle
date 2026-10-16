@@ -33,6 +33,7 @@ import { saveExport } from '../host';
 import { MAX_PROMPT_PAYLOAD } from '../../../desktop/src/runtime-protocol';
 import { t } from '../i18n/index.ts';
 import { SessionActionError } from './action-error';
+import { armComposerFocus, cancelComposerFocus } from './composer-focus';
 import { sessionHasContent } from './session-management';
 
 const LOCAL_SESSION = [
@@ -542,7 +543,25 @@ export class LiveRuntime implements RuntimePort {
       await this.selectSession(session.id);
     }
     const result = (await this.native('new-session')) as { sessionId: string };
-    return result.sessionId;
+    const id = result.sessionId;
+    const row = this.snapshot.sessions.find((item) => item.id === id);
+    // Reused empty session: drop a leftover draft. A new id has none.
+    if (
+      row &&
+      row.draft &&
+      !row.messages.some((message) => message.role === 'user')
+    ) {
+      this.change((state) => {
+        const target = state.sessions.find((item) => item.id === id);
+        if (
+          target &&
+          target.draft &&
+          !target.messages.some((message) => message.role === 'user')
+        )
+          target.draft = '';
+      });
+    }
+    return id;
   };
   beginConversation = async (input: {
     workspaceId?: string | null;
@@ -673,6 +692,7 @@ export class LiveRuntime implements RuntimePort {
         'trust-workspace': 'trust',
         'save-secret': 'save-secret',
         'remove-secret': 'remove-secret',
+        'create-skill': 'create-skill',
         execute: 'shell',
       };
       if (kind === 'export-session') {
@@ -783,6 +803,21 @@ export class LiveRuntime implements RuntimePort {
     args = '',
     sessionId = this.snapshot.activeSessionId,
   ): Promise<CommandResult> => {
+    const opening = (parseSlash('/' + name)?.name ?? name) === 'new';
+    // Before the awaits, so keys during the native round-trip are kept.
+    if (opening) armComposerFocus();
+    try {
+      return await this.dispatchCommand(name, args, sessionId);
+    } catch (error) {
+      if (opening) cancelComposerFocus();
+      throw error;
+    }
+  };
+  private dispatchCommand = async (
+    name: string,
+    args = '',
+    sessionId = this.snapshot.activeSessionId,
+  ): Promise<CommandResult> => {
     await this.changes;
     name = parseSlash('/' + name)?.name ?? name;
     const session = this.snapshot.sessions.find(
@@ -795,7 +830,7 @@ export class LiveRuntime implements RuntimePort {
     ) => this.native(name, payload, session.id);
     if (name === 'new') {
       await this.newSession(session.workspaceId);
-      return { openSession: true };
+      return { openSession: true, focusComposer: true };
     }
     if (name === 'resume' && args) {
       const visible = this.snapshot.sessions.filter(sessionHasContent);
@@ -851,7 +886,7 @@ export class LiveRuntime implements RuntimePort {
       return {};
     }
     if (['effort', 'thinking'].includes(name) && args) {
-      if (!(EFFORTS as string[]).includes(args))
+      if (args !== 'default' && !(EFFORTS as string[]).includes(args))
         throw Error(t('unknown thinking depth'));
       await native('set-effort', { effort: args });
       return {};
