@@ -285,6 +285,8 @@ export async function runNativeCommandHandoffJourney({
     try {
       await page
         .locator(`.sidebar .session-link[href="#/session/${parentSessionId}"]`)
+        // The original sidebar deliberately lists the same owner in recent and project sections.
+        .first()
         .click();
       await page.waitForFunction(
         (id) => location.hash === '#/session/' + id,
