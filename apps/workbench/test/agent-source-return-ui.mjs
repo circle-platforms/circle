@@ -39,6 +39,13 @@ try {
       agent.workspaceId = snapshot.sessions.find(
         (s) => s.id === 'session1',
       ).workspaceId;
+      agent.task = {
+        id: 'source-child-task',
+        attempt: 1,
+        state: 'failed',
+        access: 'write',
+        baseline: 'a'.repeat(40),
+      };
       agent.messages = Array.from({ length: 100 }, (_, i) => ({
         id: 'child-source-' + i,
         parentId: null,
@@ -99,6 +106,10 @@ try {
     .filter({ hasText: 'source-child' })
     .click();
   const record = page.locator('.agent-record');
+  await record
+    .locator('header .status')
+    .getByText('failed', { exact: true })
+    .waitFor();
   await record
     .locator('header strong')
     .getByText('source-child', { exact: true })

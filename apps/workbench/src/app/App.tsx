@@ -72,6 +72,7 @@ import {
 } from '../model/workspace-client';
 import { NativeResourceBoundary } from '../components/NativeResourceBoundary';
 import { SourceNavigation } from '../components/SourceNavigation';
+import { agentState } from '../model/activity';
 import {
   agentSourceOwner,
   type SourceResourceOwner,
@@ -666,7 +667,7 @@ export function App() {
                   {t('main')}
                 </Button>
                 <strong>{activeAgent.name}</strong>
-                <Status value={activeAgent.status} />
+                <Status value={agentState(activeAgent)} />
               </header>
               <div className="agent-record-body">
                 <h2>{activeAgent.description}</h2>
