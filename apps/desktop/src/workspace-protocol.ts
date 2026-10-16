@@ -45,6 +45,8 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
     'resolveSource',
   ]),
   terminal: new Set([
+    'resolveCommand',
+    'command',
     'create',
     'restart',
     'write',

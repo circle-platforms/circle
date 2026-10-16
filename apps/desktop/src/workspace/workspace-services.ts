@@ -80,6 +80,10 @@ export class WorkspaceServices {
   private loginOwners = new Map<string, string>();
   private activeDelivery?: DeliveryService;
   private watch: ReturnType<WorkspaceDocuments['watch']>;
+  /** Subscription identity only. Session authorization is checked by the host. */
+  get id(): string {
+    return this.workspaceId;
+  }
   constructor(options: WorkspaceServicesOptions) {
     this.options = options;
     const rootHash = createHash('sha256')

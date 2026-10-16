@@ -1,6 +1,12 @@
 import { canonicalPath } from '../../../src/paths.js';
 import type { ResolveInputsRequest } from '../../../src/input_outbox.js';
 import { spawnPty } from './workspace/native-pty.js';
+import { createTerminalCommandLauncher } from './workspace/command-terminal.js';
+import {
+  resolveCommandTerminal,
+  commandTerminalAction,
+  type CommandTerminalSource,
+} from './workspace/command-handoff.js';
 import { createWorkspaceCyclePorts } from './workspace/cycle-ports.js';
 import { GitWorkspaceService } from './workspace/git.js';
 import { DeliveryService } from './workspace/delivery.js';
@@ -263,6 +269,8 @@ export interface ControllerOptions {
     runtimeExecutable: string;
     adapterPath: string;
     ghPath: string;
+    /** Bundled static supervisor; no source-directory or PATH fallback. */
+    commandSupervisorPath?: string;
   };
   /** The application's data folder, which holds home beside the updates and Chromium's
    * own files: the default workspace may not be in it. Home when not given. */
@@ -1343,7 +1351,7 @@ export class RuntimeController {
   ): Promise<unknown> {
     const reads: Record<string, string[]> = {
       documents: ['read', 'refresh', 'resolveSource'],
-      terminal: ['list', 'replay'],
+      terminal: ['list', 'replay', 'resolveCommand'],
       git: ['status', 'snapshot', 'diff', 'branches'],
       debug: [
         'snapshot',
@@ -1364,6 +1372,9 @@ export class RuntimeController {
     const read =
       request.service === 'language' ||
       request.service === 'events' ||
+      (request.service === 'terminal' &&
+        request.method === 'command' &&
+        ['list', 'replay'].includes(String(request.params?.action))) ||
       reads[request.service]?.includes(request.method) ||
       (request.service === 'tasks' &&
         request.method === 'settings' &&
@@ -1391,6 +1402,60 @@ export class RuntimeController {
       },
       action,
     );
+  }
+  /** Existing runtimes only: resolving a card must never open a runtime or spawn. */
+  private commandTerminalSource(
+    viewSessionId: string,
+    sourceSessionId: string,
+    emergency: boolean,
+  ): CommandTerminalSource | undefined {
+    const view = this.store.get(viewSessionId);
+    const source = this.store.get(sourceSessionId);
+    const runtime =
+      this.runtimes.get(sourceSessionId) ??
+      [...this.taskRuntimes.values()].find(
+        (runtime) => runtime.session.id === sourceSessionId,
+      );
+    if (
+      !view ||
+      !source ||
+      !runtime ||
+      runtime.options.workspace !== source.workspace
+    )
+      return;
+    const root = this.workspaceRoots.get(source.workspace)?.canonical;
+    if (!root) return;
+    if (sourceSessionId !== viewSessionId) {
+      // Notification ownership is deliberately irrelevant. Only the actual
+      // TaskService ledger may grant a parent access to an execution session.
+      const owned = [...this.taskServices.values()].some((service) =>
+        service
+          .ownedRuntimeSessions(viewSessionId)
+          .some(
+            (child) =>
+              child.sessionId === sourceSessionId &&
+              child.worktree !== undefined &&
+              this.workspaceRoots.get(child.worktree)?.canonical === root,
+          ),
+      );
+      if (!owned) return;
+    }
+    if (!emergency) {
+      if (
+        this.metadata.archivedAt(viewSessionId) ||
+        this.metadata.archivedAt(sourceSessionId)
+      )
+        throw Error('restore this session before continuing');
+      this.trustedWorkspace(view.workspace);
+      this.trustedWorkspace(source.workspace);
+    }
+    const services = this.workspaceServices.get(root);
+    if (!services) return { jobs: runtime.jobs };
+    return {
+      jobs: runtime.jobs,
+      terminals: services.terminals,
+      workspaceId: services.id,
+    };
   }
   private async workspaceCommand(command: RuntimeCommand): Promise<unknown> {
     this.metadata.refresh();
@@ -1434,6 +1499,30 @@ export class RuntimeController {
           );
       this.publish();
       return result;
+    }
+    if (
+      request.service === 'terminal' &&
+      ['resolveCommand', 'command'].includes(request.method)
+    ) {
+      const emergency =
+        request.method === 'command' &&
+        (request.params?.action === 'close' ||
+          (request.params?.action === 'signal' &&
+            ['SIGTERM', 'SIGKILL'].includes(
+              String(
+                (request.params?.params as Record<string, unknown> | undefined)
+                  ?.signal,
+              ),
+            )));
+      const access = {
+        sourceFor: (view: string, source: string) =>
+          this.commandTerminalSource(view, source, emergency),
+      };
+      return this.workspaceOperation(command, row.workspace, request, () =>
+        request.method === 'resolveCommand'
+          ? resolveCommandTerminal(access, id, request.params)
+          : commandTerminalAction(access, id, request.params),
+      );
     }
     const emergency =
       (request.service === 'terminal' &&
@@ -1548,6 +1637,22 @@ export class RuntimeController {
       new AgentRuntime({
         workspace,
         fileMutations: this.fileMutations(workspace),
+        commandLauncher: this.options.workspaceTools?.commandSupervisorPath
+          ? (request) =>
+              createTerminalCommandLauncher({
+                terminals: this.services(workspace).terminals,
+                runtimeExecutable:
+                  this.options.workspaceTools!.runtimeExecutable,
+                supervisorPath:
+                  this.options.workspaceTools!.commandSupervisorPath!,
+                stopExecution: (actualSessionId, executionId, reason) =>
+                  runtime.jobs.stopExecution(
+                    actualSessionId,
+                    executionId,
+                    reason,
+                  ),
+              })(request)
+          : undefined,
         wrapModel: (model) =>
           wrapModelCompletion(model, (request, invoke) =>
             this.taskResources.withResource(
