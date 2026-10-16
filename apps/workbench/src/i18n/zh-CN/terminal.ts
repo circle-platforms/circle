@@ -1,4 +1,12 @@
 export const terminal: Record<string, string> = {
+  selection: '选区',
+  'add selection to chat': '将选区添加到对话',
+  'select terminal output first': '请先选择终端输出',
+  'terminal selection expired; select it again': '终端选区已过期，请重新选择',
+  'terminal selection source changed': '终端选区来源已变化，请重新选择',
+  'terminal selection is over 4 MB': '终端选区超过 4 MB，未添加，请缩小选区',
+  'terminal selection could not be saved': '无法保存终端选区，请重试',
+  'terminal selection added to draft': '终端选区已添加到草稿',
   optional: '可选',
   stopping: '正在停止',
   'previous match': '上一个匹配',

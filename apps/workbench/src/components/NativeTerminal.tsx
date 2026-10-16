@@ -12,6 +12,7 @@ import {
   ArrowDown,
   ArrowUp,
   Copy,
+  MessageSquarePlus,
   Plus,
   Play,
   RotateCcw,
@@ -34,6 +35,7 @@ import {
   terminalInputChunks,
 } from '../model/terminal-stream';
 import { subscribeWorkspace, workspaceCall } from '../model/workspace-client';
+import type { TerminalSelectionCapture } from '../model/terminal-context';
 import { Button, IconButton, Modal, Status } from './common';
 import '@xterm/xterm/css/xterm.css';
 import '../styles/terminal.css';
@@ -46,6 +48,7 @@ type Controls = {
   ) => Promise<boolean | undefined>;
   focus: () => void;
   selection: () => string;
+  captureSelection: () => TerminalSelectionCapture | undefined;
 };
 
 type TerminalTiming = {
@@ -130,10 +133,12 @@ export function NativeTerminal({
   sessionId,
   active = true,
   embedded = false,
+  onAddToDraft,
 }: {
   sessionId: string;
   active?: boolean;
   embedded?: boolean;
+  onAddToDraft?: (capture: TerminalSelectionCapture) => Promise<void>;
 }) {
   useLocale();
   const [terminals, setTerminals] = useState<TerminalSnapshot[]>([]);
@@ -158,6 +163,7 @@ export function NativeTerminal({
   const [servicePort, setServicePort] = useState('');
   const [servicePattern, setServicePattern] = useState('');
   const controls = useRef(new Map<string, Controls>());
+  const [hasSelection, setHasSelection] = useState<Record<string, boolean>>({});
   const focusTarget = useRef<string | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const selectedId = selectedBySession[sessionId];
@@ -345,6 +351,25 @@ export function NativeTerminal({
       }));
     });
 
+  const addToDraft = () => {
+    // Capture synchronously before a toolbar click or later output changes the
+    // current selection. The draft callback binds this exact originating session.
+    const capture =
+      selected && controls.current.get(selected.id)?.captureSelection();
+    void run(async () => {
+      if (!capture || !onAddToDraft)
+        throw Error(t('select terminal output first'));
+      await onAddToDraft(capture);
+      setOperations((previous) => ({
+        ...previous,
+        [capture.sourceSessionId]: {
+          ...previous[capture.sourceSessionId],
+          notice: t('terminal selection added to draft'),
+        },
+      }));
+    });
+  };
+
   const find = async (previous: boolean) => {
     if (!selected || !query) return;
     const target = { sessionId, query, selectedId: selected.id };
@@ -526,6 +551,17 @@ export function NativeTerminal({
         >
           <Copy size={14} />
         </IconButton>
+        {onAddToDraft && (
+          <IconButton
+            label={t('add selection to chat')}
+            disabled={
+              busy || !active || !selected || !hasSelection[selected.id]
+            }
+            onClick={addToDraft}
+          >
+            <MessageSquarePlus size={14} />
+          </IconButton>
+        )}
       </div>
       {selected?.command && (
         <div className="native-service-details">
@@ -637,6 +673,13 @@ export function NativeTerminal({
               }
               visible={item.id === selected?.id && item.sessionId === sessionId}
               adopt={adopt}
+              onSelectionChange={(selected) => {
+                setHasSelection((current) =>
+                  current[item.id] === selected
+                    ? current
+                    : { ...current, [item.id]: selected },
+                );
+              }}
               register={(value) => {
                 if (value) {
                   controls.current.set(item.id, value);
@@ -796,12 +839,14 @@ function TerminalSurface({
   visible,
   adopt,
   register,
+  onSelectionChange,
 }: {
   snapshot: TerminalSnapshot;
   active: boolean;
   visible: boolean;
   adopt: (snapshot: TerminalSnapshot) => void;
   register: (controls?: Controls) => void;
+  onSelectionChange: (selected: boolean) => void;
 }) {
   const language = useLocale();
   const container = useRef<HTMLDivElement>(null);
@@ -810,6 +855,8 @@ function TerminalSurface({
   const notifySearchesRef = useRef<(() => void) | null>(null);
   const activeRef = useRef(active);
   const statusRef = useRef(snapshot.status);
+  const selectionChange = useRef(onSelectionChange);
+  selectionChange.current = onSelectionChange;
   const timingVisibility = useRef<TimingVisibility>({
     active: false,
     epoch: 0,
@@ -1012,10 +1059,37 @@ function TerminalSurface({
           });
         });
         if (cancelled || !activeRef.current || !isCurrent()) return undefined;
-        return previous ? search.findPrevious(text) : search.findNext(text);
+        const found = previous
+          ? search.findPrevious(text)
+          : search.findNext(text);
+        // xterm clears selection without clearing its cached coordinates. When
+        // search selects that same range again, no change event is emitted.
+        // Read the actual selection after the programmatic selection completes.
+        selectionChange.current(terminal.hasSelection());
+        return found;
       },
       focus: () => terminal.focus(),
       selection: () => terminal.getSelection(),
+      captureSelection: () => {
+        const text = terminal.getSelection();
+        const range = terminal.getSelectionPosition();
+        if (!text || !range || cancelled || !activeRef.current) return;
+        return {
+          operationId: crypto.randomUUID(),
+          sourceSessionId: snapshot.sessionId,
+          terminalId: snapshot.id,
+          terminalEpoch: snapshot.epoch,
+          outputSequence: cursor,
+          capturedAt: new Date().toISOString(),
+          cols: terminal.cols,
+          rows: terminal.rows,
+          range: structuredClone(range),
+          text,
+        };
+      },
+    });
+    const selection = terminal.onSelectionChange(() => {
+      selectionChange.current(terminal.hasSelection());
     });
     const unsubscribe = subscribeWorkspace((event) => {
       if (
@@ -1100,6 +1174,8 @@ function TerminalSurface({
       notifySearches();
       unsubscribe();
       input.dispose();
+      selection.dispose();
+      selectionChange.current(false);
       dimensions.dispose();
       resize.disconnect();
       if (fitFrame !== undefined) cancelAnimationFrame(fitFrame);

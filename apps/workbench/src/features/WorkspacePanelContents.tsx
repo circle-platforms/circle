@@ -5,6 +5,9 @@ import { t } from '../i18n';
 import { NativeResourceBoundary } from '../components/NativeResourceBoundary';
 import { TasksPanel } from './TasksPanel';
 import { DeliveryCyclePanel } from './DeliveryCyclePanel';
+import { appendTerminalSelection } from '../model/terminal-context';
+import { workspaceCall } from '../model/workspace-client';
+import type { TerminalReplay } from '../../../desktop/src/workspace/terminal';
 const NativeTerminal = lazy(() =>
   import('../components/NativeTerminal').then((m) => ({
     default: m.NativeTerminal,
@@ -37,7 +40,7 @@ export function WorkspacePanelContents({
   onSession: (id: string) => void;
   onTask: (id: string) => void;
 }) {
-  const { notify } = useRuntime();
+  const { runtime, notify } = useRuntime();
   const initial = kind === 'terminal' ? 'terminal' : 'original';
   const [tab, setTab] = useState(initial);
   const [visited, setVisited] = useState<Set<string>>(() => new Set([initial]));
@@ -151,6 +154,20 @@ export function WorkspacePanelContents({
                     embedded
                     sessionId={sessionId}
                     active={visible && tab === 'terminal'}
+                    onAddToDraft={(capture) =>
+                      appendTerminalSelection(runtime, capture, () =>
+                        workspaceCall<TerminalReplay>(
+                          capture.sourceSessionId,
+                          'terminal',
+                          'replay',
+                          {
+                            id: capture.terminalId,
+                            afterSequence: capture.outputSequence,
+                            limit: 1,
+                          },
+                        ),
+                      )
+                    }
                   />
                 ) : item.id === 'git' ? (
                   <GitPanel
