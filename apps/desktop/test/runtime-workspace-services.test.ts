@@ -1004,7 +1004,12 @@ test('controller isolates same-named cycles by session and repairs real PR check
   t.mock.method(
     GitWorkspaceService.prototype,
     'git',
-    function (this: GitWorkspaceService, args: string[], input?: string) {
+    function (
+      this: GitWorkspaceService,
+      args: string[],
+      input?: string,
+      invocation?: Parameters<GitWorkspaceService['git']>[2],
+    ) {
       return timed(
         'git',
         {
@@ -1012,7 +1017,7 @@ test('controller isolates same-named cycles by session and repairs real PR check
           args,
           inputBytes: input === undefined ? 0 : Buffer.byteLength(input),
         },
-        () => actualGit.call(this, args, input),
+        () => actualGit.call(this, args, input, invocation),
       );
     },
   );
@@ -1056,7 +1061,8 @@ function execute(args){
  let result;
  try {
   let stdout='',code=0;
-  if(args[0]==='pr'&&args[1]==='create'){fs.writeFileSync(state,'{}');stdout='created'}
+  if(args[0]==='api'&&args[1]==='user')stdout=JSON.stringify({login:'fixture',id:7});
+  else if(args[0]==='pr'&&args[1]==='create'){fs.writeFileSync(state,'{}');stdout='created'}
   else if(args[0]==='pr'&&args[1]==='view'){if(!fs.existsSync(state))code=1;else stdout=JSON.stringify(pr())}
   else if(args[0]==='pr'&&args[1]==='list')stdout='[]';
   else if(args[0]==='pr'&&args[1]==='checks'){const pass=fs.readFileSync('app.cjs','utf8').includes('readyForCI=true');stdout=JSON.stringify([{name:'integration',bucket:pass?'pass':'fail',state:pass?'SUCCESS':'FAILURE',link:'https://example.invalid/actions/runs/19'}])}
@@ -1132,6 +1138,36 @@ if(process.argv[2]==='--ipc'){
     },
   });
   const controller = f.controller as any;
+  const profile = controller.githubConnection();
+  let finishGrant!: () => void;
+  t.mock.method(profile.login, 'spawn', () => ({
+    onData: () => {},
+    onExit: (callback: any) => {
+      finishGrant = () => callback({ exitCode: 0 });
+    },
+    write: () => {},
+    kill: () => finishGrant?.(),
+  }));
+  t.mock.method(profile.login, 'credentialCommand', async () => ({
+    stdout: 'synthetic-explicit-fixture-grant',
+  }));
+  t.mock.method(
+    profile,
+    'command',
+    async (
+      args: string[],
+      env: NodeJS.ProcessEnv,
+      cwd: string,
+      signal?: AbortSignal,
+    ) => {
+      assert.equal(env.GH_TOKEN, 'synthetic-explicit-fixture-grant');
+      signal?.throwIfAborted();
+      const result = await fixtureProcess.call(args, cwd);
+      signal?.throwIfAborted();
+      return result;
+    },
+  );
+
   const actualVerifier = controller.taskVerifier.bind(controller);
   const wrappedVerifiers = new WeakMap<Function, Function>();
   t.mock.method(
@@ -1214,10 +1250,52 @@ if(process.argv[2]==='--ipc'){
       'origin',
       'HEAD',
     ]);
+    const enabled = await f.call('save-settings', {
+      settings: {},
+      extensions: [{ name: 'github', enabled: true }],
+    });
+    assert.equal(enabled.ok, true, enabled.error);
+    await wait(() =>
+      f.controller
+        .snapshot()
+        .extensions.some(
+          (entry) =>
+            entry.name === 'github' &&
+            entry.enabled &&
+            (entry.view as { provider?: string })?.provider === 'github',
+        ),
+    );
+    const grant = await f.call('custom-command', {
+      name: 'github',
+      args:
+        'connect ' +
+        JSON.stringify({ storage: 'session', repositories: ['fixture/repo'] }),
+    });
+    assert.equal(grant.ok, true, grant.error);
+    finishGrant();
+    await wait(() =>
+      f.controller
+        .snapshot()
+        .extensions.some(
+          (entry) => (entry.view as { state?: string })?.state === 'connected',
+        ),
+    );
+    assert(
+      !JSON.stringify(f.controller.snapshot()).includes(
+        'synthetic-explicit-fixture-grant',
+      ),
+    );
     const ownerA = f.controller.snapshot().activeSessionId;
     await f.call('new-session');
     const ownerB = f.controller.snapshot().activeSessionId;
     for (const owner of [ownerA, ownerB]) {
+      await wait(
+        () =>
+          controller.runtimes
+            .get(owner)
+            ?.extensions.commands()
+            .has('github') === true,
+      );
       const created = await f.service(
         'cycles',
         'create',
@@ -1385,8 +1463,29 @@ if(process.argv[2]==='--ipc'){
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line));
-    const ipcRecords = commandRecords.filter(
+    const allIPCRecords = commandRecords.filter(
       (record) => record.pid === fixtureProcess.pid,
+    );
+    const identityRecords = allIPCRecords.filter(
+      (record) => record.args[0] === 'api',
+    );
+    assert.equal(
+      identityRecords.length,
+      1,
+      'the explicit grant verifies identity through the real local Node fixture',
+    );
+    assert.deepEqual(identityRecords[0].args, [
+      'api',
+      'user',
+      '--jq',
+      '{login: .login, id: .id}',
+    ]);
+    const ipcRecords = allIPCRecords.filter(
+      (record) => record.args[0] !== 'api',
+    );
+    assert.equal(
+      allIPCRecords.length,
+      transports.length + identityRecords.length,
     );
     assert.equal(
       ipcRecords.length,
