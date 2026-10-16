@@ -10,7 +10,7 @@ import {
   Status,
 } from '../components/common';
 import type { RuntimeExtension } from '../model/types';
-import type { WorkbenchPlugin } from './types';
+import type { PluginViewProps, WorkbenchPlugin } from './types';
 import { t } from '../i18n';
 
 interface HubProjection {
@@ -62,6 +62,52 @@ interface HubView {
   tasks: { taskId: string; title: string; seq: number; saved?: boolean }[];
   recent: string[];
   projection?: HubProjection;
+  inbox?: HubInboxItem[];
+  knowledge?: { query: string; items: HubKnowledgeHit[] };
+}
+interface HubInboxItem {
+  kind: string;
+  requestId: string;
+  taskId: string;
+  approvalId: string;
+  title: string;
+}
+interface HubKnowledgeHit {
+  recordId: string;
+  snapshotId: string;
+  title: string;
+}
+const DEFAULT_HUB_URL = 'http://127.0.0.1:7410';
+const HUB_LOGIN_KEY = 'circle.workbench.hub.login.v1';
+/** The last server and user typed on this page. The password is never kept. */
+export function readHubLogin(storage?: Pick<Storage, 'getItem'>): {
+  url: string;
+  username: string;
+} {
+  const empty = { url: DEFAULT_HUB_URL, username: '' };
+  if (!storage) return empty;
+  try {
+    const parsed = JSON.parse(storage.getItem(HUB_LOGIN_KEY) ?? '');
+    if (!parsed || typeof parsed !== 'object') return empty;
+    const url = typeof parsed.url === 'string' ? parsed.url.trim() : '';
+    const username = typeof parsed.username === 'string' ? parsed.username : '';
+    return { url: url || DEFAULT_HUB_URL, username };
+  } catch {
+    return empty;
+  }
+}
+function writeHubLogin(
+  storage: Pick<Storage, 'setItem'> | undefined,
+  value: { url: string; username: string },
+) {
+  try {
+    storage?.setItem(
+      HUB_LOGIN_KEY,
+      JSON.stringify({ url: value.url, username: value.username }),
+    );
+  } catch {
+    /* A private window keeps the fields for this visit only. */
+  }
 }
 export function hubView(
   extensions: readonly RuntimeExtension[],
@@ -69,21 +115,62 @@ export function hubView(
   const view = extensions.find((item) => item.name === 'hub')?.view;
   return view && typeof view === 'object' ? (view as HubView) : undefined;
 }
-const DEFAULT_HUB_URL = 'http://127.0.0.1:7410';
+function loginStorage(): Pick<Storage, 'getItem' | 'setItem'> | undefined {
+  return typeof localStorage === 'undefined' ? undefined : localStorage;
+}
+function offeredLogin(
+  view: HubView | undefined,
+  storage: Pick<Storage, 'getItem'> | undefined,
+): { url: string; username: string } {
+  const saved = readHubLogin(storage);
+  if (!view) return saved;
+  const url =
+    view.username || (view.url && view.url !== DEFAULT_HUB_URL)
+      ? view.url || saved.url
+      : saved.url;
+  return { url, username: view.username || saved.username };
+}
+function approveArgs(item: HubInboxItem): string {
+  if (item.kind === 'governance' || (!item.taskId && item.requestId))
+    return `approve ${item.requestId}`;
+  const approval = item.approvalId || item.requestId;
+  return approval
+    ? `approve ${item.taskId} ${approval}`
+    : `approve ${item.taskId}`;
+}
+function rejectArgs(item: HubInboxItem, reason: string): string {
+  if (item.kind === 'governance' || (!item.taskId && item.requestId))
+    return `reject ${item.requestId} ${reason}`;
+  const approval = item.approvalId || item.requestId;
+  return `reject ${item.taskId} ${approval} ${reason}`;
+}
 /** The interface half of the hub extension: its commands, as a page. */
-export function HubPage() {
+export function HubPage({
+  storage,
+}: PluginViewProps & {
+  storage?: Pick<Storage, 'getItem' | 'setItem'>;
+}) {
   const { snapshot, runtime, perform } = useRuntime();
   const view = hubView(snapshot.extensions);
-  const [address, setAddress] = useState(DEFAULT_HUB_URL);
-  const [user, setUser] = useState('');
+  const box = storage ?? loginStorage();
+  const [address, setAddress] = useState(() => offeredLogin(view, box).url);
+  const [user, setUser] = useState(() => offeredLogin(view, box).username);
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [query, setQuery] = useState('');
+  const [reasons, setReasons] = useState<Record<string, string>>({});
   const touched = useRef({ address: false, user: false });
   useEffect(() => {
     if (!view) return;
-    if (!touched.current.address && view.url) setAddress(view.url);
-    if (!touched.current.user && view.username) setUser(view.username);
-  }, [view]);
+    const offered = offeredLogin(view, box);
+    if (!touched.current.address && offered.url) setAddress(offered.url);
+    if (!touched.current.user && offered.username) setUser(offered.username);
+    if (view.username || (view.url && view.url !== DEFAULT_HUB_URL))
+      writeHubLogin(box, {
+        url: view.url || offered.url,
+        username: view.username || offered.username,
+      });
+  }, [view, box]);
   // Every action is the extension's own /hub command; its lines go to the conversation.
   const run = (args: string) =>
     perform(async () => {
@@ -116,80 +203,197 @@ export function HubPage() {
           {t('The hub extension has published nothing yet.')}
         </EmptyState>
       )}
-      <form
-        className="form-stack"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!address.trim() || !user.trim() || !password) {
-            setError(t('enter the server, user and password'));
-            return;
-          }
-          if (runtime.mode !== 'live') {
-            setError(t('sign-in needs the Circle runtime'));
-            return;
-          }
-          const server = address.trim();
-          const name = user.trim();
-          const secret = password;
-          setError('');
-          perform(async () => {
-            try {
-              await runtime.request('extension-command', {
-                name: 'hub',
-                args: `login ${server} ${name}`,
-                secret,
-              });
-              setPassword('');
-            } catch (caught) {
-              setError(
-                caught instanceof Error ? caught.message : t('sign-in failed'),
-              );
+      {view?.signedIn ? (
+        <div className="inline-actions">
+          <Button onClick={() => run('logout')}>{t('sign out')}</Button>
+        </div>
+      ) : (
+        <form
+          className="form-stack"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!address.trim() || !user.trim() || !password) {
+              setError(t('enter the server, user and password'));
+              return;
             }
-          });
-        }}
-      >
-        <label>
-          {t('server')}
-          <input
-            aria-label={t('server')}
-            placeholder={DEFAULT_HUB_URL}
-            value={address}
-            onChange={(event) => {
-              touched.current.address = true;
-              setAddress(event.target.value);
+            if (runtime.mode !== 'live') {
+              setError(t('sign-in needs the Circle runtime'));
+              return;
+            }
+            const server = address.trim();
+            const name = user.trim();
+            const secret = password;
+            writeHubLogin(box, { url: server, username: name });
+            setError('');
+            perform(async () => {
+              try {
+                await runtime.request('extension-command', {
+                  name: 'hub',
+                  args: `login ${server} ${name}`,
+                  secret,
+                });
+                setPassword('');
+              } catch (caught) {
+                setError(
+                  caught instanceof Error
+                    ? caught.message
+                    : t('sign-in failed'),
+                );
+              }
+            });
+          }}
+        >
+          <label>
+            {t('server')}
+            <input
+              aria-label={t('server')}
+              placeholder={DEFAULT_HUB_URL}
+              value={address}
+              onChange={(event) => {
+                touched.current.address = true;
+                const url = event.target.value;
+                setAddress(url);
+                writeHubLogin(box, { url, username: user });
+              }}
+            />
+          </label>
+          <label>
+            {t('user')}
+            <input
+              aria-label={t('user')}
+              placeholder={t('user')}
+              value={user}
+              autoComplete="username"
+              onChange={(event) => {
+                touched.current.user = true;
+                const username = event.target.value;
+                setUser(username);
+                writeHubLogin(box, { url: address, username });
+              }}
+            />
+          </label>
+          <label>
+            {t('password')}
+            <input
+              aria-label={t('password')}
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </label>
+          <Button type="submit">{t('sign in')}</Button>
+        </form>
+      )}
+      {error ? (
+        <p className="inline-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+      {view?.signedIn ? (
+        <>
+          <section className="extension-list">
+            <div className="detail-title">
+              <h2>{t('inbox')}</h2>
+              <Button onClick={() => run('inbox')}>
+                {view.inbox ? t('refresh') : t('open inbox')}
+              </Button>
+            </div>
+            {view.inbox?.length ? (
+              view.inbox.map((item, index) => {
+                const id = item.requestId || item.taskId || String(index);
+                return (
+                  <article className="extension-card" key={id}>
+                    <div className="detail-title">
+                      <div>
+                        <h2>{item.title || id}</h2>
+                        <p>
+                          {item.kind} · {item.taskId || item.requestId}
+                          {item.approvalId ? ' · ' + item.approvalId : ''}
+                        </p>
+                      </div>
+                      <Button onClick={() => run(`show ${id}`)}>
+                        {t('show')}
+                      </Button>
+                      <Button onClick={() => run(approveArgs(item))}>
+                        {t('approve')}
+                      </Button>
+                    </div>
+                    <form
+                      className="form-stack"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        const reason = reasons[id]?.trim() ?? '';
+                        if (!reason) {
+                          setError(t('a rejection needs a reason'));
+                          return;
+                        }
+                        setError('');
+                        run(rejectArgs(item, reason));
+                      }}
+                    >
+                      <label>
+                        {t('rejection reason')}
+                        <input
+                          aria-label={t('rejection reason')}
+                          value={reasons[id] ?? ''}
+                          onChange={(event) =>
+                            setReasons({ ...reasons, [id]: event.target.value })
+                          }
+                        />
+                      </label>
+                      <Button type="submit">{t('reject')}</Button>
+                    </form>
+                  </article>
+                );
+              })
+            ) : view.inbox ? (
+              <p>{t('nothing is waiting for you')}</p>
+            ) : null}
+          </section>
+          <form
+            className="form-stack"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const text = query.trim();
+              if (!text) {
+                setError(t('enter text to search knowledge'));
+                return;
+              }
+              setError('');
+              run(`knowledge search ${text}`);
             }}
-          />
-        </label>
-        <label>
-          {t('user')}
-          <input
-            aria-label={t('user')}
-            placeholder={t('user')}
-            value={user}
-            autoComplete="username"
-            onChange={(event) => {
-              touched.current.user = true;
-              setUser(event.target.value);
-            }}
-          />
-        </label>
-        <label>
-          {t('password')}
-          <input
-            aria-label={t('password')}
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </label>
-        {error ? (
-          <p className="inline-error" role="alert">
-            {error}
-          </p>
-        ) : null}
-        <Button type="submit">{t('sign in')}</Button>
-      </form>
+          >
+            <h2>{t('knowledge')}</h2>
+            <label>
+              {t('search knowledge')}
+              <input
+                aria-label={t('search knowledge')}
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </label>
+            <Button type="submit">{t('search')}</Button>
+            {view.knowledge?.items.length ? (
+              <div className="extension-list">
+                {view.knowledge.items.map((item) => (
+                  <article className="extension-card" key={item.recordId}>
+                    <h2>{item.title || item.recordId}</h2>
+                    <p>
+                      {item.recordId}
+                      {item.snapshotId
+                        ? ' · ' + t('snapshot {id}', { id: item.snapshotId })
+                        : ''}
+                    </p>
+                  </article>
+                ))}
+              </div>
+            ) : view.knowledge ? (
+              <p>{t('no knowledge matched')}</p>
+            ) : null}
+          </form>
+        </>
+      ) : null}
       {view?.tasks.length ? (
         <div className="extension-list">
           {view.tasks.map((task) => (

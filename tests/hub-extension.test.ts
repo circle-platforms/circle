@@ -8,6 +8,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ExtensionHost, bundledExtensionsRoot } from '../src/extensions.js';
+import { HUB_ZH } from '../src/hub_text.js';
 import { ExtensionSecrets } from '../src/extension_secrets.js';
 import { submitAnswer } from '../src/secret_prompt.js';
 
@@ -1716,6 +1717,15 @@ test('inbox, a content view and a rejection reason use the general approval rout
     /signed in to http:\/\/127\.0\.0\.1:\d+ as ada/,
   );
   await command.handler('approve', context);
+  await until(() => {
+    const inbox = (host.view('hub') as { inbox?: unknown[] } | undefined)
+      ?.inbox;
+    return Array.isArray(inbox) && inbox.length === 2;
+  });
+  const inbox = (host.view('hub') as { inbox: Record<string, string>[] }).inbox;
+  assert.equal(inbox[0]!.requestId, 'aprq_1');
+  assert.equal(inbox[0]!.title, 'export the register');
+  assert.equal(inbox[1]!.taskId, 'task_ask');
   assert.match(
     lines.at(-1)!,
     /governance aprq_1 · export the register[\s\S]*\/hub show aprq_1[\s\S]*\/hub approve aprq_1[\s\S]*change-set task_ask · apr_9 · mindmap/,
@@ -2165,6 +2175,24 @@ test('knowledge search, sharing, review and publish use the hub routes', async (
   await command.handler(`login http://127.0.0.1:${port} developer`, context);
   await command.handler('knowledge search the register --mode exact', context);
   assert.match(lines.at(-1)!, /knr_claim · snapshot knr_snap · the register/);
+  await until(() => {
+    const found = (
+      host.view('hub') as
+        { knowledge?: { items?: { recordId?: string }[] } } | undefined
+    )?.knowledge;
+    return found?.items?.[0]?.recordId === 'knr_claim';
+  });
+  assert.equal(
+    (
+      host.view('hub') as {
+        knowledge: {
+          query: string;
+          items: { snapshotId: string; title: string }[];
+        };
+      }
+    ).knowledge.items[0]!.snapshotId,
+    'knr_snap',
+  );
   assert.match(
     posts.find((post) => post.path === '/v1/knowledge/search')!.query,
     /mode=exact/,
@@ -2230,4 +2258,48 @@ test('knowledge search, sharing, review and publish use the hub routes', async (
   assert.equal(published.expectedSnapshotId, null);
   assert.equal(published.knowledgeCategory, 'consolidated');
   assert.match(lines.at(-1)!, /published snapshot knr_snap · consolidated/);
+});
+
+test('a server that cannot be reached is named without the transport error', async (t) => {
+  assert.equal(HUB_ZH['cannot reach the server {url}'], '无法连接服务器 {url}');
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+  }).load();
+  cleanup(t, () => host.close());
+  const context = {
+    workspace,
+    toast: () => {},
+    append: () => {},
+    sendUserMessage: () => {},
+    secret: PASSWORD,
+  };
+  await assert.rejects(
+    async () => {
+      await host
+        .commands()
+        .get('hub')!
+        .handler('login http://127.0.0.1:1 ada', context);
+    },
+    (error: Error) => {
+      assert.match(
+        error.message,
+        /cannot reach the server http:\/\/127\.0\.0\.1:1|无法连接服务器 http:\/\/127\.0\.0\.1:1/,
+      );
+      assert.equal(error.message.includes('fetch failed'), false);
+      return true;
+    },
+  );
+  await until(() => {
+    const view = host.view('hub') as
+      { url?: string; username?: string } | undefined;
+    return view?.username === 'ada' && view.url === 'http://127.0.0.1:1';
+  });
 });

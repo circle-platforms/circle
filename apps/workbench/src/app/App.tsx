@@ -65,7 +65,7 @@ import { ManagementPage } from '../features/Pages';
 import { DialogHost, InteractionDialog } from '../features/Dialogs';
 import { applyTheme } from '../theme';
 import { t } from '../i18n';
-import { platformTitle } from '../plugins/labels';
+import { platformTitle, shellPageTitle } from '../plugins/labels';
 import { isSessionBrowser } from '../model/browser';
 import { armComposerFocus, sealComposerFocus } from '../model/composer-focus';
 import {
@@ -77,19 +77,6 @@ import {
   isDesktopSettings,
   matchingAction,
 } from '../model/shortcuts';
-// The names of the pages in the top bar; any other page shows its id.
-const PAGE_NAMES: Partial<Record<string, () => string>> = {
-  sessions: () => t('sessions'),
-  models: () => t('models'),
-  skills: () => t('skills'),
-  commands: () => t('commands'),
-  mcp: () => t('mcp servers'),
-  extensions: () => t('extensions'),
-  tools: () => t('tools'),
-  approvals: () => t('approvals'),
-  settings: () => t('settings'),
-  help: () => t('help'),
-};
 function useNarrow() {
   return useSyncExternalStore(
     (listener) => {
@@ -769,7 +756,7 @@ export function App() {
                   {home
                     ? t('new session')
                     : page
-                      ? (PAGE_NAMES[page]?.() ?? page)
+                      ? shellPageTitle(page)
                       : file
                         ? file
                         : t('agent record')}

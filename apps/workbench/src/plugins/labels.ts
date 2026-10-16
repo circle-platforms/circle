@@ -8,6 +8,34 @@ export function extensionErrorText(error: string): string {
   return t('could not load the extension: {error}', { error });
 }
 
+/** The name in the top bar. A built-in page has its own word; a plugin page uses its title. */
+export function shellPageTitle(page: string): string {
+  switch (page) {
+    case 'sessions':
+      return t('sessions');
+    case 'models':
+      return t('models');
+    case 'skills':
+      return t('skills');
+    case 'commands':
+      return t('commands');
+    case 'mcp':
+      return t('mcp servers');
+    case 'extensions':
+      return t('extensions');
+    case 'tools':
+      return t('tools');
+    case 'approvals':
+      return t('approvals');
+    case 'settings':
+      return t('settings');
+    case 'help':
+      return t('help');
+    default:
+      return platformTitle(page);
+  }
+}
+
 /** Sidebar and search names for the hub pages. Unknown ids stay as written. */
 export function platformTitle(id: string, fallback = id): string {
   switch (id) {

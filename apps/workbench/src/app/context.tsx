@@ -31,7 +31,11 @@ export function RuntimeProvider({
   runtime: RuntimePort;
   children: ReactNode;
 }) {
-  const snapshot = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot);
+  const snapshot = useSyncExternalStore(
+    runtime.subscribe,
+    runtime.getSnapshot,
+    runtime.getSnapshot,
+  );
   const [notice, setNotice] = useState('');
   const shownNotice = useRef<
     { text: string; source: 'action' | 'runtime' | 'session-error' } | undefined

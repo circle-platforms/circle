@@ -70,7 +70,7 @@ Interfaces are built into the application; an extension cannot add one by itself
 
 | Page | What it shows | What it does |
 |---|---|---|
-| **hub** | The connection, the tasks handed over from here and their latest lines. | Sign in, follow a task, save its results again. |
+| **hub** | The connection, tasks handed over from here, the inbox and knowledge search. | Sign in or sign out, open the inbox, search knowledge, follow a task, save its results again. |
 | **work** | Tasks the server lets you read: their phase, questions they wait on, approvals bound to an input revision. | Answer a question, approve or reject an open approval. |
 | **execution** | Operations the server's workers ran: the worker and the fencing token that held the lease. | Reconcile an operation whose outcome is unknown. |
 | **knowledge** | Each task's source, artifacts and evidence by revision and SHA-256, and the server's own read-back check. | Save the results. |
@@ -127,7 +127,7 @@ This extension's own version is **0.1.0**. That number is the Circle plugin vers
 
 **When a program runs Circle for the server.** hub's own runner starts Circle without a person, as `circle --mode rpc --extensions`, and hands over the address and a short-lived token in the environment: `CIRCLE_HUB_URL` and `CIRCLE_HUB_TOKEN` (with `CIRCLE_HUB_USER` and `CIRCLE_HUB_SCOPE` if it has them). The extension then reads the server's tools before the first prompt, writes nothing to disk, and does not ask for a password when the token is turned down; `/hub login` and `/hub logout` are refused.
 
-The address can also be set in `settings.json` as `"extensions": { "hub": { "enabled": true, "url": "http://127.0.0.1:7410" } }`. Signing in writes that `url` as well. The desktop hub page starts from it, or from `http://127.0.0.1:7410` when it is empty, and asks for the password on the page. The lines the commands write are notices for you; the model does not see them.
+The address can also be set in `settings.json` as `"extensions": { "hub": { "enabled": true, "url": "http://127.0.0.1:7410" } }`. Signing in writes that `url` as well. The desktop hub page starts from the last server and user, then from that url, then from `http://127.0.0.1:7410`. The password is asked on the page and is not kept. Once signed in, the form is replaced by the signed-in state and a sign-out button. Inbox and knowledge search on that page run `/hub inbox` and `/hub knowledge search`, and the page shows what those commands read. A server that cannot be reached is reported with its address; the transport's own "fetch failed" is not shown. The lines the commands write are notices for you; the model does not see them.
 
 A server error is named and says what to do next: a bad password says to sign in again, a missing id says to check it, and a skill pack the server will not accept names the fields (`INVALID_PAYLOAD`) or the tools the trial used (`SKILLPACK_CHECK_FAILED`, including every undeclared or missing name). A manifest check that returns `details.manifestErrors` lists every `{code, message}`, not only the first. `DECISION_CONFLICT` says whether the task was not waiting for that answer or the decision was already recorded, and which command to use. `SELF_APPROVAL` says you cannot decide your own request. `/hub tools` after `/hub logout` says you are not signed in. A server you are signed in to that publishes no tool catalog still says it offers no tools.
 

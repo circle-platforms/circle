@@ -15,6 +15,7 @@ export const HUB_ZH: Record<string, string> = {
     '地址必须以 http:// 或 https:// 开头',
   'put no user name or password in the address': '地址里不要写用户名或密码',
   'not signed in: /hub login <url> <user>': '未登录：/hub login <url> <user>',
+  'cannot reach the server {url}': '无法连接服务器 {url}',
   'cannot reach {url}: {message}': '无法连接 {url}：{message}',
   '{method} {path} → {status}, not JSON':
     '{method} {path} → {status}，不是 JSON',

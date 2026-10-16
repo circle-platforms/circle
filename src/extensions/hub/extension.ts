@@ -344,6 +344,18 @@ function rowsOf(data: unknown): Record<string, unknown>[] {
 }
 const reason = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+// Node's fetch reports a refused or missing server as "fetch failed". That
+// English is not a reason; the address is the whole of what a person can use.
+function unreachable(url: string, error: unknown): string {
+  const message = reason(error);
+  if (
+    message === 'fetch failed' ||
+    message === 'connection error' ||
+    message === ''
+  )
+    return hubText('cannot reach the server {url}', { url });
+  return hubText('cannot reach {url}: {message}', { url, message });
+}
 // The server's sentence, without the code or the JSON detail blob. Chinese uses
 // messageZh when the server sent it; with Accept-Language the message itself is Chinese.
 function serverSentence(error: ServerError): string {
@@ -845,6 +857,9 @@ export async function register(api: ExtensionAPI): Promise<void> {
       username: username || current?.username || '',
     });
     api.saveSettings({ url });
+    // A sign-in that never reaches the server still leaves the address here,
+    // so the desktop page can offer it again.
+    api.background(showStatus());
   }
   function followed(): Record<string, Followed> {
     const value = readJson('tasks.json');
@@ -859,6 +874,15 @@ export async function register(api: ExtensionAPI): Promise<void> {
   // What a paired page of the desktop application shows (api.setView): where you are
   // signed in, the tasks handed over from here and the last lines this extension wrote.
   const recent: string[] = [];
+  // The last inbox and knowledge search, so the desktop page can show them.
+  // Absent until that command has run; an empty list is a real answer.
+  let inboxPublished: InboxItem[] | undefined;
+  let knowledgePublished:
+    | {
+        query: string;
+        items: { recordId: string; snapshotId: string; title: string }[];
+      }
+    | undefined;
   // Runs of your bots the server has published to Circle, or could not start, that this
   // window has not shown yet; and whether the last look found the token expired.
   let botNews: { bot: Asset; run: BotRun }[] = [];
@@ -881,6 +905,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
         .slice(-20)
         .map(([taskId, item]) => ({ taskId, ...item })),
       recent: recent.slice(-30),
+      ...(inboxPublished !== undefined ? { inbox: inboxPublished } : {}),
+      ...(knowledgePublished ? { knowledge: knowledgePublished } : {}),
       objects,
       botResults: botNews.map(({ bot, run }) => ({
         botAssetId: bot.assetId,
@@ -1303,12 +1329,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         ]),
       });
     } catch (error) {
-      throw new ServerError(
-        hubText('cannot reach {url}: {message}', {
-          url: config.url,
-          message: reason(error),
-        }),
-      );
+      throw new ServerError(unreachable(config.url, error));
     }
     const bytes = Buffer.from(await response.arrayBuffer());
     // Asked with If-None-Match: nothing changed since the last answer.
@@ -3418,6 +3439,20 @@ export async function register(api: ExtensionAPI): Promise<void> {
     }
     const payload = isRecord(data) ? data : {};
     const items = rowsOf(payload.items ?? data);
+    knowledgePublished = {
+      query: q,
+      items: items.map((item) => {
+        const body = isRecord(item.payload) ? item.payload : {};
+        const snapshot =
+          typeof item.snapshotId === 'string' ? item.snapshotId : '';
+        return {
+          recordId: String(item.recordId ?? ''),
+          snapshotId: snapshot,
+          title: String(item.title ?? body.subject ?? body.text ?? ''),
+        };
+      }),
+    };
+    api.background(showStatus());
     if (!items.length) {
       context.append(
         hubText(
@@ -4433,6 +4468,10 @@ export async function register(api: ExtensionAPI): Promise<void> {
     title: string;
   }
   let inboxItems: InboxItem[] = [];
+  function noteInbox(): void {
+    inboxPublished = inboxItems;
+    api.background(showStatus());
+  }
   async function listInbox(context: CommandContext): Promise<void> {
     let pending: Record<string, unknown>[] | undefined;
     try {
@@ -4469,6 +4508,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         };
       });
       if (!inboxItems.length) {
+        noteInbox();
         context.append(
           hubText(
             'Nothing is waiting for you. /hub inbox lists what you can approve.',
@@ -4476,6 +4516,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         );
         return;
       }
+      noteInbox();
       context.append(
         inboxItems
           .map((item, index) => {
@@ -4513,6 +4554,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     const tasks = rowsOf(data);
     inboxItems = [];
     if (!tasks.length) {
+      noteInbox();
       context.append(
         hubText(
           'Nothing is waiting for your approval. /hub task <id> shows one task. Knowledge claims are reviewed one id at a time (GET /v1/knowledge/reviews/<id>); this server has no page that lists them.',
@@ -4536,6 +4578,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         title: String(task.title ?? ''),
       });
     }
+    noteInbox();
     context.append(lines.join('\n'));
   }
   async function showApproval(
