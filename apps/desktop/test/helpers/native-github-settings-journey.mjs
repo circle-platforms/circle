@@ -32,7 +32,7 @@ const view = (page, sessionId) =>
 const requestCount = async (path) =>
   (await readFile(path, 'utf8')).trim().split('\n').filter(Boolean).length;
 
-/** Original settings UI only. Never clicks authorization or invokes a GitHub tool/command. */
+/** Original plugin details UI only. Never clicks authorization or invokes a GitHub tool/command. */
 export async function runNativeGitHubSettingsJourney({
   page,
   sessionId,
@@ -43,44 +43,52 @@ export async function runNativeGitHubSettingsJourney({
   requestsPath,
 }) {
   const receipt = { checks: [] };
-  const openSettings = async () => {
+  const openPlugin = async () => {
     await page
       .locator('.sidebar')
       .getByRole('button', { name: 'settings', exact: true })
       .click();
-    await page.locator('#github-connection').waitFor();
-    return page.locator('#github-connection');
-  };
-  const openExtensions = async (card) => {
-    const direct = card.getByRole('link', { name: 'extensions', exact: true });
-    if (await direct.isVisible()) await direct.click();
-    else {
-      await page
-        .locator('.sidebar')
-        .getByRole('link', { name: 'customize', exact: true })
-        .click();
-      await page
-        .locator('.customize-tabs')
-        .getByRole('link', { name: 'extensions', exact: true })
-        .click();
-    }
+    assert.equal(
+      await page.locator('#github-connection').count(),
+      0,
+      'settings offers navigation rather than a second account-management card',
+    );
     await page
-      .getByRole('heading', { name: 'extensions', exact: true })
-      .waitFor();
-    const runtimeTab = page.getByRole('button', {
-      name: 'runtime extensions',
+      .getByRole('link', { name: 'manage GitHub plugin', exact: true })
+      .click();
+    const detail = page.getByRole('region', {
+      name: 'GitHub plugin',
       exact: true,
     });
-    if (await runtimeTab.isVisible()) await runtimeTab.click();
-    const row = page.locator('.extension-card').filter({
-      has: page.getByRole('heading', { name: 'github', exact: true }),
-    });
+    await detail.waitFor();
     assert.equal(
-      await row.count(),
-      1,
-      'the bundled GitHub extension has one original settings row',
+      await page.evaluate(() => location.hash),
+      '#/page/extensions?plugin=github',
     );
-    return row.getByRole('checkbox', { name: 'enable github', exact: true });
+    await page
+      .getByRole('button', { name: 'back to plugins', exact: true })
+      .waitFor();
+    return detail.locator('#github-connection');
+  };
+  const expand = async (container, name) => {
+    const details = container.locator('details').filter({
+      has: page
+        .locator('summary')
+        .filter({ hasText: new RegExp('^' + name + '$') }),
+    });
+    assert.equal(await details.count(), 1);
+    if (!(await details.evaluate((node) => node.open)))
+      await details.locator(':scope > summary').click();
+    return details;
+  };
+  const openExtensions = async () => {
+    const detail = page.getByRole('region', {
+      name: 'GitHub plugin',
+      exact: true,
+    });
+    if (!(await detail.isVisible())) await openPlugin();
+    await expand(detail, 'manage');
+    return detail.getByRole('checkbox', { name: 'enable github', exact: true });
   };
   const verifyDisabled = (snapshot) => {
     const item = extension(snapshot);
@@ -112,7 +120,7 @@ export async function runNativeGitHubSettingsJourney({
     const messages = parent.messages.map((message) => message.id);
     const calls = await requestCount(requestsPath);
     const others = otherExtensions(initial);
-    let card = await openSettings();
+    let card = await openPlugin();
     await card.getByText(unavailable, { exact: true }).waitFor();
     await page.screenshot({
       path: join(output, 'github-settings-default-unavailable.png'),
@@ -165,15 +173,20 @@ export async function runNativeGitHubSettingsJourney({
         .enabled,
       true,
     );
-    card = await openSettings();
+    card = await openPlugin();
     await card
       .getByText('authorization application: GitHub CLI', { exact: true })
       .waitFor();
     await card.getByText('GitHub login required', { exact: true }).waitFor();
+    await card
+      .getByRole('heading', { name: 'connected account', exact: true })
+      .waitFor();
+    await expand(card, 'connection options');
     const repositories = card.getByPlaceholder('owner/repository', {
       exact: true,
     });
     assert.equal(await repositories.inputValue(), '');
+    await expand(card, 'credential storage');
     const storage = card.locator('select');
     assert.equal(await storage.count(), 1);
     assert.deepEqual(
@@ -217,7 +230,25 @@ export async function runNativeGitHubSettingsJourney({
         .map((tool) => tool.name),
       commands: github.commands,
     };
-    const disable = await openExtensions(card);
+    await page
+      .getByRole('button', { name: 'back to plugins', exact: true })
+      .click();
+    await page
+      .getByRole('heading', { name: 'extensions', exact: true })
+      .waitFor();
+    await page
+      .getByRole('button', { name: 'runtime extensions', exact: true })
+      .click();
+    const githubCard = page.locator('.extension-card').filter({
+      has: page.getByRole('heading', { name: 'github', exact: true }),
+    });
+    await githubCard
+      .getByRole('link', { name: 'plugin details', exact: true })
+      .click();
+    await page
+      .getByRole('region', { name: 'GitHub plugin', exact: true })
+      .waitFor();
+    const disable = await openExtensions();
     await until(
       () => disable.isChecked(),
       'the original GitHub switch is enabled before the explicit disable click',
@@ -239,7 +270,7 @@ export async function runNativeGitHubSettingsJourney({
         .enabled,
       false,
     );
-    card = await openSettings();
+    card = await openPlugin();
     await card.getByText(unavailable, { exact: true }).waitFor();
     assert.equal(
       await card
@@ -275,14 +306,15 @@ export async function runNativeGitHubSettingsJourney({
     assert.equal(
       await requestCount(requestsPath),
       calls,
-      'settings toggles never trigger another model request',
+      'plugin management never triggers another model request',
     );
     receipt.status = 'passed';
     receipt.checks.push(
       'original bundled extension starts disabled',
       'actual native GitHub provider and status tool register while disconnected',
       'original storage and empty optional repository controls remain usable without authorization',
-      'disabling removes actual tools and returns original card to unavailable',
+      'plugin details are discoverable from settings and the original plugin list',
+      'disabling removes actual tools and leaves the same plugin detail available',
       'other extensions, original draft and model-request count remain unchanged',
     );
     receipt.authorization =
@@ -330,7 +362,7 @@ export async function runNativeGitHubSettingsJourney({
         extension(await state())?.enabled === true
       ) {
         try {
-          const card = await openSettings();
+          const card = await openPlugin();
           const toggle = await openExtensions(card);
           await until(
             () => toggle.isChecked(),
