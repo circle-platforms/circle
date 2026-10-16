@@ -51,7 +51,24 @@ export function armNativeFeedback({ kind, selector, condition }) {
           },
         );
       }
-      const target = document.querySelector(condition.selector);
+      let target;
+      if (condition.file) {
+        const views = [...document.querySelectorAll('.file-view')].filter(
+          (view) =>
+            visible(view) &&
+            view
+              .querySelector('.file-view-filename strong')
+              ?.textContent.trim() === condition.file.path &&
+            view
+              .querySelector('.file-source-origin')
+              ?.getAttribute('aria-label')
+              ?.endsWith(': ' + condition.file.sourceDirectory),
+        );
+        if (views.length !== 1) return false;
+        target = [...views[0].querySelectorAll(condition.selector)].find(
+          visible,
+        );
+      } else target = document.querySelector(condition.selector);
       if (!target) return false;
       if (condition.panel) {
         const panel = document.querySelector(condition.panel.selector);

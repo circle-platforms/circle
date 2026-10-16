@@ -248,3 +248,92 @@ test('visibility eligibility preserves mixed raw and distinguishes reveal recove
   assert.equal(result[1].producerToFrameMs, 50);
   assert.equal(result[2].visibilityEpoch, 3);
 });
+
+test('file feedback targets the unique visible expected file and workspace, ignoring hidden Monaco first matches', async () => {
+  const r = renderer();
+  const node = (textContent, hidden = false) => ({
+    textContent,
+    closest: () => (hidden ? {} : null),
+    getBoundingClientRect: () => ({
+      width: hidden ? 0 : 500,
+      height: hidden ? 0 : 80,
+    }),
+  });
+  const hiddenEditor = node('PERF_SECOND', true);
+  const liveEditor = node('PERF_README');
+  let directory = '/wrong-owner';
+  const view = {
+    ...node(''),
+    querySelector: (selector) =>
+      selector === '.file-view-filename strong'
+        ? node('README.md')
+        : { getAttribute: () => 'workspace source: workspace: ' + directory },
+    querySelectorAll: () => [hiddenEditor, liveEditor],
+  };
+  r.document.querySelectorAll = () => [{ ...view, closest: () => ({}) }, view];
+  r.document.querySelector = () => hiddenEditor;
+  r.install({
+    selector: '.monaco-editor .view-lines',
+    file: { path: 'README.md', sourceDirectory: '/actual-owner' },
+    text: 'PERF_README',
+  });
+  let finished = false;
+  r.window.__circleNativePerfPending.then(() => (finished = true));
+  r.click();
+  r.frame();
+  r.frame();
+  await Promise.resolve();
+  assert.equal(
+    finished,
+    false,
+    'same content in a different workspace cannot satisfy the metric',
+  );
+  directory = '/actual-owner';
+  r.frame();
+  r.frame();
+  await Promise.resolve();
+  assert.equal(
+    finished,
+    true,
+    'visible matching resource succeeds despite stale hidden editor first',
+  );
+});
+
+test('file save feedback cannot use a hidden matched toolbar while visible buffer remains unsaved', async () => {
+  const r = renderer();
+  const toolbar = {
+    textContent: 'unsaved buffer',
+    closest: () => null,
+    getBoundingClientRect: () => ({ width: 500, height: 40 }),
+  };
+  const view = {
+    closest: () => null,
+    getBoundingClientRect: () => ({ width: 500, height: 800 }),
+    querySelector: (selector) =>
+      selector === '.file-view-filename strong'
+        ? { textContent: 'README.md' }
+        : { getAttribute: () => 'workspace source: workspace: /actual-owner' },
+    querySelectorAll: () => [
+      { ...toolbar, textContent: 'disk and buffer match', closest: () => ({}) },
+      toolbar,
+    ],
+  };
+  r.document.querySelectorAll = () => [view];
+  r.install({
+    selector: '.file-view-toolbar',
+    file: { path: 'README.md', sourceDirectory: '/actual-owner' },
+    text: 'disk and buffer match',
+  });
+  let finished = false;
+  r.window.__circleNativePerfPending.then(() => (finished = true));
+  r.click();
+  r.frame();
+  r.frame();
+  await Promise.resolve();
+  assert.equal(finished, false);
+  toolbar.textContent = 'disk and buffer match';
+  r.frame();
+  r.frame();
+  await Promise.resolve();
+  assert.equal(finished, true);
+});

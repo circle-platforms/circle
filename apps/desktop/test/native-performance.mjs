@@ -785,6 +785,17 @@ try {
   await page
     .locator('.transcript')
     .evaluate((node) => node.scrollTo({ top: node.scrollHeight }));
+  const sourceSnapshot = await state();
+  const sourceSession = sourceSnapshot.sessions.find(
+    (item) => item.id === mainSession,
+  );
+  const sourceDirectory = sourceSnapshot.workspaces.find(
+    (item) => item.id === sourceSession.workspaceId,
+  )?.path;
+  assert.ok(
+    sourceDirectory,
+    'file metrics require actual parent workspace identity',
+  );
   const openSource = async (name, marker) => {
     if (
       await page
@@ -794,10 +805,11 @@ try {
       await page
         .getByRole('button', { name: 'close file', exact: true })
         .click();
-    const link = page.locator(`a[href="${name}#L1"]`).first();
+    const link = page.locator(`.transcript:visible a[href="${name}#L1"]`);
     await link.evaluate((node) => (node.dataset.perfTarget = 'file'));
     await arm('click', '[data-perf-target="file"]', {
       selector: '.monaco-editor .view-lines',
+      file: { path: name, sourceDirectory },
       text: marker,
     });
     await link.click();
@@ -808,8 +820,14 @@ try {
       index % 2 ? 'README.md' : 'SECOND.md',
       index % 2 ? 'PERF_README' : 'PERF_SECOND',
     );
-  await page.getByRole('button', { name: 'edit', exact: true }).click();
-  const editor = page.locator('.monaco-editor textarea').first();
+  const activeFile = page.locator('.file-view:visible');
+  assert.equal(
+    await activeFile.locator('.file-view-filename strong').textContent(),
+    'README.md',
+  );
+  await activeFile.getByRole('button', { name: 'edit', exact: true }).click();
+  const editor = activeFile.locator('.monaco-editor:visible textarea');
+  await editor.waitFor({ state: 'attached' });
   for (let index = 0; index < 24; index++) {
     await editor.focus();
     await editor.press(
@@ -820,18 +838,19 @@ try {
     await waitFor(
       async () =>
         await page
-          .locator('.file-view-toolbar')
+          .locator('.file-view:visible .file-view-toolbar')
           .textContent()
           .then((text) => text.includes('unsaved buffer')),
       'unsaved editor buffer',
     );
-    const save = page.getByRole('button', {
+    const save = activeFile.getByRole('button', {
       name: 'save to disk',
       exact: true,
     });
     await save.evaluate((node) => (node.dataset.perfTarget = 'save'));
     await arm('click', '[data-perf-target="save"]', {
       selector: '.file-view-toolbar',
+      file: { path: 'README.md', sourceDirectory },
       text: 'disk and buffer match',
     });
     await save.click();
