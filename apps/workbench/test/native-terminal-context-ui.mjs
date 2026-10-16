@@ -198,12 +198,18 @@ try {
       await page.waitForFunction(
         () => window.__terminalContextFixture.observe().pending,
       );
-      await page.getByRole('link', { name: 'context B', exact: true }).click();
+      await page
+        .locator('.sidebar [data-row-key="recent:B"]')
+        .getByRole('link', { name: 'context B', exact: true })
+        .click();
       await page.waitForFunction(
         () => window.__terminalContextFixture.observe().activeSessionId === 'B',
       );
       assert.equal(await message.inputValue(), 'unsent B draft');
-      await page.getByRole('link', { name: 'context A', exact: true }).click();
+      await page
+        .locator('.sidebar [data-row-key="recent:A"]')
+        .getByRole('link', { name: 'context A', exact: true })
+        .click();
       await page.waitForFunction(
         () => window.__terminalContextFixture.observe().activeSessionId === 'A',
       );

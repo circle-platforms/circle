@@ -24,7 +24,7 @@ try {
   );
   await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
-  const expected = await page.evaluate(async () => {
+  const fixture = await page.evaluate(async () => {
     const { PreviewRuntime } = await import('/src/model/state.ts');
     const runtime = new PreviewRuntime(localStorage);
     let expected;
@@ -75,8 +75,18 @@ try {
         .filter((row) => !row.archivedAt)
         .map((row) => row.id);
     });
-    return expected;
+    return {
+      expected,
+      seed: localStorage.getItem('circle.workbench.preview.v1'),
+    };
   });
+  const expected = fixture.expected;
+  assert.equal(typeof fixture.seed, 'string');
+  // The mounted application's pagehide saves its own older view. Seed the next
+  // document before its real PreviewRuntime is constructed, after that save.
+  await page.addInitScript((seed) => {
+    localStorage.setItem('circle.workbench.preview.v1', seed);
+  }, fixture.seed);
   await page.reload();
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   for (const name of ['Login implementation', 'Login review'])
@@ -88,8 +98,17 @@ try {
     await page.locator('.project-list').innerText(),
     /a0b1c2d3e4f56789012345/,
   );
+  const recent = page.locator('.sidebar .project').filter({
+    has: page.getByRole('button', { name: 'recent', exact: true }),
+  });
+  const moreRecent = recent.getByRole('button', {
+    name: /^show \d+ more$/,
+  });
+  if (await moreRecent.count()) await moreRecent.click();
+  const workspaceRows = '.sidebar .session-row:not([data-row-key^="recent:"])';
   const ids = await page
-    .locator('.sidebar .session-link')
+    .locator(workspaceRows)
+    .getByRole('link')
     .evaluateAll((nodes) =>
       nodes.map((node) => node.getAttribute('href').split('/').at(-1)),
     );
@@ -98,8 +117,21 @@ try {
     [...expected].sort(),
     'all existing and task session routes remain visible',
   );
+  const recentIds = await recent
+    .getByRole('link')
+    .evaluateAll((nodes) =>
+      nodes.map((node) => node.getAttribute('href').split('/').at(-1)),
+    );
+  assert.deepEqual(
+    [...recentIds].sort(),
+    [...expected].sort(),
+    'recent independently preserves all existing and task session routes',
+  );
   for (const id of ['child-01', 'child-02']) {
-    const link = page.locator(`.sidebar .session-link[href="#/session/${id}"]`);
+    const link = page
+      .locator(workspaceRows)
+      .getByRole('link', { name: 'shared task title', exact: true })
+      .and(page.locator(`[href="#/session/${id}"]`));
     assert.equal(
       await link.locator('span').textContent(),
       'shared task title',
@@ -108,8 +140,19 @@ try {
     await link.click();
     await page.waitForFunction((id) => location.hash === '#/session/' + id, id);
     assert.equal(
-      await page.locator('.sidebar .session-link.active').getAttribute('href'),
+      await page
+        .locator(workspaceRows + ' .session-link.active')
+        .getAttribute('href'),
       '#/session/' + id,
+    );
+    await recent
+      .getByRole('link', { name: 'shared task title', exact: true })
+      .and(page.locator(`[href="#/session/${id}"]`))
+      .click();
+    assert.equal(
+      await recent.locator('.session-link.active').getAttribute('href'),
+      '#/session/' + id,
+      'recent and workspace rows reflect the same selected route',
     );
   }
   console.log(
