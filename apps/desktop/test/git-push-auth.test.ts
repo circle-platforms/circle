@@ -135,6 +135,11 @@ test('actual Git HTTP 401 challenge cannot borrow an owned GitHub grant for anot
     GH_HOST: 'github.com',
   };
   try {
+    await writeFile(
+      path.join(root, process.platform === 'win32' ? '_netrc' : '.netrc'),
+      'machine 127.0.0.1 login fixture-host password synthetic-host-cache',
+      { mode: 0o600 },
+    );
     await assert.rejects(
       withGitHubPushCredentials(
         {
@@ -571,6 +576,98 @@ test('credential waits recheck the accepted candidate and authenticated pushes c
       competing,
     );
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+test('repository HTTP credentials are an actual transport override and authenticated service pushes reject them before obtaining a grant', async () => {
+  const root = await mkdtemp(
+    path.join(tmpdir(), 'circle-push-http-overrides-'),
+  );
+  const env = {
+    ...process.env,
+    HOME: root,
+    USERPROFILE: root,
+    GIT_TERMINAL_PROMPT: '0',
+  };
+  let marker = false;
+  const server = createServer((req, res) => {
+    marker ||= req.headers.authorization === 'synthetic-repository-header';
+    res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="fixture"' });
+    res.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as { port: number };
+  try {
+    await git(['init'], env, root);
+    await git(
+      [
+        '-c',
+        'user.name=Fixture',
+        '-c',
+        'user.email=fixture@example.invalid',
+        'commit',
+        '--allow-empty',
+        '-m',
+        'Seed',
+      ],
+      env,
+      root,
+    );
+    await git(
+      ['remote', 'add', 'origin', 'https://github.com/fixture/repo.git'],
+      env,
+      root,
+    );
+    await git(
+      [
+        'config',
+        'http.extraHeader',
+        'Authorization: synthetic-repository-header',
+      ],
+      env,
+      root,
+    );
+    await assert.rejects(
+      git(['ls-remote', `http://127.0.0.1:${port}/repo`], env, root),
+    );
+    assert.equal(
+      marker,
+      true,
+      'real Git used the repository header without asking the owned helper',
+    );
+    await git(['config', '--unset', 'http.extraHeader'], env, root);
+    const service = new GitWorkspaceService(root);
+    let grants = 0;
+    const invocation = {
+      pushAuthentication: {
+        repository: 'fixture/repo',
+        withCredentials: async () => {
+          grants++;
+          return '';
+        },
+      },
+    };
+    for (const key of [
+      'http.extraHeader',
+      'http.https://github.com/fixture/repo.git.extraHeader',
+      'http.cookieFile',
+      'http.sslCert',
+      'http.sslKey',
+    ]) {
+      await git(['config', key, 'synthetic-only'], env, root);
+      await assert.rejects(
+        service.call(
+          'push',
+          { revision: (await service.snapshot()).revision },
+          invocation,
+        ),
+        /remove repository HTTP credential overrides/,
+      );
+      await git(['config', '--unset', key], env, root);
+    }
+    assert.equal(grants, 0);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(root, { recursive: true, force: true });
   }
 });

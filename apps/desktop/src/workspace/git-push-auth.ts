@@ -48,7 +48,7 @@ export async function withGitHubPushCredentials(
         ...Object.keys(cleanEnv),
       ])) {
         if (
-          /^(GIT_CONFIG_|GIT_TRACE|GIT_CURL_VERBOSE$|GIT_ASKPASS$|GIT_EXEC_PATH$|GIT_SSL_NO_VERIFY$|SSH_ASKPASS$|NODE_OPTIONS$|GH_DEBUG$|GH_TOKEN$|GITHUB_TOKEN$|GH_ENTERPRISE_TOKEN$|GITHUB_ENTERPRISE_TOKEN$|GH_HOST$|GH_REPO$|GH_CONFIG_DIR$)/i.test(
+          /^(GIT_|SSH_ASKPASS$|NODE_OPTIONS$|GH_DEBUG$|GH_TOKEN$|GITHUB_TOKEN$|GH_ENTERPRISE_TOKEN$|GITHUB_ENTERPRISE_TOKEN$|GH_HOST$|GH_REPO$|GH_CONFIG_DIR$|HOME$|USERPROFILE$|HOMEDRIVE$|HOMEPATH$|CURL_HOME$|NETRC$)/i.test(
             key,
           )
         )
@@ -59,9 +59,13 @@ export async function withGitHubPushCredentials(
       const result = await run(
         {
           ...cleanEnv,
+          HOME: directory,
+          USERPROFILE: directory,
+          CURL_HOME: directory,
           GH_TOKEN: options.token,
           GH_HOST: 'github.com',
           GH_CONFIG_DIR: directory,
+          GIT_TERMINAL_PROMPT: '0',
           GIT_CONFIG_NOSYSTEM: '1',
           GIT_CONFIG_GLOBAL: emptyConfig,
           CIRCLE_GIT_GH: options.ghPath,
@@ -93,6 +97,10 @@ export async function withGitHubPushCredentials(
       options.assertActive();
       return result.split(options.token).join('[redacted]');
     } catch (error) {
+      if ((error as { code?: string }).code === 'CIRCLE_GIT_HTTP_AUTH_OVERRIDE')
+        throw Error(
+          'remove repository HTTP credential overrides before using the Circle GitHub connection',
+        );
       if (
         (error as { code?: string }).code ===
         'CIRCLE_GIT_PUSH_CANDIDATE_CHANGED'

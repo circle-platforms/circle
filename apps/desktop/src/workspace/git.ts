@@ -181,6 +181,7 @@ export class GitWorkspaceService {
         throw Error(
           'GitHub push destination does not match the authorized repository',
         );
+      await this.assertPushHttpConfiguration();
       invocation.signal?.throwIfAborted();
       invocation.assertActive?.();
       // Use the reviewed canonical URL directly, not a mutable remote alias.
@@ -189,9 +190,34 @@ export class GitWorkspaceService {
         throw Error('authenticated push requires an explicit origin');
       args = [...args];
       args[originIndex] = destinations[0]!;
-      return authentication.withCredentials(execute);
+      return authentication.withCredentials(async (env, config) => {
+        await this.assertPushHttpConfiguration();
+        return execute(env, config);
+      });
     }
     return execute();
+  }
+  private async assertPushHttpConfiguration() {
+    let unsafeHttp = '';
+    try {
+      unsafeHttp = await this.git([
+        'config',
+        '--local',
+        '--includes',
+        '--name-only',
+        '--get-regexp',
+        '^http\\.(.*\\.)?(extraheader|cookiefile|savecookies|sslcert|sslkey|sslcertpasswordprotected)$',
+      ]);
+    } catch (error) {
+      if ((error as { code?: number }).code !== 1) throw error;
+    }
+    if (unsafeHttp.trim())
+      throw Object.assign(
+        Error(
+          'remove repository HTTP credential overrides before using the Circle GitHub connection',
+        ),
+        { code: 'CIRCLE_GIT_HTTP_AUTH_OVERRIDE' },
+      );
   }
   async snapshot(): Promise<GitSnapshot> {
     let previous = await this.readSnapshot();
