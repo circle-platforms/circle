@@ -1,3 +1,4 @@
+import { createWindowsTerminalCommandLauncher } from './windows-command-terminal.ts';
 import { createServer, type Socket } from 'node:net';
 import { mkdtemp, chmod, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -36,6 +37,8 @@ export interface TerminalCommandLauncherOptions {
     executionId: string,
     reason: string,
   ) => Promise<unknown>;
+  /** Trusted opt-in until real Windows native and packaged gates pass. */
+  windowsJobObject?: boolean;
   readyTimeoutMs?: number;
   stopTimeoutMs?: number;
 }
@@ -49,10 +52,13 @@ export function createTerminalCommandLauncher(
   options: TerminalCommandLauncherOptions,
 ): CommandLauncher {
   return async (request) => {
-    if (process.platform === 'win32')
-      throw Error(
-        'managed command process-tree ownership is unavailable on Windows',
-      );
+    if (process.platform === 'win32') {
+      if (!options.windowsJobObject)
+        throw Error(
+          'managed command process-tree ownership is unavailable on Windows',
+        );
+      return createWindowsTerminalCommandLauncher(options)(request);
+    }
     request.signal.throwIfAborted();
     const executionId = request.executionId,
       owner = request.origin.executionSessionId;
