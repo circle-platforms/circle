@@ -136,9 +136,16 @@ test('actual scripted desktop worker runs nested npm with strict system PATH thr
       platform: 'node',
       target: 'node24',
       format: 'esm',
-      external: ['node-pty', 'typescript-language-server', 'typescript'],
+      // Match build.mjs: keep Koffi's loader/native payload external and avoid
+      // colliding with module imports bundled from dependencies.
+      external: [
+        'koffi',
+        'node-pty',
+        'typescript-language-server',
+        'typescript',
+      ],
       banner: {
-        js: "import {createRequire} from 'node:module'; const require=createRequire(import.meta.url);",
+        js: "import { createRequire as circleCreateRequire } from 'node:module'; const require = circleCreateRequire(import.meta.url);",
       },
     });
     for (const folder of ['prompts', 'data'])
