@@ -500,7 +500,10 @@ test('real Anthropic requests fit legacy thinking and output budgets and include
     token: () => {},
   });
   assert.equal(bodies[1]!.max_tokens, 32000);
-  assert.deepEqual(bodies[1]!.thinking, { type: 'adaptive' });
+  assert.deepEqual(bodies[1]!.thinking, {
+    type: 'adaptive',
+    display: 'summarized',
+  });
   assert.deepEqual(bodies[1]!.output_config, { effort: 'low' });
   const title = new GatewayModel(endpoint, root, 'glm-5.3', {}, catalog);
   title.effort = 'medium';

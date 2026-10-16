@@ -44,6 +44,19 @@ try {
           answerTitle(res, body);
           return;
         }
+        if (req.url === '/v1/responses') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              error: {
+                type: 'invalid_request_error',
+                param: 'tools',
+                message: 'web_search is not supported',
+              },
+            }),
+          );
+          return;
+        }
         seen.push({ host, url: req.url, model: body.model });
         res.writeHead(200, { 'Content-Type': 'text/event-stream' });
         const last = body.messages.at(-1);

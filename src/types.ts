@@ -21,6 +21,27 @@ export interface Usage {
   /** Input tokens whose endpoint omitted cache fields. Filled by `stats`. */
   cache_unreported_input?: number;
 }
+/** A model request made inside a tool, retained with that tool's result. */
+export interface ToolModelCall {
+  model: string;
+  usage: Usage;
+  cost?: import('./pricing.js').PriceReceipt;
+  search_requests?: number;
+}
+/** Provider completion evidence. Absent on older history and custom models. */
+export interface ModelCompletion {
+  reason:
+    | 'stop'
+    | 'tool_calls'
+    | 'length'
+    | 'filter'
+    | 'pause'
+    | 'missing'
+    | 'unknown';
+  provider_reason?: string;
+  output_limit?: number;
+  client_stop?: 'repetition';
+}
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'tool' | 'system';
@@ -51,8 +72,10 @@ export interface Message {
    * `cache 0.0%`; a missing field is `cache N/A`, the same as a stop.
    */
   cache_reported?: boolean;
+  model_calls?: ToolModelCall[];
   internal?: string;
   truncated?: boolean;
+  completion?: ModelCompletion;
   recoverable?: boolean;
   legacy_data?: { type: string; data: Record<string, unknown> };
 }
@@ -95,6 +118,9 @@ export interface ToolContext {
   emitAttachments?: (attachments: MediaAttachment[]) => void;
   /** Whether the model in use reads images: false when it is known not to. */
   imageInput?: boolean;
+  /** Bound to this harness's model and connection, including child harnesses. */
+  webSearch?: (query: string, numResults: number) => Promise<string>;
+  recordModelCall?: (call: ToolModelCall) => void;
 }
 export interface MediaAttachment {
   kind: 'image' | 'document';

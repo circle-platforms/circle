@@ -1,6 +1,7 @@
 import { effectiveBindings, matchingAction } from '../model/shortcuts';
 import { planVisible } from '../../../../src/plan_state';
 import { agentActivityText } from '../model/activity';
+import { completionNoticeText } from '../model/completion';
 import { usePlugins } from '../plugins/context';
 import { PluginBoundary } from '../plugins/Boundary';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -726,19 +727,7 @@ export function Conversation({
                 >
                   {item.message.role === 'notice' ? (
                     <div className="transcript-notice">
-                      {item.message.planCompleted === undefined
-                        ? item.message.text === '✖ the turn failed'
-                          ? t('✖ the turn failed')
-                          : item.message.text.startsWith('title failed · ')
-                            ? t('title failed · {message}', {
-                                message: item.message.text.slice(
-                                  'title failed · '.length,
-                                ),
-                              })
-                            : item.message.text
-                        : t('plan completed · {n} steps', {
-                            n: item.message.planCompleted,
-                          })}
+                      {completionNoticeText(item.message)}
                     </div>
                   ) : (
                     <MessageView

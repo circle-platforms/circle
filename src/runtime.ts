@@ -3,6 +3,8 @@ import { join, basename } from 'node:path';
 import { readFileSync } from 'node:fs';
 import type { ChatModel, Message, ToolCall } from './types.js';
 import { GatewayModel, EFFORT_LEVELS, defaultEffort } from './model.js';
+import { WebSearchService } from './websearch_service.js';
+import type { NativeSearchConnection } from './native_websearch.js';
 import { CheckpointStore, type Session } from './checkpoint_store.js';
 import {
   defaultPolicy,
@@ -173,6 +175,49 @@ export interface RuntimeOptions {
   holdTitle?: boolean;
 }
 export class AgentRuntime {
+  private readonly searches = new WebSearchService();
+  private readonly searchConnections = new WeakMap<
+    ChatModel,
+    NativeSearchConnection
+  >();
+  private modelWithSearch(base: ChatModel): ChatModel {
+    const wrapped = this.extensions.model(base);
+    const connection =
+      base instanceof GatewayModel
+        ? base.webSearchConnection()
+        : this.searchConnections.get(base);
+    if (connection) this.searchConnections.set(wrapped, connection);
+    return wrapped;
+  }
+  private async searchFromModel(
+    model: ChatModel,
+    query: string,
+    numResults: number,
+    context: ToolContext,
+  ): Promise<string> {
+    this.requireCurrentConnection();
+    return this.searches.search(
+      this.searchConnections.get(model),
+      query,
+      numResults,
+      context.signal,
+      (record) =>
+        context.recordModelCall?.({
+          model: record.model,
+          usage: record.usage,
+          cost: {
+            ...priceCall(
+              this.catalog.facts(record.model, this.options.settings),
+              record.usage,
+            ),
+            tool_fee_unknown: true,
+          },
+          ...(record.searchRequests !== undefined
+            ? { search_requests: record.searchRequests }
+            : {}),
+        }),
+    );
+  }
   readonly migration: MigrationReport;
   readonly options: RuntimeOptions;
   readonly store: CheckpointStore;
@@ -468,7 +513,7 @@ export class AgentRuntime {
         if (!custom && !['general-purpose', 'explore'].includes(name))
           throw new Error('unknown subagent type');
         const childModel = custom?.spec.model
-          ? this.extensions.model(
+          ? this.modelWithSearch(
               this.gatewayModel(this.options.settings, custom.spec.model),
             )
           : parentHarness.model;
@@ -640,6 +685,8 @@ export class AgentRuntime {
           parentPlanMode: () => this.harness.planMode,
           toolBoundary: (tool, args, context) =>
             this.extensionToolBoundary(tool, args, context),
+          webSearch: (model, query, count, context) =>
+            this.searchFromModel(model, query, count, context),
           prepareMessages: (signal): Promise<Message[]> =>
             this.context.prepare(
               session.id,
@@ -698,7 +745,7 @@ export class AgentRuntime {
       variables: () => this.options.settings.variables,
       secrets: () => loadSecrets(this.options.home),
       redact: this.redact,
-      model: this.extensions.model(model),
+      model: this.modelWithSearch(model),
       holdTitle: this.options.holdTitle,
       tools,
       store: this.store,
@@ -731,6 +778,8 @@ export class AgentRuntime {
       },
       toolBoundary: (tool, args, context) =>
         this.extensionToolBoundary(tool, args, context),
+      webSearch: (model, query, count, context) =>
+        this.searchFromModel(model, query, count, context),
       prepareMessages: (signal) =>
         this.context.prepare(
           this.session.id,
@@ -981,7 +1030,7 @@ export class AgentRuntime {
           base.filter((tool) => tool.name !== 'wait_jobs'),
         );
         this.describeSubagents(this.harness.tools);
-        this.harness.model = host.model(this.baseModel!);
+        this.harness.model = this.modelWithSearch(this.baseModel!);
         this.refreshSystemPrompt();
         host.emit('session_start', {
           workspace: this.options.workspace,
@@ -1065,7 +1114,7 @@ export class AgentRuntime {
     const nextModel = this.gatewayModel(this.options.settings, model);
     nextModel.effort = effort;
     this.baseModel = nextModel;
-    this.harness.model = this.extensions.model(this.baseModel);
+    this.harness.model = this.modelWithSearch(this.baseModel);
     this.refreshSystemPrompt();
   }
   /** An explicit login/logout replaces every cached client, including future sessions. */
@@ -1087,7 +1136,7 @@ export class AgentRuntime {
     this.options.modelOverride = undefined;
     this.options.model = ready ? undefined : nextModel;
     this.baseModel = nextModel;
-    this.harness.model = this.extensions.model(nextModel);
+    this.harness.model = this.modelWithSearch(nextModel);
     if (!ready) this.authFingerprint = this.savedConnectionFingerprint();
     this.refreshSystemPrompt();
   }
@@ -1234,7 +1283,9 @@ export class AgentRuntime {
         if (message.usage) {
           addUsage(usage, message.usage);
           countEstimate(message);
-          compactions.add(message.cost, message.interrupted === true);
+          if (message.model_calls?.length)
+            for (const call of message.model_calls) compactions.add(call.cost);
+          else compactions.add(message.cost, message.interrupted === true);
         }
       const childState = this.store.contextState(id);
       const calls =
@@ -1467,6 +1518,8 @@ export class AgentRuntime {
     }
   }
   private retitleSession(id: string): Promise<void> {
+    // A repair on open is quiet: a model that cannot be asked is not a failure here.
+    if (!this.harness.model.sideRequests) return Promise.resolve();
     const session = this.store.get(id);
     if (!session?.title || !session.head || session.title_locked)
       return Promise.resolve();

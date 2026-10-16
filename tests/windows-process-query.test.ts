@@ -431,6 +431,54 @@ test('known PIDs still block installation even when the native query times out a
   assert.equal(native.error, nativeError);
 });
 
+test('the query helper started from the copy itself is never a running copy', (t) => {
+  const { copy, program, where } = heldCopy(t);
+  // circle uninstall runs from the installation it removes: its own node is a held program of
+  // the copy, and the helper started from that node lists itself among the processes.
+  const helper = process.pid + 1;
+  const other = process.pid + 2;
+  const record = (pid: number) =>
+    `${pid} ${Buffer.from(program).toString('base64')}\r\n`;
+  const query = (stdout: string) => () => ({
+    status: 0,
+    pid: helper,
+    stdout,
+    stderr: '',
+  });
+  assert.deepEqual(
+    runningCopies(
+      [copy],
+      where,
+      query(record(process.pid) + record(helper)),
+      () => 'EBUSY',
+      () => {},
+    ),
+    [],
+  );
+  assert.deepEqual(
+    runningCopies(
+      [copy],
+      where,
+      query(record(process.pid) + record(helper) + record(other)),
+      () => 'EBUSY',
+      () => {},
+    ),
+    [other],
+  );
+  // Listed alone, the helper does not explain who holds the program: still unknown.
+  assert.throws(
+    () =>
+      runningCopies(
+        [copy],
+        where,
+        query(record(helper)),
+        () => 'EBUSY',
+        () => {},
+      ),
+    /is in use by another program/,
+  );
+});
+
 test('an unheld program does not start a query', (t) => {
   const { copy, where } = heldCopy(t);
   let reports = 0;

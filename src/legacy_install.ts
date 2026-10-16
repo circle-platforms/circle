@@ -58,11 +58,12 @@ export interface Surroundings {
   prefix?: string;
   binDir?: string;
 }
-type Run = (
+export type Run = (
   command: string,
   args: string[],
   timeout?: number,
-) => Pick<SpawnSyncReturns<string>, 'status' | 'stdout' | 'stderr' | 'error'>;
+) => Pick<SpawnSyncReturns<string>, 'status' | 'stdout' | 'stderr' | 'error'> &
+  Partial<Pick<SpawnSyncReturns<string>, 'pid' | 'signal'>>;
 
 const runCommand: Run = (command, args, timeout = 120_000) =>
   spawnSync(command, args, { encoding: 'utf8', timeout });
@@ -121,7 +122,7 @@ const real = (path: string): string | undefined => {
     return undefined;
   }
 };
-const inside = (path: string, folder: string): boolean => {
+export const inside = (path: string, folder: string): boolean => {
   const rest = relative(resolve(folder), resolve(path));
   return rest === '' || (!rest.startsWith('..') && !isAbsolute(rest));
 };
@@ -394,6 +395,9 @@ export function runningCopies(
         )
           pids.add(pid);
       }
+      // The query helper runs this program's own node, which may be inside the copy (circle
+      // uninstall), and so may list itself: it is never a running copy.
+      if (typeof result.pid === 'number') pids.delete(result.pid);
       // A program in use that no listed process runs: removing it would fail halfway, after
       // the new release is staged.
       const busy = held

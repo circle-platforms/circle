@@ -15,6 +15,7 @@ import type {
   Message,
   ModelRequest,
   ModelResponse,
+  ModelCompletion,
   ToolCall,
 } from './types.js';
 import { emptyUsage } from './types.js';
@@ -30,7 +31,12 @@ import { parseToolInput } from './tool_call_compat.js';
 import { isRecord } from './settings.js';
 import { circleHome } from './paths.js';
 import { ModelCatalog, type ModelFacts } from './model_catalog.js';
-import { modelProfile, fitEffort, THINKING_BUDGET } from './model_profiles.js';
+import {
+  modelProfile,
+  fitEffort,
+  THINKING_BUDGET,
+  supportsThinkingDisplay,
+} from './model_profiles.js';
 import { priceCall } from './pricing.js';
 import { isNetworkFailure, networkError } from './net.js';
 import {
@@ -47,6 +53,41 @@ export const EFFORT_LEVELS = [
   'xhigh',
   'max',
 ] as const;
+function completion(
+  protocol: 'openai' | 'anthropic',
+  finish: string | null | undefined,
+  outputLimit?: number,
+  repetition = false,
+): ModelCompletion {
+  const reasons: Record<string, ModelCompletion['reason']> =
+    protocol === 'anthropic'
+      ? {
+          end_turn: 'stop',
+          stop_sequence: 'stop',
+          tool_use: 'tool_calls',
+          max_tokens: 'length',
+          model_context_window_exceeded: 'length',
+          refusal: 'filter',
+          pause_turn: 'pause',
+        }
+      : {
+          stop: 'stop',
+          tool_calls: 'tool_calls',
+          function_call: 'tool_calls',
+          length: 'length',
+          content_filter: 'filter',
+        };
+  return {
+    reason: finish
+      ? Object.hasOwn(reasons, finish)
+        ? reasons[finish]!
+        : 'unknown'
+      : 'missing',
+    ...(finish ? { provider_reason: finish } : {}),
+    ...(outputLimit !== undefined ? { output_limit: outputLimit } : {}),
+    ...(repetition ? { client_stop: 'repetition' as const } : {}),
+  };
+}
 /** Depth when the user has not chosen one. Anthropic used to fall back to `xhigh`. */
 export function defaultEffort(
   protocol: string,
@@ -69,15 +110,21 @@ export class GatewayModel implements ChatModel {
   private readonly timeout: number;
   effort: string;
   private readonly dropped = new Set<string>();
-  /** Parameters each in-flight request actually sent. A parallel title request must not
-   * replace the turn's set, or a 400 would drop the wrong field. */
-  private readonly sentNow = new Set<Set<string>>();
-  /** Finished bodies, newest last. Drop runs after the request returns. */
+  /**
+   * Parameters the latest requests sent, newest last. Each request keeps its own set:
+   * a title request beside the turn must not replace the turn's, or a 400 would drop
+   * the wrong field. The guard drops a field after its request returned.
+   */
   private readonly sentRecent: Set<string>[] = [];
   private readonly thinkingScope: string;
   private readonly rejectedThinking = new Set<string>();
   private readonly guard: ModelGuard;
   readonly catalog: ModelCatalog;
+  private readonly searchConnection: import('./native_websearch.js').NativeSearchConnection;
+  /** A snapshot of the same connection used by the main model client. Never persisted. */
+  webSearchConnection(): import('./native_websearch.js').NativeSearchConnection {
+    return { ...this.searchConnection };
+  }
   constructor(
     readonly settings: CircleSettings,
     home?: string,
@@ -93,6 +140,12 @@ export class GatewayModel implements ChatModel {
     const apiKey =
       credentials[settings.auth.api_key_ref] || credentials.api_key;
     if (!apiKey) throw new Error('missing API key; re-run circle --init');
+    this.searchConnection = Object.freeze({
+      baseUrl: settings.auth.base_url,
+      protocol: settings.auth.protocol === 'anthropic' ? 'anthropic' : 'openai',
+      model: this.model,
+      apiKey,
+    });
     // Keyed identity lets saved history detect account/endpoint/model changes without
     // storing a key or endpoint in the transcript. Rotation conservatively drops replay.
     this.thinkingScope = createHmac('sha256', apiKey)
@@ -201,10 +254,23 @@ export class GatewayModel implements ChatModel {
       return this.effort;
     return chosen;
   }
+  private sent(parameter: string): boolean {
+    return this.sentRecent.some((sent) => sent.has(parameter));
+  }
   get downgrades(): Record<string, string> {
     return Object.fromEntries(this.guard.downgrades);
   }
   private dropParameter(parameter: string): boolean {
+    if (parameter === 'thinking.display') {
+      if (
+        !this.anthropic ||
+        !this.sent(parameter) ||
+        this.dropped.has(parameter)
+      )
+        return false;
+      this.dropped.add(parameter);
+      return true;
+    }
     let root = parameter.split('.')[0]!;
     if (root === 'effort')
       root = this.anthropic ? 'output_config' : 'reasoning_effort';
@@ -219,24 +285,22 @@ export class GatewayModel implements ChatModel {
         'parallel_tool_calls',
         'betas',
       ].includes(root) ||
-      ![...this.sentNow, ...this.sentRecent].some((sent) => sent.has(root)) ||
+      !this.sent(root) ||
       this.dropped.has(root)
     )
       return false;
     this.dropped.add(root);
     return true;
   }
-  private configureBody(body: Record<string, unknown>): Set<string> {
-    for (const field of this.dropped) delete body[field];
+  private configureBody(body: Record<string, unknown>): void {
+    for (const field of this.dropped) {
+      if (field === 'thinking.display') {
+        if (isRecord(body.thinking)) delete body.thinking.display;
+      } else delete body[field];
+    }
     const sent = new Set(Object.keys(body));
-    this.sentNow.add(sent);
-    return sent;
-  }
-  private releaseBody(sent: Set<string>): void {
-    this.sentNow.delete(sent);
-    // The guard drops a rejected field after this request has already returned.
-    // Keep a few finished bodies so that drop still sees what was sent, including
-    // when a title request is in flight beside the turn.
+    if (isRecord(body.thinking) && body.thinking.display !== undefined)
+      sent.add('thinking.display');
     this.sentRecent.push(sent);
     if (this.sentRecent.length > 8) this.sentRecent.shift();
   }
@@ -315,137 +379,122 @@ export class GatewayModel implements ChatModel {
       body.reasoning_effort =
         effort as ChatCompletionCreateParamsStreaming['reasoning_effort'];
     if (request.maxTokens) body.max_tokens = request.maxTokens;
-    const sent = this.configureBody(body as unknown as Record<string, unknown>);
+    this.configureBody(body as unknown as Record<string, unknown>);
+    const stream = await this.openai!.chat.completions.create(body, {
+      signal: request.signal,
+      timeout: this.requestTimeout(request),
+    });
+    request.progress?.('connected');
+    let content = '';
+    let thinking = '';
+    let finish = '';
+    let servedModel = this.model;
+    const calls = new Map<number, { id: string; name: string; args: string }>();
+    const usage = emptyUsage();
+    let cacheReported = false;
+    let guardedStop = false;
     try {
-      const stream = await this.openai!.chat.completions.create(body, {
-        signal: request.signal,
-        timeout: this.requestTimeout(request),
-      });
-      request.progress?.('connected');
-      let content = '';
-      let thinking = '';
-      let finish = '';
-      let servedModel = this.model;
-      const calls = new Map<
-        number,
-        { id: string; name: string; args: string }
-      >();
-      const usage = emptyUsage();
-      let cacheReported = false;
-      let guardedStop = false;
-      try {
-        for await (const chunk of stream) {
-          if (chunk.model) servedModel = chunk.model;
-          if (chunk.usage) {
-            usage.input_tokens = Math.max(
-              usage.input_tokens,
-              chunk.usage.prompt_tokens || 0,
-            );
-            usage.output_tokens = Math.max(
-              usage.output_tokens,
-              chunk.usage.completion_tokens || 0,
-            );
-            const cached = chunk.usage.prompt_tokens_details?.cached_tokens;
-            if (typeof cached === 'number') {
-              cacheReported = true;
-              usage.cache_read_tokens = Math.max(
-                usage.cache_read_tokens,
-                cached,
-              );
-            }
-            request.progress?.('usage');
-          }
-          const choice = chunk.choices[0];
-          if (!choice) continue;
-          if (choice.finish_reason) finish = choice.finish_reason;
-          const delta = choice.delta;
-          request.progress?.(
-            delta.content
-              ? 'text'
-              : delta.tool_calls?.length
-                ? 'tool'
-                : 'keepalive',
+      for await (const chunk of stream) {
+        if (chunk.model) servedModel = chunk.model;
+        if (chunk.usage) {
+          usage.input_tokens = Math.max(
+            usage.input_tokens,
+            chunk.usage.prompt_tokens || 0,
           );
-          if (delta.content) {
-            content += delta.content;
-            request.token(delta.content);
+          usage.output_tokens = Math.max(
+            usage.output_tokens,
+            chunk.usage.completion_tokens || 0,
+          );
+          const cached = chunk.usage.prompt_tokens_details?.cached_tokens;
+          if (typeof cached === 'number') {
+            cacheReported = true;
+            usage.cache_read_tokens = Math.max(usage.cache_read_tokens, cached);
           }
-          const extra = delta as unknown as Record<string, unknown>;
-          const reasoning = extra.reasoning_content ?? extra.reasoning;
-          if (typeof reasoning === 'string') {
-            thinking += reasoning;
-            request.token(reasoning, true);
-          }
-          for (const part of delta.tool_calls ?? []) {
-            const call = calls.get(part.index) ?? {
-              id: '',
-              name: '',
-              args: '',
-            };
-            if (part.id) call.id = part.id;
-            if (part.function?.name) call.name += part.function.name;
-            if (part.function?.arguments) call.args += part.function.arguments;
-            calls.set(part.index, call);
-          }
+          request.progress?.('usage');
         }
-      } catch (error) {
-        if (error instanceof TextRepetitionLoop && error.answered) {
-          guardedStop = true;
-          request.notice?.({
-            event: 'repetition_stopped',
-            period: error.period,
-          });
-        } else throw error;
-      } finally {
-        stream.controller.abort();
-      }
-      request.signal.throwIfAborted();
-      const tool_calls: ToolCall[] = [...calls.values()].map((call) => {
-        if (!call.id || !call.name) throw new Error('incomplete tool call');
-        let args = parseToolInput(call.args || '{}');
-        if (typeof args === 'string') args = parseToolInput(args);
-        return {
-          id: call.id,
-          name: call.name,
-          args: isRecord(args) ? args : {},
-          ...(!isRecord(args)
-            ? {
-                raw_args: call.args,
-                argument_error:
-                  'tool arguments must be a JSON object; repair the call before retrying',
-              }
-            : {}),
-        };
-      });
-      const response: ModelResponse = {
-        message: {
-          id: randomUUID(),
-          role: 'assistant',
-          model: servedModel,
-          content,
-          thinking,
-          tool_calls,
-          ...(cacheReported ? {} : { cache_reported: false }),
-          ...(guardedStop || !finish || finish === 'length'
-            ? { truncated: true }
-            : {}),
-        },
-        usage,
-      };
-      if (!finish && !guardedStop)
-        throw new MissingFinish(
-          response,
-          Boolean(content || thinking || calls.size),
+        const choice = chunk.choices[0];
+        if (!choice) continue;
+        if (choice.finish_reason) finish = choice.finish_reason;
+        const delta = choice.delta;
+        request.progress?.(
+          delta.content
+            ? 'text'
+            : delta.tool_calls?.length
+              ? 'tool'
+              : 'keepalive',
         );
-      if (finish === 'length' && !content && !calls.size)
-        request.notice?.({
-          event: 'output_budget_exhausted',
-          finish_reason: finish,
-        });
-      return response;
+        if (delta.content) {
+          content += delta.content;
+          request.token(delta.content);
+        }
+        const extra = delta as unknown as Record<string, unknown>;
+        const reasoning = extra.reasoning_content ?? extra.reasoning;
+        if (typeof reasoning === 'string') {
+          thinking += reasoning;
+          request.token(reasoning, true);
+        }
+        for (const part of delta.tool_calls ?? []) {
+          const call = calls.get(part.index) ?? { id: '', name: '', args: '' };
+          if (part.id) call.id = part.id;
+          if (part.function?.name) call.name += part.function.name;
+          if (part.function?.arguments) call.args += part.function.arguments;
+          calls.set(part.index, call);
+        }
+      }
+    } catch (error) {
+      if (error instanceof TextRepetitionLoop && error.answered) {
+        guardedStop = true;
+        request.notice?.({ event: 'repetition_stopped', period: error.period });
+      } else throw error;
     } finally {
-      this.releaseBody(sent);
+      stream.controller.abort();
     }
+    request.signal.throwIfAborted();
+    const tool_calls: ToolCall[] = [...calls.values()].map((call) => {
+      const incomplete = !call.id || !call.name;
+      let args = parseToolInput(call.args || '{}');
+      if (typeof args === 'string') args = parseToolInput(args);
+      return {
+        id: call.id || randomUUID(),
+        name: call.name || 'incomplete_tool_call',
+        args: isRecord(args) ? args : {},
+        ...(incomplete || !isRecord(args)
+          ? {
+              raw_args: call.args,
+              argument_error: incomplete
+                ? 'incomplete tool call; repair the call before retrying'
+                : 'tool arguments must be a JSON object; repair the call before retrying',
+            }
+          : {}),
+      };
+    });
+    const response: ModelResponse = {
+      message: {
+        id: randomUUID(),
+        role: 'assistant',
+        model: servedModel,
+        content,
+        thinking,
+        tool_calls,
+        ...(cacheReported ? {} : { cache_reported: false }),
+        completion: completion('openai', finish, undefined, guardedStop),
+        ...(guardedStop || !finish || finish === 'length'
+          ? { truncated: true }
+          : {}),
+      },
+      usage,
+    };
+    if (!finish && !guardedStop)
+      throw new MissingFinish(
+        response,
+        Boolean(content || thinking || calls.size),
+      );
+    if (finish === 'length' && !content && !calls.size)
+      request.notice?.({
+        event: 'output_budget_exhausted',
+        finish_reason: finish,
+      });
+    return response;
   }
   private async completeAnthropic(
     request: ModelRequest,
@@ -601,123 +650,223 @@ export class GatewayModel implements ChatModel {
         };
       }
     }
-    const sent = this.configureBody(body as unknown as Record<string, unknown>);
-    try {
-      const stream = this.anthropic!.messages.stream(body, {
+    if (
+      body.thinking &&
+      (body.thinking.type === 'adaptive' || body.thinking.type === 'enabled') &&
+      supportsThinkingDisplay('anthropic', this.model)
+    ) {
+      body.thinking.display = 'summarized';
+    }
+    this.configureBody(body as unknown as Record<string, unknown>);
+    // Consume the SDK's raw stream so tool JSON cannot throw inside its message
+    // accumulator before later usage and stop events have been read.
+    const stream = await this.anthropic!.messages.create(
+      { ...body, stream: true },
+      {
         signal: request.signal,
         timeout: this.requestTimeout(request),
-      });
-      stream.on('connect', () => request.progress?.('connected'));
-      let snapshot: Anthropic.Message | undefined;
-      let guardedStop = false;
-      try {
-        for await (const event of stream) {
-          snapshot = stream.currentMessage ?? snapshot;
-          if (
-            event.type === 'content_block_delta' &&
-            event.delta.type === 'text_delta'
-          )
-            request.token(event.delta.text);
+      },
+    );
+    request.progress?.('connected');
+    let snapshot: Anthropic.Message | undefined;
+    const inputParts = new Map<number, string>();
+    let messageStopped = false;
+    let guardedStop = false;
+    try {
+      for await (const event of stream) {
+        if (event.type === 'message_start') {
+          snapshot = structuredClone(event.message);
+          for (const block of snapshot.content) {
+            if (block.type === 'text' && block.text) request.token(block.text);
+            else if (block.type === 'thinking' && block.thinking)
+              request.token(block.thinking, true);
+          }
+        } else if (!snapshot) {
+          throw new Error('Anthropic stream event preceded message_start');
+        } else if (event.type === 'message_delta') {
+          Object.assign(snapshot, event.delta);
+          // Usage events are cumulative, including cache categories when present.
+          // Null means omitted, not zero; preserve known counters as the SDK does.
+          Object.assign(
+            snapshot.usage,
+            Object.fromEntries(
+              Object.entries(event.usage).filter(([, value]) => value != null),
+            ),
+          );
+        } else if (event.type === 'content_block_start') {
+          const block = structuredClone(event.content_block);
+          snapshot.content[event.index] = block;
+          if (block.type === 'text' && block.text) request.token(block.text);
+          else if (block.type === 'thinking' && block.thinking)
+            request.token(block.thinking, true);
+        } else if (event.type === 'content_block_delta') {
+          const block = snapshot.content[event.index];
+          const delta = event.delta;
+          if (block?.type === 'text' && delta.type === 'text_delta')
+            block.text += delta.text;
+          else if (block?.type === 'text' && delta.type === 'citations_delta')
+            block.citations = [...(block.citations ?? []), delta.citation];
           else if (
-            event.type === 'content_block_delta' &&
-            event.delta.type === 'thinking_delta'
+            block?.type === 'thinking' &&
+            delta.type === 'thinking_delta'
           )
-            request.token(event.delta.thinking, true);
-          else
-            // A tool call's arguments are content as they stream, and keep the stream alive
-            request.progress?.(
-              (event.type === 'content_block_start' &&
-                event.content_block.type === 'tool_use') ||
-                (event.type === 'content_block_delta' &&
-                  event.delta.type === 'input_json_delta')
-                ? 'tool'
-                : event.type === 'message_start' ||
-                    event.type === 'message_delta'
-                  ? 'usage'
-                  : 'keepalive',
-            );
+            block.thinking += delta.thinking;
+          else if (
+            block?.type === 'thinking' &&
+            delta.type === 'signature_delta'
+          )
+            block.signature = delta.signature;
         }
-      } catch (error) {
-        if (error instanceof TextRepetitionLoop && error.answered && snapshot) {
-          guardedStop = true;
-          request.notice?.({
-            event: 'repetition_stopped',
-            period: error.period,
-          });
-        } else throw error;
-      } finally {
-        if (guardedStop) {
-          stream.abort();
-          await stream.finalMessage().catch(() => {});
+        if (event.type === 'message_stop') messageStopped = true;
+        if (
+          event.type === 'content_block_delta' &&
+          event.delta.type === 'input_json_delta'
+        ) {
+          inputParts.set(
+            event.index,
+            (inputParts.get(event.index) ?? '') + event.delta.partial_json,
+          );
         }
+        if (
+          event.type === 'content_block_delta' &&
+          event.delta.type === 'text_delta'
+        )
+          request.token(event.delta.text);
+        else if (
+          event.type === 'content_block_delta' &&
+          event.delta.type === 'thinking_delta'
+        )
+          request.token(event.delta.thinking, true);
+        else
+          // A tool call's arguments are content as they stream, and keep the stream alive
+          request.progress?.(
+            (event.type === 'content_block_start' &&
+              event.content_block.type === 'tool_use') ||
+              (event.type === 'content_block_delta' &&
+                event.delta.type === 'input_json_delta')
+              ? 'tool'
+              : event.type === 'message_start' || event.type === 'message_delta'
+                ? 'usage'
+                : 'keepalive',
+          );
       }
-      const final = guardedStop ? snapshot! : await stream.finalMessage();
-      request.signal.throwIfAborted();
-      const tool_calls: ToolCall[] = [];
-      let content = '';
-      let thinking = '';
-      for (const block of final.content) {
-        if (block.type === 'text') content += block.text;
-        else if (block.type === 'thinking') thinking += block.thinking;
-        else if (block.type === 'tool_use')
-          tool_calls.push({
-            id: block.id,
-            name: block.name,
-            args: block.input as Record<string, unknown>,
-          });
-      }
-      const response: ModelResponse = {
-        message: {
-          id: randomUUID(),
-          role: 'assistant',
-          model: final.model,
-          content,
-          thinking,
-          tool_calls,
-          ...(typeof final.usage.cache_read_input_tokens === 'number' ||
-          typeof final.usage.cache_creation_input_tokens === 'number'
-            ? {}
-            : { cache_reported: false }),
-          provider_content: final.content,
-          thinking_scope: this.thinkingScope,
-          ...(guardedStop ||
-          !final.stop_reason ||
-          final.stop_reason === 'max_tokens'
-            ? { truncated: true }
-            : {}),
+    } catch (error) {
+      if (error instanceof TextRepetitionLoop && error.answered && snapshot) {
+        guardedStop = true;
+        request.notice?.({ event: 'repetition_stopped', period: error.period });
+      } else throw error;
+    } finally {
+      stream.controller.abort();
+    }
+    request.signal.throwIfAborted();
+    if (!snapshot)
+      throw new MissingFinish(
+        {
+          message: {
+            id: randomUUID(),
+            role: 'assistant',
+            model: this.model,
+            content: '',
+            truncated: true,
+            completion: completion('anthropic', null, body.max_tokens),
+          },
+          usage: emptyUsage(),
         },
-        usage: {
-          input_tokens:
-            final.usage.input_tokens +
-            (final.usage.cache_read_input_tokens ?? 0) +
-            (final.usage.cache_creation_input_tokens ?? 0),
-          output_tokens: final.usage.output_tokens,
-          cache_read_tokens: final.usage.cache_read_input_tokens ?? 0,
-          ...(final.usage.cache_creation_input_tokens
-            ? { cache_write_tokens: final.usage.cache_creation_input_tokens }
-            : {}),
-          ...(final.usage.cache_creation?.ephemeral_1h_input_tokens
+        false,
+      );
+    const final = snapshot;
+    const missingFinish = !final.stop_reason || !messageStopped;
+    const tool_calls: ToolCall[] = [];
+    let content = '';
+    let thinking = '';
+    for (const [index, block] of final.content.entries()) {
+      if (block.type === 'text') content += block.text;
+      else if (block.type === 'thinking') thinking += block.thinking;
+      else if (block.type === 'server_tool_use' && inputParts.has(index)) {
+        block.input = parseToolInput(inputParts.get(index)!);
+      } else if (block.type === 'tool_use') {
+        const raw = inputParts.get(index);
+        const originalInput = block.input;
+        let args = raw === undefined ? originalInput : parseToolInput(raw);
+        if (typeof args === 'string') args = parseToolInput(args);
+        // Raw fragments remain on the call as evidence. Keep the replayable
+        // provider block valid even when those fragments are unfinished JSON.
+        block.input = isRecord(args) ? args : {};
+        tool_calls.push({
+          id: block.id,
+          name: block.name,
+          args: isRecord(args) ? args : {},
+          ...(!isRecord(args)
             ? {
-                cache_write_1h_tokens:
-                  final.usage.cache_creation.ephemeral_1h_input_tokens,
+                raw_args: raw ?? JSON.stringify(originalInput),
+                argument_error:
+                  'tool arguments must be a JSON object; repair the call before retrying',
               }
             : {}),
-        },
-      };
-      if (!final.stop_reason && !guardedStop)
-        throw new MissingFinish(
-          response,
-          Boolean(content || thinking || tool_calls.length),
-        );
-      if (final.stop_reason === 'max_tokens' && !content && !tool_calls.length)
-        request.notice?.({
-          event: 'output_budget_exhausted',
-          finish_reason: final.stop_reason,
         });
-      return response;
-    } finally {
-      this.releaseBody(sent);
+      }
     }
+    const response: ModelResponse = {
+      message: {
+        id: randomUUID(),
+        role: 'assistant',
+        model: final.model,
+        content,
+        thinking,
+        tool_calls,
+        provider_content: final.content,
+        ...(typeof final.usage.cache_read_input_tokens === 'number' ||
+        typeof final.usage.cache_creation_input_tokens === 'number'
+          ? {}
+          : { cache_reported: false }),
+        completion: {
+          ...completion(
+            'anthropic',
+            final.stop_reason,
+            body.max_tokens,
+            guardedStop,
+          ),
+          ...(missingFinish && !guardedStop
+            ? { reason: 'missing' as const }
+            : {}),
+        },
+        thinking_scope: this.thinkingScope,
+        ...(guardedStop ||
+        missingFinish ||
+        final.stop_reason === 'max_tokens' ||
+        final.stop_reason === 'model_context_window_exceeded'
+          ? { truncated: true }
+          : {}),
+      },
+      usage: {
+        input_tokens:
+          final.usage.input_tokens +
+          (final.usage.cache_read_input_tokens ?? 0) +
+          (final.usage.cache_creation_input_tokens ?? 0),
+        output_tokens: final.usage.output_tokens,
+        cache_read_tokens: final.usage.cache_read_input_tokens ?? 0,
+        ...(final.usage.cache_creation_input_tokens
+          ? { cache_write_tokens: final.usage.cache_creation_input_tokens }
+          : {}),
+        ...(final.usage.cache_creation?.ephemeral_1h_input_tokens
+          ? {
+              cache_write_1h_tokens:
+                final.usage.cache_creation.ephemeral_1h_input_tokens,
+            }
+          : {}),
+      },
+    };
+    if (missingFinish && !guardedStop)
+      throw new MissingFinish(
+        response,
+        Boolean(content || thinking || tool_calls.length),
+      );
+    if (final.stop_reason === 'max_tokens' && !content && !tool_calls.length)
+      request.notice?.({
+        event: 'output_budget_exhausted',
+        finish_reason: final.stop_reason,
+      });
+    return response;
   }
 }
 

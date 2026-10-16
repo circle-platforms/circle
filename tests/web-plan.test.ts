@@ -26,14 +26,16 @@ test('web search parses DuckDuckGo result redirects, entity text and snippets wi
   assert.match(result, /Docs & API/);
   assert.match(result, /https:\/\/example.com\/docs/);
   assert.match(result, /A useful result/);
-  assert.match(parseSearchHtml('', 'query'), /No results/);
+  assert.throws(() => parseSearchHtml('', 'query'), /unrecognized search page/);
 });
 test('web search uses fallback endpoint, honors cancellation and never invents results', async () => {
   const urls: string[] = [];
   const request: typeof fetch = async (input) => {
     urls.push(String(input));
     if (urls.length === 1) return new Response('failed', { status: 503 });
-    return new Response('<a href="https://example.com/docs">Documentation</a>');
+    return new Response(
+      '<a class="result__a" href="https://example.com/docs">Documentation</a>',
+    );
   };
   const result = await webSearch(
     'typescript',

@@ -5,6 +5,7 @@ import {
   screenshotCapture,
   screenshotDescription,
   screenshotMetadata,
+  sameView,
   type CoordinateTarget,
   type PageCaptureState,
   type ScreenshotCapture,
@@ -53,7 +54,12 @@ import {
   type BrowserResult,
   type DownloadApproval,
 } from '../../../src/browser/protocol.js';
-import { pageCall } from '../../../src/browser/page.js';
+import {
+  pageCall,
+  reachElement,
+  settlePage,
+  type PageRun,
+} from '../../../src/browser/page.js';
 import {
   actedOn,
   describedOther,
@@ -292,6 +298,20 @@ const promptScript = (path: string) => `(() => {
     }
   };
   Object.defineProperty(window, 'prompt', { value: prompt, writable: true, configurable: true });
+})();`;
+
+/**
+ * Chrome's rule for a page that closes itself: only a window a script opened may be closed
+ * by script. Circle adopts a page's popups as tabs, so those keep the leave; a tab the
+ * person or Circle opened stays until they close it. Without this a device WebUI that ends
+ * a side panel with window.close() empties the tab strip under them, which reads as the
+ * browser going blank.
+ */
+const closeGuard = `(() => {
+  const close = function close() {
+    console.warn('Scripts may close only the windows that were opened by them.');
+  };
+  Object.defineProperty(window, 'close', { value: close, writable: true, configurable: true });
 })();`;
 
 /**
@@ -602,6 +622,13 @@ export class BrowserSessions {
         source: promptScript(tab.promptPath),
         runImmediately: true,
       }),
+      // A tab the page did not open is not the page's to close away
+      options.opener
+        ? Promise.resolve()
+        : contents.debugger.sendCommand(
+            'Page.addScriptToEvaluateOnNewDocument',
+            { source: closeGuard, runImmediately: true },
+          ),
     ]).then(() => {});
     tab.ready = options.contents
       ? (void enable.catch(() => {}), Promise.resolve())
@@ -952,7 +979,10 @@ export class BrowserSessions {
         conversation.personInput = Date.now();
     });
     contents.on('did-navigate', (_event, url) => {
-      if (url.startsWith(WARNING_SCHEME + ':')) return;
+      if (url.startsWith(WARNING_SCHEME + ':')) {
+        this.dropStaleWarnings(tab);
+        return;
+      }
       tab.requestedUrl = url;
       tab.warning = undefined;
       tab.failure = undefined;
@@ -964,6 +994,7 @@ export class BrowserSessions {
         )
       )
         tab.safeUrl = url;
+      this.dropStaleWarnings(tab);
       this.visibility(conversation);
       this.publish(id);
     });
@@ -1305,6 +1336,29 @@ export class BrowserSessions {
       void this.load(conversation, tab, tab.safeUrl || BLANK).catch(() => {});
     }
   }
+  /**
+   * A warning page is served only while a tab shows it, so one left in the back-forward
+   * list answers `not found` to whoever goes back to it and the tab goes blank: a page
+   * that closes its own panel by walking history does exactly that. Once the tab has moved
+   * on, or has a newer warning to show, the warning pages it passed come out of its history
+   * - as Chrome's own warning leaves nothing behind.
+   */
+  private dropStaleWarnings(tab: Tab) {
+    const history = tab.contents.navigationHistory;
+    const active = history.getActiveIndex();
+    for (let index = history.length() - 1; index >= 0; index--) {
+      if (index === active) continue;
+      const entry = history.getEntryAtIndex(index);
+      if (!entry?.url.startsWith(WARNING_SCHEME + '://')) continue;
+      if (
+        tab.warning &&
+        entry.url.startsWith(`${WARNING_SCHEME}://${tab.warning.token}`)
+      )
+        continue;
+      history.removeEntryAtIndex(index);
+    }
+  }
+
   // ---- what the person's panel asks
   /** The window changed theme: a certificate warning on show is drawn again in it. */
   setDark(dark: boolean) {
@@ -1989,6 +2043,26 @@ export class BrowserSessions {
     this.publish(conversation.id);
   }
   // ---- reaching into the page
+  /** A tab's page commands and state, for the waits around an action. */
+  private pageOf(tab: Tab, signal: AbortSignal) {
+    const run: PageRun = (command, args = {}) =>
+      this.js(tab, command, args, signal);
+    return {
+      run,
+      page: {
+        stopped: () =>
+          tab.closed ||
+          tab.contents.isDestroyed() ||
+          !!tab.failure ||
+          tab.dialogs.length > 0 ||
+          !!tab.choice,
+        busy: () =>
+          tab.contents.isLoading() ||
+          tab.network.size > 0 ||
+          Date.now() - tab.lastNetwork < 400,
+      },
+    };
+  }
   private async js<T = unknown>(
     tab: Tab,
     command: string,
@@ -2084,7 +2158,7 @@ export class BrowserSessions {
       const capturedState = await this.js<PageCaptureState>(
         tab,
         'capture-state',
-        {},
+        { record: true },
         signal,
       );
       const { image, attempts, retryErrors } = await this.limit(
@@ -2099,9 +2173,18 @@ export class BrowserSessions {
       );
       if (this.state(id).url !== before.url)
         throw Error('browser changed during capture');
+      // Another document, viewport or scroll meanwhile: the picture is of no use. A change
+      // within the page is the coordinate click's to judge, where it clicks.
       if (
-        JSON.stringify(capturedState) !==
-        JSON.stringify(await this.js(tab, 'capture-state', {}, signal))
+        !sameView(
+          capturedState,
+          await this.js<PageCaptureState>(
+            tab,
+            'capture-state',
+            { record: false },
+            signal,
+          ),
+        )
       )
         throw Error(
           'the page changed during capture; take a new browser_screenshot',
@@ -2605,10 +2688,11 @@ export class BrowserSessions {
       signal,
     );
     // A real mouseenter may replace the action; never press based on the pre-hover target.
+    // A hover style may restyle it: only its content and what it does count then.
     const hovered = await this.js<CoordinateTarget>(
       tab,
       'point',
-      { x: args.x, y: args.y, capture: capture.state },
+      { x: args.x, y: args.y, capture: capture.state, hover: true },
       signal,
     );
     checkCoordinateTarget(point, hovered);
@@ -2626,6 +2710,8 @@ export class BrowserSessions {
         signal,
       );
     await this.idle(tab, signal);
+    const { run, page } = this.pageOf(tab, signal);
+    await settlePage(run, page, signal);
     await this.downloadsDone(conversation, signal);
     return {
       text: await this.result(
@@ -2680,7 +2766,9 @@ export class BrowserSessions {
           !args.values.every((value) => typeof value === 'string'))
       )
         throw Error('invalid browser options');
-      const target = await this.js<
+      // Something on top of the element (a loading mask, a message) may go in a moment
+      const { run, page } = this.pageOf(tab, signal);
+      const target = await reachElement<
         PageElement & {
           x: number;
           y: number;
@@ -2691,9 +2779,9 @@ export class BrowserSessions {
           password: boolean;
         }
       >(
-        tab,
-        'prepare',
+        run,
         { ref: args.ref, typing: action === 'type', secret: !!secret },
+        page,
         signal,
       );
       if (action === 'click' && target.action === 'proceed') {
@@ -2746,10 +2834,10 @@ export class BrowserSessions {
         signal,
       );
       // Read again as the input goes in: the result names this element, not the model's words
-      const point = await this.js<PageElement & { x: number; y: number }>(
-        tab,
-        'prepare',
+      const point = await reachElement<PageElement & { x: number; y: number }>(
+        run,
         { ref: args.ref, typing: action === 'type', secret: !!secret },
+        page,
         signal,
       );
       const which = actedOn(args.ref, point);
@@ -2818,6 +2906,11 @@ export class BrowserSessions {
     }
     tab.lastNetwork = Date.now();
     await this.idle(tab, signal);
+    // A drawer sliding in or a mask fading out: the result shows the page once it is still
+    {
+      const { run, page } = this.pageOf(tab, signal);
+      await settlePage(run, page, signal);
+    }
     await this.downloadsDone(conversation, signal);
     const shown = this.activeTab(conversation);
     // A tab the click opened is the one the result shows: its page first
