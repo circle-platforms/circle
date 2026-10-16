@@ -72,10 +72,10 @@ A shown window whose controls are laid out and enabled still cannot be clicked
 until it runs animation frames, and on a runner's first launch the GPU process
 can take seconds to start before it does. `test:desktop` therefore waits for the
 first frames during startup, before its first click. `test/frame-readiness.mjs`,
-also part of `test:desktop`, holds the GPU process back for eight seconds with
-Chromium's `--gpu-launcher`. It checks that the browser panel button cannot be
+also part of `test:desktop`, pauses the running GPU process for five seconds
+(`SIGSTOP`, then `SIGCONT`). It checks that the browser panel button cannot be
 clicked until frames arrive and that the click then opens the panel. Windows has
-no launcher prefix, so the check reports a skip there.
+no such signal, so the check reports a skip there.
 
 ## Check
 
