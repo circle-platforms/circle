@@ -36,8 +36,15 @@ import {
   jobBand,
   jobRows,
   stripHeader,
+  terminalBand,
+  terminalRows,
   AGENT_ROWS,
 } from './strip_rows.js';
+import {
+  terminalScreenLines,
+  terminalScreenRows,
+} from '../terminal/tui_screen.js';
+import type { TerminalSession, TerminalView } from '../terminal/sessions.js';
 import {
   extensionRows,
   HIDDEN_TOOLS,
@@ -101,6 +108,16 @@ export interface ScreenState {
   jobs?: Job[];
   otherSessions?: { id: string; title: string; waiting: boolean }[];
   jobDetail?: Job;
+  // This conversation's live device terminals for the strip, and the one the page shows.
+  terminals?: TerminalView[];
+  terminalDetail?: TerminalSession;
+  // Attached: keystrokes go to the device and its cursor is drawn.
+  terminalAttached?: boolean;
+  /**
+   * What the device page drew its console at, filled in by the render: the app gives
+   * that size to the device, so it lays out for the width it is actually shown at.
+   */
+  terminalPage?: { cols: number; rows: number };
   compaction?: CompactionProgress;
   contextInput?: number;
   contextWindow?: number;
@@ -490,7 +507,10 @@ function stripRows(
   );
   const selected = state.agentDetail?.id ?? state.selectedAgent;
   const jobs = (state.jobs ?? []).filter((job) => job.status === 'running');
-  if (!agents.length && !jobs.length)
+  const terminals = (state.terminals ?? []).filter(
+    (one) => one.held || one.state === 'connecting' || one.state === 'ready',
+  );
+  if (!agents.length && !jobs.length && !terminals.length)
     return { rows: [], ids: [], scrollable: false };
   const now = Date.now();
   const most = Math.min(AGENT_ROWS, Math.max(1, Math.floor((height - 8) / 3)));
@@ -502,7 +522,9 @@ function stripRows(
   // Where the wheel left it, else where the selection is.
   const start = Math.min(last, Math.max(0, state.stripStart ?? at - most + 1));
   const visible = agents.slice(start, start + most);
-  const rows = [stripHeader(agents.length, jobs.length, width)];
+  const rows = [
+    stripHeader(agents.length, jobs.length, width, terminals.length),
+  ];
   rows.push(
     ...agentRows(visible, {
       width,
@@ -524,6 +546,13 @@ function stripRows(
       max: Math.floor(
         (height - rows.length - (state.todos.length ? 14 : 8)) / 2,
       ),
+    }),
+  );
+  rows.push(
+    ...terminalRows(terminals, {
+      width,
+      now,
+      max: Math.max(1, Math.floor((height - rows.length - 4) / 2)),
     }),
   );
   return {
@@ -746,8 +775,33 @@ export function renderScreen(
       (row) => p.dim + row + p.reset,
     );
   }
+  // A device's page: its band under the header, and under that the emulated screen as
+  // the device drew it — colours and cursor and all. A bounded tail of lines, as the
+  // job page reads a bounded tail of its file; the page's own keys scroll it.
+  if (state.terminalDetail) {
+    const session = state.terminalDetail;
+    bandRows = terminalBand(session, width, state.terminalAttached === true);
+    try {
+      const lines = terminalScreenLines(session);
+      const shown = Math.min(lines, Math.max(20, height * 3));
+      transcript = terminalScreenRows(session, {
+        width,
+        rows: shown,
+        from: lines - shown,
+        cursor: state.terminalAttached === true,
+      });
+    } catch {
+      transcript = ['The device screen is gone.'];
+    }
+  }
   // two header rows (and a page's band) above the transcript
   const available = Math.max(1, height - bottom.length - 2 - bandRows.length);
+  // A device screen is not a file: the device wraps and redraws for the size it has.
+  // Tell the app the box this page drew into so it can hand that to the console, as
+  // the desktop panel does through circle:terminal-resize.
+  state.terminalPage = state.terminalDetail
+    ? { cols: width, rows: Math.max(2, available) }
+    : undefined;
   state.view = {
     rows: available,
     maxScroll: Math.max(0, transcript.length - available),
@@ -780,6 +834,7 @@ export function renderScreen(
       welcomeInView:
         !state.agentDetail &&
         !state.jobDetail &&
+        !state.terminalDetail &&
         state.welcome.length > 0 &&
         first < state.welcome.length,
     },

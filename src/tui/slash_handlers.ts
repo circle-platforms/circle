@@ -25,6 +25,7 @@ import {
   type CircleSettings,
 } from '../settings.js';
 import { removeSecret, saveSecret, secretNames } from '../secrets.js';
+import { loadProfiles, profileTarget } from '../terminal/profiles.js';
 import type {
   Picker,
   PickerItem,
@@ -97,6 +98,16 @@ export interface CommandHost {
   clipboard(text: string): Promise<boolean>;
   // While `list` is open it takes `rows()` again whenever a job starts, changes or ends.
   followJobs(list: Picker, rows: () => PickerItem[]): void;
+
+  // This conversation's device terminals, when the app drives them.
+  terminals?(): import('../terminal/sessions.js').TerminalSessions | undefined;
+  // While `list` is open it takes `rows()` again whenever a console opens, changes or closes.
+  followTerminals?(list: Picker, rows: () => PickerItem[]): void;
+  // Open a console's page, connect a saved profile, or cut a console: the person's acts.
+  openTerminal?(id: string): void;
+  connectTerminal?(name: string): Promise<void>;
+  cutTerminal?(id: string): Promise<void>;
+  // The footer's ctx is unknown until the next answer (after /undo and /redo, as in 0.5.0).
   // The footer's ctx is unknown until the next answer (after /undo and /redo).
   clearContextMeter(): void;
   // A value typed on a masked card, never in the input box; null when cancelled.
@@ -123,6 +134,7 @@ const BUSY_OK = new Set([
   'name',
   'tree',
   'jobs',
+  'terminals',
   'logout',
   'new',
   'resume',
@@ -1297,6 +1309,94 @@ function jobs(host: CommandHost, args: string): void {
   if (host.state.picker) host.followJobs(host.state.picker, rows);
 }
 
+// Device terminals: this conversation's consoles on top (live, then ended), then the
+// person's saved profiles that are not open. Enter opens a console's page or connects a
+// profile; ctrl+d cuts a console after a question, as /jobs stops a job after one.
+function terminals(host: CommandHost, args: string): void {
+  const manager = host.terminals?.();
+  if (!manager) {
+    host.fail('Device terminals are not part of this build');
+    return;
+  }
+  const thread = host.runtime.session.id;
+  if (args.trim()) {
+    const open = manager.session(thread, args.trim());
+    if (!open) {
+      host.fail(`No terminal ${args.trim()} · /terminals lists them`);
+      return;
+    }
+    host.state.jobDetail = undefined;
+    host.state.terminalDetail = open;
+    host.repaint();
+    return;
+  }
+  const rows = (): PickerItem[] => {
+    const saved = loadProfiles(join(host.home, 'terminal-sessions.json'));
+    const all = manager.views(thread);
+    const live = all.filter(
+      (one) => one.state === 'ready' || one.state === 'connecting' || one.held,
+    );
+    const ended = all.filter((one) => !live.includes(one)).reverse();
+    const openTargets = new Set(all.map((one) => one.target));
+    return [
+      ...[...live, ...ended].map((one) => ({
+        key: one.id,
+        label: `${one.id} ${one.name}`,
+        meta:
+          (one.held
+            ? 'held by you'
+            : one.state === 'connecting'
+              ? 'connecting'
+              : one.state === 'ready'
+                ? `quiet ${Math.round(one.quiet / 1000)}s`
+                : one.state + (one.detail ? ` · ${one.detail}` : '')) +
+          ` · ${one.transport} ${one.target}`,
+        search: one.transport,
+      })),
+      ...saved
+        .filter((profile) => !openTargets.has(profileTarget(profile)))
+        .map((profile) => ({
+          key: `profile:${profile.name}`,
+          label: profile.name,
+          meta: `saved · ${profile.transport} ${profileTarget(profile)}`,
+          search: 'profile',
+        })),
+    ];
+  };
+  const cut = (item: PickerItem | undefined): void => {
+    if (!item || !host.cutTerminal) return;
+    const list = host.state.picker;
+    if (!list || item.key.startsWith('profile:')) return;
+    const one = manager.session(thread, item.key);
+    if (!one || one.state !== 'ready') {
+      list.setItems(rows());
+      return;
+    }
+    list.confirm(`Cut ${item.key} ${one.name}?`, async () => {
+      await host.cutTerminal?.(item.key);
+      list.setItems(rows());
+    });
+  };
+  host.picker(
+    'Device terminals',
+    rows(),
+    (item) => {
+      if (item.key.startsWith('profile:')) {
+        const name = item.key.slice('profile:'.length);
+        void host.connectTerminal?.(name).catch((error) => host.fail(error));
+        return;
+      }
+      host.openTerminal?.(item.key);
+    },
+    {
+      hint: 'enter opens · ctrl+d cuts',
+      empty: 'No terminals',
+      keys: { 'ctrl+d': cut },
+    },
+  );
+  if (host.state.picker) host.followTerminals?.(host.state.picker, rows);
+}
+
 function skill(host: CommandHost, args: string): void {
   const runtime = host.runtime;
   const skills = discoverSkills(host.workspace, host.home);
@@ -1885,6 +1985,7 @@ const HANDLERS: Record<string, Handler> = {
   effort,
   logout,
   jobs,
+  terminals,
   skill,
   compact,
 };

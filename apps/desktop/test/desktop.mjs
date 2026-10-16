@@ -538,7 +538,12 @@ try {
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
-  assert.equal(await page.getByRole('checkbox').count(), 8);
+  // Three plain components, the device-terminal pane, and the hub interface
+  // with the four platform objects paired with a runtime extension.
+  assert.equal(await page.getByRole('checkbox').count(), 9);
+  await page
+    .getByRole('checkbox', { name: 'enable devices interface', exact: true })
+    .waitFor();
   for (const id of ['knowledge', 'work', 'execution', 'methods'])
     assert.equal(
       await page

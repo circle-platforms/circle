@@ -972,6 +972,10 @@ try {
     }),
   });
   await defaultWorkspace.waitFor();
+  // Tasks with no project name their own folder here, with a picker of their own.
+  await page
+    .getByRole('heading', { name: 'tasks with no project', exact: true })
+    .waitFor();
   // Key preferences use the same label on every row. This is the folder button.
   await defaultWorkspace
     .getByRole('button', { name: 'change…', exact: true })

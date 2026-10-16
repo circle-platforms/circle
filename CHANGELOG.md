@@ -21,6 +21,10 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 Circle 1.7.0, 1.7.1, 1.7.2 and 1.7.3 were tagged but never published, so this is the first release since 1.6.0 and it includes all of their changes. Coming from 1.6.0, one of them needs you to act: since 1.7.0 the bundled hub extension is named `hub`, with `/hub` commands and `hub_*` tools, and the former `circle-server` extension and `/server` commands no longer work. Enable `hub` and sign in again; [1.7.0](https://github.com/circle-platforms/circle/blob/main/CHANGELOG.md#170---2026-10-15) has the details.
 
+### Added
+
+- Device terminals: Circle drives SSH and Telnet consoles the way you would in SecureCRT, for switches, routers and servers on your network. Eight `terminal_*` tools connect by a saved profile, type commands, read and wait on the screen, press keys and hand a console over; approvals go device by device, a line that can wipe a device asks every time, and the first SSH login to an unknown host key stops for your answer. Passwords come only from saved secrets. The terminal interface shows each device's screen on a page you can attach to and type on (`/terminals`); the desktop application has a terminal panel you share with Circle. Serial ports and file transfer are not in this version. See [Device terminals](https://circle-platforms.github.io/circle/tools/#device-terminals).
+
 ### Changed
 
 - **Several terminal keys moved.** `alt+l` chooses a model, and `ctrl+l` only redraws the screen. `alt+m` switches to the next model, and `ctrl+p` and `ctrl+n` now go through earlier prompts, as `↑` and `↓` do. `alt+c` copies the last answer, where it was `ctrl+x`. `alt+k` enters a secret a task waits for, where it was `ctrl+s`, which many terminals take as a signal to freeze. In `/models`, `/effort` and the default-mode list `alt+d` saves the choice as the default, where it was `ctrl+s`; `ctrl+k` deletes a session in `/resume` and stops or removes a job in `/jobs`, where it was `ctrl+d`. `ctrl+u` deletes back to the start of the line instead of clearing the box, and `ctrl+y` puts that text back. See [Keybindings](docs/keybindings.md).

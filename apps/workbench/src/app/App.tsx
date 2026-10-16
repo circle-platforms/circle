@@ -66,6 +66,8 @@ import { DialogHost, InteractionDialog } from '../features/Dialogs';
 import { applyTheme } from '../theme';
 import { t } from '../i18n';
 import { isSessionBrowser } from '../model/browser';
+import type { TerminalEvent } from '../../../desktop/src/contracts';
+import { isSessionTerminal } from '../features/useTerminalState';
 import { armComposerFocus, sealComposerFocus } from '../model/composer-focus';
 import {
   effectiveBindings,
@@ -207,6 +209,25 @@ export function App() {
       }
     };
     return host.onBrowserEvent(show);
+  }, [session.id, onPage, narrow]);
+  // The same courtesy for a device console: when Circle opens one, its panel opens too,
+  // once per appearance and never over another page or a narrow window.
+  const terminalCount = useRef(0);
+  useEffect(() => {
+    const host = desktopHost();
+    if (!host) return;
+    terminalCount.current = 0;
+    const show = (event: TerminalEvent) => {
+      if (event.kind !== 'state' || !isSessionTerminal(event.state, session.id))
+        return;
+      const opened = event.state.sessions.length > terminalCount.current;
+      terminalCount.current = event.state.sessions.length;
+      if (opened && !onPage && !narrow) {
+        setPanel('devices');
+        setInspectorOpen(true);
+      }
+    };
+    return host.onTerminalEvent(show);
   }, [session.id, onPage, narrow]);
   const onFile = async (path: string) => {
     try {

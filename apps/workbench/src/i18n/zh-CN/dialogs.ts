@@ -196,4 +196,5 @@ export const dialogs: Record<string, string> = {
   'background the turn': '把这一轮放到后台',
   tool: '工具',
   notice: '提示',
+  'trust this device key for good': '永久信任这台设备的这个密钥',
 };

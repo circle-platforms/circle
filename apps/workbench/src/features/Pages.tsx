@@ -1,4 +1,4 @@
-import { desktopHost, setDefaultWorkspace } from '../host';
+import { desktopHost, setDefaultWorkspace, setTaskFolder } from '../host';
 import { recordedDecision, recordedTitle } from '../model/decisions';
 import { KeybindingsEditor } from './KeybindingsEditor';
 import { usePlugins } from '../plugins/context';
@@ -79,6 +79,8 @@ import {
 } from '../model/session-management';
 import { openHome } from './home-selection';
 import { NetworkStatus } from './NetworkStatus';
+import { WorkspaceTrustSettings } from './WorkspaceTrustSettings';
+import { ProtectedFilesSettings } from './ProtectedFilesSettings';
 import { BUILTIN_TOOL_INFO } from '../model/tool-info';
 import { TEXT_SIZES, textSizes } from '../theme';
 import { LANGUAGES, languageChoice, setLanguage, t, tn } from '../i18n';
@@ -144,7 +146,14 @@ function SessionsPage({ onSession, onDialog }: Props) {
   const navigate = useNavigate();
   const location = useLocation();
   const [search, setSearch] = useState('');
-  const [all, setAll] = useState(false);
+  // A task with no project is a folder of its own, so showing only "this workspace" while
+  // one is open would hide every other task: those pages start on all workspaces.
+  const [all, setAll] = useState(() => {
+    const here = currentSession(snapshot);
+    return snapshot.workspaces.some(
+      (workspace) => workspace.id === here.workspaceId && workspace.task,
+    );
+  });
   const [archived, setArchived] = useState(false);
   const current = currentSession(snapshot);
   const sessions = visibleSessions(snapshot.sessions).filter(
@@ -1166,6 +1175,7 @@ const TOOL_KIND: Record<string, () => string> = {
   write: () => t('changes files'),
   execute: () => t('runs commands'),
   unknown: () => t('may change things'),
+  terminal: () => t('device terminal'),
 };
 function ToolsPage() {
   const [query, setQuery] = useState('');
@@ -1396,15 +1406,17 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
             ))}
           </div>
         </div>
-        <Switch
-          label={t('hide thinking in new sessions')}
-          checked={settings.hideThinking}
-          onChange={(checked) =>
-            save((value) => {
-              value.hideThinking = checked;
-            })
-          }
-        />
+        <div className="setting-row">
+          <Switch
+            label={t('hide thinking in new sessions')}
+            checked={settings.hideThinking}
+            onChange={(checked) =>
+              save((value) => {
+                value.hideThinking = checked;
+              })
+            }
+          />
+        </div>
       </section>
       <section className="settings-block">
         <h2>{t('session defaults')}</h2>
@@ -1500,44 +1512,36 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
           </p>
         )}
       </section>
-      <section className="settings-block">
-        <h2>{t('workspace trust')}</h2>
-        {snapshot.workspaces.map((workspace) => (
-          <div className="setting-row" key={workspace.id}>
+      {!!settings.taskFolder && (
+        <section className="settings-block">
+          <h2>{t('tasks with no project')}</h2>
+          <div className="setting-row">
             <span>
-              {workspaceLabel(workspace)}
-              <small>{workspace.path}</small>
+              {t('folder')}
+              <small>{settings.taskFolder}</small>
             </span>
-            <Status value={workspace.trusted ? 'trusted' : 'not trusted'} />
-            <Button onClick={() => onDialog('trust', workspace.id)}>
-              {t('review')}
-            </Button>
+            {runtime.mode === 'live' && (
+              <Button
+                onClick={() =>
+                  perform(async () => {
+                    if (await setTaskFolder(runtime))
+                      notify(t('task folder changed'));
+                  })
+                }
+              >
+                {t('change…')}
+              </Button>
+            )}
           </div>
-        ))}
-      </section>
-      <section className="settings-block">
-        <h2>{t('protected files')}</h2>
-        <label className="field-label" htmlFor="credential-patterns">
-          {t('additional file patterns')}
-        </label>
-        <textarea
-          id="credential-patterns"
-          className="input short"
-          value={settings.credentialFiles.join('\n')}
-          onChange={(event) =>
-            save((value) => {
-              value.credentialFiles = event.target.value
-                .split('\n')
-                .filter(Boolean);
-            })
-          }
-        />
-        <p className="panel-note">
-          {t(
-            "Circle's built-in protections remain in force when a runtime is connected.",
-          )}
-        </p>
-      </section>
+          <p className="panel-note">
+            {t(
+              'a task you start outside a project gets a folder of its own here, and is listed apart from your projects',
+            )}
+          </p>
+        </section>
+      )}
+      <WorkspaceTrustSettings onReview={(id) => onDialog('trust', id)} />
+      <ProtectedFilesSettings />
       <section className="settings-block">
         <NetworkStatus />
       </section>
@@ -1585,15 +1589,17 @@ function SettingsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
                 : 'this browser only',
           }}
         />
-        <Switch
-          label={t('check for updates')}
-          checked={settings.updateCheck}
-          onChange={(checked) =>
-            save((value) => {
-              value.updateCheck = checked;
-            })
-          }
-        />
+        <div className="setting-row">
+          <Switch
+            label={t('check for updates')}
+            checked={settings.updateCheck}
+            onChange={(checked) =>
+              save((value) => {
+                value.updateCheck = checked;
+              })
+            }
+          />
+        </div>
         {desktopHost() ? (
           <UpdateControl />
         ) : (

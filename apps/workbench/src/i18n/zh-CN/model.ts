@@ -206,4 +206,30 @@ export const model: Record<string, string> = {
     '用于只该由你在网页上完成的事，比如安全密钥或验证码。浏览器在你手上时 Circle 什么也看不到，只会知道标签页去了哪些地址。',
   'For a file input, or for the file chooser one of its clicks opened. Circle asks you every time, with the files and the site.':
     '用于文件输入框，或它的点击打开的文件选择框。Circle 每次都会问你，并列出文件和站点。',
+  // device terminals in the tool catalogue
+  'List the terminals and saved device profiles':
+    '列出终端会话与已保存的设备档案',
+  "List this conversation's device terminals with their state, and the person's saved profiles.":
+    '列出本对话的设备终端及其状态，以及使用者保存的设备档案。',
+  'Open an SSH or Telnet console': '打开 SSH 或 Telnet 控制台',
+  'Open a device console by a saved profile or a bare host. SSH sign-in comes only from a profile, whose password is a saved secret; an unknown device host key stops the login and asks you.':
+    '按已保存的档案或主机地址打开设备控制台。SSH 登录只能来自档案，其密码是已保存的秘密；陌生的设备主机密钥会中止登录并询问你。',
+  'Type text to a device console': '向设备控制台输入文本',
+  'Type text to a device, Enter when asked; a word that can destroy device state in the line asks you every time. %NAME% puts in a secret whose value you never see back.':
+    '向设备输入文本，需要时按下回车；行内含有会破坏设备状态的词时每次都要询问你。%NAME% 填入秘密，其值不会再出现在结果里。',
+  'Read a device screen and its prompt': '读取设备画面与提示符',
+  "Read a device terminal's last lines and the line the cursor sits on, as plain text.":
+    '以纯文本读取设备终端的最后几行，以及光标所在的提示符行。',
+  'Wait for a device screen to rest': '等待设备画面静止',
+  'Wait until a device screen rests or shows a pattern, bounded by a timeout; a timeout is an answer, not a failure.':
+    '等待设备画面静止或出现指定模式，受超时限制；超时是回答而不是失败。',
+  'Press one key on a device console': '在设备控制台按一个键',
+  'Press Enter, Tab, Escape, an arrow, Ctrl-C or another known key on a device terminal.':
+    '在设备终端上按回车、Tab、Esc、方向键、Ctrl-C 或其他已知按键。',
+  'Close a device console': '关闭设备控制台',
+  "Close one of the conversation's device consoles; its last screen stays readable.":
+    '关闭本对话的一个设备控制台；它最后的画面仍可读。',
+  'Hand a device console to the user': '把设备控制台交给使用者',
+  'Give the person a console to type on; the model waits until they give it back and then sees the screen as they left it, never what they typed.':
+    '把控制台交给人来输入；模型会等到对方交还，然后看到他们留下的画面，而不会看到他们输入的内容。',
 };

@@ -125,6 +125,15 @@ import type {
   CertificateApproval,
 } from '../browser/protocol.js';
 import { sizeText } from '../browser/files.js';
+import { TerminalSessions } from '../terminal/sessions.js';
+import { terminalTools, runtimeTerminalOptions } from '../terminal/tools.js';
+import { sshConnector } from '../terminal/ssh.js';
+import { telnetConnector } from '../terminal/telnet.js';
+import { loadProfiles } from '../terminal/profiles.js';
+import { TrustedHostKeys } from '../terminal/hostkeys.js';
+import { terminalKeyBytes } from '../terminal/keys.js';
+import type { TerminalApproval } from '../terminal/protocol.js';
+import { loadSecrets } from '../secrets.js';
 export { VERSION } from '../version.js';
 interface DialogPending {
   complete: (answer: unknown) => void;
@@ -154,6 +163,9 @@ interface SessionView {
   jobWakeCount: number;
   jobWakeSnoozed: boolean;
   jobsList?: { list: Picker; rows: () => PickerItem[] };
+  terminalsList?: { list: Picker; rows: () => PickerItem[] };
+  // The handoff's own card: unlike any other card, it does not drop the attached page.
+  handoffDialog?: NonNullable<ScreenState['dialog']>;
 }
 export class SessionApp {
   private view!: SessionView;
@@ -161,6 +173,8 @@ export class SessionApp {
   private views = new Map<AgentRuntime, SessionView>();
   private sessions?: SessionRuntimeManager;
   private browsers = new Map<AgentRuntime, ChromeBrowser>();
+  // Each conversation's device terminals, owned beside its browser
+  private terminals = new Map<AgentRuntime, TerminalSessions>();
   private subscriptions = new Map<AgentRuntime, () => void>();
   private runtimeOptions?: Omit<RuntimeOptions, 'approve' | 'question'>;
   private selecting: Promise<void> = Promise.resolve();
@@ -237,6 +251,15 @@ export class SessionApp {
   }
   private set jobsList(value: SessionView['jobsList']) {
     this.view.jobsList = value;
+  }
+  private get terminalsList() {
+    return this.view.terminalsList;
+  }
+  private set terminalsList(value: SessionView['terminalsList']) {
+    this.view.terminalsList = value;
+  }
+  private get terminalManager(): TerminalSessions | undefined {
+    return this.runtime ? this.terminals.get(this.runtime) : undefined;
   }
   // After /undo or /redo, the answer whose request the footer's ctx no longer describes.
   private get meterCleared() {
@@ -496,11 +519,16 @@ export class SessionApp {
         this.runtime?.jobs.list().some((job) => job.status === 'running') ||
         this.state.jobDetail ||
         this.state.agentDetail ||
+        this.state.terminalDetail ||
+        (this.state.terminals?.length ?? 0) > 0 ||
         this.connecting
       )
         this.requestRender();
       for (const view of this.views.values())
-        this.inView(view, () => this.wakeJobs());
+        this.inView(view, () => {
+          this.wakeJobs();
+          this.refreshTerminalsList();
+        });
     }, 160);
     this.repaint();
   }
@@ -582,6 +610,17 @@ export class SessionApp {
         facts.rates?.input !== undefined && facts.rates.output !== undefined,
       );
       this.state.jobs = this.runtime.jobs.list();
+      const terminals = this.terminalManager;
+      this.state.terminals = terminals?.views(this.runtime.session.id) ?? [];
+      if (this.state.terminalDetail) {
+        // The page keeps reading the live screen; a console that vanished leaves the page
+        const one = terminals?.session(
+          this.runtime.session.id,
+          this.state.terminalDetail.id,
+        );
+        this.state.terminalDetail = one;
+        if (!one || one.state !== 'ready') this.state.terminalAttached = false;
+      }
       const cache = this.subagentCache;
       if (
         cache &&
@@ -693,6 +732,21 @@ export class SessionApp {
     );
     this.frameRows = rows;
     this.screen.render(this.selection.frame(rows, this.state), cursor.value);
+    this.sizeOpenTerminal();
+  }
+  /**
+   * The console on the page takes the page's size, as a device console takes its
+   * window's. Without this a switch lays its tables out for 80 columns and the page
+   * cuts them in half at 62, which is what makes a device page look broken.
+   */
+  private sizeOpenTerminal(): void {
+    const page = this.state.terminalPage;
+    const detail = this.state.terminalDetail;
+    const manager = this.terminalManager;
+    if (!page || !detail || !manager || !this.runtime) return;
+    // resize() answers to nothing when the size is the one it has, so this is quiet
+    // unless the page really changed, and a device's reply repaints through onChange.
+    manager.resize(this.runtime.session.id, detail.id, page.cols, page.rows);
   }
   // Coalesced frame request for high-frequency sources; one draw at most every 16 ms.
   requestRender(): void {
@@ -1031,10 +1085,50 @@ export class SessionApp {
           mode: () => runtime?.mode,
         })
       : undefined;
+    // The device terminals: SSH and Telnet consoles the model drives and the person can
+    // take over. Unlike the browser they need no external program, so they are always on.
+    const profilesFile = join(this.home, 'terminal-sessions.json');
+    const terminals = new TerminalSessions({
+      connectors: { ssh: sshConnector, telnet: telnetConnector },
+      profiles: () => loadProfiles(profilesFile),
+      hostkeys: new TrustedHostKeys(join(this.home, 'terminal-host-keys.json')),
+      secret: (name) => loadSecrets(this.home)[name] ?? '',
+      keyFile: (path) => {
+        const full = runtime.sandbox.resolvePath(path);
+        runtime.sandbox.checkCredentialPath(full);
+        return full;
+      },
+      onChange: () =>
+        this.inView(view, () => {
+          this.requestRender();
+          this.refreshTerminalsList();
+        }),
+      hand: (_conversation, name, reason, signal) =>
+        runtime.mode === 'plan'
+          ? Promise.reject(Error('plan mode does not hand a terminal over'))
+          : view.interactions.run(
+              () =>
+                this.inView(view, () =>
+                  this.handTerminal(name, reason, signal),
+                ),
+              signal,
+            ),
+    });
     runtime = new AgentRuntime({
       ...options,
       deferSession: true,
-      extraTools: [...(options.extraTools ?? [])],
+      extraTools: [
+        ...(options.extraTools ?? []),
+        ...terminalTools(terminals, {
+          confirm: (_session, approval, signal) =>
+            view.interactions.run(
+              () =>
+                this.inView(view, () => this.confirmHostKey(approval, signal)),
+              signal,
+            ),
+          ...runtimeTerminalOptions(() => runtime),
+        }),
+      ],
       // Browser manuals are thousands of tokens. A greeting does not send them;
       // the turn that asks for a page, or one that already used the browser, does.
       deferredTools: browser
@@ -1053,6 +1147,7 @@ export class SessionApp {
       settings: structuredClone(this.settings),
       beforeDelete: async () => {
         await browser?.close();
+        terminals.close();
         await options.beforeDelete?.();
       },
       ...this.cardHooks(view),
@@ -1065,6 +1160,7 @@ export class SessionApp {
     view.runtime = runtime;
     this.views.set(runtime, view);
     if (browser) this.browsers.set(runtime, browser);
+    this.terminals.set(runtime, terminals);
     this.subscriptions.set(
       runtime,
       runtime.bus.subscribe((event) => {
@@ -1269,6 +1365,9 @@ export class SessionApp {
     const old = this.runtime?.session.id;
     this.state.picker = undefined;
     this.jobsList = undefined;
+    // Nobody leaves a conversation holding its device console's keys
+    if (this.state.terminalAttached) this.attachTerminal(false);
+    this.terminalsList = undefined;
     if (this.view.suspendedDialog) {
       this.state.dialog = this.view.suspendedDialog;
       this.view.suspendedDialog = undefined;
@@ -1358,6 +1457,8 @@ export class SessionApp {
     this.subscriptions.get(runtime)?.();
     this.subscriptions.delete(runtime);
     this.browsers.delete(runtime);
+    this.terminals.get(runtime)?.close();
+    this.terminals.delete(runtime);
     this.views.delete(runtime);
     if (this.previousSession === id) this.previousSession = '';
     if (this.selectedView === view) {
@@ -1539,6 +1640,8 @@ export class SessionApp {
     const list = screen.picker;
     screen.picker = undefined;
     view.parked.park(screen);
+    // An attached console gives its keys to any card that is not the handoff's own
+    this.detachForCard(state);
     screen.dialog = state;
     screen.planFocused = false;
     screen.waiting = true;
@@ -1583,6 +1686,191 @@ export class SessionApp {
       ['continue'],
       signal,
     );
+  }
+  // A device console the model hands over: the page opens on it, attached, so the
+  // person is typing on the device at once; the card below waits, and only ctrl+] gives
+  // the keys to the card. Unlike every other card this one does not drop the page.
+  private async handTerminal(
+    name: string,
+    reason: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const manager = this.terminalManager;
+    const conversation = this.runtime?.session.id ?? '';
+    if (!manager) return;
+    const one = manager
+      .views(conversation)
+      .find((view) => view.name === name || view.id === name);
+    const session = one ? manager.session(conversation, one.id) : undefined;
+    if (!session) return;
+    this.openTerminalPage(session.id);
+    this.attachTerminal(true);
+    const spec = {
+      title: 'terminal',
+      body: [
+        `Circle hands you ${name}${reason ? `: ${reason}` : ''}`,
+        'Type on the device. ctrl+] gives the keys to this card; when you are done, choose continue.',
+      ].join('\n'),
+      options: ['continue'],
+      focus: 0,
+    };
+    this.view.handoffDialog = spec;
+    try {
+      await this.dialog<string>(spec, signal);
+    } finally {
+      this.view.handoffDialog = undefined;
+    }
+    manager.detach(conversation, session.id);
+  }
+  /** A device whose host key nobody has trusted: only the person decides. */
+  private async confirmHostKey(
+    approval: TerminalApproval,
+    signal: AbortSignal,
+  ): Promise<'once' | 'always' | 'reject' | 'auto'> {
+    // auto mode answers for once, never for good, as it passes a certificate warning
+    if (this.runtime?.policy.mode(this.runtime.session.id) === 'auto')
+      return 'auto';
+    const choice = await this.askChoice(
+      'host key',
+      [
+        `Circle wants to log in to ${approval.host}, whose host key nobody has trusted:`,
+        `  ${approval.keyType || 'unknown type'}  ${approval.fingerprint}`,
+        'A host key is how you know the device is the one you mean; a wrong one means someone else is answering.',
+      ].join('\n'),
+      [
+        'connect once',
+        ...(approval.privateHost ? ['trust for good'] : []),
+        'reject',
+      ],
+      signal,
+    );
+    if (choice === 'trust for good') return 'always';
+    if (choice === 'connect once') return 'once';
+    return 'reject';
+  }
+  /** The person opens a console's page from /terminals or a handoff. */
+  private openTerminalPage(id: string): void {
+    const manager = this.terminalManager;
+    const conversation = this.runtime?.session.id ?? '';
+    const session = manager?.session(conversation, id);
+    if (!session) return;
+    // Pages are exclusive: opening a terminal leaves the job and subagent pages
+    this.agents.clear();
+    this.state.agentDetail = undefined;
+    this.state.jobDetail = undefined;
+    this.state.find = undefined;
+    this.state.terminalDetail = session;
+    this.state.terminalAttached = false;
+    this.state.scroll = 0;
+    this.repaint();
+  }
+  /** The person takes or gives back the keys of the page they are looking at. */
+  private attachTerminal(attach: boolean): boolean {
+    const manager = this.terminalManager;
+    const detail = this.state.terminalDetail;
+    const conversation = this.runtime?.session.id ?? '';
+    if (!manager || !detail) return false;
+    if (attach) {
+      if (!manager.attach(conversation, detail.id)) return false;
+      this.state.terminalAttached = true;
+    } else {
+      // ctrl+] during a handoff only returns the keys to the card: the model still
+      // waits, and the handoff is answered with continue on the card itself
+      if (detail.held === 'attach') manager.detach(conversation, detail.id);
+      this.state.terminalAttached = false;
+    }
+    this.state.scroll = 0;
+    this.repaint();
+    return true;
+  }
+  /** /terminals' ctrl+d: a person's disconnect, not the model's. */
+  private async cutTerminal(id: string): Promise<void> {
+    const manager = this.terminalManager;
+    const conversation = this.runtime?.session.id ?? '';
+    if (!manager) return;
+    await manager
+      .request(
+        conversation,
+        'disconnect',
+        { session: id },
+        AbortSignal.timeout(5000),
+      )
+      .catch((error) => this.fail(error));
+  }
+  /** /terminals' enter on a profile: connect now and open the page; the host key still asks. */
+  private async connectTerminalProfile(name: string): Promise<void> {
+    const manager = this.terminalManager;
+    const conversation = this.runtime?.session.id ?? '';
+    if (!manager) return;
+    const stop = new AbortController();
+    let result = await manager
+      .request(conversation, 'connect', { profile: name }, stop.signal)
+      .catch((error) => {
+        this.fail(error);
+        return undefined;
+      });
+    for (let round = 0; result?.approval && round < 8; round++) {
+      const answer = await this.inView(this.view, () =>
+        this.confirmHostKey(result!.approval!, stop.signal),
+      ).catch(() => 'reject' as const);
+      if (answer === 'reject') {
+        this.flash('Not connected');
+        return;
+      }
+      result = await manager.request(
+        conversation,
+        'connect',
+        {
+          profile: name,
+          approval: {
+            token: result!.approval!.token,
+            scope: answer === 'always' ? 'always' : 'once',
+          },
+        },
+        stop.signal,
+      );
+    }
+    if (!result) return;
+    const one = manager
+      .views(conversation)
+      .find((view) => view.name === name && view.state === 'ready');
+    if (one) this.openTerminalPage(one.id);
+    this.notice(`Connected ${name}`);
+  }
+  /** A card that is not the handoff's own takes the keys: leave attach and the page. */
+  private detachForCard(state: NonNullable<ScreenState['dialog']>): void {
+    if (!this.state.terminalAttached) return;
+    if (state === this.view.handoffDialog) return;
+    this.attachTerminal(false);
+    this.state.terminalDetail = undefined;
+  }
+  // While attached, and nothing else holds the keyboard — no card, no list, no secret
+  // box — typed keys and pastes are the device's. The handoff card is the one card that
+  // may sit over an attached console without taking its keys.
+  private canTypeToTerminal(): boolean {
+    if (!this.state.terminalAttached || !this.state.terminalDetail)
+      return false;
+    if (this.state.picker) return false;
+    if (this.view.secretReady) return false;
+    const dialog = this.state.dialog;
+    return !dialog || dialog === this.view.handoffDialog;
+  }
+  private typeToTerminal(bytes: string): void {
+    const detail = this.state.terminalDetail;
+    if (!detail || !bytes) return;
+    this.terminalManager?.input(
+      this.runtime?.session.id ?? '',
+      detail.id,
+      bytes,
+    );
+  }
+  /** The open /terminals list follows the consoles, as the jobs list follows jobs. */
+  private refreshTerminalsList(): void {
+    const open = this.terminalsList;
+    if (!open) return;
+    if (this.state.picker === open.list) {
+      if (!open.list.asking) open.list.setItems(open.rows());
+    } else if (!this.state.dialog) this.terminalsList = undefined;
   }
   /** What only the person decides in the browser: files for a page or from it, or passing a warning. */
   private async confirmBrowser(
@@ -1814,6 +2102,12 @@ export class SessionApp {
     // a key or paste for the draft: a card that arrives now waits until typing pauses
     if (!this.state.dialog) this.interactions.typed();
     if (event.type === 'paste') {
+      // Attached to a device: what you paste is what the console gets
+      if (this.canTypeToTerminal()) {
+        this.typeToTerminal(event.text);
+        this.repaint();
+        return;
+      }
       this.state.planFocused = false;
       if (this.state.picker && this.state.picker.options.search !== false)
         this.state.picker.paste(event.text);
@@ -1860,16 +2154,30 @@ export class SessionApp {
     const key = this.remap[event.key] || event.key;
     const char = event.char;
     if (key === 'alt+s' && this.runtime) {
+      // Leaving the view never leaves a console held by its keys
+      if (this.state.terminalAttached) this.attachTerminal(false);
       this.view.suspendedDialog ??= this.state.dialog;
       this.state.dialog = undefined;
       void this.command('resume', '').catch((error) => this.fail(error));
+      return;
+    }
+    // Attached: every key goes to the device, and only ctrl+] comes back. Ctrl+C with
+    // it goes to the console, not the turn: leaving is ctrl+], then ctrl+c as ever.
+    if (this.canTypeToTerminal()) {
+      if (key === 'ctrl+]') {
+        this.attachTerminal(false);
+        return;
+      }
+      this.typeToTerminal(terminalKeyBytes(key, char));
+      this.repaint();
       return;
     }
     if (
       !this.state.dialog &&
       !this.state.picker &&
       !this.state.agentDetail &&
-      !this.state.jobDetail
+      !this.state.jobDetail &&
+      !this.state.terminalDetail
     ) {
       if (key === 'alt+p' && planVisible(this.state.todos)) {
         this.state.planFocused = !this.state.planFocused;
@@ -2051,6 +2359,59 @@ export class SessionApp {
           this.repaint();
         })().catch((error) => this.fail(error));
       else if (key === 'ctrl+b') this.runtime?.jobs.backgroundForeground();
+      this.repaint();
+      return;
+    }
+    // The terminal page, while you look at it and have not attached: the page keys
+    // scroll, enter attaches, ctrl+d cuts, esc leaves; ctrl+c and ctrl+z are as anywhere.
+    if (
+      this.state.terminalDetail &&
+      !this.state.terminalAttached &&
+      !this.state.dialog &&
+      !this.state.picker &&
+      key !== 'ctrl+c' &&
+      key !== 'ctrl+z'
+    ) {
+      const detail = this.state.terminalDetail;
+      const owner = this.view;
+      const page = Math.max(1, this.state.view?.rows ?? 1);
+      if (key === 'escape') {
+        owner.state.terminalDetail = undefined;
+        owner.state.scroll = 0;
+        this.repaint();
+        return;
+      }
+      if (key === 'enter' || key === 'a') {
+        if (!this.attachTerminal(true))
+          this.inView(owner, () => this.flash('nothing to attach'));
+        return;
+      }
+      if (key === 'ctrl+d')
+        void (async () => {
+          if (detail.state === 'ready') {
+            if (
+              (await this.askChoice(
+                `cut ${detail.id}`,
+                `${detail.name} · ${detail.transport} ${detail.target}`,
+                ['disconnect', 'keep'],
+              )) === 'disconnect'
+            )
+              await this.cutTerminal(detail.id);
+          } else {
+            owner.state.terminalDetail = undefined;
+            await this.inView(owner, () => this.command('terminals', ''));
+          }
+          this.inView(owner, () => this.repaint());
+        })().catch((error) => this.fail(error));
+      else if (key === 'pageup' || key === 'pagedown')
+        this.scrollBy(key === 'pageup' ? page : -page);
+      else if (key === 'home')
+        this.state.scroll = this.state.view?.maxScroll ?? 0;
+      else if (key === 'end') this.state.scroll = 0;
+      else {
+        // any other key only leaves the page
+        owner.state.terminalDetail = undefined;
+      }
       this.repaint();
       return;
     }
@@ -2743,6 +3104,8 @@ export class SessionApp {
           this.subscriptions.delete(runtime);
           await this.browsers.get(runtime)?.close();
           this.browsers.delete(runtime);
+          this.terminals.get(runtime)?.close();
+          this.terminals.delete(runtime);
           this.views.delete(runtime);
           throw error;
         }
@@ -2807,6 +3170,15 @@ export class SessionApp {
       followJobs: (list, rows) => {
         owner.jobsList = { list, rows };
       },
+      terminals: () =>
+        owner.runtime ? this.terminals.get(owner.runtime) : undefined,
+      followTerminals: (list, rows) => {
+        owner.terminalsList = { list, rows };
+      },
+      openTerminal: (id) => this.inView(owner, () => this.openTerminalPage(id)),
+      connectTerminal: (name) =>
+        this.inView(owner, () => this.connectTerminalProfile(name)),
+      cutTerminal: (id) => this.inView(owner, () => this.cutTerminal(id)),
       secretValue: (body) =>
         this.inView(owner, () => this.showCard(new SecretCard(body, true))),
       clearContextMeter: () => {
@@ -3452,6 +3824,7 @@ export class SessionApp {
     await Promise.all([
       this.sessions?.close() ?? runtime?.close(),
       ...[...this.browsers.values()].map((browser) => browser.close()),
+      ...[...this.terminals.values()].map((terminals) => terminals.close()),
     ]);
     for (const line of [stoppedJobsLine(jobs), hint])
       if (line) this.terminal.write(line + '\n');

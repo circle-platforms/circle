@@ -140,6 +140,20 @@ export async function setDefaultWorkspace(
   adoptSelectedFiles(runtime, selected, result.workspaceId);
   return selected;
 }
+// Where tasks with no project get their folders. Same native dialog and grant
+// indirection as the default workspace: the window never names a path.
+export async function setTaskFolder(
+  runtime: RuntimePort,
+): Promise<NativeWorkspace | null> {
+  const host = desktopHost();
+  if (!host || runtime.mode !== 'live') return null;
+  const selected = await host.chooseWorkspace();
+  if (!selected) return null;
+  await runtime.request('set-task-folder', {
+    workspaceGrant: selected.id,
+  });
+  return selected;
+}
 export async function readNativeFile(runtime: RuntimePort, path: string) {
   const session = currentSession(runtime.getSnapshot());
   const file = runtime

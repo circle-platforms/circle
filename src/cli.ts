@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import {
   existsSync,
+  mkdirSync,
   readFileSync,
   statSync,
   writeFileSync,
@@ -8,13 +9,22 @@ import {
 } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { circleHome, expandUser, normalizeWorkspace } from './paths.js';
+import {
+  circleHome,
+  expandUser,
+  newTaskName,
+  normalizeWorkspace,
+  taskWorkspace,
+  tasksFolder,
+} from './paths.js';
 import {
   isFolderTrusted,
   isReady,
   loadCredentials,
   loadSettings,
   applyProjectSettings,
+  saveSettings,
+  trustFolder,
   type CircleSettings,
 } from './settings.js';
 import {
@@ -55,6 +65,8 @@ export interface CliOptions {
   listModels: string | null;
   export: string[] | null;
   workspace: string;
+  /** Set by --task: work in a folder of Circle's own, named this or made up. */
+  task?: string;
   prompts: string[];
   // The @files from the command line, as written, without the @
   files: string[];
@@ -146,6 +158,13 @@ export function parseCli(argv: string[], cwd = process.cwd()): CliOptions {
       else if (argv[i + 1] && !argv[i + 1]!.startsWith('-'))
         printPrompt = argv[++i];
       else printPrompt ??= '';
+      continue;
+    }
+    if (flag === '--task') {
+      // A task with no project: a folder under the task folder, named or not.
+      options.task =
+        inline ??
+        (argv[i + 1] && !argv[i + 1]!.startsWith('-') ? argv[++i]! : '');
       continue;
     }
     if (flag === '--list-models') {
@@ -284,7 +303,7 @@ function conflict(
   return '';
 }
 export function helpText(): string {
-  return `usage: circle [options] [folder] [@file ...] [message ...]\n\nA terminal coding agent for your own model endpoint.\n\n  -p, --print [PROMPT]  Print the answer and exit\n  --mode text|json|rpc  Output mode\n  -c, --continue       Continue the last session\n  -r, --resume         Choose a saved session\n  --session ID         Resume by ID\n  --session-id ID      Open or create this ID\n  --fork ID            Copy a saved session\n  --no-session         In-memory conversation\n  -m, --model ID       Model for this run\n  --thinking LEVEL     Thinking depth\n  --list-models [TEXT] List endpoint models\n  --export ID [OUT]    Export a saved session\n  --system-prompt TEXT|FILE\n  --append-system-prompt TEXT|FILE\n  --no-context-files   Skip instruction files\n  --tools LIST         Limit tools\n  --exclude-tools LIST Exclude tools\n  --no-tools           No tools except compaction\n  --yolo               Auto mode for print or line\n  --extensions         Load extensions and MCP servers in print, line or rpc mode\n  --line               Plain line mode\n  --init               Model setup\n  --print-home         Print the data directory\n  -v, --version        Print version\n  -h, --help           Show help\n`;
+  return `usage: circle [options] [folder] [@file ...] [message ...]\n\nA terminal coding agent for your own model endpoint.\n\n  -p, --print [PROMPT]  Print the answer and exit\n  --mode text|json|rpc  Output mode\n  -c, --continue       Continue the last session\n  -r, --resume         Choose a saved session\n  --session ID         Resume by ID\n  --session-id ID      Open or create this ID\n  --fork ID            Copy a saved session\n  --no-session         In-memory conversation\n  -m, --model ID       Model for this run\n  --thinking LEVEL     Thinking depth\n  --list-models [TEXT] List endpoint models\n  --export ID [OUT]    Export a saved session\n  --system-prompt TEXT|FILE\n  --append-system-prompt TEXT|FILE\n  --no-context-files   Skip instruction files\n  --tools LIST         Limit tools\n  --exclude-tools LIST Exclude tools\n  --no-tools           No tools except compaction\n  --yolo               Auto mode for print or line\n  --extensions         Load extensions and MCP servers in print, line or rpc mode\n  --line               Plain line mode\n  --init               Model setup\n  --task [NAME]        Work in a folder of Circle's own for this task, under the task folder\n  --print-home         Print the data directory\n  -v, --version        Print version\n  -h, --help           Show help\n`;
 }
 // How long `-p PROMPT` waits for piped input to start before going on without it.
 const STDIN_WAIT_MS = 3000;
@@ -521,6 +540,27 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         store.close();
       }
     }
+
+    // --task: work that belongs to no project gets a folder of Circle's own under the
+    // task folder, trusted as Circle's own scratch folder is, so nothing has to be
+    // answered to start. It never changes where circle works without the flag.
+    if (options.task !== undefined) {
+      let chosen;
+      try {
+        chosen = loadSettings(home);
+      } catch (error) {
+        throw new UsageError(`settings could not be read: ${error}`);
+      }
+      const folder = taskWorkspace(
+        options.task || newTaskName(),
+        tasksFolder(chosen.task_folder, home),
+      );
+      mkdirSync(folder, { recursive: true });
+      if (!isFolderTrusted(chosen, folder))
+        saveSettings(trustFolder(chosen, folder), home);
+      options.workspace = normalizeWorkspace(folder);
+    }
+    // As in the Python releases: the flag beats the variable and is never saved.
     // The flag beats the variable and is never saved.
     if (options.thinking)
       process.env.CIRCLE_REASONING_EFFORT = options.thinking;

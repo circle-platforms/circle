@@ -15,6 +15,10 @@ import { readViewport, setViewport } from './helpers/viewport.mjs';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
 const temp = await mkdtemp(join(tmpdir(), 'circle-parallel-sessions-'));
+// Two sessions in one folder only happen inside a project the person opened: where
+// no project is open, a new session gets a task folder of its own.
+const project = join(temp, 'project');
+await mkdir(project);
 const packaged = Boolean(process.env.CIRCLE_DESKTOP_EXECUTABLE);
 const output = resolve(
   root,
@@ -85,7 +89,7 @@ const env = {
   CIRCLE_WORKBENCH_MODE: 'live',
   CIRCLE_NO_UPDATE_CHECK: '1',
   CIRCLE_NO_MODELS_REFRESH: '1',
-  CIRCLE_WORKBENCH_TEST_PROFILE: JSON.stringify({}),
+  CIRCLE_WORKBENCH_TEST_PROFILE: JSON.stringify({ workspace: project }),
   CIRCLE_DESKTOP_RUNTIME_FIXTURE: fixturePath,
 };
 delete env.ELECTRON_RUN_AS_NODE;
@@ -229,13 +233,30 @@ try {
     (await page.evaluate(() => window.circleDesktop.info())).packaged,
     packaged,
   );
-  const a = (await state()).activeSessionId;
-  // The home composer reuses this untitled session for the first message.
-  // Naming it first would make that message start a different session.
-  await send('A saved baseline');
+  // Open the project through the native folder dialog's grant, trust it as that
+  // grant's answer does, and start A there with its first message, so the sessions
+  // that follow share the folder.
+  const grant = await page.evaluate(() =>
+    window.circleDesktop.chooseWorkspace(),
+  );
+  assert(grant, 'the folder dialog returned the fixture project');
+  const opened = await okay('open-workspace', { workspaceGrant: grant.id });
+  await okay('trust', { enabled: true, workspaceId: opened.workspaceId });
+  const a = (
+    await okay('begin-session', {
+      workspaceId: opened.workspaceId,
+      text: 'A saved baseline',
+      display: 'A saved baseline',
+    })
+  ).sessionId;
+  await page.evaluate((id) => {
+    location.hash = '/session/' + id;
+  }, a);
+  await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   await page.getByText('fixture line 80', { exact: true }).waitFor();
   await okay('rename-session', { id: a, title: 'parallel A' });
   await until(async () => (await session(a)).state === 'idle', 'A saved');
+  assert.equal((await session(a)).workspaceId, opened.workspaceId);
   await send('A hold open');
   await until(
     async () => (await modelRequests()).length === 2,
