@@ -1,3 +1,4 @@
+import { preserveNativeEditing } from '../model/native-editable-shortcut';
 import { effectiveBindings, matchingAction } from '../model/shortcuts';
 import { planVisible } from '../../../../src/plan_state';
 import { agentActivityText, isAgentActive } from '../model/activity';
@@ -542,6 +543,7 @@ export function Conversation({
       // the trusted paste event that supplies clipboard files to the composer.
       // A custom chord does not grant permission to read the clipboard either.
       if (mapped === 'image.paste') return;
+      if (preserveNativeEditing(event, mapped)) return;
       if (mapped) {
         event.preventDefault();
         event.stopImmediatePropagation();

@@ -18,6 +18,8 @@ export const COMPONENT_SUITES = Object.freeze([
   'debug-panel-ui.mjs',
   'browser-diagnostics-ui.mjs',
   'keyboard-navigation-ui.mjs',
+  'paste-default-ui.mjs',
+  'native-editable-shortcuts-ui.mjs',
   'windowed-mount-ui.mjs',
   'native-terminal-search-ui.mjs',
   'original-shell-ui.mjs',
