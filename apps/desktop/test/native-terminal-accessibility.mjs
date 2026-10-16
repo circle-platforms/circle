@@ -313,15 +313,18 @@ try {
   await page?.screenshot({ path: join(output, 'failure.png') }).catch(() => {});
   throw error;
 } finally {
-  await writeFile(
-    join(output, 'receipt.json'),
-    JSON.stringify(report, null, 2),
-  );
   if (app && clipboard)
     await restoreNativeClipboardWithRecovery(app, clipboard, {
       retryPath: join(output, 'retry-clipboard-restore'),
       onFailure: async (e) =>
-        writeFile(join(output, 'clipboard-restore-error.txt'), String(e)),
+        writeFile(join(output, 'clipboard-restore-error.txt'), String(e)).catch(
+          (error) => {
+            console.error(
+              'could not save clipboard recovery diagnostics',
+              error,
+            );
+          },
+        ),
     });
   if (app && terminalId && page)
     await page
