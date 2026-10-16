@@ -118,6 +118,7 @@ test('OpenAI streaming joins split tool arguments and records usage from the fin
     output_tokens: 5,
     cache_read_tokens: 2,
   });
+  assert.equal(result.message.cache_reported, undefined);
   assert.equal(requestBody.model, 'gateway');
 });
 test('Anthropic streaming preserves thinking signatures and tool payloads for the next request', async (t) => {
@@ -193,6 +194,7 @@ test('Anthropic streaming preserves thinking signatures and tool payloads for th
   });
   assert.equal(result.message.content, 'answer');
   assert.equal(result.message.thinking, 'reason');
+  assert.equal(result.message.cache_reported, false);
   assert.equal(
     (result.message.provider_content?.[0] as { signature: string }).signature,
     'preserved-signature',

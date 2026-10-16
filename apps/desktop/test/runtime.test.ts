@@ -5009,7 +5009,8 @@ test('picking folders writes no session until the first message is sent', async 
   await f.controller.close();
   const store = new CheckpointStore(home);
   try {
-    const rows = store.list();
+    // Every stored row, including the empty session the window opened with.
+    const rows = store.list(undefined, false, true);
     assert.equal(rows.length, stored.length + 1);
     assert.equal(
       rows.filter((row) => row.workspace === realpathSync(beta)).length,

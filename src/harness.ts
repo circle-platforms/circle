@@ -25,10 +25,24 @@ import {
 } from './secrets.js';
 import { httpStatus } from './model_guard.js';
 import { validateAttachments } from './media.js';
+import { readPrompt } from './system_prompt.js';
+import {
+  acceptGeneratedTitle,
+  fallbackTitle,
+  TITLE_MAX_TOKENS,
+  titleConversation,
+  titleRetrySystem,
+  titleSkipReason,
+} from './session_title.js';
+import { tokenLen } from './middleware/tool_result_prune.js';
 import {
   completionFailure,
   ModelCompletionFailure,
 } from './model_completion.js';
+function titleTrace(message: string): void {
+  if (!process.env.CIRCLE_DEBUG) return;
+  console.error(`[circle] title: ${message}`);
+}
 export type ApprovalDecision =
   | 'approve'
   | 'reject'
@@ -58,7 +72,7 @@ export interface HarnessOptions {
   headless?: boolean;
   beforeRun?: (signal: AbortSignal) => Promise<void>;
   /** Called for each turn, including queued follow-ups, before consuming its message. */
-  beforeTurn?: () => void;
+  beforeTurn?: (prompt: string | undefined) => void;
   beforeStep?: () => void;
   priceUsage?: (
     model: string,
@@ -114,6 +128,12 @@ export class Harness {
     }
   >();
   private active?: Promise<{ answer: string; usage: Usage }>;
+  /** Text of the model call in flight, kept when the user stops it before the reply is stored. */
+  private streamed = '';
+  private streamedThinking = '';
+  /** When this step's thinking started, and how long it ran before the answer text. */
+  private thinkingAt?: number;
+  private thinkingSeconds?: number;
   /** Secrets' values hidden as %NAME% in text the model reads. */
   readonly redact: Redactor;
   constructor(readonly options: HarnessOptions) {
@@ -322,10 +342,20 @@ export class Harness {
     let answer = '';
     let first = true;
     do {
-      this.options.beforeTurn?.();
+      signal.throwIfAborted();
+      // Peek, then check the connection, then take the message. Shifting first
+      // drops a queued follow-up when logout throws before the next turn.
+      const upcoming = first
+        ? prompt !== undefined
+          ? prompt
+          : (this.steering[0] ?? this.followUps[0])
+        : this.followUps[0];
+      this.options.beforeTurn?.(upcoming);
       signal.throwIfAborted();
       const next = first
-        ? (prompt ?? this.steering.shift() ?? this.followUps.shift())
+        ? prompt !== undefined
+          ? prompt
+          : (this.steering.shift() ?? this.followUps.shift())
         : this.followUps.shift();
       const result = await this.runTurn(next, signal);
       answer = result.answer;
@@ -333,6 +363,162 @@ export class Harness {
       first = false;
     } while (this.followUps.length);
     return { answer, usage: total };
+  }
+  /**
+   * Output cap for the title request. 128 was spent entirely on reasoning by
+   * glm-5.3, so the answer never arrived. 512 leaves room for the title once
+   * thinking is disabled.
+   */
+  static readonly titleOutputTokens = TITLE_MAX_TOKENS;
+  /** Set once the fallback is saved. Sent after the turn so it does not share that request. */
+  private pendingTitle?: { display: string; fallback: string };
+  /**
+   * Ask the model for a short title after the fallback is already saved. A scripted model
+   * never sees this call. A rename that landed first is left alone. The request disables
+   * thinking: glm-5.3 still reasons when the field is omitted. Reasoning text is
+   * not a title. The prompt is wrapped as data, and a reply that answers the
+   * user is discarded.
+   */
+  private generateTitle(
+    display: string,
+    fallback: string,
+    sessionId = this.sessionId,
+  ): Promise<void> {
+    // `this.model`, not the model passed at construction: /model and a reload replace it.
+    const model = this.model;
+    const prompt = display.trim();
+    const report = (message: string): void => {
+      titleTrace(`failed: ${message}`);
+      this.bus.emit('info', {
+        payload: { model_notice: { event: 'title_failed', message } },
+      });
+    };
+    // A greeting keeps the fallback and stays quiet. A long line with no side
+    // request used to return here with no footer: the extension wrapper had
+    // dropped `sideRequests`. That one still says why.
+    const skip = titleSkipReason(prompt, model.sideRequests);
+    if (skip === 'prompt too short') {
+      titleTrace(`skipped (${skip})`);
+      return Promise.resolve();
+    }
+    if (skip) {
+      titleTrace(`skipped (${skip})`);
+      report(skip);
+      return Promise.resolve();
+    }
+    titleTrace(
+      `request model=${model.model} chars=${prompt.length} maxTokens=${Harness.titleOutputTokens} thinking=disabled`,
+    );
+    const system = readPrompt('agent', 'title.md');
+    const ask = (text: string) =>
+      model.complete({
+        system: text,
+        messages: [
+          {
+            id: 'title',
+            role: 'user',
+            content: titleConversation(prompt),
+          },
+        ],
+        tools: [],
+        signal: AbortSignal.timeout(20_000),
+        // `''` asks the Anthropic body for `thinking: {type: 'disabled'}`.
+        // `minimal` is sent as output_config.effort and glm rejects it.
+        effort: '',
+        maxTokens: Harness.titleOutputTokens,
+        token: () => {},
+      });
+    return ask(system)
+      .then(async (response) => {
+        // Reasoning is never a title, even when the answer is empty.
+        let decision = acceptGeneratedTitle(response.message.content, prompt);
+        // One stricter retry. A second copy is not stored.
+        if (decision.reason === 'echoes prompt') {
+          const held = this.options.store.get(sessionId);
+          if (!held || held.title_locked) return;
+          if (held.title !== fallback) {
+            this.bus.emit('info', {
+              payload: { title: held.title, session_id: sessionId },
+            });
+            return;
+          }
+          const again = await ask(titleRetrySystem(system));
+          decision = acceptGeneratedTitle(again.message.content, prompt);
+        }
+        if (!decision.title) {
+          titleTrace(`discarded (${decision.reason})`);
+          report(decision.reason);
+          return;
+        }
+        const title = decision.title;
+        const current = this.options.store.get(sessionId);
+        if (!current || current.title_locked) return;
+        if (current.title !== fallback) {
+          // A repair that finished first already renamed it. The resume line
+          // still has the old title until this event.
+          this.bus.emit('info', {
+            payload: { title: current.title, session_id: sessionId },
+          });
+          return;
+        }
+        this.options.store.rename(sessionId, title);
+        titleTrace(`renamed to ${JSON.stringify(title)}`);
+        this.bus.emit('info', { payload: { title, session_id: sessionId } });
+      })
+      .catch((error: unknown) => {
+        // The fallback title stays. A side request must not fail the turn.
+        report(error instanceof Error ? error.message : String(error));
+      });
+  }
+  private thoughtClock(): { thinking_seconds?: number } {
+    const seconds =
+      this.thinkingSeconds ??
+      (this.thinkingAt !== undefined
+        ? (Date.now() - this.thinkingAt) / 1000
+        : undefined);
+    const thought = this.streamedThinking.replace(
+      /[\s\u200b\u200c\u200d\ufeff\u2060\u00ad]/g,
+      '',
+    );
+    this.thinkingAt = undefined;
+    this.thinkingSeconds = undefined;
+    // An empty thinking token is not a thought. A real one keeps its clock,
+    // including a short one.
+    if (seconds === undefined || !thought) return {};
+    return { thinking_seconds: seconds };
+  }
+  /** What this step was about to send, when the endpoint never reported input tokens. */
+  private estimateInputTokens(): number {
+    const parts = [this.system];
+    for (const message of this.messages) {
+      parts.push(message.content);
+      if (message.thinking) parts.push(message.thinking);
+    }
+    for (const tool of this.tools)
+      parts.push(tool.name, tool.description, JSON.stringify(tool.parameters));
+    return Math.max(1, tokenLen(parts.join('\n')));
+  }
+  /**
+   * Ask again for a title that is still the trimmed first message. The caller
+   * has already checked that a turn was answered. A short prompt stays quiet.
+   * `sessionId` names another session when the recent list is repaired.
+   */
+  retitle(
+    display: string,
+    storedTitle: string,
+    sessionId?: string,
+  ): Promise<void> {
+    return this.generateTitle(
+      display,
+      storedTitle,
+      sessionId ?? this.sessionId,
+    );
+  }
+  private flushTitle(): void {
+    const pending = this.pendingTitle;
+    if (!pending) return;
+    this.pendingTitle = undefined;
+    this.generateTitle(pending.display, pending.fallback);
   }
   private async runTurn(
     prompt: string | undefined,
@@ -357,11 +543,14 @@ export class Harness {
         ...shown,
       });
     const session = this.options.store.get(this.sessionId)!;
-    if (!session.title && shown?.display !== undefined)
-      this.options.store.rename(
-        this.sessionId,
-        shown.display.split('\n')[0]!.slice(0, 100),
-      );
+    if (!session.title && shown?.display !== undefined) {
+      const fallback = fallbackTitle(shown.display);
+      this.options.store.rename(this.sessionId, fallback);
+      this.bus.emit('info', {
+        payload: { title: fallback, session_id: this.sessionId },
+      });
+      this.pendingTitle = { display: shown.display, fallback };
+    }
     this.bus.emit('run_start', { payload: { message: prompt } });
     try {
       for (let step = 0; step < (this.options.maxSteps ?? 9999); step++) {
@@ -394,6 +583,10 @@ export class Harness {
         this.options.beforeStep?.();
         try {
           stepSignal.throwIfAborted();
+          this.streamed = '';
+          this.streamedThinking = '';
+          this.thinkingAt = undefined;
+          this.thinkingSeconds = undefined;
           this.bus.emit('llm_start');
           const response = await this.model.complete({
             system:
@@ -412,15 +605,34 @@ export class Harness {
             signal: stepSignal,
             notice: (event) =>
               this.bus.emit('info', { payload: { model_notice: event } }),
-            token: (text, thinking) =>
+            token: (text, thinking) => {
+              if (thinking) {
+                const visible = text.replace(
+                  /[\s\u200b\u200c\u200d\ufeff\u2060\u00ad]/g,
+                  '',
+                );
+                if (visible) {
+                  this.streamedThinking += text;
+                  this.thinkingAt ??= Date.now();
+                }
+              } else {
+                if (
+                  this.thinkingAt !== undefined &&
+                  this.thinkingSeconds === undefined
+                )
+                  this.thinkingSeconds = (Date.now() - this.thinkingAt) / 1000;
+                this.streamed += text;
+              }
               this.bus.emit('llm_token', {
                 payload: { text, thinking: Boolean(thinking) },
-              }),
+              });
+            },
           });
           stepSignal.throwIfAborted();
           const message = {
             ...response.message,
             request_model: this.model.model,
+            ...this.thoughtClock(),
             usage: response.usage,
             cost:
               response.message.cost ??
@@ -430,6 +642,8 @@ export class Harness {
               ),
           };
           this.save(message);
+          this.streamed = '';
+          this.streamedThinking = '';
           addUsage(usage, response.usage);
           this.bus.emit('llm_end', {
             payload: { message },
@@ -459,6 +673,7 @@ export class Harness {
               usage: { ...usage },
               elapsed_ms: Date.now() - start,
             });
+            this.flushTitle();
             return { answer, usage };
           }
           // As in 0.5.0, the subagents of task calls next to each other run at the same time;
@@ -492,6 +707,62 @@ export class Harness {
       }
       throw new Error('maximum model steps reached');
     } catch (error) {
+      if (this.streamed.trim() || this.streamedThinking.trim()) {
+        try {
+          const estimated = {
+            input_tokens: this.estimateInputTokens(),
+            output_tokens: Math.max(
+              1,
+              Math.ceil(
+                (this.streamed.length + this.streamedThinking.length) / 4,
+              ),
+            ),
+            cache_read_tokens: 0,
+          };
+          let cost: Message['cost'];
+          try {
+            cost = this.options.priceUsage?.(this.model.model, estimated);
+          } catch {
+            cost = undefined;
+          }
+          const message: Message = {
+            id: randomUUID(),
+            role: 'assistant',
+            content: this.streamed,
+            ...(this.streamedThinking
+              ? { thinking: this.streamedThinking }
+              : {}),
+            ...this.thoughtClock(),
+            interrupted: true,
+            usage: estimated,
+            ...(cost ? { cost } : {}),
+          };
+          this.save(message);
+          // The footer sums this usage. The turn line only hears it from llm_end.
+          // Without that event a stop mid-thought shows ↓ 0 under the turn and the
+          // estimate in the footer.
+          this.bus.emit('llm_end', {
+            payload: { message },
+            usage: { ...estimated },
+          });
+        } catch {
+          /* The store may already be closing. The turn still reports the failure. */
+        }
+        this.streamed = '';
+        this.streamedThinking = '';
+      } else if (!signal.aborted) {
+        const asked = this.messages.some(
+          (message) => message.role === 'user' && !message.internal,
+        );
+        // Keep the person's words on screen. Drop the row only when nothing was saved.
+        if (!asked)
+          try {
+            this.options.store.abandonUnanswered(this.sessionId);
+          } catch {
+            /* Keep the original failure. */
+          }
+      }
+      this.flushTitle();
       const failure = signal.aborted ? signal.reason : error;
       this.bus.emit('run_error', {
         payload: {

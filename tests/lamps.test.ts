@@ -17,6 +17,23 @@ import {
 import { emptyUsage, type Message } from '../src/types.js';
 import type { Todo } from '../src/tools.js';
 
+test('a session that ends on a user prompt shows an interrupted marker', () => {
+  setPalette(buildPalette(...DEFAULT_DARK));
+  const state = screen();
+  state.messages = [
+    { id: 'u', role: 'user', content: 'hello' },
+    {
+      id: 'stop',
+      role: 'user',
+      content: 'The previous turn was interrupted before a reply was saved.',
+      display: 'Interrupted',
+      internal: 'interrupted',
+    },
+  ];
+  const text = transcriptRows(state, 80).map(stripAnsi).join('\n');
+  assert.match(text, /Interrupted/);
+  assert.equal(text.includes('previous turn was interrupted'), false);
+});
 const PALETTES: [string, Palette][] = [
   ['dark', buildPalette(...DEFAULT_DARK)],
   ['light', buildPalette(...DEFAULT_LIGHT)],

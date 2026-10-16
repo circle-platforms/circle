@@ -21,6 +21,64 @@ import {
 import { scratch } from './helpers.js';
 const plain = (text: string, width = 80): string =>
   markdownRows(text, width).map(stripAnsi).join('\n');
+test('an em dash on the wrap boundary does not drop the following space', () => {
+  const text =
+    'Nero — Roman citizenship was a legal status of the ancient world.';
+  for (const width of [24, 40, 57, 60]) {
+    const rows = markdownRows(text, width).map(stripAnsi);
+    const shown = rows.join('\n');
+    assert.equal(shown.includes('Romanc'), false, shown);
+    assert.equal(shown.includes('citizenshipwas'), false, shown);
+    assert.match(rows.join(' '), /Roman citizenship/);
+  }
+});
+test('a wrap does not start on a closing quote or split a digit run that fits', () => {
+  const quoted = '他说“公民权”是一种地位，并且‘罗马’的法律持续了很久。';
+  for (const width of [8, 12, 20, 24, 40]) {
+    const rows = markdownRows(quoted, width).map((row) =>
+      stripAnsi(row).trim(),
+    );
+    const forbidden = '”’」』＂＇»›〞〟';
+    for (const row of rows) {
+      assert.equal(forbidden.includes(row[0] ?? ''), false, `${width}: ${row}`);
+      assert.ok(stringWidth(row) <= width, row);
+    }
+    assert.equal(rows.join('').replaceAll(' ', ''), quoted.replaceAll(' ', ''));
+  }
+  const digits = 'value=395 units and then 12 more';
+  for (const width of [8, 10, 12, 16, 24]) {
+    const rows = markdownRows(digits, width).map((row) => stripAnsi(row));
+    for (let index = 0; index < rows.length - 1; index++) {
+      const end = rows[index]!.match(/(\d+)\s*$/);
+      const start = rows[index + 1]!.match(/^\s*(\d+)/);
+      const left = end?.[1];
+      const right = start?.[1];
+      if (!left || !right) continue;
+      assert.ok(
+        stringWidth(left + right) > width,
+        `split ${left}/${right} at width ${width}`,
+      );
+    }
+    assert.ok(rows.every((row) => stringWidth(row) <= width));
+  }
+});
+test('CJK wrap does not start a line with closing punctuation', () => {
+  const text =
+    '罗马公民权（civitas Romana）是一种法律地位，它把个人和国家连在一起，并且持续了很多个世纪。';
+  for (const width of [20, 24, 40, 60]) {
+    const rows = markdownRows(text, width).map((row) => stripAnsi(row).trim());
+    for (const row of rows) {
+      assert.equal(
+        /^[\）\]】」』。，、！？]/.test(row),
+        false,
+        `${width}: ${row}`,
+      );
+      assert.equal(/[（【「『]$/.test(row), false, `${width}: ${row}`);
+    }
+    assert.equal(rows.join('').includes('）'), true);
+    assert.equal(rows.join('').replaceAll(' ', ''), text.replaceAll(' ', ''));
+  }
+});
 test('CommonMark emphasis, inline code, links and literal underscore URLs remain distinct in nested formatting', () => {
   const rows = markdownRows(
     '**outer *inner* tail** and ~~old~~; `a_b *literal*` https://example.com/a_b_c',

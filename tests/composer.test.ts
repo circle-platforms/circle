@@ -169,8 +169,13 @@ test('up and down move between the rows of a multiline draft and browse the hist
   key('down');
   key('down'); // the last row going down: nothing to browse, the draft stays
   assert.equal(app.state.draft, 'abcdef\nxy\nlast line');
-  // A long line wraps at spaces, and ↑ ↓ move between its rows too
+  // ctrl+u deletes back to the start of the current line, not the lines above it
+  key('ctrl+e');
   key('ctrl+u');
+  assert.equal(app.state.draft, 'abcdef\nxy\n');
+  key('ctrl+a');
+  key('ctrl+k');
+  assert.equal(app.state.draft, '');
   const words = Array.from({ length: 30 }, (_, i) => `word${i}`).join(' ');
   type(words);
   const before = app.state.draftCursor;
@@ -257,7 +262,8 @@ test('a long paste becomes a placeholder: the model reads the paste, the transcr
     app.state.draft,
     '[Pasted text #1 +3 lines] explainshort\npaste',
   );
-  key(ui, 'ctrl+u');
+  key(ui, 'ctrl+a');
+  key(ui, 'ctrl+k');
   feed('\x1b[200~' + 'x'.repeat(801) + '\x1b[201~');
   assert.equal(app.state.draft, '[Pasted text #2]');
   key(ui, 'ctrl+u');
@@ -366,6 +372,10 @@ test('typing / or @ lists completions above the box: arrows move, tab takes, ent
   key(ui, 'escape');
   key(ui, 'tab', '\t');
   assert.equal(app.state.draft, '@src/alpha.ts ');
+  // The cursor sits on the space tab just added. Another tab must not add a second.
+  key(ui, 'left');
+  key(ui, 'tab', '\t');
+  assert.equal(app.state.draft, '@src/alpha.ts ');
 });
 
 test('the completion list draws on the panel at full width on dark and light palettes', (t) => {
@@ -450,10 +460,19 @@ test('an empty box shows the shortcuts on ? at once, and its scroll keys and arr
   assert.equal(app.state.draftCursor, 3);
 });
 
-test('esc clears the box, only esc esc on an empty box opens the tree, and ctrl+c clears it but keeps it in the history', (t) => {
+test('esc esc clears the box and ctrl+y puts it back; only esc esc on an empty box opens the tree, and ctrl+c clears it but keeps it in the history', (t) => {
   const { app, ui, type, picker } = session(t);
   type('draft one');
   key(ui, 'escape');
+  assert.equal(app.state.draft, 'draft one');
+  assert.match(app.state.flash ?? '', /press esc again to clear/);
+  key(ui, 'escape');
+  assert.equal(app.state.draft, '');
+  assert.match(app.state.flash ?? '', /ctrl\+y restores/);
+  key(ui, 'ctrl+y');
+  assert.equal(app.state.draft, 'draft one');
+  assert.equal(app.state.flash, '');
+  key(ui, 'ctrl+u');
   assert.equal(app.state.draft, '');
   key(ui, 'escape'); // the first esc on an empty box: no tree yet
   assert.equal(picker(), undefined);

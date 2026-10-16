@@ -44,7 +44,7 @@ When Circle needs a decision, a card takes over the input box and the frame turn
 
 - Press the number of the option. For an approval, `y`, `a` and `n` also work, though they are not shown.
 - `↑` `↓` move, `enter` confirms, `esc` gives the most cautious answer: reject, or cancel.
-- `Reject and explain` turns the last row into an input. Type what Circle should do instead and press `enter`. An empty `enter` is a plain rejection.
+- `Reject and explain` turns the last row into an input. Type what Circle should do instead and press `enter`. An empty `enter` is a plain rejection. `esc` returns to the options and keeps what you typed. A `/command` runs, and the card stays.
 - Keys you type while a card is up do not go to the input box, so a stray letter cannot answer for you. If you were typing a message, the card waits until you have paused for a second, and it puts your draft back when you are done.
 
 A question from the model can have several questions. `←` and `→` move between them, `space` ticks an answer when several are allowed, and `o` lets you type your own answer.
@@ -53,7 +53,9 @@ What each approval option does is explained in [Security](security.md#approvals)
 
 ## Interrupt
 
-Press `esc` to stop a turn. Circle marks it `✖ Interrupted` until the next turn starts. A shell command that is running is ended, with everything it started, within about a second (on Windows with `taskkill`, not yet tried on a real machine). [Background jobs](background-jobs.md) keep running; a job that ends after you stopped the turn waits for your next message instead of starting a turn. `ctrl+c` also stops a turn. `ctrl+b` moves the command being waited on to the background instead of stopping it. When Circle is idle, `esc` and `ctrl+c` clear what you typed (`ctrl+c` keeps it in the history), and `ctrl+d` on an empty box leaves.
+Press `esc` to stop a turn. Circle marks it `✖ Interrupted`, in a dim line, until the next turn starts. The footer counts text that was already streaming, and estimates the input of that step when the endpoint has not reported it. A stopped step is priced from that estimate when the model has rates, and the total then starts with `~` (`~$0.0035`) so it is not shown as a measured bill. The cache meter says `cache N/A` when cache fields were not reported, on a stop and on a finished call alike. A reported zero still reads `cache 0.0%`. A `$` total that ends in `+` still means some other call had usage and no price. An estimate with no rate does not add that `+`. A shell command that is running is ended, with everything it started, within about a second (on Windows with `taskkill`, not yet tried on a real machine). [Background jobs](background-jobs.md) keep running; a job that ends after you stopped the turn waits for your next message instead of starting a turn. `ctrl+c` also stops a turn. `ctrl+b` moves the command being waited on to the background instead of stopping it. When Circle is idle, `esc` again clears what you typed (`ctrl+y` puts it back) and `ctrl+c` clears it at once (`ctrl+c` keeps it in the history). `ctrl+d` on an empty box leaves.
+
+A fenced code block names its language and colours keywords, strings, numbers and comments. Copying still falls back to a file when the terminal has no clipboard tool.
 
 ## Steer a running turn
 
@@ -100,14 +102,14 @@ While `task` subagents run, a strip below the footer lists them. Press `↓` in 
 | `ctrl+o` | Expand or collapse tool output. Long output is folded by default: `… +15 lines · ctrl+o`. |
 | `ctrl+t` | Expand or collapse the model's thinking. |
 | `/thinking` | Hide or show thinking rows altogether. |
-| `ctrl+l` | Choose a model. |
+| `alt+l` | Choose a model. `ctrl+l` redraws the screen. |
 | `pageup`, `pagedown`, `home`, `end` | Scroll the conversation when the prompt is empty. |
 | `ctrl+f` | Find text in the conversation; `enter` goes to the next match. |
 
 ## Get text out
 
 - **Select with the mouse.** Dragging selects and copies at once. Double-click selects a word, triple-click a line. Dragging past the top or bottom edge scrolls.
-- `/copy` (or `ctrl+x`) copies the last answer. It uses `pbcopy`, `wl-copy` or `xclip` (`clip` on Windows). If none works it writes the text to `exports/last-copy.txt` in the data folder.
+- `/copy` (or `alt+c`) copies the last answer. It uses `pbcopy`, `wl-copy` or `xclip` (`clip` on Windows). The footer says `Copied N chars`. If none works it writes the text to `exports/last-copy.txt` in the data folder and the footer says `Saved to file`.
 - `/export` writes the whole conversation as Markdown. `/share` writes a copy under `shares/` and copies its path. Nothing is uploaded.
 - `/editor` (or `ctrl+g`) opens the draft in `$VISUAL` or `$EDITOR`, else the first of `nvim`, `vim` and `nano` that is installed (then `notepad` on Windows). The variable may carry arguments, such as `code --wait`. What you save comes back into the input box. It is not sent until you press `enter`.
 
@@ -117,10 +119,10 @@ While `task` subagents run, a strip below the footer lists them. Press `↓` in 
 
 ## Secrets
 
-When a task needs a password or token, the model can ask for it without it entering the conversation. A card names the variable and the file it will be written to, such as `API_TOKEN → /path/to/.env`. Press `ctrl+s` (or choose `enter secret`), type the value (it is masked), and press `enter`. The value is written straight to that file as `API_TOKEN=…`, keeping the file's other lines. The model is told it was collected, not what it was. `esc` cancels, and the model is told to ask you to put it in the file yourself; it never asks for the value in chat.
+When a task needs a password or token, the model can ask for it without it entering the conversation. A card names the variable and the file it will be written to, such as `API_TOKEN → /path/to/.env`. Choose `enter secret` (or press `alt+k` when a request is already waiting), type the value (it is masked), and press `enter`. The value is written straight to that file as `API_TOKEN=…`, keeping the file's other lines. The model is told it was collected, not what it was. `esc` cancels, and the model is told to ask you to put it in the file yourself; it never asks for the value in chat.
 
 The value must fit on one line and in 4,096 bytes. A request nobody answers is dropped after ten minutes, and the model is told. Without the full-screen interface nobody can type it, so such a request waits out those ten minutes. Read the file name on the card before you enter a value: the model chooses it. See [Security](security.md#secrets).
 
-A secret you keep for later has a name instead. `/secrets NAME` saves one on a masked card; `/secrets` or `/variables` alone lists the variables and the secrets, secrets by name only. The model writes `%NAME%` in a tool's arguments, for example in a browser's password field or a command. Circle puts the value in when the tool runs, and the model only ever reads `%NAME%`. `/variables NAME=value` keeps a plain value the same way, which the model may see. See [Secrets by name](security.md#secrets-by-name).
+A secret you keep for later has a name instead. `/secrets NAME` saves one on a masked card; `/secrets` or `/variables` alone lists the variables and the secrets, secrets by name only. The model still writes `%NAME%` in a tool's arguments, for example in a browser's password field or a command. Circle puts the value in when the tool runs, and the model only ever reads `%NAME%`. On Windows, `/variables` and `/secrets` say that. Elsewhere those commands describe the name without the `%NAME%` form. `/variables NAME=value` keeps a plain value the same way, which the model may see. See [Secrets by name](security.md#secrets-by-name).
 
 The model can also ask for such a value when a task needs one you have not saved. For a password it asks a secret question with a name and no file, and the value is kept as a secret. For something like a folder path, a device's address or a user name, the question's card shows the name it will be kept under (`%BACKUP_DIR%`), and your answer is kept as a variable in your settings. Either way the model then writes `%NAME%`, and Circle fills in the value wherever it is used.

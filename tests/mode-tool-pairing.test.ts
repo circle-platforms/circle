@@ -13,6 +13,7 @@ import {
 } from '../src/settings.js';
 import { pairingGateway, pairingRows } from './tool-pairing-fixture.js';
 import { orderModeToolResults } from '../src/tool_history.js';
+import { TITLE_MAX_TOKENS } from '../src/session_title.js';
 import type { Message } from '../src/types.js';
 
 for (const protocol of ['anthropic', 'openai'] as const)
@@ -68,8 +69,15 @@ for (const protocol of ['anthropic', 'openai'] as const)
       const result = await runtime.harness.run(
         'change plan mode and read both files',
       );
+      // The prompt asks for a session title after the turn. That request carries
+      // no tool history and is not one of the turn requests counted here.
+      const turns = () =>
+        gateway.requests.filter(
+          (r) =>
+            (r.body as { max_tokens?: number }).max_tokens !== TITLE_MAX_TOKENS,
+        );
       assert.equal(result.answer, 'paired response');
-      assert.equal(gateway.requests.length, 2);
+      assert.equal(turns().length, 2);
       assert.equal(
         runtime.mode,
         direction === 'enter'
@@ -97,7 +105,7 @@ for (const protocol of ['anthropic', 'openai'] as const)
         runtime.store.tree(runtime.session.id).slice(0, before.length),
         before,
       );
-      assert.equal(gateway.requests.length, 3);
+      assert.equal(turns().length, 3);
       assert.ok(gateway.requests.every((r) => !r.error));
       const beforeRestart = await pairingRows(home, runtime.session.id);
       const id = runtime.session.id;
@@ -137,7 +145,7 @@ for (const protocol of ['anthropic', 'openai'] as const)
         child.stdin.end();
       });
       assert.match(resultFromCLI, /paired response/);
-      assert.equal(gateway.requests.length, 4);
+      assert.equal(turns().length, 4);
       assert.deepEqual(
         (await pairingRows(home, id)).slice(0, beforeRestart.length),
         beforeRestart,

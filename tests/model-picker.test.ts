@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
+import { stripAnsi } from '../src/ink/string_width.js';
 import { matchesModel, modelScope } from '../src/model_scope.js';
 import { Picker } from '../src/ink/components/picker.js';
 import { AgentRuntime } from '../src/runtime.js';
@@ -119,6 +120,10 @@ for (const scopedRun of [false, true])
       await delay(10);
     };
     await app.command('models', '');
+    assert.match(
+      app.state.picker!.rows(100).map(stripAnsi).join('\n'),
+      /● a · current/,
+    );
     app.state.picker!.query = 'b';
     await key('tab');
     assert.deepEqual(
@@ -131,21 +136,30 @@ for (const scopedRun of [false, true])
     assert.equal(runtime.harness.model.model, 'b');
     assert.equal(loadSettings(root).auth.model, 'a');
     const beforeCycle = discoveryCount;
-    await key('ctrl+p');
+    await key('alt+m');
     assert.equal(runtime.harness.model.model, 'a');
     assert.equal(discoveryCount, beforeCycle);
     await key('alt+t');
     assert.equal(runtime.thinkingLevel, 'minimal');
     await app.command('models', '');
     app.state.picker!.query = 'b';
-    await key('ctrl+s');
+    await key('alt+d');
     assert.equal(loadSettings(root).auth.model, 'b');
     assert.equal(loadSettings(root).theme, 'dark');
     assert.equal(loadSettings(root).future, 'keep');
     await app.command('effort', '');
     app.state.picker!.query = 'medium';
-    await key('ctrl+s');
+    await key('alt+d');
     assert.equal(loadSettings(root).default_thinking, 'medium');
     assert.equal(loadSettings(root).theme, 'dark');
     assert.equal(runtime.thinkingLevel, 'medium');
+    await app.command('models', 'nosuch-model-x');
+    assert.match(app.state.flash, /model set to nosuch-model-x/);
+    assert.match(app.state.flash, /not listed by this endpoint/);
+    assert.equal(app.state.flash.includes('  '), false, app.state.flash);
+    const transcript = app.state.notices.at(-1) ?? '';
+    assert.match(transcript, /model set to nosuch-model-x/);
+    assert.match(transcript, /not listed by this endpoint/);
+    assert.equal(transcript.includes('  '), false, transcript);
+    assert.equal(runtime.harness.model.model, 'nosuch-model-x');
   });
