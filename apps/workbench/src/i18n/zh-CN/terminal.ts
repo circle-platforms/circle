@@ -1,4 +1,6 @@
 export const terminal: Record<string, string> = {
+  'text output': '文本输出',
+  'copy text output': '复制完整文本输出',
   'terminal screen reader': '终端屏幕阅读支持',
   'always on': '始终启用',
   'terminal closed': '终端已关闭',

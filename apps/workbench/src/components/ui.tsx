@@ -215,11 +215,24 @@ export function PermissionState() {
     </div>
   );
 }
-export function DataBlock({ title, value }: { title: string; value: unknown }) {
+export function DataBlock({
+  title,
+  value,
+  tabIndex,
+  wrap,
+}: {
+  title: string;
+  value: unknown;
+  tabIndex?: number;
+  wrap?: boolean;
+}) {
   return (
     <div className="data-block">
       <h4>{title}</h4>
-      <pre>
+      <pre
+        tabIndex={tabIndex}
+        style={wrap === false ? { whiteSpace: 'pre' } : undefined}
+      >
         {typeof value === 'string' ? value : JSON.stringify(value, null, 2)}
       </pre>
     </div>

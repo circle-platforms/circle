@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { structuredTextOutput } from '../model/tool-output';
 import { useCommandTerminal } from './CommandTerminalNavigation';
 import { copyText } from '../host';
 import {
@@ -113,6 +114,10 @@ export function ToolMessage({
   const [open, setOpen] = useSessionDisclosure('tool:' + tool.id, expanded);
   const { view, update } = useSessionPresentation();
   const tab = view.toolTabs?.[tool.id] ?? 'output';
+  const textOutput = useMemo(
+    () => structuredTextOutput(tool.output),
+    [tool.output],
+  );
   const setTab = (value: 'input' | 'output') =>
     update((target) => {
       (target.toolTabs ??= {})[tool.id] = value;
@@ -243,6 +248,19 @@ export function ToolMessage({
                 <ArrowUpRight size={12} />
               </button>
             )}
+            {tab === 'output' && textOutput && (
+              <IconButton
+                label={t('copy text output')}
+                onClick={() =>
+                  copyText(textOutput.text).then(
+                    () => notify(t('copied')),
+                    () => notify(t('clipboard unavailable')),
+                  )
+                }
+              >
+                <Copy size={13} />
+              </IconButton>
+            )}
             <IconButton
               label={t('copy tool output')}
               onClick={() =>
@@ -260,11 +278,28 @@ export function ToolMessage({
             </IconButton>
           </div>
           {terminalError && <p role="alert">{terminalError}</p>}
-          {(tab === 'output' || hasToolInput(tool.input)) && (
-            <DataBlock
-              title={tab === 'input' ? t('raw input') : t('raw output')}
-              value={tab === 'input' ? tool.input : tool.output}
-            />
+          {tab === 'output' && textOutput ? (
+            <>
+              <div className="tool-text-preview">
+                <DataBlock
+                  title={t('text output')}
+                  value={textOutput.preview}
+                  tabIndex={0}
+                  wrap={false}
+                />
+              </div>
+              <details className="context-source">
+                <summary>{t('raw output')}</summary>
+                <DataBlock title={t('raw output')} value={tool.output} />
+              </details>
+            </>
+          ) : (
+            (tab === 'output' || hasToolInput(tool.input)) && (
+              <DataBlock
+                title={tab === 'input' ? t('raw input') : t('raw output')}
+                value={tab === 'input' ? tool.input : tool.output}
+              />
+            )
           )}
           {attachments.length > 0 && (
             <div className="message-attachments">
