@@ -4,8 +4,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { inspect } from 'node:util';
 import * as legacy from '../src/legacy_install.js';
+import { WindowsProcessQueryObservation } from '../src/windows_process_query.js';
 import { scratch } from './helpers.js';
 
 function fixture(t: TestContext) {
@@ -38,6 +38,7 @@ type Result = Parameters<typeof legacy.runningCopies>[2] extends infer R
 function failed(t: TestContext, result: Result) {
   const own = fixture(t);
   let calls = 0;
+  const reports: string[] = [];
   let failure: unknown;
   try {
     legacy.runningCopies(
@@ -49,16 +50,20 @@ function failed(t: TestContext, result: Result) {
         return result;
       },
       (path) => (path === own.frozen ? 'EBUSY' : undefined),
+      (summary) => reports.push(summary),
     );
   } catch (error) {
     failure = error;
   }
   assert.ok(failure instanceof Error);
   assert.equal(calls, 1);
+  assert.ok(failure.cause instanceof WindowsProcessQueryObservation);
+  assert.deepEqual(reports, [failure.cause.message]);
   return {
     ...own,
     error: failure,
-    evidence: legacy.processQueryEvidence?.(failure),
+    observation: failure.cause,
+    evidence: failure.cause.details,
   };
 }
 
@@ -66,7 +71,7 @@ test('a timed out process query retains a bounded safe summary without machine p
   const unrelated = 'C:\\unrelated-private-process\\program.exe';
   const stdout = `7 ${Buffer.from(unrelated).toString('base64')}\r\nnot a process\r\n`;
   const stderr = 'synthetic query diagnostic\r\n';
-  const { frozen, error, evidence } = failed(t, {
+  const { frozen, error, observation, evidence } = failed(t, {
     status: null,
     pid: 444,
     signal: 'SIGTERM',
@@ -80,7 +85,6 @@ test('a timed out process query retains a bounded safe summary without machine p
     error.message,
     `${frozen} is in use, and the running programs could not be listed (no answer in 30 s)`,
   );
-  assert.ok(evidence);
   assert.equal(evidence.reportedPid, 444);
   assert.equal(evidence.status, null);
   assert.equal(evidence.signal, 'SIGTERM');
@@ -89,23 +93,24 @@ test('a timed out process query retains a bounded safe summary without machine p
   assert.equal(evidence.stderrCodeUnits, stderr.length);
   assert.equal(evidence.stdoutLineCount, 2);
   assert.equal(evidence.stderrLineCount, 1);
-  assert.equal(evidence.matchingPidCount, 0);
-  assert.ok(evidence.runningCopiesElapsedMs >= 0);
-  assert.equal('elapsedMs' in evidence, false);
+  assert.ok(evidence.elapsedMs >= 0);
   assert.equal('scriptEnteredObserved' in evidence, false);
   assert.equal('pipelineCompletedObserved' in evidence, false);
-  assert.equal(Object.isFrozen(evidence), true);
-  assert.equal(
-    Object.getOwnPropertyDescriptor(error, 'processQuery')?.value,
-    evidence,
+  assert.match(
+    observation.message,
+    new RegExp(
+      `signal: SIGTERM; reported pid: 444; stdout: ${stdout.length} code units in 2 lines; stderr: ${stderr.length} code units in 1 lines`,
+    ),
   );
-  assert.match(inspect(error), /processQuery:/);
-  const summary = JSON.stringify(evidence);
-  assert.equal(summary.includes(unrelated), false);
-  assert.equal(
-    summary.includes(Buffer.from(unrelated).toString('base64')),
-    false,
-  );
+  for (const summary of [observation.message, JSON.stringify(evidence)]) {
+    assert.equal(summary.includes(unrelated), false);
+    assert.equal(
+      summary.includes(Buffer.from(unrelated).toString('base64')),
+      false,
+    );
+    assert.equal(summary.includes('synthetic query diagnostic'), false);
+    assert.equal(summary.includes(frozen), false);
+  }
   assert.equal('stdout' in evidence, false);
   assert.equal('stderr' in evidence, false);
 });
@@ -125,19 +130,19 @@ test('query evidence preserves the original nonzero exit error and its CRLF text
     error.message,
     `${frozen} is in use, and the running programs could not be listed (${reason})`,
   );
-  assert.ok(evidence);
   assert.equal(evidence.status, 1);
-  assert.equal(evidence.errorCode, null);
+  assert.equal(evidence.signal, null);
+  assert.equal(evidence.stdoutCodeUnits, 0);
+  assert.equal(evidence.stdoutLineCount, 0);
   assert.equal(evidence.stderrCodeUnits, stderr.length);
   assert.equal(evidence.stderrLineCount, 2);
 });
 
-test('omitted runner fields remain unknown and only recorded query errors provide installer evidence', (t) => {
-  const stderr = 'synthetic lookup unavailable\r\n';
-  const { frozen, error, evidence } = failed(t, {
+test('omitted runner fields remain unknown rather than inferred', (t) => {
+  const { frozen, error, observation, evidence } = failed(t, {
     status: null,
-    stdout: '',
-    stderr,
+    stdout: undefined as unknown as string,
+    stderr: undefined as unknown as string,
     error: Object.assign(Error('synthetic query could not start'), {
       code: 'ENOENT',
     }),
@@ -146,36 +151,33 @@ test('omitted runner fields remain unknown and only recorded query errors provid
     error.message,
     `${frozen} is in use, and the running programs could not be listed (synthetic query could not start)`,
   );
-  assert.ok(evidence);
   assert.equal(evidence.reportedPid, 'unknown');
   assert.equal(evidence.signal, 'unknown');
   assert.equal(evidence.errorCode, 'ENOENT');
-  assert.equal(
-    legacy.processQueryEvidence?.(
-      Object.assign(Error('unrelated'), {
-        processQuery: { stdout: 'must not become installer output' },
-      }),
-    ),
-    undefined,
+  assert.equal(evidence.stdoutCodeUnits, 'unknown');
+  assert.equal(evidence.stderrLineCount, 'unknown');
+  assert.match(
+    observation.message,
+    /signal: unknown; reported pid: unknown; stdout: unknown code units in unknown lines/,
   );
 });
 
-test('a zero reported PID remains a reported value and an oversized error code is explicitly truncated', (t) => {
-  const { evidence } = failed(t, {
+test('a zero reported PID remains a reported value while unexpected codes and signals stay unknown', (t) => {
+  const { evidence, observation } = failed(t, {
     status: null,
     pid: 0,
-    signal: null,
+    signal: 'private\nsignal' as NodeJS.Signals,
     stdout: '',
     stderr: '',
     error: Object.assign(Error('synthetic query failed'), {
       code: 'E'.repeat(100),
     }),
   });
-  assert.ok(evidence);
   assert.equal(evidence.reportedPid, 0);
   assert.equal('childStarted' in evidence, false);
-  assert.equal(evidence.errorCode?.length, 64);
-  assert.equal(evidence.errorCodeTruncated, true);
+  assert.equal(evidence.errorCode, 'unknown');
+  assert.equal(evidence.signal, 'unknown');
+  assert.doesNotMatch(observation.message, /private|EEEE/);
 });
 
 test('process query evidence preserves the single call, budget and PID decision', (t) => {
@@ -198,12 +200,8 @@ test('process query evidence preserves the single call, budget and PID decision'
   );
   assert.deepEqual(pids, [matchingPid]);
   assert.equal(calls.length, 1);
-  assert.match(calls[0]!.command, /powershell\.exe$/);
-  assert.deepEqual(calls[0]!.args.slice(0, 3), [
-    '-NoProfile',
-    '-NonInteractive',
-    '-Command',
-  ]);
+  assert.equal(calls[0]!.command, process.execPath);
+  assert.match(calls[0]!.args[0]!, /windows_process_native\.[jt]s$/);
   assert.equal(calls[0]!.timeout, 30_000);
 });
 
@@ -219,7 +217,6 @@ test('the installer consumer discloses only its safe query evidence and exits be
     export const findPythonCopies=()=>${JSON.stringify(own.copies)};
     export const chooseLocation=()=>deny('chooseLocation');
     export const removePythonCopies=()=>deny('removePythonCopies');
-    export const processQueryEvidence=error=>actual.processQueryEvidence?.(error);
     export const runningCopies=(copies,where)=>actual.runningCopies(copies,where,()=>({
       status:null,pid:4321,signal:'SIGTERM',stdout:'',stderr:'',
       error:Object.assign(Error('synthetic query timeout'),{code:'ETIMEDOUT'}),
@@ -256,6 +253,8 @@ test('the installer consumer discloses only its safe query evidence and exits be
     process.execPath,
     [
       '--import',
+      'tsx',
+      '--import',
       pathToFileURL(hook).href,
       fileURLToPath(new URL('../src/install_manager.ts', import.meta.url)),
       join(own.base, 'synthetic-release-never-staged'),
@@ -278,21 +277,19 @@ test('the installer consumer discloses only its safe query evidence and exits be
   assert.equal(result.status, 1, result.stderr + result.stdout);
   assert.deepEqual(JSON.parse(readFileSync(record, 'utf8')), []);
   assert.match(result.stderr, /Nothing was changed/);
-  const line = result.stderr
-    .split(/\r?\n/)
-    .find((line) =>
-      line.startsWith('[circle-install] process query evidence: '),
-    );
+  const prefix = '[circle-install] Windows process query observation: ';
+  const lines = result.stderr.split(/\r?\n/);
+  const line = lines.find((line) => line.startsWith(prefix));
   assert.ok(line, result.stderr);
-  const evidence = JSON.parse(
-    line.slice('[circle-install] process query evidence: '.length),
+  assert.ok(
+    lines.indexOf(line) <
+      lines.findIndex((line) => /Nothing was changed/.test(line)),
+    result.stderr,
   );
-  assert.ok(evidence.runningCopiesElapsedMs >= 0);
-  assert.equal('scriptEnteredObserved' in evidence, false);
-  assert.equal('pipelineCompletedObserved' in evidence, false);
-  assert.equal(evidence.reportedPid, 4321);
-  assert.equal(evidence.errorCode, 'ETIMEDOUT');
-  assert.equal('stdout' in evidence, false);
-  assert.equal('stderr' in evidence, false);
-  assert.equal(JSON.stringify(evidence).includes(own.frozen), false);
+  assert.match(
+    line,
+    /; error code: ETIMEDOUT; signal: SIGTERM; reported pid: 4321;/,
+  );
+  assert.match(line, /stdout: 0 code units in 0 lines; stderr: 0 code units/);
+  assert.equal(line.includes(own.frozen), false);
 });

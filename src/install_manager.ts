@@ -25,7 +25,6 @@ import {
   findPythonCopies,
   removePythonCopies,
   runningCopies,
-  processQueryEvidence,
   surroundings,
 } from './legacy_install.js';
 
@@ -51,11 +50,6 @@ try {
     `[circle-install] the Python circle may still be running: ${error instanceof Error ? error.message : String(error)}. ` +
       'Close those sessions, then run the installer again. Nothing was changed.\n',
   );
-  const evidence = processQueryEvidence(error);
-  if (evidence)
-    process.stderr.write(
-      `[circle-install] process query evidence: ${JSON.stringify(evidence)}\n`,
-    );
   process.exit(1);
 }
 if (running.length) {
