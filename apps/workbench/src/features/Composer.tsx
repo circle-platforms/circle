@@ -254,7 +254,13 @@ export function EffortMenu({
           onCloseAutoFocus={closeMenu(onCloseFocus)}
         >
           {(['default', ...EFFORTS] as Effort[]).map((effort) => (
-            <DropdownMenu.Item key={effort} onSelect={() => onEffort(effort)}>
+            <DropdownMenu.Item
+              key={effort}
+              // Named by the depth; the line under it describes it.
+              aria-label={EFFORT_TEXT[effort].label()}
+              aria-description={EFFORT_TEXT[effort].detail()}
+              onSelect={() => onEffort(effort)}
+            >
               <span>
                 <strong>{EFFORT_TEXT[effort].label()}</strong>
                 <small>{EFFORT_TEXT[effort].detail()}</small>
