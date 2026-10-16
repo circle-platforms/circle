@@ -35,6 +35,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'native-terminal-tabs-ui.mjs',
   'extension-feedback-ui.mjs',
   'github-sidebar-status-ui.mjs',
+  'conversation-reading-anchor-ui.mjs',
 ]);
 
 /** Explicit suites run serially; a failed suite prevents later execution. */
