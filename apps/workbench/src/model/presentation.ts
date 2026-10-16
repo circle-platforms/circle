@@ -60,10 +60,16 @@ export function restoreTranscriptAnchor(
     (row) => row.dataset.messageId === anchor.messageId,
   );
   if (!node) return false;
-  box.scrollTop +=
-    node.getBoundingClientRect().top -
-    box.getBoundingClientRect().top -
-    anchor.offset;
+  // Geometry compensation must finish in this commit. Inheriting the transcript's
+  // smooth scrolling would let a later measurement retarget an unfinished move.
+  box.scrollTo({
+    top:
+      box.scrollTop +
+      node.getBoundingClientRect().top -
+      box.getBoundingClientRect().top -
+      anchor.offset,
+    behavior: 'instant',
+  });
   return true;
 }
 

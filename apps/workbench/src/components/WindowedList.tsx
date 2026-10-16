@@ -143,10 +143,14 @@ export function WindowedList<T>({
       ...root.current.querySelectorAll<HTMLElement>('[data-windowed-key]'),
     ].find((row) => row.dataset.windowedKey === anchor.key);
     if (row)
-      box.scrollTop +=
-        row.getBoundingClientRect().top -
-        box.getBoundingClientRect().top -
-        anchor.offset;
+      box.scrollTo({
+        top:
+          box.scrollTop +
+          row.getBoundingClientRect().top -
+          box.getBoundingClientRect().top -
+          anchor.offset,
+        behavior: 'instant',
+      });
   }, [revision, scrollRef]);
   const range = windowedRange(offsets, viewport.top, viewport.height, overscan);
   return (
