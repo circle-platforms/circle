@@ -5,6 +5,23 @@ import { join } from 'node:path';
 import { Resvg } from '@resvg/resvg-js';
 import { execFileSync } from 'node:child_process';
 const root = fileURLToPath(new URL('..', import.meta.url));
+// ssh2 loads two optional native accelerators, each inside a try/catch: the
+// `cpu-features` package and its own sshcrypto.node, built by npm on a machine that
+// has a compiler. esbuild cannot put a .node binary in a bundle, and `external` takes
+// strings only, so a plugin matches the path ssh2 writes. Left to runtime, a packaged
+// Circle simply does not have them and ssh2 uses its pure-JS crypto - which is already
+// what happens where they were never compiled. The device terminals reach ssh2 from
+// the main process (src/terminal.ts); the worker is covered for the same require.
+const nativeModules = ['cpu-features'];
+const nativeBinaries = {
+  name: 'native-binaries',
+  setup(api) {
+    api.onResolve({ filter: /\.node$/ }, (args) => ({
+      path: args.path,
+      external: true,
+    }));
+  },
+};
 const dist = join(root, 'dist');
 await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });
@@ -15,6 +32,8 @@ await build({
   platform: 'node',
   target: 'node24',
   format: 'esm',
+  external: nativeModules,
+  plugins: [nativeBinaries],
   banner: {
     js: "import { createRequire as circleCreateRequire } from 'node:module'; const require = circleCreateRequire(import.meta.url);",
   },
@@ -36,13 +55,8 @@ await build({
   platform: 'node',
   target: 'node24',
   format: 'cjs',
-  external: [
-    'electron',
-    'original-fs',
-    // ssh2's optional native accelerator: a .node binary esbuild cannot bundle.
-    // ssh2 requires it inside a try/catch and falls back to pure-JS crypto without it.
-    'cpu-features',
-  ],
+  external: ['electron', 'original-fs', ...nativeModules],
+  plugins: [nativeBinaries],
   sourcemap: true,
 });
 await build({
