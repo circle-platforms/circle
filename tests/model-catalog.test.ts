@@ -473,7 +473,8 @@ test('real Anthropic requests fit legacy thinking and output budgets and include
     model.contextWindow,
     modelProfile('anthropic', model.model)!.max_input_tokens,
   );
-  assert.equal(model.outputBudget, 24_192);
+  assert.equal(model.effort, 'medium');
+  assert.equal(model.outputBudget, 16_384);
   const wrapper = new ExtensionHost({
     workspace: root,
     home: root,
@@ -482,6 +483,7 @@ test('real Anthropic requests fit legacy thinking and output budgets and include
   endpoint.models = { 'claude-sonnet-4-5': { context_window: 40_000 } };
   assert.equal(wrapper.contextWindow, 40_000);
   assert.equal(wrapper.outputBudget, 10_000);
+  assert.equal(wrapper.sideRequests, true);
   const modern = new GatewayModel(
     endpoint,
     root,
@@ -498,8 +500,26 @@ test('real Anthropic requests fit legacy thinking and output budgets and include
     token: () => {},
   });
   assert.equal(bodies[1]!.max_tokens, 32000);
-  assert.deepEqual(bodies[1]!.thinking, { type: 'adaptive' });
+  assert.deepEqual(bodies[1]!.thinking, {
+    type: 'adaptive',
+    display: 'summarized',
+  });
   assert.deepEqual(bodies[1]!.output_config, { effort: 'low' });
+  const title = new GatewayModel(endpoint, root, 'glm-5.3', {}, catalog);
+  title.effort = 'medium';
+  await title.complete({
+    system: 'name this session',
+    messages: [{ id: 'user', role: 'user', content: 'question' }],
+    tools: [],
+    effort: '',
+    maxTokens: 512,
+    signal: new AbortController().signal,
+    token: () => {},
+  });
+  assert.equal(bodies[2]!.model, 'glm-5.3');
+  assert.equal(bodies[2]!.max_tokens, 512);
+  assert.equal(bodies[2]!.output_config, undefined);
+  assert.deepEqual(bodies[2]!.thinking, { type: 'disabled' });
 });
 test('saved prices and model identity survive catalog changes and restart instead of repricing previous calls', async (t) => {
   const root = scratch(t);

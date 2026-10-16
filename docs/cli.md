@@ -4,12 +4,13 @@ nav_order: 16
 
 # CLI
 
-Circle has one command, `circle`, and one subcommand, `circle update`. Without options `circle` opens the full-screen interface in a folder you choose. With `-p` it runs a prompt and prints the answer.
+Circle has one command, `circle`, and two subcommands, `circle update` and `circle uninstall`. Without options `circle` opens the full-screen interface in a folder you choose. With `-p` it runs a prompt and prints the answer.
 
 ```bash
 circle [options] [folder] [@file ...] [message ...]
 circle -p "prompt" [folder]
 circle update [version] [--check]
+circle uninstall [--purge] [--yes]
 ```
 
 ## Folder, messages and files
@@ -40,7 +41,7 @@ circle -p "review this" @src/app.ts "now list the risks"
 | `--fork ID` | Start a new conversation in this folder with a copy of a saved one, from any folder. The original is not changed. Combine with `--session-id` to choose the new id. |
 | `--no-session` | Keep the conversation in memory only. It is not saved and not listed in `/resume`. |
 | `-n`, `--name NAME` | Give the conversation a title, as `/name` does. |
-| `-m`, `--model NAME` | Use this model id for this run. It is not saved; `ctrl+s` in `/models` inside a session saves one. |
+| `-m`, `--model NAME` | Use this model id for this run. It is not saved; `alt+d` in `/models` inside a session saves one. |
 | `--thinking LEVEL` | The thinking depth for this run: `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. It is not saved. See [Models](models.md#thinking-depth). |
 | `--models PATTERNS` | The models `ctrl+p` switches between in this run, comma-separated, such as `step-3.7-flash,step-5-*`. In place of `enabled_models` in [settings](settings.md). |
 | `--export ID [FILE]` | Write a saved conversation as HTML, or as a JSONL bundle when `FILE` ends in `.jsonl`, and exit. `FILE` defaults to `<id>.html` in the current folder. See [Sessions](sessions.md#export-and-import). |
@@ -158,6 +159,30 @@ When the full-screen interface starts, Circle checks once a day whether a newer 
 
 Turn it off with `"update_check": false` in [settings](settings.md#keys), or `CIRCLE_NO_UPDATE_CHECK=1` in the environment.
 
+## Uninstalling
+
+```bash
+circle uninstall [--purge] [--yes]
+```
+
+| Option | What it does |
+|---|---|
+| *(none)* | Remove the installation. On a terminal, ask first. |
+| `--purge` | Also delete the data folder, `~/.circle` (or `CIRCLE_HOME`), with the settings, keys and sessions in it. |
+| `-y`, `--yes` | Do not ask. Required without a terminal. |
+
+`circle uninstall` removes what the installer put on the machine: the `circle` launcher, every version under the prefix with `current.ref` and `installation.json`, and the PATH change — the lines marked `# circle path` in `~/.zshrc` or `~/.bashrc`, or on Windows the launcher's folder in your user `PATH`. The data folder stays unless `--purge` deletes it too. On a terminal it lists what goes and asks; anywhere else it needs `--yes`. Files of other programs in the prefix folder, and a startup-file block for another folder, are left alone.
+
+Like `circle update`, it works on a copy that `install.sh` or `install.ps1` put in place: a git checkout is not touched, and the command stops with `circle uninstall requires an installer-managed installation`. It also stops, changing nothing, while another circle session runs from the same installation. On Windows the launcher and the running version's own files are still in use while circle runs; a small helper removes them, and the launcher folder and prefix when nothing else is left in them, a moment after this session ends. To open a folder that is called `uninstall`, write `./uninstall`.
+
+| Code | When |
+|---|---|
+| `0` | Removed. A PATH entry that could not be removed is a warning, not a failure. |
+| `1` | The question was declined, another session is running, the copy was not installed by the installer, the receipt could not be read, or a removal failed. |
+| `2` | An unknown option, or no terminal and no `--yes`. |
+
+The desktop application is removed separately: on Windows through Settings → Apps, on macOS and Linux by deleting the application.
+
 ## Full-screen and line mode
 
 Circle uses the full-screen interface when both standard input and standard output are terminals, `-p`, `--line` and `--mode` are not given, and `CIRCLE_NO_TUI` is not `1`, `true`, or `yes`. Otherwise it runs line mode, or print mode when there are messages.
@@ -189,4 +214,4 @@ It replaces only the connection, `auth` in `settings.json`: endpoint, protocol a
 
 Inside a session, `/login` asks the same questions and switches the session without a restart. See [Change the endpoint or the key](models.md#change-the-endpoint-or-the-key).
 
-To change only the model, pick it in `/models` inside a session and press `ctrl+s` instead. See [Settings](settings.md).
+To change only the model, pick it in `/models` inside a session and press `alt+d` instead. See [Settings](settings.md).

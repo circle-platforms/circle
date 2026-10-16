@@ -36,7 +36,7 @@ The model sees the conversation history and a system prompt that Circle assemble
 
 1. Base instructions chosen by the model family (Claude, GPT, Gemini, Kimi and others each get their own).
 2. Circle's guidelines and a note on how paths work.
-3. Your instruction files: `AGENTS.md` or `CLAUDE.md` from the workspace and its parent folders, then your personal ones. See [Configuration](configuration.md#instruction-files).
+3. Your instruction files: `AGENTS.md` or `CLAUDE.md` from the workspace folder, then your personal ones. A parent folder's files are not included. See [Configuration](configuration.md#instruction-files).
 4. A short description of the environment: working folder, platform, date, whether it is a git repository, model and protocol.
 5. Anything appended with `APPEND_SYSTEM.md` (the project's `.circle/` one, else the data folder's) or `--append-system-prompt`.
 6. The names and descriptions of the [skills](skills.md), and of the extension tools.
@@ -76,7 +76,8 @@ Circle protects a turn from the things that go wrong around a model:
 - Other transient endpoint errors are retried with backoff, honouring `Retry-After`: rate limits up to 5 times within 10 minutes, server errors and dropped connections up to 6 times within 5 minutes, errors the endpoint reports inside a stream 3 times. Certificate and TLS errors are not retried: they fail the same way every time.
 - A timeout or a dropped connection is retried even when part of the answer had come; that part is dropped, and the answer starts again.
 - A parameter your endpoint rejects is dropped for the rest of the session.
-- A model stuck repeating itself, or a response with no finish signal, is cut and sent again.
+- A model stuck repeating itself while thinking is cut and sent again with a reminder; one repeating itself in its answer is stopped.
+- A response that ends without a complete finish signal, at its output limit, filtered or empty is kept in history and reported as incomplete, not sent again. Its tool calls are not run.
 - A model that keeps repeating the same tool call, or keeps finding nothing, is reminded to change course.
 - A tool that crashes returns an error to the model instead of ending the turn.
 - A tool call with the wrong name case, argument names or argument shape is repaired when the meaning is clear, and checked against the tool's schema before it runs.

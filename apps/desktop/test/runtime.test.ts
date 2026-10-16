@@ -1,6 +1,13 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  writeFile,
+  unlink,
+} from 'node:fs/promises';
 import { existsSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,14 +22,23 @@ import {
 } from '../../../src/browser/protocol.ts';
 import { ScriptedModel } from '../../../src/testing.ts';
 import { AgentRuntime } from '../../../src/runtime.ts';
-import { emptyUsage, type Message } from '../../../src/types.ts';
+import { ExtensionAPI } from '../../../src/extensions.ts';
+import { ExtensionSecrets } from '../../../src/extension_secrets.ts';
+import {
+  emptyUsage,
+  type ChatModel,
+  type Message,
+  type ModelRequest,
+} from '../../../src/types.ts';
 import {
   saveSettings,
   saveSettingsChange,
   loadSettings,
   trustFolder,
   defaultSettings,
+  isFolderTrusted,
 } from '../../../src/settings.ts';
+import { fallbackTitle, TITLE_MAX_TOKENS } from '../../../src/session_title.ts';
 import { visibleMessages } from '../../workbench/src/model/state.ts';
 import {
   historyMessages,
@@ -32,6 +48,7 @@ import { createServer } from 'node:http';
 import { ModelCatalog } from '../../../src/model_catalog.ts';
 import { loadSecrets } from '../../../src/secrets.ts';
 import { CheckpointStore } from '../../../src/checkpoint_store.ts';
+import type { Socket } from 'node:net';
 import type {
   RuntimeCommandName,
   RuntimeUpdate,
@@ -104,6 +121,491 @@ function fakeBrowser(result: BrowserResult = { text: 'page snapshot' }) {
   };
   return { port, requests };
 }
+
+test('the desktop keeps interleaved text and thinking, then exposes one typed incomplete response without tool effects', async (t) => {
+  const f = await setup(t, [
+    async (request) => {
+      request.token('first thought', true);
+      request.token('first text ');
+      request.token(' then more thought', true);
+      request.token('second text');
+      return {
+        message: {
+          id: 'interleaved',
+          role: 'assistant',
+          content: 'first text second text',
+          thinking: 'first thought then more thought',
+          completion: { reason: 'tool_calls', provider_reason: 'tool_use' },
+          tool_calls: [
+            {
+              id: 'read',
+              name: 'read_file',
+              args: { file_path: 'fixture.txt' },
+            },
+          ],
+        },
+        usage: { input_tokens: 11, output_tokens: 4, cache_read_tokens: 0 },
+      };
+    },
+    {
+      message: {
+        id: 'partial',
+        role: 'assistant',
+        content: 'partial final answer',
+        completion: {
+          reason: 'length',
+          provider_reason: 'max_tokens',
+          output_limit: 32000,
+        },
+        truncated: true,
+        tool_calls: [
+          {
+            id: 'blocked',
+            name: 'write_file',
+            args: { file_path: 'must-not-exist.txt', content: 'blocked' },
+          },
+        ],
+      },
+      usage: { input_tokens: 12, output_tokens: 32000, cache_read_tokens: 0 },
+    },
+  ]);
+  await writeFile(join(f.workspace, 'fixture.txt'), 'real fixture bytes');
+  await f.call('prompt', { text: 'show text and incomplete response' });
+  await wait(
+    () => f.updates.some((row) => row.event?.kind === 'run_error'),
+    'specific completion failure',
+  );
+  const early = f.updates.find(
+    (row) =>
+      row.event?.kind === 'llm_end' &&
+      (row.event.payload.message as Message | undefined)?.id === 'partial',
+  )!;
+  const earlySession = early.snapshot.sessions.find(
+    (row) => row.id === early.snapshot.activeSessionId,
+  )!;
+  assert(
+    earlySession.messages.some(
+      (row) => row.completionFailure === 'output_limit',
+    ),
+    'the saved partial response already projects its diagnostic at llm_end',
+  );
+  assert.equal(
+    earlySession.messages.find((row) => row.tool?.id === 'blocked')?.tool
+      ?.status,
+    'unknown',
+    'the projected diagnostic does not mean blocked calls have their results yet',
+  );
+  assert(earlySession.turn, 'llm_end is still inside the running turn');
+  const ended = f.updates.find(
+    (row) =>
+      row.event?.kind === 'run_error' &&
+      row.event.payload.completion_message_id === 'partial',
+  )!;
+  const endedSession = ended.snapshot.sessions.find(
+    (row) => row.id === ended.snapshot.activeSessionId,
+  )!;
+  assert.equal(
+    endedSession.messages.find((row) => row.tool?.id === 'blocked')?.tool
+      ?.status,
+    'error',
+  );
+  assert.equal(
+    endedSession.turn,
+    undefined,
+    'the terminal failure clears turn presentation only after paired blocked results are saved',
+  );
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .sessions.find((row) => row.id === ended.snapshot.activeSessionId)
+        ?.state === 'idle',
+    'failed harness request settled',
+  );
+  const snapshot = f.controller.snapshot();
+  assert.equal(
+    snapshot.runtime?.error,
+    undefined,
+    'typed completion failures already have a persistent transcript diagnostic',
+  );
+  const session = snapshot.sessions.find(
+    (row) => row.id === snapshot.activeSessionId,
+  )!;
+  const interleaved = session.messages.find(
+    (row) => row.text === 'first text second text',
+  )!;
+  assert.equal(interleaved.text, 'first text second text');
+  assert.equal(interleaved.thinking, 'first thought then more thought');
+  assert(
+    f.updates.some((row) =>
+      row.snapshot.sessions.some((session) =>
+        session.messages.some(
+          (message) =>
+            message.at === 'streaming' &&
+            message.thinking === 'first thought' &&
+            message.text === 'first text ',
+        ),
+      ),
+    ),
+  );
+  const notices = session.messages.filter((row) => row.role === 'notice');
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0]!.completionFailure, 'output_limit');
+  assert.equal(
+    notices[0]!.text,
+    '✖ model output limit reached; response incomplete',
+  );
+  assert.equal(existsSync(join(f.workspace, 'must-not-exist.txt')), false);
+  assert.equal(f.model.requests.length, 2);
+  assert.equal(
+    f.updates.filter((row) => row.event?.kind === 'run_end').length,
+    0,
+  );
+  assert.equal(
+    f.updates.filter((row) => row.event?.kind === 'llm_end').length,
+    2,
+  );
+  const reloadedModel = new ScriptedModel([]);
+  await f.controller.close();
+  const reloaded = new RuntimeController({
+    home: f.home,
+    workspace: f.workspace,
+    userHome: f.home,
+    model: reloadedModel,
+    emit: () => {},
+  });
+  try {
+    const restored = reloaded.snapshot();
+    const restoredSession = restored.sessions.find(
+      (row) => row.id === restored.activeSessionId,
+    )!;
+    const restoredNotices = visibleMessages(restoredSession).filter(
+      (row) => row.role === 'notice',
+    );
+    assert.deepEqual(
+      restoredNotices.map((row) => row.completionFailure),
+      ['output_limit'],
+    );
+    assert.equal(
+      restoredSession.messages.find(
+        (row) => row.text === 'partial final answer',
+      )?.text,
+      'partial final answer',
+    );
+    assert.equal(reloadedModel.requests.length, 0);
+    (
+      reloaded as unknown as {
+        active: { bus: { emit: (kind: string, options: unknown) => void } };
+      }
+    ).active.bus.emit('run_error', {
+      payload: {
+        message: 'model output limit reached; response incomplete',
+        completion_failure: 'output_limit',
+        completion_message_id: 'unsaved-compaction-response',
+      },
+    });
+    const later = reloaded.snapshot();
+    assert.equal(
+      visibleMessages(
+        later.sessions.find((row) => row.id === later.activeSessionId)!,
+      ).filter((row) => row.completionFailure === 'output_limit').length,
+      2,
+      'an unrelated current error must not be hidden by an older persisted failure',
+    );
+  } finally {
+    await reloaded.close();
+  }
+});
+
+test('untyped harness failures retain their source-session diagnostic without a global error', async (t) => {
+  const f = await setup(t, [
+    async () => {
+      throw Error('local fixture network failed');
+    },
+  ]);
+  await f.call('prompt', { text: 'show an untyped failure' });
+  await wait(
+    () => f.updates.some((row) => row.event?.kind === 'run_error'),
+    'untyped failure diagnostic',
+  );
+  const snapshot = f.controller.snapshot();
+  assert.equal(snapshot.runtime?.error, undefined);
+  assert.equal(
+    snapshot.sessions
+      .find((row) => row.id === snapshot.activeSessionId)!
+      .messages.filter((row) => row.text === '✖ local fixture network failed')
+      .length,
+    1,
+  );
+});
+
+test('continuing after a legacy empty-answer error clears current failure state while keeping the error before the new turn', async (t) => {
+  let finish!: () => void;
+  const held = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const f = await setup(t, [
+    async () => {
+      throw Error('model ended without an answer');
+    },
+    async () => {
+      await held;
+      return {
+        message: assistant('continued successfully'),
+        usage: emptyUsage(),
+      };
+    },
+  ]);
+  try {
+    await f.call('prompt', { text: 'trigger legacy empty answer' });
+    await wait(
+      () => f.updates.some((row) => row.event?.kind === 'run_error'),
+      'legacy source-session error',
+    );
+    await f.call('prompt', { text: 'continue after legacy error' });
+    await wait(
+      () => f.model.requests.length === 2,
+      'held continuation request',
+    );
+    const current = f.controller.snapshot();
+    const session = current.sessions.find(
+      (row) => row.id === current.activeSessionId,
+    )!;
+    const shown = visibleMessages(session);
+    assert.equal(current.runtime?.error, undefined);
+    assert(session.turn, 'the continuation is running');
+    const failure = shown.findIndex(
+      (row) => row.text === '✖ model ended without an answer',
+    );
+    const continued = shown.findIndex(
+      (row) =>
+        row.role === 'user' && row.text === 'continue after legacy error',
+    );
+    assert(
+      failure >= 0 && failure < continued,
+      'the historical failure stays at its original position',
+    );
+    finish();
+    await wait(
+      () => f.updates.some((row) => row.event?.kind === 'run_end'),
+      'continued success',
+    );
+    const final = f.controller.snapshot();
+    assert.equal(final.runtime?.error, undefined);
+    assert.equal(
+      final.sessions
+        .find((row) => row.id === final.activeSessionId)!
+        .messages.filter(
+          (row) => row.text === '✖ model ended without an answer',
+        ).length,
+      1,
+    );
+    assert.equal(f.model.requests.length, 2);
+  } finally {
+    finish();
+  }
+});
+
+test('a typed manual compaction failure remains visible on its source session without a harness run_error', async (t) => {
+  const f = await setup(t, [
+    {
+      message: {
+        id: 'failed-summary',
+        role: 'assistant',
+        content: 'partial summary',
+        completion: {
+          reason: 'length',
+          provider_reason: 'max_tokens',
+          output_limit: 32000,
+        },
+      },
+      usage: { input_tokens: 13, output_tokens: 3, cache_read_tokens: 0 },
+    },
+  ]);
+  const active = (f.controller as unknown as { active: AgentRuntime }).active;
+  active.store.append(
+    active.session.id,
+    Array.from({ length: 8 }, (_, index) => ({
+      id: 'compact-history-' + index,
+      role: index % 2 ? ('assistant' as const) : ('user' as const),
+      content: 'synthetic conversation ' + index,
+    })),
+  );
+  await f.call('compact');
+  await wait(
+    () =>
+      f.updates.some(
+        (row) =>
+          row.event?.kind === 'compaction' &&
+          row.event.payload.phase === 'error',
+      ),
+    'compaction failure event',
+  );
+  const snapshot = f.controller.snapshot();
+  const notices = snapshot.sessions
+    .find((row) => row.id === snapshot.activeSessionId)!
+    .messages.filter((row) => row.role === 'notice');
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0]!.completionFailure, 'output_limit');
+  assert.equal(
+    notices[0]!.text,
+    '✖ model output limit reached; response incomplete',
+  );
+  assert.equal(snapshot.runtime?.error, undefined);
+  assert.equal(
+    f.updates.filter((row) => row.event?.kind === 'run_error').length,
+    0,
+  );
+  assert.equal(f.model.requests.length, 1);
+  assert.equal(
+    active.store.contextState(active.session.id).compactionCalls?.length,
+    1,
+  );
+});
+
+test('an error anchored to an invisible empty assistant stays before the continued turn', async (t) => {
+  let finish!: () => void;
+  const held = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const f = await setup(t, [
+    {
+      message: {
+        id: 'empty-hidden-assistant',
+        role: 'assistant',
+        content: '',
+        provider_content: [
+          { type: 'thinking', thinking: '', signature: 'synthetic-signature' },
+        ],
+      },
+    },
+    async () => {
+      await held;
+      return {
+        message: assistant('continued after invisible response'),
+        usage: emptyUsage(),
+      };
+    },
+  ]);
+  try {
+    await f.call('prompt', { text: 'trigger invisible empty response' });
+    await wait(
+      () => f.updates.some((row) => row.event?.kind === 'run_error'),
+      'empty response error',
+    );
+    await f.call('prompt', { text: 'continue after invisible response' });
+    await wait(
+      () => f.model.requests.length === 2,
+      'held continuation request',
+    );
+    const current = f.controller.snapshot();
+    const shown = visibleMessages(
+      current.sessions.find((row) => row.id === current.activeSessionId)!,
+    );
+    const failure = shown.findIndex(
+      (row) => row.completionFailure === 'empty_response',
+    );
+    const continued = shown.findIndex(
+      (row) =>
+        row.role === 'user' && row.text === 'continue after invisible response',
+    );
+    assert(
+      failure >= 0 && failure < continued,
+      'an invisible historical anchor must not move the failure below the new turn',
+    );
+    finish();
+    await wait(
+      () => f.updates.some((row) => row.event?.kind === 'run_end'),
+      'continued success',
+    );
+    const final = f.controller.snapshot();
+    const finalShown = visibleMessages(
+      final.sessions.find((row) => row.id === final.activeSessionId)!,
+    );
+    assert(
+      finalShown.findIndex(
+        (row) => row.completionFailure === 'empty_response',
+      ) <
+        finalShown.findIndex(
+          (row) => row.text === 'continued after invisible response',
+        ),
+    );
+    assert.equal(f.model.requests.length, 2);
+  } finally {
+    finish();
+  }
+});
+
+test('consecutive invisible response failures keep their order and branch ownership at the same visible ancestor', async (t) => {
+  const f = await setup(t, []);
+  const active = (f.controller as unknown as { active: AgentRuntime }).active;
+  const id = active.session.id;
+  const visibleHead = active.store.append(id, [
+    {
+      id: 'visible-before-failures',
+      role: 'user',
+      content: 'shared visible ancestor',
+    },
+  ]);
+  const firstHead = active.store.append(id, [
+    { id: 'invisible-one', role: 'assistant', content: '' },
+  ]);
+  active.bus.emit('run_error', {
+    payload: { message: 'first hidden response failed' },
+  });
+  const secondHead = active.store.append(id, [
+    { id: 'invisible-two', role: 'assistant', content: '' },
+  ]);
+  active.bus.emit('run_error', {
+    payload: { message: 'second hidden response failed' },
+  });
+  const projected = () => {
+    const snapshot = f.controller.snapshot();
+    return visibleMessages(
+      snapshot.sessions.find((session) => session.id === id)!,
+    );
+  };
+  const failures = projected().filter((row) => row.role === 'notice');
+  assert.deepEqual(
+    failures.map((row) => row.text),
+    ['✖ first hidden response failed', '✖ second hidden response failed'],
+  );
+  assert.deepEqual(
+    failures.map((row) => row.parentId),
+    [firstHead, secondHead],
+  );
+  active.store.select(id, visibleHead);
+  active.store.append(id, [
+    { id: 'sibling-hidden', role: 'assistant', content: '' },
+  ]);
+  active.bus.emit('run_error', {
+    payload: { message: 'sibling hidden response failed' },
+  });
+  assert.deepEqual(
+    projected()
+      .filter((row) => row.role === 'notice')
+      .map((row) => row.text),
+    ['✖ sibling hidden response failed'],
+  );
+  active.store.select(id, secondHead);
+  active.store.append(id, [
+    {
+      id: 'continued-visible',
+      role: 'assistant',
+      content: 'visible continuation',
+    },
+  ]);
+  assert.deepEqual(
+    projected().map((row) => row.text),
+    [
+      'shared visible ancestor',
+      '✖ first hidden response failed',
+      '✖ second hidden response failed',
+      'visible continuation',
+    ],
+  );
+  assert.equal(f.model.requests.length, 0);
+});
 
 test('browser tools are available only when a browser port is connected', async (t) => {
   const absent = await setup(t, [{ message: assistant('no browser') }]);
@@ -1672,7 +2174,12 @@ test('saved API configuration, model selection and effort produce actual local g
     controller.snapshot().models.some((model) => model.id === 'fixture-two'),
   );
   assert.equal((await call('set-model', { modelId: 'fixture-two' })).ok, true);
+  assert.equal((await call('set-effort', { effort: 'default' })).ok, true);
+  assert.equal(controller.snapshot().sessions[0]!.effort, 'default');
+  assert.equal(controller.snapshot().settings.defaultEffort, 'default');
   assert.equal((await call('set-effort', { effort: 'high' })).ok, true);
+  assert.equal(controller.snapshot().sessions[0]!.effort, 'high');
+  assert.equal(controller.snapshot().settings.defaultEffort, 'high');
   assert.equal(
     (await call('prompt', { text: 'use the selected model' })).ok,
     true,
@@ -2007,6 +2514,9 @@ test('an Anthropic endpoint without model discovery keeps the saved model availa
 
 test('a retried native command cannot create duplicate sessions or change its bound input', async (t) => {
   const f = await setup(t, []);
+  // The open session is empty, so a new session is a real second row only
+  // after this one is kept.
+  assert.equal((await f.call('rename-session', { title: 'kept' })).ok, true);
   const command = {
     id: randomUUID(),
     name: 'new-session',
@@ -2031,6 +2541,43 @@ test('a retried native command cannot create duplicate sessions or change its bo
     false,
   );
   assert.equal(f.controller.snapshot().sessions.length, 2);
+});
+
+test('an empty session is kept only until the first message', async (t) => {
+  const f = await setup(t, [{ message: assistant('noted') }]);
+  const first = f.controller.snapshot().activeSessionId;
+  const again = await f.call('new-session');
+  assert.equal(again.ok, true);
+  assert.equal((again.data as { sessionId: string }).sessionId, first);
+  assert.equal(f.controller.snapshot().sessions.length, 1);
+  assert.equal(f.controller.snapshot().sessions[0]!.title, 'new session');
+  assert.equal((await f.call('prompt', { text: 'hi' })).ok, true);
+  await wait(
+    () =>
+      f.controller.snapshot().sessions.find((row) => row.id === first)!
+        .state === 'idle',
+    'hi settles',
+  );
+  const titled = f.controller
+    .snapshot()
+    .sessions.find((row) => row.id === first)!;
+  assert.equal(titled.title, 'hi');
+  assert.equal(
+    titled.messages.some((message) => message.text.includes('title failed')),
+    false,
+  );
+  const created = await f.call('new-session');
+  assert.equal(created.ok, true);
+  const second = (created.data as { sessionId: string }).sessionId;
+  assert.notEqual(second, first);
+  assert.equal(f.controller.snapshot().activeSessionId, second);
+  assert.equal(f.controller.snapshot().sessions.length, 2);
+  assert.equal((await f.call('select-session', { id: first })).ok, true);
+  assert.equal(f.controller.snapshot().activeSessionId, first);
+  assert.equal(
+    f.controller.snapshot().sessions.some((row) => row.id === second),
+    false,
+  );
 });
 
 test('saved command templates expand real shell output into the next model request', async (t) => {
@@ -2936,7 +3483,9 @@ test('desktop archive is durable presentation state and leaves core history and 
         .archivedAt,
     );
     const withoutTurnUsage = (messages: typeof before) =>
-      messages.map(({ usage: _usage, ...message }) => message);
+      messages
+        .filter((message) => !message.id.startsWith('title-failed-'))
+        .map(({ usage: _usage, ...message }) => message);
     assert.deepEqual(
       withoutTurnUsage(
         restarted.snapshot().sessions.find((session) => session.id === id)!
@@ -2978,8 +3527,10 @@ test('archive all rejects a busy workspace atomically and cannot strand a pendin
     { message: assistant('approved') },
   ]);
   const old = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('rename-session', { title: 'older' })).ok, true);
   await f.call('new-session');
   const id = f.controller.snapshot().activeSessionId;
+  assert.notEqual(id, old);
   const workspaceId = f.controller
     .snapshot()
     .sessions.find((session) => session.id === id)!.workspaceId;
@@ -3722,8 +4273,10 @@ test('background approval survives same-workspace switching and confirmed deleti
 test('deleting an active session selects a remaining session and preserves command identity', async (t) => {
   const f = await setup(t, []);
   const a = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('rename-session', { title: 'kept' })).ok, true);
   await f.call('new-session');
   const b = f.controller.snapshot().activeSessionId;
+  assert.notEqual(b, a);
   const command = {
     id: randomUUID(),
     name: 'delete-session',
@@ -4202,10 +4755,15 @@ test('a background session cleanup leaves selection and other model turns respon
     },
   );
   const a = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('rename-session', { title: 'A' })).ok, true);
   await f.call('new-session');
   const b = f.controller.snapshot().activeSessionId;
+  assert.notEqual(b, a);
+  assert.equal((await f.call('rename-session', { title: 'B' })).ok, true);
   await f.call('new-session');
   const c = f.controller.snapshot().activeSessionId;
+  assert.notEqual(c, b);
+  assert.equal((await f.call('rename-session', { title: 'C' })).ok, true);
   const command = {
     id: randomUUID(),
     name: 'delete-session' as const,
@@ -4349,8 +4907,11 @@ test('trusting a folder initializes every idle session with its own project cont
     'Independent trusted workspace instructions marker.\n',
   );
   const a = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('rename-session', { title: 'A' })).ok, true);
   await f.call('new-session');
   const b = f.controller.snapshot().activeSessionId;
+  assert.notEqual(b, a);
+  assert.equal((await f.call('rename-session', { title: 'B' })).ok, true);
   assert.equal((await f.call('trust', { enabled: true })).ok, true);
   await f.call('select-session', { id: a });
   assert.equal(
@@ -4385,6 +4946,154 @@ test('trusting a folder initializes every idle session with its own project cont
       .snapshot()
       .workspaces.find((row) => row.path === realpathSync(f.workspace))!
       .trusted,
+  );
+});
+
+test('a model that cannot be asked for a title keeps the short title quietly', async (t) => {
+  // A scripted model has no side requests. A connected endpoint always has.
+  const f = await setup(t, [{ message: assistant('listed') }]);
+  const prompt = 'please list all the files in the workspace';
+  await f.call('prompt', { text: prompt });
+  const row = () =>
+    f.controller
+      .snapshot()
+      .sessions.find(
+        (session) => session.id === f.controller.snapshot().activeSessionId,
+      )!;
+  await wait(
+    () => row().state === 'idle' && row().messages.length >= 2,
+    'answered',
+  );
+  assert.equal(row().title, fallbackTitle(prompt));
+  assert.equal(
+    row().messages.some((message) => message.text.includes('title failed')),
+    false,
+  );
+});
+
+test('a desktop prompt asks for a title after the turn and shows a failure', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-core-desktop-'));
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  await mkdir(home);
+  await mkdir(workspace);
+  await mkdir(join(workspace, '.git'));
+  saveSettings(trustFolder(defaultSettings(), workspace), home);
+  const requests: ModelRequest[] = [];
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let fail = false;
+  const model: ChatModel = {
+    model: 'title-model',
+    sideRequests: true,
+    async complete(request) {
+      requests.push(request);
+      const titleCall = request.maxTokens === TITLE_MAX_TOKENS;
+      if (titleCall && fail) throw new Error('title exploded');
+      if (titleCall) await gate;
+      const content = titleCall ? 'Workspace file list' : 'listed';
+      if (!titleCall && content) request.token(content);
+      return {
+        message: {
+          id: titleCall ? 'title' : 'answer',
+          role: 'assistant',
+          content,
+        },
+        usage: emptyUsage(),
+      };
+    },
+  };
+  const controller = new RuntimeController({
+    home,
+    workspace,
+    userHome: home,
+    model,
+    emit: () => {},
+  });
+  t.after(async () => {
+    release();
+    await controller.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const prompt = 'Please list all the files in the workspace and explain each';
+  const sessionId = controller.snapshot().activeSessionId;
+  assert.equal(
+    (
+      await controller.dispatch({
+        id: randomUUID(),
+        name: 'prompt',
+        payload: { text: prompt },
+        sessionId,
+      })
+    ).ok,
+    true,
+  );
+  await wait(
+    () => requests.some((request) => request.maxTokens === TITLE_MAX_TOKENS),
+    'title request after the turn',
+  );
+  assert.equal(requests[0]!.maxTokens, undefined);
+  const title = requests.find(
+    (request) => request.maxTokens === TITLE_MAX_TOKENS,
+  )!;
+  assert.equal(title.effort, '');
+  assert.equal(title.tools.length, 0);
+  assert.equal(
+    requests.filter((request) => request.maxTokens === TITLE_MAX_TOKENS).length,
+    1,
+  );
+  const row = () =>
+    controller.snapshot().sessions.find((session) => session.id === sessionId)!;
+  // The summary has not arrived. The trimmed prompt is not the title.
+  assert.equal(row().title, 'new session');
+  release();
+  await wait(
+    () => row().title === 'Workspace file list',
+    'generated title in the snapshot',
+  );
+  fail = true;
+  const second = await mkdtemp(join(tmpdir(), 'circle-core-desktop-'));
+  const secondHome = join(second, 'home');
+  const secondWorkspace = join(second, 'workspace');
+  await mkdir(secondHome);
+  await mkdir(secondWorkspace);
+  await mkdir(join(secondWorkspace, '.git'));
+  saveSettings(trustFolder(defaultSettings(), secondWorkspace), secondHome);
+  requests.length = 0;
+  const failed = new RuntimeController({
+    home: secondHome,
+    workspace: secondWorkspace,
+    userHome: secondHome,
+    model,
+    emit: () => {},
+  });
+  t.after(async () => {
+    await failed.close();
+    await rm(second, { recursive: true, force: true });
+  });
+  const failedId = failed.snapshot().activeSessionId;
+  assert.equal(
+    (
+      await failed.dispatch({
+        id: randomUUID(),
+        name: 'prompt',
+        payload: { text: prompt },
+        sessionId: failedId,
+      })
+    ).ok,
+    true,
+  );
+  await wait(
+    () =>
+      failed
+        .snapshot()
+        .sessions.find((session) => session.id === failedId)!
+        .messages.some((message) =>
+          message.text.includes('title failed · title exploded'),
+        ),
+    'title failure in the transcript',
   );
 });
 
@@ -4513,7 +5222,8 @@ test('picking folders writes no session until the first message is sent', async 
   await f.controller.close();
   const store = new CheckpointStore(home);
   try {
-    const rows = store.list();
+    // Every stored row, including the empty session the window opened with.
+    const rows = store.list(undefined, false, true);
     assert.equal(rows.length, stored.length + 1);
     assert.equal(
       rows.filter((row) => row.workspace === realpathSync(beta)).length,
@@ -4722,3 +5432,316 @@ test('the first message keeps the thinking depth and mode chosen on home', async
     'home turn finished',
   );
 });
+
+async function coldStartFixture(
+  t: TestContext,
+  mode: 'scratch' | 'untrusted' = 'scratch',
+  prepare?: (home: string, workspace: string) => Promise<void>,
+) {
+  const root = await mkdtemp(join(tmpdir(), 'circle-desktop-cold-start-'));
+  const home = join(root, 'home'),
+    workspace = join(root, 'workspace');
+  await mkdir(home);
+  await mkdir(workspace);
+  const settings = defaultSettings();
+  settings.extensions.hub = { enabled: true };
+  saveSettings(settings, home);
+  await prepare?.(home, workspace);
+  const model = new ScriptedModel([]),
+    updates: RuntimeUpdate[] = [];
+  const controller = new RuntimeController({
+    home,
+    userHome: home,
+    workspace: mode === 'untrusted' ? workspace : undefined,
+    model,
+    emit: (update) => updates.push(update),
+  });
+  const controllers = [controller];
+  t.after(async () => {
+    for (const owner of controllers) await owner.close();
+    await rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    });
+  });
+  return { root, home, workspace, model, updates, controller, controllers };
+}
+
+test('trusted scratch cold start loads the enabled hub before any prompt trust or reload and retains it after restart', async (t) => {
+  const f = await coldStartFixture(t);
+  f.controller.publish();
+  assert.equal(f.updates[0]!.connected, true);
+  await f.controller.initialize();
+  const hub = f.controller.snapshot().extensions.find((x) => x.name === 'hub');
+  assert.ok(hub);
+  assert.equal(hub?.enabled, true);
+  assert.equal(hub.error, undefined);
+  await wait(
+    () =>
+      (
+        f.controller.snapshot().extensions.find((x) => x.name === 'hub')
+          ?.view as { signedIn?: boolean } | undefined
+      )?.signedIn === false,
+    'cold-start hub view',
+  );
+  assert.ok(hub.commands.includes('hub'));
+  assert.equal(f.model.requests.length, 0);
+  const saved = loadSettings(f.home);
+  assert.equal(isFolderTrusted(saved, join(f.home, 'workspace')), true);
+  assert.equal(isFolderTrusted(saved, f.workspace), false);
+  await f.controller.close();
+  const restart = new RuntimeController({
+    home: f.home,
+    userHome: f.home,
+    model: f.model,
+    emit: () => {},
+  });
+  f.controllers.push(restart);
+  await restart.initialize();
+  assert.equal(
+    restart.snapshot().extensions.find((x) => x.name === 'hub')?.enabled,
+    true,
+  );
+  assert.equal(f.model.requests.length, 0);
+});
+
+test('cold start leaves an untrusted workspace and its extension code untouched', async (t) => {
+  const f = await coldStartFixture(t, 'untrusted', async (_home, workspace) => {
+    const folder = join(workspace, '.circle/extensions/untrusted');
+    await mkdir(folder, { recursive: true });
+    await writeFile(
+      join(folder, 'extension.mjs'),
+      `import{writeFileSync}from'node:fs';export function register(){writeFileSync(${JSON.stringify(join(workspace, 'must-not-run'))},'ran')}`,
+    );
+  });
+  await f.controller.initialize();
+  assert.deepEqual(f.controller.snapshot().extensions, []);
+  assert.equal(existsSync(join(f.workspace, 'must-not-run')), false);
+  assert.equal(isFolderTrusted(loadSettings(f.home), f.workspace), false);
+  assert.equal(f.model.requests.length, 0);
+});
+
+test('cold start reports a discovery failure and an explicit reload can recover without a model turn', async (t) => {
+  const f = await coldStartFixture(t, 'scratch', async (home) => {
+    await writeFile(join(home, 'extensions'), 'invalid extension directory');
+  });
+  await f.controller.initialize();
+  assert.match(f.controller.snapshot().runtime?.error ?? '', /ENOTDIR/);
+  assert.equal(f.model.requests.length, 0);
+  await unlink(join(f.home, 'extensions'));
+  const reply = await f.controller.dispatch({
+    id: randomUUID(),
+    name: 'reload',
+    payload: {},
+    sessionId: f.controller.snapshot().activeSessionId,
+  });
+  assert.equal(reply.ok, true);
+  assert.equal(f.controller.snapshot().runtime?.error, undefined);
+  assert.equal(
+    f.controller.snapshot().extensions.find((x) => x.name === 'hub')?.enabled,
+    true,
+  );
+  assert.equal(f.model.requests.length, 0);
+});
+
+test(
+  'closing cold start cancels an MCP transport waiting for headers without hiding the first frame or leaking its socket',
+  { timeout: 5000 },
+  async (t) => {
+    const sockets = new Set<Socket>();
+    let requested!: () => void;
+    const requestSeen = new Promise<void>((resolve) => {
+      requested = resolve;
+    });
+    const server = createServer(() => requested());
+    server.on('connection', (socket) => {
+      sockets.add(socket);
+      socket.once('close', () => sockets.delete(socket));
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    t.after(async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+    const port = (server.address() as { port: number }).port;
+    const f = await coldStartFixture(t, 'scratch', async (home) => {
+      const settings = loadSettings(home);
+      settings.mcp_servers = [
+        {
+          name: 'waiting-for-headers',
+          transport: 'sse',
+          url: `http://127.0.0.1:${port}/events`,
+        },
+      ];
+      saveSettings(settings, home);
+    });
+    f.controller.publish();
+    const initializing = f.controller.initialize();
+    assert.equal(f.updates[0]!.connected, true);
+    await requestSeen;
+    const published = f.updates.length;
+    await f.controller.close();
+    await initializing;
+    await wait(() => sockets.size === 0, 'closed startup MCP socket');
+    assert.equal(f.model.requests.length, 0);
+    assert.equal(f.updates.length, published);
+  },
+);
+
+test(
+  'closing cold start aborts an async extension registration and never installs its closed host',
+  { timeout: 5000 },
+  async (t) => {
+    const f = await coldStartFixture(t, 'scratch', async (home) => {
+      const folder = join(home, 'extensions', 'waiting');
+      await mkdir(folder, { recursive: true });
+      await writeFile(
+        join(folder, 'extension.mjs'),
+        `import{writeFileSync}from'node:fs';export async function register(api){writeFileSync(${JSON.stringify(join(home, 'register-started'))},'started');api.signal.addEventListener('abort',()=>writeFileSync(${JSON.stringify(join(home, 'register-aborted'))},'aborted'),{once:true});await new Promise(()=>{});}`,
+      );
+    });
+    const initializing = f.controller.initialize();
+    await wait(
+      () => existsSync(join(f.home, 'register-started')),
+      'pending extension registration',
+    );
+    const published = f.updates.length;
+    await f.controller.close();
+    await initializing;
+    await f.controller.close();
+    assert.equal(existsSync(join(f.home, 'register-aborted')), true);
+    assert.equal(f.updates.length, published);
+    assert.ok(
+      f.updates.every((update) => update.snapshot.extensions.length === 0),
+    );
+    assert.equal(f.model.requests.length, 0);
+  },
+);
+
+for (const mode of ['released', 'bounded'] as const)
+  test(
+    `closing cold start owns a late hub token read through ${mode} drain without recreating data or publishing`,
+    { timeout: 8000 },
+    async (t) => {
+      let release!: () => void;
+      const barrier = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let paused = false;
+      const get = ExtensionSecrets.prototype.get,
+        background = ExtensionAPI.prototype.background,
+        setView = ExtensionAPI.prototype.setView,
+        setStatus = ExtensionAPI.prototype.setStatus;
+      const work: Promise<unknown>[] = [],
+        late: string[] = [];
+      t.mock.method(
+        ExtensionSecrets.prototype,
+        'get',
+        async function (this: ExtensionSecrets, name: string) {
+          const value = await get.call(this, name);
+          if (name === 'token' && Reflect.get(this, 'extension') === 'hub') {
+            paused = true;
+            await barrier;
+          }
+          return value;
+        },
+      );
+      t.mock.method(
+        ExtensionAPI.prototype,
+        'background',
+        function (this: ExtensionAPI, promise: Promise<unknown>) {
+          if (this.name === 'hub') work.push(promise);
+          return background.call(this, promise);
+        },
+      );
+      t.mock.method(
+        ExtensionAPI.prototype,
+        'setView',
+        function (this: ExtensionAPI, value: unknown) {
+          if (this.name === 'hub' && this.signal.aborted) late.push('view');
+          return setView.call(this, value);
+        },
+      );
+      t.mock.method(
+        ExtensionAPI.prototype,
+        'setStatus',
+        function (
+          this: ExtensionAPI,
+          ...args: Parameters<ExtensionAPI['setStatus']>
+        ) {
+          if (this.name === 'hub' && this.signal.aborted) late.push('status');
+          return setStatus.apply(this, args);
+        },
+      );
+      const f = await coldStartFixture(t, 'scratch', async (home) => {
+        const folder = join(home, 'extensions', 'waiting');
+        await mkdir(folder, { recursive: true });
+        await writeFile(
+          join(folder, 'extension.mjs'),
+          `import{writeFileSync}from'node:fs';export async function register(api){writeFileSync(${JSON.stringify(join(home, 'register-started'))},'started');await new Promise(()=>{});}`,
+        );
+      });
+      let initializing: Promise<void> | undefined,
+        closing: Promise<void> | undefined;
+      try {
+        initializing = f.controller.initialize();
+        await wait(
+          () => paused && existsSync(join(f.home, 'register-started')),
+          'late hub token read and pending registration',
+        );
+        let ended = false;
+        closing = f.controller.close().then(() => {
+          ended = true;
+        });
+        if (mode === 'released') {
+          await delay(25);
+          const endedBeforeRelease = ended;
+          release();
+          await closing;
+          await initializing;
+          assert.equal(
+            endedBeforeRelease,
+            false,
+            'runtime close waits for its not-yet-installed host background work',
+          );
+        } else {
+          // A stuck background read cannot hold close forever; after its existing
+          // bounded drain expires, it still may not publish or recreate files.
+          await closing;
+          await initializing;
+        }
+        await rm(f.home, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 100,
+        });
+        assert.equal(existsSync(f.home), false);
+        release();
+        await Promise.allSettled([...work]);
+        assert.equal(
+          existsSync(join(f.home, 'extension_data')),
+          false,
+          'late hub work must not recreate a removed home',
+        );
+        assert.deepEqual(
+          late,
+          [],
+          'a closed hub may publish neither a view nor a status',
+        );
+        assert.equal(f.model.requests.length, 0);
+        assert.ok(
+          f.updates.every((update) => update.snapshot.extensions.length === 0),
+        );
+      } finally {
+        release();
+        await closing;
+        await initializing;
+        await Promise.allSettled([...work]);
+      }
+    },
+  );

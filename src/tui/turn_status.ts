@@ -4,7 +4,7 @@
 // approval, a question) does not count. Kept in memory only, as the Python version did: a
 // reopened session has no turn lines.
 import type { CircleEvent } from '../events.js';
-import type { Message } from '../types.js';
+import type { Message, ToolModelCall } from '../types.js';
 import { pickBusyVerb, type TurnUsage } from './status_rows.js';
 import type { ScreenState } from './render.js';
 
@@ -21,6 +21,9 @@ export class TurnStatus {
   verb = 'Brewing';
   // The output tokens of the turn's finished requests, as their usage gives them
   tokens = 0;
+  // Characters of the reply still streaming: the busy word and the footer count them
+  // before the request reports a usage.
+  private liveChars = 0;
   // The model request being tried again (`timeout 3/10`), until it answers or the turn ends
   retry?: string;
   readonly usage: Record<string, TurnUsage> = {};
@@ -56,21 +59,32 @@ export class TurnStatus {
       turn.waited += now - turn.waitingSince;
       turn.waitingSince = undefined;
     }
-    if (event.kind === 'llm_end') {
+    if (
+      event.kind === 'llm_end' ||
+      (event.kind === 'tool_result' && event.usage)
+    ) {
       const output = event.usage?.output_tokens ?? 0;
       this.tokens += output;
       if (turn) {
         turn.input += event.usage?.input_tokens ?? 0;
         turn.output += output;
-        const cost = (event.payload.message as Message | undefined)?.cost;
-        // A request without a price in dollars leaves the turn's unknown
-        turn.cost =
-          turn.cost === null ||
-          !cost ||
-          cost.currency !== 'USD' ||
-          cost.amount === null
-            ? null
-            : turn.cost + cost.amount;
+        const calls = event.payload.model_calls as ToolModelCall[] | undefined;
+        const receipts =
+          event.kind === 'llm_end'
+            ? [(event.payload.message as Message | undefined)?.cost]
+            : calls?.length
+              ? calls.map((call) => call.cost)
+              : [undefined];
+        // Hosted tool charges can be unknown even when token prices are known.
+        for (const cost of receipts)
+          turn.cost =
+            turn.cost === null ||
+            !cost ||
+            cost.currency !== 'USD' ||
+            cost.amount === null ||
+            cost.tool_fee_unknown
+              ? null
+              : turn.cost + cost.amount;
       }
     }
     if (subagent) {
@@ -81,8 +95,9 @@ export class TurnStatus {
       Record<string, unknown> | undefined;
     if (event.kind === 'info' && notice?.event === 'retry') {
       this.retry = `${RETRY_CAUSE[String(notice.kind)] ?? 'error'} ${notice.attempt}/${notice.max}`;
-      // The failed try's thinking is gone with it
+      // The failed try's text is dropped and sent again, so it is not counted.
       this.thinkingFrom = this.live = undefined;
+      this.liveChars = 0;
     } else if (
       [
         'llm_start',
@@ -98,20 +113,32 @@ export class TurnStatus {
     if (event.kind === 'run_start') {
       this.verb = pickBusyVerb(this.random);
       this.tokens = 0;
+      this.liveChars = 0;
       this.turn = { started: now, waited: 0, input: 0, output: 0, cost: 0 };
       this.thinkingFrom = this.live = undefined;
-    } else if (event.kind === 'llm_start')
+    } else if (event.kind === 'llm_start') {
       this.thinkingFrom = this.live = undefined;
-    else if (event.kind === 'llm_token') {
-      if (event.payload.thinking) this.thinkingFrom ??= now;
-      else if (this.thinkingFrom !== undefined && this.live === undefined)
-        this.live = (now - this.thinkingFrom) / 1000;
+      this.liveChars = 0;
+    } else if (event.kind === 'llm_token') {
+      const token = String(event.payload.text ?? '');
+      const visible = token.replace(
+        /[\s\u200b\u200c\u200d\ufeff\u2060\u00ad]/g,
+        '',
+      );
+      if (event.payload.thinking) {
+        if (visible) this.thinkingFrom ??= now;
+      } else {
+        if (this.thinkingFrom !== undefined && this.live === undefined)
+          this.live = (now - this.thinkingFrom) / 1000;
+        this.liveChars += token.length;
+      }
     } else if (event.kind === 'llm_end') {
       const message = event.payload.message as Message | undefined;
       if (message?.id && this.thinkingFrom !== undefined)
         this.thinking[message.id] =
           this.live ?? (now - this.thinkingFrom) / 1000;
       this.thinkingFrom = this.live = undefined;
+      this.liveChars = 0;
     } else if (
       (event.kind === 'run_end' || event.kind === 'run_error') &&
       turn
@@ -123,11 +150,17 @@ export class TurnStatus {
         this.usage[id] = {
           seconds: Math.max(0, (now - turn.started - turn.waited) / 1000),
           input: turn.input,
-          output: turn.output,
+          output: turn.output + this.pendingOutput,
           cost: turn.cost,
         };
+      this.liveChars = 0;
       this.turn = undefined;
     }
+  }
+
+  /** Output tokens of the reply still streaming, estimated from its text. */
+  get pendingOutput(): number {
+    return this.liveChars ? Math.max(1, Math.ceil(this.liveChars / 4)) : 0;
   }
 
   // A subagent's rounds think too: how long, by the id of the answer, for its page.
@@ -135,8 +168,13 @@ export class TurnStatus {
     if (event.kind === 'llm_start') this.agents.delete(agent);
     else if (event.kind === 'llm_token') {
       const round = this.agents.get(agent) ?? {};
-      if (event.payload.thinking) round.from ??= now;
-      else if (round.from !== undefined && round.live === undefined)
+      const visible = String(event.payload.text ?? '').replace(
+        /[\s\u200b\u200c\u200d\ufeff\u2060\u00ad]/g,
+        '',
+      );
+      if (event.payload.thinking) {
+        if (visible) round.from ??= now;
+      } else if (round.from !== undefined && round.live === undefined)
         round.live = (now - round.from) / 1000;
       this.agents.set(agent, round);
     } else if (event.kind === 'llm_end') {
@@ -155,7 +193,7 @@ export class TurnStatus {
 
   fill(state: ScreenState): void {
     state.busyVerb = this.verb;
-    state.busyTokens = this.tokens;
+    state.busyTokens = this.tokens + this.pendingOutput;
     state.busyRetry = this.retry;
     state.turnUsage = this.usage;
     state.thinkingSeconds = this.thinking;

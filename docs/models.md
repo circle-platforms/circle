@@ -33,11 +33,11 @@ The protocol is set by setup, never guessed from a model name: a model called `c
 /models qwen3.8-flash   use this id
 ```
 
-`/models` (or `ctrl+l`) lists the models the endpoint offers, asking it with the saved protocol; when it cannot be asked, a red line says why. Type to search. `enter` uses the model for this session; `ctrl+s` uses it and saves it as the default for new sessions. The list marks the saved one `default`.
+`/models` (or `alt+l`) lists the models the endpoint offers, asking it with the saved protocol; when it cannot be asked, a red line says why. Type to search. `enter` uses the model for this session; `alt+d` uses it and saves it as the default for new sessions. The row for the model this session is using starts with `●` and says `current`, including when the endpoint lists it with a vendor prefix. The saved default is marked `default`. `ctrl+l` redraws the screen and does not open this list.
 
-`/models <id>` uses the id for this session without checking that the endpoint knows it. To keep it, open `/models` and press `ctrl+s` on it.
+`/models <id>` (and `/model <id>`) sets that id for this session. The footer says `model set to <id>` for a few seconds, and the same line stays in the transcript. When the endpoint can be asked and does not list that id, both add `not listed by this endpoint`; the id is still used. To keep it, open `/models` and press `alt+d` on it. An id the endpoint rejects on a turn is shown as a short message that points back at `/models`, not as the raw error body.
 
-`ctrl+p` switches to the next model for this session. It goes through the models in `enabled_models` in `settings.json`, for example `["step-3.7-flash", "step-5-*"]`, where a pattern is matched against what the endpoint lists. With no `enabled_models` it goes through every listed model. Rows in the scope are marked `in ctrl+p` in `/models`, and `tab` there adds the marked model to the scope or takes it out; the list is saved as `enabled_models` (for this run only when Circle was started with `--models`).
+`alt+m` switches to the next model for this session. It goes through the models in `enabled_models` in `settings.json`, for example `["step-3.7-flash", "step-5-*"]`, where a pattern is matched against what the endpoint lists. With no `enabled_models` it goes through every listed model. Rows in the scope are marked `in alt+m` in `/models`, and `tab` there adds the marked model to the scope or takes it out; the list is saved as `enabled_models` (for this run only when Circle was started with `--models`).
 
 A model cannot be switched while a turn runs. The footer shows cost and context for the current model.
 
@@ -57,15 +57,17 @@ Circle signs in only with an API URL and key. It has no OAuth sign-in, so a Chat
 
 Circle asks models for extended thinking when the protocol supports it. The depth is one of `minimal`, `low`, `medium`, `high`, `xhigh` or `max`.
 
-- `/effort` lists the depths. `enter` uses one for the rest of this run; `ctrl+s` also saves it as `default_thinking` in `settings.json`.
+- `/effort` lists the depths. `enter` uses one for the rest of this run; `alt+d` also saves it as `default_thinking` in `settings.json`.
 - `/effort <level>` and `/thinking <level>` set it for the rest of this run.
 - `alt+t` switches to the next depth.
 - `--thinking <level>` sets it for one run and is never saved.
 - `CIRCLE_REASONING_EFFORT` sets it for a run and wins over `default_thinking`.
 
+For documented Claude models that support thinking summaries, Circle requests `display: "summarized"` so progress can include thinking text. The thinking visibility switch only changes the interface; it does not change the model request, effort or output limit. An endpoint that explicitly rejects `thinking.display` is retried once without that field, keeping the remaining thinking settings. Unknown model aliases and older profiles keep their existing request format. Thinking blocks and signatures are retained as returned; ordinary text is shown only when the provider sends it.
+
 A change applies from the next message. When the model has a depth, the header shows it after the model name, such as `step-3.7-flash • high`.
 
-- **Anthropic protocol**: the default is `xhigh`. For a model whose profile lists the levels it supports, Circle sends the highest one at or below your choice. For older Claude models that take a thinking budget, the budgets are 1,024 for `minimal`, 2,048 for `low`, 8,192 for `medium`, 16,000 for `high` and `xhigh`, and 31,999 for `max`, kept below the answer limit.
+- **Anthropic protocol**: the default is `medium`. For a model whose profile lists the levels it supports, Circle sends the highest one at or below your choice. For older Claude models that take a thinking budget, the budgets are 1,024 for `minimal`, 2,048 for `low`, 8,192 for `medium`, 16,000 for `high` and `xhigh`, and 31,999 for `max`, kept below the answer limit.
 - **OpenAI protocol**: nothing is sent unless you choose a depth; then it is sent as `reasoning_effort`.
 
 If an endpoint rejects a parameter Circle sent (thinking, reasoning effort, stream options and a few others), Circle drops that parameter, sends the request again, and does not send it again for the rest of the session. You see one line saying so. A request drops at most four parameters.
@@ -84,12 +86,14 @@ Circle retries transient failures for you. While it does, the busy line says why
 
 The wait between tries doubles each time up to a cap (2 minutes for rate limits, 30 seconds otherwise). If the endpoint sends `Retry-After`, `retry-after-ms` or says how long to wait in its error message, Circle uses that. After a timeout the next try also waits twice as long for the answer to start, up to 5 minutes (Node.js's own limit), and twice as long for content in the stream, up to 8 times as long. A timeout or a dropped connection is retried even after part of the answer came: that part is dropped and the answer starts again. Other failures after the answer has started are not retried, and neither are 402, quota or billing errors, other 4xx errors, or certificate and TLS errors. When the retries run out, the error says how many were made. `esc` stops a request and a wait alike.
 
-Two more guards protect a turn:
+Additional checks protect a turn:
 
 - A model that repeats itself while thinking is sent again with a reminder, twice at most. One that repeats itself in its answer is stopped.
-- A response that ends with no finish signal and no output is sent again once. When it has output, the output is kept and Circle says it may be truncated.
+- A response that ends without a complete finish signal, reaches its output limit, is filtered, pauses, or ends with an unknown reason is kept as incomplete and reported as a failure. Partial text stays in history. Tool calls in that response are not run, even if their arguments parse; matching error results keep the history balanced.
+- A normally ended response with neither text nor tool calls is reported as empty. Circle does not automatically continue or resend it. You can continue with another message.
+- Provider finish reasons, the actual output limit where one was sent, and client repetition stops are stored with new responses. Older records stay unchanged; a missing field is not inferred from token counts.
 
-`CIRCLE_LLM_TIMEOUT`, `CIRCLE_LLM_STALL_TIMEOUT`, `CIRCLE_LLM_REPEAT_GUARD` and `CIRCLE_LLM_VERIFY_FINISH` change these. See [Environment variables](environment-variables.md#model-requests).
+`CIRCLE_LLM_TIMEOUT`, `CIRCLE_LLM_STALL_TIMEOUT` and `CIRCLE_LLM_REPEAT_GUARD` change timeouts and repetition checks. See [Environment variables](environment-variables.md#model-requests).
 
 ## Cost and context in the footer
 
@@ -101,6 +105,6 @@ A snapshot of models.dev ships with Circle. Once a day, when Circle starts, it f
 
 **Context window.** `models` in [settings](settings.md#keys) sets it for a model, and `CIRCLE_MODEL_CTX` for every model; otherwise models.dev's figure is used; otherwise the window of a profile Circle ships for well-known models; otherwise 128,000, and the footer shows `ctx 12.5k/N/A`. The footer and the automatic [compaction](sessions.md#compaction) use this one number. On the Anthropic protocol the answer takes part of the window too: its limit (`max_tokens`) is 32,000 tokens, or a little more for older Claude models with a thinking budget, but never more than a quarter of the window or the model's own output limit; and a request must fit in 95% of the window less that limit. Compaction starts at 85% of the window, or where a request would no longer fit if that comes first: with a 200,000-token window and a 32,000-token answer limit, at 79%.
 
-**Cost.** Pay-as-you-go prices in US dollars per million tokens: input, cached input, cache writes and output, and the long-context rates for a request over 200,000 input tokens where models.dev lists them. A cache price models.dev gives as 0 is charged as input. When the endpoint is a subscription (a coding plan or token plan, which models.dev prices at 0), the same vendor's pay-as-you-go price is shown as a reference. Each call is priced when its usage arrives and the price is stored with it, so switching models or a newer copy of models.dev does not change earlier calls. The calls a compaction or a subagent makes count in the conversation's total. It is an estimate, not a bill: a model without a price shows `N/A`, and a total that leaves out unpriced calls ends in `+`. Prices recorded in RMB by older versions are added up separately.
+**Cost.** Pay-as-you-go prices in US dollars per million tokens: input, cached input, cache writes and output, and the long-context rates for a request over 200,000 input tokens where models.dev lists them. A cache price models.dev gives as 0 is charged as input. When the endpoint is a subscription (a coding plan or token plan, which models.dev prices at 0), the same vendor's pay-as-you-go price is shown as a reference. Each call is priced when its usage arrives and the price is stored with it, so switching models or a newer copy of models.dev does not change earlier calls. The calls a compaction or a subagent makes count in the conversation's total. It is an estimate, not a bill: a model without a price shows `N/A`, and a total that leaves out unpriced calls ends in `+`. A turn stopped with `esc` or `ctrl+c` prices the tokens it estimates when the model has rates, and that total starts with `~`. The cache meter says `cache N/A` when the endpoint omits cache fields, including a stop and a finished call that never reported them. A reported zero still reads `cache 0.0%`. The `+` is only a call that had reported usage and no price; the estimate itself does not add it. Prices recorded in RMB by older versions are added up separately.
 
 Endpoints report the usage of a streamed answer in different ways. Circle counts each answer once whichever way it comes. On the Anthropic protocol, input counts ordinary input, cache reads and cache writes together.

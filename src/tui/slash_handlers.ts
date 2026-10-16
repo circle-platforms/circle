@@ -13,6 +13,7 @@ import {
 import { homedir } from 'node:os';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import type { AgentRuntime } from '../runtime.js';
+import { sessionSearchText } from '../session_search.js';
 import {
   clearCredentials,
   defaultAuth,
@@ -33,6 +34,7 @@ import type {
 } from '../ink/components/picker.js';
 import { palette } from '../ink/theme.js';
 import { stripAnsi } from '../ink/string_width.js';
+import { sessionRowLabel } from './session_label.js';
 import {
   isSessionMode,
   SESSION_MODES,
@@ -46,7 +48,7 @@ import { exportKind, toHtml } from '../session_export.js';
 import { discoverCustomCommands, expandCommandTemplate } from '../commands.js';
 import { discoverSkills, loadSkillBody } from '../skills.js';
 import { readPrompt } from '../system_prompt.js';
-import { helpText, hotkeysText } from './slash_commands.js';
+import { helpText, hotkeysText, variableCopy } from './slash_commands.js';
 import type { ScreenSnapshot, UndoHistory } from './undo_history.js';
 import {
   conversationTree,
@@ -58,7 +60,8 @@ import {
 
 export interface CommandHost {
   readonly runtime: AgentRuntime;
-  createSession?(): Promise<void>;
+  /** False when the current session is still empty, so /new does not open another. */
+  createSession?(): Promise<boolean | void>;
   openSession?(id: string): Promise<void>;
   deleteSession?(id: string): Promise<void>;
   selected?(): boolean;
@@ -170,7 +173,7 @@ export function shortPath(path: string): string {
     ? '~' + path.slice(home.length)
     : path;
 }
-// `…/code/app`: the end of a path, which is what tells folders apart.
+// The folder name. The session row is already dim, so the full path is not repeated.
 // `https://gateway.example/v1` as `gateway.example/v1`: short enough for a list.
 export function endpointName(url: string): string {
   return url
@@ -180,7 +183,7 @@ export function endpointName(url: string): string {
 }
 export function pathTail(path: string): string {
   const parts = path.split(/[\\/]+/).filter(Boolean);
-  return parts.length <= 2 ? path : '…/' + parts.slice(-2).join('/');
+  return parts.at(-1) || path;
 }
 // `3m`, `5h`, `2d`: how long ago, for lists.
 export function sessionAge(updated: number, now = Date.now()): string {
@@ -380,7 +383,7 @@ function mode(host: CommandHost, args: string): void {
   runtime.setMode(want);
   host.notice(MODE_NOTICES[want]);
 }
-// The mode list from /settings: enter uses a mode in this session, ctrl+s
+// The mode list from /settings: enter uses a mode in this session, alt+d
 // also writes default_mode, as /effort does for the thinking depth.
 function modePicker(host: CommandHost): void {
   const now = host.runtime.mode;
@@ -418,10 +421,10 @@ function modePicker(host: CommandHost): void {
     })),
     (item) => apply(item.key as SessionMode, false),
     {
-      hint: 'enter uses it in this session · ctrl+s also makes it the default',
+      hint: 'enter uses it in this session · alt+d also makes it the default',
       focusKey: now,
       keys: {
-        'ctrl+s': (item) => {
+        'alt+d': (item) => {
           if (!item) return;
           host.closePicker();
           apply(item.key as SessionMode, true);
@@ -481,7 +484,7 @@ function name(host: CommandHost, args: string): void {
     host.flash('/name <title> renames it', 4000);
     return;
   }
-  runtime.store.rename(runtime.session.id, title);
+  runtime.store.rename(runtime.session.id, title, true);
   host.notice(`Session name → ${title}`);
 }
 
@@ -1048,8 +1051,10 @@ async function copy(host: CommandHost): Promise<void> {
     return;
   }
   const path = join(host.home, 'exports', 'last-copy.txt');
-  if (write(host, path, text + '\n'))
-    host.notice(`No clipboard tool · wrote ${path}`);
+  if (write(host, path, text + '\n')) {
+    host.flash('Saved to file');
+    host.notice(`Saved to file · ${path}`);
+  }
 }
 
 // A list of the settings, as pi's /settings: enter changes the marked one, and the change is
@@ -1198,10 +1203,10 @@ function effort(host: CommandHost, args: string): void {
     })),
     (item) => setThinking(host, item.key),
     {
-      hint: 'enter uses it in this session · ctrl+s also makes it the default · alt+t cycles',
+      hint: 'enter uses it in this session · alt+d also makes it the default · alt+t cycles',
       focusKey: now || undefined,
       keys: {
-        'ctrl+s': (item) => {
+        'alt+d': (item) => {
           if (!item) return;
           host.closePicker();
           saveSettingsChange(host.home, (file) => {
@@ -1242,7 +1247,7 @@ function outcome(job: Job): string {
         : 'failed';
   return job.status || 'ended';
 }
-// /jobs: every background job, running ones first; enter opens one's page, ctrl+d stops a
+// /jobs: every background job, running ones first; enter opens one's page, ctrl+k stops a
 // running one (after asking) or removes one that has ended.
 function jobs(host: CommandHost, args: string): void {
   const runtime = host.runtime;
@@ -1295,9 +1300,9 @@ function jobs(host: CommandHost, args: string): void {
       host.state.jobDetail = runtime.jobs.get(item.key);
     },
     {
-      hint: 'enter opens · ctrl+d stops',
+      hint: 'enter opens · ctrl+k stops',
       empty: 'No jobs',
-      keys: { 'ctrl+d': stop },
+      keys: { 'ctrl+k': stop },
     },
   );
   if (host.state.picker) host.followJobs(host.state.picker, rows);
@@ -1469,8 +1474,10 @@ function redrawn(host: CommandHost, note: string): void {
 async function newSession(host: CommandHost): Promise<void> {
   const runtime = host.runtime;
   const previous = runtime.session.id;
-  if (host.createSession) await host.createSession();
-  else await runtime.newSession();
+  const created = host.createSession
+    ? await host.createSession()
+    : (await runtime.newSession(), true);
+  if (created === false) return;
   host.previousSession = previous;
   host.state.usage = emptyUsage();
   redrawn(host, `New session ${host.runtime.session.id}`);
@@ -1478,16 +1485,30 @@ async function newSession(host: CommandHost): Promise<void> {
 async function continueSession(host: CommandHost): Promise<void> {
   const runtime = host.runtime;
   const previous = host.previousSession;
-  if (!previous || previous === runtime.session.id) {
+  const current = runtime.session.id;
+  const empty = !runtime.harness.messages.some(
+    (message) => !message.internal || message.internal === 'job_notice',
+  );
+  // After a restart nothing is remembered in this process. An empty home opens
+  // the latest saved session in this folder instead of flashing and staying put.
+  const resumed = !previous || previous === current;
+  const target = !resumed
+    ? previous
+    : empty
+      ? runtime.store
+          .list(host.workspace)
+          .find((session) => session.id !== current)?.id
+      : undefined;
+  if (!target) {
     host.flash('No previous session');
     return;
   }
-  const current = runtime.session.id;
-  if (host.openSession) await host.openSession(previous);
-  else await runtime.switchSession(previous);
+  if (host.openSession) await host.openSession(target);
+  else await runtime.switchSession(target);
   host.previousSession = current;
+  const title = (host.runtime.store.get(target)?.title || target).slice(0, 40);
   host.notice(
-    `Continued ${previous} · ${(host.runtime.store.get(previous)?.title || previous).slice(0, 40)}`,
+    resumed ? `Resumed ${target} · ${title}` : `Continued ${target} · ${title}`,
   );
 }
 // Open a saved session. One from another folder is copied into this one; the original stays.
@@ -1498,9 +1519,14 @@ async function openSession(host: CommandHost, id: string): Promise<void> {
   if (host.openSession) await host.openSession(id);
   else await runtime.switchSession(id);
   host.previousSession = previous;
+  const title = (
+    host.runtime.store.get(host.runtime.session.id)?.title ||
+    source?.title ||
+    id
+  ).slice(0, 40);
   host.notice(
     host.runtime.session.id === id
-      ? `Resumed ${id} · ${(source?.title || id).slice(0, 40)}`
+      ? `Resumed ${id} · ${title}`
       : `Forked ${id} from ${shortPath(source?.workspace ?? '')} → ${host.runtime.session.id}`,
   );
 }
@@ -1535,55 +1561,85 @@ async function resume(host: CommandHost, args: string): Promise<void> {
   }
   await openSession(host, chosen.id);
 }
-// Type to search; tab shows every folder's sessions, ctrl+r renames one, ctrl+d deletes one.
-function sessionList(host: CommandHost, everywhere: boolean, query = ''): void {
+// Type to search titles and message text; tab shows every folder's sessions, ctrl+r renames
+// one (the old name is selected), ctrl+k deletes one. ctrl+d stays the exit key.
+function sessionList(
+  host: CommandHost,
+  everywhere: boolean,
+  query = '',
+  focusKey?: string,
+): void {
   const runtime = host.runtime;
-  const again = (): void =>
-    sessionList(host, everywhere, host.state.picker?.query ?? query);
+  const again = (focus?: string): void =>
+    sessionList(host, everywhere, host.state.picker?.query ?? query, focus);
   const here = runtime.store.get(runtime.session.id)?.workspace;
+  const sessions = everywhere
+    ? runtime.store.list()
+    : runtime.store.list(host.workspace);
+  const labels = new Map(
+    sessions.map((session) => [
+      session.id,
+      sessionRowLabel(session, sessions, runtime.store),
+    ]),
+  );
   host.picker(
     everywhere ? 'Sessions · every folder' : 'Sessions · this folder',
-    (everywhere
-      ? runtime.store.list()
-      : runtime.store.list(host.workspace)
-    ).map((session) => ({
+    sessions.map((session) => ({
       key: session.id,
-      label: session.title || '(untitled)',
+      label: labels.get(session.id) || session.title || '(untitled)',
       meta:
-        sessionAge(session.updated) +
+        sessionAge(session.activity ?? session.updated) +
         (host.sessionStatus?.(session.id)
           ? ` · ${host.sessionStatus(session.id)}`
           : '') +
-        (session.workspace === here ? '' : ` · ${pathTail(session.workspace)}`),
-      search: `${session.id} ${session.workspace}`,
+        (everywhere || session.workspace !== here
+          ? ` · ${pathTail(session.workspace)}`
+          : ''),
+      search: sessionSearchText(session, runtime.store.messages(session.id)),
       current: session.id === runtime.session.id,
     })),
     async (item) => {
       if (item.key !== runtime.session.id) await openSession(host, item.key);
     },
     {
-      hint: 'enter opens · tab every folder · ctrl+r renames · ctrl+d deletes',
-      empty: "No sessions here · tab shows every folder's",
-      focusKey: runtime.session.id,
+      hint: everywhere
+        ? 'enter opens · tab this folder · ctrl+r renames · ctrl+k deletes'
+        : 'enter opens · tab every folder · ctrl+r renames · ctrl+k deletes',
+      empty: (_typed, total) =>
+        total === 0
+          ? everywhere
+            ? 'No sessions saved'
+            : 'No sessions in this folder'
+          : 'No matches',
+      focusKey: focusKey ?? runtime.session.id,
       keys: {
         tab: () => sessionList(host, !everywhere, host.state.picker?.query),
         // Both ask in the list; esc there leaves the session as it was.
         'ctrl+r': (item) => {
           if (!item) return;
+          const stored = runtime.store.get(item.key)?.title ?? '';
           host.state.picker?.ask(
-            'New name',
-            item.label === '(untitled)' ? '' : item.label,
+            'Rename',
+            stored,
             (text) => {
               const title = text.trim().replace(/\s+/g, ' ').slice(0, 80);
               if (!title) return;
-              runtime.store.rename(item.key, title);
-              again();
+              runtime.store.rename(item.key, title, true);
+              again(item.key);
+            },
+            {
+              replace: true,
+              keys: 'typing replaces the name · enter saves · esc cancels',
             },
           );
         },
-        'ctrl+d': (item) => {
+        'ctrl+k': (item) => {
           if (!item) return;
-          const label = item.label.slice(0, 40);
+          const label = (
+            runtime.store.get(item.key)?.title ||
+            item.label.split(' · ')[0] ||
+            item.label
+          ).slice(0, 40);
           host.state.picker?.confirm(
             `${host.sessionStatus?.(item.key) ? 'Stop and delete' : 'Delete'} “${label}” and its messages?`,
             async () => {
@@ -1842,7 +1898,7 @@ function variables(host: CommandHost, args: string): void {
     return;
   }
   variablesChanged(host, { ...saved, [name]: trimmed });
-  host.notice(`${name}=${trimmed} · the model writes %${name}% to use it`);
+  host.notice(`${name}=${trimmed} · ${variableCopy().saved(name)}`);
 }
 async function secrets(host: CommandHost, args: string): Promise<void> {
   const text = args.trim();
@@ -1873,7 +1929,7 @@ async function secrets(host: CommandHost, args: string): Promise<void> {
     return;
   }
   const typed = await host.secretValue(
-    `${name}\nThe model knows only the name and writes %${name}% in a tool's arguments; Circle puts this value in when the tool runs.`,
+    `${name}\n${variableCopy().secretCard(name)}`,
   );
   if (!typed) {
     host.flash('No secret saved');
@@ -1881,7 +1937,7 @@ async function secrets(host: CommandHost, args: string): Promise<void> {
   }
   saveSecret(host.home, name, typed);
   host.runtime.refreshPrompt();
-  host.notice(`Saved secret ${name} · the model writes %${name}% to use it`);
+  host.notice(`Saved secret ${name} · ${variableCopy().saved(name)}`);
 }
 async function clone(host: CommandHost): Promise<void> {
   const runtime = host.runtime;

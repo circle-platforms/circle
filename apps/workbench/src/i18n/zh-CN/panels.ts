@@ -23,6 +23,8 @@ export const panels: Record<string, string> = {
   'context panel': '上下文面板',
   context: '上下文',
   '{title} panel': '{title}面板',
+  'full view': '完整视图',
+  'exit full view': '退出完整视图',
   'close inspector': '关闭检查器',
   // the context panel
   'session context': '会话上下文',

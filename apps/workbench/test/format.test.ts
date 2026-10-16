@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { agentActivityText } from '../src/model/activity.ts';
+import {
+  completionFailureText,
+  completionNoticeText,
+} from '../src/model/completion.ts';
 import { setLanguage } from '../src/i18n/index.ts';
 import { planVisible } from '../../../src/plan_state.ts';
 import {
@@ -8,7 +14,16 @@ import {
   formatBusyElapsed,
   formatTokens,
   formatWindow,
+  nextBusySeconds,
 } from '../src/model/format.ts';
+import { focusMarkedField } from '../src/model/dialog-focus.ts';
+import {
+  DESKTOP_SEARCH_CHORD,
+  DESKTOP_SETTINGS_CHORD,
+  formatChord,
+  isDesktopSearch,
+  isDesktopSettings,
+} from '../src/model/shortcuts.ts';
 import {
   browserApprovalInput,
   browserEventAddress,
@@ -19,6 +34,51 @@ import {
   isSessionBrowser,
   shownDialog,
 } from '../src/model/browser.ts';
+
+test('only typed completion diagnostics translate; model and provider text stay verbatim', (t) => {
+  t.after(() => setLanguage('en'));
+  const failures = [
+    ['empty_response', 'model returned an empty response', '模型返回了空响应'],
+    [
+      'output_limit',
+      'model output limit reached; response incomplete',
+      '模型达到输出上限，响应未完成',
+    ],
+    [
+      'missing_finish',
+      'model response ended without a complete finish signal',
+      '模型响应缺少完整的结束信号',
+    ],
+    ['filtered', 'model response was filtered', '模型响应被过滤'],
+    [
+      'paused',
+      'model response paused before completion',
+      '模型响应尚未完成便暂停',
+    ],
+    [
+      'unknown_finish',
+      'model response ended with an unknown finish reason',
+      '模型响应的结束原因未知',
+    ],
+    [
+      'repetition_stopped',
+      'model response stopped after repeating; response incomplete',
+      '模型因重复输出而停止，响应未完成',
+    ],
+  ] as const;
+  setLanguage('en');
+  for (const [code, english] of failures)
+    assert.equal(completionFailureText(code), english);
+  setLanguage('zh-CN');
+  for (const [code, , chinese] of failures)
+    assert.equal(completionFailureText(code), chinese);
+  const text = '✖ model returned an empty response';
+  assert.equal(completionNoticeText({ text }), text);
+  assert.equal(
+    completionNoticeText({ text, completionFailure: 'empty_response' }),
+    '✖ 模型返回了空响应',
+  );
+});
 
 test('completed plans hide in either renderer, except while their plan-exit decision waits', () => {
   assert.equal(planVisible([{ status: 'completed' }]), false);
@@ -67,6 +127,146 @@ test('the footer and busy word write numbers as the terminal does', () => {
   assert.equal(contextPercent(null, 1_000_000), null);
   assert.equal(contextPercent(10, null), null);
   assert.equal(contextPercent(5_000_000, 1000), 999);
+  assert.equal(nextBusySeconds(undefined, 8.1), 8.1);
+  assert.equal(nextBusySeconds(8.1, 7.8), 8.1);
+  assert.equal(nextBusySeconds(8.1, 8.4), 8.4);
+  assert.equal(nextBusySeconds(8.1, Number.NaN), 8.1);
+  assert.equal(formatChord('alt+up'), 'Alt+Up');
+  assert.equal(formatChord('ctrl+shift+p'), 'Ctrl+Shift+P');
+  assert.equal(DESKTOP_SEARCH_CHORD, 'ctrl+k');
+  assert.equal(formatChord(DESKTOP_SEARCH_CHORD), 'Ctrl+K');
+  assert.equal(formatChord('ctrl+r'), 'Ctrl+R');
+  const key = (
+    name: string,
+    mods: { ctrl?: boolean; meta?: boolean; shift?: boolean } = {},
+  ) =>
+    isDesktopSearch({
+      key: name,
+      ctrlKey: Boolean(mods.ctrl),
+      altKey: false,
+      shiftKey: Boolean(mods.shift),
+      metaKey: Boolean(mods.meta),
+    });
+  assert.equal(key('k', { ctrl: true }), true);
+  assert.equal(key('k', { meta: true }), true);
+  assert.equal(key('p', { ctrl: true, shift: true }), false);
+  assert.equal(DESKTOP_SETTINGS_CHORD, 'ctrl+,');
+  assert.equal(formatChord(DESKTOP_SETTINGS_CHORD), 'Ctrl+,');
+  const comma = (
+    name: string,
+    mods: { ctrl?: boolean; meta?: boolean; shift?: boolean } = {},
+  ) =>
+    isDesktopSettings({
+      key: name,
+      ctrlKey: Boolean(mods.ctrl),
+      altKey: false,
+      shiftKey: Boolean(mods.shift),
+      metaKey: Boolean(mods.meta),
+    });
+  assert.equal(comma(',', { ctrl: true }), true);
+  assert.equal(comma(',', { meta: true }), true);
+  assert.equal(comma(',', { ctrl: true, shift: true }), false);
+  assert.equal(comma(','), false);
+});
+
+test('search opens with focus in the field, not on the close button', () => {
+  let prevented = false;
+  let focused = false;
+  const marked = {
+    querySelector: (selector: string) => {
+      assert.equal(selector, '[data-initial-focus]');
+      return {
+        focus() {
+          focused = true;
+        },
+      };
+    },
+  };
+  assert.equal(
+    focusMarkedField(marked, {
+      preventDefault() {
+        prevented = true;
+      },
+    }),
+    true,
+  );
+  assert.equal(prevented, true);
+  assert.equal(focused, true);
+  prevented = false;
+  assert.equal(
+    focusMarkedField(
+      { querySelector: () => null },
+      {
+        preventDefault() {
+          prevented = true;
+        },
+      },
+    ),
+    false,
+  );
+  assert.equal(prevented, false);
+  const app = readFileSync(
+    fileURLToPath(new URL('../src/app/App.tsx', import.meta.url)),
+    'utf8',
+  );
+  const search = app.slice(
+    app.indexOf('open={searchOpen}'),
+    app.indexOf('<DialogHost'),
+  );
+  assert.match(search, /<SearchInput\s+autoFocus/);
+  const shortcuts = readFileSync(
+    fileURLToPath(new URL('../src/features/Dialogs.tsx', import.meta.url)),
+    'utf8',
+  );
+  assert.match(shortcuts, /formatChord\('ctrl\+r'\), t\('search'\)/);
+  const conversation = readFileSync(
+    fileURLToPath(new URL('../src/features/Conversation.tsx', import.meta.url)),
+    'utf8',
+  );
+  assert.match(conversation, /mapped === 'history\.search'\) onCommand\(\)/);
+  const field = readFileSync(
+    fileURLToPath(new URL('../src/components/common.tsx', import.meta.url)),
+    'utf8',
+  );
+  assert.match(field, /data-initial-focus=\{focus \? '' : undefined\}/);
+  const modal = readFileSync(
+    fileURLToPath(new URL('../src/components/ui.tsx', import.meta.url)),
+    'utf8',
+  );
+  assert.match(modal, /focusMarkedField\(event\.currentTarget, event\)/);
+});
+
+test('settings opens from the window, including a focused sidebar or composer', () => {
+  const app = readFileSync(
+    fileURLToPath(new URL('../src/app/App.tsx', import.meta.url)),
+    'utf8',
+  );
+  const start = app.indexOf("addEventListener('keydown', handle, true)");
+  assert.ok(start > 0);
+  const effect = app.slice(app.lastIndexOf('useEffect', start), start);
+  assert.match(effect, /isDesktopSettings\(event\)/);
+  assert.match(effect, /navigate\('\/page\/settings'\)/);
+  assert.doesNotMatch(effect, /tagName|INPUT|TEXTAREA|closest\(/);
+  const sidebar = readFileSync(
+    fileURLToPath(new URL('../src/components/Sidebar.tsx', import.meta.url)),
+    'utf8',
+  );
+  assert.match(sidebar, /session-menu-gap/);
+  assert.match(sidebar, /event\.stopPropagation\(\)/);
+  const menu = readFileSync(
+    fileURLToPath(new URL('../../desktop/src/main.ts', import.meta.url)),
+    'utf8',
+  );
+  const fileStart = menu.indexOf("label: text('file')");
+  const editStart = menu.indexOf("label: text('edit')");
+  const file = menu.slice(fileStart, editStart);
+  assert.match(file, /process\.platform === 'darwin'[\s\S]*\? \[\]/);
+  assert.match(file, /settingsItem\(\)/);
+  const shortcuts = readFileSync(
+    fileURLToPath(new URL('../src/features/Dialogs.tsx', import.meta.url)),
+    'utf8',
+  );
+  assert.match(shortcuts, /formatChord\(DESKTOP_SETTINGS_CHORD\)/);
 });
 
 test('a dialog shows over the tab that waits on it and names where it came from', () => {

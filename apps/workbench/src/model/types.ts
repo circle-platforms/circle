@@ -1,3 +1,5 @@
+import type { ModelCompletionFailureCode } from '../../../../src/model_completion';
+
 export type Theme = 'auto' | 'light' | 'dark';
 export type TextSize = 'small' | 'default' | 'large' | 'larger';
 export type Effort =
@@ -74,6 +76,8 @@ export interface Message {
   attachments?: Attachment[];
   /** A runtime notice, separate from user/model text, for interface translation. */
   planCompleted?: number;
+  /** A core completion diagnostic; arbitrary model/provider text stays untranslated. */
+  completionFailure?: ModelCompletionFailureCode;
   usage?: {
     input: number;
     output: number;
@@ -360,6 +364,8 @@ export interface WorkbenchSnapshot {
 }
 export interface CommandResult {
   openSession?: boolean;
+  /** Ctrl+N / new session: the empty conversation should take the keyboard. */
+  focusComposer?: boolean;
   notice?: string;
   page?: PageId;
   dialog?: DialogId;

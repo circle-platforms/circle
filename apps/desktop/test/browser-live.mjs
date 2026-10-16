@@ -486,6 +486,25 @@ const nativeUrls = () =>
       view.webContents.getURL(),
     ),
   );
+// Close one named tab from its own page, as a page's script does
+const closeView = (title) =>
+  app.evaluate(({ BrowserWindow }, name) => {
+    const views = BrowserWindow.getAllWindows()[0].contentView.children;
+    const view = views.find((entry) => entry.webContents.getTitle() === name);
+    if (!view) throw Error(`no tab titled ${name}`);
+    view.webContents.executeJavaScript('window.close()');
+  }, title);
+// The tab’s own back-forward list, as Chromium holds it
+const nativeHistory = () =>
+  app.evaluate(({ BrowserWindow }) => {
+    const views = BrowserWindow.getAllWindows()[0].contentView.children;
+    const view = views.find((entry) => entry.getVisible()) ?? views[0];
+    const history = view.webContents.navigationHistory;
+    return {
+      active: history.getActiveIndex(),
+      entries: history.getAllEntries().map((entry) => entry.url),
+    };
+  });
 // The tool result a call got, from the model request that followed it
 const resultOf = async (id) => {
   for (const request of await requests()) {
@@ -637,6 +656,18 @@ try {
       .waitFor();
     await page.getByTestId('browser-insecure').waitFor();
     assert.equal((await browserState(sessionId)).insecure, true);
+    // A warning page nobody can answer any more is a dead page: it answers `not found`
+    // to whoever goes back to it, and a page that closes its own panel by walking
+    // history goes blank. So nothing of it may stay in the tab behind this point.
+    const passed = await nativeHistory();
+    assert(
+      !passed.entries.some((entry) => entry.startsWith('circle-warning://')),
+      'the passed warning left a page in the history: ' +
+        JSON.stringify(passed),
+    );
+    checks.push(
+      'a passed certificate warning leaves no dead page in the tab history',
+    );
     // The page fills the panel, also in a window as tall as the screen allows, where a
     // page of fixed height left a gap: below the footer there is only the panel's own
     // padding (20) and the footer's margin (10)
@@ -903,6 +934,59 @@ try {
     assert.match(await textOf('snapshot'), /fixture-answer/);
     checks.push(
       'snapshot and screenshot run without another approval, and the browser PNG reaches the next model request',
+    );
+    // The panel seen whole: the page is a native view, not DOM, so it has to follow the
+    // panel across the workspace and back, sitting on the box the person sees.
+    const domBox = () =>
+      page.evaluate(() => {
+        const box = document
+          .querySelector('.native-browser-viewport')
+          ?.getBoundingClientRect();
+        return box
+          ? {
+              width: Math.round(box.width),
+              height: Math.round(box.height),
+            }
+          : null;
+      });
+    const viewBox = () =>
+      app.evaluate(({ BrowserWindow }) => {
+        const views = BrowserWindow.getAllWindows()[0].contentView.children;
+        const tab = views.find(
+          (view) =>
+            view.getVisible() &&
+            !view.webContents.getURL().includes('circle-mask'),
+        );
+        return tab ? tab.getBounds() : null;
+      });
+    const split = { dom: await domBox(), view: await viewBox() };
+    assert(split.dom && split.view, 'the browser page is shown in the panel');
+    await page.getByRole('button', { name: 'full view', exact: true }).click();
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    const whole = { dom: await domBox(), view: await viewBox() };
+    assert(
+      whole.view.width > split.view.width + 40,
+      `the native page grew with the panel: ${JSON.stringify([
+        split.view,
+        whole.view,
+      ])}`,
+    );
+    assert(
+      Math.abs(whole.view.width - whole.dom.width) <= 3 &&
+        Math.abs(whole.view.height - whole.dom.height) <= 3,
+      `the native page left its box: ${JSON.stringify(whole)}`,
+    );
+    await page
+      .getByRole('button', { name: 'exit full view', exact: true })
+      .click();
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    const back = await viewBox();
+    assert(
+      Math.abs(back.width - split.view.width) <= 3,
+      `the split did not take the page back: ${JSON.stringify([split.view, back])}`,
+    );
+    checks.push(
+      'the full view carries the native browser page across the workspace and back, in step with its box',
     );
 
     await send('open the unavailable local port');
@@ -1486,11 +1570,22 @@ try {
         openerState.tabs.length + 1,
       'popup adopted',
     );
-    await native('window.close()');
+    // A tab a page opened may close itself, as in any browser.
+    await closeView('Self closing popup');
     await waitFor(
       async () =>
         (await browserState(sessionId)).tabs.length === openerState.tabs.length,
       'self-closed popup removed',
+    );
+    // A tab the person or Circle opened is not the page's to close away: Chrome refuses
+    // that, and so does Circle - otherwise a site that ends a side panel with
+    // window.close() would empty the browser panel under the person.
+    await closeView('Close fixture opener');
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.equal(
+      (await browserState(sessionId)).tabs.length,
+      openerState.tabs.length,
+      'a page closed a tab it did not open',
     );
     assert.deepEqual(await app.evaluate(() => globalThis.closeErrors), []);
     await app.evaluate(() =>
@@ -1504,7 +1599,7 @@ try {
     );
     assert.equal((await browserState(sessionId)).url, url);
     checks.push(
-      'a popup can close itself without a main-process exception; tabs, address and subsequent navigation recover',
+      'a popup can close itself and a tab the browser opened cannot, without a main-process exception; tabs, address and subsequent navigation recover',
     );
     await page.screenshot({ path: join(output, 'browser-live.png') });
     await app.close();

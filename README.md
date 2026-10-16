@@ -38,7 +38,7 @@ irm https://raw.githubusercontent.com/circle-platforms/circle/main/install.ps1 |
 
 The installers download the latest release for your platform, verify its SHA-256, start it once, and put `circle` on your PATH. macOS and Linux need `bash`, `curl`, `tar`, and `sha256sum` or `shasum`. Windows needs PowerShell 5.1 or newer.
 
-Restart your terminal after installing, then run `circle`. Upgrade with `circle update`. See [Installation and updates](https://circle-platforms.github.io/circle/installation/) and [Releases](https://github.com/circle-platforms/circle/releases).
+Restart your terminal after installing, then run `circle`. Upgrade with `circle update`; remove an installation with `circle uninstall` (`--purge` deletes the data folder too). See [Installation and updates](https://circle-platforms.github.io/circle/installation/) and [Releases](https://github.com/circle-platforms/circle/releases).
 
 **Coming from Circle 0.5.0 or older?** Those were written in Python. Run the install command above: it removes the Python version, keeps your settings, keys, skills and sessions, and installs the current release in its place. The old `circle update` cannot install 1.0.0 or later. Python extensions have to be rewritten; see [Extensions](https://circle-platforms.github.io/circle/extensions/).
 

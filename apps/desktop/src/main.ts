@@ -122,6 +122,28 @@ const forcedLanguage: NativeLocale | undefined = process.env
   : fixtureProfile
     ? 'en'
     : undefined;
+// GTK file dialogs take their button labels from the process locale at init, which is
+// before the window can say which language it shows. A Chinese start asks for zh_CN now.
+function startupLocale(): NativeLocale {
+  if (forcedLanguage) return forcedLanguage;
+  try {
+    return systemNativeLocale(app.getPreferredSystemLanguages());
+  } catch {
+    return systemNativeLocale([
+      Intl.DateTimeFormat().resolvedOptions().locale ?? '',
+    ]);
+  }
+}
+if (startupLocale() === 'zh-CN') {
+  app.commandLine.appendSwitch('lang', 'zh-CN');
+  if (!/^zh/i.test(process.env.LANG ?? '')) {
+    process.env.LANG = 'zh_CN.UTF-8';
+    process.env.LC_MESSAGES = 'zh_CN.UTF-8';
+  }
+  // gettext reads LANGUAGE when the dialog is built, including under the C locale.
+  // It does not create the catalog: Recent and Home stay English until gtk30.mo exists.
+  if (!process.env.LANGUAGE) process.env.LANGUAGE = 'zh_CN';
+}
 function checkSender(event: IpcMainInvokeEvent) {
   if (
     !window ||
@@ -152,6 +174,11 @@ const role = (
     ? { role: name }
     : { role: name, label: text(english) };
 function configureMenu() {
+  const settingsItem = (): MenuItemConstructorOptions => ({
+    label: text('settings'),
+    accelerator: 'CmdOrCtrl+,',
+    click: () => sendAction('settings'),
+  });
   const menu: MenuItemConstructorOptions[] = [];
   if (process.platform === 'darwin')
     menu.push({
@@ -159,11 +186,7 @@ function configureMenu() {
       submenu: [
         role('about', 'About Circle'),
         { type: 'separator' },
-        {
-          label: text('settings'),
-          accelerator: 'CmdOrCtrl+,',
-          click: () => sendAction('settings'),
-        },
+        settingsItem(),
         { type: 'separator' },
         role('hide', 'Hide Circle'),
         role('hideOthers', 'Hide Others'),
@@ -179,7 +202,12 @@ function configureMenu() {
         {
           label: text('new session'),
           accelerator: 'CmdOrCtrl+N',
-          click: () => sendAction('new'),
+          click: () => {
+            // The menu takes the key. Hand the window back before the
+            // renderer focuses the composer, or the typed message is lost.
+            window?.webContents.focus();
+            sendAction('new');
+          },
         },
         {
           label: text('open folder'),
@@ -190,6 +218,11 @@ function configureMenu() {
         { label: text('import session'), click: () => sendAction('import') },
         { label: text('export session'), click: () => sendAction('export') },
         { type: 'separator' },
+        // macOS already owns this accelerator on the app menu. One item per
+        // platform, or Electron drops the chord.
+        ...(process.platform === 'darwin'
+          ? []
+          : [settingsItem(), { type: 'separator' as const }]),
         process.platform === 'darwin'
           ? role('close', 'Close Window')
           : role('quit', 'Quit Circle'),

@@ -38,6 +38,10 @@ Read `docs/development/tui-contract.md` before you change anything on screen. It
 - Add a test with every behaviour change. Drive `ScriptedModel` from `src/testing.ts` or a local HTTP gateway; do not call a real model.
 - Check real effects: the next model request, stored history, files and processes. Text on screen alone does not show that the runtime is right.
 - Do not weaken or delete a failing test to get green. Fix the code or say why the test is wrong.
+- A check that fails only sometimes gets an issue that decides which of three it is, with evidence, and acts on it:
+  - **A product fault** a user could meet: fix the product and keep the check.
+  - **A needed check measured unreliably**, by wall-clock waits, the runner's screen or input timing: check the same real effect another way, such as waiting on state or events or a deterministic unit test. A longer timeout or a retry is not another way.
+  - **A check that is not needed**, because it repeats other coverage or tests the CI machine: take it out of the required path, saying why in the issue.
 - Say what you ran. Do not report that tests pass unless you ran them.
 
 ## Rules for docs
@@ -49,6 +53,10 @@ Read `docs/development/tui-contract.md` before you change anything on screen. It
 Several agents and people may work in this checkout at once.
 
 - Do not commit or push unless the user asked you to.
+- Use `gh pr merge <number> --merge` to merge through the merge queue. Use `--admin` only for releases.
+- Do not cancel and rerun queued CI runs; rerunning sends them to the back of the queue.
+- When main turns red, revert the commit confirmed to have caused the failure before merging other work. Do not guess which commit caused it.
+- Do not rerun CI until a flaky check passes. Give it an owner and decide it as [Rules for tests](#rules-for-tests) says; until then a rerun is only for a failure already tracked in an issue, and the PR says so.
 - Stage explicit paths. Never `git add -A` or `git add .`, and never `git commit -a`.
 - Do not reset, checkout over, stash or delete files you did not create. Look at `git status` and `git diff` before you touch a file that is already modified.
 - For a separate line of work, use a worktree (`git worktree add ../circle-<topic> -b <branch>`) rather than switching branches in a shared checkout.

@@ -104,11 +104,12 @@ export const circlePlugins: WorkbenchPlugin[] = [
         },
         icon: Globe,
         component: BrowserPanel,
+        fullView: true,
       },
     ],
   },
   {
-    id: 'terminal',
+    id: 'devices',
     apiVersion: 1,
     version: '0.1.0',
     get title() {
@@ -120,9 +121,9 @@ export const circlePlugins: WorkbenchPlugin[] = [
     icon: SquareTerminal,
     panels: [
       {
-        id: 'terminal',
+        id: 'devices',
         get title() {
-          return t('terminal');
+          return t('device terminals');
         },
         icon: SquareTerminal,
         component: TerminalDevice,

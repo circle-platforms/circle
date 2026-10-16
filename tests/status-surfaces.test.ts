@@ -43,6 +43,7 @@ import { defaultSettings, trustFolder } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
 import { emptyUsage, type Message } from '../src/types.js';
 import type { Job } from '../src/jobs.js';
+import { CheckpointStore } from '../src/checkpoint_store.js';
 import { cleanup, scratch } from './helpers.js';
 
 const PALETTES: [string, Palette][] = [
@@ -304,6 +305,45 @@ test('footer meters colour the context yellow from 70% and red from 90%, and a f
     assert.equal(stringWidth(flashed), 60);
     assert.match(stripAnsi(flashed), /^ ↑ 36\.6k.* Copied $/);
     assert.ok(!flashed.includes(p.red));
+    const cramped = stripAnsi(
+      footerRow(
+        { usage, contextInput: 91_000, contextWindow: 100_000 },
+        'cleared',
+        24,
+      ),
+    );
+    assert.equal(cramped.includes('cach'), false, cramped);
+    assert.match(cramped, /cleared/);
+    const omitted = stripAnsi(
+      footerRow(
+        {
+          usage: {
+            input_tokens: 1500,
+            output_tokens: 42,
+            cache_read_tokens: 0,
+            cache_unreported_input: 1500,
+          },
+        },
+        '',
+        80,
+      ),
+    );
+    assert.match(omitted, /cache N\/A/);
+    assert.equal(omitted.includes('cache 0.0%'), false);
+    const reportedZero = stripAnsi(
+      footerRow(
+        {
+          usage: {
+            input_tokens: 1500,
+            output_tokens: 42,
+            cache_read_tokens: 0,
+          },
+        },
+        '',
+        80,
+      ),
+    );
+    assert.match(reportedZero, /cache 0\.0%/);
   }
   // Before the session is connected there are no meters.
   const state = screen();
@@ -566,6 +606,107 @@ test('the welcome lists what the folder brings, unlit until trusted, blinking wh
   assert.deepEqual(empty.items, []);
 });
 
+test('the welcome lists a short title and an untitled session, including the newest', async (t) => {
+  const root = scratch(t);
+  const store = new CheckpointStore(root);
+  cleanup(t, () => store.close());
+  const speak = async (title: string, text: string): Promise<string> => {
+    await delay(5);
+    const session = store.create(root, 'm', title);
+    store.append(session.id, [
+      { id: session.id + 'u', role: 'user', content: text },
+      { id: session.id + 'a', role: 'assistant', content: 'ok' },
+    ]);
+    return session.id;
+  };
+  await speak('older task', 'an older request about the build');
+  await speak('', 'a message with no title');
+  const hi = await speak('hi', 'hi');
+  const blank = store.create(root, 'm', '');
+  const welcome = new WelcomeState(root);
+  const settings = defaultSettings();
+  const info = (id: string) =>
+    welcome.info({
+      version: '1',
+      settings,
+      runtime: {
+        session: { id },
+        store,
+        extensions: { extensions: [] },
+        harness: { model: { model: 'm' } },
+        thinkingLevel: '',
+      } as unknown as AgentRuntime,
+      connected: true,
+      trusted: true,
+    });
+  const first = info('other');
+  assert.deepEqual(
+    first.recent.map(([title]) => title),
+    ['hi', '(untitled)', 'older task'],
+  );
+  assert.equal(first.more, 0);
+  assert.equal(
+    store.list(root).some((session) => session.id === blank.id),
+    false,
+  );
+  assert.equal(info(blank.id).recent[0]?.[0], 'hi');
+  const open = info(hi);
+  assert.equal(
+    open.recent.some(([title]) => title === 'hi'),
+    false,
+  );
+  assert.equal(open.recent[0]?.[0], '(untitled)');
+  await speak('just now', 'a newer request');
+  const next = info(blank.id);
+  assert.equal(next.recent[0]?.[0], 'just now');
+  assert.ok(next.recent.some(([title]) => title === 'hi'));
+  assert.equal(next.more, 1);
+});
+
+test('shared recent titles show the first reply, or the short id when the reply matches', async (t) => {
+  const root = scratch(t);
+  const store = new CheckpointStore(root);
+  cleanup(t, () => store.close());
+  const speak = async (title: string, reply: string): Promise<string> => {
+    await delay(5);
+    const session = store.create(root, 'm', title);
+    store.append(session.id, [
+      { id: session.id + 'u', role: 'user', content: 'hi' },
+      { id: session.id + 'a', role: 'assistant', content: reply },
+    ]);
+    return session.id;
+  };
+  const hello = await speak('hi', 'hello there');
+  const ready = await speak('hi', 'ready now');
+  const welcome = new WelcomeState(root);
+  const settings = defaultSettings();
+  const info = (id: string) =>
+    welcome.info({
+      version: '1',
+      settings,
+      runtime: {
+        session: { id },
+        store,
+        extensions: { extensions: [] },
+        harness: { model: { model: 'm' } },
+        thinkingLevel: '',
+      } as unknown as AgentRuntime,
+      connected: true,
+      trusted: true,
+    });
+  assert.deepEqual(
+    info('other').recent.map(([title]) => title),
+    ['hi · ready now', 'hi · hello there'],
+  );
+  const again = await speak('hi', 'ok');
+  const twin = await speak('hi', 'ok');
+  const rows = info('other').recent.map(([title]) => title);
+  assert.equal(rows[0], `hi · ${twin.slice('circle-'.length)}`);
+  assert.equal(rows[1], `hi · ${again.slice('circle-'.length)}`);
+  assert.equal(rows[2], 'hi · ready now');
+  assert.deepEqual(info(hello).recent[0], info('other').recent[0]);
+});
+
 test('thinking rows have no background on a dark theme and on a light one', () => {
   const text = '**Check the notes**\n\nThe file has three lines.';
   for (const [, p] of PALETTES) {
@@ -581,6 +722,13 @@ test('thinking rows have no background on a dark theme and on a light one', () =
       stripAnsi(folded[0]!),
       /^ ∴ Thought 1\.2s · Check the notes {2}ctrl\+t +$/,
     );
+    const resumed = thinkingRows('The file has three lines.', {
+      done: true,
+      expanded: false,
+      width: 80,
+    });
+    assert.match(stripAnsi(resumed[0]!), /^ ∴ Thought ctrl\+t +$/);
+    assert.equal(stripAnsi(resumed[0]!).includes('Thought  ctrl'), false);
     assert.equal(stringWidth(folded[0]!), 80);
     assert.ok(folded[0]!.includes(p.reason.slice(2, -1)));
     assert.ok(folded[0]!.includes(p.faint.slice(2, -1)));
@@ -615,6 +763,74 @@ test('thinking rows have no background on a dark theme and on a light one', () =
     assert.ok(live[0]!.includes(p.reason.slice(2, -1)));
     assert.ok(!live[0]!.includes('\x1b[48'));
   }
+});
+
+test('a rejection with no thought does not draw Thought 0.0s', () => {
+  for (const text of ['', ' ', '\n', '\u200b'])
+    assert.deepEqual(
+      thinkingRows(text, {
+        done: true,
+        seconds: 0,
+        expanded: false,
+        width: 80,
+      }),
+      [],
+    );
+  const row = stripAnsi(
+    thinkingRows('**Check the notes**\n\nThe file has three lines.', {
+      done: true,
+      seconds: 1.2,
+      expanded: false,
+      width: 80,
+    })[0]!,
+  );
+  assert.match(row, /∴ Thought 1\.2s · Check the notes/);
+});
+
+test('a finished call that omitted cache fields reads cache N/A', async (t) => {
+  const root = scratch(t);
+  const settings = trustFolder(defaultSettings(), root);
+  const model = new ScriptedModel([
+    {
+      message: {
+        id: 'omitted',
+        role: 'assistant',
+        content: 'done',
+        cache_reported: false,
+      },
+      usage: { input_tokens: 1500, output_tokens: 42, cache_read_tokens: 0 },
+    },
+    {
+      message: {
+        id: 'reported',
+        role: 'assistant',
+        content: 'again',
+      },
+      usage: { input_tokens: 100, output_tokens: 8, cache_read_tokens: 0 },
+    },
+  ]);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings,
+    model,
+    headless: true,
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.harness.run('look at the workspace and say what is there');
+  const omitted = runtime.stats().usage;
+  assert.equal(omitted.cache_unreported_input, 1500);
+  assert.equal(omitted.input_tokens, 1500);
+  const row = stripAnsi(footerRow({ usage: omitted }, '', 80));
+  assert.match(row, /cache N\/A/);
+  assert.equal(row.includes('cache 0.0%'), false);
+  await runtime.harness.run('look at the workspace and say what is there');
+  const mixed = runtime.stats().usage;
+  assert.equal(mixed.input_tokens, 1600);
+  assert.equal(mixed.cache_unreported_input, 1500);
+  const mixedRow = stripAnsi(footerRow({ usage: mixed }, '', 80));
+  assert.match(mixedRow, /cache 0\.0%/);
+  assert.equal(mixedRow.includes('cache N/A'), false);
 });
 
 test('a real turn renders short tool rows, a folded read, a folded thought with its time and a usage line without the approval wait', async (t) => {

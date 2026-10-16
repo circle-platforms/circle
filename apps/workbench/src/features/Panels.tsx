@@ -20,6 +20,8 @@ import {
   Plus,
   RotateCcw,
   ExternalLink,
+  Maximize2,
+  Minimize2,
   Search,
   Play,
   Users,
@@ -47,12 +49,6 @@ export const PANEL_DEFINITIONS = [
   { id: 'context', label: 'context', icon: Layers },
   { id: 'activity', label: 'activity', icon: Activity, plugin: 'activity' },
   { id: 'browser', label: 'browser', icon: Globe, plugin: 'browser' },
-  {
-    id: 'terminal',
-    label: 'terminal',
-    icon: Terminal,
-    plugin: 'terminal',
-  },
 ] as const;
 // What an attached piece of context is, and what a request asks for.
 const ATTACHMENT_KIND: Record<string, () => string> = {
@@ -73,6 +69,10 @@ interface Props {
   selection: string;
   onPanel: (panel: PanelId, selection?: string) => void;
   onClose: () => void;
+  /** The panel across the whole workspace, and the way back to the split. */
+  whole: boolean;
+  canBeWhole: boolean;
+  onWhole: () => void;
   onFile: (path: string) => void;
   onAgent: (id: string) => void;
   onInteraction: (item: Interaction) => void;
@@ -106,11 +106,19 @@ export function PanelButtons({
   const active = panels.some((item) => item.panel.id === panel)
     ? panel
     : 'context';
-  const current = active;
+  const current = panel === 'terminal' ? 'terminal' : active;
   const toggle = (id: PanelId) =>
     open && current === id ? onClose() : onPanel(id);
   return (
     <>
+      <IconButton
+        label={t('terminal panel')}
+        aria-pressed={open && current === 'terminal'}
+        className={`icon-button ${open && current === 'terminal' ? 'active' : ''}`}
+        onClick={() => toggle('terminal')}
+      >
+        <Terminal size={16} />
+      </IconButton>
       {panels.map(({ panel: item }) => (
         <IconButton
           key={item.id}
@@ -138,18 +146,37 @@ export function Inspector(props: Props) {
   const session = currentSession(snapshot);
   const panels = usePanels();
   const selected = panels.find((item) => item.panel.id === props.panel);
+  const terminal = props.panel === 'terminal';
   return (
     <aside className="inspector">
       <header className="inspector-title">
-        <h2>{selected ? selected.panel.title : t('context')}</h2>
-        <IconButton label={t('close inspector')} onClick={props.onClose}>
-          <X size={15} />
-        </IconButton>
+        <h2>
+          {terminal
+            ? t('terminal')
+            : selected
+              ? selected.panel.title
+              : t('context')}
+        </h2>
+        <span className="inspector-actions">
+          {props.canBeWhole && (
+            <IconButton
+              label={props.whole ? t('exit full view') : t('full view')}
+              aria-pressed={props.whole}
+              className={`icon-button ${props.whole ? 'active' : ''}`}
+              onClick={props.onWhole}
+            >
+              {props.whole ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            </IconButton>
+          )}
+          <IconButton label={t('close inspector')} onClick={props.onClose}>
+            <X size={15} />
+          </IconButton>
+        </span>
       </header>
-      <div
-        className={`inspector-body ${selected && props.panel === 'terminal' ? 'flush' : ''}`}
-      >
-        {selected ? (
+      <div className={`inspector-body ${terminal ? 'flush' : ''}`}>
+        {terminal ? (
+          <TerminalPanel embedded onClose={props.onClose} />
+        ) : selected ? (
           <PluginBoundary key={selected.panel.id} name={selected.plugin.title}>
             <selected.panel.component {...props} sessionId={session.id} />
           </PluginBoundary>
@@ -381,7 +408,7 @@ export function ContextPanel({ onDialog }: Pick<Props, 'onDialog'>) {
         values={{
           [t('workspace')]: workspace.path,
           [t('model')]: session.model,
-          [t('effort')]: EFFORT_TEXT[session.effort]?.() ?? session.effort,
+          [t('effort')]: EFFORT_TEXT[session.effort]?.label() ?? session.effort,
           [t('mode')]: MODE_TEXT[sessionMode(session)].label(),
           [t('connection')]: snapshot.runtime?.configured
             ? t('configured')
@@ -693,5 +720,113 @@ function BrowserPlaceholder() {
         </p>
       </div>
     </>
+  );
+}
+// What each session's terminal printed, kept while the app runs: switching panels or
+// closing the inspector does not clear it.
+const terminalOutput = new Map<string, string[]>();
+export function TerminalPanel({
+  onClose,
+  embedded = false,
+}: {
+  onClose: () => void;
+  embedded?: boolean;
+}) {
+  const { runtime, snapshot, perform } = useRuntime();
+  const session = currentSession(snapshot);
+  const [input, setInput] = useState('');
+  const greeting = () => [
+    runtime.mode === 'live' ? 'Circle shell' : 'terminal not connected',
+    runtime.mode === 'live'
+      ? t('Commands run in this session workspace.')
+      : 'commands stay in the preview request log',
+  ];
+  const [output, setLines] = useState<string[]>(
+    () => terminalOutput.get(session.id) ?? greeting(),
+  );
+  const setOutput = (update: (lines: string[]) => string[]) =>
+    setLines((lines) => {
+      const next = update(lines);
+      terminalOutput.set(session.id, next);
+      return next;
+    });
+  useEffect(() => {
+    setInput('');
+    setLines(terminalOutput.get(session.id) ?? greeting());
+  }, [session.id]);
+  return (
+    <section className={`terminal-pane ${embedded ? 'embedded' : ''}`}>
+      <header hidden={embedded}>
+        <span>
+          <Terminal size={14} />
+          {t('terminal')}{' '}
+          <small>
+            {
+              snapshot.workspaces.find(
+                (workspace) => workspace.id === session.workspaceId,
+              )?.name
+            }
+          </small>
+        </span>
+        <div>
+          <span className="muted small">
+            {runtime.mode === 'live' ? t('connected') : t('not connected')}
+          </span>
+          <IconButton label={t('close terminal')} onClick={onClose}>
+            <X size={13} />
+          </IconButton>
+        </div>
+      </header>
+      <pre>{output.join('\n')}</pre>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (input.trim()) {
+            if (runtime.mode === 'live') {
+              const command = input;
+              setInput('');
+              setOutput((lines) => [...lines, '$ ' + command]);
+              perform(async () => {
+                const result = (await runtime.request('execute', {
+                  command,
+                })) as {
+                  output: string;
+                  exit_code?: number;
+                  job?: { id: string };
+                };
+                setOutput((lines) => [
+                  ...lines,
+                  result.output,
+                  result.job
+                    ? t('background job {id}', { id: result.job.id })
+                    : t('exit {code}', {
+                        code: result.exit_code ?? t('unknown'),
+                      }),
+                ]);
+              });
+              return;
+            }
+            runtime.request('execute', { command: input });
+            setOutput((lines) => [
+              ...lines,
+              '$ ' + input,
+              'not executed · runtime connection required',
+            ]);
+            setInput('');
+          }
+        }}
+      >
+        <span>›</span>
+        <input
+          aria-label={t('terminal command')}
+          value={input}
+          placeholder={t('enter a command…')}
+          onChange={(event) => setInput(event.target.value)}
+        />
+        <button aria-label={t('record terminal command')}>
+          <ArrowUpRight size={14} />
+        </button>
+      </form>
+    </section>
   );
 }

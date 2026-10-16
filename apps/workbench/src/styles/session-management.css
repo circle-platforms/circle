@@ -21,6 +21,12 @@
   height: 24px;
   opacity: 0;
 }
+/* The rename field keeps the menu's slot, so it lines up with the row highlight. */
+.session-menu-gap {
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+}
 .session-row:hover > .icon-button,
 .session-row:focus-within > .icon-button,
 .session-row > .icon-button[data-state='open'] {
@@ -33,4 +39,16 @@
 .session-menu [data-disabled] {
   opacity: 0.5;
   cursor: default;
+}
+/* The opening click's pointerup must not land on an item and rename the row. */
+.session-menu[data-state='open'] {
+  animation: session-menu-ready 160ms step-end;
+}
+@keyframes session-menu-ready {
+  from {
+    pointer-events: none;
+  }
+  to {
+    pointer-events: auto;
+  }
 }

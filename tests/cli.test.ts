@@ -26,6 +26,7 @@ import {
   trustFolder,
 } from '../src/settings.js';
 import { CheckpointStore } from '../src/checkpoint_store.js';
+import { TITLE_MAX_TOKENS } from '../src/session_title.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { ScriptedModel } from '../src/testing.js';
 import { SessionApp } from '../src/tui/session_app.js';
@@ -332,7 +333,15 @@ test('@file is read from the current folder, then the workspace, and inlined aft
   });
   assert.equal(binary.code, 2);
   assert.match(binary.stderr, /blob\.bin is not a text file/);
-  assert.equal(endpoint.bodies.length, 1);
+  // The long prompt asks for a title after the turn. That call is not a user turn.
+  const turns = () =>
+    endpoint.bodies.filter((body) => body.max_tokens !== TITLE_MAX_TOKENS);
+  assert.equal(turns().length, 1);
+  assert.equal(
+    endpoint.bodies.filter((body) => body.max_tokens === TITLE_MAX_TOKENS)
+      .length,
+    1,
+  );
   // An image in the workspace goes as an attachment, which text cannot carry.
   const png = Buffer.from('89504e470d0a1a0a30303030', 'hex');
   writeFileSync(join(workspace, 'shot.png'), png);
@@ -342,7 +351,7 @@ test('@file is read from the current folder, then the workspace, and inlined aft
   });
   assert.equal(image.code, 0, image.stderr);
   const content = (
-    endpoint.bodies[1]!.messages as { role: string; content: unknown }[]
+    turns()[1]!.messages as { role: string; content: unknown }[]
   ).at(-1)!.content as { type: string; image_url?: { url: string } }[];
   assert.equal(
     content.find((part) => part.type === 'image_url')?.image_url?.url,
@@ -354,7 +363,7 @@ test('@file is read from the current folder, then the workspace, and inlined aft
   });
   assert.equal(far.code, 0, far.stderr);
   const farContent = (
-    endpoint.bodies.at(-1)!.messages as { role: string; content: unknown }[]
+    turns().at(-1)!.messages as { role: string; content: unknown }[]
   ).at(-1)!.content as {
     type: string;
     text?: string;
@@ -412,10 +421,7 @@ test('the full-screen interface shows @path while the model gets the file text',
     'review\n\n<file path="notes.txt">\nremember this\n</file>',
   );
   assert.equal(model.requests[0]!.messages.at(-1)!.content, user.content);
-  assert.equal(
-    runtime.store.get(runtime.session.id)!.title,
-    'review @notes.txt',
-  );
+  assert.equal(runtime.store.get(runtime.session.id)!.title, 'review');
 });
 
 test('the folder is the first word without spaces or the last word, and -p takes a folder as a flag', async (t) => {
@@ -426,22 +432,30 @@ test('the folder is the first word without spaces or the last word, and -p takes
   // A message with spaces, then the folder.
   const last = await circle(home, ['what is here', workspace]);
   assert.equal(last.code, 0, last.stderr);
-  assert.equal(userText(endpoint.bodies[0]!), 'what is here');
-  assert.ok(systemText(endpoint.bodies[0]!).includes(workspace));
+  const turns = () =>
+    endpoint.bodies.filter((body) => body.max_tokens !== TITLE_MAX_TOKENS);
+  assert.equal(userText(turns()[0]!), 'what is here');
+  assert.ok(systemText(turns()[0]!).includes(workspace));
   // -p before a folder is a flag; the prompt is piped in.
   const piped = await circle(home, ['-p', workspace], {
     stdin: 'piped prompt\n',
   });
   assert.equal(piped.code, 0, piped.stderr);
-  assert.equal(userText(endpoint.bodies[1]!), 'piped prompt');
-  assert.ok(systemText(endpoint.bodies[1]!).includes(workspace));
+  assert.equal(userText(turns()[1]!), 'piped prompt');
+  assert.ok(systemText(turns()[1]!).includes(workspace));
   // One word without spaces is a folder, so a typo is an error, not a message.
   const typo = await circle(home, ['-p', 'question', 'no-such-folder'], {
     cwd: workspace,
   });
   assert.equal(typo.code, 2);
   assert.match(typo.stderr, /No such folder: .*no-such-folder/);
-  assert.equal(endpoint.bodies.length, 2);
+  assert.equal(turns().length, 2);
+  // "what is here" is three words, so it asks for a title. "piped prompt" does not.
+  assert.equal(
+    endpoint.bodies.filter((body) => body.max_tokens === TITLE_MAX_TOKENS)
+      .length,
+    1,
+  );
 });
 
 test('print mode sends each message as a turn and writes only the last answer', async (t) => {
@@ -713,8 +727,11 @@ test('an open stdin survives a slow real CLI startup, waits three seconds and re
   assert.equal(run.lifecycle.stdinEndedByFixture, false);
   assert.match(run.stderr, /nothing arrived on stdin within 3s/);
   assert.ok(run.lifecycle.warningAt! - run.lifecycle.beforeMainAt! >= 3000);
-  assert.equal(endpoint.bodies.length, 1);
-  assert.equal(userText(endpoint.bodies[0]!), 'slow startup prompt');
+  const turns = endpoint.bodies.filter(
+    (body) => body.max_tokens !== TITLE_MAX_TOKENS,
+  );
+  assert.equal(turns.length, 1);
+  assert.equal(userText(turns[0]!), 'slow startup prompt');
   assert.equal(run.stdout.trim(), 'slow startup answered');
   assert.equal(run.lifecycle.exited, true);
 });
@@ -904,3 +921,24 @@ test(
     assert.equal(endpoint.keys.at(-1), 'Bearer secret-key');
   },
 );
+
+test('circle uninstall is its own subcommand, not a folder', async (t) => {
+  const home = scratch(t);
+  const run = await circle(home, ['uninstall'], {
+    env: { CIRCLE_INSTALL_PREFIX: '' },
+  });
+  assert.equal(run.code, 1);
+  assert.match(
+    run.stderr,
+    /circle uninstall requires an installer-managed installation/,
+  );
+});
+
+test('circle uninstall answers an unknown option with the usage exit code', async (t) => {
+  const home = scratch(t);
+  const run = await circle(home, ['uninstall', '--bogus'], {
+    env: { CIRCLE_INSTALL_PREFIX: '' },
+  });
+  assert.equal(run.code, 2);
+  assert.match(run.stderr, /usage: circle uninstall \[--purge\] \[--yes\]/);
+});

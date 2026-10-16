@@ -11,6 +11,36 @@ export interface Usage {
   cache_read_tokens: number;
   cache_write_tokens?: number;
   cache_write_1h_tokens?: number;
+  /**
+   * Input tokens included above that a stopped turn estimated. Not stored on a
+   * message: `stats` fills it when it adds an interrupted reply.
+   */
+  estimated_input_tokens?: number;
+  /** Output tokens included above that a stopped turn estimated. */
+  estimated_output_tokens?: number;
+  /** Input tokens whose endpoint omitted cache fields. Filled by `stats`. */
+  cache_unreported_input?: number;
+}
+/** A model request made inside a tool, retained with that tool's result. */
+export interface ToolModelCall {
+  model: string;
+  usage: Usage;
+  cost?: import('./pricing.js').PriceReceipt;
+  search_requests?: number;
+}
+/** Provider completion evidence. Absent on older history and custom models. */
+export interface ModelCompletion {
+  reason:
+    | 'stop'
+    | 'tool_calls'
+    | 'length'
+    | 'filter'
+    | 'pause'
+    | 'missing'
+    | 'unknown';
+  provider_reason?: string;
+  output_limit?: number;
+  client_stop?: 'repetition';
 }
 export interface Message {
   id: string;
@@ -33,8 +63,19 @@ export interface Message {
   thinking_scope?: string;
   usage?: Usage;
   cost?: import('./pricing.js').PriceReceipt;
+  /** Seconds the model spent thinking before the answer text, kept across a restart. */
+  thinking_seconds?: number;
+  /** This assistant message is the partial reply saved when the turn was stopped. */
+  interrupted?: boolean;
+  /**
+   * False when this call's endpoint omitted cache fields. A reported zero stays
+   * `cache 0.0%`; a missing field is `cache N/A`, the same as a stop.
+   */
+  cache_reported?: boolean;
+  model_calls?: ToolModelCall[];
   internal?: string;
   truncated?: boolean;
+  completion?: ModelCompletion;
   recoverable?: boolean;
   legacy_data?: { type: string; data: Record<string, unknown> };
 }
@@ -77,6 +118,9 @@ export interface ToolContext {
   emitAttachments?: (attachments: MediaAttachment[]) => void;
   /** Whether the model in use reads images: false when it is known not to. */
   imageInput?: boolean;
+  /** Bound to this harness's model and connection, including child harnesses. */
+  webSearch?: (query: string, numResults: number) => Promise<string>;
+  recordModelCall?: (call: ToolModelCall) => void;
 }
 export interface MediaAttachment {
   kind: 'image' | 'document';
@@ -98,6 +142,13 @@ export interface ModelRequest {
   notice?: (event: ModelNotice) => void;
   /** Wait this many times the configured request timeout for the answer to start. */
   timeoutScale?: number;
+  /**
+   * Thinking depth for this request only. A side request (a session title) uses it so the
+   * turn's depth stays put. `''` asks for no thinking on this request.
+   */
+  effort?: string;
+  /** Output cap for this request only. A session title asks for a short reply. */
+  maxTokens?: number;
 }
 export interface ModelNotice {
   event: string;
@@ -114,6 +165,11 @@ export interface ChatModel {
   modelFacts?: import('./model_catalog.js').ModelFacts;
   /** Whether the model reads images: false when it is known not to, undefined when unknown. */
   imageInput?: boolean;
+  /**
+   * True when `complete` may be called beside the turn (a session title) without consuming
+   * the reply the turn is waiting for. Scripted models leave this unset.
+   */
+  sideRequests?: boolean;
   complete(request: ModelRequest): Promise<ModelResponse>;
 }
 export const emptyUsage = (): Usage => ({

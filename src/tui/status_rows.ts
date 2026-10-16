@@ -43,6 +43,17 @@ export function formatElapsed(seconds: number): string {
   if (minutes < 60) return `${minutes}m ${Math.floor(value) % 60}s`;
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
+/** How long passed between two messages, or blank when that would read as `0s`. */
+export function gapElapsed(
+  previousMs: number | undefined,
+  created: number | string,
+): string {
+  if (previousMs === undefined) return '';
+  const at = new Date(created).getTime();
+  if (!Number.isFinite(at)) return '';
+  const text = formatElapsed((at - previousMs) / 1000);
+  return text === '0s' ? '' : text;
+}
 // `840`, `12.3k`, `7.8M`: past a million the k would grow to `7824.0k`.
 export function formatTokens(value: number): string {
   const count = Math.max(0, Math.floor(value || 0));
@@ -132,6 +143,19 @@ export function headerRows(info: HeaderInfo, width: number): string[] {
   ];
 }
 
+/** Input tokens for the context meter. A partial saved on interrupt has neither a
+ * request model nor a measured input; `0/N/A` would disagree with the turn line. */
+export function contextInputOf(
+  message: { request_model?: string; usage?: Usage } | undefined,
+  model: string,
+): number | undefined {
+  const usage = message?.usage;
+  if (!usage) return undefined;
+  if (message?.request_model && message.request_model !== model)
+    return undefined;
+  if (!message?.request_model && !usage.input_tokens) return undefined;
+  return usage.input_tokens;
+}
 export interface Meters {
   usage: Usage;
   costText?: string;
@@ -144,32 +168,65 @@ function meterParts(meters: Meters): {
   head: string;
   context: string;
   percent: number;
+  /** Pieces dropped from the right until the footer fits: context, cache, then cost. */
+  lines: string[];
 } {
   const usage = meters.usage;
-  const cached = Math.min(usage.cache_read_tokens, usage.input_tokens);
-  const rate = usage.input_tokens ? (cached / usage.input_tokens) * 100 : 0;
-  const head = [
-    `↑ ${formatTokens(usage.input_tokens)} · ↓ ${formatTokens(usage.output_tokens)}`,
-    ...(meters.costText ? [meters.costText] : []),
-    `cache ${rate.toFixed(1)}%`,
-  ].join(' · ');
-  if (meters.contextInput === undefined)
-    return { head, context: '', percent: 0 };
-  if (!meters.contextWindow)
-    return {
-      head,
-      context: `ctx ${formatTokens(meters.contextInput)}/N/A`,
-      percent: 0,
-    };
-  const percent = Math.min(
-    999,
-    (meters.contextInput / meters.contextWindow) * 100,
+  // A stopped turn stores cache reads as 0 because the endpoint never reported
+  // them. That is not a measured 0.0% hit rate.
+  const estimatedIn = usage.estimated_input_tokens ?? 0;
+  // A finished call that omitted cache fields is the same unknown as a stop.
+  const unreported = usage.cache_unreported_input ?? 0;
+  const measuredIn = Math.max(0, usage.input_tokens - estimatedIn - unreported);
+  const cacheUnknown = usage.input_tokens > 0 && measuredIn === 0;
+  const cached = Math.min(
+    usage.cache_read_tokens,
+    measuredIn || usage.input_tokens,
   );
+  const rate = measuredIn ? (cached / measuredIn) * 100 : 0;
+  const tokens = `↑ ${formatTokens(usage.input_tokens)} · ↓ ${formatTokens(usage.output_tokens)}`;
+  const cache = cacheUnknown ? 'cache N/A' : `cache ${rate.toFixed(1)}%`;
+  const cost = meters.costText ?? '';
+  const head = [tokens, ...(cost ? [cost] : []), cache].join(' · ');
+  let context = '';
+  let percent = 0;
+  if (meters.contextInput !== undefined && !meters.contextWindow)
+    context = `ctx ${formatTokens(meters.contextInput)}/N/A`;
+  else if (meters.contextInput !== undefined && meters.contextWindow) {
+    percent = Math.min(999, (meters.contextInput / meters.contextWindow) * 100);
+    context = `ctx ${formatTokens(meters.contextInput)}/${formatWindow(meters.contextWindow)} (${Math.round(percent)}%)`;
+  }
+  const lines = [
+    [tokens, cost, cache, context],
+    [tokens, cost, cache],
+    [tokens, cost],
+    [tokens],
+  ].map((parts) => parts.filter(Boolean).join(' · '));
   return {
     head,
-    context: `ctx ${formatTokens(meters.contextInput)}/${formatWindow(meters.contextWindow)} (${Math.round(percent)}%)`,
+    context,
     percent,
+    lines,
   };
+}
+// Shorten on a separator, then on a space, and only then mid-token with an ellipsis.
+function fitSegment(text: string, width: number): string {
+  const source = text.trimEnd();
+  if (width <= 0) return '';
+  if (stringWidth(source) <= width) return source;
+  let rest = source;
+  while (stringWidth(rest) > width) {
+    const at = rest.lastIndexOf(' · ');
+    if (at <= 0) break;
+    rest = rest.slice(0, at);
+  }
+  if (stringWidth(rest) <= width) return rest;
+  const space = rest.lastIndexOf(' ');
+  if (space > 0) {
+    const word = rest.slice(0, space).trimEnd();
+    if (word && stringWidth(word) <= width) return fitSegment(word, width);
+  }
+  return truncate(rest, width).trimEnd();
 }
 // The footer: the meters, and a flash at the right for a second or two. While a flash shows,
 // the meters' tail gives way and they are not coloured. Without a flash, extensions' status
@@ -181,30 +238,33 @@ export function footerRow(
   status: { text: string; lamp: LampState }[] = [],
 ): string {
   const p = palette();
-  const { head, context, percent } = meterParts(meters);
-  const plain = context ? `${head} · ${context}` : head;
+  const parts = meterParts(meters);
+  const { context, percent } = parts;
+  const room = Math.max(1, width - 1);
+  const fitted =
+    parts.lines.find((line) => stringWidth(line) <= room) ??
+    parts.lines[parts.lines.length - 1]!;
+  const plain = stringWidth(fitted) <= room ? fitted : truncate(fitted, room);
+  const showsContext = Boolean(context) && plain.includes(context);
   if (flash) {
-    const shown = truncate(flash, Math.max(1, width - 2));
+    // The flash is its own segment. Meters give way on a ` · ` boundary, so a
+    // narrow row does not become `cach  cleared`.
+    const shown = fitSegment(flash, Math.max(1, width - 2));
     const room = width - 1 - stringWidth(shown) - 3;
     if (room < 12) return p.faint + ' ' + shown + p.reset;
-    let left = plain;
-    while (stringWidth(left) > room)
-      left = Array.from(left).slice(0, -1).join('');
+    const left = fitSegment(fitted, room);
     const gap = Math.max(
       1,
       width - 1 - stringWidth(left) - stringWidth(shown) - 1,
     );
     return p.faint + ' ' + left + ' '.repeat(gap) + shown + ' ' + p.reset;
   }
-  if (stringWidth(plain) + 1 > width)
-    return p.faint + ' ' + truncate(plain, Math.max(1, width - 1)) + p.reset;
   const left =
-    !context || percent < 70
+    !showsContext || percent < 70
       ? p.faint + ' ' + plain + p.reset
       : p.faint +
         ' ' +
-        head +
-        ' · ' +
+        plain.slice(0, plain.length - context.length) +
         p.reset +
         (percent >= 90 ? p.red : p.yellow) +
         context +

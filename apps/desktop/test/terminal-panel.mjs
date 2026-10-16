@@ -40,11 +40,25 @@ const server = createServer((socket) => {
   socket.on('close', () => sockets.delete(socket));
   let input = '';
   socket.on('data', (raw) => {
-    // this fixture answers lines only: negotiation bytes are none of its business
-    const bytes = [...raw].filter(
-      (byte) => byte === 10 || byte === 13 || (byte >= 32 && byte < 127),
-    );
-    input += Buffer.from(bytes).toString('utf8');
+    // Telnet negotiation goes whole, including the IAC SB ... IAC SE payload:
+    // dropping only the IAC bytes would leave the window size in the line, as
+    // characters - an 80-column NAWS arrives with a stray P.
+    let text = '';
+    for (let at = 0; at < raw.length; at++) {
+      const byte = raw[at];
+      if (byte === 255) {
+        const verb = raw[at + 1];
+        if (verb === 250) {
+          while (at < raw.length && !(raw[at] === 255 && raw[at + 1] === 240))
+            at++;
+          at++;
+        } else if (verb >= 236 && verb <= 254) at += 2;
+        continue;
+      }
+      if (byte === 10 || byte === 13 || (byte >= 32 && byte < 127))
+        text += String.fromCharCode(byte);
+    }
+    input += text;
     let cut = input.search(/[\r\n]/);
     while (cut !== -1) {
       typed.push(input.slice(0, cut).trim());
@@ -105,19 +119,15 @@ try {
     env,
     timeout: 60000,
   });
-  const page = await app.firstPage();
+  const page = await app.firstWindow();
   await page.waitForFunction(() => !!window.circleDesktop, null, {
     timeout: 30000,
   });
-  // the preview application routes to its local session's id
-  await page.waitForFunction(
-    () => location.pathname.includes('/session/'),
-    null,
-    {
-      timeout: 30000,
-    },
-  );
-  const session = new URL(page.url()).pathname.split('/session/')[1];
+  // the application routes by hash: circle://workbench/index.html#/session/<id>
+  await page.waitForFunction(() => location.hash.includes('#/session/'), null, {
+    timeout: 30000,
+  });
+  const session = new URL(page.url()).hash.split('/session/')[1];
   // The panel lists the saved profile before anyone connects
   const listed = await page.evaluate(() =>
     window.circleDesktop.terminalProfiles(),
@@ -131,7 +141,7 @@ try {
   assert.equal(state.sessions[0].state, 'ready');
   // The panel opens from the top bar and paints the device screen
   await page
-    .getByRole('button', { name: 'terminal panel', exact: true })
+    .getByRole('button', { name: 'device terminals panel', exact: true })
     .click();
   const screen = page.locator('.device-terminal .terminal-screen .xterm');
   await screen.waitFor({ state: 'visible', timeout: 15000 });

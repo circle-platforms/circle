@@ -193,7 +193,10 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
     lastKind = kind;
   };
   let messages = state.messages.filter(
-    (message) => !message.internal || message.internal === 'job_notice',
+    (message) =>
+      !message.internal ||
+      message.internal === 'job_notice' ||
+      message.internal === 'interrupted',
   );
   let hide = state.hiddenTurns;
   while (hide-- > 0) {
@@ -238,7 +241,11 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
     );
   };
   const thinking = (text: string, done: boolean, seconds?: number): void => {
-    if (!state.showThinking || !text.trim()) return;
+    if (
+      !state.showThinking ||
+      !text.replace(/[\s\u200b\u200c\u200d\ufeff\u2060\u00ad]/g, '')
+    )
+      return;
     gap('thinking');
     rows.push(
       ...thinkingRows(text, {
@@ -294,13 +301,15 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
       trailing.push(note);
     else placed.set(anchor, [...(placed.get(anchor) ?? []), note]);
   });
-  const noticeBlock = (note: string): void =>
+  const noticeBlock = (note: string): void => {
+    const failed = note.startsWith('✖') && !note.startsWith('✖ Interrupted');
     block(
       note.startsWith('✖') ? '✖' : ' ',
       note.replace(/^✖\s*/, ''),
       '',
-      note.startsWith('✖') ? p.red : p.dim,
+      failed ? p.red : p.dim,
     );
+  };
   for (const note of placed.get('') ?? []) noticeBlock(note);
   const agents = taskAgents(messages, state.subagents ?? []);
   // The reply a running turn is working on: the newest one with tool calls.
@@ -364,6 +373,10 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
         shellRows(shell);
       return;
     }
+    if (message.internal === 'interrupted') {
+      noticeBlock('✖ Interrupted');
+      return;
+    }
     if (message.internal === 'job_notice') {
       gap('notice');
       rows.push(...noticeRows(message.display ?? '', width));
@@ -371,7 +384,11 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
       user(message.display ?? message.content);
     else if (message.role === 'assistant') {
       if (message.thinking)
-        thinking(message.thinking, true, state.thinkingSeconds?.[message.id]);
+        thinking(
+          message.thinking,
+          true,
+          message.thinking_seconds ?? state.thinkingSeconds?.[message.id],
+        );
       if (message.content.trim())
         block('●', message.content, '', p.text, true, 'text');
       // Calls run one after another: the first without a result is the one running (or
@@ -619,6 +636,9 @@ export function renderScreen(
         ? 'accept edits'
         : '';
   const modeSgr = state.planMode ? p.green : state.autoMode ? p.yellow : p.blue;
+  // The reason row is the composer, so its completion list sits above the card.
+  if (state.dialog?.input !== undefined && state.completion && !state.picker)
+    bottom.push(...completionRows(state.completion, width));
   if (state.dialog)
     bottom.push(
       ...dialogRows(

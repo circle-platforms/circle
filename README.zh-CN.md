@@ -38,7 +38,7 @@ irm https://raw.githubusercontent.com/circle-platforms/circle/main/install.ps1 |
 
 安装器会下载适合当前平台的最新 Release，验证 SHA-256，先启动一次确认能跑，再把 `circle` 加入 PATH。macOS 和 Linux 需要 `bash`、`curl`、`tar`，以及 `sha256sum` 或 `shasum`；Windows 需要 PowerShell 5.1 或更新版本。
 
-安装后重新打开终端，再运行 `circle`；以后用 `circle update` 升级。详见[安装与升级](https://circle-platforms.github.io/circle/installation/)和[发布页面](https://github.com/circle-platforms/circle/releases)。
+安装后重新打开终端，再运行 `circle`；以后用 `circle update` 升级，用 `circle uninstall` 卸载（加 `--purge` 会同时删除数据文件夹）。详见[安装与升级](https://circle-platforms.github.io/circle/installation/)和[发布页面](https://github.com/circle-platforms/circle/releases)。
 
 **从 Circle 0.5.0 或更早版本升级？** 那些版本是 Python 写的。运行上面的安装命令即可：它会卸载 Python 版，保留你的设置、密钥、技能和会话，再装上当前版本。旧版的 `circle update` 不能安装 1.0.0 及之后的版本。Python 扩展需要重写，见[扩展](https://circle-platforms.github.io/circle/extensions/)。
 

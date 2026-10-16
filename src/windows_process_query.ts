@@ -98,13 +98,29 @@ export function readWindowsQueryMarkers(stderr: string, nonce: string) {
 }
 
 type Markers = ReturnType<typeof readWindowsQueryMarkers>;
+// What the runner returned. Absent fields stay unknown rather than being inferred.
+export interface WindowsQueryOutcome {
+  status: number | null;
+  error?: Error;
+  pid?: number;
+  signal?: NodeJS.Signals | null;
+  stdout?: string | null;
+  stderr?: string | null;
+}
+const lineCount = (value: string): number =>
+  value ? value.split(/\r?\n/).length - (value.endsWith('\n') ? 1 : 0) : 0;
+// Lengths of the decoded strings in UTF-16 code units, not raw pipe bytes; never their content.
+const streamSize = (value: string | null | undefined) =>
+  typeof value === 'string'
+    ? { codeUnits: value.length, lines: lineCount(value) }
+    : { codeUnits: 'unknown' as const, lines: 'unknown' as const };
 export class WindowsProcessQueryObservation extends Error {
   readonly name = 'WindowsProcessQueryObservation';
   readonly details;
   constructor(
     markers: Markers,
     elapsedMs: number,
-    outcome: { status: number | null; error?: Error },
+    outcome: WindowsQueryOutcome,
     records?: { invalidRecords: number; incompleteRecords: number },
   ) {
     const nativeCode = (outcome.error as NodeJS.ErrnoException | undefined)
@@ -114,6 +130,23 @@ export class WindowsProcessQueryObservation extends Error {
       /^[A-Z][A-Z0-9_]{0,63}$/.test(nativeCode)
         ? nativeCode
         : 'unknown';
+    // A reported PID, including zero, does not establish that the query started; a reported
+    // signal does not establish what stopped it.
+    const reportedPid =
+      typeof outcome.pid === 'number' &&
+      Number.isSafeInteger(outcome.pid) &&
+      outcome.pid >= 0
+        ? outcome.pid
+        : 'unknown';
+    const signal =
+      outcome.signal === null
+        ? null
+        : typeof outcome.signal === 'string' &&
+            /^SIG[A-Z0-9]{1,16}$/.test(outcome.signal)
+          ? outcome.signal
+          : 'unknown';
+    const stdout = streamSize(outcome.stdout);
+    const stderr = streamSize(outcome.stderr);
     const counts = queryStages
       .map((stage) => `${stage}=${markers.counts[stage]}`)
       .join(',');
@@ -125,7 +158,7 @@ export class WindowsProcessQueryObservation extends Error {
       ? `; stdout records invalid=${records!.invalidRecords}, incomplete=${records!.incompleteRecords}; absence unknown`
       : '';
     super(
-      `Windows process query observation: last captured stage: ${markers.lastCapturedStage}; captured counts: ${counts}; possibly capped stages: ${capped}; elapsed ms: ${Math.round(elapsedMs)}; status: ${outcome.status}; error code: ${errorCode}. Markers show reached boundaries, not the stalled operation${output}`,
+      `Windows process query observation: last captured stage: ${markers.lastCapturedStage}; captured counts: ${counts}; possibly capped stages: ${capped}; elapsed ms: ${Math.round(elapsedMs)}; status: ${outcome.status}; error code: ${errorCode}; signal: ${signal}; reported pid: ${reportedPid}; stdout: ${stdout.codeUnits} code units in ${stdout.lines} lines; stderr: ${stderr.codeUnits} code units in ${stderr.lines} lines. Markers show reached boundaries, not the stalled operation${output}`,
     );
     this.details = {
       lastCapturedStage: markers.lastCapturedStage,
@@ -134,6 +167,12 @@ export class WindowsProcessQueryObservation extends Error {
       elapsedMs: Math.round(elapsedMs),
       status: outcome.status,
       errorCode,
+      signal,
+      reportedPid,
+      stdoutCodeUnits: stdout.codeUnits,
+      stderrCodeUnits: stderr.codeUnits,
+      stdoutLineCount: stdout.lines,
+      stderrLineCount: stderr.lines,
       ...(outputProblem
         ? {
             invalidRecords: records!.invalidRecords,

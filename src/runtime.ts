@@ -2,7 +2,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { join, basename } from 'node:path';
 import { readFileSync } from 'node:fs';
 import type { ChatModel, Message, ToolCall } from './types.js';
-import { GatewayModel, EFFORT_LEVELS } from './model.js';
+import { GatewayModel, EFFORT_LEVELS, defaultEffort } from './model.js';
+import { WebSearchService } from './websearch_service.js';
+import type { NativeSearchConnection } from './native_websearch.js';
 import { CheckpointStore, type Session } from './checkpoint_store.js';
 import {
   defaultPolicy,
@@ -11,6 +13,7 @@ import {
 } from './approvals.js';
 import { Sandbox } from './sandbox.js';
 import { buildTools, type Todo } from './tools.js';
+import { browserToolsWanted } from './browser/tools.js';
 import {
   loadSecrets,
   MAX_SECRET,
@@ -29,6 +32,7 @@ import { fromJsonl, toSessionBundle } from './session_export.js';
 import { projectDataDir, circleHome, normalizeWorkspace } from './paths.js';
 import { McpManager } from './mcp_loader.js';
 import { ExtensionHost } from './extensions.js';
+import { abortable } from './watch.js';
 import {
   isFolderTrusted,
   isReady,
@@ -64,6 +68,7 @@ import { addUsage, emptyUsage } from './types.js';
 import { UserShells } from './user_shell.js';
 import { toolCallLine } from './headless.js';
 import { canScreenshot, type ScreenshotOptions } from './screenshot.js';
+import { titleNeedsRefresh, userPrompts } from './session_title.js';
 const BUILTIN_TOOL_NAMES = new Set([
   'ls',
   'read_file',
@@ -123,6 +128,11 @@ export interface RuntimeOptions {
   model?: ChatModel;
   catalog?: ModelCatalog;
   extraTools?: Tool[];
+  /**
+   * Tools left out of a short turn and added on the turn that needs them.
+   * The terminal keeps browser tool schemas here until a page is requested.
+   */
+  deferredTools?: Tool[];
   /** Where the extensions that ship with Circle are; false for none (tests). */
   bundledExtensions?: string | false;
   /** An extension's status line changed. */
@@ -152,8 +162,62 @@ export interface RuntimeOptions {
     signal: AbortSignal,
     origin?: InteractionContext,
   ) => Promise<void>;
+  /**
+   * Keep a new session out of the database until its first message. The terminal uses this
+   * so startup and /new do not leave an empty row.
+   */
+  deferSession?: boolean;
+  /**
+   * Leave a sentence untitled until its generated title arrives, and do not ask
+   * for a title again when a session opens. The desktop shows such a session as
+   * a new session and keeps its own list.
+   */
+  holdTitle?: boolean;
 }
 export class AgentRuntime {
+  private readonly searches = new WebSearchService();
+  private readonly searchConnections = new WeakMap<
+    ChatModel,
+    NativeSearchConnection
+  >();
+  private modelWithSearch(base: ChatModel): ChatModel {
+    const wrapped = this.extensions.model(base);
+    const connection =
+      base instanceof GatewayModel
+        ? base.webSearchConnection()
+        : this.searchConnections.get(base);
+    if (connection) this.searchConnections.set(wrapped, connection);
+    return wrapped;
+  }
+  private async searchFromModel(
+    model: ChatModel,
+    query: string,
+    numResults: number,
+    context: ToolContext,
+  ): Promise<string> {
+    this.requireCurrentConnection();
+    return this.searches.search(
+      this.searchConnections.get(model),
+      query,
+      numResults,
+      context.signal,
+      (record) =>
+        context.recordModelCall?.({
+          model: record.model,
+          usage: record.usage,
+          cost: {
+            ...priceCall(
+              this.catalog.facts(record.model, this.options.settings),
+              record.usage,
+            ),
+            tool_fee_unknown: true,
+          },
+          ...(record.searchRequests !== undefined
+            ? { search_requests: record.searchRequests }
+            : {}),
+        }),
+    );
+  }
   readonly migration: MigrationReport;
   readonly options: RuntimeOptions;
   readonly store: CheckpointStore;
@@ -187,6 +251,7 @@ export class AgentRuntime {
   private activeCompaction?: Promise<string>;
   extensions: ExtensionHost;
   private integrationsReady?: Promise<void>;
+  private readonly integrationLifetime = new AbortController();
   private baseModel?: ChatModel;
   private authFingerprint?: string;
   private coreTools: Tool[] = [];
@@ -237,6 +302,10 @@ export class AgentRuntime {
           options.settings.auth.model,
           this.runOptions.session_name,
           options.sessionId,
+          null,
+          Boolean(options.deferSession) &&
+            !this.runOptions.session_name &&
+            !options.sessionId,
         );
       this.store.claimSession(this.session.id, (error) =>
         this.ownershipLost(error),
@@ -245,6 +314,9 @@ export class AgentRuntime {
       const current = this.store.get(this.session.id);
       if (!current) throw new Error('unknown session');
       this.session = current;
+      this.store.repairStaleTitles();
+      const repaired = this.store.get(this.session.id);
+      if (repaired) this.session = repaired;
     } catch (error) {
       this.store.close();
       throw error;
@@ -310,7 +382,7 @@ export class AgentRuntime {
     });
     this.extensions = this.extensionHost(new Set());
     if (this.runOptions.session_name)
-      this.store.rename(this.session.id, this.runOptions.session_name);
+      this.store.rename(this.session.id, this.runOptions.session_name, true);
     try {
       this.harness = this.createHarness(options.model);
       this.todos = restoredTodos(this.harness.messages);
@@ -322,6 +394,7 @@ export class AgentRuntime {
       this.store.close();
       throw error;
     }
+    this.refreshFallbackTitle();
     this.bus.setRunId(this.session.id);
     if (!options.model)
       void this.catalog.refreshIfStale(() =>
@@ -440,7 +513,7 @@ export class AgentRuntime {
         if (!custom && !['general-purpose', 'explore'].includes(name))
           throw new Error('unknown subagent type');
         const childModel = custom?.spec.model
-          ? this.extensions.model(
+          ? this.modelWithSearch(
               this.gatewayModel(this.options.settings, custom.spec.model),
             )
           : parentHarness.model;
@@ -612,6 +685,8 @@ export class AgentRuntime {
           parentPlanMode: () => this.harness.planMode,
           toolBoundary: (tool, args, context) =>
             this.extensionToolBoundary(tool, args, context),
+          webSearch: (model, query, count, context) =>
+            this.searchFromModel(model, query, count, context),
           prepareMessages: (signal): Promise<Message[]> =>
             this.context.prepare(
               session.id,
@@ -670,7 +745,8 @@ export class AgentRuntime {
       variables: () => this.options.settings.variables,
       secrets: () => loadSecrets(this.options.home),
       redact: this.redact,
-      model: this.extensions.model(model),
+      model: this.modelWithSearch(model),
+      holdTitle: this.options.holdTitle,
       tools,
       store: this.store,
       session: this.session,
@@ -690,7 +766,10 @@ export class AgentRuntime {
         if (this.activeCompaction) throw new Error('a compaction is running');
         await this.initialize(signal);
       },
-      beforeTurn: () => this.requireTurnConnection(),
+      beforeTurn: (prompt) => {
+        this.requireTurnConnection();
+        this.promoteDeferredTools(prompt);
+      },
       beforeStep: () => {
         this.userShells.flush();
         const messages = this.jobs.takeNotices(this.harness.sessionId);
@@ -699,6 +778,8 @@ export class AgentRuntime {
       },
       toolBoundary: (tool, args, context) =>
         this.extensionToolBoundary(tool, args, context),
+      webSearch: (model, query, count, context) =>
+        this.searchFromModel(model, query, count, context),
       prepareMessages: (signal) =>
         this.context.prepare(
           this.session.id,
@@ -827,6 +908,27 @@ export class AgentRuntime {
   private refreshSystemPrompt(): void {
     this.harness.system = this.systemPrompt(this.harness.model.model);
   }
+  /** Move deferred tools onto the harness once this turn's text asks for them. */
+  private promoteDeferredTools(prompt: string | undefined): void {
+    const extra = this.options.deferredTools;
+    if (!extra?.length) return;
+    if (
+      extra.every((tool) =>
+        this.coreTools.some((have) => have.name === tool.name),
+      )
+    )
+      return;
+    if (!browserToolsWanted(this.harness.messages, prompt ?? '')) return;
+    this.coreTools.push(
+      ...extra.filter(
+        (tool) => !this.coreTools.some((have) => have.name === tool.name),
+      ),
+    );
+    this.harness.tools = this.withIntegrationTools(
+      this.coreTools.filter((tool) => tool.name !== 'wait_jobs'),
+    );
+    this.describeSubagents(this.harness.tools);
+  }
   private describeSubagents(tools: Tool[]): void {
     const task = tools.find((tool) => tool.name === 'task');
     if (!task) return;
@@ -891,21 +993,36 @@ export class AgentRuntime {
     if (this.ownershipError) throw this.ownershipError;
     if (this.closing || this.deleting) throw new Error('session is closing');
     if (this.options.headless && !this.options.integrations) return;
+    const active = signal
+      ? AbortSignal.any([signal, this.integrationLifetime.signal])
+      : this.integrationLifetime.signal;
+    active.throwIfAborted();
     if (!this.integrationsReady) {
       this.integrationsReady = (async () => {
         const base = this.coreTools;
         await this.mcp.load(
           this.options.settings.mcp_servers,
           new Set(base.map((tool) => tool.name)),
-          signal,
+          active,
         );
         const host = this.extensionHost(
           new Set([...base, ...this.mcp.tools].map((tool) => tool.name)),
         );
-        await host.load();
-        if (signal?.aborted) {
+        const stop = () => {
+          // This host is not installed yet, but already owns background work.
+          // Its catch below awaits the same bounded drain before startup ends.
+          void host.close(2000);
+        };
+        active.addEventListener('abort', stop, { once: true });
+        try {
+          active.throwIfAborted();
+          await abortable(host.load(), active);
+          active.throwIfAborted();
+        } catch (error) {
           await host.close(2000);
-          signal.throwIfAborted();
+          throw error;
+        } finally {
+          active.removeEventListener('abort', stop);
         }
         const previous = this.extensions;
         this.extensions = host;
@@ -913,7 +1030,7 @@ export class AgentRuntime {
           base.filter((tool) => tool.name !== 'wait_jobs'),
         );
         this.describeSubagents(this.harness.tools);
-        this.harness.model = host.model(this.baseModel!);
+        this.harness.model = this.modelWithSearch(this.baseModel!);
         this.refreshSystemPrompt();
         host.emit('session_start', {
           workspace: this.options.workspace,
@@ -997,7 +1114,7 @@ export class AgentRuntime {
     const nextModel = this.gatewayModel(this.options.settings, model);
     nextModel.effort = effort;
     this.baseModel = nextModel;
-    this.harness.model = this.extensions.model(this.baseModel);
+    this.harness.model = this.modelWithSearch(this.baseModel);
     this.refreshSystemPrompt();
   }
   /** An explicit login/logout replaces every cached client, including future sessions. */
@@ -1019,7 +1136,7 @@ export class AgentRuntime {
     this.options.modelOverride = undefined;
     this.options.model = ready ? undefined : nextModel;
     this.baseModel = nextModel;
-    this.harness.model = this.extensions.model(nextModel);
+    this.harness.model = this.modelWithSearch(nextModel);
     if (!ready) this.authFingerprint = this.savedConnectionFingerprint();
     this.refreshSystemPrompt();
   }
@@ -1110,6 +1227,22 @@ export class AgentRuntime {
     this.options.settings.default_thinking = level;
     this.refreshSystemPrompt();
   }
+  /**
+   * A chosen depth, or `default` when the user has not chosen one. `default` clears
+   * the saved preference and sends the protocol's usual effort (Anthropic `medium`).
+   * A request already built keeps the depth it read. The next request uses this choice.
+   */
+  applyThinkingChoice(level: string): void {
+    const clearing = level === 'default' || level === '';
+    if (!clearing && !(EFFORT_LEVELS as readonly string[]).includes(level))
+      throw new Error('unknown thinking depth');
+    if (this.baseModel instanceof GatewayModel)
+      this.baseModel.effort = clearing
+        ? defaultEffort(this.baseModel.settings.auth.protocol, '')
+        : level;
+    this.options.settings.default_thinking = clearing ? '' : level;
+    if (!this.busy) this.refreshSystemPrompt();
+  }
   stats(): {
     messages: number;
     toolCalls: number;
@@ -1118,8 +1251,28 @@ export class AgentRuntime {
   } {
     const messages = this.harness.messages;
     const usage = emptyUsage();
+    let estimatedIn = 0;
+    let estimatedOut = 0;
+    let unreportedIn = 0;
+    const countEstimate = (message: {
+      interrupted?: boolean;
+      cache_reported?: boolean;
+      usage?: import('./types.js').Usage;
+    }): void => {
+      if (!message.usage) return;
+      if (message.interrupted) {
+        estimatedIn += message.usage.input_tokens;
+        estimatedOut += message.usage.output_tokens;
+        return;
+      }
+      if (message.cache_reported === false)
+        unreportedIn += message.usage.input_tokens;
+    };
     for (const message of messages)
-      if (message.usage) addUsage(usage, message.usage);
+      if (message.usage) {
+        addUsage(usage, message.usage);
+        countEstimate(message);
+      }
     const costs = messageCosts(messages);
     const compactions = new UsageCostTotals();
     const state = this.store.contextState(this.session.id);
@@ -1129,7 +1282,10 @@ export class AgentRuntime {
       for (const message of messages)
         if (message.usage) {
           addUsage(usage, message.usage);
-          compactions.add(message.cost);
+          countEstimate(message);
+          if (message.model_calls?.length)
+            for (const call of message.model_calls) compactions.add(call.cost);
+          else compactions.add(message.cost, message.interrupted === true);
         }
       const childState = this.store.contextState(id);
       const calls =
@@ -1161,6 +1317,19 @@ export class AgentRuntime {
       costs.amounts[currency] = (costs.amounts[currency] ?? 0) + amount;
     costs.calls += summary.calls;
     costs.unpriced_calls += summary.unpriced_calls;
+    if (summary.estimated_amounts) {
+      costs.estimated_amounts ??= {};
+      for (const [currency, amount] of Object.entries(
+        summary.estimated_amounts,
+      ))
+        costs.estimated_amounts[currency] =
+          (costs.estimated_amounts[currency] ?? 0) + amount;
+    }
+    if (estimatedIn || estimatedOut) {
+      usage.estimated_input_tokens = estimatedIn;
+      usage.estimated_output_tokens = estimatedOut;
+    }
+    if (unreportedIn) usage.cache_unreported_input = unreportedIn;
     return {
       messages: messages.length,
       toolCalls: messages.reduce(
@@ -1221,6 +1390,10 @@ export class AgentRuntime {
     const session = this.store.create(
       this.options.workspace,
       this.harness.model.model,
+      this.runOptions.session_name,
+      undefined,
+      null,
+      Boolean(this.options.deferSession) && !this.runOptions.session_name,
     );
     this.store.claimSession(session.id, (error) => this.ownershipLost(error));
     this.session = session;
@@ -1230,6 +1403,7 @@ export class AgentRuntime {
     this.applyDefaultMode();
     this.bus.setRunId(this.session.id);
     this.store.releaseSession(previous);
+    this.store.dropDeferred(previous);
     this.extensions.emit('session_start', {
       workspace: this.options.workspace,
       session_id: this.session.id,
@@ -1244,11 +1418,15 @@ export class AgentRuntime {
     const previous = this.session.id;
     this.store.claimSession(session.id, (error) => this.ownershipLost(error));
     this.session = session;
+    this.store.repairStaleTitles();
+    const repaired = this.store.get(session.id);
+    if (repaired) this.session = repaired;
     this.harness = this.createHarness(this.options.model);
     this.todos = restoredTodos(this.harness.messages);
     this.applyDefaultMode();
     this.bus.setRunId(session.id);
     if (previous !== session.id) this.store.releaseSession(previous);
+    this.refreshFallbackTitle();
   }
   private requireIdleSession(): void {
     if (this.ownershipError) throw this.ownershipError;
@@ -1270,6 +1448,10 @@ export class AgentRuntime {
       this.applyDefaultMode();
       this.bus.setRunId(session.id);
       this.store.releaseSession(previous);
+      this.store.repairStaleTitles();
+      const repaired = this.store.get(session.id);
+      if (repaired) this.session = repaired;
+      this.refreshFallbackTitle();
       this.extensions.emit('session_start', {
         workspace: this.options.workspace,
         session_id: session.id,
@@ -1288,6 +1470,74 @@ export class AgentRuntime {
     this.todos = restoredTodos(messages);
     if (typeof header.title === 'string')
       this.store.rename(this.session.id, header.title);
+    this.store.repairStaleTitles();
+    const repaired = this.store.get(this.session.id);
+    if (repaired) this.session = repaired;
+    this.refreshFallbackTitle();
+  }
+  /**
+   * Ask again when a finished session still has the trimmed first message, a
+   * cut of that message, several messages stuck together, or a title that
+   * reads as work already done. A greeting is not worth a request. A name
+   * from /name stays.
+   */
+  private refreshFallbackTitle(): void {
+    if (this.options.holdTitle) return;
+    void this.retitleSession(this.session.id);
+  }
+  /**
+   * The welcome list shows three other sessions. Ask for those titles once, one
+   * at a time, when a reply is already stored and the name is not locked.
+   * Opening them is not required. A model with no side request is left alone.
+   */
+  repairRecentTitles(): void {
+    if (
+      this.closing ||
+      this.options.holdTitle ||
+      !this.harness.model.sideRequests
+    )
+      return;
+    const pending = this.store
+      .list(this.options.workspace)
+      .filter((session) => session.id !== this.session.id)
+      .slice(0, 3);
+    if (!pending.length) return;
+    void this.repairRecent(pending.map((session) => session.id));
+  }
+  private repairingRecent = false;
+  private async repairRecent(ids: string[]): Promise<void> {
+    if (this.repairingRecent) return;
+    this.repairingRecent = true;
+    try {
+      for (const id of ids) {
+        if (this.closing) return;
+        await this.retitleSession(id);
+      }
+    } finally {
+      this.repairingRecent = false;
+    }
+  }
+  private retitleSession(id: string): Promise<void> {
+    // A repair on open is quiet: a model that cannot be asked is not a failure here.
+    if (!this.harness.model.sideRequests) return Promise.resolve();
+    const session = this.store.get(id);
+    if (!session?.title || !session.head || session.title_locked)
+      return Promise.resolve();
+    let messages;
+    try {
+      messages = this.store.messages(session.id);
+    } catch {
+      return Promise.resolve();
+    }
+    const prompts = userPrompts(messages);
+    const source = prompts[0];
+    if (
+      !source ||
+      !titleNeedsRefresh(session.title, source, prompts.slice(1)) ||
+      !messages.some((message) => message.role === 'assistant')
+    )
+      return Promise.resolve();
+    return this.harness.retitle(prompts.join('\n'), session.title, session.id);
   }
   exportSession(): string {
     if (
@@ -1304,6 +1554,7 @@ export class AgentRuntime {
   async close(saveJobNotes = true): Promise<void> {
     if (this.closingPromise) return this.closingPromise;
     this.closing = true;
+    this.integrationLifetime.abort(new Error('runtime closed'));
     this.closingPromise = this.closeResources(saveJobNotes);
     return this.closingPromise;
   }
@@ -1365,6 +1616,7 @@ export class AgentRuntime {
     this.compactionController?.abort(new Error('Interrupted'));
     await this.activeCompaction?.catch(() => {});
     await this.harness.cancel();
+    await this.harness.finishTitle();
     await this.userShells.cancel();
     const stopped = await this.jobs.close();
     if (!this.ownershipError) this.userShells.flush();
