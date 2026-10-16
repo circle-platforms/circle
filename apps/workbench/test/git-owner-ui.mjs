@@ -73,6 +73,7 @@ const server = await createServer({
               data = await repos
                 .get(command.sessionId)
                 .call(p.method, p.params);
+            else if (p.service === 'terminal' && p.method === 'list') data = [];
             else if (p.service === 'delivery') {
               if (
                 p.method === 'status' &&
@@ -116,7 +117,7 @@ try {
     .getByRole('button', { name: 'changes panel', exact: true })
     .click();
   await page.locator('#inspector-changes-tab-git').click();
-  const git = page.locator('.native-git:visible');
+  let git = page.locator('.native-git:visible');
   await page.waitForFunction(
     () =>
       document.querySelector('.native-git')?.getAttribute('data-branch') ===
@@ -125,7 +126,7 @@ try {
   await git
     .getByRole('textbox', { name: 'commit message', exact: true })
     .fill('commit draft A');
-  const delivery = git.locator('.native-delivery');
+  let delivery = git.locator('.native-delivery');
   await delivery.locator(':scope > summary').click();
   await delivery
     .getByRole('textbox', { name: 'PR title', exact: true })
@@ -342,6 +343,184 @@ try {
     0,
     'late original-owner status errors cannot enter the new owner',
   );
+  hold = false;
+  holdStatus = false;
+  await select('a');
+  const longBody =
+    Array.from(
+      { length: 600 },
+      (_, index) => `line ${index + 1}: 中文 PR recovery text`,
+    ).join('\n') + '\n';
+  await delivery
+    .getByRole('textbox', { name: 'PR description', exact: true })
+    .fill(longBody);
+  const inspectDrafts = async () => {
+    assert.equal(
+      await git
+        .getByRole('textbox', { name: 'commit message', exact: true })
+        .inputValue(),
+      'commit draft A',
+    );
+    assert.equal(
+      await delivery
+        .getByRole('textbox', { name: 'PR title', exact: true })
+        .inputValue(),
+      'draft A',
+    );
+    assert.equal(
+      await delivery
+        .getByRole('textbox', { name: 'PR description', exact: true })
+        .inputValue(),
+      longBody,
+    );
+  };
+  const reopenGit = async () => {
+    const toggle = page.getByRole('button', {
+      name: 'changes panel',
+      exact: true,
+    });
+    if ((await toggle.getAttribute('aria-pressed')) !== 'true')
+      await toggle.click();
+    await page.locator('#inspector-changes-tab-git').click();
+    git = page.locator('.native-git:visible');
+    delivery = git.locator('.native-delivery');
+    if (!(await delivery.evaluate((node) => node.open)))
+      await delivery.locator(':scope > summary').click();
+    await git
+      .getByRole('textbox', { name: 'commit message', exact: true })
+      .waitFor();
+  };
+  await page
+    .getByRole('button', { name: 'changes panel', exact: true })
+    .click();
+  await reopenGit();
+  await inspectDrafts();
+  await page
+    .getByRole('button', { name: 'terminal panel', exact: true })
+    .click();
+  await page
+    .locator('.inspector-title')
+    .getByRole('button', { name: 'full view', exact: true })
+    .click();
+  await page.locator('.inspector-full .inspector').waitFor();
+  await page
+    .locator('.inspector-title')
+    .getByRole('button', { name: 'exit full view', exact: true })
+    .click();
+  await reopenGit();
+  await inspectDrafts();
+  await page.reload();
+  await reopenGit();
+  await inspectDrafts();
+  assert.equal(
+    await delivery.getByRole('alert').count(),
+    0,
+    'errors are not restored as drafts',
+  );
+  const persistedProfile = await page.context().storageState();
+  await page.context().close();
+  const restoredContext = await browser.newContext({
+    storageState: persistedProfile,
+    viewport: { width: 1400, height: 900 },
+  });
+  page = await restoredContext.newPage();
+  page.setDefaultTimeout(8000);
+  await page.goto(
+    server.resolvedUrls.local[0] + 'test/git-owner-ui.html#/session/a',
+  );
+  await reopenGit();
+  await inspectDrafts();
+  const saved = await page.evaluate(() =>
+    Object.entries(localStorage)
+      .filter(([key]) => key.startsWith('circle.workbench.owner-draft.v1:'))
+      .map(([, value]) => JSON.parse(value)),
+  );
+  assert(saved.length >= 4);
+  for (const item of saved)
+    assert.deepEqual(Object.keys(item).sort(), [
+      'field',
+      'owner',
+      'text',
+      'version',
+    ]);
+  await page.evaluate(() => {
+    window.__restoreOwnerStorage = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      if (key.startsWith('circle.workbench.owner-draft.v1:'))
+        throw new DOMException('fixture quota', 'QuotaExceededError');
+      return window.__restoreOwnerStorage.call(this, key, value);
+    };
+  });
+  await delivery
+    .getByRole('textbox', { name: 'PR title', exact: true })
+    .fill('unsaved current input');
+  assert.equal(
+    await delivery
+      .getByRole('textbox', { name: 'PR title', exact: true })
+      .inputValue(),
+    'unsaved current input',
+  );
+  await delivery
+    .getByRole('status')
+    .filter({ hasText: 'local draft storage is unavailable' })
+    .waitFor();
+  await select('b');
+  assert.equal(
+    await delivery
+      .getByRole('textbox', { name: 'PR title', exact: true })
+      .inputValue(),
+    'draft B',
+  );
+  assert.equal(
+    await delivery
+      .getByRole('status')
+      .filter({ hasText: 'local draft storage is unavailable' })
+      .count(),
+    0,
+  );
+  await select('a');
+  assert.equal(
+    await delivery
+      .getByRole('textbox', { name: 'PR title', exact: true })
+      .inputValue(),
+    'unsaved current input',
+  );
+  await delivery
+    .getByRole('status')
+    .filter({ hasText: 'local draft storage is unavailable' })
+    .waitFor();
+  await page.evaluate(() => {
+    Storage.prototype.setItem = window.__restoreOwnerStorage;
+    delete window.__restoreOwnerStorage;
+  });
+  await delivery
+    .getByRole('textbox', { name: 'PR title', exact: true })
+    .fill('saved after recovery');
+  assert.equal(
+    await delivery
+      .getByRole('status')
+      .filter({ hasText: 'local draft storage is unavailable' })
+      .count(),
+    0,
+  );
+  await select('b');
+  if (!(await delivery.evaluate((node) => node.open)))
+    await delivery.locator(':scope > summary').click();
+  assert.equal(
+    await delivery
+      .getByRole('textbox', { name: 'PR title', exact: true })
+      .inputValue(),
+    'draft B',
+  );
+  receipt.draftRecovery = {
+    reload: true,
+    newRendererContextFromPersistedProfile: true,
+    fullView: true,
+    closePanel: true,
+    bodyLines: 600,
+    quotaFailureKeepsInputAndWarns: true,
+    noBusyErrorOrCredentialsPersisted: true,
+  };
   for (const [id, repo] of repos) {
     assert.equal(
       (await repo.git(['diff', '--cached', '--name-only'])).trim(),

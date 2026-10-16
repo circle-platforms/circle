@@ -1,4 +1,6 @@
 export const githubConnection: Record<string, string> = {
+  'local draft storage is unavailable; keep this panel open and copy your text before leaving':
+    '本地草稿暂时无法保存；请保持面板打开，离开前复制文字。',
   'GitHub disconnected': 'GitHub 已断开连接',
   'GitHub authorization in progress': '正在进行 GitHub 授权',
   'commit remaining workspace changes or move them to another branch, then refresh before publishing; nothing was pushed':

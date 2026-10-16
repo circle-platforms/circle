@@ -1,3 +1,4 @@
+import { useOwnerDraft } from '../model/owner-draft';
 import { deliveryPreflightText } from '../model/delivery-preflight-text';
 import { useOwnerState } from '../model/owner-state';
 import { useEffect, useRef, useState } from 'react';
@@ -51,8 +52,14 @@ export function DeliveryPanel({
     extension?.enabled &&
     connection?.provider === 'github' &&
     connection.state === 'connected';
-  const [title, setTitle] = useOwnerState(sessionId, '');
-  const [body, setBody] = useOwnerState(sessionId, '');
+  const [title, setTitle, titleUnavailable] = useOwnerDraft(
+    sessionId,
+    'delivery.title',
+  );
+  const [body, setBody, bodyUnavailable] = useOwnerDraft(
+    sessionId,
+    'delivery.body',
+  );
   const [runId, setRunId] = useOwnerState(sessionId, '');
   const [logs, setLogs] = useOwnerState(sessionId, '');
   const [busy, setBusy] = useOwnerState(sessionId, false);
@@ -132,6 +139,13 @@ export function DeliveryPanel({
     >
       <summary>{t('GitHub delivery')}</summary>
       {error && <WorkspaceServiceError key={sessionId} error={error} />}
+      {(titleUnavailable || bodyUnavailable) && (
+        <p className="panel-note" role="status">
+          {t(
+            'local draft storage is unavailable; keep this panel open and copy your text before leaving',
+          )}
+        </p>
+      )}
       <p>{auth ? t('GitHub connected') : t('GitHub login required')}</p>
       <NavLink to="/page/extensions?plugin=github">
         {t('manage GitHub plugin')}

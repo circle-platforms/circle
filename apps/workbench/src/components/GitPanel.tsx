@@ -1,3 +1,4 @@
+import { useOwnerDraft } from '../model/owner-draft';
 import { useOwnerState } from '../model/owner-state';
 import { useEffect, useRef } from 'react';
 import { workspaceCall } from '../model/workspace-client';
@@ -52,7 +53,10 @@ export function GitPanel({
   const [base, setBase] = useOwnerState(sessionId, 'origin/main');
   const [selected, setSelected] = useOwnerState<string[]>(sessionId, []);
   const [diff, setDiff] = useOwnerState(sessionId, '');
-  const [message, setMessage] = useOwnerState(sessionId, '');
+  const [message, setMessage, draftUnavailable] = useOwnerDraft(
+    sessionId,
+    'git.commit-message',
+  );
   const [error, setError] = useOwnerState(sessionId, '');
   const [busy, setBusy] = useOwnerState(sessionId, false);
   const generation = useRef(0);
@@ -153,6 +157,13 @@ export function GitPanel({
         </Button>
       </header>
       {error && <WorkspaceServiceError key={sessionId} error={error} />}
+      {draftUnavailable && (
+        <p className="panel-note" role="status">
+          {t(
+            'local draft storage is unavailable; keep this panel open and copy your text before leaving',
+          )}
+        </p>
+      )}
       <div
         className="native-git-scopes segmented"
         role="group"
