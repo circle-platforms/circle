@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, mkdtemp } from 'node:fs/promises';
+import { join } from 'node:path';
 import { createServer } from 'vite';
 import { chromium } from 'playwright';
 const server = await createServer({
@@ -8,15 +9,22 @@ const server = await createServer({
   server: { port: 0, host: '127.0.0.1' },
 });
 let browser;
-const output = fileURLToPath(
+const evidenceRoot = fileURLToPath(
   new URL('../artifacts/debug-embedded/', import.meta.url),
 );
+await mkdir(evidenceRoot, { recursive: true });
+const output =
+  process.env.CIRCLE_DEBUG_EMBEDDED_EVIDENCE ||
+  process.env.CIRCLE_COMPONENT_UI_EVIDENCE ||
+  (await mkdtemp(join(evidenceRoot, 'attempt-')));
 await mkdir(output, { recursive: true });
 try {
   await server.listen();
   browser = await chromium.launch({
     headless: true,
-    channel: process.env.CIRCLE_TEST_BROWSER_CHANNEL || 'chrome',
+    ...(process.env.CIRCLE_TEST_BROWSER_CHANNEL
+      ? { channel: process.env.CIRCLE_TEST_BROWSER_CHANNEL }
+      : {}),
   });
   for (const locale of ['en', 'zh-CN'])
     for (const theme of ['dark', 'light']) {
