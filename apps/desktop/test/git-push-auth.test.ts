@@ -75,6 +75,15 @@ test('owned gh credential helper serves only the exact HTTPS repository and clea
           .find((value) => value.startsWith('core.hooksPath='))!
           .slice('core.hooksPath='.length);
         assert.equal(childEnv.GH_TOKEN, TOKEN);
+        assert(
+          !(
+            await readFile(
+              path.join(privateDirectory, 'credential.cjs'),
+              'utf8',
+            )
+          ).includes(TOKEN),
+        );
+        assert.equal(await readFile(childEnv.GIT_CONFIG_GLOBAL!, 'utf8'), '');
         assert(!config.join(' ').includes(TOKEN));
         const credentials = await git(
           [...config, 'credential', 'fill'],
@@ -273,6 +282,8 @@ test('private credential context strips injected command and tracing settings an
     GIT_CURL_VERBOSE: '1',
     GIT_ASKPASS: 'untrusted',
     NODE_OPTIONS: '--require=untrusted',
+    Gh_Token: 'untrusted-alias',
+    GH_DEBUG: 'api',
   };
   await assert.rejects(
     withGitHubPushCredentials(
@@ -296,6 +307,8 @@ test('private credential context strips injected command and tracing settings an
           'GIT_TRACE',
           'GIT_CURL_VERBOSE',
           'NODE_OPTIONS',
+          'Gh_Token',
+          'GH_DEBUG',
         ])
           assert.equal(childEnv[key], undefined);
         assert.equal(childEnv.GIT_ASKPASS, 'false');

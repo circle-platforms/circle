@@ -37,6 +37,8 @@ export async function withGitHubPushCredentials(
   try {
     const file = path.join(directory, 'credential.cjs');
     await writeFile(file, helper, { mode: 0o600 });
+    const emptyConfig = path.join(directory, 'empty-git-config');
+    await writeFile(emptyConfig, '', { mode: 0o600 });
     options.signal?.throwIfAborted();
     options.assertActive();
     try {
@@ -46,7 +48,7 @@ export async function withGitHubPushCredentials(
         ...Object.keys(cleanEnv),
       ])) {
         if (
-          /^(GIT_CONFIG_|GIT_TRACE|GIT_CURL_VERBOSE$|GIT_ASKPASS$|GIT_EXEC_PATH$|GIT_SSL_NO_VERIFY$|SSH_ASKPASS$|NODE_OPTIONS$)/i.test(
+          /^(GIT_CONFIG_|GIT_TRACE|GIT_CURL_VERBOSE$|GIT_ASKPASS$|GIT_EXEC_PATH$|GIT_SSL_NO_VERIFY$|SSH_ASKPASS$|NODE_OPTIONS$|GH_DEBUG$|GH_TOKEN$|GITHUB_TOKEN$|GH_ENTERPRISE_TOKEN$|GITHUB_ENTERPRISE_TOKEN$|GH_HOST$|GH_REPO$|GH_CONFIG_DIR$)/i.test(
             key,
           )
         )
@@ -58,6 +60,10 @@ export async function withGitHubPushCredentials(
         {
           ...cleanEnv,
           GH_TOKEN: options.token,
+          GH_HOST: 'github.com',
+          GH_CONFIG_DIR: directory,
+          GIT_CONFIG_NOSYSTEM: '1',
+          GIT_CONFIG_GLOBAL: emptyConfig,
           CIRCLE_GIT_GH: options.ghPath,
           CIRCLE_GIT_REPOSITORY: options.repository,
           ELECTRON_RUN_AS_NODE: '1',
