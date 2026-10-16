@@ -13,6 +13,7 @@ const server = await createServer({
 await server.listen();
 const output =
   process.env.CIRCLE_TERMINAL_TABS_EVIDENCE ??
+  process.env.CIRCLE_COMPONENT_UI_EVIDENCE ??
   (await mkdtemp(join(tmpdir(), 'circle-terminal-tabs-')));
 await mkdir(output, { recursive: true });
 let browser, currentPage;

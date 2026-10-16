@@ -32,6 +32,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'file-source-heading-ui.mjs',
   'sidebar-workspace-label-ui.mjs',
   'github-connection-ui.mjs',
+  'native-terminal-tabs-ui.mjs',
 ]);
 
 /** Explicit suites run serially; a failed suite prevents later execution. */
