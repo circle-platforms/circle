@@ -1,3 +1,4 @@
+import { setLanguage } from '../src/i18n';
 import '../src/styles/app.css';
 import { applyTheme } from '../src/theme';
 import { useState } from 'react';
@@ -18,6 +19,7 @@ function Fixture() {
   Object.assign(window, {
     __gitSetSession: setSessionId,
     __gitTheme: applyTheme,
+    __gitLanguage: setLanguage,
   });
   applyTheme('light');
   return <GitPanel sessionId={sessionId} embedded />;

@@ -1,5 +1,8 @@
 export const nativeGit: Record<string, string> = {
   skipped: '已跳过',
+  'open this workspace in Circle desktop, then refresh':
+    '在 Circle 桌面端打开此工作区后刷新',
+  'technical details': '技术详情',
   'finishing secure login': '正在完成安全登录',
   'secure storage unavailable; signed in for this session only':
     '安全存储不可用；仅在本次会话中登录',

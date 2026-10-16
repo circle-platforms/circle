@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { workspaceCall } from '../model/workspace-client';
 import { t } from '../i18n';
 import './GitPanel.css';
-import { DeliveryPanel } from './DeliveryPanel';
+import { DeliveryPanel, WorkspaceServiceError } from './DeliveryPanel';
 import { Button } from './common';
 import { DiffBlock } from './DiffBlock';
 import type { DiffView } from '../model/types';
@@ -153,12 +153,7 @@ export function GitPanel({
           {t('refresh')}
         </Button>
       </header>
-      <p className="panel-note">
-        {t(
-          'git includes manual and agent changes; session changes remain in Changes',
-        )}
-      </p>
-      {error && <p role="alert">{error}</p>}
+      {error && <WorkspaceServiceError key={sessionId} error={error} />}
       <div
         className="native-git-scopes segmented"
         role="group"

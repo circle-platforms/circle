@@ -18,6 +18,19 @@ type Check = {
   link: string;
   workflow: string;
 };
+export function WorkspaceServiceError({ error }: { error: string }) {
+  if (!error.includes('native workspace services are not connected'))
+    return <p role="alert">{error}</p>;
+  return (
+    <div role="alert">
+      <p>{t('open this workspace in Circle desktop, then refresh')}</p>
+      <details>
+        <summary>{t('technical details')}</summary>
+        <pre tabIndex={0}>{error}</pre>
+      </details>
+    </div>
+  );
+}
 export function DeliveryPanel({
   sessionId,
   revision,
@@ -103,7 +116,7 @@ export function DeliveryPanel({
       onToggle={(e) => setOpened(e.currentTarget.open)}
     >
       <summary>{t('GitHub delivery')}</summary>
-      {error && <p role="alert">{error}</p>}
+      {error && <WorkspaceServiceError key={sessionId} error={error} />}
       <p>
         {auth === null
           ? t('checking GitHub connection')

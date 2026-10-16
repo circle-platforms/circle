@@ -208,6 +208,48 @@ try {
   );
   assert.equal((await git.snapshot()).entries.length, 0);
   console.log('real React + Git: two consecutive explicit-file commits passed');
+  for (const [language, friendly, details] of [
+    [
+      'en',
+      'open this workspace in Circle desktop, then refresh',
+      'technical details',
+    ],
+    ['zh-CN', '在 Circle 桌面端打开此工作区后刷新', '技术详情'],
+  ]) {
+    await page.evaluate(
+      ({ language }) => {
+        window.circleDesktop = undefined;
+        window.__gitLanguage(language);
+        window.__gitSetSession('disconnected-' + language);
+      },
+      { language },
+    );
+    const alert = panel.getByRole('alert');
+    await alert.getByText(friendly, { exact: true }).waitFor();
+    assert.equal(
+      await alert.locator('details pre').isVisible(),
+      false,
+      'raw transport detail starts collapsed',
+    );
+    await alert.getByText(details, { exact: true }).click();
+    assert.equal(await alert.locator('details pre').isVisible(), true);
+    assert.match(
+      await alert.locator('details pre').innerText(),
+      /native workspace services are not connected/,
+    );
+    assert.equal(
+      await panel
+        .getByText(
+          'git includes manual and agent changes; session changes remain in Changes',
+          { exact: true },
+        )
+        .count(),
+      0,
+    );
+  }
+  console.log(
+    'disconnected preview has localized next action and expandable original error',
+  );
 } finally {
   await browser?.close();
   await server.close();
