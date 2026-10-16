@@ -48,14 +48,20 @@ export async function runNativeGitHubSettingsJourney({
       .locator('.sidebar')
       .getByRole('button', { name: 'settings', exact: true })
       .click();
+    await page
+      .getByRole('heading', { name: 'settings', exact: true })
+      .waitFor();
+    const managePlugin = page.getByRole('link', {
+      name: 'manage GitHub plugin',
+      exact: true,
+    });
+    await managePlugin.waitFor({ state: 'visible' });
     assert.equal(
       await page.locator('#github-connection').count(),
       0,
       'settings offers navigation rather than a second account-management card',
     );
-    await page
-      .getByRole('link', { name: 'manage GitHub plugin', exact: true })
-      .click();
+    await managePlugin.click();
     const detail = page.getByRole('region', {
       name: 'GitHub plugin',
       exact: true,
