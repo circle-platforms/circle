@@ -13,4 +13,7 @@ test('the desktop footer writes tokens and times as the terminal does', () => {
       desktop.formatBusyElapsed(seconds),
       terminal.formatBusyElapsed(seconds),
     );
+  assert.equal(terminal.gapElapsed(undefined, 5_000), '');
+  assert.equal(terminal.gapElapsed(1_000, 1_400), '');
+  assert.equal(terminal.gapElapsed(1_000, 9_600), '9s');
 });

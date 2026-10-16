@@ -364,6 +364,8 @@ export interface WorkbenchSnapshot {
 }
 export interface CommandResult {
   openSession?: boolean;
+  /** Ctrl+N / new session: the empty conversation should take the keyboard. */
+  focusComposer?: boolean;
   notice?: string;
   page?: PageId;
   dialog?: DialogId;

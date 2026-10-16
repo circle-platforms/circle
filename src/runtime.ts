@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { join, basename } from 'node:path';
 import { readFileSync } from 'node:fs';
 import type { ChatModel, Message, ToolCall } from './types.js';
-import { GatewayModel, EFFORT_LEVELS } from './model.js';
+import { GatewayModel, EFFORT_LEVELS, defaultEffort } from './model.js';
 import { WebSearchService } from './websearch_service.js';
 import type { NativeSearchConnection } from './native_websearch.js';
 import { CheckpointStore, type Session } from './checkpoint_store.js';
@@ -167,6 +167,12 @@ export interface RuntimeOptions {
    * so startup and /new do not leave an empty row.
    */
   deferSession?: boolean;
+  /**
+   * Leave a sentence untitled until its generated title arrives, and do not ask
+   * for a title again when a session opens. The desktop shows such a session as
+   * a new session and keeps its own list.
+   */
+  holdTitle?: boolean;
 }
 export class AgentRuntime {
   private readonly searches = new WebSearchService();
@@ -740,6 +746,7 @@ export class AgentRuntime {
       secrets: () => loadSecrets(this.options.home),
       redact: this.redact,
       model: this.modelWithSearch(model),
+      holdTitle: this.options.holdTitle,
       tools,
       store: this.store,
       session: this.session,
@@ -1220,6 +1227,22 @@ export class AgentRuntime {
     this.options.settings.default_thinking = level;
     this.refreshSystemPrompt();
   }
+  /**
+   * A chosen depth, or `default` when the user has not chosen one. `default` clears
+   * the saved preference and sends the protocol's usual effort (Anthropic `medium`).
+   * A request already built keeps the depth it read. The next request uses this choice.
+   */
+  applyThinkingChoice(level: string): void {
+    const clearing = level === 'default' || level === '';
+    if (!clearing && !(EFFORT_LEVELS as readonly string[]).includes(level))
+      throw new Error('unknown thinking depth');
+    if (this.baseModel instanceof GatewayModel)
+      this.baseModel.effort = clearing
+        ? defaultEffort(this.baseModel.settings.auth.protocol, '')
+        : level;
+    this.options.settings.default_thinking = clearing ? '' : level;
+    if (!this.busy) this.refreshSystemPrompt();
+  }
   stats(): {
     messages: number;
     toolCalls: number;
@@ -1459,6 +1482,7 @@ export class AgentRuntime {
    * from /name stays.
    */
   private refreshFallbackTitle(): void {
+    if (this.options.holdTitle) return;
     void this.retitleSession(this.session.id);
   }
   /**
@@ -1467,7 +1491,12 @@ export class AgentRuntime {
    * Opening them is not required. A model with no side request is left alone.
    */
   repairRecentTitles(): void {
-    if (this.closing || !this.harness.model.sideRequests) return;
+    if (
+      this.closing ||
+      this.options.holdTitle ||
+      !this.harness.model.sideRequests
+    )
+      return;
     const pending = this.store
       .list(this.options.workspace)
       .filter((session) => session.id !== this.session.id)
@@ -1587,6 +1616,7 @@ export class AgentRuntime {
     this.compactionController?.abort(new Error('Interrupted'));
     await this.activeCompaction?.catch(() => {});
     await this.harness.cancel();
+    await this.harness.finishTitle();
     await this.userShells.cancel();
     const stopped = await this.jobs.close();
     if (!this.ownershipError) this.userShells.flush();

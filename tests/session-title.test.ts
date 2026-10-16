@@ -392,7 +392,7 @@ class TitleModel implements ChatModel {
   }
 }
 
-function harness(root: string, model: ChatModel) {
+function harness(root: string, model: ChatModel, holdTitle = false) {
   const store = new CheckpointStore(root);
   const session = store.create(root, model.model);
   const policy = new ApprovalPolicy(
@@ -409,8 +409,19 @@ function harness(root: string, model: ChatModel) {
       session,
       policy,
       system: 'test',
+      holdTitle,
     }),
   };
+}
+
+function titleFailures(run: Harness): string[] {
+  const notes: string[] = [];
+  run.bus.subscribe((event) => {
+    const notice = event.payload.model_notice as
+      { event?: string; message?: string } | undefined;
+    if (notice?.event === 'title_failed') notes.push(String(notice.message));
+  });
+  return notes;
 }
 
 const LONG =
@@ -1567,4 +1578,112 @@ test('startup repairs a visible title and the resume line follows it', async (t)
     order,
   );
   assert.equal(app.runtime!.store.get(kept.id)!.title, 'older topic');
+});
+
+test('the desktop holds a sentence untitled until its title arrives', async (t) => {
+  const root = scratch(t);
+  const model = new TitleModel('done', 'Login bug fix');
+  const { harness: run, store, session } = harness(root, model, true);
+  cleanup(t, () => store.close());
+  const result = await run.run(LONG);
+  assert.equal(result.answer, 'done');
+  // The trimmed prompt is not the title while the summary is pending.
+  assert.equal(store.get(session.id)!.title, '');
+  model.releaseTitle();
+  await run.finishTitle();
+  assert.equal(store.get(session.id)!.title, 'Login bug fix');
+  // A short line is its own title at once, and asks for nothing.
+  const short = scratch(t);
+  const quiet = new TitleModel('hello', 'unused');
+  const hi = harness(short, quiet, true);
+  cleanup(t, () => hi.store.close());
+  const notes = titleFailures(hi.harness);
+  await hi.harness.run('hi');
+  assert.equal(hi.store.get(hi.session.id)!.title, 'hi');
+  assert.equal(
+    quiet.requests.filter(
+      (request) => request.maxTokens === Harness.titleOutputTokens,
+    ).length,
+    0,
+  );
+  assert.deepEqual(notes, []);
+});
+
+test('a held title that fails or is refused keeps the short title', async (t) => {
+  for (const [reply, reason] of [
+    ['Sorry, I cannot title this', 'not a title'],
+    ['', 'empty title'],
+  ] as const) {
+    const root = scratch(t);
+    const model = new TitleModel('done', reply);
+    const { harness: run, store, session } = harness(root, model, true);
+    cleanup(t, () => store.close());
+    const notes = titleFailures(run);
+    await run.run(LONG);
+    assert.equal(store.get(session.id)!.title, '');
+    model.releaseTitle();
+    await run.finishTitle();
+    assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
+    assert.deepEqual(notes, [reason]);
+  }
+  const root = scratch(t);
+  const model = new TitleModel('done', 'Login bug fix');
+  model.failTitle = true;
+  const { harness: run, store, session } = harness(root, model, true);
+  cleanup(t, () => store.close());
+  const notes = titleFailures(run);
+  await run.run(LONG);
+  await run.finishTitle();
+  assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
+  assert.match(notes[0] ?? '', /title exploded/);
+});
+
+test('a held question that is echoed twice stays untitled without a failure', async (t) => {
+  const prompt = 'what is TCP';
+  const root = scratch(t);
+  const model = new TitleModel('done', 'unused');
+  model.scriptedTitles = ['What is TCP', 'TCP overview'];
+  const first = harness(root, model, true);
+  cleanup(t, () => first.store.close());
+  const notes = titleFailures(first.harness);
+  await first.harness.run(prompt);
+  model.releaseTitle();
+  await first.harness.finishTitle();
+  assert.equal(first.store.get(first.session.id)!.title, 'TCP overview');
+  assert.deepEqual(notes, []);
+
+  const again = scratch(t);
+  const echo = new TitleModel('done', 'unused');
+  echo.scriptedTitles = ['What is TCP', 'what is TCP?'];
+  const second = harness(again, echo, true);
+  cleanup(t, () => second.store.close());
+  const quiet = titleFailures(second.harness);
+  await second.harness.run(prompt);
+  echo.releaseTitle();
+  await second.harness.finishTitle();
+  assert.equal(
+    echo.requests.filter(
+      (request) => request.maxTokens === Harness.titleOutputTokens,
+    ).length,
+    2,
+  );
+  assert.equal(second.store.get(second.session.id)!.title, '');
+  assert.deepEqual(quiet, []);
+});
+
+test('closing waits for a title in flight before the store goes', async (t) => {
+  const root = scratch(t);
+  const model = new TitleModel('done', 'Login bug fix');
+  const { harness: run, store, session } = harness(root, model, true);
+  cleanup(t, () => store.close());
+  await run.run(LONG);
+  let settled = false;
+  const finished = run.finishTitle().then(() => {
+    settled = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  model.releaseTitle();
+  await finished;
+  assert.equal(store.get(session.id)!.title, 'Login bug fix');
 });

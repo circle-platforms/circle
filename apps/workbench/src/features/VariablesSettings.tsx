@@ -104,12 +104,17 @@ export function VariablesSettings() {
     <section className="settings-block">
       <h2>{t('variables')}</h2>
       <p className="panel-note">
-        {t(
-          "Written as Windows writes environment variables: %NAME% in a tool's arguments takes the value when the tool runs. The model also reads the values.",
-        )}
+        {document.documentElement.dataset.desktop === 'win32'
+          ? t(
+              "Written as Windows writes environment variables: %NAME% in a tool's arguments takes the value when the tool runs. The model also reads the values.",
+            )
+          : t(
+              "A shell variable on this system is $NAME. In a tool's arguments write %NAME%, and Circle puts the value in when the tool runs. The model also reads the values.",
+            )}
       </p>
       <VariableTable
         label={t('variables')}
+        empty={t('no variables yet')}
         rows={Object.entries(variables)}
         selected={selected.variable}
         onSelect={(name) => setSelected({ ...selected, variable: name })}
@@ -119,12 +124,18 @@ export function VariablesSettings() {
       />
       <h3>{t('secrets')}</h3>
       <p className="panel-note">
-        {t(
-          'Variables whose values the model never sees: it knows the name, and reads %NAME% wherever a value shows in output. A saved value is not shown again.',
-        )}
+        {document.documentElement.dataset.desktop === 'win32'
+          ? t(
+              'Variables whose values the model never sees: it knows the name, and reads %NAME% wherever a value shows in output. A saved value is not shown again.',
+            )
+          : t(
+              "The model knows a secret only by name. Where a tool's output shows the value, you read %NAME%, not the shell's $NAME. A saved value is not shown again.",
+            )}
       </p>
       <VariableTable
         label={t('secrets')}
+        nameHeading={t('name')}
+        empty={t('no secrets yet')}
         rows={secrets.map((name) => [name, MASK])}
         selected={selected.secret}
         onSelect={(name) => setSelected({ ...selected, secret: name })}
@@ -227,6 +238,8 @@ export function VariablesSettings() {
 
 function VariableTable({
   label,
+  nameHeading,
+  empty,
   rows,
   selected,
   onSelect,
@@ -235,6 +248,8 @@ function VariableTable({
   onDelete,
 }: {
   label: string;
+  nameHeading?: string;
+  empty: string;
   rows: [string, string][];
   selected: string | null;
   onSelect: (name: string) => void;
@@ -249,11 +264,18 @@ function VariableTable({
         <table aria-label={label}>
           <thead>
             <tr>
-              <th>{t('variable')}</th>
+              <th>{nameHeading ?? t('variable')}</th>
               <th>{t('value')}</th>
             </tr>
           </thead>
           <tbody>
+            {rows.length === 0 && (
+              <tr className="variable-empty-row">
+                <td className="variable-empty" colSpan={2}>
+                  {empty}
+                </td>
+              </tr>
+            )}
             {rows.map(([name, value]) => (
               <tr
                 key={name}

@@ -192,6 +192,8 @@ export const dialogs: Record<string, string> = {
   'enter a secret': '输入密钥',
   'copy the last answer, when nothing is selected':
     '没有选中内容时，复制上一条回答',
+  'show or hide the sidebar': '显示或隐藏侧边栏',
+  'background the turn': '把这一轮放到后台',
   tool: '工具',
   notice: '提示',
 };

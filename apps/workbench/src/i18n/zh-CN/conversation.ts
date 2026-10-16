@@ -22,6 +22,7 @@ export const conversation: Record<string, string> = {
   'close find': '关闭查找',
   // the transcript
   'what are we working on?': '我们要做什么？',
+  'work without a project': '不在项目中工作',
   'what should we build in {name}?': '你想让我们在 {name} 中构建什么？',
   'search projects': '搜索项目',
   'no matching projects': '没有匹配的项目',
@@ -49,6 +50,8 @@ export const conversation: Record<string, string> = {
   'toggle plan': '展开或收起计划',
   'plan steps': '计划步骤',
   'plan completed · {n} steps': '计划已完成 · {n} 个步骤',
+  '✖ the turn failed': '✖ 这一轮失败了',
+  'title failed · {message}': '标题失败 · {message}',
   'archived conversation · read only': '已归档对话 · 只读',
   'restore conversation': '恢复对话',
   steering: '插话',

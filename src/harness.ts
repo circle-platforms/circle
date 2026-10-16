@@ -93,6 +93,11 @@ export interface HarnessOptions {
   approvalSessionId?: string;
   parentPlanMode?: () => boolean;
   planFileMutation?: (call: ToolCall) => boolean;
+  /**
+   * Leave a sentence untitled until its generated title arrives, instead of
+   * saving the short title first. The desktop shows it as a new session.
+   */
+  holdTitle?: boolean;
 }
 /** A message that waits for the model, as the input box showed it. */
 export interface QueuedMessage {
@@ -257,6 +262,20 @@ export class Harness {
       /* run_error and persisted results record the stop. */
     }
   }
+  /** Let in-flight titles finish. Closing calls this before the store goes. */
+  async finishTitle(): Promise<void> {
+    await Promise.all([...this.titleTasks]);
+  }
+  private storedSession(sessionId = this.sessionId): Session | undefined {
+    try {
+      return this.options.store.get(sessionId);
+    } catch (error) {
+      // The session can close while the title request is still in flight.
+      if (error instanceof Error && /not open/.test(error.message))
+        return undefined;
+      throw error;
+    }
+  }
   // A prompt with the files it mentions and the ones given with it (the desktop's). A model
   // known not to read images gets their paths only, and the screen says so. A file that
   // cannot go is left out: the model and the screen are told which and why.
@@ -370,19 +389,32 @@ export class Harness {
    * thinking is disabled.
    */
   static readonly titleOutputTokens = TITLE_MAX_TOKENS;
-  /** Set once the fallback is saved. Sent after the turn so it does not share that request. */
+  /** Set when the turn starts. Sent after the turn so it does not share that request. */
   private pendingTitle?: { display: string; fallback: string };
-  /**
-   * Ask the model for a short title after the fallback is already saved. A scripted model
-   * never sees this call. A rename that landed first is left alone. The request disables
-   * thinking: glm-5.3 still reasons when the field is omitted. Reasoning text is
-   * not a title. The prompt is wrapped as data, and a reply that answers the
-   * user is discarded.
-   */
+  /** Title requests in flight, so close can let them land before the store goes. */
+  private readonly titleTasks = new Set<Promise<void>>();
   private generateTitle(
     display: string,
     fallback: string,
     sessionId = this.sessionId,
+  ): Promise<void> {
+    const task = this.requestTitle(display, fallback, sessionId);
+    this.titleTasks.add(task);
+    void task.finally(() => this.titleTasks.delete(task));
+    return task;
+  }
+  /**
+   * Ask the model for a short title. The terminal has already saved the short
+   * title; with `holdTitle` (the desktop) a sentence stays untitled until this
+   * returns. A scripted model never sees this call. A rename that landed first
+   * is left alone. The request disables thinking: glm-5.3 still reasons when
+   * the field is omitted. Reasoning text is not a title. The prompt is wrapped
+   * as data, and a reply that answers the user is discarded.
+   */
+  private requestTitle(
+    display: string,
+    fallback: string,
+    sessionId: string,
   ): Promise<void> {
     // `this.model`, not the model passed at construction: /model and a reload replace it.
     const model = this.model;
@@ -428,15 +460,34 @@ export class Harness {
         maxTokens: Harness.titleOutputTokens,
         token: () => {},
       });
+    // An empty title is the desktop's placeholder while the summary is pending.
+    const unchanged = (title: string) => title === fallback || title === '';
+    const remember = (title: string): boolean => {
+      try {
+        this.options.store.rename(sessionId, title);
+      } catch (error) {
+        if (error instanceof Error && /not open/.test(error.message))
+          return false;
+        throw error;
+      }
+      this.bus.emit('info', { payload: { title, session_id: sessionId } });
+      return true;
+    };
+    // A failed or rejected title keeps the short title, also where it was held.
+    const keepFallback = (): void => {
+      const current = this.storedSession(sessionId);
+      if (current && !current.title && !current.title_locked)
+        remember(fallback);
+    };
     return ask(system)
       .then(async (response) => {
         // Reasoning is never a title, even when the answer is empty.
         let decision = acceptGeneratedTitle(response.message.content, prompt);
         // One stricter retry. A second copy is not stored.
         if (decision.reason === 'echoes prompt') {
-          const held = this.options.store.get(sessionId);
+          const held = this.storedSession(sessionId);
           if (!held || held.title_locked) return;
-          if (held.title !== fallback) {
+          if (!unchanged(held.title)) {
             this.bus.emit('info', {
               payload: { title: held.title, session_id: sessionId },
             });
@@ -444,16 +495,27 @@ export class Harness {
           }
           const again = await ask(titleRetrySystem(system));
           decision = acceptGeneratedTitle(again.message.content, prompt);
+          // A held session stays untitled after a second copy, and that is
+          // not a failure. The terminal keeps its short title and says so.
+          if (
+            decision.reason === 'echoes prompt' &&
+            this.options.holdTitle &&
+            !this.storedSession(sessionId)?.title
+          ) {
+            titleTrace('left untitled (title echoed the prompt)');
+            return;
+          }
         }
         if (!decision.title) {
           titleTrace(`discarded (${decision.reason})`);
+          keepFallback();
           report(decision.reason);
           return;
         }
         const title = decision.title;
-        const current = this.options.store.get(sessionId);
+        const current = this.storedSession(sessionId);
         if (!current || current.title_locked) return;
-        if (current.title !== fallback) {
+        if (!unchanged(current.title)) {
           // A repair that finished first already renamed it. The resume line
           // still has the old title until this event.
           this.bus.emit('info', {
@@ -461,12 +523,16 @@ export class Harness {
           });
           return;
         }
-        this.options.store.rename(sessionId, title);
+        if (!remember(title)) return;
         titleTrace(`renamed to ${JSON.stringify(title)}`);
-        this.bus.emit('info', { payload: { title, session_id: sessionId } });
       })
       .catch((error: unknown) => {
-        // The fallback title stays. A side request must not fail the turn.
+        // The short title stays. A side request must not fail the turn.
+        try {
+          keepFallback();
+        } catch {
+          /* The store is closing. */
+        }
         report(error instanceof Error ? error.message : String(error));
       });
   }
@@ -545,10 +611,17 @@ export class Harness {
     const session = this.options.store.get(this.sessionId)!;
     if (!session.title && shown?.display !== undefined) {
       const fallback = fallbackTitle(shown.display);
-      this.options.store.rename(this.sessionId, fallback);
-      this.bus.emit('info', {
-        payload: { title: fallback, session_id: this.sessionId },
-      });
+      // The desktop holds a sentence untitled until its summary arrives, also
+      // while a tool approval is open. A short line such as "hi" is its title.
+      const hold =
+        this.options.holdTitle &&
+        !titleSkipReason(shown.display.trim(), this.model.sideRequests);
+      if (!hold) {
+        this.options.store.rename(this.sessionId, fallback);
+        this.bus.emit('info', {
+          payload: { title: fallback, session_id: this.sessionId },
+        });
+      }
       this.pendingTitle = { display: shown.display, fallback };
     }
     this.bus.emit('run_start', { payload: { message: prompt } });
