@@ -129,6 +129,14 @@ export async function runNativeCommandHandoffJourney({
           throw error;
         });
     }, 'original command approval starts the owned process');
+    receipt.observedProcess = {
+      pid: Number(
+        await readFile(join(workspace, 'native-command-pid'), 'utf8'),
+      ),
+      starts: await readFile(join(workspace, 'native-command-starts'), 'utf8'),
+      workspace,
+      ownerSessionId: owner,
+    };
     const ownSession = (await state()).sessions.find(
       (item) => item.id === owner,
     );
