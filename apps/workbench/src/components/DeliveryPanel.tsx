@@ -1,6 +1,6 @@
 import { deliveryPreflightText } from '../model/delivery-preflight-text';
 import { useOwnerState } from '../model/owner-state';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRuntime } from '../app/context';
 import type { GitHubConnectionState } from '../../../../src/github_connection';
 import { NavLink } from 'react-router-dom';
@@ -39,7 +39,7 @@ export function DeliveryPanel({
   revision?: string;
   onOpenExternal?: (url: string) => void;
 }) {
-  const [opened, setOpened] = useOwnerState(sessionId, false);
+  const [opened, setOpened] = useState(false);
   const [pr, setPR] = useOwnerState<PR | null>(sessionId, null);
   const [checks, setChecks] = useOwnerState<Check[]>(sessionId, []);
   const { snapshot } = useRuntime();

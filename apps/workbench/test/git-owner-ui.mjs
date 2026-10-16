@@ -198,6 +198,18 @@ try {
     );
   };
   await select('b');
+  const ownerStatusDeadline = Date.now() + 8000;
+  while (
+    !calls.some(
+      (command) =>
+        command.sessionId === 'b' &&
+        command.payload.service === 'delivery' &&
+        command.payload.method === 'status',
+    )
+  ) {
+    assert(Date.now() < ownerStatusDeadline);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
   assert.equal(
     await git
       .getByRole('textbox', { name: 'commit message', exact: true })
