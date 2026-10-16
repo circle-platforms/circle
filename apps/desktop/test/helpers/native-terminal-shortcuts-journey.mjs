@@ -259,11 +259,11 @@ export async function runNativeTerminalShortcutsJourney({
     await input().focus();
     await page.keyboard.press('Control+c');
     await until(
-      () => terminalShortcutPidGone(ready.pid),
+      async () => terminalShortcutPidGone(ready.pid),
       'Control+C exits the actual foreground child',
     );
     await until(
-      () => terminalShortcutPortFree(ready.port),
+      async () => terminalShortcutPortFree(ready.port),
       'Control+C releases the actual child port',
     );
     assert.deepEqual(
