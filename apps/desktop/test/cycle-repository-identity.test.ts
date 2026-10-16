@@ -4,6 +4,7 @@ import {
   chmod,
   mkdtemp,
   mkdir,
+  open,
   readFile,
   realpath,
   rename,
@@ -20,6 +21,18 @@ import { GitWorkspaceService } from '../src/workspace/git.js';
 import { TaskService } from '../src/workspace/task-service.js';
 import type { CycleRecord } from '../src/workspace/delivery-cycle.js';
 const exec = promisify(execFile);
+// Git for Windows hides a linked worktree's .git file. Windows refuses to
+// replace a hidden file (CREATE_ALWAYS, which writeFile uses) with EPERM, so
+// this owned corruption fixture rewrites the existing file in place instead.
+async function rewrite(path: string, content: string) {
+  const handle = await open(path, 'r+');
+  try {
+    await handle.truncate(0);
+    await handle.write(content, 0, 'utf8');
+  } finally {
+    await handle.close();
+  }
+}
 async function fixture(t: TestContext) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'cycle-identity-')));
   let tasks: TaskService | undefined;
@@ -72,18 +85,14 @@ test('fresh repository identity handles real linked worktrees and rejects dangli
     target.directory,
   );
   const originalMarker = await readFile(marker, 'utf8');
-  // Git marks linked-worktree .git metadata read-only on Windows. This owned
-  // corruption fixture must explicitly make its test file writable first.
+  // Restore write permission before the owned corruption fixture edits it.
   await chmod(marker, 0o600);
-  await writeFile(
-    marker,
-    `gitdir: ${relative(f.target, target.directory)}\r\n`,
-  );
+  await rewrite(marker, `gitdir: ${relative(f.target, target.directory)}\r\n`);
   assert.equal(
     (await cycleRepositoryIdentity(f.target)).directory,
     target.directory,
   );
-  await writeFile(marker, originalMarker);
+  await rewrite(marker, originalMarker);
   const commonFile = join(target.directory, 'commondir'),
     original = await readFile(commonFile, 'utf8');
   await writeFile(
@@ -102,7 +111,7 @@ test('fresh repository identity handles real linked worktrees and rejects dangli
     'ref: refs/heads/codex/identity\nref: refs/heads/foreign\n',
   );
   await assert.rejects(cycleRepositoryIdentity(f.target), /invalid.*HEAD/);
-  await writeFile(marker, 'gitdir: \n');
+  await rewrite(marker, 'gitdir: \n');
   await assert.rejects(cycleRepositoryIdentity(f.target), /invalid.*gitdir/);
 });
 

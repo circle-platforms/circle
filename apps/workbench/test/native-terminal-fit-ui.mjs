@@ -141,15 +141,26 @@ try {
             theme,
         );
         const panel = await openNativeTerminalInspector(page);
+        // Terminals closed by earlier cases stay listed, read-only, beside the
+        // new one: wait for the terminal this case creates, not any terminal.
+        const previous = new Set(
+          (await manager.list('session1')).map((terminal) => terminal.id),
+        );
         await panel
           .getByRole('button', { name: 'new terminal', exact: true })
           .first()
           .click();
-        await page
-          .locator('.xterm-helper-textarea')
-          .waitFor({ state: 'attached' });
-        const id = (await manager.list('session1')).at(-1).id;
+        let id;
+        for (const until = Date.now() + 5000; !id;) {
+          id = (await manager.list('session1')).find(
+            (terminal) => !previous.has(terminal.id),
+          )?.id;
+          if (!id && Date.now() > until)
+            throw Error('new terminal was not created');
+          if (!id) await new Promise((resolve) => setTimeout(resolve, 20));
+        }
         const input = page.locator(`#terminal-${id} .xterm-helper-textarea`);
+        await input.waitFor({ state: 'attached' });
         const original = await input.elementHandle();
         const samples = [];
         // Observe real rendered frames, rather than fitting a terminal into a fixed-height component fixture.

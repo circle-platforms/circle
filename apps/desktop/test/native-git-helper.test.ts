@@ -50,8 +50,20 @@ test('native Git fixture preserves the primary failure when dirty cleanup cannot
         return locator;
       },
     };
+    // The journey opens the original changes panel from its top-bar toggle
+    // before it selects the Git tab inside it.
+    let changesOpen = false;
+    const toggled: string[] = [];
     const page = {
       locator: () => ({ ...panel, click: async () => {} }),
+      getByRole: (role: string, options: { name?: string } = {}) => ({
+        getAttribute: async (name: string) =>
+          name === 'aria-pressed' ? String(changesOpen) : null,
+        click: async () => {
+          toggled.push(`${role}:${options.name}`);
+          changesOpen = !changesOpen;
+        },
+      }),
       evaluate: async () => git.snapshot(),
       waitForTimeout: async () => {},
     };
@@ -59,6 +71,7 @@ test('native Git fixture preserves the primary failure when dirty cleanup cannot
       runNativeGitJourney({ page, workspace, output, sessionId: 'fixture' }),
       /PRIMARY_STAGE_FAILURE/,
     );
+    assert.deepEqual(toggled, ['button:changes panel']);
     const failure = JSON.parse(
       await readFile(join(output, 'native-git-failure.json'), 'utf8'),
     );

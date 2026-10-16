@@ -1267,7 +1267,10 @@ if(process.argv[2]==='--ipc'){
       );
       assert.equal(created.ok, true, created.error);
     }
-    const end = Date.now() + 30000;
+    // A wall-clock bound for the whole scenario, not a product target. Two real
+    // cycles take about 6 s on Apple silicon; the work is CPU-bound and the
+    // Intel macOS runner needed 33 s, so the bound leaves room for that runner.
+    const end = Date.now() + 60000;
     const final = new Map<string, any>();
     const observedAt = new Map<string, number>();
     const timeline: unknown[] = [];
