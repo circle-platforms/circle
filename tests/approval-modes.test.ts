@@ -7,6 +7,7 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -176,6 +177,39 @@ test('accept-edits still asks before overwriting a skill-run output', (t) => {
       's',
     ),
     false,
+  );
+});
+
+test('accept-edits still asks when the workspace path is a symlink', (t) => {
+  const real = scratch(t);
+  const linked = join(scratch(t), 'workspace');
+  symlinkSync(real, linked);
+  mkdirSync(join(real, 'out'));
+  mkdirSync(join(real, 'pack'));
+  writeFileSync(join(real, 'out', 'report.md'), 'old\n');
+  writeFileSync(
+    join(real, 'pack', 'skillpack.json'),
+    JSON.stringify({ outputs: ['out/report.md'] }),
+  );
+  const rules = policy(linked);
+  rules.setMode('s', 'accept-edits');
+  assert.notEqual(linked, realpathSync(linked));
+  assert.equal(
+    rules.review('write_file', { file_path: 'out/report.md', content: 'new' })
+      .verdict,
+    'ASK_FORCED',
+  );
+  assert.equal(
+    rules.needsApproval(
+      'write_file',
+      { file_path: 'out/fresh.md', content: 'n' },
+      's',
+    ),
+    false,
+  );
+  assert.equal(
+    rules.review('execute', { command: 'printf n > out/report.md' }).verdict,
+    'ASK_FORCED',
   );
 });
 

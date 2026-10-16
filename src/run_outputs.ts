@@ -3,8 +3,14 @@
 // not cover these files. A declared file at the workspace root protects only
 // that file. A declared file in a subdirectory protects the existing files
 // in that directory.
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { dirname, relative, resolve, sep } from 'node:path';
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from 'node:fs';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 
 const SKIP = new Set(['node_modules', '.git', 'dist', '.circle']);
 
@@ -20,7 +26,24 @@ function inside(root: string, path: string): boolean {
   return rel !== '..' && !rel.startsWith('..' + sep) && !/^[A-Za-z]:/.test(rel);
 }
 
+/** One spelling of a path. An existing path is realpath'd. A path that is
+ * not there yet keeps its last part and uses the realpath of its parent, so
+ * `/var/…/out/report.md` and `/private/var/…/out/report.md` compare equal. */
+function canonical(path: string): string {
+  const absolute = resolve(path);
+  try {
+    if (existsSync(absolute)) return realpathSync(absolute);
+  } catch {
+    return absolute;
+  }
+  const parent = dirname(absolute);
+  if (parent === absolute) return absolute;
+  const tail = absolute.slice(parent.length + (parent.endsWith(sep) ? 0 : 1));
+  return join(canonical(parent), tail);
+}
+
 function guards(workspace: string): Guard[] {
+  const root = canonical(workspace);
   const found: Guard[] = [];
   const visit = (dir: string, depth: number): void => {
     if (depth > 4) return;
@@ -46,8 +69,8 @@ function guards(workspace: string): Guard[] {
             : [];
         for (const output of outputs) {
           if (typeof output !== 'string' || !output.trim()) continue;
-          const full = resolve(workspace, output);
-          if (!inside(workspace, full) || !existsSync(full)) continue;
+          const full = canonical(resolve(root, output));
+          if (!inside(root, full) || !existsSync(full)) continue;
           let stat;
           try {
             stat = statSync(full);
@@ -55,12 +78,12 @@ function guards(workspace: string): Guard[] {
             continue;
           }
           if (stat.isDirectory()) {
-            if (full !== resolve(workspace)) found.push({ directory: full });
+            if (full !== root) found.push({ directory: full });
             continue;
           }
           if (!stat.isFile()) continue;
           const parent = dirname(full);
-          if (parent === resolve(workspace)) found.push({ file: full });
+          if (parent === root) found.push({ file: full });
           else found.push({ directory: parent });
         }
         continue;
@@ -73,7 +96,7 @@ function guards(workspace: string): Guard[] {
         visit(joinSafe(dir, entry.name), depth + 1);
     }
   };
-  if (existsSync(workspace)) visit(resolve(workspace), 0);
+  if (existsSync(root)) visit(root, 0);
   return found;
 }
 
@@ -83,8 +106,9 @@ function joinSafe(dir: string, name: string): string {
 
 /** An existing file a skill pack already produced, or another file in that directory. */
 export function isExistingRunOutput(workspace: string, path: string): boolean {
-  const full = resolve(path);
-  if (!inside(workspace, full) || !existsSync(full)) return false;
+  const root = canonical(workspace);
+  const full = canonical(path);
+  if (!inside(root, full) || !existsSync(full)) return false;
   let stat;
   try {
     stat = statSync(full);
@@ -104,7 +128,7 @@ export function commandTouchesRunOutput(
   workspace: string,
   command: string,
 ): boolean {
-  const root = resolve(workspace);
+  const root = canonical(workspace);
   for (const guard of guards(workspace)) {
     if (guard.file) {
       const rel = relative(root, guard.file).split(sep).join('/');
