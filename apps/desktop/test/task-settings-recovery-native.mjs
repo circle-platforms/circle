@@ -150,9 +150,16 @@ const launch = async () => {
   receipt.identity = actual;
 };
 const openHistoryAndTasks = async () => {
-  await page
-    .locator(`.sidebar:visible .session-link[href="#/session/${sessionId}"]`)
-    .click();
+  const historyLink = page.locator(
+    `.sidebar:visible .session-link[href="#/session/${sessionId}"][tabindex="0"]`,
+  );
+  await historyLink.waitFor({ state: 'visible' });
+  assert.equal(
+    await historyLink.count(),
+    1,
+    'open the unique keyboard-primary original history row',
+  );
+  await historyLink.click();
   await page
     .getByText('COLD_CONFIG_HISTORY_REMAINS_READABLE', { exact: true })
     .waitFor();
@@ -163,7 +170,7 @@ const openHistoryAndTasks = async () => {
   if ((await toggle.getAttribute('aria-pressed')) !== 'true')
     await toggle.click();
   await page.locator('#inspector-activity-tab-tasks').click();
-  await page.locator('.tasks-panel').waitFor({ state: 'visible' });
+  await page.locator('.tasks-panel:visible').waitFor({ state: 'visible' });
 };
 try {
   await launch();
@@ -219,7 +226,7 @@ try {
   await writeFile(receipt.settingsPath, '{malformed native fixture');
   await launch();
   await openHistoryAndTasks();
-  const panel = page.locator('.tasks-panel');
+  const panel = page.locator('.tasks-panel:visible');
   await panel
     .getByText('fix collaboration limits in settings before starting tasks', {
       exact: false,
@@ -295,7 +302,7 @@ try {
   await launch();
   await openHistoryAndTasks();
   await page
-    .locator('.tasks-panel')
+    .locator('.tasks-panel:visible')
     .getByText('limits repaired; start queued tasks when ready', {
       exact: true,
     })
@@ -318,7 +325,7 @@ try {
     path: join(output, 'restarted-still-explicit-start-required.png'),
   });
   await page
-    .locator('.tasks-panel')
+    .locator('.tasks-panel:visible')
     .getByRole('button', { name: 'start ready tasks', exact: true })
     .click();
   await until(
