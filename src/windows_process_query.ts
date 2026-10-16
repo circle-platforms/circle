@@ -36,6 +36,35 @@ export function windowsProcessQuery(
   };
 }
 
+export function readWindowsProcessRecords(stdout: string) {
+  const lines = stdout.split('\n');
+  const tail = lines.pop()!;
+  let invalidRecords = 0;
+  const incompleteRecords = tail.length ? 1 : 0;
+  const entries: { pid: number; path: string }[] = [];
+  const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+  for (const line of lines) {
+    const match = /^(\d+) ([A-Za-z0-9+/]+={0,2})\r?$/.exec(line);
+    if (!match) {
+      invalidRecords++;
+      continue;
+    }
+    const bytes = Buffer.from(match[2]!, 'base64');
+    if (bytes.toString('base64') !== match[2]) {
+      invalidRecords++;
+      continue;
+    }
+    try {
+      const path = decoder.decode(bytes);
+      if (!path || path.includes('\0')) throw new Error('invalid image path');
+      entries.push({ pid: Number(match[1]), path });
+    } catch {
+      invalidRecords++;
+    }
+  }
+  return { entries, invalidRecords, incompleteRecords };
+}
+
 export function readWindowsQueryMarkers(stderr: string, nonce: string) {
   const counts = Object.fromEntries(
     queryStages.map((stage) => [stage, 0]),
@@ -76,6 +105,7 @@ export class WindowsProcessQueryObservation extends Error {
     markers: Markers,
     elapsedMs: number,
     outcome: { status: number | null; error?: Error },
+    records?: { invalidRecords: number; incompleteRecords: number },
   ) {
     const nativeCode = (outcome.error as NodeJS.ErrnoException | undefined)
       ?.code;
@@ -88,8 +118,14 @@ export class WindowsProcessQueryObservation extends Error {
       .map((stage) => `${stage}=${markers.counts[stage]}`)
       .join(',');
     const capped = markers.possiblyCappedStages.join(',') || 'none';
+    const outputProblem = !!(
+      records?.invalidRecords || records?.incompleteRecords
+    );
+    const output = outputProblem
+      ? `; stdout records invalid=${records!.invalidRecords}, incomplete=${records!.incompleteRecords}; absence unknown`
+      : '';
     super(
-      `Windows process query observation: last captured stage: ${markers.lastCapturedStage}; captured counts: ${counts}; possibly capped stages: ${capped}; elapsed ms: ${Math.round(elapsedMs)}; status: ${outcome.status}; error code: ${errorCode}. Markers show reached boundaries, not the stalled operation`,
+      `Windows process query observation: last captured stage: ${markers.lastCapturedStage}; captured counts: ${counts}; possibly capped stages: ${capped}; elapsed ms: ${Math.round(elapsedMs)}; status: ${outcome.status}; error code: ${errorCode}. Markers show reached boundaries, not the stalled operation${output}`,
     );
     this.details = {
       lastCapturedStage: markers.lastCapturedStage,
@@ -98,6 +134,12 @@ export class WindowsProcessQueryObservation extends Error {
       elapsedMs: Math.round(elapsedMs),
       status: outcome.status,
       errorCode,
+      ...(outputProblem
+        ? {
+            invalidRecords: records!.invalidRecords,
+            incompleteRecords: records!.incompleteRecords,
+          }
+        : {}),
     };
   }
 }

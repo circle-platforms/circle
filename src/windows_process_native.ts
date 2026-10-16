@@ -200,6 +200,31 @@ export async function loadWindowsProcessApi(): Promise<WindowsProcessApi> {
   };
 }
 
+export function writeWindowsProcessEntry(
+  entry: { pid: number; path: string },
+  write: (bytes: Buffer, offset: number, length: number) => number = (
+    bytes,
+    offset,
+    length,
+  ) => writeSync(1, bytes, offset, length),
+) {
+  const bytes = Buffer.from(
+    `${entry.pid} ${Buffer.from(entry.path, 'utf8').toString('base64')}\n`,
+    'utf8',
+  );
+  let offset = 0;
+  while (offset < bytes.length) {
+    const written = write(bytes, offset, bytes.length - offset);
+    if (
+      !Number.isInteger(written) ||
+      written <= 0 ||
+      written > bytes.length - offset
+    )
+      throw new WindowsProcessApiError('output');
+    offset += written;
+  }
+}
+
 async function runWorker() {
   if (process.argv[2] === '--load-only') {
     const api = await loadWindowsProcessApi();
@@ -245,12 +270,7 @@ async function runWorker() {
     names,
     mode === 'all',
     mark,
-    (entry) => {
-      writeSync(
-        1,
-        `${entry.pid} ${Buffer.from(entry.path, 'utf8').toString('base64')}\n`,
-      );
-    },
+    writeWindowsProcessEntry,
   );
   if (!outcome.complete) {
     const first = outcome.issues[0];
