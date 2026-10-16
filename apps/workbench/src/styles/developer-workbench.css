@@ -191,3 +191,16 @@
 .delivery-cycle-panel .panel-note[role='alert'] {
   color: var(--negative);
 }
+
+/* Panel v4 applies className/style to an inner surface; its registered outer
+   panel must also leave the main region when the original inspector is hidden. */
+#workbench-columns[data-inspector-mode='closed'] > #inspector {
+  display: none !important;
+}
+#workbench-columns[data-inspector-mode='closed'] > #main,
+#workbench-columns[data-inspector-mode='overlay'] > #main {
+  flex: 1 1 0 !important;
+}
+#workbench-columns[data-inspector-mode='overlay'] > #inspector {
+  display: contents !important;
+}

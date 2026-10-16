@@ -916,7 +916,13 @@ export function App() {
               </div>
             </header>
             <div className="workspace-content">
-              <Group orientation="horizontal" id="workbench-columns">
+              <Group
+                orientation="horizontal"
+                id="workbench-columns"
+                data-inspector-mode={
+                  inspectorVisible ? (narrow ? 'overlay' : 'split') : 'closed'
+                }
+              >
                 <Panel id="main" defaultSize="68%" minSize="38%">
                   <div className="main-stack">{content}</div>
                 </Panel>
