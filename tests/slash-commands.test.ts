@@ -162,7 +162,7 @@ const said = (request: { messages: Message[] }): string[] =>
     .filter((message) => !message.internal)
     .map((message) => message.content);
 
-test('/undo and /redo put the screen back; the model keeps every turn, as in 0.5.0', async (t) => {
+test('/undo and /redo put the screen back; the model keeps every turn', async (t) => {
   const { app, runtime, model, screen } = await session(t, [
     answer('answer one'),
     answer('answer two'),
@@ -459,7 +459,7 @@ test('/jobs lists running jobs first; ctrl+k stops one after asking in the list 
   );
   assert.match(picker.items[0]!.meta!, /^running · \d+s · other session$/);
   assert.match(picker.items[1]!.meta!, /^done · \d+s$/);
-  // The question is asked in the list, as 0.5.0 did; esc keeps the job running.
+  // The question is asked in the list; esc keeps the job running.
   await key('ctrl+k');
   assert.equal(app.state.dialog, undefined);
   assert.equal(app.state.picker, picker);
@@ -564,7 +564,7 @@ test('/mode steps through manual, accept edits, plan and auto, and the frame nam
   assert.equal(app.state.flash, 'Usage: /mode [manual|accept-edits|plan|auto]');
 });
 
-test('/export, /share and /unshare write the screen as Markdown under the names 0.5.0 used', async (t) => {
+test('/export, /share and /unshare write the screen as Markdown under names with the time', async (t) => {
   const { app, runtime, home, workspace, copied } = await session(t, [
     answer('the answer'),
   ]);
@@ -623,10 +623,12 @@ test('/copy copies the last answer, or writes it to a file when there is no clip
   assert.equal(app.state.flash, 'Copied 7 chars');
   app.clipboard.copyNative = async () => false;
   await app.submit('/copy');
-  const path = join(home, 'exports', 'last-copy.txt');
-  assert.equal(readFileSync(path, 'utf8'), 'copy me\n');
-  assert.equal(app.state.flash, 'Saved to file');
-  assert.equal(app.state.notices.at(-1), `Saved to file · ${path}`);
+  assert.equal(app.state.flash, 'Copied 7 chars');
+  assert.equal(existsSync(join(home, 'exports', 'last-copy.txt')), false);
+  assert.equal(
+    app.state.notices.some((note) => note.includes('Saved to file')),
+    false,
+  );
 });
 
 test('/import of a text file starts a session that gives the model its start', async (t) => {
@@ -688,7 +690,7 @@ test('/skill loads a skill into the conversation without starting a turn', async
   assert.equal(model.requests[0]!.messages.at(-1)!.content, 'write a poem');
 });
 
-test('/name, /session, /approvals, /themes and /effort answer as 0.5.0 did', async (t) => {
+test('/name, /session, /approvals, /themes and /effort answer in the transcript', async (t) => {
   const { app, runtime, home, key } = await session(t);
   await app.submit('/name');
   assert.equal(app.state.notices.at(-1), 'Session name: new');
@@ -1185,7 +1187,7 @@ test('/tree, /fork, /clone, /new, /continue and /resume move between branches an
   assert.match(stripAnsi(app.state.picker!.rows(80).join('\n')), /No matches/);
 });
 
-test('/compact, /mcp, /extensions, /trust and /reload report as 0.5.0 did', async (t) => {
+test('/compact, /mcp, /extensions, /trust and /reload report what they did', async (t) => {
   const home = scratch(t);
   const workspace = scratch(t);
   const settings = defaultSettings();
@@ -1268,7 +1270,7 @@ test("/login asks for the URL and the key on its list, lists the endpoint's mode
   saveSettings(settings, home);
   saveCredentials({ api_key: 'old-key' }, home);
   const before = readFileSync(join(home, 'settings.json'), 'utf8');
-  // started with `-m`: the model chosen in /login still wins, as in 0.5.0
+  // started with `-m`: the model chosen in /login still wins
   const { app, ui, runtime, key } = await session(t, [], {
     home,
     settings: structuredClone(settings),

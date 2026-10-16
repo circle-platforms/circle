@@ -1,7 +1,7 @@
 import type { Message } from '../types.js';
 // What the screen showed at one moment: which session, which of its messages, and the notes
 // under them. /undo and /redo put the screen back to one of these. They change only what is
-// shown: the model keeps every message, as in the Python releases.
+// shown: the model keeps every message.
 export interface ScreenSnapshot {
   sessionId: string;
   shown: Set<string>;

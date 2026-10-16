@@ -194,7 +194,7 @@ test('the header shows thinking depth and branch, hands off to the welcome block
   assert.equal(stripAnsi(renderScreen(state, 90, 40)[0]!).trim(), '');
 });
 
-test('the busy word is a Python verb with the turn time and written tokens, and the rainbow travels round the frame', () => {
+test('the busy word is a verb from the list with the turn time and written tokens, and the rainbow travels round the frame', () => {
   assert.equal(
     pickBusyVerb(() => 0),
     'Thinking',
@@ -573,7 +573,7 @@ test('the welcome lists what the folder brings, unlit until trusted, blinking wh
     untrusted.items.map((item) => [item.kind, item.text, item.state]),
     [
       ['instructions', 'AGENTS.md', 'none'],
-      // paths in the system's own separator, as 0.5.0 wrote them
+      // paths in the system's own separator
       ['skills', `1 in ${join('.circle', 'skills')}`, 'none'],
       ['commands', `1 in ${join('.circle', 'commands')}`, 'none'],
       ['settings', join('.circle', 'settings.json'), 'none'],
@@ -1175,11 +1175,14 @@ test('an attached session shows the busy verb while it works and the turn line a
     rendered = rows;
   };
   let label = '';
+  let streamingFooter = '';
   const model = new ScriptedModel([
     async (request) => {
       ui.repaint();
       label =
         rendered.map(stripAnsi).find((row) => row.startsWith('╭──')) ?? '';
+      streamingFooter =
+        rendered.map(stripAnsi).find((row) => row.includes('cache ')) ?? '';
       request.token('done');
       return {
         message: { id: 'final', role: 'assistant', content: 'done' },
@@ -1207,6 +1210,10 @@ test('an attached session shows the busy verb while it works and the turn line a
   await app.submit('hello');
   const verbs = BUSY_VERBS.join('|');
   assert.match(label, new RegExp(`^╭──(${verbs})… · \\d+s · ↓ 0─`));
+  assert.match(streamingFooter, /↑ N\/A/);
+  assert.match(streamingFooter, /cache N\/A/);
+  assert.equal(streamingFooter.includes('↑ 0'), false);
+  assert.equal(streamingFooter.includes('cache 0.0%'), false);
   ui.repaint();
   const plain = rendered.map(stripAnsi);
   const answer = plain.findIndex((row) => row.startsWith(' ● done'));

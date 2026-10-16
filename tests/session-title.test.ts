@@ -1609,7 +1609,7 @@ test('the desktop holds a sentence untitled until its title arrives', async (t) 
   assert.deepEqual(notes, []);
 });
 
-test('a held title that fails or is refused keeps the short title', async (t) => {
+test('a held title that fails stays untitled and does not become the prompt', async (t) => {
   for (const [reply, reason] of [
     ['Sorry, I cannot title this', 'not a title'],
     ['', 'empty title'],
@@ -1623,7 +1623,8 @@ test('a held title that fails or is refused keeps the short title', async (t) =>
     assert.equal(store.get(session.id)!.title, '');
     model.releaseTitle();
     await run.finishTitle();
-    assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
+    assert.equal(store.get(session.id)!.title, '');
+    assert.notEqual(store.get(session.id)!.title, fallbackTitle(LONG));
     assert.deepEqual(notes, [reason]);
   }
   const root = scratch(t);
@@ -1634,7 +1635,7 @@ test('a held title that fails or is refused keeps the short title', async (t) =>
   const notes = titleFailures(run);
   await run.run(LONG);
   await run.finishTitle();
-  assert.equal(store.get(session.id)!.title, fallbackTitle(LONG));
+  assert.equal(store.get(session.id)!.title, '');
   assert.match(notes[0] ?? '', /title exploded/);
 });
 

@@ -8,11 +8,14 @@ import { ensureHome } from './paths.js';
 // proper-lockfile uses atomic mkdir and a heartbeat; no PID-based takeover is involved.
 const STALE = 30000;
 const UPDATE = 5000;
+/** What to say when another runtime holds the session. Names the copy command. */
+export function occupiedSessionMessage(sessionId: string): string {
+  return `this session is open in another terminal. Close it there to continue, or copy it with circle --fork ${sessionId}`;
+}
+
 export class SessionOccupiedError extends Error {
   constructor(readonly sessionId: string) {
-    super(
-      'session is in use by another Circle runtime; stop and release it there, or fork it',
-    );
+    super(occupiedSessionMessage(sessionId));
     this.name = 'SessionOccupiedError';
   }
 }

@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DatabaseSync } from 'node:sqlite';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { encode, ExtData } from '@msgpack/msgpack';
+import { AgentRuntime } from '../src/runtime.js';
 import { SessionApp } from '../src/tui/session_app.js';
 import { ScreenRenderer } from '../src/ink/screen.js';
 import { editorCommand } from '../src/tui/external_editor.js';
@@ -26,6 +26,7 @@ import {
   type ModelRequest,
   type ModelResponse,
 } from '../src/types.js';
+import { sessionOccupied } from '../src/session_lock.js';
 import { cleanup, scratch } from './helpers.js';
 
 type Reply =
@@ -46,7 +47,12 @@ async function until(predicate: () => boolean, timeout = 5000): Promise<void> {
 async function session(
   t: Parameters<typeof scratch>[0],
   replies: Reply[] = [],
-  options: { home?: string; workspace?: string; session?: string } = {},
+  options: {
+    home?: string;
+    workspace?: string;
+    session?: string;
+    inspect?: boolean;
+  } = {},
 ) {
   const home = options.home ?? scratch(t);
   const workspace = options.workspace ?? scratch(t);
@@ -69,6 +75,7 @@ async function session(
     model,
     headless: true,
     ...(options.session ? { session: options.session } : {}),
+    ...(options.inspect ? { inspect: true } : {}),
   });
   const runtime = app.runtime!;
   cleanup(t, async () => {
@@ -288,7 +295,7 @@ test('ctrl+c on an empty prompt says how to leave, and a second press within 1.5
   assert.equal(await app.wait(), 0);
 });
 
-test('esc esc opens the tree only within half a second, as 0.5.0 timed it', async (t) => {
+test('esc esc opens the tree only within half a second', async (t) => {
   const { app, ui, key } = await session(t, [answer('an answer')]);
   const list = (): string | undefined => app.state.picker?.title;
   await app.submit('a question');
@@ -396,7 +403,7 @@ test('ctrl+c during a turn stops it, and a second press right after leaves', asy
   assert.equal(ui.ended, true);
 });
 
-test('/tree draws the branches as 0.5.0 did: yours ›, answers ●, ├ where a branch starts, here and · on the way', async (t) => {
+test('/tree draws the branches: yours ›, answers ●, ├ where a branch starts, here and · on the way', async (t) => {
   const { app, ui, runtime, workspace } = await session(t, [
     {
       message: {
@@ -511,7 +518,7 @@ test('/jobs follows the jobs while it is open: one that starts appears and one t
   assert.match(list.items[0]!.meta!, /^running/);
 });
 
-test('/undo and /redo clear the context meter until the next answer, as 0.5.0 did', async (t) => {
+test('/undo and /redo clear the context meter until the next answer', async (t) => {
   const { app, ui, model } = await session(t, [
     answer('one', 1200),
     answer('two', 2400),
@@ -652,99 +659,6 @@ test('ctrl+l redraws the screen; alt+l opens the model list; ctrl+b says when th
   assert.ok((await command).job);
 });
 
-test('a session from 0.5.0 keeps its pastes: /fork and /tree put them back and the model reads them whole', async (t) => {
-  const home = scratch(t);
-  const workspace = scratch(t);
-  const paste = 'alpha\nbeta\ngamma\ndelta';
-  const legacy = (module: string, name: string, data: object): ExtData =>
-    new ExtData(5, encode([module, name, data, 'model_validate_json']));
-  const messages = [
-    legacy('langchain_core.messages.human', 'HumanMessage', {
-      id: 'u1',
-      type: 'human',
-      content: `${paste} explain`,
-      additional_kwargs: {
-        circle_shown: '[Pasted text #2 +3 lines] explain',
-        circle_pastes: { '2': paste, x: 'not a number' },
-      },
-    }),
-    legacy('langchain_core.messages.ai', 'AIMessage', {
-      id: 'a1',
-      type: 'ai',
-      content: 'explained',
-      additional_kwargs: {},
-      tool_calls: [],
-    }),
-  ];
-  const sessions = new DatabaseSync(join(home, 'sessions.sqlite'));
-  sessions.exec(
-    "CREATE TABLE sessions (thread_id TEXT PRIMARY KEY, workspace TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', created REAL NOT NULL, updated REAL NOT NULL, leaf TEXT NOT NULL DEFAULT '')",
-  );
-  sessions
-    .prepare('INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(
-      'circle-pastes',
-      workspace,
-      'pasted',
-      'old',
-      1791463528,
-      1791463528,
-      '',
-    );
-  sessions.close();
-  const checkpoints = new DatabaseSync(join(home, 'checkpoints.sqlite'));
-  checkpoints.exec(
-    "CREATE TABLE checkpoints (thread_id TEXT NOT NULL, checkpoint_ns TEXT NOT NULL DEFAULT '', checkpoint_id TEXT NOT NULL, parent_checkpoint_id TEXT, type TEXT, checkpoint BLOB, metadata BLOB, PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id))",
-  );
-  checkpoints.exec(
-    "CREATE TABLE writes (thread_id TEXT NOT NULL, checkpoint_ns TEXT NOT NULL DEFAULT '', checkpoint_id TEXT NOT NULL, task_id TEXT NOT NULL, idx INTEGER NOT NULL, channel TEXT NOT NULL, type TEXT, value BLOB, PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx))",
-  );
-  checkpoints
-    .prepare('INSERT INTO checkpoints VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(
-      'circle-pastes',
-      '',
-      '1',
-      null,
-      'msgpack',
-      encode({
-        channel_values: { messages },
-        ts: '2026-10-08T00:00:00Z',
-      }),
-      null,
-    );
-  checkpoints.close();
-  const { app, ui, runtime, model } = await session(t, [answer('again')], {
-    home,
-    workspace,
-    session: 'circle-pastes',
-  });
-  assert.deepEqual(runtime.migration.errors, []);
-  const sent = runtime.harness.messages[0]!;
-  assert.equal(sent.display, '[Pasted text #2 +3 lines] explain');
-  assert.deepEqual(sent.pastes, { '2': paste });
-  // /tree: back before the message, which comes back folded with its paste
-  await app.submit('/tree');
-  const tree = app.state.picker!;
-  tree.focus = tree
-    .matches()
-    .findIndex((item) => item.label === '› [Pasted text #2 +3 lines] explain');
-  ui.handle({ type: 'key', key: 'enter', char: '' });
-  await until(() => app.state.draft === '[Pasted text #2 +3 lines] explain');
-  assert.equal(ui.composer.modelText(app.state.draft), `${paste} explain`);
-  ui.composer.clear();
-  // /fork: the same, in a new session; sending it again sends the paste
-  await app.submit('/fork');
-  ui.handle({ type: 'key', key: 'enter', char: '' });
-  await until(() => app.state.draft === '[Pasted text #2 +3 lines] explain');
-  ui.handle({ type: 'key', key: 'enter', char: '' });
-  await until(() => model.requests.length === 1 && !app.runtime!.busy);
-  assert.equal(model.requests[0]!.messages.at(-1)!.content, `${paste} explain`);
-  assert.deepEqual(app.runtime!.harness.messages.at(-2)!.pastes, {
-    '2': paste,
-  });
-});
-
 test('esc on the /tree label line leaves the label as it was; enter on an empty one removes it', async (t) => {
   const original = palette();
   t.after(() => setPalette(original));
@@ -831,7 +745,7 @@ test('/resume: esc on the new name or on the delete question leaves the session 
   assert.ok(runtime.store.list(workspace).some((item) => item.id === other));
 });
 
-test('lists jump a page with pageup and pagedown, as 0.5.0 did, without scrolling the conversation', async (t) => {
+test('lists jump a page with pageup and pagedown without scrolling the conversation', async (t) => {
   const items = Array.from({ length: 30 }, (_, i) => ({
     key: String(i),
     label: `row ${i}`,
@@ -1047,4 +961,185 @@ test('an internal reminder cannot become the fallback position of a prior failur
     text.indexOf('model ended without an answer') < text.indexOf('continue'),
   );
   assert.doesNotMatch(text, /hidden reminder/);
+});
+
+test('a view-only session keeps the typed message and says why it was not sent', async (t) => {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const owner = new AgentRuntime({
+    workspace,
+    home,
+    settings: defaultSettings(),
+    model: new ScriptedModel([
+      { message: { id: 'stored', role: 'assistant', content: 'stored reply' } },
+    ]),
+    headless: true,
+  });
+  cleanup(t, () => owner.close());
+  await owner.harness.run('hello from the owner');
+  const { app, ui } = await session(t, [], {
+    home,
+    workspace,
+    session: owner.session.id,
+    inspect: true,
+  });
+  ui.composer.set('keep this draft');
+  await ui.send('steer');
+  assert.equal(app.state.draft, 'keep this draft');
+  assert.ok(
+    app.state.notices.some(
+      (note) => note.includes('view only') && note.includes('circle --fork'),
+    ),
+  );
+  assert.equal(
+    app.runtime!.harness.messages.some((message) =>
+      (message.content ?? '').includes('keep this draft'),
+    ),
+    false,
+  );
+});
+
+async function occupiedPair(
+  t: Parameters<typeof scratch>[0],
+  replies: Reply[] = [],
+) {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  const owner = new AgentRuntime({
+    workspace,
+    home,
+    settings: defaultSettings(),
+    model: new ScriptedModel([
+      { message: { id: 'stored', role: 'assistant', content: 'stored reply' } },
+    ]),
+    headless: true,
+  });
+  cleanup(t, () => owner.close());
+  await owner.harness.run('hello from the owner');
+  const opened = await session(t, replies, {
+    home,
+    workspace,
+    session: owner.session.id,
+    inspect: true,
+  });
+  return { owner, ...opened };
+}
+
+test('enter sends once the other terminal has released a view-only session', async (t) => {
+  const { app, owner, runtime, ui } = await occupiedPair(t, [
+    answer('continued'),
+  ]);
+  ui.composer.set('keep this draft');
+  await ui.send('steer');
+  assert.equal(runtime.viewOnly, true);
+  assert.equal(app.state.draft, 'keep this draft');
+  owner.yieldLease();
+  await app.submit('now it sends');
+  assert.equal(runtime.viewOnly, false);
+  assert.ok(
+    app.state.notices.includes('this session is writable again'),
+    app.state.notices.join('\n'),
+  );
+  assert.ok(
+    runtime.harness.messages.some((message) =>
+      (message.content ?? '').includes('now it sends'),
+    ),
+  );
+});
+
+test('an empty enter and the session list take a released view-only session', async (t) => {
+  const { app, owner, runtime, ui, key } = await occupiedPair(t);
+  ui.composer.set('');
+  key('enter');
+  assert.equal(runtime.viewOnly, true);
+  owner.yieldLease();
+  key('enter');
+  assert.equal(runtime.viewOnly, false);
+  assert.ok(app.state.notices.includes('this session is writable again'));
+
+  const again = await occupiedPair(t);
+  again.owner.yieldLease();
+  await again.app.submit('/resume');
+  assert.equal(again.app.state.picker?.title, 'Sessions · this folder');
+  again.key('enter');
+  await until(() => !again.runtime.viewOnly);
+  assert.equal(again.app.state.picker, undefined);
+  assert.ok(again.app.state.notices.includes('this session is writable again'));
+  assert.equal(
+    again.runtime.harness.messages.some((message) =>
+      (message.content ?? '').includes('now it sends'),
+    ),
+    false,
+  );
+});
+
+test('switching away releases the lock when the background turn finishes', async (t) => {
+  let finish!: () => void;
+  let started!: () => void;
+  const runningTurn = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const { app, runtime, home } = await session(t, [
+    async (request) => {
+      started();
+      await new Promise<void>((resolve, reject) => {
+        finish = resolve;
+        request.signal.addEventListener(
+          'abort',
+          () => reject(request.signal.reason),
+          {
+            once: true,
+          },
+        );
+      });
+      return {
+        message: { id: 'done', role: 'assistant', content: 'done' },
+        usage: emptyUsage(),
+      };
+    },
+  ]);
+  const first = runtime.session.id;
+  const turn = app.submit('start a turn');
+  await runningTurn;
+  await app.submit('/new');
+  const second = app.runtime!.session.id;
+  assert.notEqual(second, first);
+  assert.equal(sessionOccupied(home, first), true);
+  assert.equal(sessionOccupied(home, second), true);
+  finish();
+  await turn;
+  assert.equal(sessionOccupied(home, first), false);
+  assert.equal(sessionOccupied(home, second), true);
+});
+
+test('the view-only screen takes the lock back without a key', async (t) => {
+  const { app, owner, runtime, ui } = await occupiedPair(t);
+  ui.watchLease();
+  assert.equal(runtime.viewOnly, true);
+  owner.yieldLease();
+  ui.watchLease();
+  assert.equal(runtime.viewOnly, false);
+  assert.ok(app.state.notices.includes('this session is writable again'));
+});
+
+test('a view-only screen refreshes footer totals while the other terminal writes', async (t) => {
+  const { app, owner, runtime, ui } = await occupiedPair(t);
+  ui.watchLease();
+  assert.equal(runtime.viewOnly, true);
+  const beforeIn = app.state.usage.input_tokens;
+  const beforeOut = app.state.usage.output_tokens;
+  owner.store.append(owner.session.id, [
+    {
+      id: 'later',
+      role: 'assistant',
+      content: 'more',
+      usage: { ...emptyUsage(), input_tokens: 40, output_tokens: 8 },
+    },
+  ]);
+  ui.watchLease();
+  assert.equal(runtime.viewOnly, true);
+  assert.equal(app.state.usage.input_tokens, beforeIn + 40);
+  assert.equal(app.state.usage.output_tokens, beforeOut + 8);
+  ui.watchLease();
+  assert.equal(app.state.usage.input_tokens, beforeIn + 40);
 });

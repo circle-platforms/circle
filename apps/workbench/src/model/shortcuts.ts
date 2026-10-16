@@ -101,6 +101,8 @@ export function formatChord(chord: string): string {
       if (part === 'meta') return mac ? '⌘' : 'Meta';
       if (part === 'escape') return 'Esc';
       if (part.length === 1) return part.toUpperCase();
+      // A function key stays in the spelling that was saved (f3). Uppercasing
+      // it hid the new chord from the settings row.
       const word = (
         {
           up: 'Up',

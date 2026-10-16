@@ -702,7 +702,7 @@ test('approval previews: a patch names its files, an edit the file cannot confir
   );
 });
 
-test('a background agent asks while the turn that started it is still running, as 0.5.0 did', async (t) => {
+test('a background agent asks while the turn that started it is still running', async (t) => {
   let app: SessionApp | undefined;
   let shownDuringTurn = false;
   let busyWhenShown = false;

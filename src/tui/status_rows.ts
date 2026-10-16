@@ -1,11 +1,12 @@
 // The rows that say what is true now: the header, the busy word on the frame, the footer's
 // meters, the line under each turn, and the window title. Colours come from the palette
-// each time a row is drawn (ported from session_app.py, footer.py and agent_strip.py).
+// each time a row is drawn.
 import { homedir } from 'node:os';
 import { basename, sep } from 'node:path';
 import { palette, statusLight, type LampState } from '../ink/theme.js';
 import { stringWidth, truncate } from '../ink/string_width.js';
 import { EFFORT_LEVELS } from '../model.js';
+import { cacheRateLabel } from '../pricing.js';
 import type { Usage } from '../types.js';
 import type { CompactionProgress } from '../compaction.js';
 
@@ -161,6 +162,8 @@ export interface Meters {
   costText?: string;
   contextInput?: number;
   contextWindow?: number;
+  /** A turn is in flight and the endpoint has not reported usage yet. */
+  unreported?: boolean;
 }
 // `↑ 36.6k · ↓ 560 · $0.0145 · cache 63.7% · ctx 12.5k/1.0M (1%)`, and how full the context
 // is: past 70% yellow, past 90% red.
@@ -172,20 +175,10 @@ function meterParts(meters: Meters): {
   lines: string[];
 } {
   const usage = meters.usage;
-  // A stopped turn stores cache reads as 0 because the endpoint never reported
-  // them. That is not a measured 0.0% hit rate.
-  const estimatedIn = usage.estimated_input_tokens ?? 0;
-  // A finished call that omitted cache fields is the same unknown as a stop.
-  const unreported = usage.cache_unreported_input ?? 0;
-  const measuredIn = Math.max(0, usage.input_tokens - estimatedIn - unreported);
-  const cacheUnknown = usage.input_tokens > 0 && measuredIn === 0;
-  const cached = Math.min(
-    usage.cache_read_tokens,
-    measuredIn || usage.input_tokens,
-  );
-  const rate = measuredIn ? (cached / measuredIn) * 100 : 0;
-  const tokens = `↑ ${formatTokens(usage.input_tokens)} · ↓ ${formatTokens(usage.output_tokens)}`;
-  const cache = cacheUnknown ? 'cache N/A' : `cache ${rate.toFixed(1)}%`;
+  // Zero tokens before the endpoint answers is not a measured empty call.
+  const unknown = meters.unreported === true;
+  const tokens = `↑ ${unknown ? 'N/A' : formatTokens(usage.input_tokens)} · ↓ ${formatTokens(usage.output_tokens)}`;
+  const cache = `cache ${unknown ? 'N/A' : cacheRateLabel(usage)}`;
   const cost = meters.costText ?? '';
   const head = [tokens, ...(cost ? [cost] : []), cache].join(' · ');
   let context = '';

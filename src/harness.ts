@@ -24,11 +24,17 @@ import {
   type Redactor,
 } from './secrets.js';
 import { httpStatus } from './model_guard.js';
+import { isNetworkFailure } from './net.js';
+import {
+  occupiedSessionMessage,
+  SessionOccupiedError,
+} from './session_lock.js';
 import { validateAttachments } from './media.js';
 import { readPrompt } from './system_prompt.js';
 import {
   acceptGeneratedTitle,
   fallbackTitle,
+  friendlyTitleFailure,
   TITLE_MAX_TOKENS,
   titleConversation,
   titleRetrySystem,
@@ -98,6 +104,10 @@ export interface HarnessOptions {
    * saving the short title first. The desktop shows it as a new session.
    */
   holdTitle?: boolean;
+  /** Read stored history without taking the lease or repairing it. */
+  inspect?: boolean;
+  /** The turn and its queued follow-ups have finished, whether or not they succeeded. */
+  settled?: () => void;
 }
 /** A message that waits for the model, as the input box showed it. */
 export interface QueuedMessage {
@@ -153,7 +163,7 @@ export class Harness {
     this.tools = options.tools;
     this.model = options.model;
     this.system = options.system;
-    options.store.repairInterrupted(this.sessionId);
+    if (!options.inspect) options.store.repairInterrupted(this.sessionId);
   }
   get busy(): boolean {
     return Boolean(this.active);
@@ -246,8 +256,8 @@ export class Harness {
       this.shown.delete(message);
     return result;
   }
-  // Stop the turn. `keepQueue`, as esc in 0.5.0: the messages it had not read yet stay, each
-  // to be sent as a turn of its own (the steering ones first), and nothing starts them here.
+  // Stop the turn. With `keepQueue`, as esc stops it: the messages it had not read yet stay,
+  // each to be sent as a turn of its own (the steering ones first); nothing here starts them.
   async cancel(options: { keepQueue?: boolean } = {}): Promise<void> {
     if (options.keepQueue) this.followUps.unshift(...this.steering.splice(0));
     else {
@@ -331,6 +341,8 @@ export class Harness {
     display?: string,
     attachments?: MediaAttachment[],
   ): Promise<{ answer: string; usage: Usage }> {
+    if (this.options.inspect)
+      throw new Error(occupiedSessionMessage(this.sessionId));
     if (this.active) throw new Error('a turn is already running');
     if (prompt !== undefined && display !== undefined && display !== prompt)
       this.shown.set(prompt, { display });
@@ -352,6 +364,7 @@ export class Harness {
       // A crash skips this. The open-turn row then still names the unanswered
       // prompt, which is the only case that earns an interrupted marker.
       this.options.store.clearTurn(this.sessionId);
+      this.options.settled?.();
     }
   }
   private async runQueued(
@@ -463,26 +476,40 @@ export class Harness {
         maxTokens: Harness.titleOutputTokens,
         token: () => {},
       });
+    // One retry for a dropped connection. A second failure is reported once.
+    const call = async (text: string) => {
+      try {
+        return await ask(text);
+      } catch (error) {
+        if (!isNetworkFailure(error)) throw error;
+        return await ask(text);
+      }
+    };
     // An empty title is the desktop's placeholder while the summary is pending.
     const unchanged = (title: string) => title === fallback || title === '';
     const remember = (title: string): boolean => {
       try {
         this.options.store.rename(sessionId, title);
       } catch (error) {
-        if (error instanceof Error && /not open/.test(error.message))
+        if (
+          error instanceof SessionOccupiedError ||
+          (error instanceof Error && /not open/.test(error.message))
+        )
           return false;
         throw error;
       }
       this.bus.emit('info', { payload: { title, session_id: sessionId } });
       return true;
     };
-    // A failed or rejected title keeps the short title, also where it was held.
+    // The terminal already stored the short title. The desktop held the
+    // sentence untitled: a failed summary must not quietly become that prompt.
     const keepFallback = (): void => {
+      if (this.options.holdTitle) return;
       const current = this.storedSession(sessionId);
       if (current && !current.title && !current.title_locked)
         remember(fallback);
     };
-    return ask(system)
+    return call(system)
       .then(async (response) => {
         // Reasoning is never a title, even when the answer is empty.
         let decision = acceptGeneratedTitle(response.message.content, prompt);
@@ -496,7 +523,7 @@ export class Harness {
             });
             return;
           }
-          const again = await ask(titleRetrySystem(system));
+          const again = await call(titleRetrySystem(system));
           decision = acceptGeneratedTitle(again.message.content, prompt);
           // A held session stays untitled after a second copy, and that is
           // not a failure. The terminal keeps its short title and says so.
@@ -536,7 +563,11 @@ export class Harness {
         } catch {
           /* The store is closing. */
         }
-        report(error instanceof Error ? error.message : String(error));
+        report(
+          friendlyTitleFailure(
+            error instanceof Error ? error.message : String(error),
+          ),
+        );
       });
   }
   private thoughtClock(): { thinking_seconds?: number } {
@@ -684,6 +715,8 @@ export class Harness {
             notice: (event) =>
               this.bus.emit('info', { payload: { model_notice: event } }),
             token: (text, thinking) => {
+              // Stop forwards nothing that arrives after the person stops the turn.
+              if (stepSignal.aborted) return;
               if (thinking) {
                 const visible = text.replace(
                   /[\s\u200b\u200c\u200d\ufeff\u2060\u00ad]/g,
@@ -754,7 +787,7 @@ export class Harness {
             this.flushTitle();
             return { answer, usage };
           }
-          // As in 0.5.0, the subagents of task calls next to each other run at the same time;
+          // The subagents of task calls next to each other run at the same time;
           // every other call runs on its own, in order. Results are stored in the order of the
           // calls, each once those before it are in.
           for (let index = 0; index < calls.length;) {

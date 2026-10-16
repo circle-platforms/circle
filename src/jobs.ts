@@ -435,7 +435,7 @@ export class JobRegistry {
       release = resolve;
     });
     entry.interrupt = release;
-    // Why the command left the foreground, for the model (as 0.5.0 told it).
+    // Why the command left the foreground, for the model.
     let why = 'The command was moved to the background.';
     const promote = (): void => {
       if (!entry.finished && !entry.stopPromise) {
@@ -463,7 +463,7 @@ export class JobRegistry {
         signal.throwIfAborted();
       }
       if (entry.job) {
-        // What it printed so far stays with the result, as in 0.5.0; the rest goes to the job.
+        // What it printed so far stays with the result; the rest goes to the job.
         const head = readHead(entry.path, 80_000).trimEnd();
         const adopted = entry.job.kind === 'adopted';
         if (adopted)

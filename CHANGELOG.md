@@ -11,12 +11,19 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 ### Changed
 
 - **Linux can replace the desktop application from settings → about → check now** when the folder can be written. Circle 1.6.0 and the published 1.7.4 need one manual update to get that updater; [Installation](docs/installation.md#the-desktop-application) is the procedure. A setuid `chrome-sandbox` is named in a confirm dialog before Circle quits, and again the next time it starts.
+- **The folder you start a desktop session in stays on the sidebar while you write the first message.** New session, a folder's + and opening a folder show that folder in the sidebar with its group, highlighted while the draft is aimed at it; still nothing is saved until the first message is sent. Deleting a folder's last conversation goes back to that folder's home page instead of an empty conversation.
 
 ### Fixed
 
 - **Stopping a reply shows that it was interrupted after the session is opened again**, in the terminal and the desktop application. The mark is on the saved reply, and a stop mid-reply shows it once, including after switching back to that session. A stop before any text still uses the notice, which leaves when the next turn starts. A crash still marks a turn that saved no reply. A finished session is not marked. In Chinese the terminal says 已中断, as the desktop does.
 - **Removing the installer's PATH line from an otherwise empty `~/.zshrc` deletes that file** when zsh is not installed.
 - **Check now does not offer the version you already have.** A checkout's package version is not Circle's version, so a local build of 1.7.4 no longer offers an update to 1.7.4. A newer local build is not offered an older release either.
+- **The terminal's browser could hang when a page opened a dialog while Circle was reading it.** Chrome answers nothing about a page while its dialog is open, and Circle waited for an answer with no limit, so the action never ended and `esc` did not free it. The action now ends as soon as the dialog opens, and its result shows the dialog.
+- **On macOS, closing a session could report a browser cleanup failure for a browser that had already exited.** macOS refuses to signal a process group whose last process has exited but is not yet cleaned up; Circle now counts that as stopped when no live process is left in the group.
+
+### Removed
+
+- **Circle no longer replaces, imports from or stays compatible with its Python versions, those before 1.0.** The installer and `circle update` no longer look for a Python copy to remove; one still on the machine stays where it is, so remove it yourself. Sessions the Python versions saved in `sessions.sqlite` and `checkpoints.sqlite` are no longer imported when Circle starts, and `/import` no longer reads their JSONL exports. Sessions imported before stay in `/resume`; in them, a command that went on in the background shows its whole result instead of a job line, and RPC `get_messages` leaves out the fields only the Python versions wrote.
 
 ## 1.7.4 - 2026-10-16
 

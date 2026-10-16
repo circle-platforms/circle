@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { UsageError } from '../src/cli.js';
 import { activateRelease } from '../src/install_layout.js';
-import type { Run } from '../src/legacy_install.js';
+import type { Run } from '../src/install_processes.js';
 import {
   uninstallInstalled,
   windowsDeferredRemoval,
@@ -229,6 +229,23 @@ test('circle uninstall stops when the program does not run from the installation
     /this program does not run from that installation/,
   );
   assert.equal(existsSync(join(inst.prefix, 'installation.json')), true);
+});
+
+test('circle uninstall --help explains what is removed and exits 0', async () => {
+  let text = '';
+  const code = await uninstallInstalled(['--help'], {
+    env: {},
+    out: {
+      write: (chunk: string) => {
+        text += chunk;
+      },
+      isTTY: false,
+    } as NodeJS.WriteStream,
+  });
+  assert.equal(code, 0);
+  assert.match(text, /usage: circle uninstall/);
+  assert.match(text, /data folder/);
+  assert.match(text, /--purge/);
 });
 
 test('circle uninstall rejects an unknown option before anything else', async () => {

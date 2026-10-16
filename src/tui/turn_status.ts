@@ -1,7 +1,7 @@
 // What the screen keeps about the turn in progress and the turns before it, from the event
 // bus: the busy word and the tokens written so far, how long each answer thought, and the
 // line under each finished turn (`12s · ↑ 1.2k · ↓ 340`). Time spent waiting on you (an
-// approval, a question) does not count. Kept in memory only, as the Python version did: a
+// approval, a question) does not count. Kept in memory only: a
 // reopened session has no turn lines.
 import type { CircleEvent } from '../events.js';
 import type { Message, ToolModelCall } from '../types.js';

@@ -95,7 +95,7 @@ test('SYSTEM.md and APPEND_SYSTEM.md in the data folder reach the model; the pro
   assert.match(system, /PROJECT RULES/);
   assert.match(system, /FLAG APPEND/);
   assert.ok(!/FROM (PROJECT|HOME)/.test(system));
-  // As in 0.5.0: an empty --system-prompt gives Circle's own instructions back, and a blank
+  // An empty --system-prompt gives Circle's own instructions back, and a blank
   // file is not passed over for the next one.
   assert.deepEqual(
     promptOverrides(workspace, home, {

@@ -72,6 +72,8 @@ export interface Message {
   text: string;
   at: string;
   thinking?: string;
+  /** Seconds the model spent thinking, kept with the reply. */
+  thinkingSeconds?: number;
   tool?: ToolCall;
   label?: string;
   attachments?: Attachment[];
@@ -86,7 +88,7 @@ export interface Message {
     output: number;
     cost: number | null;
     elapsed: string;
-    /** Stopped-turn estimate. The dollar figure then ends with `~`. */
+    /** A stopped turn's price is an estimate. The dollar figure then ends with `~`. */
     estimated?: boolean;
   };
 }
@@ -132,6 +134,10 @@ export interface Session {
     input: number;
     output: number;
     cacheRead: number;
+    /** `N/A` when cache was not reported, otherwise a percent such as `63.7%`. */
+    cache?: string;
+    /** A turn is in flight and the endpoint has not reported input yet. */
+    inputUnknown?: boolean;
     cost: string;
     contextInput: number | null;
     contextWindow: number | null;

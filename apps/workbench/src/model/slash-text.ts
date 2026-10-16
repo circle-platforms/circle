@@ -46,6 +46,8 @@ const SLASH_TEXT: Record<string, () => string> = {
   yolo: () => t('Toggle auto mode: approve every tool call without asking'),
   mode: () => t('Next approval mode, or /mode manual|accept-edits|plan|auto'),
   exit: () => t('Quit Circle'),
+  variables: () => t('Named values Circle fills in: /variables [NAME=value]'),
+  secrets: () => t('Named values Circle fills in unseen: /secrets [NAME]'),
 };
 export function slashText(name: string, english: string): string {
   return SLASH_TEXT[name]?.() ?? english;

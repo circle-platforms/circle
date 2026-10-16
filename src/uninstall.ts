@@ -18,13 +18,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { UsageError } from './usage_error.js';
 import { INSTALL_SCHEMA, validRepo } from './install_layout.js';
-import {
-  inside,
-  runningCopies,
-  surroundings,
-  type InstallerCopy,
-  type Run,
-} from './legacy_install.js';
+import { inside, runningFrom, type Run } from './install_processes.js';
 import { terminalPrompter, type LinePrompter } from './line_setup.js';
 import { circleHome } from './paths.js';
 import type { UpdateOutput } from './update.js';
@@ -176,6 +170,21 @@ export async function uninstallInstalled(
     run = runCommand,
     spawnDetached = detach,
   } = deps;
+  if (args.includes('--help') || args.includes('-h')) {
+    out.write(
+      [
+        'usage: circle uninstall [--purge] [--yes]',
+        '',
+        'Remove this Circle installation: the circle command, every installed',
+        'version, the installation receipt, and the PATH lines the installer added.',
+        'Sessions, settings and credentials stay in the data folder.',
+        'circle uninstall --purge deletes that folder too.',
+        '--yes skips the confirmation.',
+        '',
+      ].join('\n'),
+    );
+    return 0;
+  }
   let purge = false;
   let yes = false;
   for (const arg of args)
@@ -210,7 +219,7 @@ export async function uninstallInstalled(
   // update, a broken release is no reason to stop — that is when people uninstall.
   if (!inside(root, join(realPrefix, 'versions')))
     throw new Error('this program does not run from that installation');
-  const where = surroundings(env, platform);
+  const home = env.HOME || env.USERPROFILE || '';
   const dataHome =
     deps.dataHome ?? circleHome(env.CIRCLE_HOME?.trim() || undefined);
   if (purge && resolve(dataHome) === resolve(homedir()))
@@ -221,14 +230,11 @@ export async function uninstallInstalled(
   } catch {
     // A versions folder that is already gone is nothing to remove.
   }
-  const copy: InstallerCopy = {
-    kind: 'installer',
-    prefix: realPrefix,
-    versions: versions.map((name) => join(realPrefix, 'versions', name)),
-    links: [],
-    leftovers: [],
-  };
-  const pids = runningCopies([copy], where, run);
+  const pids = runningFrom(
+    versions.map((name) => join(realPrefix, 'versions', name)),
+    platform,
+    run,
+  );
   if (pids.length)
     throw new Error(
       `circle is still running from this installation (process ${pids.join(', ')}). ` +
@@ -239,9 +245,9 @@ export async function uninstallInstalled(
   // The startup-file blocks that name this binDir, on both shells the installer may have
   // written: $SHELL can have changed since.
   const rcBlocks: string[] = [];
-  if (platform !== 'win32' && where.home)
+  if (platform !== 'win32' && home)
     for (const name of ['.bashrc', '.zshrc']) {
-      const path = join(where.home, name);
+      const path = join(home, name);
       if (!existsSync(path)) continue;
       const text = readFileSync(path, 'utf8');
       if (stripRcBlock(text, binDir) !== text) rcBlocks.push(path);

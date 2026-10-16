@@ -20,9 +20,13 @@ import { PluginRegistry } from '../src/plugins/registry.ts';
 import type { WorkbenchPlugin } from '../src/plugins/types.ts';
 import {
   activityAge,
+  archiveBlockReason,
+  afterDeleteRoute,
   canArchiveSession,
+  disambiguatedSessionTitle,
   historyMessages,
   orderedProjects,
+  projectFolders,
   projectTag,
   RECENT_SHOWN,
   recentDetails,
@@ -44,7 +48,7 @@ import {
   selectedHomeProject,
   startPath,
 } from '../src/features/home-selection.ts';
-import type { Workspace } from '../src/model/types.ts';
+import type { Session, Workspace } from '../src/model/types.ts';
 function storage() {
   const values = new Map<string, string>();
   return {
@@ -451,7 +455,7 @@ test('core times show as local clock times, with the day when it is not today', 
   // The preview's own words stay as they are
   assert.equal(shownTime('10:24', now), '10:24');
   assert.equal(shownTime('yesterday', now), 'yesterday');
-  assert.equal(shownTime('streaming', now), 'streaming');
+  assert.equal(shownTime('streaming', now), '');
 });
 
 test('an empty new session is not listed, and hi keeps that title', () => {
@@ -987,7 +991,7 @@ test('recent lists every context newest first, and its hover names only a projec
         },
       ],
     ).map((item) => item.id),
-    ['late', 'early'],
+    ['early', 'late'],
   );
   assert.deepEqual(
     orderedProjects(
@@ -1025,4 +1029,152 @@ test('recent lists every context newest first, and its hover names only a projec
   );
   assert.equal(inRecent, true);
   assert.equal(inProject, true);
+
+  // A new session aimed at a project keeps its folder on the bar even while the
+  // project has only an empty placeholder; once a session has content it is there
+  // on its own and the aim adds nothing.
+  const drafting = { ...placeholder };
+  assert.deepEqual(
+    projectFolders(workspaces, [drafting], project.id).map((item) => item.id),
+    ['proj'],
+  );
+  assert.deepEqual(
+    projectFolders(workspaces, [older], project.id).map((item) => item.id),
+    ['proj'],
+  );
+  // Aiming at a project already listed does not duplicate it.
+  assert.equal(
+    projectFolders(workspaces, [older], project.id).filter(
+      (item) => item.id === project.id,
+    ).length,
+    1,
+  );
+  // Aiming nowhere keeps the plain list; a scratch aim never adds a folder.
+  assert.deepEqual(
+    projectFolders(workspaces, [older], null).map((item) => item.id),
+    ['proj'],
+  );
+  assert.deepEqual(
+    projectFolders(workspaces, [older], scratch.id).map((item) => item.id),
+    ['proj'],
+  );
+});
+
+test('deleting a session lands on its next conversation, or home when none is left', () => {
+  // The route reads content, the title and state only; a lean literal is enough.
+  const withContent = {
+    id: 'kept',
+    title: 'kept work',
+    workspaceId: 'proj',
+    messages: [
+      {
+        id: 'm1',
+        parentId: null,
+        role: 'user',
+        text: 'a task',
+        at: '2026-01-01T00:00:00.000Z',
+      },
+    ],
+    queue: [],
+    state: 'idle',
+  };
+  // An empty session the runtime kept to draft in is not a destination: home wins.
+  const empty = {
+    ...withContent,
+    id: 'phantom',
+    title: 'new session',
+    messages: [],
+    leafId: null,
+  };
+  const lean = (rows: object[]): Session[] => rows as unknown as Session[];
+  assert.deepEqual(
+    afterDeleteRoute(lean([withContent]), withContent.id, 'proj'),
+    { kind: 'session', id: withContent.id },
+  );
+  assert.deepEqual(afterDeleteRoute(lean([empty]), empty.id, 'proj'), {
+    kind: 'home',
+    workspaceId: 'proj',
+  });
+  // An active session that is gone (a race, or the last one) also falls to home.
+  assert.deepEqual(afterDeleteRoute([], 'missing', 'proj'), {
+    kind: 'home',
+    workspaceId: 'proj',
+  });
+});
+
+test('a streaming clock is not shown as the English word streaming', () => {
+  assert.equal(shownTime('streaming'), '');
+  assert.match(
+    shownTime('2026-10-15T12:35:00.000Z', new Date('2026-10-15T15:00:00.000Z')),
+    /35/,
+  );
+});
+
+test('duplicate titles gain a reply hint, and archive says why it is unavailable', () => {
+  const runtime = new PreviewRuntime();
+  const sample = runtime.getSnapshot().sessions.find(sessionHasContent)!;
+  const first = {
+    ...sample,
+    id: 'circle-aaaa1111',
+    title: '中秋节 800 字文章',
+    messages: [
+      {
+        id: 'reply-a',
+        parentId: null,
+        role: 'assistant' as const,
+        text: '**月亮** 很圆',
+        at: '2026-10-15T12:00:00.000Z',
+      },
+    ],
+  };
+  const second = {
+    ...sample,
+    id: 'circle-bbbb2222',
+    title: '中秋节 800 字文章',
+    messages: [
+      {
+        id: 'reply-b',
+        parentId: null,
+        role: 'assistant' as const,
+        text: '**桂花** 糕',
+        at: '2026-10-15T12:05:00.000Z',
+      },
+    ],
+  };
+  assert.equal(
+    disambiguatedSessionTitle(first, [first, second]),
+    '中秋节 800 字文章 · 月亮 很圆',
+  );
+  assert.notEqual(
+    disambiguatedSessionTitle(first, [first, second]),
+    disambiguatedSessionTitle(second, [first, second]),
+  );
+  const running = { ...first, state: 'waiting' as const };
+  assert.match(
+    archiveBlockReason(runtime.getSnapshot(), running) ?? '',
+    /stop the turn/,
+  );
+});
+
+test('a new session does not start in the untrusted project that was open', () => {
+  const trusted = folder('alpha', 'alpha');
+  const untrusted = { ...folder('beta', 'beta'), trusted: false };
+  assert.equal(
+    selectedHomeProject(
+      [untrusted, trusted],
+      [{ id: 'current', workspaceId: 'beta' }],
+      'current',
+      null,
+    )?.id,
+    'alpha',
+  );
+  assert.equal(
+    selectedHomeProject(
+      [untrusted],
+      [{ id: 'current', workspaceId: 'beta' }],
+      'current',
+      null,
+    ),
+    undefined,
+  );
 });

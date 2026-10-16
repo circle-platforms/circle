@@ -1,11 +1,14 @@
 import { palette, sgrJoin } from '../theme.js';
 import { pad, stringWidth, truncate } from '../string_width.js';
 import { printable } from './dialog_card.js';
+import { uiText } from '../../locale.js';
 export interface PickerItem {
   key: string;
   label: string;
   meta?: string;
   search?: string;
+  /** Message text a search can quote, shown beside a match. */
+  detail?: string;
   current?: boolean;
 }
 export interface PickerOptions {
@@ -15,7 +18,7 @@ export interface PickerOptions {
   empty?: string | ((query: string, total: number) => string);
   focusKey?: string;
   /** false: typing does not search. The keys the list does not use go on to the input box,
-   * and ctrl+c closes the list before the session takes it (`/approvals`, as 0.5.0's). */
+   * and ctrl+c closes the list before the session takes it (`/approvals`). */
   search?: boolean;
   /** enter on a search nothing matches: what was typed (a model id the endpoint does not list). */
   freeText?: (text: string) => void | Promise<void>;
@@ -33,8 +36,21 @@ interface Asked {
 function dropLast(text: string): string {
   return Array.from(text).slice(0, -1).join('');
 }
+/** A short quote around the first word of `query` found in `text`. */
+export function matchSnippet(text: string, query: string): string {
+  const word = query.toLowerCase().split(/\s+/).find(Boolean);
+  if (!word) return '';
+  const at = text.toLowerCase().indexOf(word);
+  if (at < 0) return '';
+  const start = Math.max(0, at - 16);
+  const slice = text
+    .slice(start, start + 42)
+    .replace(/\s+/g, ' ')
+    .trim();
+  return `${start > 0 ? '…' : ''}${slice}${start + 42 < text.length ? '…' : ''}`;
+}
 /**
- * A searchable list above the frame (0.5.0's picker.py). Type to narrow it (every word must
+ * A searchable list above the frame. Type to narrow it (every word must
  * appear), ↑ ↓ move (wrapping), pageup pagedown jump, enter picks, esc clears the search or
  * closes. A list can bind keys of its own and can ask, in place of the search, for a line of
  * text (a new name, a key shown as dots) or for a confirmation; esc there cancels and leaves
@@ -215,10 +231,12 @@ export class Picker {
     const p = palette();
     this.window = Math.max(1, maximum);
     const shown = this.matches();
+    // Newest rows stay in the window when the marked row is among them.
+    // Further down, the marked row is the last visible one.
     const top = Math.max(0, this.focus - maximum + 1);
     const info = (text: string, tone: string): string =>
       sgrJoin(p.panel_bg, tone) + pad(truncate(text, width), width) + p.reset;
-    const rows = [info(`   ${this.title}`, p.faint)];
+    const rows = [info(`   ${uiText(this.title)}`, p.faint)];
     if (this.asked) {
       const typed = this.asked.mask
         ? '•'.repeat(Array.from(this.asked.text).length)
@@ -235,17 +253,20 @@ export class Picker {
       );
     else {
       if (this.options.hint)
-        rows.push(info(`   ${this.options.hint}`, p.faint));
+        rows.push(info(`   ${uiText(this.options.hint)}`, p.faint));
       if (this.options.search !== false)
         rows.push(
           info(
-            `   ${this.query ? 'search: ' + this.query : 'type to search'}`,
+            `   ${uiText(this.query ? 'search: ' + this.query : 'type to search')}`,
             p.faint,
           ),
         );
+      // Directly above the rows, after the hint and the search line.
+      if (top > 0)
+        rows.push(info(`   ${uiText(`↑ ${top} more above`)}`, p.faint));
     }
     const headOf = (item: PickerItem): string =>
-      `${item.current ? '● ' : ''}${item.label}${item.current ? ' · current' : ''}`;
+      `${item.current ? '● ' : ''}${item.label}${item.current ? ` · ${uiText('current')}` : ''}`;
     // The time (or any meta) starts in one column. CJK titles are wider than
     // their character count, so the pad uses display width.
     const metas = shown.some((item) => item.meta);
@@ -258,7 +279,10 @@ export class Picker {
       const marked = index + top === this.focus;
       const head = headOf(item);
       const body = metas ? pad(truncate(head, column), column) : head;
-      const meta = item.meta ? `  ${item.meta}` : '';
+      const snippet =
+        this.query && item.detail ? matchSnippet(item.detail, this.query) : '';
+      const meta =
+        (item.meta ? `  ${item.meta}` : '') + (snippet ? `  ${snippet}` : '');
       rows.push(
         sgrJoin(marked ? p.sel_bg : p.panel_bg, p.text) +
           pad(truncate(` ${marked ? '>' : ' '} ${body}${meta}`, width), width) +
@@ -270,7 +294,7 @@ export class Picker {
         typeof this.options.empty === 'function'
           ? this.options.empty(this.query, this.items.length)
           : (this.options.empty ?? 'Nothing to show');
-      rows.push(p.faint + '   ' + empty + p.reset);
+      rows.push(p.faint + '   ' + uiText(empty) + p.reset);
     }
     return rows;
   }

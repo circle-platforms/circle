@@ -7,7 +7,7 @@ nav_order: 3
 
 2026-09-29 定稿。渲染层（块间节奏、类型底色、单行页脚、彩虹框）沿用 InfoTest 07 章 §11.25；本文补上它没有的一半：**什么信息、什么条件下、进哪个区、待多久、谁把它撤掉**。字形、颜色、措辞都是这张分区表的下游。
 
-本契约为 Python 版（0.5.0 及以前）定稿；1.0 的 TypeScript 版实现它，代码在 `src/tui/` 与 `src/ink/`。两者不一致之处列在 [第 8 节](#8-尚未落地的部分)，以契约为准。定稿时用的方案 demo 在 Python 版里：检出 `v0.5.0` 后运行 `python docs/demo/tui_schemes_20260929/demo.py show [--lang zh]`（十一页，每区一页）。
+实现本契约的代码在 `src/tui/` 与 `src/ink/`。代码与契约不一致之处列在 [第 8 节](#8-尚未落地的部分)，以契约为准。
 
 守门测试：`tests/interaction.test.ts`、`tests/cards.test.ts`、`tests/composer.test.ts`（交互）；`tests/status-surfaces.test.ts`、`tests/status-pages.test.ts`、`tests/lamps.test.ts`、`tests/interface.test.ts`（渲染与深浅色）；`tests/render-colors.test.ts`（颜色只从 palette 取）。
 
@@ -93,7 +93,7 @@ nav_order: 3
 | setup（URL、key、查模型、选模型）与 trust（写明会加载文件夹里的什么，有扩展时黄色提醒它会执行代码） | 没设置过或 `--init`；文件夹没信任过 | 对话框，会话连接之前；欢迎块随答随填 |
 | `/approvals` 规则 | 无参数 | 弹窗 |
 | 模型、思考深度、会话、会话树、fork 的列表 | `/models` `/effort` `/resume` `/tree` `/fork` 无参数，alt+l，空框 esc esc | 弹窗 |
-| URL、key（圆点）、模型，问法同 setup（`SessionApp.initialize`），一打开就问 URL；key 上 esc 回到 URL，URL 上 esc 离开。0.5.0 先问 API URL + KEY 还是 OAuth，Circle 不做 OAuth，这一步去掉了 | `/login` | 弹窗；选完模型才保存，成了进转录淡色一行 |
+| URL、key（圆点）、模型，问法同 setup（`SessionApp.initialize`），一打开就问 URL；key 上 esc 回到 URL，URL 上 esc 离开。Circle 只用 API URL 与 key 登录，不做 OAuth | `/login` | 弹窗；选完模型才保存，成了进转录淡色一行 |
 | key 被端点拒（401 / 403） | 回合失败 | 转录，红色 `✖` 行尾加 `· /login to change the key` |
 | 等着被读的插话 `steering: …`、回合后才发的 `follow-up: …` | 回合进行中你按了 enter | 常驻，输入框上方，淡色一行一条；读到后进转录 |
 | 压缩进行中 `auto-compacting · ████░░░░ summarizing · 12s`（`/compact` 为 `compacting`；不写触发条件；自动的那种随回合被 esc 中止，行撤下、不落失败行） | 压缩开始到结束 | 常驻，输入框上方，排在插话之前；结束撤下，转录落一条淡色 `auto-compacted · …` 或 `compacted · …`（失败红色 `✖`），回合进行中则等回合结束、落在用量行之下 |

@@ -116,6 +116,28 @@ export function formatUsdAmount(amount: number, estimated = false): string {
   return estimated ? `${text}~` : text;
 }
 
+/**
+ * The footer's cache cell. A stopped turn stores cache reads as 0 because the
+ * endpoint never reported them, and a finished call can omit cache fields.
+ * Neither is a measured 0.0% hit rate.
+ */
+export function cacheRateLabel(usage: {
+  input_tokens: number;
+  cache_read_tokens: number;
+  estimated_input_tokens?: number;
+  cache_unreported_input?: number;
+}): string {
+  const estimatedIn = usage.estimated_input_tokens ?? 0;
+  const unreported = usage.cache_unreported_input ?? 0;
+  const measuredIn = Math.max(0, usage.input_tokens - estimatedIn - unreported);
+  if (usage.input_tokens > 0 && measuredIn === 0) return 'N/A';
+  const cached = Math.min(
+    usage.cache_read_tokens,
+    measuredIn || usage.input_tokens,
+  );
+  const rate = measuredIn ? (cached / measuredIn) * 100 : 0;
+  return `${rate.toFixed(1)}%`;
+}
 export function formatCosts(
   summaries: CostSummary[],
   knownEmpty = false,

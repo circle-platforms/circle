@@ -529,3 +529,18 @@ export function userPrompts(messages: StoredUser[]): string[] {
 export function firstUserSource(messages: StoredUser[]): string {
   return userPrompts(messages)[0] ?? '';
 }
+
+/**
+ * A title request's failure, as a person can read it. Transport errors stay
+ * one short reason: the TLS chain is not something to act on in the sidebar.
+ */
+export function friendlyTitleFailure(message: string): string {
+  const text = message.replace(/\s+/g, ' ').trim();
+  if (
+    /TLS|ERR_SSL|fetch failed|Connection error|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|network error|certificate/i.test(
+      text,
+    )
+  )
+    return 'could not reach the endpoint';
+  return text.length > 80 ? `${text.slice(0, 77)}…` : text;
+}

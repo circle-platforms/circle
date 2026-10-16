@@ -530,7 +530,7 @@ test('/copy uses pbcopy, wl-copy, then xclip, and clip on Windows with UTF-16 te
   );
 });
 
-test('alt+c copies the last answer with a local tool, or writes it to a file when there is none', async (t) => {
+test('alt+c copies with a local tool, or OSC 52 when that tool is missing', async (t) => {
   const s = await session(t, ['  the answer  ']);
   s.feed('\x1bc');
   await settle();
@@ -538,21 +538,27 @@ test('alt+c copies the last answer with a local tool, or writes it to a file whe
     s.calls.map((call) => [call.command, call.input.toString()]),
     [['pbcopy', 'the answer']],
   );
-  assert.deepEqual(s.writes, [], 'no OSC 52 for /copy, as in 0.5.0');
+  assert.deepEqual(s.writes, [], 'no OSC 52 for /copy');
   assert.equal(s.app.state.flash, 'Copied 10 chars');
 
   const none = fakeRunner({ pbcopy: null, 'wl-copy': null, xclip: null });
+  const osc: string[] = [];
   s.ui.clipboard = new Clipboard({
-    env: {},
+    env: { TMUX: '/tmp/tmux-test' },
     platform: 'darwin',
     run: none.run,
+    write: (text) => osc.push(text),
   });
   s.feed('\x1bc');
   await settle();
-  const path = join(s.root, 'exports', 'last-copy.txt');
-  assert.equal(readFileSync(path, 'utf8'), 'the answer\n');
-  assert.equal(s.app.state.flash, 'Saved to file');
-  assert.equal(s.app.state.notices.at(-1), `Saved to file · ${path}`);
+  assert.equal(osc.length, 1);
+  assert.match(osc[0]!, /52;c;/);
+  assert.equal(existsSync(join(s.root, 'exports', 'last-copy.txt')), false);
+  assert.match(s.app.state.flash, /^Copied /);
+  assert.equal(
+    s.app.state.notices.some((note) => note.includes('Saved to file')),
+    false,
+  );
 
   const empty = await session(t);
   empty.feed('\x1bc');

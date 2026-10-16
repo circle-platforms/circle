@@ -1,10 +1,8 @@
 // Installs a verified release directory. Run by install.sh and install.ps1 with the release's
 // own Node.js:
 //   install_manager <release-directory> [prefix] [bin-directory] [repository]
-// Missing arguments come from CIRCLE_PREFIX, CIRCLE_BIN_DIR and CIRCLE_REPO. Without a prefix,
-// the release goes where the Python implementation was installed, else to the default.
-// Copies of the Python implementation are removed after the new release has been checked and
-// before it is selected; if one is still running, nothing changes.
+// Missing arguments come from CIRCLE_PREFIX, CIRCLE_BIN_DIR and CIRCLE_REPO; without a prefix
+// or bin folder the release goes to the default location.
 import {
   appendFileSync,
   existsSync,
@@ -22,18 +20,12 @@ import {
 import {
   DEFAULT_REPO,
   activeVersion,
+  installLocation,
   pointToRelease,
   pruneVersions,
   stageRelease,
   validRepo,
 } from './install_layout.js';
-import {
-  chooseLocation,
-  findPythonCopies,
-  removePythonCopies,
-  runningCopies,
-  surroundings,
-} from './legacy_install.js';
 
 const say = (text: string): void => {
   process.stdout.write(`[circle-install] ${text}\n`);
@@ -45,36 +37,11 @@ if (!root)
   );
 const repo = repoArgument || process.env.CIRCLE_REPO || DEFAULT_REPO;
 if (!validRepo(repo)) throw new Error('invalid release repository');
-const where = surroundings();
-if (prefixArgument) where.prefix = prefixArgument;
-if (binArgument) where.binDir = binArgument;
-const copies = findPythonCopies(where);
-let running: number[];
-try {
-  running = runningCopies(copies, where);
-} catch (error) {
-  process.stderr.write(
-    `[circle-install] the Python circle may still be running: ${error instanceof Error ? error.message : String(error)}. ` +
-      'Close those sessions, then run the installer again. Nothing was changed.\n',
-  );
-  process.exit(1);
-}
-if (running.length) {
-  process.stderr.write(
-    `[circle-install] the Python circle is still running (process ${running.join(', ')}). ` +
-      'Close those sessions, then run the installer again. Nothing was changed.\n',
-  );
-  process.exit(1);
-}
-const { prefix, binDir } = chooseLocation(copies, where);
+const { prefix, binDir } = installLocation({
+  prefix: prefixArgument || process.env.CIRCLE_PREFIX,
+  binDir: binArgument || process.env.CIRCLE_BIN_DIR,
+});
 const manifest = stageRelease(root, prefix, say);
-for (const copy of copies)
-  say(
-    copy.kind === 'installer'
-      ? `removing the Python circle installed in ${copy.prefix}`
-      : `removing the Python circle installed with pip (${copy.script})`,
-  );
-removePythonCopies(copies);
 const previous = activeVersion(prefix);
 pointToRelease(manifest, prefix, binDir, repo);
 for (const name of pruneVersions(prefix, [
@@ -85,18 +52,11 @@ for (const name of pruneVersions(prefix, [
 if (process.env.CIRCLE_INSTALL_RESULT)
   writeFileSync(
     process.env.CIRCLE_INSTALL_RESULT,
-    JSON.stringify({
-      version: manifest.version,
-      prefix,
-      binDir,
-      removedPrefixes: copies.flatMap((copy) =>
-        copy.kind === 'installer' ? [copy.prefix] : [],
-      ),
-    }) + '\n',
+    JSON.stringify({ version: manifest.version, prefix, binDir }) + '\n',
   );
 say(`installed circle ${manifest.version} in ${prefix}`);
 if (process.platform !== 'win32') {
-  const onPath = where.path
+  const onPath = (process.env.PATH ?? '')
     .split(delimiter)
     .some((entry) => entry && resolve(entry) === binDir);
   if (onPath)
@@ -104,16 +64,18 @@ if (process.platform !== 'win32') {
   else if (process.env.CIRCLE_NO_PATH === '1')
     say(`add ${binDir} to PATH, or run ${binDir}/circle`);
   else {
-    // $SHELL, then $BASH, then the login shell. Skip a shell that is not installed,
-    // so a bash-only machine does not grow a ~/.zshrc.
+    // $SHELL, then $BASH, then the login shell. Skip a shell that is not
+    // installed, so a bash-only machine does not grow a ~/.zshrc. The marked
+    // line is the one circle uninstall removes.
     let loginShell: string | undefined;
     try {
       loginShell = userInfo().shell || undefined;
     } catch {
       loginShell = undefined;
     }
+    const home = process.env.HOME || process.env.USERPROFILE || '';
     const startup = shellStartupFile({
-      home: where.home,
+      home,
       env: process.env,
       exists: existsSync,
       loginShell,
@@ -137,7 +99,7 @@ if (process.platform !== 'win32') {
     // The old installer wrote ~/.zshrc whenever $SHELL was not bash, including
     // on a machine with no zsh. That line does nothing there; take it out.
     if (!zshIsInstalled(existsSync)) {
-      const zshrc = resolve(where.home, '.zshrc');
+      const zshrc = resolve(home, '.zshrc');
       if (existsSync(zshrc)) {
         const next = withoutStrayZshrc(readFileSync(zshrc, 'utf8'));
         if (next !== undefined) {

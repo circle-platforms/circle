@@ -52,6 +52,8 @@ export interface ComposerHost {
   /** Positive scrolls up, to older rows. */
   scroll(rows: number | 'top' | 'bottom'): void;
   send(kind: 'steer' | 'followUp'): void;
+  /** An empty enter while this session is view only: look again at the lock. */
+  watchLease?(): void;
   command(name: string): void;
   flash(text: string): void;
   /** Everything that can follow `/`, with a description. */
@@ -486,6 +488,7 @@ export class Composer {
         this.insert('\n');
         this.update();
       } else if (this.state.draft.trim()) host.send('steer');
+      else host.watchLease?.();
       return true;
     }
     if (!this.edit(key, char)) return false;
