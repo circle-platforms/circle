@@ -40,8 +40,6 @@ The installers download the latest release for your platform, verify its SHA-256
 
 Restart your terminal after installing, then run `circle`. Upgrade with `circle update`; remove an installation with `circle uninstall` (`--purge` deletes the data folder too). See [Installation and updates](https://circle-platforms.github.io/circle/installation/) and [Releases](https://github.com/circle-platforms/circle/releases).
 
-**Coming from Circle 0.5.0 or older?** Those were written in Python. Run the install command above: it removes the Python version, keeps your settings, keys, skills and sessions, and installs the current release in its place. The old `circle update` cannot install 1.0.0 or later. Python extensions have to be rewritten; see [Extensions](https://circle-platforms.github.io/circle/extensions/).
-
 ## Desktop application
 
 Each release also has Circle as a desktop application: the same agent in its own window, with a browser panel you and Circle use together. [The desktop application](https://circle-platforms.github.io/circle/desktop/) says what the window shows. It carries everything it needs and does not use the `circle` command. It keeps its settings, key and sessions in its own data folder, apart from `~/.circle`.
@@ -103,7 +101,7 @@ Save a password with `/secrets NAME`, or under settings → variables in the des
 
 ## Development
 
-Circle is written in TypeScript and runs on Node.js 24 or newer. Up to 0.5.0 it was written in Python; that code is at the tag `v0.5.0`.
+Circle is written in TypeScript and runs on Node.js 24 or newer.
 
 ```bash
 git clone https://github.com/circle-platforms/circle

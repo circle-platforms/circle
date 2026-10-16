@@ -18,8 +18,7 @@ Install Node.js 24 or newer, then run `npm ci`. The compiler and every tool are 
 | `npm run format:check` | Check the formatting, as CI does. |
 | `npm run release -- X.Y.Z` | Set the version and date the changelog. See [Releasing](releasing.md). |
 | `npm run release:build` | Build the package with its own Node.js for the current platform. |
-| `npm run release:smoke` | Install, relocate and upgrade that package in a scratch home, replace a Python circle there, reject a bad checksum, and run a real tool turn. |
-| `npm run port:status` | Count the entries of the port inventory by status. It is a record of the port, not of the code; see [The TypeScript port](migration.md). |
+| `npm run release:smoke` | Install, relocate and upgrade that package in a scratch home, install it to the default location there, reject a bad checksum, and run a real tool turn. |
 
 Use a scratch `CIRCLE_HOME` for every test and every interactive run. The tests create their own folders, local model gateways and fake credentials; they never need a model account or the network.
 
@@ -34,5 +33,4 @@ More:
 - [Architecture](architecture.md): the module map.
 - [The TUI contract](https://github.com/circle-platforms/circle/blob/main/docs/development/tui-contract.md): the rules for everything on screen. It is written in Chinese.
 - [Releasing](releasing.md): cutting a release.
-- [The TypeScript port](migration.md) and [Session data migration](migration-data.md): how 0.5.0 became 1.0.
 - [Register Circle in skills.sh](skills-registry.md).

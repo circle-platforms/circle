@@ -34,10 +34,7 @@ defaults:
 exclude:
   - vendor
   - .bundle
-  - development/baseline.json
   - development/model-data.json
-  - development/port-inventory.json
-  - development/upstream-updates.json
   - development/design-history
   # Contributor notes. The contract is Chinese; the workbench notes are
   # working records, one of them in Chinese. Both stay in the repository.

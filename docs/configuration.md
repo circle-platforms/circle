@@ -8,7 +8,7 @@ Circle is configured by files: a data folder for your account-level settings and
 
 ## Where Circle keeps things
 
-The data folder is `~/.circle`. Set `CIRCLE_HOME` to use another location, and run `circle --print-home` to see which one is in use. Circle 0.5.0 and older used the same folder, and what they left there carries over.
+The data folder is `~/.circle`. Set `CIRCLE_HOME` to use another location, and run `circle --print-home` to see which one is in use.
 
 | Path | What it is |
 |---|---|
@@ -16,7 +16,6 @@ The data folder is `~/.circle`. Set `CIRCLE_HOME` to use another location, and r
 | `credentials.json` | Your API key. Readable only by you. |
 | `history` | Your prompt history, last 1,000 messages. |
 | `circle.sqlite` | Every session: its messages, branches and titles, for `/resume` and `circle -c`. See [Sessions](sessions.md). |
-| `sessions.sqlite`, `checkpoints.sqlite`, `migration-backups/` | The sessions of 0.5.0 and older, which are imported into `circle.sqlite`, and a copy of what was imported. |
 | `approvals/` | "Allow for this session" rules, one file per session. |
 | `projects/<folder>-<id>/` | Per project: the messages a summary replaced (`conversation_history/`), tool output too long for the conversation (`large_tool_results/`), and the output of commands and [background jobs](background-jobs.md) (`background_jobs/`, one folder per run of Circle, removed a day after that run ended). |
 | `cache/models-dev.json` | The copy of models.dev that context windows and prices come from. See [Models](models.md#cost-and-context-in-the-footer). |

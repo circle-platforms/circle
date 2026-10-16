@@ -24,8 +24,6 @@ Run it from source with `npm run dev -- <folder>`, or build it with `npm run bui
 CIRCLE_HOME=$(mktemp -d) npm run dev -- ~/some/project
 ```
 
-Up to 0.5.0 Circle was written in Python; that code is at the tag `v0.5.0`.
-
 ## Test
 
 ```bash
