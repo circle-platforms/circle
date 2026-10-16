@@ -159,6 +159,15 @@ try {
             { exact: true },
           )
           .waitFor();
+        await detail
+          .getByText(
+            label(
+              'inspect the exact commit and files before publishing',
+              '检查待发布的提交和文件',
+            ),
+            { exact: true },
+          )
+          .waitFor();
         await page.screenshot({
           path: `${output}/${language}-${theme}-${width}-plugin-account.png`,
         });

@@ -77,6 +77,10 @@ export function GitHubPluginDetails({
       'github_connection',
       () => t('check the connection and Circle repository access'),
     ],
+    [
+      'github_candidate',
+      () => t('inspect the exact commit and files before publishing'),
+    ],
     ['github_checks', () => t('read pull request checks')],
     ['github_logs', () => t('read failed CI logs')],
     ['github_retry', () => t('retry failed CI jobs after approval')],

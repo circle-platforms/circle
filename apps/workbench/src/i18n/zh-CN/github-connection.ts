@@ -1,4 +1,6 @@
 export const githubConnection: Record<string, string> = {
+  'inspect the exact commit and files before publishing':
+    '检查待发布的提交和文件',
   'local draft storage is unavailable; keep this panel open and copy your text before leaving':
     '本地草稿暂时无法保存；请保持面板打开，离开前复制文字。',
   'GitHub disconnected': 'GitHub 已断开连接',

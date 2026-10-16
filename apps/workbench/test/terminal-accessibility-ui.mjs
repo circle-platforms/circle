@@ -9,7 +9,9 @@ const server = await createServer({
 });
 await server.listen();
 const browser = await chromium.launch({
-  channel: process.env.CIRCLE_TEST_BROWSER_CHANNEL ?? 'chrome',
+  ...(process.env.CIRCLE_TEST_BROWSER_CHANNEL
+    ? { channel: process.env.CIRCLE_TEST_BROWSER_CHANNEL }
+    : {}),
   headless: true,
 });
 try {

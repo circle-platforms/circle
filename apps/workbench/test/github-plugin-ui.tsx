@@ -135,6 +135,7 @@ Object.assign(window, {
       };
       extension.tools = [
         'github_connection',
+        'github_candidate',
         'github_checks',
         'github_logs',
         'github_retry',
