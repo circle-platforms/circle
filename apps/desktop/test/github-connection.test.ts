@@ -25,7 +25,10 @@ import {
   saveSettings,
 } from '../../../src/settings.js';
 import { ScriptedModel } from '../../../src/testing.js';
-import type { LoginPty } from '../src/workspace/delivery-login.ts';
+import type {
+  DeliveryLogin,
+  LoginPty,
+} from '../src/workspace/delivery-login.ts';
 const TOKEN = 'synthetic-github-token-never-in-model';
 async function until<T>(read: () => Promise<T | false>) {
   for (let i = 0; i < 100; i++) {
@@ -1402,4 +1405,154 @@ test('the original settings toggle loads only GitHub into the existing runtime a
     await controller.close();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('one connection startup owns its helper and rejects competing storage choices without changing its grant', async (t) => {
+  for (const storage of ['session', 'encrypted'] as const) {
+    await t.test(storage, async () => {
+      const f = await fixture();
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const login = (f.connection as unknown as { login: DeliveryLogin }).login;
+      const original = login.start.bind(login);
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      t.mock.method(
+        login,
+        'start',
+        async (options: Parameters<DeliveryLogin['start']>[0]) => {
+          const value = await original(options);
+          entered();
+          await held;
+          return value;
+        },
+      );
+      try {
+        const first = f.connection.connect({
+          storage,
+          repositories: ['fixture/first'],
+        });
+        await started;
+        const before = f.connection.snapshot();
+        await assert.rejects(
+          f.connection.connect({
+            storage: storage === 'session' ? 'encrypted' : 'session',
+            repositories: ['fixture/second'],
+          }),
+          /authorization is already starting/,
+        );
+        assert.deepEqual(f.connection.snapshot(), before);
+        assert.equal(f.helpers.length, 1);
+        assert.equal(f.helpers[0]!.killed, false);
+        release();
+        const authorization = await first;
+        assert.equal(authorization.storage, storage);
+        assert.deepEqual(authorization.repositories, ['fixture/first']);
+        f.helpers[0]!.finish();
+        const connected = await until(async () => {
+          const state = await f.connection.status();
+          return state.state === 'connected' ? state : false;
+        });
+        assert.equal(connected.storage, storage);
+        assert.deepEqual(connected.repositories, ['fixture/first']);
+        assert.equal(connected.account?.login, 'fixture');
+        assert.equal(f.puts, storage === 'encrypted' ? 1 : 0);
+      } finally {
+        release();
+        await f.close();
+      }
+    });
+  }
+});
+
+test('cancellation drains a held connection startup and a failed startup releases ownership for a real retry', async (t) => {
+  for (const action of ['cancel', 'disconnect'] as const) {
+    await t.test(action, async () => {
+      const f = await fixture();
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const login = (f.connection as unknown as { login: DeliveryLogin }).login;
+      const original = login.start.bind(login);
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      t.mock.method(
+        login,
+        'start',
+        async (options: Parameters<DeliveryLogin['start']>[0]) => {
+          const value = await original(options);
+          entered();
+          await held;
+          return value;
+        },
+      );
+      try {
+        const first = f.connection.connect({
+          storage: 'session',
+          repositories: [],
+        });
+        await started;
+        let settled = false;
+        const cleanup = f.connection[action](
+          f.connection.snapshot().epoch,
+        ).then(() => {
+          settled = true;
+        });
+        await delay(10);
+        assert.equal(settled, false);
+        release();
+        await first;
+        await cleanup;
+        assert.equal(f.connection.snapshot().state, 'disconnected');
+        assert(f.helpers.every((helper) => helper.killed));
+        assert.equal(await login.token(), undefined);
+      } finally {
+        release();
+        await f.close();
+      }
+    });
+  }
+  await t.test('startup failure permits retry', async () => {
+    const f = await fixture();
+    const login = (f.connection as unknown as { login: DeliveryLogin }).login;
+    const original = login.start.bind(login);
+    let fail = true;
+    t.mock.method(
+      login,
+      'start',
+      async (options: Parameters<DeliveryLogin['start']>[0]) => {
+        if (fail) {
+          fail = false;
+          throw Error('synthetic startup failure');
+        }
+        return original(options);
+      },
+    );
+    try {
+      await assert.rejects(
+        f.connection.connect({ storage: 'session', repositories: [] }),
+        /authorization could not start/,
+      );
+      assert.equal(f.connection.snapshot().state, 'error');
+      const next = await f.connection.connect({
+        storage: 'session',
+        repositories: ['fixture/retry'],
+      });
+      assert.equal(next.state, 'authorizing');
+      f.helpers[0]!.finish();
+      await until(
+        async () => (await f.connection.status()).state === 'connected',
+      );
+      assert.deepEqual(f.connection.snapshot().repositories, ['fixture/retry']);
+    } finally {
+      await f.close();
+    }
+  });
 });

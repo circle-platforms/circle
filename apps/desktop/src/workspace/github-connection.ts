@@ -296,6 +296,8 @@ export class NativeGitHubConnection {
     return this.snapshot();
   }
   connect(input: { storage: 'encrypted' | 'session'; repositories: string[] }) {
+    if (this.connecting)
+      return Promise.reject(Error('GitHub authorization is already starting'));
     const work = this.beginConnect(input);
     this.connecting = work;
     void work
