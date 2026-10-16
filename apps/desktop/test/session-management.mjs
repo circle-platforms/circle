@@ -7,6 +7,11 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { readModelRequests } from './helpers/model-requests.mjs';
+import { readViewport, setViewport } from './helpers/viewport.mjs';
+import {
+  captureSessionFailure,
+  cleanupSessionTest,
+} from './helpers/session-failure.mjs';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
 const temp = await mkdtemp(join(tmpdir(), 'circle-session-management-'));
@@ -151,12 +156,32 @@ try {
   const a = (await state()).activeSessionId;
   assert.equal((await command('new-session')).ok, true);
   const b = (await state()).activeSessionId;
+  assert.notEqual(b, a);
+  // The sidebar and the session list hide a placeholder title with no messages.
+  // Name this one before either surface is asked to open it. Sending would
+  // consume the scripted write that the approval turn still needs.
+  assert.equal(
+    (
+      await command('rename-session', {
+        id: b,
+        title: 'managed fixture B',
+      })
+    ).ok,
+    true,
+  );
+  await until(
+    async () =>
+      (await state()).sessions.find((session) => session.id === b).title ===
+      'managed fixture B',
+    'the second session is named before it is listed',
+  );
   const current = (await state()).sessions.find((session) => session.id === a);
   await page
     .getByRole('button', {
       name: `session actions for ${current.title}`,
       exact: true,
     })
+    .first()
     .click();
   await page
     .getByRole('menuitem', { name: 'rename session', exact: true })
@@ -179,10 +204,12 @@ try {
     'sidebar rename targets its selected session while another session is open',
   );
   const menu = () =>
-    page.getByRole('button', {
-      name: 'session actions for managed fixture A',
-      exact: true,
-    });
+    page
+      .getByRole('button', {
+        name: 'session actions for managed fixture A',
+        exact: true,
+      })
+      .first();
   await menu().click();
   await page
     .getByRole('menuitem', { name: 'pin session', exact: true })
@@ -193,6 +220,74 @@ try {
     .waitFor();
   await page.keyboard.press('Escape');
   checks.push('sidebar pin is retained by the live presentation store');
+  const originalViewport = await readViewport(page);
+  const focusedRowViewport = await setViewport(app, page, {
+    width: 1024,
+    height: 684,
+  });
+  await writeFile(
+    join(output, 'focus-lifecycle-viewport.json'),
+    JSON.stringify(focusedRowViewport, null, 2) + '\n',
+  );
+  await menu().focus();
+  await page
+    .getByRole('tooltip')
+    .filter({ hasText: 'session actions for managed fixture A' })
+    .waitFor();
+  assert.equal(
+    (await command('archive-session', { id: a, archived: true })).ok,
+    true,
+  );
+  const restoredRows = () =>
+    page
+      .locator('.sidebar .session-link')
+      .filter({ hasText: 'managed fixture A' });
+  await until(
+    async () => (await restoredRows().count()) === 0,
+    'focused row removed',
+  );
+  assert.equal(
+    (await command('archive-session', { id: a, archived: false })).ok,
+    true,
+  );
+  await until(
+    async () => (await restoredRows().count()) > 0,
+    'focused row restored',
+  );
+  const restoredWorkspace = (await state()).workspaces.find(
+    (item) => item.id === current.workspaceId,
+  );
+  await page
+    .getByRole('button', {
+      name: `workspace actions for ${restoredWorkspace.name}`,
+      exact: true,
+    })
+    .click();
+  await page
+    .getByRole('menuitem', { name: 'archive all sessions', exact: true })
+    .waitFor();
+  await page.keyboard.press('Escape');
+  await page
+    .locator('.sidebar .session-link')
+    .filter({ hasText: 'managed fixture B' })
+    .first()
+    .click();
+  await until(
+    async () => (await state()).activeSessionId === b,
+    'restored row does not block B',
+  );
+  assert.equal(await page.getByRole('menu').count(), 0);
+  assert.equal(
+    await page
+      .getByRole('tooltip')
+      .filter({ hasText: 'session actions for managed fixture A' })
+      .count(),
+    0,
+  );
+  checks.push(
+    'removing a focused sidebar row releases its menu tooltip ownership',
+  );
+  await setViewport(app, page, originalViewport);
   await menu().click();
   await page
     .getByRole('menuitem', { name: 'archive session', exact: true })
@@ -265,6 +360,7 @@ try {
       hasText: (await state()).sessions.find((session) => session.id === b)
         .title,
     })
+    .first()
     .click();
   await until(
     async () => (await state()).activeSessionId === b,
@@ -273,6 +369,7 @@ try {
   await page
     .locator('.sidebar .session-link')
     .filter({ hasText: 'managed fixture A' })
+    .first()
     .click();
   await until(
     async () => (await state()).activeSessionId === a,
@@ -472,7 +569,15 @@ try {
       errors,
     }),
   );
+} catch (error) {
+  await captureSessionFailure(app, error, output);
+  throw error;
 } finally {
-  await app?.close();
-  await rm(temp, { recursive: true, force: true });
+  if (
+    !(await cleanupSessionTest([
+      () => app?.close(),
+      () => rm(temp, { recursive: true, force: true }),
+    ]))
+  )
+    process.exitCode = 1;
 }

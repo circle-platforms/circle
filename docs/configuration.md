@@ -46,7 +46,7 @@ Instruction files tell Circle how to work: build commands, conventions, things t
 
 If your workspace is itself the git root, or there is no git root above it, Circle keeps looking in the folders above it as far as the root of the disk, so a `CLAUDE.md` in your home folder can apply. Each file goes into the prompt once: a file reached under two names (as `AGENTS.md` and `agents.md` are on macOS) is read once.
 
-Circle reads them again when you start a new session, open another one, or switch models.
+Circle reads them again when you start a new session, open another one, or switch models. The prompt then tells the model that any of those files that exist are already included, and not to call `read_file` to look for one that is not.
 
 To have Circle write a starting `AGENTS.md` for a project, run `/init`. It reads the repository and drafts one. Add a focus after it, for example `/init testing conventions`.
 
