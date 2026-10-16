@@ -2600,7 +2600,9 @@ export async function register(api: ExtensionAPI): Promise<void> {
             const from = values.from?.at(-1);
             const startsAt = from ? new Date(from) : new Date();
             if (Number.isNaN(startsAt.getTime()))
-              throw new ServerError(hubText('not a time: {from}', { from }));
+              throw new ServerError(
+                hubText('not a time: {from}', { from: from ?? '' }),
+              );
             return {
               kind: 'schedule',
               intervalMs: every(args[1]),
