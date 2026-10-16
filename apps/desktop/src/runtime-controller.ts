@@ -3261,6 +3261,25 @@ export class RuntimeController {
     if (await this.nativeSessionActive(id, root)) return false;
     if ((await this.workspaceServices.get(root)?.terminals.list(id))?.length)
       return false;
+    // Durable operations are real session work even when a tool failed before
+    // producing a chat message or allocating a terminal. Include every state:
+    // completed/reconciled records still carry this owner's idempotency history.
+    const operationLedger =
+      this.operationLedger ??
+      (existsSync(
+        join(
+          this.options.dataFolder ?? this.home,
+          'workspace-operations',
+          'operations.sqlite',
+        ),
+      )
+        ? this.ledger()
+        : undefined);
+    if (
+      operationLedger &&
+      (await operationLedger).list({ sessionId: id, limit: 1 }).length
+    )
+      return false;
     // Resource reads yield: recheck the session before classifying it as empty.
     const current = this.store.get(id);
     if (!current || current.head || current.title || owner.busy) return false;
