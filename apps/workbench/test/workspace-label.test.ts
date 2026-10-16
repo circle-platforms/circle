@@ -54,3 +54,16 @@ test('a folder-shaped name never invents ownership, roles or navigation changes'
   assert.equal(owner.resourceSessionId, 'actual-child');
   assert.equal(owner.workspaceId, 'actual-worktree');
 });
+
+test('a folder with no project uses the same words as the home screen', () => {
+  assert.equal(workspaceLabel({ name: 'unscoped' }), 'work without a project');
+  assert.equal(
+    workspaceLabel({ name: 'unscoped', kind: 'scratch' }),
+    'work without a project',
+  );
+  assert.equal(
+    workspaceLabel({ name: 'notes', kind: 'scratch' }),
+    'work without a project',
+  );
+  assert.equal(workspaceLabel({ name: 'circle' }), 'circle');
+});

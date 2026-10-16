@@ -54,6 +54,7 @@ import {
   sessionHasContent,
   visibleSessions,
 } from '../model/session-management';
+import { workspaceLabel } from '../model/workspace-label';
 import type {
   Attachment,
   DialogId,
@@ -105,6 +106,16 @@ import { DialogHost, InteractionDialog } from '../features/Dialogs';
 import { applyTheme } from '../theme';
 import { t } from '../i18n';
 import { isSessionBrowser } from '../model/browser';
+import { armComposerFocus, sealComposerFocus } from '../model/composer-focus';
+import {
+  effectiveBindings,
+  DESKTOP_SEARCH_CHORD,
+  formatChord,
+  isDesktopNewSession,
+  isDesktopSearch,
+  isDesktopSettings,
+  matchingAction,
+} from '../model/shortcuts';
 // The names of the pages in the top bar; any other page shows its id.
 const PAGE_NAMES: Partial<Record<string, () => string>> = {
   sessions: () => t('sessions'),
@@ -150,6 +161,11 @@ export function App() {
   )!;
   const narrow = useNarrow();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const toggleSidebar = () => {
+    if (narrow) setSidebarOpen((open) => !open);
+    else setSidebarCollapsed((closed) => !closed);
+  };
   // Closed at first, as Claude's side panel; the top bar's icons open it.
   const [inspectorOpen, setInspectorOpen] = useState(false);
   useEffect(() => {
@@ -714,6 +730,7 @@ export function App() {
   };
   setRouter((result) => {
     if (result.openSession) onSession(result.focusComposer);
+    if (result.focusComposer) sealComposerFocus();
     if (result.page) navigate('/page/' + result.page);
     if (result.dialog) onDialog(result.dialog, result.selection);
     if (result.panel) onPanel(result.panel, result.selection);
@@ -742,22 +759,19 @@ export function App() {
               );
           })
           .catch((error) => notify(folderOpenMessage(error)));
-      } else if (action === 'new')
+      } else if (action === 'new') {
+        armComposerFocus();
         openHome(navigate, `${location.pathname}${location.search}`);
-      else if (action === 'settings') navigate('/page/settings');
+      } else if (action === 'settings') navigate('/page/settings');
       else if (action === 'help') navigate('/page/help');
       else act(() => runtime.command(action));
     });
   }, [runtime, navigate, location.pathname, location.search]);
   useEffect(() => {
     const handle = (event: KeyboardEvent) => {
-      if (
-        ((event.metaKey && event.key === 'k') ||
-          ((event.ctrlKey || event.metaKey) &&
-            event.shiftKey &&
-            event.key.toLowerCase() === 'p')) &&
-        !document.querySelector('[role="dialog"]')
-      ) {
+      if (document.documentElement.dataset.keyCapture) return;
+      if (document.querySelector('[role="dialog"]')) return;
+      if (isDesktopSearch(event)) {
         event.preventDefault();
         searchReturnFocus.current =
           document.activeElement instanceof HTMLElement
@@ -781,11 +795,45 @@ export function App() {
         setQuickOpen(true);
         setSearch('');
         setSearchOpen(true);
+        return;
+      }
+      // Capture, and no check of the focused field: the rename box and the
+      // composer stop the bubble, and Linux has no menu accelerator for this.
+      if (isDesktopSettings(event)) {
+        event.preventDefault();
+        navigate('/page/settings');
+        return;
+      }
+      // The desktop File menu owns Ctrl+N and opens home. Handling it here as
+      // well would open it twice. The preview has no menu, so the chord is here.
+      if (!desktopHost() && isDesktopNewSession(event)) {
+        event.preventDefault();
+        armComposerFocus();
+        openHome(navigate, `${location.pathname}${location.search}`);
+        return;
+      }
+      if (
+        matchingAction(
+          event,
+          effectiveBindings(snapshot.settings.keybindings),
+        ) === 'sidebar.toggle'
+      ) {
+        event.preventDefault();
+        if (narrow) setSidebarOpen((open) => !open);
+        else setSidebarCollapsed((closed) => !closed);
       }
     };
-    addEventListener('keydown', handle);
-    return () => removeEventListener('keydown', handle);
-  }, []);
+    addEventListener('keydown', handle, true);
+    return () => removeEventListener('keydown', handle, true);
+  }, [
+    act,
+    narrow,
+    navigate,
+    runtime,
+    snapshot.settings.keybindings,
+    location.pathname,
+    location.search,
+  ]);
   const activeAgent = snapshot.agents.find(
     (item) => item.id === agent && item.sessionId === session.id,
   );
@@ -1060,7 +1108,9 @@ export function App() {
   const surface = (
     <SourceNavigation onFile={onFile}>
       <Tooltip.Provider delayDuration={300}>
-        <div className="workbench">
+        <div
+          className={`workbench${sidebarCollapsed && !narrow ? ' sidebar-collapsed' : ''}`}
+        >
           {desktopHost() && <div className="desktop-drag-region" />}
           <div className="desktop-sidebar">
             <Sidebar
@@ -1072,14 +1122,12 @@ export function App() {
           <main className="workspace">
             <header className="topbar">
               <div className="topbar-title">
-                <span className="mobile-only">
-                  <IconButton
-                    label={t('open navigation')}
-                    onClick={() => setSidebarOpen(true)}
-                  >
-                    <PanelLeft size={16} />
-                  </IconButton>
-                </span>
+                <IconButton
+                  label={t('show or hide the sidebar')}
+                  onClick={toggleSidebar}
+                >
+                  <PanelLeft size={16} />
+                </IconButton>
                 {page || file || agent || home ? (
                   <span className="page-title">
                     {home

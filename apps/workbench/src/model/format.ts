@@ -24,6 +24,15 @@ export function formatBusyElapsed(seconds: number): string {
   if (minutes < 60) return `${minutes}m ${Math.floor(value) % 60}s`;
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
+/** The busy clock never steps backwards when a later snapshot adds wait time. */
+export function nextBusySeconds(
+  shown: number | undefined,
+  raw: number,
+): number {
+  const value = Number.isFinite(raw) ? Math.max(0, raw) : 0;
+  if (shown === undefined || !Number.isFinite(shown)) return value;
+  return Math.max(shown, value);
+}
 /** A path inside `root` as it reads in the workspace: `src/app.ts`, not the full path. */
 export function relativePath(path: string, root?: string): string {
   if (!root || !path) return path;

@@ -4,11 +4,17 @@ import {
   PreviewRuntime,
   currentSession,
   branchMessages,
+  sessionListed,
   visibleMessages,
 } from '../src/model/state.ts';
 import { parsePreviewBundle } from '../src/model/transfer.ts';
 import { shownTime } from '../src/model/time.ts';
-import { validateKeybindings, matchingAction } from '../src/model/shortcuts.ts';
+import {
+  KEY_ACTIONS,
+  effectiveBindings,
+  validateKeybindings,
+  matchingAction,
+} from '../src/model/shortcuts.ts';
 import { PlatformPreviewService } from '../src/plugins/platform/store.ts';
 import { PluginRegistry } from '../src/plugins/registry.ts';
 import type { WorkbenchPlugin } from '../src/plugins/types.ts';
@@ -297,6 +303,51 @@ test('custom key preferences validate actions and resolve aliases', () => {
     ),
     'model.select',
   );
+  assert.equal(
+    matchingAction(
+      {
+        key: 'b',
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+        metaKey: true,
+      },
+      {},
+    ),
+    undefined,
+  );
+  assert.equal(KEY_ACTIONS['sidebar.toggle'], 'ctrl+b');
+  assert.equal(KEY_ACTIONS['secret.enter'], 'ctrl+alt+s');
+  assert.equal(KEY_ACTIONS['message.copy'], 'alt+c');
+  assert.equal(KEY_ACTIONS['model.select'], 'ctrl+shift+m');
+  assert.equal(KEY_ACTIONS['model.cycle'], 'alt+m');
+  assert.equal(KEY_ACTIONS['job.background'], 'alt+b');
+  assert.equal(
+    matchingAction(
+      {
+        key: 'b',
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+        metaKey: true,
+      },
+      effectiveBindings(),
+    ),
+    'sidebar.toggle',
+  );
+  assert.equal(
+    matchingAction(
+      {
+        key: 's',
+        ctrlKey: true,
+        altKey: true,
+        shiftKey: false,
+        metaKey: false,
+      },
+      effectiveBindings({ 'secret.enter': 'ctrl+k' }),
+    ),
+    undefined,
+  );
 });
 test('platform work and execution retain independent states after Circle interaction', () => {
   const runtime = new PreviewRuntime();
@@ -385,6 +436,7 @@ test('resume without an argument opens the session picker; explicit selection op
   assert.equal(runtime.command('resume', 'session2').openSession, true);
   assert.equal(runtime.getSnapshot().activeSessionId, 'session2');
   assert.equal(runtime.command('new').openSession, true);
+  assert.equal(runtime.command('new').focusComposer, true);
   assert.equal(runtime.command('redo').notice, 'nothing to redo');
 });
 
@@ -399,6 +451,34 @@ test('core times show as local clock times, with the day when it is not today', 
   assert.equal(shownTime('10:24', now), '10:24');
   assert.equal(shownTime('yesterday', now), 'yesterday');
   assert.equal(shownTime('streaming', now), 'streaming');
+});
+
+test('an empty new session is not listed, and hi keeps that title', () => {
+  const runtime = new PreviewRuntime();
+  const before = runtime.getSnapshot().sessions.length;
+  const created = runtime.newSession();
+  assert.equal(runtime.getSnapshot().sessions.length, before + 1);
+  assert.equal(sessionListed(currentSession(runtime.getSnapshot())), false);
+  assert.equal(runtime.newSession(), created);
+  assert.equal(runtime.getSnapshot().sessions.length, before + 1);
+  runtime.change((state) => {
+    currentSession(state).draft = 'leftover';
+  });
+  assert.equal(runtime.newSession(), created);
+  assert.equal(currentSession(runtime.getSnapshot()).draft, '');
+  runtime.change((state) => {
+    currentSession(state).draft = 'hi';
+  });
+  runtime.send();
+  assert.equal(currentSession(runtime.getSnapshot()).title, 'hi');
+  assert.equal(sessionListed(currentSession(runtime.getSnapshot())), true);
+  const again = runtime.newSession();
+  assert.notEqual(again, created);
+  runtime.selectSession(created);
+  assert.equal(
+    runtime.getSnapshot().sessions.some((session) => session.id === again),
+    false,
+  );
 });
 
 test('the first message from home creates one session in the chosen project', () => {

@@ -130,7 +130,11 @@ import {
 import { formatMcpArguments, parseMcpArguments } from './mcp-arguments';
 import { PlanCompletionTracker } from '../../../src/plan_state.js';
 import { nextAgentActivity } from '../../../src/session_activity.js';
-import { formatElapsed, type TurnUsage } from '../../../src/tui/status_rows.js';
+import {
+  formatElapsed,
+  gapElapsed,
+  type TurnUsage,
+} from '../../../src/tui/status_rows.js';
 import {
   approvalPreview,
   fileChange,
@@ -421,6 +425,7 @@ export class RuntimeController {
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
     this.metadata = new SessionMetadata(this.home);
     this.store = new CheckpointStore(this.home);
+    this.store.repairStaleTitles();
     for (const session of this.store.list(undefined, true)) {
       try {
         this.bindWorkspace(session.workspace);
@@ -597,6 +602,14 @@ export class RuntimeController {
     } catch (error) {
       if (!runtime.isClosing) this.pendingTrustReloads.add(runtime);
       throw error;
+    }
+  }
+  /** The saved thinking depth, on every open runtime except one that was just set. */
+  private applySharedEffort(saved: string, skip?: AgentRuntime): void {
+    const level = saved || 'default';
+    for (const owner of this.runtimes.values()) {
+      if (owner === skip || owner.isClosing) continue;
+      owner.applyThinkingChoice(level);
     }
   }
   private synchronizeSharedSettings(settings: CircleSettings): void {
@@ -1717,6 +1730,8 @@ export class RuntimeController {
             ),
           ),
         home: this.home,
+        // A sentence shows as a new session until its summary title arrives.
+        holdTitle: true,
         beforeDelete: async () => {
           await this.releaseSessionResources(runtime.session.id, workspace);
           await this.options.beforeDelete?.(runtime.session.id);
@@ -1871,6 +1886,9 @@ export class RuntimeController {
     const turns = this.turnUsage.get(id) ?? {};
     const result: Message[] = [];
     const calls = new Map<string, Message>();
+    // A stored reply has tokens but not the turn clock. Measure it from the prompt,
+    // or from the previous reply, so an older footer shows a duration too.
+    let markedAt: number | undefined;
     for (const node of nodes) {
       const raw = node.message;
       if (!raw || raw.internal || raw.role === 'system') continue;
@@ -1926,7 +1944,8 @@ export class RuntimeController {
           content: a.data,
           mime: a.mime_type,
         })),
-        // The last message of a finished turn shows the whole turn: its time and tokens
+        // The last message of a finished turn shows the whole turn: its time and tokens.
+        // Any other reply with usage shows the time since the prompt or the previous reply.
         usage: turns[raw.id]
           ? {
               input: turns[raw.id]!.input,
@@ -1943,17 +1962,16 @@ export class RuntimeController {
                   raw.cost?.currency === 'USD'
                     ? (raw.cost.amount ?? null)
                     : null,
-                elapsed: '',
+                elapsed: gapElapsed(markedAt, node.created),
               }
             : undefined,
       };
-      if (
+      const shown =
         raw.role !== 'assistant' ||
-        base.text ||
-        base.thinking ||
-        base.attachments?.length
-      )
-        result.push(base);
+        Boolean(base.text || base.thinking || base.attachments?.length);
+      if (raw.role === 'user' || (shown && base.usage))
+        markedAt = new Date(node.created).getTime();
+      if (shown) result.push(base);
       for (const call of raw.tool_calls ?? []) {
         const state = this.toolStates.get(`${id}:${call.id}`);
         const row: Message = {
@@ -2122,7 +2140,7 @@ export class RuntimeController {
         workspaceId: identity(row.workspace),
         model: selected ? owner.harness.model.model : row.model,
         effort: ((selected
-          ? owner.thinkingLevel
+          ? owner.options.settings.default_thinking
           : savedSettings.default_thinking) || 'default') as Effort,
         draft: '',
         attachments: [],
@@ -2669,6 +2687,28 @@ export class RuntimeController {
     } catch {
       /* A diff is a view; failing to draw one never stops the turn. */
     }
+    if (
+      event.kind === 'info' &&
+      !event.tags?.subagent &&
+      (event.payload.model_notice as { event?: string } | undefined)?.event ===
+        'title_failed' &&
+      // A model without side requests is a scripted one. Every connected
+      // endpoint can be asked, so that skip is nothing a person can act on.
+      (event.payload.model_notice as { message?: string }).message !==
+        'model has no side request'
+    ) {
+      const notice = event.payload.model_notice as { message?: string };
+      const rows = this.notices.get(id) ?? [];
+      rows.push({
+        id: `title-failed-${randomUUID()}`,
+        after: runtime.store.get(id)?.head ?? null,
+        text: `title failed · ${String(notice.message ?? '')
+          .replace(/\s+/g, ' ')
+          .slice(0, 120)}`,
+        at: event.ts,
+      });
+      this.notices.set(id, rows);
+    }
     if (event.kind === 'run_error' && !event.payload.interrupted) {
       const assistant = event.payload.completion_message_id
         ? runtime.store
@@ -3202,6 +3242,46 @@ export class RuntimeController {
     tracker.reset(runtime.todos);
     this.planCompletions.set(runtime.session.id, tracker);
   }
+  /** An empty untitled session. It is not kept once the user leaves it. */
+  private async unusedSession(id: string): Promise<boolean> {
+    const row = this.store.get(id);
+    if (!row || row.parent_id || row.head || row.title) return false;
+    const owner = this.runtimes.get(id);
+    if (!owner || owner.busy) return false;
+    // An agent-only parent and recoverable drafts are real work even without a
+    // chat head. Leaving the view must not delete their provenance or payload.
+    if (
+      this.taskAgentAttempts(id).records.length ||
+      this.taskProjectionErrors.size
+    )
+      return false;
+    if (owner.harness.recoverableInputs.items.length) return false;
+    const root =
+      this.workspaceRoots.get(row.workspace)?.canonical ?? row.workspace;
+    if (await this.nativeSessionActive(id, root)) return false;
+    if ((await this.workspaceServices.get(root)?.terminals.list(id))?.length)
+      return false;
+    // Resource reads yield: recheck the session before classifying it as empty.
+    const current = this.store.get(id);
+    if (!current || current.head || current.title || owner.busy) return false;
+    if (
+      this.taskAgentAttempts(id).records.length ||
+      owner.harness.recoverableInputs.items.length
+    )
+      return false;
+    if (owner.jobs.list().some((job) => job.status === 'running')) return false;
+    if (
+      [...this.pending.values()].some((pending) => pending.row.sessionId === id)
+    )
+      return false;
+    return this.runtimes.lifecycle(id) === 'open';
+  }
+  private async dropUnused(id: string): Promise<void> {
+    if (!id || id === this.selectedSessionId || !(await this.unusedSession(id)))
+      return;
+    await this.runtimes.delete(id, { confirmed: true });
+    this.publish();
+  }
   // Conversations with no project live here, not in the default circle workspace.
   // That folder is a project of its own; sharing it made "no project" look like circle.
   private unscopedPath(): string {
@@ -3529,8 +3609,12 @@ export class RuntimeController {
         return runtime.jobs.backgroundForeground();
       case 'new-session': {
         this.workspaceRoot(this.selectedWorkspace);
+        const previous = this.selectedSessionId;
+        if ((await this.unusedSession(previous)) && !this.viewedSessionId)
+          return { sessionId: previous };
         const owner = this.runtimes.create(this.selectedWorkspace);
         this.selectRuntime(owner);
+        if (previous !== owner.session.id) await this.dropUnused(previous);
         return { sessionId: owner.session.id };
       }
       case 'select-session': {
@@ -3546,12 +3630,14 @@ export class RuntimeController {
         if (!row || row.parent_id) throw Error('session not found');
         if (id === this.selectedSessionId && !this.viewedSessionId)
           return { sessionId: id };
+        const previous = this.selectedSessionId;
         try {
           const owner = this.runtimes.open(row.workspace, id);
           await this.reloadTrustedRuntime(owner);
           if (owner.isClosing || this.closing)
             throw Error('session is closing');
           this.selectRuntime(owner);
+          if (previous !== id) await this.dropUnused(previous);
         } catch (error) {
           if (!(error instanceof SessionOccupiedError)) throw error;
           this.previous = this.selectedSessionId;
@@ -3673,9 +3759,12 @@ export class RuntimeController {
       case 'rename-session':
         if (!this.store.get(String(p.id ?? command.sessionId)))
           throw Error('session not found');
+        // The person chose this name. A later open, here or in the terminal,
+        // does not replace it with a generated title.
         this.store.rename(
           String(p.id ?? command.sessionId),
           text(p.title, 'title', 500),
+          true,
         );
         return {};
       case 'fork':
@@ -3739,9 +3828,14 @@ export class RuntimeController {
         }
         return {};
       }
-      case 'set-effort':
-        runtime.setThinkingLevel(text(p.effort, 'effort', 20));
+      case 'set-effort': {
+        runtime.applyThinkingChoice(text(p.effort, 'effort', 20));
+        const settings = saveSettingsChange(this.home, (saved) => {
+          saved.default_thinking = runtime.options.settings.default_thinking;
+        });
+        this.applySharedEffort(settings.default_thinking, runtime);
         return {};
+      }
       case 'set-plan-mode':
         runtime.setPlanMode(flag(p.enabled));
         return {};
@@ -4007,6 +4101,8 @@ export class RuntimeController {
           }
         });
         this.synchronizeSharedSettings(settings);
+        if (data.defaultEffort !== undefined)
+          this.applySharedEffort(settings.default_thinking);
         if (data.variables !== undefined)
           for (const owner of this.runtimes.values()) {
             owner.options.settings.variables = { ...settings.variables };
@@ -4316,6 +4412,35 @@ export class RuntimeController {
           { mode: 0o600 },
         );
         return { name, path };
+      }
+      case 'create-skill': {
+        if (runtime.busy)
+          throw Error('finish the current turn before adding a skill');
+        if (
+          !isFolderTrusted(runtime.options.settings, runtime.options.workspace)
+        )
+          throw Error('trust this workspace first');
+        const name = text(p.name, 'skill name', 64);
+        if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name))
+          throw Error('invalid skill name');
+        const description = text(p.description ?? '', 'description', 1024);
+        const body = text(p.body ?? '', 'skill', 120_000);
+        const folder = join(
+          runtime.options.workspace,
+          '.circle',
+          'skills',
+          name,
+        );
+        mkdirSync(folder, { recursive: true, mode: 0o700 });
+        const skillPath = join(folder, 'SKILL.md');
+        if (existsSync(skillPath)) throw Error('skill already exists');
+        writeFileSync(
+          skillPath,
+          `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n\n${body}\n`,
+          { mode: 0o600 },
+        );
+        await runtime.reloadIntegrations();
+        return { name, path: skillPath };
       }
       case 'write-file': {
         if (

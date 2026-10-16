@@ -24,7 +24,12 @@ import { ScriptedModel } from '../../../src/testing.ts';
 import { AgentRuntime } from '../../../src/runtime.ts';
 import { ExtensionAPI } from '../../../src/extensions.ts';
 import { ExtensionSecrets } from '../../../src/extension_secrets.ts';
-import { emptyUsage, type Message } from '../../../src/types.ts';
+import {
+  emptyUsage,
+  type ChatModel,
+  type Message,
+  type ModelRequest,
+} from '../../../src/types.ts';
 import {
   saveSettings,
   saveSettingsChange,
@@ -33,6 +38,7 @@ import {
   defaultSettings,
   isFolderTrusted,
 } from '../../../src/settings.ts';
+import { fallbackTitle, TITLE_MAX_TOKENS } from '../../../src/session_title.ts';
 import { visibleMessages } from '../../workbench/src/model/state.ts';
 import {
   historyMessages,
@@ -2168,7 +2174,12 @@ test('saved API configuration, model selection and effort produce actual local g
     controller.snapshot().models.some((model) => model.id === 'fixture-two'),
   );
   assert.equal((await call('set-model', { modelId: 'fixture-two' })).ok, true);
+  assert.equal((await call('set-effort', { effort: 'default' })).ok, true);
+  assert.equal(controller.snapshot().sessions[0]!.effort, 'default');
+  assert.equal(controller.snapshot().settings.defaultEffort, 'default');
   assert.equal((await call('set-effort', { effort: 'high' })).ok, true);
+  assert.equal(controller.snapshot().sessions[0]!.effort, 'high');
+  assert.equal(controller.snapshot().settings.defaultEffort, 'high');
   assert.equal(
     (await call('prompt', { text: 'use the selected model' })).ok,
     true,
@@ -2503,6 +2514,9 @@ test('an Anthropic endpoint without model discovery keeps the saved model availa
 
 test('a retried native command cannot create duplicate sessions or change its bound input', async (t) => {
   const f = await setup(t, []);
+  // The open session is empty, so a new session is a real second row only
+  // after this one is kept.
+  assert.equal((await f.call('rename-session', { title: 'kept' })).ok, true);
   const command = {
     id: randomUUID(),
     name: 'new-session',
@@ -2527,6 +2541,43 @@ test('a retried native command cannot create duplicate sessions or change its bo
     false,
   );
   assert.equal(f.controller.snapshot().sessions.length, 2);
+});
+
+test('an empty session is kept only until the first message', async (t) => {
+  const f = await setup(t, [{ message: assistant('noted') }]);
+  const first = f.controller.snapshot().activeSessionId;
+  const again = await f.call('new-session');
+  assert.equal(again.ok, true);
+  assert.equal((again.data as { sessionId: string }).sessionId, first);
+  assert.equal(f.controller.snapshot().sessions.length, 1);
+  assert.equal(f.controller.snapshot().sessions[0]!.title, 'new session');
+  assert.equal((await f.call('prompt', { text: 'hi' })).ok, true);
+  await wait(
+    () =>
+      f.controller.snapshot().sessions.find((row) => row.id === first)!
+        .state === 'idle',
+    'hi settles',
+  );
+  const titled = f.controller
+    .snapshot()
+    .sessions.find((row) => row.id === first)!;
+  assert.equal(titled.title, 'hi');
+  assert.equal(
+    titled.messages.some((message) => message.text.includes('title failed')),
+    false,
+  );
+  const created = await f.call('new-session');
+  assert.equal(created.ok, true);
+  const second = (created.data as { sessionId: string }).sessionId;
+  assert.notEqual(second, first);
+  assert.equal(f.controller.snapshot().activeSessionId, second);
+  assert.equal(f.controller.snapshot().sessions.length, 2);
+  assert.equal((await f.call('select-session', { id: first })).ok, true);
+  assert.equal(f.controller.snapshot().activeSessionId, first);
+  assert.equal(
+    f.controller.snapshot().sessions.some((row) => row.id === second),
+    false,
+  );
 });
 
 test('saved command templates expand real shell output into the next model request', async (t) => {
@@ -3432,7 +3483,9 @@ test('desktop archive is durable presentation state and leaves core history and 
         .archivedAt,
     );
     const withoutTurnUsage = (messages: typeof before) =>
-      messages.map(({ usage: _usage, ...message }) => message);
+      messages
+        .filter((message) => !message.id.startsWith('title-failed-'))
+        .map(({ usage: _usage, ...message }) => message);
     assert.deepEqual(
       withoutTurnUsage(
         restarted.snapshot().sessions.find((session) => session.id === id)!
@@ -3474,8 +3527,10 @@ test('archive all rejects a busy workspace atomically and cannot strand a pendin
     { message: assistant('approved') },
   ]);
   const old = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('rename-session', { title: 'older' })).ok, true);
   await f.call('new-session');
   const id = f.controller.snapshot().activeSessionId;
+  assert.notEqual(id, old);
   const workspaceId = f.controller
     .snapshot()
     .sessions.find((session) => session.id === id)!.workspaceId;
@@ -4218,8 +4273,10 @@ test('background approval survives same-workspace switching and confirmed deleti
 test('deleting an active session selects a remaining session and preserves command identity', async (t) => {
   const f = await setup(t, []);
   const a = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('rename-session', { title: 'kept' })).ok, true);
   await f.call('new-session');
   const b = f.controller.snapshot().activeSessionId;
+  assert.notEqual(b, a);
   const command = {
     id: randomUUID(),
     name: 'delete-session',
@@ -4698,10 +4755,15 @@ test('a background session cleanup leaves selection and other model turns respon
     },
   );
   const a = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('rename-session', { title: 'A' })).ok, true);
   await f.call('new-session');
   const b = f.controller.snapshot().activeSessionId;
+  assert.notEqual(b, a);
+  assert.equal((await f.call('rename-session', { title: 'B' })).ok, true);
   await f.call('new-session');
   const c = f.controller.snapshot().activeSessionId;
+  assert.notEqual(c, b);
+  assert.equal((await f.call('rename-session', { title: 'C' })).ok, true);
   const command = {
     id: randomUUID(),
     name: 'delete-session' as const,
@@ -4845,8 +4907,11 @@ test('trusting a folder initializes every idle session with its own project cont
     'Independent trusted workspace instructions marker.\n',
   );
   const a = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('rename-session', { title: 'A' })).ok, true);
   await f.call('new-session');
   const b = f.controller.snapshot().activeSessionId;
+  assert.notEqual(b, a);
+  assert.equal((await f.call('rename-session', { title: 'B' })).ok, true);
   assert.equal((await f.call('trust', { enabled: true })).ok, true);
   await f.call('select-session', { id: a });
   assert.equal(
@@ -4881,6 +4946,154 @@ test('trusting a folder initializes every idle session with its own project cont
       .snapshot()
       .workspaces.find((row) => row.path === realpathSync.native(f.workspace))!
       .trusted,
+  );
+});
+
+test('a model that cannot be asked for a title keeps the short title quietly', async (t) => {
+  // A scripted model has no side requests. A connected endpoint always has.
+  const f = await setup(t, [{ message: assistant('listed') }]);
+  const prompt = 'please list all the files in the workspace';
+  await f.call('prompt', { text: prompt });
+  const row = () =>
+    f.controller
+      .snapshot()
+      .sessions.find(
+        (session) => session.id === f.controller.snapshot().activeSessionId,
+      )!;
+  await wait(
+    () => row().state === 'idle' && row().messages.length >= 2,
+    'answered',
+  );
+  assert.equal(row().title, fallbackTitle(prompt));
+  assert.equal(
+    row().messages.some((message) => message.text.includes('title failed')),
+    false,
+  );
+});
+
+test('a desktop prompt asks for a title after the turn and shows a failure', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-core-desktop-'));
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  await mkdir(home);
+  await mkdir(workspace);
+  await mkdir(join(workspace, '.git'));
+  saveSettings(trustFolder(defaultSettings(), workspace), home);
+  const requests: ModelRequest[] = [];
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let fail = false;
+  const model: ChatModel = {
+    model: 'title-model',
+    sideRequests: true,
+    async complete(request) {
+      requests.push(request);
+      const titleCall = request.maxTokens === TITLE_MAX_TOKENS;
+      if (titleCall && fail) throw new Error('title exploded');
+      if (titleCall) await gate;
+      const content = titleCall ? 'Workspace file list' : 'listed';
+      if (!titleCall && content) request.token(content);
+      return {
+        message: {
+          id: titleCall ? 'title' : 'answer',
+          role: 'assistant',
+          content,
+        },
+        usage: emptyUsage(),
+      };
+    },
+  };
+  const controller = new RuntimeController({
+    home,
+    workspace,
+    userHome: home,
+    model,
+    emit: () => {},
+  });
+  t.after(async () => {
+    release();
+    await controller.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const prompt = 'Please list all the files in the workspace and explain each';
+  const sessionId = controller.snapshot().activeSessionId;
+  assert.equal(
+    (
+      await controller.dispatch({
+        id: randomUUID(),
+        name: 'prompt',
+        payload: { text: prompt },
+        sessionId,
+      })
+    ).ok,
+    true,
+  );
+  await wait(
+    () => requests.some((request) => request.maxTokens === TITLE_MAX_TOKENS),
+    'title request after the turn',
+  );
+  assert.equal(requests[0]!.maxTokens, undefined);
+  const title = requests.find(
+    (request) => request.maxTokens === TITLE_MAX_TOKENS,
+  )!;
+  assert.equal(title.effort, '');
+  assert.equal(title.tools.length, 0);
+  assert.equal(
+    requests.filter((request) => request.maxTokens === TITLE_MAX_TOKENS).length,
+    1,
+  );
+  const row = () =>
+    controller.snapshot().sessions.find((session) => session.id === sessionId)!;
+  // The summary has not arrived. The trimmed prompt is not the title.
+  assert.equal(row().title, 'new session');
+  release();
+  await wait(
+    () => row().title === 'Workspace file list',
+    'generated title in the snapshot',
+  );
+  fail = true;
+  const second = await mkdtemp(join(tmpdir(), 'circle-core-desktop-'));
+  const secondHome = join(second, 'home');
+  const secondWorkspace = join(second, 'workspace');
+  await mkdir(secondHome);
+  await mkdir(secondWorkspace);
+  await mkdir(join(secondWorkspace, '.git'));
+  saveSettings(trustFolder(defaultSettings(), secondWorkspace), secondHome);
+  requests.length = 0;
+  const failed = new RuntimeController({
+    home: secondHome,
+    workspace: secondWorkspace,
+    userHome: secondHome,
+    model,
+    emit: () => {},
+  });
+  t.after(async () => {
+    await failed.close();
+    await rm(second, { recursive: true, force: true });
+  });
+  const failedId = failed.snapshot().activeSessionId;
+  assert.equal(
+    (
+      await failed.dispatch({
+        id: randomUUID(),
+        name: 'prompt',
+        payload: { text: prompt },
+        sessionId: failedId,
+      })
+    ).ok,
+    true,
+  );
+  await wait(
+    () =>
+      failed
+        .snapshot()
+        .sessions.find((session) => session.id === failedId)!
+        .messages.some((message) =>
+          message.text.includes('title failed · title exploded'),
+        ),
+    'title failure in the transcript',
   );
 });
 

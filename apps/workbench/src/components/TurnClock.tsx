@@ -1,6 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Session } from '../model/types';
-import { formatBusyElapsed, formatTokens } from '../model/format';
+import {
+  formatBusyElapsed,
+  formatTokens,
+  nextBusySeconds,
+} from '../model/format';
 import { t } from '../i18n';
 
 // What a retry is for (src/tui/turn_status.ts RETRY_CAUSE), then `3/10`.
@@ -11,6 +15,18 @@ const RETRIES: Record<string, () => string> = {
   'rate limited': () => t('rate limited'),
   'endpoint error': () => t('endpoint error'),
   error: () => t('error'),
+};
+const VERBS: Record<string, () => string> = {
+  thinking: () => t('thinking'),
+  considering: () => t('considering'),
+  analyzing: () => t('analyzing'),
+  brewing: () => t('brewing'),
+  pondering: () => t('pondering'),
+  cogitating: () => t('cogitating'),
+  reflecting: () => t('reflecting'),
+  processing: () => t('processing'),
+  evaluating: () => t('evaluating'),
+  examining: () => t('examining'),
 };
 function retryText(retry: string) {
   const match = retry.match(/^(.*) (\d+\/\d+)$/);
@@ -26,14 +42,23 @@ function retryText(retry: string) {
  */
 export function TurnClock({ turn }: { turn: NonNullable<Session['turn']> }) {
   const [now, setNow] = useState(Date.now());
+  const floor = useRef(0);
+  const turnId = useRef(turn.startedAt);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 160);
     return () => clearInterval(timer);
   }, []);
-  const seconds = Math.max(0, now - turn.startedAt - turn.waited) / 1000;
+  if (turnId.current !== turn.startedAt) {
+    turnId.current = turn.startedAt;
+    floor.current = 0;
+  }
+  const raw = Math.max(0, now - turn.startedAt - turn.waited) / 1000;
+  floor.current = nextBusySeconds(floor.current, raw);
+  const seconds = floor.current;
   return (
     <span className="turn-clock" aria-live="off" data-testid="turn-clock">
       {[
+        ...(turn.verb ? [VERBS[turn.verb.toLowerCase()]?.() ?? turn.verb] : []),
         ...(turn.retry ? [retryText(turn.retry)] : []),
         formatBusyElapsed(seconds),
         // An endpoint gives a request's tokens when it ends: none until then
