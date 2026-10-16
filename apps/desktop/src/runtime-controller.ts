@@ -324,7 +324,14 @@ export class RuntimeController {
   private workspaceServices = new Map<string, WorkspaceServices>();
   private taskServices = new Map<string, TaskService>();
   private archivedTaskAttempts = new Map<string, readonly TaskRecord[]>();
-  private taskProjectionErrors = new Map<string, string>();
+  private taskProjectionErrors = new Map<
+    string,
+    {
+      message: string;
+      workspace: string;
+      worktrees: string;
+    }
+  >();
   private taskResources = new CollaborationResources();
   private taskVerifiers = new Map<
     string,
@@ -921,10 +928,16 @@ export class RuntimeController {
       this.taskProjectionErrors.delete(key);
       return { records, archived: true };
     } catch (error) {
-      this.taskProjectionErrors.set(
-        key,
-        `could not read agent task history: ${(error as Error).message}`,
-      );
+      this.taskProjectionErrors.set(key, {
+        message: `could not read agent task history: ${(error as Error).message}`,
+        workspace: root,
+        worktrees: join(
+          this.options.dataFolder ?? this.home,
+          'collaboration',
+          identity(root),
+          'worktrees',
+        ),
+      });
       return { records: [], archived: true };
     }
   }
@@ -996,11 +1009,18 @@ export class RuntimeController {
         return task;
       }
     }
-    // A failed task history read must not silently grant write permission.
-    if (this.taskProjectionErrors.size)
-      throw Error(
-        'agent source permission could not be verified; inspect task history error',
-      );
+    // A corrupt ledger cannot identify an old child's access mode. Fail closed
+    // for its managed worktrees, not for ordinary parents or other workspaces.
+    // Both read-only and write tasks currently receive trees in this directory.
+    for (const failure of this.taskProjectionErrors.values())
+      if (
+        folderContains(canonicalPath(failure.worktrees), child.workspace) ||
+        (child.workspace !== failure.workspace &&
+          this.taskWorkspaces.get(child.workspace) === failure.workspace)
+      )
+        throw Error(
+          'agent source permission could not be verified; inspect task history error',
+        );
     return undefined;
   }
   private ledger(): Promise<OperationLedger> {
@@ -1659,7 +1679,7 @@ export class RuntimeController {
         error:
           this.error ??
           this.workspaceStreamFailures.values().next().value ??
-          this.taskProjectionErrors.values().next().value,
+          this.taskProjectionErrors.values().next().value?.message,
       },
       workspaces: paths.map((path) => ({
         id: identity(path),
