@@ -32,7 +32,7 @@ function app(t: Parameters<typeof cleanup>[0], home: string): SessionApp {
   return session;
 }
 
-test('the update check asks once a day, remembers a failed check and shares its file with the Python releases', async (t) => {
+test('the update check asks once a day, remembers a failed check and reads update-check.json as written', async (t) => {
   const home = scratch(t);
   let asked = 0;
   const latest = async (): Promise<string> => {
@@ -61,10 +61,10 @@ test('the update check asks once a day, remembers a failed check and shares its 
     '1.2.0',
   );
   assert.equal(asked, 2);
-  // What 0.5.0 wrote is read as it is.
+  // A time in fractions of a second and an older version are read as they are.
   writeFileSync(
     join(home, 'update-check.json'),
-    JSON.stringify({ checked_at: 5000.25, latest: '0.5.0' }) + '\n',
+    JSON.stringify({ checked_at: 5000.25, latest: '0.9.0' }) + '\n',
   );
   assert.equal(await availableUpdate(home, '1.0.0', latest, 5001), undefined);
   assert.equal(asked, 2);
@@ -106,7 +106,7 @@ test('circle update --help explains the command and exits 0', async () => {
   assert.match(text, /--check/);
 });
 
-test('circle update takes a version the way the Python releases did', async () => {
+test('circle update takes a version alone or after --version', async () => {
   const previous = process.env.CIRCLE_INSTALL_PREFIX;
   delete process.env.CIRCLE_INSTALL_PREFIX;
   try {
@@ -352,7 +352,7 @@ test('ctrl+c during the download of circle update stops it and leaves nothing be
   assert.equal(existsSync(seen), false);
 });
 
-test('keybindings.json from the Python releases keeps working and its problems are shown', (t) => {
+test('keybindings.json keeps working, with an older action name too, and its problems are shown', (t) => {
   const home = scratch(t);
   writeFileSync(
     join(home, 'keybindings.json'),

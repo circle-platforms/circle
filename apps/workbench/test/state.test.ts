@@ -21,10 +21,12 @@ import type { WorkbenchPlugin } from '../src/plugins/types.ts';
 import {
   activityAge,
   archiveBlockReason,
+  afterDeleteRoute,
   canArchiveSession,
   disambiguatedSessionTitle,
   historyMessages,
   orderedProjects,
+  projectFolders,
   projectTag,
   RECENT_SHOWN,
   recentDetails,
@@ -46,7 +48,7 @@ import {
   selectedHomeProject,
   startPath,
 } from '../src/features/home-selection.ts';
-import type { Workspace } from '../src/model/types.ts';
+import type { Session, Workspace } from '../src/model/types.ts';
 function storage() {
   const values = new Map<string, string>();
   return {
@@ -1027,6 +1029,77 @@ test('recent lists every context newest first, and its hover names only a projec
   );
   assert.equal(inRecent, true);
   assert.equal(inProject, true);
+
+  // A new session aimed at a project keeps its folder on the bar even while the
+  // project has only an empty placeholder; once a session has content it is there
+  // on its own and the aim adds nothing.
+  const drafting = { ...placeholder };
+  assert.deepEqual(
+    projectFolders(workspaces, [drafting], project.id).map((item) => item.id),
+    ['proj'],
+  );
+  assert.deepEqual(
+    projectFolders(workspaces, [older], project.id).map((item) => item.id),
+    ['proj'],
+  );
+  // Aiming at a project already listed does not duplicate it.
+  assert.equal(
+    projectFolders(workspaces, [older], project.id).filter(
+      (item) => item.id === project.id,
+    ).length,
+    1,
+  );
+  // Aiming nowhere keeps the plain list; a scratch aim never adds a folder.
+  assert.deepEqual(
+    projectFolders(workspaces, [older], null).map((item) => item.id),
+    ['proj'],
+  );
+  assert.deepEqual(
+    projectFolders(workspaces, [older], scratch.id).map((item) => item.id),
+    ['proj'],
+  );
+});
+
+test('deleting a session lands on its next conversation, or home when none is left', () => {
+  // The route reads content, the title and state only; a lean literal is enough.
+  const withContent = {
+    id: 'kept',
+    title: 'kept work',
+    workspaceId: 'proj',
+    messages: [
+      {
+        id: 'm1',
+        parentId: null,
+        role: 'user',
+        text: 'a task',
+        at: '2026-01-01T00:00:00.000Z',
+      },
+    ],
+    queue: [],
+    state: 'idle',
+  };
+  // An empty session the runtime kept to draft in is not a destination: home wins.
+  const empty = {
+    ...withContent,
+    id: 'phantom',
+    title: 'new session',
+    messages: [],
+    leafId: null,
+  };
+  const lean = (rows: object[]): Session[] => rows as unknown as Session[];
+  assert.deepEqual(
+    afterDeleteRoute(lean([withContent]), withContent.id, 'proj'),
+    { kind: 'session', id: withContent.id },
+  );
+  assert.deepEqual(afterDeleteRoute(lean([empty]), empty.id, 'proj'), {
+    kind: 'home',
+    workspaceId: 'proj',
+  });
+  // An active session that is gone (a race, or the last one) also falls to home.
+  assert.deepEqual(afterDeleteRoute([], 'missing', 'proj'), {
+    kind: 'home',
+    workspaceId: 'proj',
+  });
 });
 
 test('a streaming clock is not shown as the English word streaming', () => {

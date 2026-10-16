@@ -18,7 +18,7 @@ export interface PickerOptions {
   empty?: string | ((query: string, total: number) => string);
   focusKey?: string;
   /** false: typing does not search. The keys the list does not use go on to the input box,
-   * and ctrl+c closes the list before the session takes it (`/approvals`, as 0.5.0's). */
+   * and ctrl+c closes the list before the session takes it (`/approvals`). */
   search?: boolean;
   /** enter on a search nothing matches: what was typed (a model id the endpoint does not list). */
   freeText?: (text: string) => void | Promise<void>;
@@ -50,7 +50,7 @@ export function matchSnippet(text: string, query: string): string {
   return `${start > 0 ? '…' : ''}${slice}${start + 42 < text.length ? '…' : ''}`;
 }
 /**
- * A searchable list above the frame (0.5.0's picker.py). Type to narrow it (every word must
+ * A searchable list above the frame. Type to narrow it (every word must
  * appear), ↑ ↓ move (wrapping), pageup pagedown jump, enter picks, esc clears the search or
  * closes. A list can bind keys of its own and can ask, in place of the search, for a line of
  * text (a new name, a key shown as dots) or for a confirmation; esc there cancels and leaves

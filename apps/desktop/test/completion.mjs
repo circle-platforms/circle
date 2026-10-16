@@ -32,6 +32,8 @@ await writeFile(
 );
 const requestsPath = join(temp, 'requests.jsonl');
 const fixturePath = join(temp, 'model.json');
+// The first stream stays open after its second thought until this file exists.
+const releaseStream = join(temp, 'release-interleaved-stream');
 const partial = 'native partial answer';
 const failures = [
   {
@@ -71,6 +73,7 @@ await writeFile(
           { text: 'native thought one', thinking: true },
           'native progress one ',
           { text: ' then thought two', thinking: true },
+          { waitForFile: releaseStream },
           'native progress two',
         ],
         delayMs: 150,
@@ -334,6 +337,8 @@ try {
     return completed;
   };
   await send('show interleaved text and thinking');
+  // The stream is held open after a thought that followed the text, so both
+  // checks see the open response however slowly the window renders it.
   await page.getByText('native progress one', { exact: true }).waitFor();
   await until(
     async () =>
@@ -341,12 +346,13 @@ try {
         row.messages.some(
           (message) =>
             message.at === 'streaming' &&
-            message.text.includes('native progress one') &&
-            message.thinking.includes('native thought one'),
+            message.text === 'native progress one ' &&
+            message.thinking === 'native thought one then thought two',
         ),
       ),
     'visible stream retains text and thinking',
   );
+  await writeFile(releaseStream, '');
   await page.getByText('native complete answer', { exact: true }).waitFor();
   let snapshot = await completedTurn({
     kind: 'run_end',

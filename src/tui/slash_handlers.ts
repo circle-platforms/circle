@@ -1,6 +1,5 @@
-// The slash commands of the full-screen interface, as the Python releases had them (up to
-// 0.5.0). SessionApp keeps /models, /login, /reload and /editor, which use its own state, and
-// routes every command through runCommand.
+// The slash commands of the full-screen interface. SessionApp keeps /models, /login, /reload
+// and /editor, which use its own state, and routes every command through runCommand.
 import { randomUUID } from 'node:crypto';
 import { networkSummary } from '../net.js';
 import {
@@ -100,7 +99,7 @@ export interface CommandHost {
   clipboard(text: string): Promise<boolean>;
   // While `list` is open it takes `rows()` again whenever a job starts, changes or ends.
   followJobs(list: Picker, rows: () => PickerItem[]): void;
-  // The footer's ctx is unknown until the next answer (after /undo and /redo, as in 0.5.0).
+  // The footer's ctx is unknown until the next answer (after /undo and /redo).
   clearContextMeter(): void;
   // A value typed on a masked card, never in the input box; null when cancelled.
   secretValue(body: string): Promise<string | null>;
@@ -200,7 +199,7 @@ function isFile(path: string): boolean {
     return false;
   }
 }
-// The time in UTC as the Python releases wrote it into export names: 20261009-142501.
+// The time in UTC as export names carry it: 20261009-142501.
 function stamp(now = new Date()): string {
   const two = (value: number): string => String(value).padStart(2, '0');
   return (
@@ -688,7 +687,7 @@ function approvalsList(host: CommandHost): void {
     const shown = picker?.matches().length ?? 0;
     if (picker && shown) picker.focus = (picker.focus + step + shown) % shown;
   };
-  // As 0.5.0's approvals page: j k (and tab) move, a digit picks; nothing searches, so the
+  // The approvals page: j k (and tab) move, a digit picks; nothing searches, so the
   // other keys go on to the input box.
   const keys: PickerOptions['keys'] = { j: move(1), k: move(-1), tab: move(1) };
   items.slice(0, 9).forEach((item, index) => {
@@ -1025,7 +1024,7 @@ async function copy(host: CommandHost): Promise<void> {
       .filter((message) => message.role === 'assistant' && message.content)
       .at(-1)?.content ?? ''
   ).trim();
-  // no answer yet: the last line of the transcript that is not yours, as 0.5.0 did
+  // no answer yet: the last line of the transcript that is not yours
   if (!text)
     text =
       transcriptRows(
@@ -1659,7 +1658,7 @@ async function tree(
     await go(target, true);
     return;
   }
-  // Yours in the order /tree shows them, the last one marked: as 0.5.0's fork list.
+  // Yours in the order /tree shows them, the last one marked.
   const yours = order
     .map(([key]) => branches.entries.get(key)!)
     .filter((entry) => entry.role === 'user');

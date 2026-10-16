@@ -3,8 +3,7 @@
 // and its lines on the tool's type tint (read blue, write green, agent cyan, question
 // magenta). A failure the model can fix itself gets no lamp and a muted strikethrough.
 // Thinking is one folded row, `∴ Thought 6.3s · title  ctrl+t`, on the terminal
-// background: italic blue from the terminal's own slot, faint body text. No type tint
-// (ported from transcript_view.py, content_blocks.py and tool_display.py).
+// background: italic blue from the terminal's own slot, faint body text. No type tint.
 import { lampSgr, palette, sgrJoin, type LampState } from '../ink/theme.js';
 import { uiText } from '../locale.js';
 import { pad, stringWidth, truncate } from '../ink/string_width.js';
@@ -317,16 +316,12 @@ export function resultRows(
 
 // A call that went on as a background job, from what it returned: the job, how it got
 // there (started there, moved there, or a command that left processes running) and what
-// the command printed before. The sentence for the model is not shown. Sessions of the
-// Python releases carry the job in the message's `circle_job`.
+// the command printed before. The sentence for the model is not shown.
 const JOB_SENTENCE =
   /(?:^|\n)(In background|Command continues in background|Watching in background): (j\d+) · (\w+) · [^\n]*do not poll or sleep\.\s*$/;
-const LEGACY_JOB_NOTE = /\[The command[^[\]]*stop_job\.\]\s*$/;
 // Why the command left the foreground, written for the model just before the job sentence.
 const JOB_REASON =
   /\n*(?:Exit code: -?\d+\n)?The command (?:was moved to the background|was still running after \d+ seconds|has ended, but processes it started are still running)\.\s*$/;
-const LEGACY_EXIT =
-  /\n*\[Command (?:succeeded|failed) with exit code -?\d+\]\s*$/;
 export interface BackgroundJob {
   id: string;
   how: 'started' | 'moved' | 'adopted';
@@ -335,43 +330,19 @@ export interface BackgroundJob {
 export function backgroundJob(result: Message): BackgroundJob | undefined {
   if (result.status === 'error') return undefined;
   const match = result.content.match(JOB_SENTENCE);
-  if (match)
-    return {
-      id: match[2]!,
-      how:
-        match[1] !== 'Command continues in background'
-          ? 'started'
-          : match[3] === 'adopted'
-            ? 'adopted'
-            : 'moved',
-      text:
-        match[1] === 'Command continues in background'
-          ? result.content.slice(0, match.index).replace(JOB_REASON, '').trim()
-          : '',
-    };
-  const extra = result.legacy_data?.data.additional_kwargs;
-  const legacy =
-    extra && typeof extra === 'object'
-      ? (extra as Record<string, unknown>).circle_job
-      : undefined;
-  if (
-    !legacy ||
-    typeof legacy !== 'object' ||
-    typeof (legacy as Record<string, unknown>).id !== 'string'
-  )
-    return undefined;
-  const { id, how } = legacy as Record<string, unknown>;
+  if (!match) return undefined;
   return {
-    id: id as string,
-    how: how === 'moved' ? 'moved' : how === 'adopted' ? 'adopted' : 'started',
+    id: match[2]!,
+    how:
+      match[1] !== 'Command continues in background'
+        ? 'started'
+        : match[3] === 'adopted'
+          ? 'adopted'
+          : 'moved',
     text:
-      how === 'started'
-        ? ''
-        : result.content
-            .replace(LEGACY_EXIT, '')
-            .trimEnd()
-            .replace(LEGACY_JOB_NOTE, '')
-            .trim(),
+      match[1] === 'Command continues in background'
+        ? result.content.slice(0, match.index).replace(JOB_REASON, '').trim()
+        : '',
   };
 }
 

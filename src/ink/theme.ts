@@ -121,7 +121,7 @@ export function frameStops(bg: string): [number, RGB][] {
     return [at, hexToRgb(colour)];
   });
 }
-// The colour at `u` (0–1, wrapping) along `stops`, channels truncated as in the Python version.
+// The colour at `u` (0–1, wrapping) along `stops`, channels truncated rather than rounded.
 export function gradientAt(stops: readonly [number, RGB][], u: number): RGB {
   const at = ((u % 1) + 1) % 1;
   for (let index = 1; index < stops.length; index++) {

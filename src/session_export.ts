@@ -1,4 +1,3 @@
-import { fromLegacyMessage } from './legacy_message.js';
 import type { Message } from './types.js';
 import { isRecord } from './settings.js';
 import { createHash } from 'node:crypto';
@@ -119,27 +118,21 @@ export function fromJsonl(text: string): {
     }
     if (!isRecord(raw)) throw new Error(`line ${index + 1} is not an object`);
     if (raw.format === 'circle-session') {
-      if (raw.version !== 1 && raw.version !== 2)
+      if (raw.version !== 2)
         throw new Error('unsupported session export version');
       header = raw;
       continue;
     }
-    if (!isRecord(raw.data) || typeof raw.type !== 'string')
+    if (!isRecord(raw.data) || raw.type !== 'message')
       throw new Error(`line ${index + 1} is not a message`);
     const data = raw.data;
-    if (raw.type === 'message') {
-      if (
-        !['user', 'assistant', 'tool', 'system'].includes(String(data.role)) ||
-        typeof data.id !== 'string' ||
-        typeof data.content !== 'string'
-      )
-        throw new Error(`line ${index + 1} has an invalid message`);
-      messages.push(data as unknown as Message);
-    } else {
-      messages.push(
-        fromLegacyMessage({ type: raw.type, data }, messages.length),
-      );
-    }
+    if (
+      !['user', 'assistant', 'tool', 'system'].includes(String(data.role)) ||
+      typeof data.id !== 'string' ||
+      typeof data.content !== 'string'
+    )
+      throw new Error(`line ${index + 1} has an invalid message`);
+    messages.push(data as unknown as Message);
   }
   if (!messages.length) throw new Error('no messages in it');
   const pending = new Set<string>();

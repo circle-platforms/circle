@@ -21,6 +21,8 @@ import {
   MessagesSquare,
   Terminal,
   FolderPlus,
+  Folder,
+  FolderOpen,
   SlidersHorizontal,
 } from 'lucide-react';
 import { Tooltip } from 'radix-ui';
@@ -30,6 +32,7 @@ import { currentSession, sessionTitle } from '../model/state';
 import {
   disambiguatedSessionTitle,
   orderedProjects,
+  projectFolders,
   RECENT_SHOWN,
   recentDetails,
   recentSessions,
@@ -37,6 +40,7 @@ import {
   visibleSessions,
   type ActivityAge,
 } from '../model/session-management';
+import { selectedHomeProject } from '../features/home-selection';
 import type { DialogId, Session } from '../model/types';
 import { workspaceLabel } from '../model/workspace-label';
 import { armComposerFocus } from '../model/composer-focus';
@@ -271,7 +275,29 @@ export function Sidebar({
   };
   const activityAt = (session: Session) =>
     Date.parse(sessionActivityAt(session)) || 0;
-  const projects = orderedProjects(snapshot.workspaces, snapshot.sessions);
+  // A home composer open for a project is that project's pending new session:
+  // its folder stays on the bar, and wears the highlight until the first
+  // message creates the session, which then carries it.
+  const onHome = location.pathname === '/home';
+  const homeParams = new URLSearchParams(location.search);
+  const homeRequested = onHome
+    ? homeParams.has('workspace')
+      ? (homeParams.get('workspace') ?? '')
+      : null
+    : null;
+  const aimed = onHome
+    ? selectedHomeProject(
+        snapshot.workspaces,
+        snapshot.sessions,
+        current.id,
+        homeRequested,
+      )
+    : undefined;
+  const projects = projectFolders(
+    snapshot.workspaces,
+    snapshot.sessions,
+    aimed?.id ?? null,
+  );
   const recent = recentSessions(snapshot.sessions);
   const recentShown = collapsed.includes(RECENT)
     ? []
@@ -621,10 +647,12 @@ export function Sidebar({
         )}
         {groups.map(({ workspace, sessions, shown }) => {
           const open = all.includes(workspace.id);
+          const isAimed = aimed?.id === workspace.id;
+          const folded = collapsed.includes(workspace.id);
           return (
             <section className="project" key={workspace.id}>
               <div
-                className="project-header"
+                className={`project-header${isAimed ? ' aimed' : ''}`}
                 title={workspace.path}
                 onPointerMove={(event) =>
                   pointRow('header', { x: event.clientX, y: event.clientY })
@@ -633,10 +661,12 @@ export function Sidebar({
               >
                 <button
                   className="project-name"
-                  aria-expanded={!collapsed.includes(workspace.id)}
+                  aria-expanded={!folded}
                   onClick={() => toggle(workspace.id, collapsed, setCollapsed)}
                 >
-                  {workspaceLabel(workspace)}
+                  {/* The folder opens with the group, the way a file list does. */}
+                  {folded ? <Folder size={13} /> : <FolderOpen size={13} />}
+                  <span>{workspaceLabel(workspace)}</span>
                 </button>
                 <div className="project-actions">
                   <IconButton

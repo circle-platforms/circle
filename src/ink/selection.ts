@@ -1,4 +1,4 @@
-// Text selection on the painted screen, ported from circle/ink/selection.py (0.5.0).
+// Text selection on the painted screen.
 // Points are screen cells: col and row from 0. The screen is the frame's rows as painted.
 import { stringWidth, stripAnsi } from './string_width.js';
 import { RESET, sgrJoin } from './theme.js';
@@ -431,7 +431,7 @@ function applySgr(active: string[], params: string): string[] {
 const sgr = (group: string): string => `\x1b[${group}m`;
 
 /** One row with columns from..to on `background`: each cell keeps its own foreground and
- * loses its own background and reverse video, as the 0.5.0 selection did. */
+ * loses its own background and reverse video. */
 export function paintRow(
   row: string,
   from: number,

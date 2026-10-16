@@ -10,7 +10,7 @@ function isFile(path: string): boolean {
   }
 }
 /**
- * The editor /editor (ctrl+g) runs, as the words of a command, in 0.5.0's order: $VISUAL,
+ * The editor /editor (ctrl+g) runs, as the words of a command, in this order: $VISUAL,
  * $EDITOR, the first of nvim, vim and nano on PATH, then notepad on Windows. Undefined when
  * there is none. A program that exists as written is one word (a path with spaces); anything
  * else is split as a shell would, so `code -w` works.

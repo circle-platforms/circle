@@ -122,12 +122,6 @@ Reminders Circle adds for the model (about the plan, a loop, waiting jobs) are k
 
 `circle --export <id> [file]` writes a saved session without opening it: HTML by default, as `<id>.html` in the current folder, or a JSONL bundle when the file name ends in `.jsonl`.
 
-`/import` also reads the JSONL exports of Circle 0.5.0 and older. Those versions cannot read the exports of this one.
-
-## Sessions from 0.5.0
-
-Circle 0.5.0 and older kept sessions in `sessions.sqlite` and `checkpoints.sqlite` in the same data folder. Each time Circle starts it imports the ones it has not imported yet into `circle.sqlite`, with their titles, branches, labels and the subagents' records, and they show in `/resume` as before. The old files are read, never changed, and a copy of what was read is kept in `migration-backups/`. A session that cannot be imported is named in a red line (on standard error without the full-screen interface), and the others still come over. A session you delete is not imported again. Details are in [Session data migration](development/migration-data.md).
-
 ## Prompt history
 
 Your messages are saved in `history` in the data folder (last 1,000). `↑` and `↓` walk through them and `ctrl+r` searches. `CIRCLE_HISTORY_PATH` keeps it somewhere else.

@@ -2,8 +2,6 @@
 
 Circle is a terminal coding agent written in TypeScript and run on Node.js 24. This file is for agents working on its source. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the human version.
 
-Up to 0.5.0 Circle was written in Python. That code is in history at the tag `v0.5.0`, and it is the reference for how Circle should behave until the TypeScript version matches it: read it with `git show v0.5.0:circle/tui/session_app.py`, or check it out in a worktree.
-
 ## Commands
 
 ```bash
@@ -17,7 +15,7 @@ CIRCLE_HOME=$(mktemp -d) npm run dev -- <folder>    # run with a scratch data fo
 
 Never run Circle, a test or a trial against the real `~/.circle`. Use a scratch `CIRCLE_HOME`.
 
-Never run `install.sh`, `install.ps1` or `src/install_manager.ts` by hand on a real machine: they find the Python circle through `HOME` and `PATH` and uninstall it. The tests and `npm run release:smoke` give them a home and PATH of their own.
+Never run `install.sh`, `install.ps1` or `src/install_manager.ts` by hand on a real machine: without a prefix they install into the default location under `HOME` and add a line to the shell's startup file. The tests and `npm run release:smoke` give them a home and PATH of their own.
 
 ## Where things are
 
@@ -25,7 +23,7 @@ Never run `install.sh`, `install.ps1` or `src/install_manager.ts` by hand on a r
 
 ## Rules for the interface
 
-Read `docs/development/tui-contract.md` before you change anything on screen. It was written for the Python version; where the TypeScript version differs, the contract is the target unless the user decided otherwise.
+Read `docs/development/tui-contract.md` before you change anything on screen. Where the code differs from it, the contract is the target unless the user decided otherwise.
 
 - Take colours only from `palette()` in `src/ink/theme.ts`. Do not write a hex value, a truecolor code or a raw colour SGR string anywhere else. `tests/render-colors.test.ts` fails if you do.
 - When you join a background with a foreground, use `sgrJoin`.
@@ -66,10 +64,8 @@ Several agents and people may work in this checkout at once.
 
 - `circle --init` and `/login` are not safe places to experiment: both replace the saved endpoint, key and model.
 - The version is in `package.json`, `package-lock.json` and `src/version.ts`. Change all three; `tests/version.test.ts` fails if they differ. Do not tag or publish a release unless the user asked.
-- `install.sh`, `install.ps1`, `src/install_layout.ts`, `src/install_manager.ts`, `src/legacy_install.ts` and `src/update.ts` share one install layout (`versions/<version>/`, `current.ref`, `installation.json`) and one asset naming (`circle-<version>-<os>-<arch>`). Change them together; `tests/install-layout.test.ts`, `tests/legacy-install.test.ts` and `npm run release:smoke` pin it.
-- Asset names must never match `circle-<os>-<arch>.tar.gz` or `.zip` without a version: that is what `circle update` in the Python releases looks for.
-- The data folder is shared with the Python releases. Keep `settings.json` and `credentials.json` readable by them, and never write values that were given for one run only (`-m`, `--thinking`) into `settings.json`.
-- `docs/development/port-inventory.json`, `baseline.json` and `upstream-updates.json` are working notes from the port, not proof that something matches.
+- `install.sh`, `install.ps1`, `src/install_layout.ts`, `src/install_manager.ts` and `src/update.ts` share one install layout (`versions/<version>/`, `current.ref`, `installation.json`) and one asset naming (`circle-<version>-<os>-<arch>`). Change them together; `tests/install-layout.test.ts`, `tests/install-manager.test.ts` and `npm run release:smoke` pin it.
+- Never write values that were given for one run only (`-m`, `--thinking`) into `settings.json`.
 
 ## Desktop workbench
 

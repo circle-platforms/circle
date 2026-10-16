@@ -15,7 +15,6 @@ import {
 } from '../src/media.js';
 import { validateMessages } from '../src/session_graph.js';
 import { McpManager } from '../src/mcp_loader.js';
-import { fromLegacyMessage } from '../src/legacy_message.js';
 import { toHtml, toJsonl, fromJsonl } from '../src/session_export.js';
 import { CheckpointStore } from '../src/checkpoint_store.js';
 import { ContextManager } from '../src/context_middleware.js';
@@ -284,7 +283,7 @@ test('MCP image and embedded PDF results become attachments without base64 in te
   validateAttachments(attachments);
 });
 
-test('attachment validation rejects changed bytes, invalid base64 and unsupported types and imports inline legacy media', () => {
+test('attachment validation rejects changed bytes, invalid base64 and unsupported types', () => {
   const attachment = makeAttachment(png, 'image/png', 'picture.png');
   validateAttachments([attachment]);
   assert.throws(
@@ -318,32 +317,6 @@ test('attachment validation rejects changed bytes, invalid base64 and unsupporte
         },
       ]),
     /attachment/,
-  );
-  const legacy = fromLegacyMessage({
-    type: 'human',
-    data: {
-      id: 'legacy',
-      content: [
-        { type: 'text', text: 'view' },
-        {
-          type: 'image',
-          mime_type: 'image/png',
-          base64: png.toString('base64'),
-        },
-        {
-          type: 'file',
-          file: {
-            filename: 'document.pdf',
-            file_data: 'data:application/pdf;base64,' + pdf.toString('base64'),
-          },
-        },
-      ],
-    },
-  });
-  assert.equal(legacy.content, 'view');
-  assert.deepEqual(
-    legacy.attachments!.map((item) => Buffer.from(item.data, 'base64')),
-    [png, pdf],
   );
 });
 

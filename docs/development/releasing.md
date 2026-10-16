@@ -35,7 +35,7 @@ The workflow then, on each target:
 1. checks that the tag, the version files and the changelog agree (`npm run release -- --check`);
 2. runs the type check, the test suite, the build and the format check;
 3. builds `circle-<version>-<os>-<arch>.tar.gz` (`.zip` on Windows) with its `.sha256` (`npm run release:build`). The package holds the compiled program, its locked dependencies and a pinned Node.js;
-4. runs `npm run release:smoke` against the archive, with a home and PATH of its own: the program starts from a relocated copy, answers a real tool turn against a local model endpoint, installs with `install.sh` or `install.ps1`, upgrades, keeps the data folder, rejects a bad checksum and replaces a Python circle at the default location.
+4. runs `npm run release:smoke` against the archive, with a home and PATH of its own: the program starts from a relocated copy, answers a real tool turn against a local model endpoint, installs with `install.sh` or `install.ps1`, upgrades, keeps the data folder, rejects a bad checksum and installs to the default location.
 
 When all six pass, the `publish` job checks that every archive and checksum is there, verifies the checksums again, adds `install.sh`, `install.ps1` and `SHA256SUMS`, uploads everything to a draft, compares the uploaded names and sizes, and publishes the release with the changelog section and `.github/release-install.md` as its notes.
 
@@ -63,13 +63,10 @@ Each has its `.sha256`, so a release has 20 files before `install.sh`, `install.
 
 A target that fails blocks the release. Do not publish a release by hand with fewer files.
 
-Asset names carry the version so that no asset matches what `circle update` in the Python releases (0.5.0 and older) downloads, `circle-<os>-<arch>.tar.gz`. Those users get a "has no circle-… file" error that points at the release page, whose notes tell them to run the installer.
-
 ## After
 
 - On a clean machine: run the installer from the release notes, then `circle --version`.
 - On a machine with the previous version: `circle update`, then restart Circle.
-- On a machine with Circle 0.5.0: run the installer and check that the Python version is gone and the old sessions are listed.
 - Fix `docs/known-issues.md` and the install text in `README.md` if they mention the old release.
 
 ## A bad release
@@ -86,6 +83,6 @@ Do not reuse a version number. People who installed it are "up to date" and will
 | `apps/desktop/scripts/package.mjs` | Packages the desktop application for the current platform, signs it ad hoc on macOS, and writes its archive and checksum. |
 | `apps/desktop/scripts/msi.ts` | Holds the WiX package source, builds the Windows MSI from the packaged folder, validates it, and writes its checksum; `apps/desktop/test/msi.test.ts` pins the source and the WiX arguments. |
 | `install.sh`, `install.ps1` | Verify the checksum, unpack, and hand the package to `install_manager`. |
-| `src/install_manager.ts`, `src/install_layout.ts`, `src/legacy_install.ts` | Check and run the new version once, remove a Python circle, write `versions/<version>`, the launcher, `installation.json` and `current.ref`. |
+| `src/install_manager.ts`, `src/install_layout.ts` | Check and run the new version once, write `versions/<version>`, the launcher, `installation.json` and `current.ref`. |
 | `src/update.ts` | `circle update` and the daily check. `circle update` runs the installer that came with the running version. |
-| `tests/install-layout.test.ts`, `legacy-install.test.ts`, `update-check.test.ts`, `release-script.test.ts`, `version.test.ts` | Pin all of the above without a network. |
+| `tests/install-layout.test.ts`, `install-manager.test.ts`, `update-check.test.ts`, `release-script.test.ts`, `version.test.ts` | Pin all of the above without a network. |

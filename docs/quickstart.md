@@ -32,10 +32,6 @@ circle --version
 
 To upgrade later, run `circle update`; to remove Circle again, run `circle uninstall` (add `--purge` to delete the data folder too).
 
-### Upgrading from 0.5.0
-
-Circle 0.5.0 and older were written in Python, and their `circle update` cannot install this version. Run the install command above instead: it removes the Python version and installs this one in its place. Your data folder stays as it was, so the endpoint, key, trusted folders, MCP servers, skills, custom commands and prompt history carry over, and your saved sessions show up in `/resume` after the first start. Python extensions have to be rewritten. See [Replacing the Python circle](installation.md#replacing-the-python-circle).
-
 ## 2. Start Circle
 
 Change to the folder you want Circle to work in, then start it:
