@@ -98,6 +98,22 @@ try {
   await run('click', { ref: 'e1', element: 'open popup' });
   const before = await app.evaluate(() => browser.state('fixture'));
   assert.equal(before.tabs.length, 2);
+  // A tab the person or Circle opened is not the page's to close: as in Chrome, only a
+  // window a script opened may close itself. The tab above was opened by navigation, so a
+  // window.close() in it must leave the tab strip untouched.
+  await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0]
+      .contentView.children.find(
+        (view) => view.webContents.getTitle() === 'opener',
+      )
+      .webContents.executeJavaScript('window.close()'),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(
+    (await app.evaluate(() => browser.state('fixture'))).tabs.length,
+    2,
+    'a page cannot close a tab it did not open',
+  );
   await app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows()[0]
       .contentView.children.find(
@@ -121,7 +137,7 @@ try {
   const events = await app.evaluate(() => browserEvents);
   assert.equal(events.at(-1).tabs.length, 1);
   console.log(
-    'PASS native page self-close: cleanup, state publication, events and subsequent navigation',
+    'PASS native close rules: a page keeps a tab it did not open, closes its own popup, and Circle cleans up, publishes and goes on navigating',
   );
   await run('navigate', { url: url + 'coordinates' });
   const shown = await run('snapshot');
