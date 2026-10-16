@@ -7,6 +7,7 @@
 // type stripping accepts. The interface words live in the compiled module beside the
 // program (`hub_text.js`); that module has no interface of its own.
 import { createHash, randomUUID } from 'node:crypto';
+import { createServer } from 'node:http';
 import { hubLocaleChinese, hubText } from '../../hub_text.js';
 import {
   existsSync,
@@ -124,6 +125,15 @@ const EXTENSIONS: Record<string, string> = {
   'application/xml': 'xml',
 };
 const DEFAULT_HUB_URL = 'http://127.0.0.1:7410';
+const APPROVAL_ROLES = new Set([
+  'manager',
+  'security',
+  'dpo',
+  'legal',
+  'finance',
+  'hr',
+  'it',
+]);
 // Commands share one description column, including the shorter reconcile line.
 function usage(rows: [string, string][]): string {
   const width = Math.max(...rows.map(([command]) => command.length)) + 2;
@@ -141,6 +151,12 @@ function usageText(): string {
       '/hub login [url] [user]',
       hubText(
         'sign in. With no user, the saved one is used or you are asked. The password is a masked card',
+      ),
+    ],
+    [
+      '/hub login --sso [url]',
+      hubText(
+        'sign in through the server single sign-on. Paste the address the browser opened when this window cannot catch it',
       ),
     ],
     ['/hub logout', hubText('revoke the token at the server, then forget it')],
@@ -172,6 +188,12 @@ function usageText(): string {
       ),
     ],
     [
+      '/hub request <title>',
+      hubText(
+        'submit a file or text for role approval (--file or --text, --summary, --role name[:count])',
+      ),
+    ],
+    [
       '/hub inbox',
       hubText('approvals waiting for you, and the command that decides each'),
     ],
@@ -192,6 +214,16 @@ function usageText(): string {
       ),
     ],
     ['/hub review', hubText('the same list as /hub inbox')],
+    [
+      '/hub search <text>',
+      hubText('find approved knowledge and the snapshot id of each hit'),
+    ],
+    [
+      '/hub roles <principal> <role>',
+      hubText(
+        'propose an approval role: manager, security, dpo, legal, finance, hr or it',
+      ),
+    ],
     [
       '/hub audit',
       hubText(
@@ -304,6 +336,28 @@ function serverSentence(error: ServerError): string {
 // and is already the whole explanation.
 function explainFailure(error: unknown): string {
   if (!(error instanceof ServerError) || !error.code) return reason(error);
+  const manifest = Array.isArray(error.details.manifestErrors)
+    ? error.details.manifestErrors.filter(isRecord)
+    : [];
+  if (manifest.length) {
+    const lines = manifest
+      .map((item) => {
+        const code = String(item.code ?? '');
+        const message = String(item.message ?? '');
+        return code ? `${code}: ${message}` : message;
+      })
+      .join('\n');
+    const head =
+      hubLocaleChinese() && error.messageZh ? `${error.messageZh}\n` : '';
+    return (
+      head +
+      hubText('the manifest has {n} error(s) ({code}):\n{lines}', {
+        n: manifest.length,
+        code: error.code,
+        lines,
+      })
+    );
+  }
   const issues = Array.isArray(error.details.issues)
     ? error.details.issues.filter(isRecord).slice(0, 6)
     : [];
@@ -348,13 +402,35 @@ function explainFailure(error: unknown): string {
             code: error.code,
             detail: detail || hubText('Check the fields the command sent.'),
           });
-    case 'SKILLPACK_CHECK_FAILED':
+    case 'SKILLPACK_CHECK_FAILED': {
+      const check = isRecord(error.details.check) ? error.details.check : {};
+      const names = (value: unknown): string[] =>
+        Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+      const said = hubLocaleChinese() ? serverSentence(error) : error.message;
+      const extra = [
+        ...names(check.undeclaredTools)
+          .filter((name) => !said.includes(name))
+          .map((name) => hubText('undeclared tool {name}', { name })),
+        ...names(check.missingTools)
+          .filter((name) => !said.includes(name))
+          .map((name) => hubText('missing tool {name}', { name })),
+      ];
       return hubText(
         '{message}. Fix skillpack.json so it declares every tool the trial used, then /hub trial start --force and push again.',
-        {
-          message: hubLocaleChinese() ? serverSentence(error) : error.message,
-        },
+        { message: extra.length ? `${said} (${extra.join('; ')})` : said },
       );
+    }
+    case 'SELF_APPROVAL':
+      return hubText(
+        'you cannot approve your own request ({code}). Someone holding the role decides it.',
+        { code: error.code },
+      );
+    case 'DEPENDENCY_NOT_APPROVED':
+      return hubText('a dependency is not approved yet ({code}). {detail}', {
+        code: error.code,
+        detail:
+          serverSentence(error) || hubText('Approve that dependency first.'),
+      });
     case 'SOURCE_HASH_MISMATCH':
       return hubText(
         'the file changed while it was sent ({code}). Send it again.',
@@ -426,6 +502,89 @@ function answerOf(text: string): Record<string, unknown> {
   if (pairs.length && pairs.every(Boolean))
     return Object.fromEntries(pairs.map((pair) => [pair![1], pair![2]]));
   return { answer: text };
+}
+function callbackParts(text: string): { code: string; state: string } {
+  const trimmed = text.trim();
+  let params: URLSearchParams;
+  try {
+    params = new URL(trimmed).searchParams;
+  } catch {
+    params = new URLSearchParams(trimmed.replace(/^[?#]/, ''));
+  }
+  return { code: params.get('code') ?? '', state: params.get('state') ?? '' };
+}
+function oidcRedirect(authorizationUrl: string): URL | undefined {
+  try {
+    const redirect = new URL(authorizationUrl).searchParams.get('redirect_uri');
+    if (!redirect) return;
+    const url = new URL(redirect);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+    if (!['127.0.0.1', 'localhost'].includes(url.hostname)) return;
+    return url;
+  } catch {
+    return;
+  }
+}
+// The browser returns to the server's loopback redirect. Listen there when the
+// port is free; otherwise the person pastes the address the browser opened.
+function bindOidc(
+  redirect: URL,
+  expectState: string,
+): Promise<
+  | {
+      wait: () => Promise<{ code: string; state: string } | undefined>;
+      close: () => void;
+    }
+  | undefined
+> {
+  const port = Number(redirect.port);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535)
+    return Promise.resolve(undefined);
+  const host = '127.0.0.1';
+  return new Promise((resolve) => {
+    const hit = Promise.withResolvers<{ code: string; state: string }>();
+    let sent = false;
+    const server = createServer((request, response) => {
+      const url = new URL(request.url ?? '/', redirect.origin);
+      if (url.pathname !== (redirect.pathname || '/')) {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      const code = url.searchParams.get('code') ?? '';
+      const state = url.searchParams.get('state') ?? '';
+      if (!code || state !== expectState) {
+        response.writeHead(400, {
+          'content-type': 'text/plain; charset=utf-8',
+        });
+        response.end(hubText('This sign-in is missing its code or state.'));
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      response.end(
+        `<!doctype html><meta charset="utf-8"><p>${hubText('Signed in. You can close this page.')}</p>`,
+      );
+      if (!sent) {
+        sent = true;
+        hit.resolve({ code, state });
+      }
+    });
+    server.once('error', () => resolve(undefined));
+    server.listen(port, host, () => {
+      resolve({
+        wait: () =>
+          new Promise((resolveWait) => {
+            const timer = setTimeout(() => resolveWait(undefined), 120_000);
+            timer.unref?.();
+            void hit.promise.then((value) => {
+              clearTimeout(timer);
+              resolveWait(value);
+            });
+          }),
+        close: () => server.close(),
+      });
+    });
+  });
 }
 
 // The host's limit covers the complete JSON view, not just its object lists.
@@ -1169,17 +1328,11 @@ export async function register(api: ExtensionAPI): Promise<void> {
     };
   }
 
-  async function signIn(
+  async function storeSession(
     url: string,
     username: string,
-    password: string,
+    issued: Record<string, unknown>,
   ): Promise<string[]> {
-    writeJson('config.json', { ...readConfig(), url, username });
-    const { data } = await send('POST', '/v1/auth/dev-login', {
-      json: { username, password },
-      anonymous: true,
-    });
-    const issued = isRecord(data) ? data : {};
     if (typeof issued.token !== 'string' || !issued.token)
       throw new ServerError(hubText('the server issued no token'));
     await api.secrets.set('token', issued.token);
@@ -1200,6 +1353,121 @@ export async function register(api: ExtensionAPI): Promise<void> {
     scheduleRefresh();
     api.background(showStatus());
     return scopes;
+  }
+  async function finishLogin(
+    url: string,
+    username: string,
+    scopes: string[],
+    context: CommandContext,
+  ): Promise<void> {
+    await collectObjects().catch(() => {});
+    const { data: about } = await request('GET', '/v1/status');
+    context.append(
+      hubText('● signed in to {url} as {user}{scope}{api}', {
+        url,
+        user: username,
+        scope: scopes.length
+          ? hubText(' · scope {id}', { id: String(scopes[0]) })
+          : '',
+        api:
+          isRecord(about) && about.apiVersion
+            ? hubText(' · api {version}', {
+                version: String(about.apiVersion),
+              })
+            : '',
+      }),
+    );
+    await announceTools(context);
+    api.background(lookForBots());
+  }
+  async function signIn(
+    url: string,
+    username: string,
+    password: string,
+  ): Promise<string[]> {
+    writeJson('config.json', { ...readConfig(), url, username });
+    const { data } = await send('POST', '/v1/auth/dev-login', {
+      json: { username, password },
+      anonymous: true,
+    });
+    return storeSession(url, username, isRecord(data) ? data : {});
+  }
+  async function loginSso(
+    address: string,
+    context: CommandContext,
+  ): Promise<void> {
+    const url = serverUrl(address);
+    rememberAddress(url, readConfig()?.username ?? '');
+    let data: unknown;
+    try {
+      ({ data } = await send('GET', '/v1/auth/oidc/start', {
+        anonymous: true,
+      }));
+    } catch (error) {
+      if (isMissing(error))
+        throw new ServerError(
+          hubText(
+            'this server has no single sign-on. /hub login [url] [user] asks for a password.',
+          ),
+        );
+      throw error;
+    }
+    const started = isRecord(data) ? data : {};
+    const authorizationUrl = String(started.authorizationUrl ?? '');
+    const state = String(started.state ?? '');
+    if (!authorizationUrl || !state)
+      throw new ServerError(hubText('the server did not start single sign-on'));
+    const redirect = oidcRedirect(authorizationUrl);
+    const door = redirect ? await bindOidc(redirect, state) : undefined;
+    context.append(
+      hubText('Open this address to sign in:\n{url}', {
+        url: authorizationUrl,
+      }),
+    );
+    let caught = door ? await door.wait() : undefined;
+    door?.close();
+    if (!caught) {
+      let pasted: string | null;
+      try {
+        pasted = await api.askSecret(
+          hubText('Paste the address the browser opened'),
+          { mask: false, conceal: false },
+        );
+      } catch (error) {
+        if (error instanceof ExtensionError)
+          throw new ServerError(
+            hubText(
+              'this window cannot ask; open the address from /hub login --sso again',
+            ),
+          );
+        throw error;
+      }
+      if (pasted === null) {
+        context.append(hubText('Sign-in cancelled'));
+        return;
+      }
+      const parts = callbackParts(pasted);
+      if (!parts.code || !parts.state)
+        throw new ServerError(
+          hubText('the sign-in address needs code and state'),
+        );
+      if (parts.state !== state)
+        throw new ServerError(
+          hubText('the sign-in state does not match. /hub login --sso again.'),
+        );
+      caught = parts;
+    }
+    const { data: session } = await send('POST', '/v1/auth/oidc/callback', {
+      anonymous: true,
+      json: { code: caught.code, state: caught.state },
+    });
+    const issued = isRecord(session) ? session : {};
+    const username =
+      typeof issued.principalId === 'string' && issued.principalId
+        ? issued.principalId
+        : 'sso';
+    const scopes = await storeSession(url, username, issued);
+    await finishLogin(url, username, scopes, context);
   }
 
   // A session stays alive without asking anyone: shortly before the token runs out it is
@@ -1698,6 +1966,8 @@ export async function register(api: ExtensionAPI): Promise<void> {
     // controlledBytes), validated strictly by the hub. No file upload, and no
     // sourceRevisionId/sourceSha256 — the hub refuses those with INVALID_PAYLOAD.
     const moduleExecute = pack === 'module-execute';
+    // hub-task is the governed task pack: its input is the JSON object, not an upload.
+    const bare = moduleExecute || pack === 'hub-task';
     if (moduleExecute && file)
       throw new ServerError(
         hubText(
@@ -1717,7 +1987,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         ),
       );
     let source: Awaited<ReturnType<typeof upload>> | undefined;
-    if (!moduleExecute) {
+    if (!bare) {
       const path = resolve(context.workspace, file);
       if (!existsSync(path))
         throw new ServerError(hubText('no such file: {path}', { path }));
@@ -1730,9 +2000,12 @@ export async function register(api: ExtensionAPI): Promise<void> {
         }),
       );
     }
-    const title = moduleExecute
-      ? `${pack}: ${String(extra.flowId)}`
-      : `${pack}: ${source!.name}`;
+    const title =
+      pack === 'hub-task'
+        ? `hub-task: ${String(extra.title ?? extra.kind ?? 'task')}`
+        : moduleExecute
+          ? `${pack}: ${String(extra.flowId)}`
+          : `${pack}: ${source!.name}`;
     const idempotencyKey =
       'circle-' +
       sha256(
@@ -1758,7 +2031,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
         title,
         capabilityPackId: pack,
         idempotencyKey,
-        input: moduleExecute
+        input: bare
           ? extra
           : {
               ...extra,
@@ -3030,6 +3303,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
     );
   }
 
+  const callHub = request;
   const commands: Record<
     string,
     (rest: string[], context: CommandContext) => Promise<void>
@@ -3041,6 +3315,13 @@ export async function register(api: ExtensionAPI): Promise<void> {
             'Circle runs with a token from hub here; there is no sign-in',
           ),
         );
+      if (args.includes('--sso')) {
+        const rest = args.filter((word) => word !== '--sso');
+        if (rest.length > 1)
+          throw new ServerError(hubText('usage: /hub login --sso [url]'));
+        await loginSso(rest[0] || knownUrl(), context);
+        return;
+      }
       if (args.length > 2)
         throw new ServerError(hubText('usage: /hub login [url] [user]'));
       let address = args[0];
@@ -3088,25 +3369,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
       }
       api.conceal(password);
       const scopes = await signIn(url, username, password);
-      await collectObjects().catch(() => {});
-      const { data: about } = await request('GET', '/v1/status');
-      context.append(
-        hubText('● signed in to {url} as {user}{scope}{api}', {
-          url,
-          user: username,
-          scope: scopes.length
-            ? hubText(' · scope {id}', { id: String(scopes[0]) })
-            : '',
-          api:
-            isRecord(about) && about.apiVersion
-              ? hubText(' · api {version}', {
-                  version: String(about.apiVersion),
-                })
-              : '',
-        }),
-      );
-      await announceTools(context);
-      api.background(lookForBots());
+      await finishLogin(url, username, scopes, context);
     },
     async logout(_rest, context) {
       if (fromRun)
@@ -3138,10 +3401,15 @@ export async function register(api: ExtensionAPI): Promise<void> {
       context.append(
         packs.length
           ? packs
-              .map(
-                (pack) =>
-                  `  ${String(pack.capabilityPackId)} ${String(pack.version ?? pack.packVersion ?? '')}${pack.title || pack.description ? ' · ' + String(pack.title ?? pack.description) : ''}${Array.isArray(pack.inputFormats) ? ' · ' + pack.inputFormats.join(', ') : ''}`,
-              )
+              .map((pack) => {
+                const title =
+                  hubLocaleChinese() &&
+                  typeof pack.titleZh === 'string' &&
+                  pack.titleZh
+                    ? String(pack.titleZh)
+                    : String(pack.title || pack.description || '');
+                return `  ${String(pack.capabilityPackId)} ${String(pack.version ?? pack.packVersion ?? '')}${title ? ' · ' + title : ''}${Array.isArray(pack.inputFormats) ? ' · ' + pack.inputFormats.join(', ') : ''}`;
+              })
               .join('\n')
           : hubText('The server lists no capability packs'),
       );
@@ -3169,6 +3437,28 @@ export async function register(api: ExtensionAPI): Promise<void> {
         const task = await handOver(pack, '', again, context, flow);
         context.append(acceptedLine(task));
         void follow(task.taskId, context);
+        return;
+      }
+      if (pack === 'hub-task') {
+        if (files.length > 1)
+          throw new ServerError(
+            hubText('usage: /hub submit hub-task [input-json] [--again]'),
+          );
+        let input: Record<string, unknown> = { kind: 'governance-request' };
+        if (files.length === 1) {
+          try {
+            const parsed: unknown = JSON.parse(files[0]!);
+            if (!isRecord(parsed)) throw new Error('not an object');
+            input = parsed;
+          } catch {
+            throw new ServerError(
+              hubText('hub-task takes its input as a JSON object'),
+            );
+          }
+        }
+        const task = await handOver(pack, '', again, context, input);
+        context.append(acceptedLine(task));
+        api.background(follow(task.taskId, context));
         return;
       }
       if (!pack || files.length !== 1)
@@ -3427,6 +3717,222 @@ export async function register(api: ExtensionAPI): Promise<void> {
     async review(_rest, context) {
       await listInbox(context);
     },
+    async request(rest, context) {
+      const { args, values } = options(rest);
+      const title = args.join(' ').trim();
+      const file = values.file?.at(-1)?.trim() ?? '';
+      const text = values.text?.at(-1) ?? '';
+      if (!title || Boolean(file) === Boolean(text))
+        throw new ServerError(
+          hubText(
+            'usage: /hub request <title> (--file <path> | --text <text>) [--summary <text>] [--role <role>[:count]]…',
+          ),
+        );
+      const config = readConfig();
+      if (!config?.scopeId)
+        throw new ServerError(
+          hubText('no scope: sign in again with /hub login <url> <user>'),
+        );
+      const roles = (values.role?.length ? values.role : ['manager']).map(
+        (raw) => {
+          const [name, countText] = raw.split(':');
+          if (!name || !APPROVAL_ROLES.has(name))
+            throw new ServerError(
+              hubText(
+                'an approval role is manager, security, dpo, legal, finance, hr or it',
+              ),
+            );
+          const count = countText === undefined ? 1 : Number(countText);
+          if (!Number.isInteger(count) || count < 1 || count > 20)
+            throw new ServerError(
+              hubText('a role count is a whole number from 1 to 20'),
+            );
+          return { role: name, count };
+        },
+      );
+      if (new Set(roles.map((role) => role.role)).size !== roles.length)
+        throw new ServerError(hubText('each approval role is named once'));
+      const summary = values.summary?.at(-1)?.trim() || title;
+      let content: Record<string, unknown>;
+      if (text) {
+        if (!text.trim())
+          throw new ServerError(hubText('the approval text is empty'));
+        content = { fileName: 'request.txt', mediaType: 'text/plain', text };
+      } else {
+        const path = resolve(context.workspace, file);
+        const rel = relative(context.workspace, path);
+        if (
+          !file ||
+          rel === '' ||
+          rel.split(sep).includes('..') ||
+          isAbsolute(rel)
+        )
+          throw new ServerError(
+            hubText('the file must stay inside the workspace: {path}', {
+              path: file,
+            }),
+          );
+        if (!existsSync(path) || !statSync(path).isFile())
+          throw new ServerError(
+            hubText('no such file: {path}', { path: file }),
+          );
+        const bytes = readFileSync(path);
+        if (!bytes.byteLength)
+          throw new ServerError(hubText('the approval file is empty'));
+        const fileName = basename(path);
+        if (/[\u0000-\u001f/\\]/.test(fileName))
+          throw new ServerError(
+            hubText('use a file name without slashes or control characters'),
+          );
+        const media =
+          (
+            {
+              '.txt': 'text/plain',
+              '.md': 'text/markdown',
+              '.json': 'application/json',
+              '.csv': 'text/csv',
+              '.html': 'text/html',
+              '.xml': 'application/xml',
+              '.png': 'image/png',
+              '.pdf': 'application/pdf',
+            } as Record<string, string>
+          )[extname(fileName).toLowerCase()] ?? 'application/octet-stream';
+        const utf8 = bytes.toString('utf8');
+        const textOk =
+          !bytes.includes(0) && Buffer.from(utf8, 'utf8').equals(bytes);
+        content = textOk
+          ? {
+              fileName,
+              mediaType:
+                media === 'application/octet-stream' ? 'text/plain' : media,
+              text: utf8,
+            }
+          : {
+              fileName,
+              mediaType: media,
+              contentBase64: bytes.toString('base64'),
+            };
+      }
+      let data: unknown;
+      try {
+        ({ data } = await callHub('POST', '/v1/approval-requests', {
+          json: {
+            scopeId: config.scopeId,
+            title,
+            summary,
+            content,
+            policy: { roles },
+            idempotencyKey: randomUUID(),
+          },
+        }));
+      } catch (error) {
+        if (isMissing(error))
+          throw new ServerError(
+            hubText(
+              'this server has no general approval. /hub submit <pack> <file> still hands over a task.',
+            ),
+          );
+        throw error;
+      }
+      const record = isRecord(data) ? data : {};
+      const requestId = String(record.requestId ?? '');
+      context.append(
+        hubText('✓ submitted {id} · {status} · task {task}\n  /hub show {id}', {
+          id: requestId,
+          status: String(record.status ?? 'open'),
+          task: String(record.taskId ?? ''),
+        }),
+      );
+    },
+    async search(rest, context) {
+      const q = rest.join(' ').trim();
+      if (!q) throw new ServerError(hubText('usage: /hub search <text>'));
+      let data: unknown;
+      try {
+        ({ data } = await request(
+          'GET',
+          `/v1/knowledge/search?q=${encodeURIComponent(q)}&limit=20`,
+        ));
+      } catch (error) {
+        if (isMissing(error))
+          throw new ServerError(hubText('this server has no knowledge search'));
+        throw error;
+      }
+      const payload = isRecord(data) ? data : {};
+      const items = rowsOf(payload.items ?? data);
+      if (!items.length) {
+        context.append(
+          hubText(
+            'No knowledge matched. A miss does not mean it is absent. Approved text is found by its snapshot id.',
+          ),
+        );
+        return;
+      }
+      context.append(
+        items
+          .map((item) => {
+            const body = isRecord(item.payload) ? item.payload : {};
+            const label = String(item.title ?? body.subject ?? body.text ?? '');
+            const snapshot =
+              typeof item.snapshotId === 'string' && item.snapshotId
+                ? item.snapshotId
+                : hubText('no snapshot');
+            return hubText('  {id} · snapshot {snapshot} · {label}', {
+              id: String(item.recordId ?? ''),
+              snapshot,
+              label,
+            });
+          })
+          .join('\n'),
+      );
+    },
+    async roles(rest, context) {
+      const [principalId, role] = rest;
+      if (!principalId || !role || rest.length !== 2)
+        throw new ServerError(
+          hubText(
+            'usage: /hub roles <principal> <role> — manager, security, dpo, legal, finance, hr, it',
+          ),
+        );
+      if (!/^prn_/.test(principalId))
+        throw new ServerError(hubText('a principal id starts with prn_'));
+      if (!APPROVAL_ROLES.has(role))
+        throw new ServerError(
+          hubText(
+            'an approval role is manager, security, dpo, legal, finance, hr or it',
+          ),
+        );
+      const scopeId = readConfig()?.scopeId;
+      if (!scopeId)
+        throw new ServerError(
+          hubText('no scope: sign in again with /hub login <url> <user>'),
+        );
+      let data: unknown;
+      try {
+        ({ data } = await request(
+          'POST',
+          `/v1/scopes/${encodeURIComponent(scopeId)}/approval-roles`,
+          {
+            json: { principalId, role, idempotencyKey: randomUUID() },
+          },
+        ));
+      } catch (error) {
+        if (isMissing(error))
+          throw new ServerError(hubText('this server has no approval roles'));
+        throw error;
+      }
+      const record = isRecord(data) ? data : {};
+      context.append(
+        hubText('✓ proposed {role} for {principal} · {id} · {status}', {
+          role,
+          principal: principalId,
+          id: String(
+            record.changeSetId ?? record.assetId ?? record.requestId ?? '',
+          ),
+          status: String(record.status ?? 'submitted'),
+        }),
+      );
+    },
     async audit(rest, context) {
       const { values } = options(rest);
       const format = values.format?.at(-1) ?? '';
@@ -3599,16 +4105,29 @@ export async function register(api: ExtensionAPI): Promise<void> {
     }
     if (pending) {
       inboxItems = pending.slice(0, 20).map((item) => {
-        const asset = isRecord(item.asset) ? item.asset : {};
+        const assets = (
+          Array.isArray(item.assets)
+            ? item.assets
+            : isRecord(item.asset)
+              ? [item.asset]
+              : []
+        ).filter(isRecord);
+        const assetLabel = assets
+          .map((asset) =>
+            [asset.name, asset.kind]
+              .filter((part) => typeof part === 'string' && part)
+              .join(' '),
+          )
+          .filter(Boolean)
+          .join(', ');
         const kind = String(item.kind ?? 'change-set');
+        const title = String(item.title ?? item.name ?? item.summary ?? '');
         return {
           kind,
           requestId: String(item.requestId ?? ''),
           taskId: String(item.taskId ?? ''),
           approvalId: String(item.approvalId ?? item.requestId ?? ''),
-          title: String(
-            item.title ?? item.name ?? asset.name ?? item.summary ?? '',
-          ),
+          title: [title, assetLabel].filter(Boolean).join(' · '),
         };
       });
       if (!inboxItems.length) {
@@ -3708,6 +4227,13 @@ export async function register(api: ExtensionAPI): Promise<void> {
       if (typeof record.declineReason === 'string' && record.declineReason)
         context.append(
           hubText('  declined: {reason}', { reason: record.declineReason }),
+        );
+      if (record.recordId || record.snapshotId)
+        context.append(
+          hubText('  record {record} · snapshot {snapshot}', {
+            record: String(record.recordId ?? ''),
+            snapshot: String(record.snapshotId ?? ''),
+          }),
         );
       await printContent(
         `/v1/approval-requests/${encodeURIComponent(requestId)}/content`,
@@ -4395,7 +4921,7 @@ export async function register(api: ExtensionAPI): Promise<void> {
   api.registerCommand(
     'hub',
     hubText(
-      'Work with a hub: /hub [help | login | logout | packs | submit | tasks | task | respond | get | refresh | inbox | show | approve | reject | review | audit | modules | tools | skill | bot]',
+      'Work with a hub: /hub [help | login | logout | packs | submit | tasks | task | respond | get | refresh | request | inbox | show | approve | reject | review | search | roles | audit | modules | tools | skill | bot]',
     ),
     async (args, context) => {
       const [verb, ...rest] = words(args);

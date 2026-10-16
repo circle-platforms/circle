@@ -1762,3 +1762,294 @@ test('inbox, a content view and a rejection reason use the general approval rout
   assert.equal(classic.reason, 'need more material');
   assert.match(lines.at(-1)!, /rejected apr_9 for task_ask/);
 });
+
+test('a governance request, single sign-on, manifest errors and a knowledge snapshot', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  writeFileSync(join(workspace, 'notes.txt'), 'hello file');
+  const redirectPort = await new Promise<number>((resolve, reject) => {
+    const probe = createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const port = (probe.address() as AddressInfo).port;
+      probe.close(() => resolve(port));
+    });
+  });
+  const state = 's'.repeat(24);
+  const posts: { path: string; body: string }[] = [];
+  let ssoPaste = false;
+  let packsMode: 'titles' | 'errors' = 'titles';
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? '/', 'http://x');
+    const body = await read(request);
+    const send = (status: number, value: unknown) => {
+      response.writeHead(status, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(value));
+    };
+    if (request.method === 'POST')
+      posts.push({ path: url.pathname, body: body.toString() });
+    if (url.pathname === '/v1/auth/oidc/start') {
+      const redirect = ssoPaste
+        ? 'http://127.0.0.1:9/cb'
+        : `http://127.0.0.1:${redirectPort}/cb`;
+      return send(200, {
+        data: {
+          authorizationUrl: `http://127.0.0.1/authorize?state=${state}&redirect_uri=${encodeURIComponent(redirect)}`,
+          state,
+        },
+      });
+    }
+    if (url.pathname === '/v1/auth/oidc/callback') {
+      const input = JSON.parse(body.toString());
+      assert.equal(input.code, 'synthetic-code');
+      assert.equal(input.state, state);
+      return send(200, {
+        data: {
+          token: TOKEN,
+          tokenType: 'Bearer',
+          scopes: ['scp_lab'],
+          principalId: 'prn_ada',
+        },
+      });
+    }
+    if (url.pathname === '/v1/auth/logout') return send(200, { data: {} });
+    if (request.headers.authorization !== `Bearer ${TOKEN}`)
+      return send(401, {
+        status: 'failed',
+        error: { code: 'UNAUTHENTICATED', message: 'expired' },
+      });
+    if (url.pathname === '/v1/status')
+      return send(200, { data: { apiVersion: '1.0.0' } });
+    if (url.pathname === '/v1/tools') return send(200, { data: [] });
+    if (url.pathname === '/v1/packs' && packsMode === 'errors')
+      return send(400, {
+        status: 'failed',
+        error: {
+          code: 'INVALID_PAYLOAD',
+          message: 'first only',
+          messageZh: '清单有多处错误',
+          details: {
+            manifestErrors: [
+              { code: 'MISSING_OUTPUT', message: 'outputs is empty' },
+              { code: 'BAD_TOOL', message: 'tool name is unknown' },
+            ],
+          },
+        },
+      });
+    if (url.pathname === '/v1/packs')
+      return send(200, {
+        data: [
+          {
+            capabilityPackId: 'hub-task',
+            version: '1.0.0',
+            title: 'Create a governed task',
+            titleZh: '创建受治理的任务',
+          },
+        ],
+      });
+    if (url.pathname === '/v1/approval-requests' && request.method === 'POST')
+      return send(201, {
+        data: { requestId: 'gov_1', taskId: 'task_gov', status: 'open' },
+      });
+    if (url.pathname === '/v1/scopes/scp_lab/approval-roles')
+      return send(201, {
+        data: { changeSetId: 'cst_1', status: 'open' },
+      });
+    if (url.pathname === '/v1/knowledge/search')
+      return send(200, {
+        data: {
+          items: [
+            {
+              recordId: 'knr_1',
+              snapshotId: 'snap_9',
+              payload: { subject: 'the register' },
+            },
+          ],
+        },
+      });
+    if (url.pathname === '/v1/skillpacks')
+      return send(200, {
+        data: [
+          {
+            skillPackId: 'skp_1',
+            manifest: { id: 'mindmap', version: '0.1.0' },
+            status: 'registered',
+            statusLabel: 'approved',
+            lifecycle: 'approved',
+          },
+        ],
+      });
+    if (url.pathname === '/v1/tasks/submit')
+      return send(202, {
+        data: {
+          taskId: 'task_hub',
+          phase: 'delivered',
+          inputRevisionId: 'inrev_hub',
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_hub/status')
+      return send(200, {
+        data: {
+          taskId: 'task_hub',
+          phase: 'delivered',
+          inputRevisionId: 'inrev_hub',
+          title: 'hub-task',
+        },
+      });
+    if (url.pathname === '/v1/tasks/task_hub/events')
+      return send(200, { data: { events: [] } });
+    if (url.pathname === '/v1/tasks/task_hub/result')
+      return send(200, {
+        data: { status: 'succeeded', phase: 'delivered', artifacts: [] },
+      });
+    if (url.pathname === '/v1/admin/audit/export') {
+      response.writeHead(200, { 'content-type': 'text/csv' });
+      response.end('id,action\n4,governance.decision\n');
+      return;
+    }
+    send(404, {
+      status: 'failed',
+      error: { code: 'TARGET_NOT_FOUND', message: 'missing' },
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  cleanup(
+    t,
+    () => new Promise<void>((resolve) => server.close(() => resolve())),
+  );
+  const port = (server.address() as AddressInfo).port;
+  let redirected = false;
+  const prompts: string[] = [];
+  const host = await new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: bundledExtensionsRoot(),
+    settings: { hub: { enabled: true } },
+    secret: async (ask) => {
+      prompts.push(ask.question);
+      await submitAnswer(
+        home,
+        ask.id,
+        `http://127.0.0.1:9/cb?code=synthetic-code&state=${state}`,
+      );
+    },
+  }).load();
+  cleanup(t, () => host.close());
+  const lines: string[] = [];
+  const context = {
+    workspace,
+    toast: (text: string) => lines.push(text),
+    append: (text: string) => {
+      lines.push(text);
+      const found = /redirect_uri=(\S+)/.exec(text);
+      if (found && !ssoPaste && !redirected) {
+        redirected = true;
+        void fetch(
+          `${decodeURIComponent(found[1]!)}?code=synthetic-code&state=${state}`,
+        );
+      }
+    },
+    sendUserMessage: () => {},
+  };
+  const command = host.commands().get('hub')!;
+  await command.handler(`login --sso http://127.0.0.1:${port}`, context);
+  assert.equal(prompts.length, 0);
+  assert.match(lines.join('\n'), /Open this address to sign in/);
+  assert.match(
+    lines.join('\n'),
+    /signed in to http:\/\/127\.0\.0\.1:\d+ as prn_ada/,
+  );
+  await command.handler(
+    'request export the register --text the register itself --summary quarterly --role legal --role security:2',
+    context,
+  );
+  const submitted = JSON.parse(
+    posts.find((post) => post.path === '/v1/approval-requests')!.body,
+  );
+  assert.equal(submitted.scopeId, 'scp_lab');
+  assert.equal(submitted.title, 'export the register');
+  assert.equal(submitted.summary, 'quarterly');
+  assert.equal(submitted.content.text, 'the register itself');
+  assert.deepEqual(submitted.policy.roles, [
+    { role: 'legal', count: 1 },
+    { role: 'security', count: 2 },
+  ]);
+  assert.match(String(submitted.idempotencyKey), /^[0-9a-f-]{36}$/);
+  assert.match(lines.at(-1)!, /gov_1 · open · task task_gov/);
+  await assert.rejects(
+    async () =>
+      command.handler('request nope --text x --role captain', context),
+    /an approval role is manager/,
+  );
+  await command.handler('request from a file --file notes.txt', context);
+  const filed = JSON.parse(
+    posts.filter((post) => post.path === '/v1/approval-requests').at(-1)!.body,
+  );
+  assert.equal(filed.content.fileName, 'notes.txt');
+  assert.equal(filed.content.text, 'hello file');
+  assert.deepEqual(filed.policy.roles, [{ role: 'manager', count: 1 }]);
+  await command.handler('roles prn_bob legal', context);
+  const role = JSON.parse(
+    posts.find((post) => post.path.endsWith('/approval-roles'))!.body,
+  );
+  assert.deepEqual(
+    { principalId: role.principalId, role: role.role },
+    { principalId: 'prn_bob', role: 'legal' },
+  );
+  assert.match(lines.at(-1)!, /proposed legal for prn_bob · cst_1 · open/);
+  await command.handler('search the register', context);
+  assert.match(lines.at(-1)!, /knr_1 · snapshot snap_9 · the register/);
+  await command.handler('skill list', context);
+  assert.match(
+    lines.at(-1)!,
+    /mindmap 0\.1\.0 · approved · lifecycle approved/,
+  );
+  await command.handler('submit hub-task', context);
+  const task = JSON.parse(
+    posts.find((post) => post.path === '/v1/tasks/submit')!.body,
+  );
+  assert.equal(task.capabilityPackId, 'hub-task');
+  assert.deepEqual(task.input, { kind: 'governance-request' });
+  assert.equal(
+    posts.some((post) => post.path === '/v1/sources'),
+    false,
+  );
+  assert.match(lines.join('\n'), /accepted task_hub/);
+  await until(() =>
+    lines.some((line) => /task_hub delivered no files/.test(line)),
+  );
+  await command.handler('audit --format csv', context);
+  assert.match(lines.at(-1)!, /governance\.decision/);
+  const savedLanguage = process.env.LANGUAGE;
+  t.after(() => {
+    if (savedLanguage === undefined) delete process.env.LANGUAGE;
+    else process.env.LANGUAGE = savedLanguage;
+  });
+  process.env.LANGUAGE = 'zh_CN.UTF-8';
+  await command.handler('packs', context);
+  assert.match(lines.at(-1)!, /创建受治理的任务/);
+  assert.equal(lines.at(-1)!.includes('Create a governed task'), false);
+  packsMode = 'errors';
+  await assert.rejects(
+    async () => command.handler('packs', context),
+    (error: Error) => {
+      assert.match(error.message, /清单有多处错误/);
+      assert.match(error.message, /MISSING_OUTPUT: outputs is empty/);
+      assert.match(error.message, /BAD_TOOL: tool name is unknown/);
+      assert.equal(error.message.includes('first only'), false);
+      return true;
+    },
+  );
+  delete process.env.LANGUAGE;
+  await command.handler('logout', context);
+  ssoPaste = true;
+  await command.handler(`login --sso http://127.0.0.1:${port}`, context);
+  assert.match(prompts.join('\n'), /Paste the address the browser opened/);
+  assert.match(
+    lines.slice(-4).join('\n'),
+    /signed in to http:\/\/127\.0\.0\.1:\d+ as prn_ada/,
+  );
+});

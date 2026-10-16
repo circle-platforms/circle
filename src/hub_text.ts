@@ -406,8 +406,73 @@ export const HUB_ZH: Record<string, string> = {
   ' · {reason}': ' · {reason}',
   'a rejection needs a reason: /hub reject {id} <reason>':
     '拒绝需要原因：/hub reject {id} <reason>',
-  'Work with a hub: /hub [help | login | logout | packs | submit | tasks | task | respond | get | refresh | inbox | show | approve | reject | review | audit | modules | tools | skill | bot]':
-    '使用枢纽：/hub [help | login | logout | packs | submit | tasks | task | respond | get | refresh | inbox | show | approve | reject | review | audit | modules | tools | skill | bot]',
+  'Work with a hub: /hub [help | login | logout | packs | submit | tasks | task | respond | get | refresh | request | inbox | show | approve | reject | review | search | roles | audit | modules | tools | skill | bot]':
+    '使用枢纽：/hub [help | login | logout | packs | submit | tasks | task | respond | get | refresh | request | inbox | show | approve | reject | review | search | roles | audit | modules | tools | skill | bot]',
+  'sign in through the server single sign-on. Paste the address the browser opened when this window cannot catch it':
+    '通过服务器的单点登录。这个窗口接不到浏览器时，粘贴浏览器打开的地址',
+  'submit a file or text for role approval (--file or --text, --summary, --role name[:count])':
+    '提交文件或文本，按角色审批（--file 或 --text，--summary，--role 角色[:人数]）',
+  'find approved knowledge and the snapshot id of each hit':
+    '查找已批准的知识，以及每条命中的快照 id',
+  'propose an approval role: manager, security, dpo, legal, finance, hr or it':
+    '提议一个审批角色：manager、security、dpo、legal、finance、hr 或 it',
+  'the manifest has {n} error(s) ({code}):\n{lines}':
+    '清单有 {n} 个错误（{code}）：\n{lines}',
+  'undeclared tool {name}': '未声明的工具 {name}',
+  'missing tool {name}': '缺少的工具 {name}',
+  'you cannot approve your own request ({code}). Someone holding the role decides it.':
+    '不能批准自己的请求（{code}）。由持有该角色的人来决定。',
+  'a dependency is not approved yet ({code}). {detail}':
+    '依赖尚未批准（{code}）。{detail}',
+  'Approve that dependency first.': '请先批准那个依赖。',
+  'This sign-in is missing its code or state.': '这次登录缺少 code 或 state。',
+  'Signed in. You can close this page.': '已登录。可以关闭这个页面。',
+  'this server has no single sign-on. /hub login [url] [user] asks for a password.':
+    '这台服务器没有单点登录。/hub login [url] [user] 会询问密码。',
+  'the server did not start single sign-on': '服务器没有开始单点登录',
+  'Open this address to sign in:\n{url}': '打开这个地址登录：\n{url}',
+  'Paste the address the browser opened': '粘贴浏览器打开的地址',
+  'this window cannot ask; open the address from /hub login --sso again':
+    '这个窗口不能询问；请打开地址后重新 /hub login --sso',
+  'the sign-in address needs code and state': '登录地址需要 code 和 state',
+  'the sign-in state does not match. /hub login --sso again.':
+    '登录 state 不一致。请重新 /hub login --sso。',
+  'usage: /hub login --sso [url]': '用法：/hub login --sso [url]',
+  'usage: /hub submit hub-task [input-json] [--again]':
+    '用法：/hub submit hub-task [input-json] [--again]',
+  'hub-task takes its input as a JSON object':
+    'hub-task 的输入必须是一个 JSON 对象',
+  'usage: /hub request <title> (--file <path> | --text <text>) [--summary <text>] [--role <role>[:count]]…':
+    '用法：/hub request <title> (--file <path> | --text <text>) [--summary <text>] [--role <role>[:count]]…',
+  'an approval role is manager, security, dpo, legal, finance, hr or it':
+    '审批角色是 manager、security、dpo、legal、finance、hr 或 it',
+  'a role count is a whole number from 1 to 20': '角色人数是 1 到 20 的整数',
+  'each approval role is named once': '每个审批角色只写一次',
+  'the approval text is empty': '审批文本是空的',
+  'the file must stay inside the workspace: {path}':
+    '文件必须留在工作区里：{path}',
+  'the approval file is empty': '审批文件是空的',
+  'use a file name without slashes or control characters':
+    '文件名不要包含斜杠或控制字符',
+  'this server has no general approval. /hub submit <pack> <file> still hands over a task.':
+    '这台服务器没有通用审批。/hub submit <pack> <file> 仍然可以提交任务。',
+  '✓ submitted {id} · {status} · task {task}\n  /hub show {id}':
+    '✓ 已提交 {id} · {status} · 任务 {task}\n  /hub show {id}',
+  'usage: /hub search <text>': '用法：/hub search <text>',
+  'this server has no knowledge search': '这台服务器没有知识检索',
+  'No knowledge matched. A miss does not mean it is absent. Approved text is found by its snapshot id.':
+    '没有匹配的知识。没有命中并不表示它不存在。已批准的文本按其快照 id 被找到。',
+  'no snapshot': '无快照',
+  '  {id} · snapshot {snapshot} · {label}':
+    '  {id} · 快照 {snapshot} · {label}',
+  'usage: /hub roles <principal> <role> — manager, security, dpo, legal, finance, hr, it':
+    '用法：/hub roles <principal> <role> — manager、security、dpo、legal、finance、hr、it',
+  'a principal id starts with prn_': '主体 id 以 prn_ 开头',
+  'this server has no approval roles': '这台服务器没有审批角色',
+  '✓ proposed {role} for {principal} · {id} · {status}':
+    '✓ 已提议 {principal} 的 {role} · {id} · {status}',
+  '  record {record} · snapshot {snapshot}':
+    '  记录 {record} · 快照 {snapshot}',
   '✓ rejected {approval} for {task} (input {input}){because}':
     '✓ 已拒绝 {task} 的 {approval}（输入 {input}）{because}',
   '✓ approved {id} · {status}': '✓ 已批准 {id} · {status}',
