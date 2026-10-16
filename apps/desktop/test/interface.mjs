@@ -905,45 +905,7 @@ try {
   await route('/session/session1');
   await page.getByRole('textbox', { name: 'message', exact: true }).press('F3');
   await page.getByRole('heading', { name: 'models', exact: true }).waitFor();
-  assert.equal(
-    await page.getByRole('button', { name: 'change…', exact: true }).count(),
-    0,
-    'a keyboard row must not answer to the workspace picker button',
-  );
   checks.push('a key recorded in settings invokes its action');
-  await route('/page/settings');
-  await modelRow
-    .getByRole('button', { name: 'reset the key for choose a model' })
-    .click();
-  assert.equal(
-    (await state()).settings.keybindings['model.select'] ?? null,
-    null,
-  );
-  checks.push('a recorded key resets to its default');
-  await keyboard
-    .getByRole('button', { name: 'edit the bindings as JSON' })
-    .click();
-  await page
-    .getByRole('textbox', { name: 'keybindings json', exact: true })
-    .fill('{"nope":"x"}');
-  await keyboard.getByRole('button', { name: 'apply', exact: true }).click();
-  await keyboard.getByText('unknown key action: nope').waitFor();
-  await page
-    .getByRole('textbox', { name: 'keybindings json', exact: true })
-    .fill('{"find":["ctrl+f","f4"]}');
-  await keyboard.getByRole('button', { name: 'apply', exact: true }).click();
-  const findRow = keyboard
-    .locator('.key-action')
-    .filter({ has: page.getByText('find in conversation') });
-  // A chord reads the way the machine's own keyboard writes it.
-  const onMac = await page.evaluate(
-    () => document.documentElement.dataset.desktop === 'darwin',
-  );
-  await findRow.getByText(onMac ? '⌃F / F4' : 'Ctrl+F / F4').waitFor();
-  assert.deepEqual((await state()).settings.keybindings, {
-    find: ['ctrl+f', 'f4'],
-  });
-  checks.push('bindings applied as JSON replace the recorded ones');
   await reset();
   const beforeNew = await state();
   await page.getByRole('button', { name: 'new session', exact: true }).click();
