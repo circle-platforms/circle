@@ -52,7 +52,7 @@ export function TaskReviewForm({
     );
   return (
     <form
-      className="task-review"
+      className="task-review panel-section"
       onSubmit={(event) => {
         event.preventDefault();
         if (!ready || busy) return;
@@ -82,11 +82,14 @@ export function TaskReviewForm({
         )}
       </p>
       {identity ? (
-        <p>
-          <code>{identity.head}</code>
-          <br />
-          <code>{identity.sha256}</code>
-        </p>
+        <details className="task-technical">
+          <summary>{t('patch identity')}</summary>
+          <p>
+            <code>{identity.head}</code>
+            <br />
+            <code>{identity.sha256}</code>
+          </p>
+        </details>
       ) : (
         <p role="status">{t('review requires the recorded patch identity')}</p>
       )}
@@ -114,8 +117,8 @@ export function TaskReviewForm({
       {task.spec.acceptanceCriteria.map((criterion) => {
         const value = checks[criterion] ?? { checked: false, evidence: '' };
         return (
-          <label key={criterion}>
-            <span>
+          <label key={criterion} className="task-review-criterion">
+            <span className="task-check">
               <input
                 type="checkbox"
                 checked={value.checked}

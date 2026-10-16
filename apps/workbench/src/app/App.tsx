@@ -60,10 +60,7 @@ import {
 import { Markdown } from '../components/Markdown';
 import { ToolMessage } from '../components/ToolMessage';
 import { Conversation } from '../features/Conversation';
-import {
-  DeveloperWorkbench,
-  type WorkbenchLayout,
-} from '../features/DeveloperWorkbench';
+import '../styles/developer-workbench.css';
 import {
   sourceLocation,
   workspaceRelativePath,
@@ -137,10 +134,6 @@ export function App() {
     if (narrow) setInspectorOpen(false);
   }, [narrow]);
   const [panel, setPanel] = useState<PanelId>('files');
-  const [dockRequest, setDockRequest] = useState<{
-    dock: 'terminal';
-    id: number;
-  }>();
   const [selection, setSelection] = useState('');
   const [file, setFile] = useState<string | null>(null);
   const sourceOpener = useRef(
@@ -148,23 +141,6 @@ export function App() {
   );
   const [sourceLine, setSourceLine] = useState<number | undefined>();
   const [sourceColumn, setSourceColumn] = useState<number | undefined>();
-  const [layout, setLayout] = useState<WorkbenchLayout>(() => {
-    try {
-      return localStorage.getItem('circle-workbench-layout') === 'developer'
-        ? 'developer'
-        : 'task';
-    } catch {
-      return 'task';
-    }
-  });
-  const changeLayout = (next: WorkbenchLayout) => {
-    setLayout(next);
-    try {
-      localStorage.setItem('circle-workbench-layout', next);
-    } catch {
-      /* private mode */
-    }
-  };
   const [quickOpen, setQuickOpen] = useState(false);
   const [agent, setAgent] = useState<string | null>(null);
   const [dialog, setDialog] = useState<DialogId | null>(null);
@@ -197,15 +173,6 @@ export function App() {
     setDialog(kind);
   };
   const onPanel = (kind: PanelId, choice = '') => {
-    if (kind === 'terminal') {
-      setDockRequest((previous) => ({
-        dock: 'terminal',
-        id: (previous?.id ?? 0) + 1,
-      }));
-      setInspectorOpen(false);
-      navigate(`/session/${runtime.getSnapshot().activeSessionId}`);
-      return;
-    }
     setPanel(kind);
     setSelection(choice);
     setInspectorOpen(true);
@@ -654,50 +621,43 @@ export function App() {
       </div>
     </section>
   ) : (
-    <DeveloperWorkbench
-      layout={layout}
-      openDock={dockRequest}
-      sessionId={session.id}
-      editorKey={file ?? undefined}
-      editor={
-        file ? (
-          <Suspense fallback={<p role="status">{t('opening file…')}</p>}>
-            <FileViewer
-              path={file}
-              line={sourceLine}
-              column={sourceColumn}
-              onNavigate={onFile}
-              onClose={() => {
-                sourceOpener.current.cancel();
-                setFile(null);
-              }}
-            />
-          </Suspense>
-        ) : null
-      }
-      onFile={onFile}
-      onSession={(id) => {
-        void perform(async () => {
-          await runtime.selectSession(id);
-          navigate(`/session/${id}`);
-        });
-      }}
-      conversation={
-        <Conversation
-          onDialog={onDialog}
-          onPanel={onPanel}
-          onAgent={setAgent}
-          onFile={onFile}
-          onAttach={() => pickFiles()}
-          onCommand={() => {
-            setSearch('');
-            setSearchOpen(true);
-          }}
-          finding={finding}
-          setFinding={setFinding}
-        />
-      }
-    />
+    <div className="session-resource-stack">
+      <div className="session-resource-view" hidden={!!file}>
+        <NativeResourceBoundary name={t('conversation')} resetKey={session.id}>
+          <Conversation
+            onDialog={onDialog}
+            onPanel={onPanel}
+            onAgent={setAgent}
+            onFile={onFile}
+            onAttach={() => pickFiles()}
+            onCommand={() => {
+              setSearch('');
+              setSearchOpen(true);
+            }}
+            finding={finding}
+            setFinding={setFinding}
+          />
+        </NativeResourceBoundary>
+      </div>
+      <div className="session-resource-view" hidden={!file}>
+        {file && (
+          <NativeResourceBoundary name={t('editor')} resetKey={file}>
+            <Suspense fallback={<p role="status">{t('opening file…')}</p>}>
+              <FileViewer
+                path={file}
+                line={sourceLine}
+                column={sourceColumn}
+                onNavigate={onFile}
+                onClose={() => {
+                  sourceOpener.current.cancel();
+                  setFile(null);
+                }}
+              />
+            </Suspense>
+          </NativeResourceBoundary>
+        )}
+      </div>
+    </div>
   );
   // The session's own actions, under its title as Claude has them.
   const SESSION_ACTIONS = [
@@ -717,6 +677,13 @@ export function App() {
     <NativeResourceBoundary name={t('inspector')} resetKey={panel}>
       <Inspector
         panel={panel}
+        visible={inspectorVisible}
+        onSession={(id) => {
+          void perform(async () => {
+            await runtime.selectSession(id);
+            navigate(`/session/${id}`);
+          });
+        }}
         selection={selection}
         onPanel={onPanel}
         onClose={() => setInspectorOpen(false)}
@@ -868,26 +835,6 @@ export function App() {
               </div>
               <div className="topbar-actions">
                 {!page && (
-                  <div
-                    className="layout-toggle"
-                    role="group"
-                    aria-label={t('workspace layout')}
-                  >
-                    <button
-                      aria-pressed={layout === 'task'}
-                      onClick={() => changeLayout('task')}
-                    >
-                      {t('task layout')}
-                    </button>
-                    <button
-                      aria-pressed={layout === 'developer'}
-                      onClick={() => changeLayout('developer')}
-                    >
-                      {t('developer layout')}
-                    </button>
-                  </div>
-                )}
-                {!page && (
                   <PanelButtons
                     panel={panel}
                     open={inspectorOpen}
@@ -948,42 +895,38 @@ export function App() {
             </header>
             <div className="workspace-content">
               <Group orientation="horizontal" id="workbench-columns">
-                <Panel
-                  id="main"
-                  defaultSize={inspectorVisible && !narrow ? '68%' : '100%'}
-                  minSize="38%"
-                >
+                <Panel id="main" defaultSize="68%" minSize="38%">
                   <div className="main-stack">{content}</div>
                 </Panel>
-                {inspectorVisible && !narrow && (
-                  <>
-                    <Separator
-                      className="resize-handle"
-                      aria-label={t('resize inspector')}
-                    />
-                    <Panel
-                      id="inspector"
-                      minSize={290}
-                      maxSize="50%"
-                      defaultSize="32%"
-                    >
-                      {inspector}
-                    </Panel>
-                  </>
-                )}
-              </Group>
-              {/* A narrow window lays the panel over the conversation, on the right,
-                and keeps the top bar's icons usable. */}
-              {inspectorVisible && narrow && (
-                <div
-                  className="inspector-overlay"
-                  onKeyDown={(event) => {
-                    if (event.key === 'Escape') setInspectorOpen(false);
+                <Separator
+                  className="resize-handle"
+                  style={{
+                    display: inspectorVisible && !narrow ? undefined : 'none',
                   }}
+                  aria-label={t('resize inspector')}
+                />
+                <Panel
+                  id="inspector"
+                  minSize={narrow ? 0 : 290}
+                  maxSize={narrow ? '100%' : '50%'}
+                  defaultSize="32%"
+                  className={
+                    narrow
+                      ? 'inspector-column inspector-overlay'
+                      : 'inspector-column'
+                  }
+                  style={{ display: inspectorVisible ? undefined : 'none' }}
                 >
-                  {inspector}
-                </div>
-              )}
+                  <div
+                    className="inspector-resource-host"
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') setInspectorOpen(false);
+                    }}
+                  >
+                    {inspector}
+                  </div>
+                </Panel>
+              </Group>
             </div>
           </main>
           <Modal

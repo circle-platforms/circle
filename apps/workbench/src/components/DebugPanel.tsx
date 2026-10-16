@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { t } from '../i18n';
+import { Button, Status } from './common';
 import { workspaceCall, subscribeWorkspace } from '../model/workspace-client';
 import './debug-panel.css';
 
@@ -13,8 +14,10 @@ type Snapshot = {
 export function DebugPanel({
   sessionId,
   onFile,
+  embedded = false,
 }: {
   sessionId: string;
+  embedded?: boolean;
   onFile?: (path: string, line?: number) => void;
 }) {
   const context = useRef({
@@ -202,172 +205,205 @@ export function DebugPanel({
     }
   }
   return (
-    <section className="debug-panel" aria-label={t('project debug')}>
-      <header>
-        <strong>{t('project debug')}</strong>
-        <span role="status">
-          {statuses[state.status] ?? state.status}
-          {state.reason ? ` · ${state.reason}` : ''}
-        </span>
-      </header>
-      <details className="debug-launch-options">
-        <summary>{t('launch options')}</summary>
-        <p>{t('each argument is passed literally without shell expansion')}</p>
-        {args.map((argument, index) => (
-          <div className="debug-argument" key={index}>
-            <input
-              aria-label={`${t('program argument')} ${index + 1}`}
-              value={argument}
-              onChange={(event) =>
-                setArgs((current) =>
-                  current.map((value, i) =>
-                    i === index ? event.target.value : value,
-                  ),
-                )
-              }
-            />
-            <button
-              onClick={() =>
-                setArgs((current) => current.filter((_, i) => i !== index))
-              }
-            >
-              {t('remove argument')} {index + 1}
-            </button>
-          </div>
-        ))}
-        <button onClick={() => setArgs((current) => [...current, ''])}>
-          {t('add argument')}
-        </button>
-        <label className="debug-entry-option">
-          <input
-            type="checkbox"
-            checked={stopOnEntry}
-            onChange={(event) => setStopOnEntry(event.target.checked)}
+    <section
+      className={`debug-panel${embedded ? ' embedded' : ''}`}
+      aria-label={t('project debug')}
+    >
+      <div className="inspector-heading debug-heading">
+        {!embedded && <h2>{t('project debug')}</h2>}
+        <span role="status" className="debug-status">
+          <Status
+            value={
+              ['idle', 'running', 'failed'].includes(state.status)
+                ? state.status
+                : (statuses[state.status] ?? state.status)
+            }
           />
-          {t('pause at entry')}
-        </label>
-      </details>
-      <div className="debug-controls">
-        <input
-          aria-label={t('program path')}
-          placeholder={t('program path')}
-          value={program}
-          onChange={(e) => setProgram(e.target.value)}
-        />
-        <button
-          disabled={
-            busy ||
-            !program ||
-            !['idle', 'stopped', 'failed'].includes(state.status)
-          }
-          onClick={() => void act('launch', { program, args, stopOnEntry })}
-        >
-          {t('launch')}
-        </button>
-        <input
-          aria-label={t('inspector port')}
-          type="number"
-          min="1"
-          max="65535"
-          value={port}
-          onChange={(e) => setPort(e.target.value)}
-        />
-        <button
-          disabled={
-            busy || !['idle', 'stopped', 'failed'].includes(state.status)
-          }
-          onClick={() => void act('attach', { port: Number(port) })}
-        >
-          {t('attach')}
-        </button>
+          {state.reason && <small>{state.reason}</small>}
+        </span>
       </div>
-      <div className="debug-controls">
-        <input
-          aria-label={t('breakpoint line')}
-          type="number"
-          min="1"
-          value={line}
-          onChange={(e) => setLine(e.target.value)}
-        />
-        <button
-          disabled={busy || !program}
-          onClick={() =>
-            void act('setBreakpoints', { path: program, lines: [Number(line)] })
-          }
-        >
-          {t('set breakpoint')}
-        </button>
-        <button
-          disabled={busy || state.status !== 'paused'}
-          onClick={() => void act('continue')}
-        >
-          {t('continue')}
-        </button>
-        <button
-          disabled={busy || state.status !== 'running'}
-          onClick={() => void act('pause')}
-        >
-          {t('pause')}
-        </button>
-        <button
-          disabled={busy || state.status !== 'paused'}
-          onClick={() => void act('next')}
-        >
-          {t('step over')}
-        </button>
-        <button
-          disabled={busy || state.status !== 'paused'}
-          onClick={() => void act('stepIn')}
-        >
-          {t('step into')}
-        </button>
-        <button
-          disabled={busy || state.status !== 'paused'}
-          onClick={() => void act('stepOut')}
-        >
-          {t('step out')}
-        </button>
-        <button
-          disabled={['idle', 'stopped'].includes(state.status)}
-          onClick={() => void act('stop')}
-        >
-          {t('stop')}
-        </button>
+      <div className="panel-section first debug-launch">
+        <div className="debug-controls">
+          <input
+            aria-label={t('program path')}
+            placeholder={t('program path')}
+            value={program}
+            onChange={(e) => setProgram(e.target.value)}
+          />
+          <Button
+            disabled={
+              busy ||
+              !program ||
+              !['idle', 'stopped', 'failed'].includes(state.status)
+            }
+            onClick={() => void act('launch', { program, args, stopOnEntry })}
+          >
+            {t('launch')}
+          </Button>
+        </div>
+        <details className="debug-launch-options">
+          <summary>{t('launch options')}</summary>
+          <p>
+            {t('each argument is passed literally without shell expansion')}
+          </p>
+          {args.map((argument, index) => (
+            <div className="debug-argument" key={index}>
+              <input
+                aria-label={`${t('program argument')} ${index + 1}`}
+                value={argument}
+                onChange={(event) =>
+                  setArgs((current) =>
+                    current.map((value, i) =>
+                      i === index ? event.target.value : value,
+                    ),
+                  )
+                }
+              />
+              <Button
+                onClick={() =>
+                  setArgs((current) => current.filter((_, i) => i !== index))
+                }
+              >
+                {t('remove argument')} {index + 1}
+              </Button>
+            </div>
+          ))}
+          <Button onClick={() => setArgs((current) => [...current, ''])}>
+            {t('add argument')}
+          </Button>
+          <label className="debug-entry-option">
+            <input
+              type="checkbox"
+              checked={stopOnEntry}
+              onChange={(event) => setStopOnEntry(event.target.checked)}
+            />
+            {t('pause at entry')}
+          </label>
+        </details>
+        <details className="debug-attach">
+          <summary>{t('attach')}</summary>
+          <div className="debug-controls">
+            <input
+              aria-label={t('inspector port')}
+              type="number"
+              min="1"
+              max="65535"
+              value={port}
+              onChange={(e) => setPort(e.target.value)}
+            />
+            <Button
+              disabled={
+                busy || !['idle', 'stopped', 'failed'].includes(state.status)
+              }
+              onClick={() => void act('attach', { port: Number(port) })}
+            >
+              {t('attach')}
+            </Button>
+          </div>
+        </details>
+      </div>
+      <div className="panel-section debug-run">
+        <div className="debug-controls">
+          <input
+            aria-label={t('breakpoint line')}
+            type="number"
+            min="1"
+            value={line}
+            onChange={(e) => setLine(e.target.value)}
+          />
+          <Button
+            disabled={busy || !program}
+            onClick={() =>
+              void act('setBreakpoints', {
+                path: program,
+                lines: [Number(line)],
+              })
+            }
+          >
+            {t('set breakpoint')}
+          </Button>
+          <Button
+            disabled={busy || state.status !== 'paused'}
+            onClick={() => void act('continue')}
+          >
+            {t('continue')}
+          </Button>
+          <Button
+            disabled={busy || state.status !== 'running'}
+            onClick={() => void act('pause')}
+          >
+            {t('pause')}
+          </Button>
+          <Button
+            disabled={busy || state.status !== 'paused'}
+            onClick={() => void act('next')}
+          >
+            {t('step over')}
+          </Button>
+          <Button
+            disabled={busy || state.status !== 'paused'}
+            onClick={() => void act('stepIn')}
+          >
+            {t('step into')}
+          </Button>
+          <Button
+            disabled={busy || state.status !== 'paused'}
+            onClick={() => void act('stepOut')}
+          >
+            {t('step out')}
+          </Button>
+          <Button
+            disabled={['idle', 'stopped'].includes(state.status)}
+            onClick={() => void act('stop')}
+          >
+            {t('stop')}
+          </Button>
+        </div>
       </div>
       {error && <p role="alert">{error}</p>}
       <div className="debug-inspection">
-        <section>
+        <section className="panel-section">
           <h3>{t('call stack')}</h3>
           {frames.map((f) => (
-            <button key={f.id} onClick={() => void inspect(f)}>
-              {f.name} · {f.source?.name ?? f.source?.path}:{f.line}
+            <button
+              className="activity-row"
+              key={f.id}
+              onClick={() => void inspect(f)}
+            >
+              <span>
+                <strong>{f.name}</strong>
+                <small>
+                  {f.source?.name ?? f.source?.path}:{f.line}
+                </small>
+              </span>
             </button>
           ))}
         </section>
-        <section>
+        <section className="panel-section">
           <h3>{t('variables')}</h3>
           {scopeList.map((scope) => (
-            <button
+            <Button
               key={scope.variablesReference}
               onClick={() => void loadVariables(scope.variablesReference)}
             >
               {scope.name}
-            </button>
+            </Button>
           ))}
           {variables.map((v, i) => (
             <div key={i}>
-              <button
+              <Button
                 disabled={!v.variablesReference}
                 onClick={() => void loadVariables(v.variablesReference)}
               >
                 {v.name}
-              </button>
+              </Button>
               <code>{v.value}</code>
             </div>
           ))}
         </section>
       </div>
       <form
+        className="panel-section debug-evaluate"
         onSubmit={(e) => {
           e.preventDefault();
           void evaluate();
@@ -378,23 +414,23 @@ export function DebugPanel({
           value={expression}
           onChange={(e) => setExpression(e.target.value)}
         />
-        <button disabled={state.status !== 'paused'}>{t('evaluate')}</button>
+        <Button disabled={state.status !== 'paused'}>{t('evaluate')}</Button>
         <output>{result}</output>
       </form>
-      <details>
+      <details className="panel-section">
         <summary>{t('breakpoints')}</summary>
         {Object.entries(state.breakpoints).flatMap(([file, rows]) =>
           rows.map((row, i) => (
             <div className="debug-breakpoint" key={`${file}:${i}`}>
-              <button onClick={() => onFile?.(file, row.line)}>
+              <Button onClick={() => onFile?.(file, row.line)}>
                 {file}:{row.line}
-              </button>
+              </Button>
               <span>
                 {row.verified
                   ? t('verified breakpoint')
                   : t('pending breakpoint')}
               </span>
-              <button
+              <Button
                 onClick={() =>
                   void act('setBreakpoints', {
                     path: file,
@@ -405,14 +441,17 @@ export function DebugPanel({
                 }
               >
                 {t('remove breakpoint')}
-              </button>
+              </Button>
             </div>
           )),
         )}
       </details>
-      <pre className="debug-output" aria-label={t('debug output')}>
-        {state.output}
-      </pre>
+      <section className="panel-section">
+        <h3>{t('debug output')}</h3>
+        <pre className="debug-output" aria-label={t('debug output')}>
+          {state.output}
+        </pre>
+      </section>
     </section>
   );
 }

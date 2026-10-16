@@ -1,115 +1,100 @@
 .debug-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
   min-width: 0;
-  height: 100%;
-  overflow: auto;
-  padding: 12px;
   color: var(--fg);
-  background: var(--bg);
+  padding: 0 17px 20px;
 }
-.debug-panel header,
+.debug-panel.embedded {
+  padding: 0;
+}
+.debug-heading .debug-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.debug-heading .debug-status small {
+  color: var(--muted);
+}
 .debug-controls,
-.debug-panel form {
+.debug-evaluate {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
 }
-.debug-panel header {
-  justify-content: space-between;
+.debug-controls + .debug-controls,
+.debug-launch details {
+  margin-top: 10px;
 }
 .debug-panel input {
   min-width: 0;
-  flex: 1;
+  flex: 1 1 120px;
 }
 .debug-controls input[type='number'] {
-  max-width: 100px;
+  flex: 0 1 76px;
+  width: 76px;
 }
 .debug-inspection {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  min-height: 100px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 0 16px;
+  min-width: 0;
+}
+.debug-panel.embedded .debug-inspection {
+  display: block;
 }
 .debug-inspection section {
   min-width: 0;
-  overflow: auto;
 }
-.debug-inspection section > button {
-  display: block;
-  text-align: left;
+.debug-inspection .activity-row {
   width: 100%;
+  text-align: left;
 }
 .debug-inspection code,
-.debug-output {
+.debug-output,
+.debug-breakpoint {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .debug-output {
-  min-height: 100px;
-  overflow: auto;
+  font-family: var(--mono);
+  font-size: var(--ui-small);
+  margin: 0;
 }
 .debug-panel [role='alert'] {
   color: var(--negative);
 }
-@media (max-width: 600px) {
-  .debug-inspection {
-    grid-template-columns: 1fr;
-  }
-}
-
-.debug-panel input {
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-.debug-panel button {
-  padding: 5px 8px;
-  border-radius: var(--radius);
-  background: var(--hover);
-}
-.debug-panel button:hover:not(:disabled) {
-  background: var(--active);
-}
-.debug-inspection section {
-  padding: 8px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-.debug-inspection h3 {
-  font-size: inherit;
-  margin: 0 0 6px;
-}
-.debug-output {
-  font-family: var(--mono);
-  background: var(--surface);
-  padding: 8px;
-}
-
-.debug-launch-options {
-  padding: 8px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-.debug-launch-options summary {
+.debug-panel details > summary {
   cursor: pointer;
+  font-size: var(--ui-small);
+  color: var(--secondary);
 }
 .debug-launch-options p {
   color: var(--muted);
+  font-size: var(--ui-small);
+  margin: 8px 0;
 }
 .debug-argument,
-.debug-entry-option {
+.debug-entry-option,
+.debug-breakpoint {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin: 8px 0;
 }
 .debug-entry-option input {
   flex: 0;
   min-width: auto;
+}
+.debug-evaluate output {
+  flex-basis: 100%;
+  overflow-wrap: anywhere;
+}
+.debug-breakpoint > .button:first-child {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  text-align: left;
 }

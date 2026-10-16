@@ -1,0 +1,221 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { runInNewContext } from 'node:vm';
+import {
+  armNativeFeedback,
+  captureNativeTranscriptAnchor,
+  terminalObservationRows,
+} from './helpers/native-performance-observation.mjs';
+
+function renderer() {
+  let runtimeListener,
+    inputListener,
+    now = 0,
+    unsubscribed = 0;
+  const frames = [];
+  const message = {
+    dataset: { messageId: 'message-middle' },
+    textContent: 'persisted history123',
+    closest: () => null,
+    getBoundingClientRect: () => ({
+      width: 500,
+      height: 80,
+      top: 110,
+      bottom: 190,
+    }),
+  };
+  const transcript = {
+    scrollTop: 500,
+    closest: () => null,
+    getBoundingClientRect: () => ({
+      width: 500,
+      height: 600,
+      top: 100,
+      bottom: 700,
+    }),
+    querySelectorAll: () => [message],
+  };
+  const header = { textContent: 'target conversation' };
+  const document = {
+    querySelector: (selector) =>
+      selector === '.transcript'
+        ? transcript
+        : selector === '.session-title'
+          ? header
+          : null,
+    addEventListener: (_, listener) => {
+      inputListener = listener;
+    },
+    removeEventListener: () => {
+      inputListener = undefined;
+    },
+  };
+  const window = {
+    circleDesktop: {
+      onRuntime: (listener) => {
+        runtimeListener = listener;
+        return () => {
+          unsubscribed++;
+        };
+      },
+    },
+  };
+  const location = { hash: '#/session/target' };
+  const context = {
+    window,
+    document,
+    location,
+    performance: { now: () => now },
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    requestAnimationFrame: (fn) => frames.push(fn),
+  };
+  return {
+    window,
+    document,
+    header,
+    message,
+    location,
+    get unsubscribed() {
+      return unsubscribed;
+    },
+    install: (condition) =>
+      runInNewContext(
+        '(' + armNativeFeedback.toString() + ')',
+        context,
+      )({ kind: 'click', selector: '#target', condition }),
+    click: () => inputListener({ target: { closest: () => true } }),
+    backend: (id) => runtimeListener({ snapshot: { activeSessionId: id } }),
+    frame: () => {
+      now += 16;
+      frames.shift()?.();
+    },
+    anchor: () =>
+      runInNewContext(
+        '(' + captureNativeTranscriptAnchor.toString() + ')',
+        context,
+      )(),
+  };
+}
+
+test('session feedback requires real backend, route, header and visible body, without a tail marker', async () => {
+  const r = renderer();
+  r.install({
+    session: {
+      id: 'target',
+      title: 'target conversation',
+      content: 'persisted history',
+    },
+  });
+  let finished = false;
+  r.window.__circleNativePerfPending.then(() => {
+    finished = true;
+  });
+  r.click();
+  r.backend('other');
+  r.frame();
+  r.frame();
+  await Promise.resolve();
+  assert.equal(finished, false);
+  r.backend('target');
+  r.location.hash = '#/session/other';
+  r.frame();
+  r.frame();
+  await Promise.resolve();
+  assert.equal(finished, false);
+  r.location.hash = '#/session/target';
+  r.header.textContent = 'wrong owner';
+  r.frame();
+  r.frame();
+  await Promise.resolve();
+  assert.equal(finished, false);
+  r.header.textContent = 'target conversation';
+  r.message.getBoundingClientRect = () => ({
+    width: 500,
+    height: 80,
+    top: -100,
+    bottom: -20,
+  });
+  r.frame();
+  r.frame();
+  await Promise.resolve();
+  assert.equal(finished, false);
+  r.message.getBoundingClientRect = () => ({
+    width: 500,
+    height: 80,
+    top: 110,
+    bottom: 190,
+  });
+  r.frame();
+  r.frame();
+  assert.ok((await r.window.__circleNativePerfPending) > 0);
+  assert.equal(r.unsubscribed, 1);
+});
+
+test('scroll anchor records the actual visible stable message and pixel offset', () => {
+  const r = renderer();
+  const anchor = r.anchor();
+  assert.equal(anchor.id, 'message-middle');
+  assert.equal(anchor.offset, 10);
+  assert.equal(anchor.scrollTop, 500);
+  r.message.getBoundingClientRect = () => ({
+    width: 500,
+    height: 80,
+    top: -100,
+    bottom: -20,
+  });
+  assert.throws(() => r.anchor(), /no visible message/);
+});
+
+test('actual UI parse/frame and AX observations remain distinct; missing hooks never borrow raw-read timing', () => {
+  const producer = 1700000000000,
+    event = {
+      terminalId: 'pty',
+      sequence: 42,
+      kind: 'data',
+      at: new Date(producer + 3).toISOString(),
+      data: `NATIVE_PERF ${producer} 1\r\n`,
+    };
+  const timing = [
+    {
+      terminalId: 'pty',
+      phase: 'replay-response',
+      afterSequence: 40,
+      cursor: 45,
+      at: producer + 7,
+    },
+    {
+      terminalId: 'pty',
+      eventSequence: 42,
+      phase: 'write-enqueued',
+      at: producer + 8,
+    },
+    {
+      terminalId: 'pty',
+      eventSequence: 42,
+      phase: 'write-parsed',
+      at: producer + 10,
+    },
+    {
+      terminalId: 'pty',
+      eventSequence: 42,
+      phase: 'write-frame',
+      at: producer + 45,
+    },
+  ];
+  const [row] = terminalObservationRows([event], timing, [
+    { sourceAt: producer, sampleAt: producer + 1000 },
+  ]);
+  assert.equal(row.producerToRuntimeMs, 3);
+  assert.equal(row.replayResponseAt, producer + 7);
+  assert.equal(row.producerToParsedMs, 10);
+  assert.equal(row.producerToFrameMs, 45);
+  assert.equal(row.producerToAxMs, 1000);
+  const [missing] = terminalObservationRows(
+    [event],
+    [timing[0]],
+    [{ sourceAt: producer, sampleAt: producer + 1000 }],
+  );
+  assert.equal(missing.frameAt, undefined);
+  assert.equal('producerToFrameMs' in missing, false);
+});

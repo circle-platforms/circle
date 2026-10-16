@@ -28,6 +28,7 @@ import {
   captureTaskChanges,
 } from '../src/workspace/task-executor.js';
 import { TaskIntegrator } from '../src/workspace/task-merge.js';
+import { GitWorkspaceService } from '../src/workspace/git.js';
 import { cleanup, scratch } from '../../../tests/helpers.js';
 const exec = promisify(execFile);
 async function git(path: string, ...args: string[]): Promise<string> {
@@ -744,4 +745,77 @@ test('task runtime cannot inherit parent-only native task tools through a mistak
         !request.tools.some((tool) => tool.name.startsWith('native_tasks_')),
     ),
   );
+});
+
+test('task integration waits for native mutations in another worktree of the same repository', async (t) => {
+  const repo = scratch(t),
+    data = scratch(t);
+  const baseline = await repository(repo);
+  const tasks = await acceptedTasks(repo, data, t, [
+    ['owned', 'owned.txt', 'accepted'],
+  ]);
+  const integrator = new TaskIntegrator({
+    workspace: repo,
+    dataDir: data,
+    identity: { name: 'Fixture', email: 'fixture@example.invalid' },
+  });
+  const workspace = await integrator.create(baseline);
+  const manual = new GitWorkspaceService(repo);
+  await writeFile(join(repo, 'human.txt'), 'human preserved');
+  const revision = (await manual.snapshot()).revision;
+  const run = manual.git.bind(manual);
+  let entered!: () => void, release!: () => void;
+  const reached = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  manual.git = async (args, input) => {
+    const result = await run(args, input);
+    if (args[0] === 'add') {
+      entered();
+      await gate;
+    }
+    return result;
+  };
+  let mergeEntered = false;
+  const observed = integrator as unknown as {
+    merge: (...args: unknown[]) => Promise<unknown>;
+  };
+  const originalMerge = observed.merge.bind(integrator);
+  observed.merge = (...args) => {
+    mergeEntered = true;
+    return originalMerge(...args);
+  };
+  const staged = manual.call('stage', { revision, paths: ['human.txt'] });
+  await reached;
+  let merged = false;
+  const merging = integrator
+    .mergeCandidates(workspace.id, tasks, { expectedHead: baseline })
+    .then((result) => {
+      merged = true;
+      return result;
+    });
+  try {
+    await delay(40);
+    assert.equal(merged, false);
+    assert.equal(
+      mergeEntered,
+      false,
+      'integration does not enter its mutation phase while the other worktree owns the repository',
+    );
+    await assert.rejects(git(workspace.path, 'show', 'HEAD:owned.txt'));
+  } finally {
+    release();
+  }
+  await staged;
+  const result = await merging;
+  assert.equal(result.status, 'merged', result.reason);
+  assert.equal(
+    await readFile(join(workspace.path, 'owned.txt'), 'utf8'),
+    'accepted',
+  );
+  assert.equal(await git(repo, 'show', ':human.txt'), 'human preserved');
+  await assert.rejects(git(workspace.path, 'show', 'HEAD:human.txt'));
 });

@@ -2,6 +2,8 @@ import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
+import { mkdir } from 'node:fs/promises';
+import { resolve, join } from 'node:path';
 const server = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
   server: { host: '127.0.0.1', port: 0 },
@@ -9,6 +11,11 @@ const server = await createServer({
 });
 await server.listen();
 let browser;
+const output = resolve(
+  process.env.CIRCLE_RECOVERY_UI_EVIDENCE_DIR ??
+    'artifacts/recovery-panel-headless',
+);
+await mkdir(output, { recursive: true });
 try {
   browser = await chromium.launch({
     headless: true,
@@ -16,6 +23,46 @@ try {
       ? { channel: process.env.CIRCLE_TEST_BROWSER_CHANNEL }
       : {}),
   });
+  for (const theme of ['light', 'dark'])
+    for (const language of ['en', 'zh-CN'])
+      for (const width of [1000, 375]) {
+        const surface = await browser.newPage({
+          viewport: { width, height: 650 },
+        });
+        await surface.goto(
+          `${server.resolvedUrls.local[0]}test/recovered-input-ui.html?theme=${theme}&language=${language}`,
+        );
+        await surface
+          .getByRole('button', {
+            name:
+              language === 'en' ? 'return input to draft' : '复制输入到草稿',
+            exact: true,
+          })
+          .waitFor();
+        assert.equal(
+          await surface.evaluate(
+            () => document.documentElement.scrollWidth <= innerWidth,
+          ),
+          true,
+        );
+        assert.equal(
+          await surface
+            .locator('.task-recovery')
+            .evaluate((node) => getComputedStyle(node).backgroundColor),
+          'rgba(0, 0, 0, 0)',
+          'recovery must keep the existing composer background',
+        );
+        assert.equal(
+          (await surface.evaluate(() => window.calls)).filter(
+            (call) => call.payload.method === 'resolve',
+          ).length,
+          0,
+        );
+        await surface.screenshot({
+          path: join(output, `${theme}-${language}-${width}.png`),
+        });
+        await surface.close();
+      }
   const page = await browser.newPage();
   await page.goto(
     `${server.resolvedUrls.local[0]}test/recovered-input-ui.html`,

@@ -2,7 +2,18 @@ import { Tooltip } from 'radix-ui';
 import { createRoot } from 'react-dom/client';
 import { useState } from 'react';
 import { NativeTerminal } from '../src/components/NativeTerminal';
+import { applyTheme } from '../src/theme';
 import '../src/styles/app.css';
+const options = new URLSearchParams(location.search);
+const embedded = options.get('embedded') === 'true';
+applyTheme(options.get('theme') === 'dark' ? 'dark' : 'light');
+(window as any).__terminalTimings = [];
+if (options.get('timing') !== 'off')
+  (window as any).__circleNativeTerminalTiming = (record: unknown) => {
+    (window as any).__terminalTimings.push(record);
+    if (options.get('timing') === 'throw')
+      throw Error('synthetic timing observer failure');
+  };
 const lines = Array.from(
   { length: 600 },
   (_, i) => `CIRCLE_TERMINAL_LINE_${String(i + 1).padStart(4, '0')}_中文`,
@@ -48,6 +59,7 @@ const snapshot = (sessionId: string) => ({
         ok: true,
         data: {
           snapshot: item,
+          nextSequence: 1,
           events:
             params.afterSequence < 1
               ? [
@@ -73,6 +85,8 @@ const snapshot = (sessionId: string) => ({
 function Fixture() {
   const [session, setSession] = useState('A');
   const [mounted, setMounted] = useState(true);
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState('history');
   (window as any).__terminalFixture = {
     release: () => {
       ready = true;
@@ -85,8 +99,48 @@ function Fixture() {
     unmount: () => setMounted(false),
   };
   return (
-    <div style={{ height: 600 }}>
-      {mounted && <NativeTerminal sessionId={session} />}
+    <div style={{ height: 600, display: 'flex', flexDirection: 'column' }}>
+      {embedded && (
+        <>
+          <button
+            aria-label="terminal panel"
+            aria-pressed={open}
+            onClick={() => setOpen(!open)}
+          >
+            terminal panel
+          </button>
+          <div role="tablist" aria-label="terminal sections">
+            {['terminal', 'history'].map((item) => (
+              <button
+                key={item}
+                id={`inspector-terminal-tab-${item}`}
+                role="tab"
+                aria-selected={tab === item}
+                onClick={() => setTab(item)}
+              >
+                {item}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+      <div
+        className={embedded ? 'inspector-body flush' : undefined}
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: embedded && (!open || tab !== 'terminal') ? 'none' : 'flex',
+        }}
+        id={embedded ? 'inspector-terminal-terminal' : undefined}
+      >
+        {mounted && (
+          <NativeTerminal
+            sessionId={session}
+            active={!embedded || (open && tab === 'terminal')}
+            embedded={embedded}
+          />
+        )}
+      </div>
     </div>
   );
 }

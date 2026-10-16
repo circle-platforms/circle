@@ -245,6 +245,40 @@ try {
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto(`${server.resolvedUrls.local[0]}test/editor-ui.html`);
   await page.locator('.monaco-editor').waitFor();
+  await page
+    .getByRole('button', { name: 'repeat source location', exact: true })
+    .click();
+  await page
+    .locator('.monaco-editor')
+    .evaluate((node) => (window.sourceLocationEditor = node));
+  await page
+    .getByRole('button', { name: 'repeat source location', exact: true })
+    .click();
+  assert.equal(
+    await page
+      .locator('.monaco-editor')
+      .evaluate((node) => node === window.sourceLocationEditor),
+    true,
+    'repeated source location must not destroy active editor widgets',
+  );
+
+  await page
+    .getByRole('button', { name: 'other source location', exact: true })
+    .click();
+  assert.equal(
+    await page
+      .locator('.monaco-editor')
+      .evaluate((node) => node === window.sourceLocationEditor),
+    true,
+    'new source locations reposition without view disposal',
+  );
+  await page.waitForFunction(() => {
+    const input = document.querySelector(
+      '.native-edit-context, textarea.inputarea',
+    );
+    const state = input.editContext ?? input;
+    return state.selectionStart === 0 && state.selectionEnd === 5;
+  });
   const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
   await page.locator('.view-lines').first().click();
   await page.keyboard.press(`${modifier}+End`);
@@ -302,6 +336,32 @@ try {
       document.documentElement.dataset.theme === 'dark' &&
       document.querySelector('.monaco-editor.vs-dark'),
   );
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty('--code-size', '16px'),
+  );
+  await page.waitForFunction(
+    () =>
+      getComputedStyle(document.querySelector('.view-lines')).fontSize ===
+      '16px',
+  );
+  assert.equal(
+    await page.evaluate(() => {
+      const editor = document.querySelector('.monaco-editor');
+      const probe = document.createElement('span');
+      editor.append(probe);
+      probe.style.backgroundColor = 'var(--vscode-menu-background)';
+      const actual = getComputedStyle(probe).backgroundColor;
+      probe.style.backgroundColor = 'var(--surface)';
+      const expected = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return actual === expected;
+    }),
+    true,
+    'Monaco popup surface follows the original Circle palette',
+  );
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty('--code-size', '13px'),
+  );
   await page.locator('.view-lines').first().click();
   await page.keyboard.press(`${modifier}+End`);
   await page.keyboard.type('// restored after reload');
@@ -314,9 +374,56 @@ try {
   await page.locator('.view-lines').first().click();
   await page.keyboard.press(`${modifier}+End`);
   await page.keyboard.type('// language undo');
+  await page.keyboard.press('Shift+ArrowLeft');
+  await page.keyboard.press('Shift+ArrowLeft');
+  await page
+    .locator('.monaco-editor')
+    .evaluate((node) => (window.localeEditorView = node));
+  const editorBeforeLocale = await page
+    .locator('output[aria-label="content"]')
+    .textContent();
+  await page.waitForFunction(() => {
+    const node = document.querySelector(
+      '.native-code-editor .native-edit-context, .native-code-editor textarea.inputarea',
+    );
+    const state = node?.editContext ?? node;
+    return state && state.selectionStart !== state.selectionEnd;
+  });
+  const rangeBeforeLocale = await page
+    .locator('.native-edit-context, textarea.inputarea')
+    .first()
+    .evaluate((node) =>
+      node.editContext
+        ? [node.editContext.selectionStart, node.editContext.selectionEnd]
+        : [node.selectionStart, node.selectionEnd],
+    );
+  assert.notEqual(rangeBeforeLocale[0], rangeBeforeLocale[1]);
+
   await page
     .getByRole('button', { name: 'toggle language', exact: true })
     .click();
+  assert.equal(
+    await page
+      .locator('.monaco-editor')
+      .evaluate((node) => node === window.localeEditorView),
+    true,
+    'locale switch keeps active Monaco view',
+  );
+  assert.equal(
+    await page.locator('output[aria-label="content"]').textContent(),
+    editorBeforeLocale,
+  );
+  assert.deepEqual(
+    await page
+      .locator('.native-edit-context, textarea.inputarea')
+      .first()
+      .evaluate((node) =>
+        node.editContext
+          ? [node.editContext.selectionStart, node.editContext.selectionEnd]
+          : [node.selectionStart, node.selectionEnd],
+      ),
+    rangeBeforeLocale,
+  );
   await page.locator('.view-lines').first().click({ button: 'right' });
   await page.getByRole('menuitem', { name: /^复制/ }).waitFor();
   await page.keyboard.press('Escape');

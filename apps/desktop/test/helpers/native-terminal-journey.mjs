@@ -62,6 +62,21 @@ async function canBind(port) {
     if (server.listening) await new Promise((done) => server.close(done));
   }
 }
+/** Open the original terminal Inspector without toggling an already open panel closed. */
+export async function openNativeTerminalInspector(page) {
+  const toggle = page.getByRole('button', {
+    name: 'terminal panel',
+    exact: true,
+  });
+  if ((await toggle.getAttribute('aria-pressed')) !== 'true')
+    await toggle.click();
+  await page.locator('#inspector-terminal-tab-terminal').click();
+  const panel = page.locator(
+    '#inspector-terminal-terminal .native-terminal:visible',
+  );
+  await panel.waitFor();
+  return panel;
+}
 /** Requires English interface, an active granted session, and clipboard preservation by the parent driver. */
 export async function runNativeTerminalJourney({
   page,
@@ -148,9 +163,7 @@ export async function runNativeTerminalJourney({
     }
     throw Error('unexpected terminal fixture output size');
   };
-  await page.locator('#dock-tab-terminal').click();
-  const panel = page.locator('.native-terminal:visible').last();
-  await panel.waitFor();
+  const panel = await openNativeTerminalInspector(page);
   const selectedTab = (id) =>
     panel.locator(`[role="tab"][aria-controls="terminal-${id}"]`);
   const select = async (id) => {

@@ -1,4 +1,6 @@
 export const developer: Record<string, string> = {
+  'session changes': '会话改动',
+  history: '历史',
   'new task': '新建任务',
   'close task form': '收起新建任务',
   'task details and acceptance': '任务详情与验收条件',

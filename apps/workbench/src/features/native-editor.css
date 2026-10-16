@@ -1,6 +1,6 @@
 .native-code-editor {
   flex: 1;
-  min-height: 180px;
+  min-height: 150px;
   overflow: hidden;
 }
 .file-view .editor-notice {
@@ -41,4 +41,15 @@
   max-width: 100%;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+/* Monaco's popup surfaces use the same Circle controls and typography. */
+.monaco-menu-container .monaco-action-bar,
+.monaco-editor .monaco-hover,
+.monaco-editor .suggest-widget {
+  font-size: var(--ui-size);
+  font-family: inherit;
+}
+.monaco-menu-container .monaco-action-bar {
+  border-radius: var(--radius);
 }

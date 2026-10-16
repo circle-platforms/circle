@@ -4,6 +4,12 @@ import { RecoveredInputs } from '../src/features/RecoveredInputs';
 import { createFixtures } from '../src/preview/fixtures';
 import { LiveRuntime } from '../src/model/live';
 import type { DesktopBridge } from '../../desktop/src/contracts';
+import { applyTheme } from '../src/theme';
+import { setLanguage } from '../src/i18n';
+import '../src/styles/app.css';
+const query = new URLSearchParams(location.search);
+applyTheme(query.get('theme') === 'dark' ? 'dark' : 'light');
+setLanguage(query.get('language') === 'zh-CN' ? 'zh-CN' : 'en');
 const snapshot = createFixtures();
 const session = snapshot.sessions[0];
 session.id = 'recovery-session';
@@ -91,11 +97,11 @@ function Fixture() {
   const { snapshot } = useRuntime();
   const s = snapshot.sessions[0];
   return (
-    <>
+    <section className="composer-area">
       <RecoveredInputs sessionId={session.id} />
       <textarea aria-label="restored draft" readOnly value={s.draft} />
       <output aria-label="restored media">{s.attachments[0]?.content}</output>
-    </>
+    </section>
   );
 }
 createRoot(document.getElementById('root')!).render(

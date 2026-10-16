@@ -5,14 +5,18 @@
   min-height: 180px;
   height: 100%;
   overflow: hidden;
-  background: var(--bg);
-  color: var(--fg);
+}
+.native-terminal.embedded {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+  background: inherit;
 }
 .native-terminal-toolbar {
   display: flex;
   align-items: center;
   gap: 3px;
-  padding: 4px 7px;
+  padding: 7px 13px;
   min-height: 37px;
   border-bottom: 1px solid var(--border);
 }
@@ -29,14 +33,7 @@
   flex-shrink: 0;
   align-items: center;
   gap: 6px;
-  padding: 7px 9px;
-  border-radius: var(--radius);
-  color: var(--muted);
   white-space: nowrap;
-}
-.native-terminal-tabs > button[aria-selected='true'] {
-  background: var(--active);
-  color: var(--fg);
 }
 .native-terminal-lamp {
   width: 6px;
@@ -57,13 +54,11 @@
   display: flex;
   align-items: center;
   gap: 3px;
-  padding: 5px 9px;
-  border-bottom: 1px solid var(--border);
+  padding: 7px 13px;
 }
 .native-terminal-search > input {
   flex: 1;
-  padding: 4px 7px;
-  max-width: 300px;
+  min-width: 0;
 }
 .native-terminal-search > span {
   color: var(--muted);
@@ -87,7 +82,7 @@
   flex: 1;
   min-height: 0;
   min-width: 0;
-  padding: 7px 9px;
+  padding: 10px 13px;
   overflow: hidden;
 }
 .native-terminal-screen .xterm {
@@ -96,7 +91,7 @@
 .native-terminal-status {
   display: flex;
   gap: 12px;
-  padding: 5px 9px;
+  padding: 7px 13px;
   border-top: 1px solid var(--border);
   color: var(--muted);
   font-size: var(--ui-small);
@@ -119,7 +114,6 @@
   gap: 10px;
   padding: 7px 10px;
   color: var(--negative);
-  background: var(--surface);
   overflow-wrap: anywhere;
 }
 .native-terminal-error > span {
@@ -172,22 +166,15 @@
   white-space: nowrap;
 }
 .native-service-form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.native-service-form > label {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
+  min-width: 0;
 }
 .native-service-form fieldset {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 10px;
+  border: 0;
+  padding: 0;
+  margin: 0;
   min-width: 0;
 }
 .native-service-form p {

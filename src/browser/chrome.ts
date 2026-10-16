@@ -136,6 +136,8 @@ export interface ChromeOptions {
   startTimeout?: number;
   /** Bounded process shutdown, in milliseconds per phase; three seconds unless given. */
   closeTimeout?: number;
+  /** Each owned-process inspection is bounded separately from the exit grace period. */
+  processInspectionTimeout?: number;
   /**
    * Host names mapped to addresses, as Chrome's --host-resolver-rules: for tests, which reach
    * a local site by a public name.
@@ -479,7 +481,7 @@ export class ChromeBrowser implements BrowserPort {
         'ps',
         ['-A', '-o', 'pgid=,stat='],
         {
-          timeout: Math.max(1, this.options.closeTimeout ?? 3000),
+          timeout: Math.max(1, this.options.processInspectionTimeout ?? 3000),
           // A stalled inspector must not outlive this check by ignoring SIGTERM.
           killSignal: 'SIGKILL',
         },

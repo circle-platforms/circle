@@ -6,9 +6,10 @@ import type { RuntimePort } from './model/types';
 import type { WorkbenchPlugin, ServiceRegistry } from './plugins/types';
 import { useLocale } from './i18n';
 import './styles/app.css';
-// A new language draws everything again; the route, and so the open page, stays.
+// Subscribe to language changes without replacing mounted editors and resources.
 function LocalizedApp() {
-  return <App key={useLocale()} />;
+  useLocale();
+  return <App />;
 }
 /** Hosts inject the Circle session port and independent, versioned component plugins. */
 export function CircleWorkbench({

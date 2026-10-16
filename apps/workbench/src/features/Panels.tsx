@@ -1,3 +1,4 @@
+import { WorkspacePanelContents } from './WorkspacePanelContents';
 import { useSources } from '../components/SourceNavigation';
 import { desktopHost } from '../host';
 import { agentActivityText } from '../model/activity';
@@ -68,7 +69,9 @@ interface Props {
   selection: string;
   onPanel: (panel: PanelId, selection?: string) => void;
   onClose: () => void;
-  onFile: (path: string) => void;
+  onFile: (path: string, line?: number, column?: number) => void;
+  visible?: boolean;
+  onSession?: (id: string) => void;
   onAgent: (id: string) => void;
   onInteraction: (item: Interaction) => void;
   onDialog: (dialog: DialogId, selection?: string) => void;
@@ -157,17 +160,62 @@ export function Inspector(props: Props) {
         </IconButton>
       </header>
       <div className={`inspector-body ${terminal ? 'flush' : ''}`}>
-        {terminal ? (
-          <TerminalPanel embedded onClose={props.onClose} />
-        ) : selected ? (
-          <PluginBoundary key={selected.panel.id} name={selected.plugin.title}>
-            <selected.panel.component {...props} sessionId={session.id} />
-          </PluginBoundary>
-        ) : (
-          <ContextPanel {...props} />
-        )}
+        <InspectorResources {...props} sessionId={session.id} panels={panels} />
       </div>
     </aside>
+  );
+}
+function InspectorResources(
+  props: Props & { sessionId: string; panels: ReturnType<typeof usePanels> },
+) {
+  const [visited, setVisited] = useState<Set<string>>(
+    () => new Set([props.panel]),
+  );
+  useEffect(() => {
+    setVisited((old) =>
+      old.has(props.panel) ? old : new Set(old).add(props.panel),
+    );
+  }, [props.panel]);
+  const ids = new Set([...visited, props.panel]);
+  return (
+    <>
+      {[...ids].map((id) => {
+        const item = props.panels.find((item) => item.panel.id === id);
+        const original =
+          id === 'terminal' ? (
+            <TerminalPanel embedded onClose={props.onClose} />
+          ) : item ? (
+            <PluginBoundary name={item.plugin.title}>
+              <item.panel.component {...props} sessionId={props.sessionId} />
+            </PluginBoundary>
+          ) : (
+            <ContextPanel {...props} />
+          );
+        return (
+          <div
+            key={id}
+            hidden={id !== props.panel}
+            className="inspector-resource-view"
+          >
+            {id === 'terminal' || id === 'changes' || id === 'activity' ? (
+              <WorkspacePanelContents
+                kind={id}
+                sessionId={props.sessionId}
+                visible={!!props.visible && id === props.panel}
+                selection={props.selection}
+                onFile={props.onFile}
+                onSession={props.onSession ?? (() => {})}
+                onTask={(task) => props.onPanel('activity', `task:${task}`)}
+              >
+                {original}
+              </WorkspacePanelContents>
+            ) : (
+              original
+            )}
+          </div>
+        );
+      })}
+    </>
   );
 }
 export function FilesPanel({

@@ -28,7 +28,7 @@ import {
   terminalInputChunks,
 } from '../model/terminal-stream';
 import { subscribeWorkspace, workspaceCall } from '../model/workspace-client';
-import { Button, IconButton, Modal } from './ui';
+import { Button, IconButton, Modal, Status } from './common';
 import '@xterm/xterm/css/xterm.css';
 import '../styles/terminal.css';
 
@@ -41,6 +41,49 @@ type Controls = {
   focus: () => void;
   selection: () => string;
 };
+
+type TerminalTiming = {
+  terminalId: string;
+  phase:
+    | 'replay-request'
+    | 'replay-response'
+    | 'write-enqueued'
+    | 'write-parsed'
+    | 'write-frame';
+  at: number;
+  eventSequence?: number;
+  cursor?: number;
+  afterSequence?: number;
+};
+
+/** Explicit test instrumentation: metadata only, with no work when no sink is installed. */
+function recordTerminalTiming(
+  terminalId: string,
+  phase: TerminalTiming['phase'],
+  eventSequence?: number,
+  cursor?: number,
+  afterSequence?: number,
+): boolean {
+  const sink = (
+    window as Window & {
+      __circleNativeTerminalTiming?: (record: TerminalTiming) => void;
+    }
+  ).__circleNativeTerminalTiming;
+  if (typeof sink !== 'function') return false;
+  try {
+    sink({
+      terminalId,
+      phase,
+      at: Date.now(),
+      eventSequence,
+      cursor,
+      afterSequence,
+    });
+  } catch {
+    // An optional test observer must never affect terminal input or output.
+  }
+  return true;
+}
 
 function status(snapshot: TerminalSnapshot): string {
   if (snapshot.kind === 'service') {
@@ -67,13 +110,15 @@ function status(snapshot: TerminalSnapshot): string {
   }
 }
 
-/** Keep mounted across layouts. Hidden terminal views retain their screen and scroll. */
+/** Keep mounted while the Inspector is hidden. Its PTYs and reading position persist. */
 export function NativeTerminal({
   sessionId,
   active = true,
+  embedded = false,
 }: {
   sessionId: string;
   active?: boolean;
+  embedded?: boolean;
 }) {
   useLocale();
   const [terminals, setTerminals] = useState<TerminalSnapshot[]>([]);
@@ -314,7 +359,7 @@ export function NativeTerminal({
 
   return (
     <section
-      className="native-terminal"
+      className={`native-terminal${embedded ? ' embedded' : ''}`}
       aria-label={t('interactive terminal')}
       onKeyDown={(event) => {
         if (
@@ -329,7 +374,7 @@ export function NativeTerminal({
     >
       <div className="native-terminal-toolbar">
         <div
-          className="native-terminal-tabs"
+          className="native-terminal-tabs segmented"
           role="tablist"
           aria-label={t('terminal tabs')}
         >
@@ -339,6 +384,7 @@ export function NativeTerminal({
               role="tab"
               type="button"
               aria-selected={item.id === selected?.id}
+              className={item.id === selected?.id ? 'active' : ''}
               tabIndex={item.id === selected?.id ? 0 : -1}
               aria-controls={`terminal-${item.id}`}
               title={`${item.cwd} · ${status(item)}`}
@@ -492,7 +538,7 @@ export function NativeTerminal({
         </div>
       )}
       {selected && (
-        <div className="native-terminal-search">
+        <div className="native-terminal-search find-bar">
           <input
             ref={searchInput}
             aria-label={t('find in terminal')}
@@ -599,7 +645,7 @@ export function NativeTerminal({
         )}
       >
         <form
-          className="native-service-form"
+          className="native-service-form form-stack"
           onSubmit={(event) => {
             event.preventDefault();
             void createService();
@@ -717,7 +763,7 @@ export function NativeTerminal({
         <div className="native-terminal-status" role="status">
           <span title={selected.cwd}>{selected.cwd}</span>
           <span title={selected.exitReason}>
-            {status(selected)}
+            <Status value={status(selected)} />
             {selected.exitReason ? ` · ${selected.exitReason}` : ''}
           </span>
           {notice && <span>{notice}</span>}
@@ -782,6 +828,15 @@ function TerminalSurface({
     let inFlight: Promise<void> | undefined;
     let dirty = false;
     let cursor = 0;
+    let timingFrames: Set<number> | undefined;
+    const timingFrame = (callback: () => void) => {
+      timingFrames ??= new Set();
+      const frame = requestAnimationFrame(() => {
+        timingFrames?.delete(frame);
+        if (!cancelled) callback();
+      });
+      timingFrames.add(frame);
+    };
     const pendingSearches = new Set<() => void>();
     const notifySearches = () => {
       for (const check of pendingSearches) check();
@@ -801,20 +856,65 @@ function TerminalSurface({
           dirty = false;
           let more: boolean;
           do {
+            const afterSequence = cursor;
+            recordTerminalTiming(
+              snapshot.id,
+              'replay-request',
+              undefined,
+              afterSequence,
+            );
             const page = await workspaceCall<TerminalReplay>(
               snapshot.sessionId,
               'terminal',
               'replay',
               { id: snapshot.id, afterSequence: cursor, limit: 128 },
             );
+            recordTerminalTiming(
+              snapshot.id,
+              'replay-response',
+              undefined,
+              page.nextSequence,
+              afterSequence,
+            );
             if (cancelled) return;
             for (const event of page.events) {
               const next = acceptTerminalEvent(snapshot.id, cursor, event);
               if (next === cursor) continue;
-              if (event.kind === 'data' && event.data)
-                await new Promise<void>((resolve) =>
-                  terminal.write(event.data!, resolve),
+              if (event.kind === 'data' && event.data) {
+                recordTerminalTiming(
+                  snapshot.id,
+                  'write-enqueued',
+                  event.sequence,
                 );
+                await new Promise<void>((resolve) =>
+                  terminal.write(event.data!, () => {
+                    if (
+                      !cancelled &&
+                      recordTerminalTiming(
+                        snapshot.id,
+                        'write-parsed',
+                        event.sequence,
+                      )
+                    )
+                      timingFrame(() =>
+                        timingFrame(() => {
+                          if (
+                            activeRef.current &&
+                            container.current?.isConnected &&
+                            container.current.clientWidth &&
+                            container.current.clientHeight
+                          )
+                            recordTerminalTiming(
+                              snapshot.id,
+                              'write-frame',
+                              event.sequence,
+                            );
+                        }),
+                      );
+                    resolve();
+                  }),
+                );
+              }
               cursor = next;
               notifySearches();
             }
@@ -910,13 +1010,20 @@ function TerminalSurface({
         return false;
       return true;
     });
+    let fitFrame: number | undefined;
     const resize = new ResizeObserver(() => {
-      if (
-        container.current?.clientWidth &&
-        container.current.clientHeight &&
-        activeRef.current
-      )
-        fit.fit();
+      if (fitFrame !== undefined) return;
+      // Fitting writes terminal dimensions. Do it outside the observer's layout
+      // delivery so opening a narrow Inspector cannot cause a resize loop.
+      fitFrame = requestAnimationFrame(() => {
+        fitFrame = undefined;
+        if (
+          container.current?.clientWidth &&
+          container.current.clientHeight &&
+          activeRef.current
+        )
+          fit.fit();
+      });
     });
     resize.observe(container.current);
     const theme = new MutationObserver(() => {
@@ -935,11 +1042,13 @@ function TerminalSurface({
     });
     return () => {
       cancelled = true;
+      for (const frame of timingFrames ?? []) cancelAnimationFrame(frame);
       notifySearches();
       unsubscribe();
       input.dispose();
       dimensions.dispose();
       resize.disconnect();
+      if (fitFrame !== undefined) cancelAnimationFrame(fitFrame);
       theme.disconnect();
       register();
       terminal.dispose();

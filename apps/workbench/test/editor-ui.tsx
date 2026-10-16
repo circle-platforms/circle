@@ -24,6 +24,12 @@ function Fixture() {
   const [open, setOpen] = useState(true);
   const [value, setValue] = useState('const amount = 1;\n');
   const [saves, setSaves] = useState(0);
+  const [selection, setSelection] = useState<{
+    startLineNumber: number;
+    startColumn: number;
+    endLineNumber: number;
+    endColumn: number;
+  }>();
   return (
     <>
       <button onClick={() => setDiff((current) => !current)}>
@@ -46,6 +52,30 @@ function Fixture() {
       <button onClick={() => setLanguage(locale() === 'en' ? 'zh-CN' : 'en')}>
         toggle language
       </button>
+      <button
+        onClick={() =>
+          setSelection({
+            startLineNumber: 1,
+            startColumn: 7,
+            endLineNumber: 1,
+            endColumn: 13,
+          })
+        }
+      >
+        repeat source location
+      </button>
+      <button
+        onClick={() =>
+          setSelection({
+            startLineNumber: 1,
+            startColumn: 1,
+            endLineNumber: 1,
+            endColumn: 6,
+          })
+        }
+      >
+        other source location
+      </button>
       <output aria-label="content">{value}</output>
       <output aria-label="saves">{saves}</output>
       <div style={{ height: 500, display: 'flex' }}>
@@ -60,6 +90,7 @@ function Fixture() {
             readOnly={false}
             diff={diff}
             live={false}
+            selection={selection}
             onChange={setValue}
             onSave={() => setSaves((count) => count + 1)}
             onNavigate={async () => {}}

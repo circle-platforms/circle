@@ -4,6 +4,7 @@ import { workspaceCall } from '../model/workspace-client';
 import { Button } from '../components/common';
 import { operationLabel } from '../model/operation-label';
 import { t } from '../i18n';
+import './task-panel.css';
 
 /** Safe metadata only: request parameters and fingerprints never enter this view. */
 interface PendingOperation {
@@ -75,18 +76,23 @@ export function PendingOperations({ sessionId }: { sessionId: string }) {
     }
   }
   return (
-    <section aria-label={t('operations to reconcile')}>
-      <header>
+    <section
+      className="task-operations panel-section"
+      aria-label={t('operations to reconcile')}
+    >
+      <header className="task-section-heading">
         <strong>{t('operations to reconcile')}</strong>
         <Button disabled={busy} onClick={() => void refresh()}>
           {t('refresh')}
         </Button>
       </header>
-      <p>
-        {t(
-          'inspect files, git and terminal effects before recording your review; this never repeats the operation',
-        )}
-      </p>
+      {rows.length > 0 && (
+        <p className="panel-note">
+          {t(
+            'inspect files, git and terminal effects before recording your review; this never repeats the operation',
+          )}
+        </p>
+      )}
       {error && (
         <p role="alert">
           {t('operation review unavailable')}: {error}
@@ -94,10 +100,10 @@ export function PendingOperations({ sessionId }: { sessionId: string }) {
       )}
       {loaded && !rows.length && <p>{t('no operations awaiting review')}</p>}
       {rows.map((row) => (
-        <article key={row.id}>
+        <article key={row.id} className="task-operation">
           <strong>{operationLabel(row.service, row.method)}</strong>
           <p>{new Date(row.createdAt).toLocaleString()}</p>
-          <details>
+          <details className="task-technical">
             <summary>{t('operation details')}</summary>
             <dl>
               <dt>{t('technical operation')}</dt>
@@ -136,7 +142,7 @@ export function PendingOperations({ sessionId }: { sessionId: string }) {
               {t('copy diagnostic')}
             </Button>
           </details>
-          <label>
+          <label className="task-field">
             {t('observed effects and review evidence')}
             <textarea
               value={notes[row.id] ?? ''}

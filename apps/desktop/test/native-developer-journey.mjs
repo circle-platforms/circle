@@ -209,11 +209,11 @@ const until = async (predicate, label) => {
   }
 };
 const dependencies = {
-  'developer layout and active-turn manual edit save': [
-    'native identity and task layout',
+  'original file viewer and active-turn manual edit save': [
+    'native identity and original panels',
   ],
   'two isolated write agents and readonly agent with pending Git approval': [
-    'developer layout and active-turn manual edit save',
+    'original file viewer and active-turn manual edit save',
   ],
 };
 const check = async (name, action) => {
@@ -276,7 +276,7 @@ const check = async (name, action) => {
     if (!diagnostic) throw error;
     if (
       page &&
-      !(await page.locator('.developer-workbench').count()) &&
+      !(await page.locator('.workspace-content .main-stack').count()) &&
       !(await page.locator('body').innerText()).trim()
     ) {
       const recovery = {
@@ -286,7 +286,9 @@ const check = async (name, action) => {
       };
       try {
         await page.keyboard.press('ControlOrMeta+Shift+r');
-        await page.locator('.developer-workbench').waitFor({ timeout: 15000 });
+        await page
+          .locator('.workspace-content .main-stack')
+          .waitFor({ timeout: 15000 });
         const after = await page.evaluate(() =>
           window.circleDesktop.runtimeState(),
         );
@@ -424,7 +426,24 @@ try {
     assert.equal(reply.ok, true, JSON.stringify(reply));
     return reply.data;
   };
+  const closeFile = async () => {
+    const close = page.getByRole('button', { name: 'close file', exact: true });
+    if (await close.isVisible()) await close.click();
+  };
+  const openInspector = async (kind, tab) => {
+    const toggle = page.getByRole('button', {
+      name: `${kind} panel`,
+      exact: true,
+    });
+    if ((await toggle.getAttribute('aria-pressed')) !== 'true')
+      await toggle.click();
+    await page.locator(`#inspector-${kind}-tab-${tab}`).click();
+    await page
+      .locator(`#inspector-${kind}-${tab}`)
+      .waitFor({ state: 'visible' });
+  };
   const send = async (text) => {
+    await closeFile();
     await page
       .getByRole('textbox', { name: 'message', exact: true })
       .fill(text);
@@ -432,18 +451,20 @@ try {
       .getByRole('button', { name: 'send message', exact: true })
       .click();
   };
-  await check('native identity and task layout', async () => {
+  await check('native identity and original panels', async () => {
     assert.equal(
       (await page.evaluate(() => window.circleDesktop.info())).packaged,
       packaged,
     );
-    await page
-      .getByRole('button', { name: 'task layout', exact: true })
-      .click();
     assert.equal(
-      await page.locator('.developer-workbench').getAttribute('data-layout'),
-      'task',
+      await page
+        .locator('.developer-workbench,.layout-toggle,.developer-dock')
+        .count(),
+      0,
     );
+    await page
+      .locator('.main-stack .conversation')
+      .waitFor({ state: 'visible' });
     await send('Prepare native journey');
     await page
       .getByText('Native journey ready: README.md and debug.cjs', {
@@ -456,7 +477,7 @@ try {
         'idle',
       'model baseline idle',
     );
-    await screenshot('01-task-layout');
+    await screenshot('01-original-panels');
   });
   await check(
     'independent editor bodies buffers and undo histories',
@@ -473,7 +494,7 @@ try {
       if (
         await page
           .getByRole('button', { name: 'close inspector', exact: true })
-          .count()
+          .isVisible()
       )
         await page
           .getByRole('button', { name: 'close inspector', exact: true })
@@ -499,7 +520,7 @@ try {
       if (
         await page
           .getByRole('button', { name: 'close inspector', exact: true })
-          .count()
+          .isVisible()
       )
         await page
           .getByRole('button', { name: 'close inspector', exact: true })
@@ -576,70 +597,72 @@ try {
         .click();
     },
   );
-  await check('developer layout and active-turn manual edit save', async () => {
-    await page
-      .getByRole('button', { name: 'developer layout', exact: true })
-      .click();
-    await send('Remain active while I edit and diagnose');
-    await until(
-      async () =>
-        ['running', 'waiting'].includes(
-          (await state()).sessions.find((s) => s.id === sessionId)?.state,
-        ),
-      'agent running',
-    );
-    await page.keyboard.press('ControlOrMeta+p');
-    await page
-      .getByRole('textbox', { name: 'global search', exact: true })
-      .fill('README.md');
-    await page
-      .locator('.search-results button')
-      .filter({ hasText: 'README.md' })
-      .first()
-      .click();
-    await page
-      .locator('.file-view')
-      .getByRole('button', { name: 'edit', exact: true })
-      .click();
-    const editor = page.locator('.file-view .monaco-editor').last();
-    await editor.locator('.view-lines').click({ position: { x: 120, y: 10 } });
-    await page.keyboard.press('ControlOrMeta+a');
-    await page.keyboard.press('ArrowRight');
-    await page.keyboard.press('Enter');
-    await page.keyboard.type('JOURNEY_MANUAL_SAVE');
-    await until(
-      async () =>
-        (await page.locator('.file-view').innerText()).includes(
-          'JOURNEY_MANUAL_SAVE',
-        ),
-      'actual edit buffer receives keyboard input',
-    );
-    await page.keyboard.press('ControlOrMeta+s');
-    await until(
-      async () =>
-        (await readFile(join(repo, 'README.md'), 'utf8')).includes(
-          'JOURNEY_MANUAL_SAVE',
-        ),
-      'actual disk save during active agent',
-    );
-    const savedReadme = await readFile(join(repo, 'README.md'), 'utf8');
-    await writeFile(join(output, '02-manual-readme-disk.txt'), savedReadme);
-    assert(
-      savedReadme.startsWith(baseline),
-      'saving README must preserve its own baseline, not another editor model',
-    );
-    assert(
-      !savedReadme.includes('import { amount }'),
-      'no cross-file model content',
-    );
-    assert.equal(
-      (await state()).sessions.find((s) => s.id === sessionId)?.state,
-      'waiting',
-    );
-    await screenshot('02-active-manual-edit');
-  });
+  await check(
+    'original file viewer and active-turn manual edit save',
+    async () => {
+      await send('Remain active while I edit and diagnose');
+      await until(
+        async () =>
+          ['running', 'waiting'].includes(
+            (await state()).sessions.find((s) => s.id === sessionId)?.state,
+          ),
+        'agent running',
+      );
+      await page.keyboard.press('ControlOrMeta+p');
+      await page
+        .getByRole('textbox', { name: 'global search', exact: true })
+        .fill('README.md');
+      await page
+        .locator('.search-results button')
+        .filter({ hasText: 'README.md' })
+        .first()
+        .click();
+      await page
+        .locator('.file-view')
+        .getByRole('button', { name: 'edit', exact: true })
+        .click();
+      const editor = page.locator('.file-view .monaco-editor').last();
+      await editor
+        .locator('.view-lines')
+        .click({ position: { x: 120, y: 10 } });
+      await page.keyboard.press('ControlOrMeta+a');
+      await page.keyboard.press('ArrowRight');
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('JOURNEY_MANUAL_SAVE');
+      await until(
+        async () =>
+          (await page.locator('.file-view').innerText()).includes(
+            'JOURNEY_MANUAL_SAVE',
+          ),
+        'actual edit buffer receives keyboard input',
+      );
+      await page.keyboard.press('ControlOrMeta+s');
+      await until(
+        async () =>
+          (await readFile(join(repo, 'README.md'), 'utf8')).includes(
+            'JOURNEY_MANUAL_SAVE',
+          ),
+        'actual disk save during active agent',
+      );
+      const savedReadme = await readFile(join(repo, 'README.md'), 'utf8');
+      await writeFile(join(output, '02-manual-readme-disk.txt'), savedReadme);
+      assert(
+        savedReadme.startsWith(baseline),
+        'saving README must preserve its own baseline, not another editor model',
+      );
+      assert(
+        !savedReadme.includes('import { amount }'),
+        'no cross-file model content',
+      );
+      assert.equal(
+        (await state()).sessions.find((s) => s.id === sessionId)?.state,
+        'waiting',
+      );
+      await screenshot('02-active-manual-edit');
+    },
+  );
   await check('interactive PTY stdin and output', async () => {
-    await page.locator('#dock-tab-terminal').click();
+    await openInspector('terminal', 'terminal');
     await page
       .getByRole('button', { name: 'new terminal', exact: true })
       .first()
@@ -685,7 +708,7 @@ try {
     },
   );
   await check('Git working diff stage and unstage hunk', async () => {
-    await page.locator('#dock-tab-git').click();
+    await openInspector('changes', 'git');
     const panel = page.locator('.native-git');
     await panel
       .getByRole('button', { name: 'refresh', exact: true })
@@ -749,7 +772,7 @@ try {
     },
   );
   await check('Node launch breakpoint variables and step', async () => {
-    await page.locator('#dock-tab-debug').click();
+    await openInspector('activity', 'debug');
     const panel = page.locator('.debug-panel');
     await panel.getByLabel('program path', { exact: true }).fill('debug.cjs');
     await panel.getByLabel('breakpoint line', { exact: true }).fill('3');
@@ -793,7 +816,7 @@ try {
     );
   });
   await check('explicit entry pause and literal launch arguments', async () => {
-    await page.locator('#dock-tab-debug').click();
+    await openInspector('activity', 'debug');
     const panel = page.locator('.debug-panel');
     await until(
       async () =>
@@ -940,6 +963,11 @@ try {
       { sessionId, origin },
     );
     assert(actual.storage.some(([k, v]) => k === 'journey' && v === 'after'));
+    const viewportSettings = panel.locator('details').filter({
+      has: page.locator('summary', { hasText: 'viewport and developer tools' }),
+    });
+    if (!(await viewportSettings.evaluate((node) => node.open)))
+      await viewportSettings.locator('summary').click();
     await panel.getByLabel('viewport width', { exact: true }).fill('375');
     await panel.getByLabel('viewport height', { exact: true }).fill('812');
     await panel
@@ -974,16 +1002,25 @@ try {
       });
     }
   });
-  await check('draft survives layout switches', async () => {
+  await check('draft survives original inspector switches', async () => {
+    await closeFile();
     const message = page.getByRole('textbox', { name: 'message', exact: true });
     await message.fill('JOURNEY_UNSENT_DRAFT');
+    await message.evaluate((node) => node.setSelectionRange(3, 10));
+    await openInspector('terminal', 'terminal');
+    await openInspector('changes', 'original');
+    await openInspector('activity', 'original');
     await page
-      .getByRole('button', { name: 'task layout', exact: true })
-      .click();
-    await page
-      .getByRole('button', { name: 'developer layout', exact: true })
+      .getByRole('button', { name: 'close inspector', exact: true })
       .click();
     assert.equal(await message.inputValue(), 'JOURNEY_UNSENT_DRAFT');
+    assert.deepEqual(
+      await message.evaluate((node) => [
+        node.selectionStart,
+        node.selectionEnd,
+      ]),
+      [3, 10],
+    );
   });
 
   await check(
@@ -992,12 +1029,12 @@ try {
       if (
         await page
           .getByRole('button', { name: 'close inspector', exact: true })
-          .count()
+          .isVisible()
       )
         await page
           .getByRole('button', { name: 'close inspector', exact: true })
           .click();
-      await page.locator('#dock-tab-tasks').click();
+      await openInspector('activity', 'tasks');
       const panel = page.locator('.tasks-panel');
       const queue = async (prompt, access) => {
         const newTask = panel.getByRole('button', {
@@ -1190,7 +1227,7 @@ try {
     },
   );
   await check(
-    'keyboard quick open palette focus and layout selection retention',
+    'keyboard quick open palette focus and original panel selection retention',
     async () => {
       const keyboardChecks = [];
       await runNativeKeyboardJourney({
@@ -1278,7 +1315,7 @@ try {
     if (
       await page
         .getByRole('button', { name: 'close inspector', exact: true })
-        .count()
+        .isVisible()
     )
       await page
         .getByRole('button', { name: 'close inspector', exact: true })

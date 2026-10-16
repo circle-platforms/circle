@@ -3,7 +3,6 @@ import { TasksPanel } from '../src/features/TasksPanel';
 import { setLanguage } from '../src/i18n';
 import { applyTheme } from '../src/theme';
 import '../src/styles/app.css';
-import '../src/styles/developer-workbench.css';
 const query = new URLSearchParams(location.search);
 setLanguage(query.get('language') === 'zh-CN' ? 'zh-CN' : 'en');
 applyTheme(query.get('theme') === 'dark' ? 'dark' : 'light');
@@ -28,6 +27,19 @@ let records = ['running', 'succeeded', 'queued'].map((state, index) => ({
   reason: state === 'succeeded' ? 'Independent verification passed' : undefined,
 }));
 const calls: unknown[] = [];
+const reviewRecord = {
+  ...records[1],
+  spec: {
+    ...records[1]!.spec,
+    id: 'review-task',
+    prompt:
+      'Review task summary\nComplete task instruction remains available after expanding the activity row.',
+  },
+  state: 'needs_review',
+  reason: 'Acceptance requires human review.',
+  result: { changes: { sha256: 'b'.repeat(64), head: 'c'.repeat(40) } },
+};
+const patch = 'diff --git a/demo.ts b/demo.ts\n+preserved complete change\n';
 Object.assign(window, {
   calls,
   circleDesktop: {
@@ -38,7 +50,42 @@ Object.assign(window, {
       if (method === 'settings')
         return { ok: true, data: { agents: 8, builds: 2, ui: 1, browsers: 1 } };
       if (method === 'list')
-        return { ok: true, data: structuredClone(records) };
+        return {
+          ok: true,
+          data: structuredClone(
+            query.has('review') ? [reviewRecord, ...records] : records,
+          ),
+        };
+      if (method === 'artifacts')
+        return {
+          ok: true,
+          data: [
+            {
+              id: 'patch-artifact',
+              kind: 'task-patch',
+              sha256: 'b'.repeat(64),
+              attempt: 1,
+            },
+          ],
+        };
+      if (method === 'readArtifact')
+        return {
+          ok: true,
+          data: {
+            id: 'patch-artifact',
+            kind: 'task-patch',
+            sha256: 'b'.repeat(64),
+            content: patch,
+            truncated: false,
+            offset: 0,
+            totalCharacters: patch.length,
+            byteLength: patch.length,
+          },
+        };
+      if (method === 'review') {
+        reviewRecord.state = 'succeeded';
+        return { ok: true, data: reviewRecord };
+      }
       if (method === 'enqueue') {
         records = [
           ...records,
@@ -72,6 +119,7 @@ createRoot(document.getElementById('root')!).render(
       sessionId="task-fixture"
       onSession={() => {}}
       focusTaskId={query.has('focusTask') ? 'task-0' : undefined}
+      embedded={query.has('embedded')}
     />
     {query.has('focusTask') && <textarea aria-label="manual editor" />}
   </>,

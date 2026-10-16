@@ -15,6 +15,7 @@ import { promisify } from 'node:util';
 import type { TaskRecord } from './collaboration.js';
 import type { TaskChanges } from './task-executor.js';
 import { resolveTaskBaseline } from './task-worktrees.js';
+import { GitWorkspaceService, serializeGitMutation } from './git.js';
 const exec = promisify(execFile);
 const queues = new Map<string, Promise<unknown>>();
 async function git(
@@ -202,7 +203,16 @@ export class TaskIntegrator {
       previous = queues.get(key) ?? Promise.resolve();
     const result = previous
       .catch(() => {})
-      .then(() => this.merge(id, tasks, options));
+      .then(async () => {
+        const service = new GitWorkspaceService(this.options.workspace);
+        const common = (
+          await service.git(['rev-parse', '--git-common-dir'])
+        ).trim();
+        return serializeGitMutation(
+          resolve(this.options.workspace, common),
+          () => this.merge(id, tasks, options),
+        );
+      });
     queues.set(key, result);
     try {
       return await result;
