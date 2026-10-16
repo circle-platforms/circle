@@ -678,6 +678,9 @@ test('profile disable unloads only GitHub in two controller runtimes and freezes
       const s = await backendA.call('status', {});
       return s.state === 'connected' ? s : false;
     });
+    const oldMetadataTool = a.extensions
+      .tools()
+      .find((tool) => tool.name === 'github_connection')!;
     const old = internal.githubInvocation(a.session.id);
     const oldUI = new DeliveryService(f.workspace, 'synthetic-gh', {
       connection: f.connection,
@@ -791,7 +794,13 @@ test('profile disable unloads only GitHub in two controller runtimes and freezes
       advanced.reason,
     );
 
-    await assert.rejects(backendA.call('status', {}), /disabled/);
+    await assert.rejects(
+      oldMetadataTool.run(
+        {},
+        { signal: new AbortController().signal, sessionId: a.session.id },
+      ),
+      /abort|disabled|closed/i,
+    );
     release();
     assert.equal(f.calls.length, before);
   } finally {
@@ -1185,4 +1194,144 @@ test('metadata persistence failures stay distinct from secure storage and never 
         await f.close();
       }
     });
+});
+
+test('the original settings toggle loads only GitHub into the existing runtime and pending enable cannot survive a later off', async () => {
+  const { RuntimeController } = await import('../src/runtime-controller.ts');
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-enable-native-')),
+    home = path.join(root, 'home'),
+    workspace = path.join(root, 'workspace');
+  await mkdir(workspace);
+  const settings = trustFolder(defaultSettings(), workspace);
+  settings.extensions.github = { enabled: false };
+  saveSettings(settings, home);
+  await mkdir(path.join(home, 'extensions', 'observer'), { recursive: true });
+  await writeFile(
+    path.join(home, 'extensions', 'observer', 'extension.mjs'),
+    `export function register(api){api.registerTool('observer_alive','observer',{type:'object',properties:{}},()=>String(api.signal.aborted),{readOnly:true});api.background(new Promise(resolve=>api.signal.addEventListener('abort',resolve,{once:true})));}`,
+  );
+  const model = new ScriptedModel(
+    Array.from({ length: 3 }, (_, i) => ({
+      message: {
+        id: String(i),
+        role: 'assistant' as const,
+        content: 'inspect actual tools',
+      },
+    })),
+  );
+  const controller = new RuntimeController({
+    home,
+    userHome: home,
+    workspace,
+    model,
+    workspaceTools: {
+      nodeExecutable: process.execPath,
+      runtimeExecutable: process.execPath,
+      adapterPath: 'unused',
+      ghPath: 'synthetic-never-executed',
+    },
+    emit: () => {},
+  });
+  const internal = controller as unknown as {
+    runtimes: { values(): Iterable<AgentRuntime> };
+    githubProfile: NativeGitHubConnection;
+  };
+  const runtime = [...internal.runtimes.values()][0]!;
+  let release!: () => void;
+  let sequence = 0;
+  const toggle = (enabled: boolean) =>
+    controller.dispatch({
+      id: 'toggle-' + ++sequence,
+      name: 'save-settings',
+      sessionId: runtime.session.id,
+      payload: { settings: {}, extensions: [{ name: 'github', enabled }] },
+    });
+  const state = () =>
+    controller
+      .snapshot()
+      .extensions.find((e) => e.name === 'github' && e.scope === 'bundled');
+  try {
+    await runtime.harness.run('ordinary turn before enabling');
+    const observer = runtime.extensions.extensions.find(
+      (e) => e.name === 'observer',
+    );
+    assert.equal(state()?.enabled, false);
+    assert(
+      !model.requests[0]!.tools.some((t) => t.name === 'github_connection'),
+    );
+    const activated = await toggle(true);
+    assert.equal(activated.ok, true, JSON.stringify(activated));
+    await until(async () =>
+      state()?.enabled &&
+      (state()?.view as { provider?: string })?.provider === 'github'
+        ? true
+        : false,
+    );
+    assert.equal(state()?.error, undefined);
+    assert(runtime.extensions.commands().has('github'));
+    await runtime.harness.run('ordinary next turn after original toggle');
+    assert(
+      model.requests[1]!.tools.some((t) => t.name === 'github_connection'),
+    );
+    assert.equal(
+      runtime.extensions.extensions.find((e) => e.name === 'observer'),
+      observer,
+    );
+    assert.equal(
+      await runtime.extensions
+        .tools()
+        .find((t) => t.name === 'observer_alive')!
+        .run(
+          {},
+          {
+            signal: new AbortController().signal,
+            sessionId: runtime.session.id,
+          },
+        ),
+      'false',
+    );
+    assert.equal((await toggle(false)).ok, true);
+    assert.equal(state()?.enabled, false);
+    const original = internal.githubProfile.status.bind(internal.githubProfile);
+    let entered = false;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    internal.githubProfile.status = async () => {
+      entered = true;
+      await gate;
+      return original();
+    };
+    assert.equal((await toggle(true)).ok, true);
+    await until(async () => (entered ? true : false));
+    assert.equal((await toggle(false)).ok, true);
+    release();
+    await until(async () =>
+      state()?.enabled === false &&
+      (internal.githubProfile as unknown as { listeners: Set<unknown> })
+        .listeners.size === 0
+        ? true
+        : false,
+    );
+    await runtime.harness.run(
+      'ordinary turn after pending enable was cancelled',
+    );
+    assert(!model.requests[2]!.tools.some((t) => t.name.startsWith('github_')));
+    assert.equal(
+      runtime.extensions.extensions.find((e) => e.name === 'observer'),
+      observer,
+    );
+    assert.equal((await toggle(true)).ok, true);
+    await until(async () =>
+      state()?.enabled &&
+      (state()?.view as { provider?: string })?.provider === 'github'
+        ? true
+        : false,
+    );
+    assert.equal(state()?.error, undefined);
+  } finally {
+    release?.();
+    await controller.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });

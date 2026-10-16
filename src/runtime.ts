@@ -959,6 +959,12 @@ export class AgentRuntime {
           new Set([...base, ...this.mcp.tools].map((tool) => tool.name)),
         );
         await host.load();
+        for (const ext of host.extensions)
+          if (
+            ext.source === 'bundled' &&
+            this.options.settings.extensions[ext.name]?.enabled !== true
+          )
+            await host.disableBundled(ext.name);
         if (signal?.aborted) {
           await host.close(2000);
           signal.throwIfAborted();
@@ -984,6 +990,26 @@ export class AgentRuntime {
       });
     }
     await this.integrationsReady;
+  }
+  /** Change one bundled extension without restarting unrelated integrations. */
+  async setBundledExtensionEnabled(
+    name: string,
+    enabled: boolean,
+  ): Promise<void> {
+    this.options.settings.extensions[name] = {
+      ...this.options.settings.extensions[name],
+      enabled,
+    };
+    if (!enabled) {
+      await this.extensions.disableBundled(name);
+      return;
+    }
+    await this.initialize();
+    if (
+      this.options.settings.extensions[name]?.enabled === true &&
+      !this.isClosing
+    )
+      await this.extensions.enableBundled(name);
   }
   private refreshIntegrationTools() {
     if (!this.toolsStale || !this.integrationsReady) return;

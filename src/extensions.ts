@@ -335,7 +335,7 @@ export class ExtensionAPI {
       );
     if (typeof execute !== 'function')
       throw new ExtensionError(`tool '${name}': execute must be callable`);
-    if (live.has(this)) this.reservedTools.add(name);
+    this.reservedTools.add(name);
     this.ext.tools.push({
       name,
       description: description || name,
@@ -414,6 +414,7 @@ export class ExtensionAPI {
       throw new ExtensionError(`command /${name} already exists`);
     if (typeof handler !== 'function')
       throw new ExtensionError('command handler must be callable');
+    this.reservedCommands.add(name);
     const mask = this.ext.mask;
     this.ext.commands.push({
       name,
@@ -529,6 +530,8 @@ export class ExtensionHost {
   // handlers, and what they gave api.background.
   private readonly pending = new Set<Promise<unknown>>();
   private closing?: Promise<void>;
+  private toolReservations = new Set<string>();
+  private commandReservations = new Set<string>();
   private readonly scopes = new Map<
     Extension,
     {
@@ -583,8 +586,10 @@ export class ExtensionHost {
   }
   async load(): Promise<this> {
     const loaded: Extension[] = [];
-    const tools = new Set(this.options.reservedTools);
-    const commands = new Set(this.options.reservedCommands);
+    const tools = (this.toolReservations = new Set(this.options.reservedTools));
+    const commands = (this.commandReservations = new Set(
+      this.options.reservedCommands,
+    ));
     for (const discovered of this.discover()) {
       const setting = this.options.settings?.[discovered.name]?.enabled;
       const ext: Extension = {
@@ -605,82 +610,148 @@ export class ExtensionHost {
       };
       loaded.push(ext);
       if (!ext.enabled) continue;
-      const scope = {
-        controller: new AbortController(),
-        pending: new Set<Promise<unknown>>(),
-        trustedBundled: false,
-      };
-      this.scopes.set(ext, scope);
-      try {
-        const bundledRoot = this.options.bundledRoot ?? bundledExtensionsRoot();
-        scope.trustedBundled =
-          discovered.source === 'bundled' &&
-          !!bundledRoot &&
-          !lstatSync(ext.path).isSymbolicLink() &&
-          realpathSync.native(ext.path) ===
-            join(realpathSync.native(bundledRoot), ext.name, 'extension.ts');
-        const module: unknown = await import(
-          pathToFileURL(ext.path).href + '?reload=' + randomUUID()
-        );
-        if (!isRecord(module) || typeof module.register !== 'function')
-          throw new ExtensionError('extension defines no register(api)');
-        const api = new ExtensionAPI(
-          ext,
-          tools,
-          commands,
-          this.options.jobs,
-          this.options.jobOwner,
-          {
-            home: this.options.home,
-            workspace: this.options.workspace,
-            githubConnection:
-              discovered.source === 'bundled' &&
-              discovered.name === 'github' &&
-              this.options.bundledRoot !== false &&
-              !lstatSync(discovered.path).isSymbolicLink() &&
-              realpathSync.native(discovered.path) ===
-                join(
-                  realpathSync.native(
-                    this.options.bundledRoot ?? bundledExtensionsRoot(),
-                  ),
-                  'github',
-                  'extension.ts',
-                )
-                ? this.options.githubConnection
-                : undefined,
-            secret: this.options.secret,
-            secretTimeoutMs: this.options.secretTimeoutMs,
-            settings: this.options.settings?.[discovered.name],
-            onStatus: this.options.onStatus,
-            openUrl: this.options.openUrl,
-            onTools: this.options.onTools,
-            signal: AbortSignal.any([
-              this.controller.signal,
-              scope.controller.signal,
-            ]),
-            track: (work) => this.track(work, ext),
-          },
-        );
-        await module.register(api);
-        for (const tool of ext.tools) tools.add(tool.name);
-        live.add(api);
-        for (const command of ext.commands) commands.add(command.name);
-      } catch (error) {
-        scope.controller.abort(error);
-        ext.error =
-          error instanceof Error
-            ? `${error.name}: ${error.message}`
-            : String(error);
-        ext.tools = [];
-        ext.commands = [];
-        ext.middleware = [];
-        ext.subagents = [];
-        ext.renderers.clear();
-        ext.handlers.clear();
-      }
+      await this.activate(ext, tools, commands);
     }
     this.extensions = loaded;
     return this;
+  }
+  private async activate(
+    ext: Extension,
+    tools: Set<string>,
+    commands: Set<string>,
+    notify = false,
+  ): Promise<void> {
+    const scope = {
+      controller: new AbortController(),
+      pending: new Set<Promise<unknown>>(),
+      trustedBundled: false,
+    };
+    this.scopes.set(ext, scope);
+    try {
+      const bundledRoot = this.options.bundledRoot ?? bundledExtensionsRoot();
+      scope.trustedBundled =
+        ext.source === 'bundled' &&
+        !!bundledRoot &&
+        !lstatSync(ext.path).isSymbolicLink() &&
+        realpathSync.native(ext.path) ===
+          join(realpathSync.native(bundledRoot), ext.name, 'extension.ts');
+      const module: unknown = await import(
+        pathToFileURL(ext.path).href + '?reload=' + randomUUID()
+      );
+      if (!isRecord(module) || typeof module.register !== 'function')
+        throw new ExtensionError('extension defines no register(api)');
+      const api = new ExtensionAPI(
+        ext,
+        tools,
+        commands,
+        this.options.jobs,
+        this.options.jobOwner,
+        {
+          home: this.options.home,
+          workspace: this.options.workspace,
+          githubConnection:
+            ext.source === 'bundled' &&
+            ext.name === 'github' &&
+            this.options.bundledRoot !== false &&
+            !lstatSync(ext.path).isSymbolicLink() &&
+            realpathSync.native(ext.path) ===
+              join(
+                realpathSync.native(
+                  this.options.bundledRoot ?? bundledExtensionsRoot(),
+                ),
+                'github',
+                'extension.ts',
+              )
+              ? this.options.githubConnection
+              : undefined,
+          secret: this.options.secret,
+          secretTimeoutMs: this.options.secretTimeoutMs,
+          settings: this.options.settings?.[ext.name],
+          onStatus: this.options.onStatus,
+          openUrl: this.options.openUrl,
+          onTools: this.options.onTools,
+          signal: AbortSignal.any([
+            this.controller.signal,
+            scope.controller.signal,
+          ]),
+          track: (work) => this.track(work, ext),
+        },
+      );
+      scope.controller.signal.throwIfAborted();
+      this.controller.signal.throwIfAborted();
+      await module.register(api);
+      scope.controller.signal.throwIfAborted();
+      this.controller.signal.throwIfAborted();
+      for (const tool of ext.tools) tools.add(tool.name);
+      live.add(api);
+      for (const command of ext.commands) commands.add(command.name);
+    } catch (error) {
+      scope.controller.abort(error);
+      ext.error = !ext.enabled
+        ? ''
+        : error instanceof Error
+          ? `${error.name}: ${error.message}`
+          : String(error);
+      for (const tool of ext.tools) tools.delete(tool.name);
+      for (const command of ext.commands) commands.delete(command.name);
+      ext.tools = [];
+      ext.commands = [];
+      ext.middleware = [];
+      ext.subagents = [];
+      ext.renderers.clear();
+      ext.handlers.clear();
+    }
+    if (notify) {
+      this.options.onTools?.();
+      this.options.onStatus?.();
+    }
+  }
+  private activating = new Map<string, Promise<void>>();
+  /** Load only the selected bundled extension, preserving every unrelated live scope. */
+  async enableBundled(name: string): Promise<void> {
+    this.controller.signal.throwIfAborted();
+    const previous = this.extensions.find((ext) => ext.name === name);
+    const pending = this.activating.get(name);
+    if (pending && previous?.enabled) return pending;
+    if (previous?.enabled && !previous.error) return;
+    const discovered = this.discover().find(
+      (ext) => ext.name === name && ext.source === 'bundled',
+    );
+    const root = this.options.bundledRoot ?? bundledExtensionsRoot();
+    if (
+      !discovered ||
+      !root ||
+      lstatSync(discovered.path).isSymbolicLink() ||
+      realpathSync.native(discovered.path) !==
+        join(realpathSync.native(root), name, 'extension.ts')
+    )
+      throw new ExtensionError('bundled extension is unavailable');
+    const ext: Extension = {
+      ...discovered,
+      enabled: true,
+      error: '',
+      warnings: [],
+      tools: [],
+      commands: [],
+      middleware: [],
+      subagents: [],
+      renderers: new Map(),
+      handlers: new Map(),
+      mask: new SecretMask(),
+    };
+    const index = this.extensions.findIndex((item) => item.name === name);
+    if (index < 0) this.extensions.push(ext);
+    else this.extensions[index] = ext;
+    const tools = this.toolReservations;
+    const commands = this.commandReservations;
+    const work = this.activate(ext, tools, commands, true);
+    this.track(work, ext);
+    this.activating.set(name, work);
+    try {
+      await work;
+    } finally {
+      if (this.activating.get(name) === work) this.activating.delete(name);
+    }
   }
   /** Stop only the actual bundled provider; unrelated extensions and MCP stay alive. */
   async disableBundled(name: string): Promise<void> {
@@ -691,6 +762,9 @@ export class ExtensionHost {
     ext.enabled = false;
     const scope = this.scopes.get(ext);
     scope?.controller.abort(new ExtensionError('the extension was disabled'));
+    for (const tool of ext.tools) this.toolReservations.delete(tool.name);
+    for (const command of ext.commands)
+      this.commandReservations.delete(command.name);
     ext.tools = [];
     ext.commands = [];
     ext.handlers.clear();
@@ -702,6 +776,7 @@ export class ExtensionHost {
     this.options.onTools?.();
     this.options.onStatus?.();
     while (scope?.pending.size) await Promise.allSettled([...scope.pending]);
+    this.scopes.delete(ext);
   }
   private loaded(): Extension[] {
     return this.extensions.filter((ext) => ext.enabled && !ext.error);

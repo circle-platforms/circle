@@ -564,14 +564,26 @@ export class RuntimeController {
           ...owner.options.settings.extensions.github,
           enabled: false,
         };
-        void owner.extensions.disableBundled('github').catch(() => {});
+        void owner.setBundledExtensionEnabled('github', false).catch(() => {});
       }
       for (const owner of this.taskRuntimes.values()) {
         owner.options.settings.extensions.github = {
           ...owner.options.settings.extensions.github,
           enabled: false,
         };
-        void owner.extensions.disableBundled('github').catch(() => {});
+        void owner.setBundledExtensionEnabled('github', false).catch(() => {});
+      }
+    }
+    if (settings.extensions.github?.enabled === true) {
+      for (const owner of [
+        ...this.runtimes.values(),
+        ...this.taskRuntimes.values(),
+      ]) {
+        owner.options.settings.extensions.github = {
+          ...owner.options.settings.extensions.github,
+          enabled: true,
+        };
+        void owner.setBundledExtensionEnabled('github', true).catch(() => {});
       }
     }
     for (const owner of this.runtimes.values()) {

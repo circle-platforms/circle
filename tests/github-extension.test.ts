@@ -114,3 +114,103 @@ test('native GitHub capability is withheld from project shadow and symlinked bun
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('targeted enable shares existing tool and command reservations and disable releases only its own names', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'circle-github-targeted-')),
+    home = path.join(root, 'home'),
+    workspace = path.join(root, 'workspace');
+  await mkdir(path.join(home, 'extensions', 'observer'), { recursive: true });
+  await mkdir(workspace);
+  await writeFile(
+    path.join(home, 'extensions', 'observer', 'extension.mjs'),
+    `export function register(api){api.registerTool('claim_tool','claim',{type:'object',properties:{}},()=>{try{api.registerTool('github_connection','observer owned',{type:'object',properties:{}},()=> 'observer',{readOnly:true});return 'claimed'}catch{return 'reserved'}},{readOnly:true});api.registerTool('claim_command','claim',{type:'object',properties:{}},()=>{try{api.registerCommand('github','observer owned',async()=>{});return 'claimed'}catch{return 'reserved'}},{readOnly:true});}`,
+  );
+  let subscriptions = 0;
+  const backend = {
+    call: async () => ({
+      ...state,
+      state: 'disconnected',
+      account: undefined,
+      repositories: [],
+    }),
+    subscribe: () => {
+      subscriptions++;
+      let closed = false;
+      return () => {
+        if (closed) return;
+        closed = true;
+        subscriptions--;
+      };
+    },
+  } as GitHubConnectionBackend;
+  const host = new ExtensionHost({
+    home,
+    workspace,
+    trusted: true,
+    bundledRoot: fileURLToPath(new URL('../src/extensions', import.meta.url)),
+    settings: { github: { enabled: false } },
+    githubConnection: backend,
+  });
+  const context = {
+    signal: new AbortController().signal,
+    sessionId: 'fixture',
+  };
+  try {
+    await host.load();
+    const observer = host.extensions.find((e) => e.name === 'observer');
+    await host.enableBundled('github');
+    assert.equal(subscriptions, 1);
+    assert(host.tools().some((t) => t.name === 'github_connection'));
+    assert.equal(
+      await host
+        .tools()
+        .find((t) => t.name === 'claim_tool')!
+        .run({}, context),
+      'reserved',
+    );
+    assert.equal(
+      await host
+        .tools()
+        .find((t) => t.name === 'claim_command')!
+        .run({}, context),
+      'reserved',
+    );
+    await host.disableBundled('github');
+    assert.equal(subscriptions, 0);
+    assert.equal(
+      await host
+        .tools()
+        .find((t) => t.name === 'claim_tool')!
+        .run({}, context),
+      'claimed',
+    );
+    assert.equal(
+      await host
+        .tools()
+        .find((t) => t.name === 'claim_command')!
+        .run({}, context),
+      'claimed',
+    );
+    await host.enableBundled('github');
+    assert.match(
+      host.extensions.find((e) => e.name === 'github')!.error,
+      /already exists/,
+    );
+    assert.equal(subscriptions, 0);
+    assert.equal(host.commands().get('github')?.description, 'observer owned');
+    assert.equal(
+      await host
+        .tools()
+        .find((t) => t.name === 'github_connection')!
+        .run({}, context),
+      'observer',
+    );
+    assert.equal(
+      host.extensions.find((e) => e.name === 'observer'),
+      observer,
+    );
+  } finally {
+    await host.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
