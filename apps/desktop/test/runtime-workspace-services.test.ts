@@ -404,7 +404,10 @@ test('task bridge runs isolated writers and read-only reviewer while task approv
   assert.equal(selected.ok, true, selected.error);
   assert.equal(f.controller.snapshot().activeSessionId, waiting.sessionId);
   await f.call('select-session', { id: parent });
-  const until = Date.now() + 8000;
+  // A wall-clock bound, not a product target: after their last model reply the
+  // three tasks still capture candidates and close runtimes in real worktrees,
+  // which a Windows runner has taken more than the remaining 4 s to finish.
+  const until = Date.now() + 30000;
   let tasks: any[] = [];
   const bridgeTimeline: unknown[] = [];
   while (Date.now() < until) {
