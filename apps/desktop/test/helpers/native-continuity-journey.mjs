@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { openNativeTerminalInspector } from './native-terminal-journey.mjs';
 import { journeyNodeCommand } from './native-journey-platform.mjs';
@@ -53,6 +53,17 @@ export async function runNativeTerminalContextJourney({
 }) {
   const receipt = { checks: [] };
   let terminal;
+  let nodePid;
+  const exited = (pid) => {
+    if (pid === undefined) return true;
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch (error) {
+      if (error.code === 'ESRCH') return true;
+      throw error;
+    }
+  };
   try {
     const before = currentSession(await state(), sessionId);
     const originalDraft = before.draft;
@@ -61,6 +72,7 @@ export async function runNativeTerminalContextJourney({
     const panel = await openNativeTerminalInspector(page);
     const prior = new Set((await query('terminal', 'list')).map((t) => t.id));
     await panel
+      .locator('.native-terminal-toolbar')
       .getByRole('button', { name: 'new terminal', exact: true })
       .click();
     await until(
@@ -101,9 +113,7 @@ export async function runNativeTerminalContextJourney({
     const actualOutput = replay.events
       .map((event) => event.data ?? '')
       .join('');
-    const nodePid = Number(
-      actualOutput.match(/CONTINUITY_NODE_PID\s+(\d+)/)?.[1],
-    );
+    nodePid = Number(actualOutput.match(/CONTINUITY_NODE_PID\s+(\d+)/)?.[1]);
     assert(Number.isSafeInteger(nodePid) && nodePid > 0);
     process.kill(nodePid, 0);
     const find = panel.getByRole('textbox', {
@@ -173,8 +183,39 @@ export async function runNativeTerminalContextJourney({
     if (!(await original.evaluate((node) => node.open)))
       await original.locator('summary').click();
     assert.equal(
-      await original.locator('pre').textContent(),
+      await original.locator('.terminal-selection-text').textContent(),
+      fixture.selectedText,
+      'the default preview shows the selected text first',
+    );
+    assert(
+      (await original.locator('.panel-note').first().innerText()).includes(
+        terminal.label,
+      ),
+    );
+    assert(
+      (await original.locator('.panel-note').first().innerText()).includes(
+        terminal.cwd,
+      ),
+    );
+    const originalDetails = original.locator('.terminal-selection-original');
+    assert.equal(
+      await originalDetails.evaluate((node) => node.open),
+      false,
+      'source JSON is folded by default',
+    );
+    assert.equal(
+      (await original.innerText()).includes('circle.terminal-selection'),
+      false,
+      'default preview does not expose JSON metadata',
+    );
+    await originalDetails
+      .locator('summary')
+      .filter({ hasText: 'original attachment and source details' })
+      .click();
+    assert.equal(
+      await originalDetails.locator('pre').textContent(),
       attachment.content,
+      'the complete original attachment is available after explicit expansion',
     );
     await page.screenshot({
       path: join(output, 'native-terminal-selection-original-context.png'),
@@ -189,8 +230,27 @@ export async function runNativeTerminalContextJourney({
     );
     assert.equal(hidden.pid, terminal.pid);
     assert.equal(hidden.status, 'running');
-    await openNativeTerminalInspector(page);
+    const reopenedPanel = await openNativeTerminalInspector(page);
     await tab.waitFor();
+    await until(
+      async () => (await tab.getAttribute('aria-selected')) === 'true',
+      'reopening selects the same terminal',
+    );
+    const reopened = (await query('terminal', 'list')).find(
+      (t) => t.id === terminal.id,
+    );
+    assert.equal(reopened.pid, terminal.pid);
+    assert.equal(reopened.epoch, terminal.epoch);
+    assert.equal(reopened.status, 'running');
+    await until(
+      async () =>
+        (
+          await reopenedPanel
+            .locator(`#terminal-${terminal.id} .xterm-accessibility-tree`)
+            .innerText()
+        ).includes(fixture.selectedText),
+      'the same terminal still displays its original Chinese output',
+    );
     process.kill(nodePid, 0);
     await page
       .locator('.attachment-strip')
@@ -235,16 +295,24 @@ export async function runNativeTerminalContextJourney({
           .locator(`[role="tab"][aria-controls="terminal-${terminal.id}"]`)
           .click();
         await panel
-          .getByRole('button', { name: 'close terminal', exact: true })
+          .getByRole('button', { name: 'stop terminal', exact: true })
           .click();
         await until(
           async () =>
-            !(await query('terminal', 'list')).some(
-              (t) => t.id === terminal.id && t.status === 'running',
-            ),
-          'helper-owned terminal stops after explicit close',
+            (await query('terminal', 'list')).some(
+              (t) =>
+                t.id === terminal.id &&
+                ['exited', 'failed', 'interrupted'].includes(t.status),
+            ) &&
+            exited(terminal.pid) &&
+            exited(nodePid),
+          'helper-owned terminal reaches final state and actual shell and Node PIDs exit after explicit stop',
         );
-        receipt.cleanup = 'owned terminal explicitly closed';
+        receipt.cleanup = {
+          status: 'actual owned processes exited',
+          shellPid: terminal.pid,
+          nodePid,
+        };
       } catch (error) {
         cleanupError = error;
         receipt.cleanup = { failed: String(error) };
@@ -293,6 +361,23 @@ export async function runNativeChildSourceJourney({
     assert(
       agent.workspaceId && agent.workspaceId !== parent.workspaceId,
       'the writable child owns an isolated workspace',
+    );
+    const projectedWorkspace = before.workspaces.find(
+      (item) => item.id === agent.workspaceId,
+    );
+    assert(
+      projectedWorkspace?.path,
+      'the actual child workspace path is projected',
+    );
+    assert.equal(
+      await realpath(projectedWorkspace.path),
+      await realpath(childWorktree),
+      'the expected worktree is the child resource owner path',
+    );
+    assert.notEqual(
+      await realpath(childWorktree),
+      await realpath(workspace),
+      'child and parent directories are actually isolated',
     );
     const childContent = await readFile(
       join(childWorktree, sourcePath),
