@@ -1,3 +1,4 @@
+import { extensionStatusText } from '../model/extension-status';
 import { desktopHost, openNativeWorkspace } from '../host';
 import { useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
@@ -301,7 +302,7 @@ export function Sidebar({
                 title={item.name}
               >
                 <i />
-                {item.status.text}
+                {extensionStatusText(item)}
               </span>
             ) : null,
           )}

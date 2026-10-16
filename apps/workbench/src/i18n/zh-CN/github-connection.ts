@@ -1,4 +1,5 @@
 export const githubConnection: Record<string, string> = {
+  'GitHub connection error': 'GitHub 连接出错',
   'loading GitHub integration': '正在加载 GitHub 集成…',
   'GitHub integration could not be loaded.': '无法加载 GitHub 集成。',
   'Secure credential storage is unavailable.': '安全凭据存储暂不可用。',
