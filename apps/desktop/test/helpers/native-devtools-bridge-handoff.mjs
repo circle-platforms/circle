@@ -133,6 +133,11 @@ export async function runActualBridgeDevToolsHandoff({
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     evidence.clickedResume = clicked;
+    assert.equal(
+      clicked,
+      true,
+      'the actual ready DevTools resume control must be clicked',
+    );
     evidence.result = await app.evaluate(
       (_, id) => globalThis.__circleOwnedBrowserWitnesses.get(id).result,
       id,
