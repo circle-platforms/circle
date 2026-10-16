@@ -874,6 +874,13 @@ export class RuntimeController {
             }
           : undefined,
         cyclePorts: async (sessionId) => {
+          const ownerRuntime =
+            this.runtimes.get(sessionId) ?? this.taskRuntimes.get(sessionId);
+          if (
+            ownerRuntime &&
+            loadSettings(this.home).extensions.github?.enabled === true
+          )
+            await ownerRuntime.setBundledExtensionEnabled('github', true);
           const githubInvocation = this.githubInvocation(sessionId);
           const githubConnection = this.githubConnection();
           const githubEpoch = githubConnection?.snapshot().epoch;
@@ -1624,6 +1631,8 @@ export class RuntimeController {
     const tracker = new PlanCompletionTracker();
     tracker.reset(runtime.todos);
     this.planCompletions.set(runtime.session.id, tracker);
+    if (runtime.options.settings.extensions.github?.enabled === true)
+      void runtime.setBundledExtensionEnabled('github', true).catch(() => {});
     return runtime;
   }
   private persistLocation() {

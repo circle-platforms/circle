@@ -1259,8 +1259,34 @@ test('the original settings toggle loads only GitHub into the existing runtime a
     assert(
       !model.requests[0]!.tools.some((t) => t.name === 'github_connection'),
     );
+    const initialStatus = internal.githubProfile.status.bind(
+      internal.githubProfile,
+    );
+    let initialEntered = false;
+    let initialRelease!: () => void;
+    const initialGate = new Promise<void>((resolve) => {
+      initialRelease = resolve;
+    });
+    release = initialRelease;
+    internal.githubProfile.status = async () => {
+      initialEntered = true;
+      await initialGate;
+      return initialStatus();
+    };
     const activated = await toggle(true);
     assert.equal(activated.ok, true, JSON.stringify(activated));
+    const immediateTurn = runtime.harness.run(
+      'ordinary next turn immediately after original toggle',
+    );
+    await until(async () => (initialEntered ? true : false));
+    await delay(20);
+    assert.equal(
+      model.requests.length,
+      1,
+      'the current runtime waits for its actual requested provider before the next model request',
+    );
+    initialRelease();
+    await immediateTurn;
     await until(async () =>
       state()?.enabled &&
       (state()?.view as { provider?: string })?.provider === 'github'
@@ -1269,7 +1295,6 @@ test('the original settings toggle loads only GitHub into the existing runtime a
     );
     assert.equal(state()?.error, undefined);
     assert(runtime.extensions.commands().has('github'));
-    await runtime.harness.run('ordinary next turn after original toggle');
     assert(
       model.requests[1]!.tools.some((t) => t.name === 'github_connection'),
     );
@@ -1304,7 +1329,29 @@ test('the original settings toggle loads only GitHub into the existing runtime a
     };
     assert.equal((await toggle(true)).ok, true);
     await until(async () => (entered ? true : false));
+    const cancelledTurn = runtime.harness.run(
+      'cancel a turn waiting for provider',
+    );
+    let cancelled = false;
+    const rejected = assert
+      .rejects(cancelledTurn, /interrupt|abort|cancel/i)
+      .then(() => {
+        cancelled = true;
+      });
+    await delay(20);
+    assert.equal(model.requests.length, 2);
+    const cancelling = runtime.cancel();
+    await until(async () => (cancelled ? true : false));
+    await cancelling;
+    await rejected;
+    const turnWhileLoading = runtime.harness.run(
+      'ordinary turn waiting for pending enable',
+    );
+    await delay(20);
+    assert.equal(model.requests.length, 2);
     assert.equal((await toggle(false)).ok, true);
+    await until(async () => (model.requests.length === 3 ? true : false));
+    await turnWhileLoading;
     release();
     await until(async () =>
       state()?.enabled === false &&
@@ -1312,9 +1359,6 @@ test('the original settings toggle loads only GitHub into the existing runtime a
         .listeners.size === 0
         ? true
         : false,
-    );
-    await runtime.harness.run(
-      'ordinary turn after pending enable was cancelled',
     );
     assert(!model.requests[2]!.tools.some((t) => t.name.startsWith('github_')));
     assert.equal(
@@ -1329,6 +1373,30 @@ test('the original settings toggle loads only GitHub into the existing runtime a
         : false,
     );
     assert.equal(state()?.error, undefined);
+    const previousSession = controller.snapshot().activeSessionId;
+    const created = await controller.dispatch({
+      id: 'new-enabled-session',
+      name: 'new-session',
+      sessionId: previousSession,
+      payload: {},
+    });
+    assert.equal(created.ok, true);
+    assert.notEqual(controller.snapshot().activeSessionId, previousSession);
+    await until(async () =>
+      state()?.enabled &&
+      (state()?.view as { provider?: string })?.provider === 'github'
+        ? true
+        : false,
+    );
+    const fresh = [...internal.runtimes.values()].find(
+      (owner) => owner.session.id === controller.snapshot().activeSessionId,
+    )!;
+    assert(fresh.extensions.commands().has('github'));
+    assert(
+      fresh.extensions
+        .tools()
+        .some((tool) => tool.name === 'github_connection'),
+    );
   } finally {
     release?.();
     await controller.close();

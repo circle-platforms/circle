@@ -204,6 +204,8 @@ export class AgentRuntime {
   private activeCompaction?: Promise<string>;
   extensions: ExtensionHost;
   private integrationsReady?: Promise<void>;
+  private extensionChanges = new Map<string, Promise<void>>();
+  private extensionChangeListeners = new Set<() => void>();
   private baseModel?: ChatModel;
   private readonly modelWrappers = new WeakMap<ChatModel, ChatModel>();
   private readonly wrappedModels = new WeakSet<ChatModel>();
@@ -740,6 +742,7 @@ export class AgentRuntime {
         if (this.userShells.busy) throw new Error('a user command is running');
         if (this.activeCompaction) throw new Error('a compaction is running');
         await this.initialize(signal);
+        await this.waitForExtensionChanges(signal);
         this.refreshIntegrationTools();
       },
       beforeTurn: () => this.requireTurnConnection(),
@@ -992,24 +995,66 @@ export class AgentRuntime {
     await this.integrationsReady;
   }
   /** Change one bundled extension without restarting unrelated integrations. */
-  async setBundledExtensionEnabled(
-    name: string,
-    enabled: boolean,
-  ): Promise<void> {
+  setBundledExtensionEnabled(name: string, enabled: boolean): Promise<void> {
     this.options.settings.extensions[name] = {
       ...this.options.settings.extensions[name],
       enabled,
     };
-    if (!enabled) {
-      await this.extensions.disableBundled(name);
-      return;
+    const work = (async () => {
+      if (!enabled) {
+        await this.extensions.disableBundled(name);
+        return;
+      }
+      await this.initialize();
+      if (
+        this.options.settings.extensions[name]?.enabled === true &&
+        !this.isClosing
+      )
+        await this.extensions.enableBundled(name);
+    })();
+    this.extensionChanges.set(name, work);
+    for (const listener of [...this.extensionChangeListeners]) listener();
+    void work
+      .finally(() => {
+        if (this.extensionChanges.get(name) === work)
+          this.extensionChanges.delete(name);
+      })
+      .catch(() => {});
+    return work;
+  }
+  private async waitForExtensionChanges(signal: AbortSignal): Promise<void> {
+    while (true) {
+      signal.throwIfAborted();
+      const pending = [...this.extensionChanges]
+        .filter(
+          ([name]) => this.options.settings.extensions[name]?.enabled === true,
+        )
+        .map(([, work]) => work);
+      if (!pending.length) return;
+      await new Promise<void>((resolve, reject) => {
+        let finished = false;
+        const cleanup = () => {
+          this.extensionChangeListeners.delete(changed);
+          signal.removeEventListener('abort', abort);
+        };
+        const changed = () => {
+          if (finished) return;
+          finished = true;
+          cleanup();
+          resolve();
+        };
+        const abort = () => {
+          if (finished) return;
+          finished = true;
+          cleanup();
+          reject(signal.reason ?? new Error('cancelled'));
+        };
+        this.extensionChangeListeners.add(changed);
+        signal.addEventListener('abort', abort, { once: true });
+        void Promise.allSettled(pending).then(changed);
+        if (signal.aborted) abort();
+      });
     }
-    await this.initialize();
-    if (
-      this.options.settings.extensions[name]?.enabled === true &&
-      !this.isClosing
-    )
-      await this.extensions.enableBundled(name);
   }
   private refreshIntegrationTools() {
     if (!this.toolsStale || !this.integrationsReady) return;
