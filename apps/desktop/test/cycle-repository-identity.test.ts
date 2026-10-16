@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import {
+  chmod,
   mkdtemp,
   mkdir,
   readFile,
@@ -65,7 +66,15 @@ test('fresh repository identity handles real linked worktrees and rejects dangli
   assert.equal(source.common, target.common);
   assert.equal(target.head, 'ref: refs/heads/codex/identity');
   const marker = join(f.target, '.git');
+  await chmod(marker, 0o400);
+  assert.equal(
+    (await cycleRepositoryIdentity(f.target)).directory,
+    target.directory,
+  );
   const originalMarker = await readFile(marker, 'utf8');
+  // Git marks linked-worktree .git metadata read-only on Windows. This owned
+  // corruption fixture must explicitly make its test file writable first.
+  await chmod(marker, 0o600);
   await writeFile(
     marker,
     `gitdir: ${relative(f.target, target.directory)}\r\n`,
