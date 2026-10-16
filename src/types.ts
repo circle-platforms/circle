@@ -29,6 +29,8 @@ export interface Message {
   /** Long pastes that `display` shows folded as `[Pasted text #N]`, by number. */
   pastes?: Record<string, string>;
   provider_content?: unknown[];
+  /** Opaque API/key/model identity for replaying signed thinking; never a credential. */
+  thinking_scope?: string;
   usage?: Usage;
   cost?: import('./pricing.js').PriceReceipt;
   internal?: string;
