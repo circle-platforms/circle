@@ -14,7 +14,10 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { TaskRecord } from './collaboration.js';
 import type { TaskChanges } from './task-executor.js';
-import { resolveTaskBaseline } from './task-worktrees.js';
+import {
+  resolveTaskBaseline,
+  serializeTaskRepositoryMutation,
+} from './task-worktrees.js';
 import { GitWorkspaceService, serializeGitMutation } from './git.js';
 const exec = promisify(execFile);
 const queues = new Map<string, Promise<unknown>>();
@@ -143,13 +146,9 @@ export class TaskIntegrator {
       directory = this.directory(id);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const path = join(directory, 'workspace');
-    await git(pin.workspace, [
-      'worktree',
-      'add',
-      '--detach',
-      path,
-      pin.baseline,
-    ]);
+    await serializeTaskRepositoryMutation(pin.workspace, () =>
+      git(pin.workspace, ['worktree', 'add', '--detach', path, pin.baseline]),
+    );
     const workspace: IntegrationWorkspace = {
       id,
       path,

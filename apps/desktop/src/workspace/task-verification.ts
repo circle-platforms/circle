@@ -33,6 +33,7 @@ import type { Message } from '../../../../src/types.ts';
 import type { TaskRecord } from './collaboration.ts';
 import type { TaskReviewerUpdate } from './task-store.ts';
 import { WorkspaceDocuments } from './documents.ts';
+import { serializeTaskRepositoryMutation } from './task-worktrees.ts';
 import type {
   TaskVerificationCheck,
   TaskVerificationContext,
@@ -473,11 +474,14 @@ async function verificationTree(
   try {
     // Apply the bytes whose hash was checked, never a second read of a mutable artifact.
     await writeFile(pinnedPatch, patch, { mode: 0o600 });
-    await git(
-      options.workspace,
-      ['worktree', 'add', '--detach', worktree, context.changes.baseline],
-      context.signal,
-    );
+    await serializeTaskRepositoryMutation(options.workspace, () => {
+      context.signal.throwIfAborted();
+      return git(
+        options.workspace,
+        ['worktree', 'add', '--detach', worktree, context.changes.baseline],
+        context.signal,
+      );
+    });
     added = true;
     if (patch.length)
       await git(worktree, ['apply', '--binary', pinnedPatch], context.signal);
@@ -609,7 +613,9 @@ async function verificationTree(
     return result;
   } finally {
     if (added && !keepWorktree)
-      await git(options.workspace, ['worktree', 'remove', '--force', worktree]);
+      await serializeTaskRepositoryMutation(options.workspace, () =>
+        git(options.workspace, ['worktree', 'remove', '--force', worktree]),
+      );
     if (!keepWorktree) await rm(directory, { recursive: true, force: true });
   }
 }

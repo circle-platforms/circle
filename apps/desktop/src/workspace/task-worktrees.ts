@@ -1,12 +1,12 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, realpath } from 'node:fs/promises';
-import { isAbsolute, join, relative } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { TaskRecord } from './task-store.js';
+import { serializeGitMutation } from './git.js';
 
 const exec = promisify(execFile);
-const gitLocks = new Map<string, Promise<unknown>>();
 async function git(workspace: string, args: string[]): Promise<string> {
   const result = await exec('git', ['-C', workspace, ...args], {
     encoding: 'utf8',
@@ -15,18 +15,15 @@ async function git(workspace: string, args: string[]): Promise<string> {
   });
   return result.stdout.trim();
 }
-async function serialized<T>(
+/** Registration changes share native Git's actual common-repository lock,
+ * including callers authorized through different linked worktree roots.
+ * Only hold this around the Git mutation, never an oracle or model request. */
+export async function serializeTaskRepositoryMutation<T>(
   workspace: string,
   action: () => Promise<T>,
 ): Promise<T> {
-  const previous = gitLocks.get(workspace) ?? Promise.resolve();
-  const next = previous.catch(() => {}).then(action);
-  gitLocks.set(workspace, next);
-  try {
-    return await next;
-  } finally {
-    if (gitLocks.get(workspace) === next) gitLocks.delete(workspace);
-  }
+  const common = await git(workspace, ['rev-parse', '--git-common-dir']);
+  return serializeGitMutation(resolve(workspace, common), action);
 }
 export async function resolveTaskBaseline(
   workspace: string,
@@ -65,7 +62,7 @@ export class TaskWorktrees {
         ? `codex/task-${key}-${task.attempt}`
         : undefined;
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
-    await serialized(task.spec.workspace, () =>
+    await serializeTaskRepositoryMutation(task.spec.workspace, () =>
       git(
         task.spec.workspace,
         branch
@@ -88,7 +85,7 @@ export class TaskWorktrees {
       isAbsolute(child)
     )
       throw new Error('worktree is not owned by the task manager');
-    return serialized(task.spec.workspace, async () => {
+    return serializeTaskRepositoryMutation(task.spec.workspace, async () => {
       if (await git(path, ['status', '--porcelain', '--untracked-files=all']))
         return false;
       await git(task.spec.workspace, ['worktree', 'remove', path]);
