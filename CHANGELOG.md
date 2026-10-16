@@ -8,6 +8,11 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 - **The folder you start a desktop session in stays on the sidebar while you write the first message.** New session, a folder's + and opening a folder show that folder in the sidebar with its group, highlighted while the draft is aimed at it; still nothing is saved until the first message is sent. Deleting a folder's last conversation goes back to that folder's home page instead of an empty conversation.
 
+### Fixed
+
+- **The terminal's browser could hang when a page opened a dialog while Circle was reading it.** Chrome answers nothing about a page while its dialog is open, and Circle waited for an answer with no limit, so the action never ended and `esc` did not free it. The action now ends as soon as the dialog opens, and its result shows the dialog.
+- **On macOS, closing a session could report a browser cleanup failure for a browser that had already exited.** macOS refuses to signal a process group whose last process has exited but is not yet cleaned up; Circle now counts that as stopped when no live process is left in the group.
+
 ### Removed
 
 - **Circle no longer replaces, imports from or stays compatible with its Python versions, those before 1.0.** The installer and `circle update` no longer look for a Python copy to remove; one still on the machine stays where it is, so remove it yourself. Sessions the Python versions saved in `sessions.sqlite` and `checkpoints.sqlite` are no longer imported when Circle starts, and `/import` no longer reads their JSONL exports. Sessions imported before stay in `/resume`; in them, a command that went on in the background shows its whole result instead of a job line, and RPC `get_messages` leaves out the fields only the Python versions wrote.
