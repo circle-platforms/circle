@@ -469,8 +469,7 @@ try {
     .first()
     .click();
   await page
-    .getByRole('button', { name: 'new terminal', exact: true })
-    .first()
+    .locator('#inspector-terminal-terminal button[aria-label="new terminal"]')
     .click();
   await page.locator('#inspector-terminal-terminal .xterm').first().waitFor();
   const terminals = await service('terminal', 'list');
