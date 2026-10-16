@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import {
   chmod,
+  open,
   mkdtemp,
   mkdir,
   readFile,
@@ -20,6 +21,17 @@ import { GitWorkspaceService } from '../src/workspace/git.js';
 import { TaskService } from '../src/workspace/task-service.js';
 import type { CycleRecord } from '../src/workspace/delivery-cycle.js';
 const exec = promisify(execFile);
+// Existing hidden files cannot be opened with 'w' on Windows. Keep the real
+// Git-created hidden attribute and edit through an existing read/write handle.
+async function rewriteMetadata(path: string, content: string) {
+  const file = await open(path, 'r+');
+  try {
+    await file.truncate(0);
+    await file.writeFile(content);
+  } finally {
+    await file.close();
+  }
+}
 async function fixture(t: TestContext) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'cycle-identity-')));
   let tasks: TaskService | undefined;
@@ -72,10 +84,18 @@ test('fresh repository identity handles real linked worktrees and rejects dangli
     target.directory,
   );
   const originalMarker = await readFile(marker, 'utf8');
-  // Git marks linked-worktree .git metadata read-only on Windows. This owned
-  // corruption fixture must explicitly make its test file writable first.
+  // Write permission and Windows' hidden attribute are distinct. Preserve the
+  // real hidden file, prove the 'w' restriction, then use its supported handle.
   await chmod(marker, 0o600);
-  await writeFile(
+  if (process.platform === 'win32') {
+    await exec('attrib.exe', ['+H', marker]);
+    await assert.rejects(
+      writeFile(marker, 'must not overwrite hidden metadata'),
+      { code: 'EPERM' },
+    );
+    assert.equal(await readFile(marker, 'utf8'), originalMarker);
+  }
+  await rewriteMetadata(
     marker,
     `gitdir: ${relative(f.target, target.directory)}\r\n`,
   );
@@ -83,7 +103,7 @@ test('fresh repository identity handles real linked worktrees and rejects dangli
     (await cycleRepositoryIdentity(f.target)).directory,
     target.directory,
   );
-  await writeFile(marker, originalMarker);
+  await rewriteMetadata(marker, originalMarker);
   const commonFile = join(target.directory, 'commondir'),
     original = await readFile(commonFile, 'utf8');
   await writeFile(
@@ -102,7 +122,7 @@ test('fresh repository identity handles real linked worktrees and rejects dangli
     'ref: refs/heads/codex/identity\nref: refs/heads/foreign\n',
   );
   await assert.rejects(cycleRepositoryIdentity(f.target), /invalid.*HEAD/);
-  await writeFile(marker, 'gitdir: \n');
+  await rewriteMetadata(marker, 'gitdir: \n');
   await assert.rejects(cycleRepositoryIdentity(f.target), /invalid.*gitdir/);
 });
 
