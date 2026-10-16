@@ -270,6 +270,30 @@ try {
           });
       }
     }
+  for (const reason of ['exit 1', 'kernel rejected termination']) {
+    await page.goto(
+      server.resolvedUrls.local[0] +
+        'test/native-terminal-search-ui.html?' +
+        new URLSearchParams({ status: 'exited', reason, timing: 'off' }),
+    );
+    const footer = page.locator('.native-terminal-status > span').nth(1);
+    await footer.waitFor();
+    assert.equal(
+      await footer.textContent(),
+      reason === 'exit 1' ? 'exit 1' : 'exit 1 · ' + reason,
+      'identical terminal exit reasons appear once while distinct details remain visible',
+    );
+    assert.equal(
+      await footer.getAttribute('title'),
+      reason,
+      'complete original exit reason stays available',
+    );
+    checks.push({
+      profile: 'footer',
+      scenario: 'exit reason ' + reason,
+      status: 'passed',
+    });
+  }
 } finally {
   await browser?.close();
   await server.close();

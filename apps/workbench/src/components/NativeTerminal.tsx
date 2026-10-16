@@ -764,7 +764,9 @@ export function NativeTerminal({
           <span title={selected.cwd}>{selected.cwd}</span>
           <span title={selected.exitReason}>
             <Status value={status(selected)} />
-            {selected.exitReason ? ` · ${selected.exitReason}` : ''}
+            {selected.exitReason && selected.exitReason !== status(selected)
+              ? ` · ${selected.exitReason}`
+              : ''}
           </span>
           {notice && <span>{notice}</span>}
         </div>
