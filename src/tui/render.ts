@@ -1,5 +1,6 @@
 import { palette, sgrJoin, statusLight } from '../ink/theme.js';
 import { DATABASE_WAIT_STATUS, uiText } from '../locale.js';
+import { interruptedMark } from '../whats_new.js';
 import type { LampState } from '../ink/theme.js';
 import { wrap, pad, truncate, truncateStyled } from '../ink/string_width.js';
 import type { Message, Usage } from '../types.js';
@@ -292,8 +293,9 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
     else placed.set(anchor, [...(placed.get(anchor) ?? []), note]);
   });
   const noticeBlock = (note: string): void => {
-    const shown = uiText(note);
-    const failed = shown.startsWith('✖') && !note.startsWith('✖ Interrupted');
+    const stop = note === '✖ Interrupted' || note === '✖ 已中断';
+    const shown = stop ? interruptedMark() : uiText(note);
+    const failed = shown.startsWith('✖') && !stop;
     block(
       shown.startsWith('✖') ? '✖' : ' ',
       shown.replace(/^✖\s*/, ''),
@@ -346,6 +348,8 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
       state.renderToolResult ? 1 : 0,
       message.thinking_seconds ?? state.thinkingSeconds?.[message.id] ?? '',
       state.turnUsage?.[message.id]?.seconds ?? '',
+      message.interrupted ? 1 : 0,
+      interruptedMark(),
       inKind,
       lead,
     ].join('|');
@@ -449,6 +453,10 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
       rows.push(turnUsageRow(usage));
       lastKind = 'usage';
     }
+    // A stopped reply keeps `interrupted` on itself. The mark is that flag,
+    // so reopening shows it without an injected "reply was not saved" line.
+    if (message.role === 'assistant' && message.interrupted)
+      noticeBlock('✖ Interrupted');
   };
   for (const message of messages) {
     const frozen = cacheable(message);

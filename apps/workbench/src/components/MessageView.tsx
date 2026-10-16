@@ -7,7 +7,9 @@ import { fullTime, shownTime } from '../model/time';
 import { FileChip, IconButton } from './common';
 import { Markdown } from './Markdown';
 import { t } from '../i18n';
+import { interruptedLabel } from '../model/completion';
 import { useSessionDisclosure } from '../model/presentation';
+import { formatUsdAmount } from '../../../../src/pricing.ts';
 
 /**
  * A message as Claude shows one: yours in a bubble on the right, Circle's as plain text
@@ -87,6 +89,9 @@ export function MessageView({
           </IconButton>
         )}
       </div>
+      {message.interrupted && (
+        <div className="transcript-notice">{interruptedLabel()}</div>
+      )}
     </article>
   );
 }
@@ -96,9 +101,9 @@ const usageText = (usage: NonNullable<Message['usage']>) =>
     usage.elapsed,
     `↑ ${usage.input.toLocaleString()}`,
     `↓ ${usage.output.toLocaleString()}`,
-    usage.cost === null
+    usage.cost === null || !Number.isFinite(usage.cost)
       ? t('cost N/A')
-      : (usage.estimated ? '~$' : '$') + usage.cost.toFixed(4),
+      : formatUsdAmount(usage.cost, usage.estimated === true),
   ]
     .filter(Boolean)
     .join(' · ');

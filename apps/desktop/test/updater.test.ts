@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
-import { spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -17,11 +18,15 @@ import { join } from 'node:path';
 import {
   checksumFor,
   installation,
+  LINUX_INSTALLER,
   releasesUrl,
+  sandboxIsSetuid,
   Updater,
   WINDOWS_INSTALLER,
   type Installation,
 } from '../src/updater';
+import { circleAppVersion } from '../src/circle-version';
+import { VERSION } from '../../../src/version';
 
 const windows = process.platform === 'win32';
 const scratch = (t: { after: (fn: () => void) => void }) => {
@@ -67,8 +72,7 @@ test('an installation is found from where the application runs', () => {
   assert.equal(msi?.kind, 'msi');
   assert.equal(msi?.asset('1.3.0'), 'circle-desktop-1.3.0-windows-x64.msi');
   assert.equal(msi?.target, 'C:\\Program Files\\Circle');
-  // Only the .msi is released for Windows: a copy elsewhere is updated by hand. No package
-  // for the others, and Linux's sandbox helper must stay root's
+  // Only the .msi is released for Windows: a copy elsewhere is updated by hand.
   assert.equal(
     installation(
       'win32',
@@ -82,10 +86,18 @@ test('an installation is found from where the application runs', () => {
     installation('win32', 'arm64', 'C:\\Circle\\Circle.exe'),
     undefined,
   );
+  const linux = installation('linux', 'x64', '/opt/Circle-linux-x64/Circle');
+  assert.equal(linux?.kind, 'linux');
+  assert.equal(linux?.target, '/opt/Circle-linux-x64');
+  assert.equal(linux?.asset('1.7.4'), 'circle-desktop-1.7.4-linux-x64.tar.gz');
   assert.equal(
-    installation('linux', 'x64', '/opt/Circle-linux-x64/Circle'),
-    undefined,
+    installation('linux', 'arm64', '/opt/Circle-linux-arm64/Circle')?.asset(
+      '1.7.4',
+    ),
+    'circle-desktop-1.7.4-linux-arm64.tar.gz',
   );
+  assert.equal(installation('linux', 'ia32', '/opt/Circle/Circle'), undefined);
+  assert.equal(installation('linux', 'x64', '/Circle'), undefined);
 });
 
 test('releases come from GitHub unless a local or https copy is named', () => {
@@ -616,4 +628,298 @@ test('an installer that does not start leaves the application running and says s
   });
   assert.equal(quit, 0);
   assert.equal(existsSync(join(folder, 'pending.json')), false);
+});
+
+function linuxArchive(
+  root: string,
+  version: string,
+  versionFile = version,
+  marker?: string,
+): Buffer {
+  const packed = join(root, `packed-${versionFile}`);
+  const folder = join(packed, 'Circle-linux-x64');
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'CIRCLE_VERSION'), `${versionFile}\n`);
+  writeFileSync(
+    join(folder, 'Circle'),
+    marker ? `#!/bin/sh\necho "$@" > "${marker}"\n` : '#!/bin/sh\necho new\n',
+    { mode: 0o755 },
+  );
+  writeFileSync(join(folder, 'chrome-sandbox'), '');
+  const archive = join(root, `circle-desktop-${version}-linux-x64.tar.gz`);
+  execFileSync('tar', ['-czf', archive, '-C', packed, 'Circle-linux-x64']);
+  return readFileSync(archive);
+}
+
+test("a checkout uses Circle's version, and an equal or newer local version is not offered", async (t) => {
+  assert.equal(circleAppVersion(false, '0.1.0'), VERSION);
+  assert.equal(circleAppVersion(true, '1.7.4'), '1.7.4');
+  assert.equal(circleAppVersion(true, 'not-a-version'), VERSION);
+  const root = scratch(t);
+  const releases = await release(t, '1.7.4', {});
+  const options = {
+    home: join(root, 'home'),
+    folder: join(root, 'updates'),
+    releases,
+    launch: () => {},
+    quit: () => {},
+  };
+  assert.deepEqual(
+    await new Updater({ ...options, version: '1.7.4' }).check(),
+    {
+      phase: 'current',
+    },
+  );
+  assert.deepEqual(
+    await new Updater({ ...options, version: '1.8.0' }).check(),
+    {
+      phase: 'current',
+    },
+  );
+});
+
+test('a writable Linux copy is checked, swapped, and does not restart while chrome-sandbox is setuid', async (t) => {
+  const root = scratch(t);
+  const version = '1.1.0';
+  const asset = `circle-desktop-${version}-linux-x64.tar.gz`;
+  const marker = join(root, 'started');
+  const bytes = linuxArchive(root, version, version, marker);
+  const releases = await release(t, version, {
+    [asset]: bytes,
+    [`${asset}.sha256`]: `${sha(bytes)}  ${asset}\n`,
+  });
+  const target = join(root, 'Circle-linux-x64');
+  mkdirSync(target, { recursive: true });
+  const executable = join(target, 'Circle');
+  writeFileSync(executable, '#!/bin/sh\n', { mode: 0o755 });
+  writeFileSync(join(target, 'chrome-sandbox'), '');
+  chmodSync(join(target, 'chrome-sandbox'), 0o4755);
+  // Windows does not store the setuid bit, so the flag below follows the real mode.
+  const setuid = sandboxIsSetuid(target);
+  if (!setuid) assert.equal(process.platform, 'win32');
+  const folder = join(root, 'updates');
+  const launched: [string, string[]][] = [];
+  let quit = 0;
+  const updater = new Updater({
+    version: '1.0.0',
+    home: join(root, 'home'),
+    folder,
+    installation: {
+      kind: 'linux',
+      target,
+      executable,
+      asset: (next) => `circle-desktop-${next}-linux-x64.tar.gz`,
+    },
+    releases,
+    // The Linux installer is chosen from this, not from the machine running the test.
+    platform: 'linux',
+    launch: (command, args) => {
+      launched.push([command, args]);
+    },
+    quit: () => quit++,
+    pid: 1,
+    args: ['--no-remote'],
+  });
+  const found = await updater.check();
+  assert.equal(found.phase, 'available');
+  assert.equal(found.phase === 'available' ? found.page : 'skipped', undefined);
+  assert.deepEqual(found.phase === 'available' ? found.linux : undefined, {
+    folder: target,
+    sandbox: setuid,
+  });
+  assert.equal((await updater.download()).phase, 'ready');
+  assert.equal(
+    readFileSync(
+      join(folder, version, 'app', 'Circle-linux-x64', 'CIRCLE_VERSION'),
+      'utf8',
+    ).trim(),
+    version,
+  );
+  assert.equal((await updater.install()).phase, 'installing');
+  assert.equal(quit, 1);
+  const [command, args] = launched[0]!;
+  assert.equal(command, '/bin/sh');
+  assert.equal(args[6], setuid ? '1' : '0');
+  assert.equal(readFileSync(args[0]!, 'utf8'), LINUX_INSTALLER);
+  // The script needs a Unix shell and, for the setuid case, a mode bit Windows
+  // does not keep. The launch command above is the decision either way.
+  if (!setuid || !existsSync('/bin/sh')) return;
+  args[1] = '999999';
+  assert.equal(spawnSync(command, args, { stdio: 'inherit' }).status, 0);
+  assert.equal(
+    readFileSync(join(target, 'CIRCLE_VERSION'), 'utf8').trim(),
+    version,
+  );
+  const log = readFileSync(join(folder, 'install.log'), 'utf8');
+  assert.match(log, /installed/);
+  assert.match(log, /sudo chmod 4755/);
+  assert.equal(existsSync(marker), false);
+  assert.equal(
+    JSON.parse(readFileSync(join(folder, 'pending.json'), 'utf8')).sandbox,
+    true,
+  );
+  const again = new Updater({
+    version,
+    home: join(root, 'home'),
+    folder,
+    installation: {
+      kind: 'linux',
+      target,
+      executable,
+      asset: (next) => `circle-desktop-${next}-linux-x64.tar.gz`,
+    },
+    releases,
+    launch: () => {},
+    quit: () => {},
+  });
+  const started = await again.start();
+  assert.equal(started.phase, 'current');
+  assert.equal(started.phase === 'current' ? started.updated : '', version);
+  assert.deepEqual(started.phase === 'current' ? started.linux : undefined, {
+    folder: target,
+    sandbox: true,
+  });
+  assert.equal(
+    JSON.parse(readFileSync(join(root, 'home', 'whats-new.json'), 'utf8')).seen,
+    '1.0.0',
+  );
+});
+
+test('a Linux update starts again when chrome-sandbox is not setuid', async (t) => {
+  const root = scratch(t);
+  const version = '1.1.0';
+  const asset = `circle-desktop-${version}-linux-x64.tar.gz`;
+  const marker = join(root, 'started');
+  const bytes = linuxArchive(root, version, version, marker);
+  const releases = await release(t, version, {
+    [asset]: bytes,
+    [`${asset}.sha256`]: `${sha(bytes)}  ${asset}\n`,
+  });
+  const target = join(root, 'opt', 'Circle-linux-x64');
+  mkdirSync(target, { recursive: true });
+  const executable = join(target, 'Circle');
+  writeFileSync(executable, '#!/bin/sh\n', { mode: 0o755 });
+  const folder = join(root, 'updates');
+  let command = '';
+  let args: string[] = [];
+  const updater = new Updater({
+    version: '1.0.0',
+    home: join(root, 'home'),
+    folder,
+    installation: {
+      kind: 'linux',
+      target,
+      executable,
+      asset: (next) => `circle-desktop-${next}-linux-x64.tar.gz`,
+    },
+    releases,
+    platform: 'linux',
+    launch: (launchedCommand, launched) => {
+      command = launchedCommand;
+      args = launched;
+    },
+    quit: () => {},
+    pid: 1,
+  });
+  await updater.check();
+  await updater.download();
+  await updater.install();
+  assert.equal(command, '/bin/sh');
+  assert.equal(args[6], '0');
+  if (!existsSync('/bin/sh')) return;
+  args[1] = '999999';
+  spawn('/bin/sh', args, { stdio: 'inherit' });
+  await until(() => existsSync(marker));
+  assert.equal(existsSync(marker), true);
+  assert.match(readFileSync(join(folder, 'install.log'), 'utf8'), /starting /);
+  assert.equal(
+    readFileSync(join(folder, 'install.log'), 'utf8').includes('sudo chmod'),
+    false,
+  );
+});
+
+test("a Linux archive with a path that leaves it, or without Circle's version, is not installed", async (t) => {
+  const root = scratch(t);
+  const evil = join(root, 'evil.tar.gz');
+  execFileSync('python3', [
+    '-c',
+    `import tarfile, io
+tar = tarfile.open(${JSON.stringify(evil)}, 'w:gz')
+info = tarfile.TarInfo('../evil')
+info.size = 1
+tar.addfile(info, io.BytesIO(b'x'))
+tar.close()`,
+  ]);
+  const asset = 'circle-desktop-1.1.0-linux-x64.tar.gz';
+  const bad = readFileSync(evil);
+  const plain = linuxArchive(root, '1.1.0', '9.9.9');
+  const releases = await release(t, '1.1.0', {
+    [asset]: bad,
+    [`${asset}.sha256`]: `${sha(bad)}  ${asset}\n`,
+  });
+  const target = join(root, 'Circle-linux-x64');
+  mkdirSync(target, { recursive: true });
+  const options = {
+    version: '1.0.0',
+    home: join(root, 'home'),
+    folder: join(root, 'updates'),
+    installation: {
+      kind: 'linux' as const,
+      target,
+      executable: join(target, 'Circle'),
+      asset: (next: string) => `circle-desktop-${next}-linux-x64.tar.gz`,
+    },
+    releases,
+    launch: () => assert.fail('nothing to install'),
+    quit: () => assert.fail('nothing to install'),
+  };
+  const updater = new Updater(options);
+  await updater.check();
+  const failed = await updater.download();
+  assert.equal(failed.phase, 'failed');
+  assert.match((failed as { error: string }).error, /leaves the archive/);
+
+  const again = await release(t, '1.1.0', {
+    [asset]: plain,
+    [`${asset}.sha256`]: `${sha(plain)}  ${asset}\n`,
+  });
+  const mismatch = new Updater({
+    ...options,
+    releases: again,
+    home: join(root, 'home2'),
+    folder: join(root, 'updates2'),
+  });
+  await mismatch.check();
+  const wrong = await mismatch.download();
+  assert.equal(wrong.phase, 'failed');
+  assert.match(
+    (wrong as { error: string }).error,
+    /does not hold Circle 1\.1\.0/,
+  );
+});
+
+test('a Linux folder that cannot be written keeps the release page and the steps', async (t) => {
+  const root = scratch(t);
+  const releases = await release(t, '2.0.0', {});
+  const target = join(root, 'missing', 'Circle-linux-x64');
+  const updater = new Updater({
+    version: '1.0.0',
+    home: join(root, 'home'),
+    folder: join(root, 'updates'),
+    installation: {
+      kind: 'linux',
+      target,
+      executable: join(target, 'Circle'),
+      asset: (version) => `circle-desktop-${version}-linux-x64.tar.gz`,
+    },
+    releases,
+    launch: () => assert.fail('nothing to install'),
+    quit: () => assert.fail('nothing to install'),
+  });
+  const state = await updater.check();
+  assert.equal(state.phase, 'available');
+  if (state.phase !== 'available') return;
+  assert.equal(state.page, `${releases}/tag/v2.0.0`);
+  assert.deepEqual(state.linux, { folder: target, sandbox: false });
+  assert.equal(LINUX_INSTALLER.includes('sudo chmod 4755'), true);
 });

@@ -53,7 +53,7 @@ irm https://raw.githubusercontent.com/circle-platforms/circle/main/install.ps1 |
 
 文件在[发布页面](https://github.com/circle-platforms/circle/releases)。它不是 Apple 或 Microsoft 签名的，第一次打开需要你确认。Windows 安装器把它装到 `C:\Program Files\Circle`，并加到开始菜单。Linux 上沙箱助手要先做一次需要 root 的设置。步骤见[安装与升级](https://circle-platforms.github.io/circle/installation/#the-desktop-application)。
 
-macOS 和 Windows 上它可以自己更新：设置 → 关于 → 立即检查，然后更新并重启。Linux 上「立即检查」会打开发布页面，文件夹要自己替换。1.2.0 及更早的版本不会自己更新。
+macOS 和 Windows 上它可以自己更新：设置 → 关于 → 立即检查，然后更新并重启。Linux 上同一次检查会替换它能写入的文件夹。Circle 1.6.0 和已发布的 1.7.4 还没有这个更新器：需要按[安装与升级](https://circle-platforms.github.io/circle/installation/#the-desktop-application)手动更新一次，之后才会有。1.2.0 及更早的版本在任何系统上都不会自己更新。
 
 窗口第一次打开时跟随系统语言，可以是英文或简体中文。终端界面仍是英文。从源码运行见 [apps/desktop](apps/desktop/README.md)。
 

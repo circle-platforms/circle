@@ -53,7 +53,7 @@ Each release also has Circle as a desktop application: the same agent in its own
 
 Take the file from [Releases](https://github.com/circle-platforms/circle/releases). It is signed ad hoc, not by Apple or Microsoft, so the first launch asks you to confirm. The Windows installer puts Circle in `C:\Program Files\Circle` and on the Start menu. On Linux the sandbox helper needs one root command. The steps are in [Installation](https://circle-platforms.github.io/circle/installation/#the-desktop-application).
 
-On macOS and Windows the application updates itself: settings → about → check now, then update and restart. On Linux, check now opens the release page and the folder is replaced by hand. Releases up to 1.2.0 do not update themselves.
+On macOS and Windows the application updates itself: settings → about → check now, then update and restart. On Linux the same check replaces a folder it can write. Circle 1.6.0 and the published 1.7.4 do not have that updater: one manual update, in [Installation](https://circle-platforms.github.io/circle/installation/#the-desktop-application), is what installs it. Releases up to 1.2.0 do not update themselves on any system.
 
 The window follows the system language the first time, and can be English or 简体中文. The terminal stays English. To run it from a checkout, see [apps/desktop](apps/desktop/README.md).
 

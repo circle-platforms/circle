@@ -32,6 +32,18 @@ test('an unanswered prompt is marked interrupted once', (t) => {
   cleanup(t, () => store.close());
   const session = store.create(home, 'model');
   store.append(session.id, [{ id: 'u', role: 'user', content: 'hello' }]);
+  const updated = store.get(session.id)!.updated;
+  // A 1.6 session has the user message and no open-turn row. Opening it must
+  // not invent an interrupted line or move the session's time.
+  store.repairInterrupted(session.id);
+  assert.equal(
+    store
+      .messages(session.id)
+      .some((message) => message.internal === 'interrupted'),
+    false,
+  );
+  assert.equal(store.get(session.id)!.updated, updated);
+  store.noteTurn(session.id);
   store.repairInterrupted(session.id);
   store.repairInterrupted(session.id);
   const marks = store
@@ -39,6 +51,7 @@ test('an unanswered prompt is marked interrupted once', (t) => {
     .filter((message) => message.internal === 'interrupted');
   assert.equal(marks.length, 1);
   assert.equal(marks[0]!.display, 'Interrupted');
+  assert.equal(store.get(session.id)!.updated, updated);
   const streamed = store.create(home, 'model');
   store.append(streamed.id, [
     { id: 'u2', role: 'user', content: 'go on' },
@@ -51,12 +64,13 @@ test('an unanswered prompt is marked interrupted once', (t) => {
       usage: { input_tokens: 10, output_tokens: 4, cache_read_tokens: 0 },
     },
   ]);
+  store.noteTurn(streamed.id);
   store.repairInterrupted(streamed.id);
   store.repairInterrupted(streamed.id);
   const after = store
     .messages(streamed.id)
     .filter((message) => message.internal === 'interrupted');
-  assert.equal(after.length, 1);
+  assert.equal(after.length, 0);
   const finished = store.create(home, 'model');
   store.append(finished.id, [
     { id: 'u3', role: 'user', content: 'done' },
@@ -172,7 +186,7 @@ test('a partial reply reports the same output on the turn line and in the footer
   assert.equal(footer.includes('cache 0.0%'), false);
   assert.match(footer, /cache N\/A/);
   assert.equal(answer?.cost?.amount, 0.0035);
-  assert.equal(formatCosts([messageCosts([answer!])]), '~$0.0035');
+  assert.equal(formatCosts([messageCosts([answer!])]), '$0.0035~');
   const unpriced = messageCosts([
     answer!,
     {
@@ -184,7 +198,7 @@ test('a partial reply reports the same output on the turn line and in the footer
       cost: { ...answer!.cost!, amount: null, currency: '' },
     },
   ]);
-  assert.equal(formatCosts([unpriced]), '~$0.0035+');
+  assert.equal(formatCosts([unpriced]), '$0.0035~+');
   const estimateOnly = messageCosts([
     {
       ...answer!,

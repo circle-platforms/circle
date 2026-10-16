@@ -1299,4 +1299,19 @@ test("a finished turn keeps its requests' tokens and, when every one is priced i
   unpriced.apply(event('llm_end', { message: { id: 'm2' } }), last);
   unpriced.apply(event('run_end'), last);
   assert.equal(unpriced.usage.final!.cost, null);
+  // A negative receipt is not a credit. The turn keeps the priced calls.
+  const credited = new TurnStatus(() => 0.35);
+  credited.apply(event('run_start'), last);
+  credited.apply(event('llm_end', priced(0.02), { output_tokens: 1 }), last);
+  credited.apply(event('llm_end', priced(-0.0182), { output_tokens: 1 }), last);
+  credited.apply(event('run_end'), last);
+  assert.equal(credited.usage.final!.cost, 0.02);
+  const onlyCredit = new TurnStatus(() => 0.35);
+  onlyCredit.apply(event('run_start'), last);
+  onlyCredit.apply(
+    event('llm_end', priced(-0.0182), { output_tokens: 162 }),
+    last,
+  );
+  onlyCredit.apply(event('run_end'), last);
+  assert.equal(onlyCredit.usage.final!.cost, 0);
 });

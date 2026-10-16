@@ -307,6 +307,59 @@ test('esc esc opens the tree only within half a second', async (t) => {
   assert.equal(list(), 'Session tree');
 });
 
+test('stopping mid-stream marks the saved reply once, including after switching back', async (t) => {
+  const saved = {
+    LANG: process.env.LANG,
+    LC_ALL: process.env.LC_ALL,
+    LANGUAGE: process.env.LANGUAGE,
+  };
+  process.env.LANG = 'C';
+  delete process.env.LC_ALL;
+  delete process.env.LANGUAGE;
+  t.after(() => {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+  let release: (() => void) | undefined;
+  const held = new Promise<void>((ready) => {
+    release = ready;
+  });
+  const { app, ui, runtime, model } = await session(t, [
+    async (request) => {
+      request.token('partial answer');
+      await held;
+      throw request.signal.reason ?? new Error('Interrupted');
+    },
+  ]);
+  const turn = app.submit('think');
+  await until(
+    () =>
+      model.requests.length === 1 && app.state.streaming.includes('partial'),
+  );
+  ui.handle({ type: 'key', key: 'escape', char: '' });
+  release?.();
+  await turn;
+  ui.repaint();
+  const marks = (rows: string[]) =>
+    stripAnsi(rows.join('\n')).split('Interrupted').length - 1;
+  assert.equal(marks(ui.frameRows), 1);
+  assert.equal(app.state.notices.includes('✖ Interrupted'), false);
+  assert.equal(
+    runtime.harness.messages.some(
+      (message) => message.role === 'assistant' && message.interrupted,
+    ),
+    true,
+  );
+  const id = runtime.session.id;
+  await app.submit('/new');
+  await app.submit(`/resume ${id}`);
+  ui.repaint();
+  assert.equal(marks(ui.frameRows), 1);
+  assert.equal(app.state.notices.includes('✖ Interrupted'), false);
+});
+
 test('stopping a turn marks it interrupted, and the mark goes once the next turn starts', async (t) => {
   const { app, ui, runtime, model } = await session(t, [
     (request) =>

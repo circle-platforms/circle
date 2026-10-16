@@ -7,6 +7,7 @@ import type { Message } from './types.js';
 import {
   acquireSessionLease,
   sessionOccupied,
+  sweepStaleSessionLocks,
   type SessionLease,
 } from './session_lock.js';
 import {
@@ -97,7 +98,11 @@ export function databaseOpenError(error: unknown): Error {
   return friendly;
 }
 
-function openDatabase(path: string, onBusy?: () => void): DatabaseSync {
+function openDatabase(
+  path: string,
+  onBusy?: () => void,
+  home?: string,
+): DatabaseSync {
   let last: unknown;
   let told = false;
   for (let attempt = 0; attempt < STORE_OPEN_ATTEMPTS; attempt++) {
@@ -160,9 +165,13 @@ function openDatabase(path: string, onBusy?: () => void): DatabaseSync {
       }
       if (timeout !== STORE_BUSY_MS)
         db.exec(`PRAGMA busy_timeout = ${STORE_BUSY_MS}`);
-      // When #154 merges, create `open_turns` and call sweepStaleSessionLocks
-      // here, before this return. Both belong inside this retry: outside it, a
-      // held lock exits with "database is locked" again.
+      // A turn that died after the user message was saved records its head here.
+      // Both this statement and the lock sweep stay inside the retry: outside
+      // it, a held lock exits with "database is locked" again.
+      db.exec(
+        `CREATE TABLE IF NOT EXISTS open_turns (session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE, head TEXT, started REAL NOT NULL)`,
+      );
+      if (home) sweepStaleSessionLocks(home);
       return db;
     } catch (error) {
       try {
@@ -210,6 +219,7 @@ export class CheckpointStore {
     this.db = openDatabase(
       home ? join(ensureHome(home), 'circle.sqlite') : ':memory:',
       hooks?.onBusy,
+      home,
     );
   }
   /** Sessions kept in memory until the first message, so an unused /new leaves no row. */
@@ -534,9 +544,17 @@ export class CheckpointStore {
           .run(id, sessionId, head, text, Date.now());
         head = id;
       }
-      this.db
-        .prepare('UPDATE sessions SET head = ?, updated = ? WHERE id = ?')
-        .run(head, Date.now(), sessionId);
+      // An internal-only append (an interrupted marker, a mode boundary) is not
+      // activity. Touching `updated` made the desktop list that session as just
+      // changed when it was only opened.
+      if (messages.some((message) => !message.internal))
+        this.db
+          .prepare('UPDATE sessions SET head = ?, updated = ? WHERE id = ?')
+          .run(head, Date.now(), sessionId);
+      else
+        this.db
+          .prepare('UPDATE sessions SET head = ? WHERE id = ?')
+          .run(head, sessionId);
       this.db.exec('COMMIT');
       // When the cache holds the head this append started from, the new messages extend
       // it; otherwise the chain is walked again on the next read. It extends with what was
@@ -843,6 +861,42 @@ export class CheckpointStore {
       throw error;
     }
   }
+  /**
+   * The head just after the user message of a turn, before the model answers.
+   * A crash between the two leaves this row; a reply, a cancel and a clean
+   * error clear it.
+   */
+  noteTurn(sessionId: string): void {
+    const session = this.get(sessionId);
+    if (!session?.head) return;
+    this.writing([sessionId], () => {
+      this.db
+        .prepare(
+          `INSERT INTO open_turns (session_id, head, started) VALUES (?, ?, ?)
+           ON CONFLICT(session_id) DO UPDATE SET head = excluded.head, started = excluded.started`,
+        )
+        .run(sessionId, session.head, Date.now());
+    });
+  }
+  /** Drops the open-turn note. Safe while the store is closing. */
+  clearTurn(sessionId: string): void {
+    try {
+      this.writing([sessionId], () => {
+        this.db
+          .prepare('DELETE FROM open_turns WHERE session_id = ?')
+          .run(sessionId);
+      });
+    } catch {
+      /* The store may already be closing. */
+    }
+  }
+  private turnMatches(sessionId: string): boolean {
+    const session = this.get(sessionId);
+    const row = this.db
+      .prepare('SELECT head FROM open_turns WHERE session_id = ?')
+      .get(sessionId) as { head: string | null } | undefined;
+    return Boolean(row && session && row.head === session.head);
+  }
   repairInterrupted(sessionId: string): void {
     const messages = this.messages(sessionId);
     const pending = new Map<string, string>();
@@ -856,34 +910,39 @@ export class CheckpointStore {
         sessionId,
         [...pending].map(([id, name]) => ({
           id: randomUUID(),
-          role: 'tool',
+          role: 'tool' as const,
           tool_call_id: id,
           name,
-          status: 'error',
+          status: 'error' as const,
           content:
             'Interrupted before a tool result was saved. The tool is not replayed.',
         })),
       );
+      this.clearTurn(sessionId);
       return;
     }
-    if (messages.some((message) => message.internal === 'interrupted')) return;
+    if (messages.some((message) => message.internal === 'interrupted')) {
+      this.clearTurn(sessionId);
+      return;
+    }
     const last = messages.filter((message) => !message.internal).at(-1);
-    // A turn stopped while the assistant was still streaming saves that partial
-    // reply. The last message is then the assistant, and the marker was skipped.
-    const stopped =
-      last?.role === 'user' ||
-      (last?.role === 'assistant' && last.interrupted === true);
-    if (!stopped) return;
-    this.append(sessionId, [
-      {
-        id: randomUUID(),
-        role: 'user',
-        content:
-          'The previous turn was interrupted before a reply was saved. Continue from the last user message if they ask again.',
-        display: 'Interrupted',
-        internal: 'interrupted',
-      },
-    ]);
+    // Only a turn that died after this user message was saved and before any
+    // reply moved the head. A saved partial (`interrupted: true`), a finished
+    // reply, a shell line and a 1.6 session (no open-turn row) are left alone.
+    const unanswered =
+      last?.role === 'user' && !last.shell && this.turnMatches(sessionId);
+    if (unanswered)
+      this.append(sessionId, [
+        {
+          id: randomUUID(),
+          role: 'user',
+          content:
+            'The previous turn was interrupted before a reply was saved. Continue from the last user message if they ask again.',
+          display: 'Interrupted',
+          internal: 'interrupted',
+        },
+      ]);
+    this.clearTurn(sessionId);
   }
   setSummary(sessionId: string, at: string, summary: string): void {
     const checkpoint = this.checkpoint(at);

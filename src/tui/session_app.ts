@@ -58,6 +58,9 @@ import {
   type PickerOptions,
 } from '../ink/components/picker.js';
 import { welcomeRows } from '../ink/components/welcome.js';
+import { noticeLocale, type WhatsNewNotice } from '../whats_new.js';
+import { dismissWhatsNew, pendingWhatsNew } from '../whats_new_state.js';
+import { whatsNewRows } from './whats_new_rows.js';
 import {
   renderScreen,
   transcriptRows,
@@ -401,6 +404,21 @@ export class SessionApp {
       this.done = resolve;
     });
     this.welcomeState = new WelcomeState(workspace);
+    this.whatsNew = pendingWhatsNew(home);
+  }
+  /** Upgrade notes still waiting. Shown under the welcome on an empty session. */
+  private whatsNew?: WhatsNewNotice;
+  /** The notice was painted on the home page. Dismiss or a real prompt marks it seen. */
+  private whatsNewShown = false;
+  private transcriptIsHome(): boolean {
+    const messages = this.runtime?.harness.messages ?? this.state.messages;
+    return !messages.some((message) => !message.internal);
+  }
+  private dismissNotice(): void {
+    if (!this.whatsNew) return;
+    dismissWhatsNew(this.home);
+    this.whatsNew = undefined;
+    this.repaint();
   }
   private makeView(): SessionView {
     const settings = this.settings;
@@ -775,6 +793,18 @@ export class SessionApp {
         ) +
         palette().reset,
     );
+    if (this.whatsNew && this.transcriptIsHome()) {
+      this.whatsNewShown = true;
+      const blank = this.state.welcome.pop() ?? '';
+      this.state.welcome.push(
+        ...whatsNewRows(
+          this.whatsNew,
+          noticeLocale(process.env),
+          process.stdout.columns || 80,
+        ),
+        blank,
+      );
+    }
     if (!this.started || Date.now() - this.titleAt < 1000) return;
     this.titleAt = Date.now();
     const runtime = this.runtime;
@@ -1235,8 +1265,16 @@ export class SessionApp {
               assistant && (assistant.completion || assistant.truncated)
                 ? completionFailure(assistant)
                 : undefined;
-            if (event.payload.interrupted) this.addNotice('✖ Interrupted');
-            else if (
+            if (event.payload.interrupted) {
+              const saved = this.runtime?.harness.messages.findLast(
+                (message) => !message.internal,
+              );
+              // The saved reply draws this mark itself. A second live notice
+              // shows it twice, and again after switching back to the session.
+              // A stop before any text has no reply, so the notice is the mark.
+              if (!(saved?.role === 'assistant' && saved.interrupted))
+                this.addNotice('✖ Interrupted');
+            } else if (
               !event.payload.completion_failure ||
               persisted?.code !== event.payload.completion_failure
             ) {
@@ -2260,6 +2298,8 @@ export class SessionApp {
           this.lastEscape = Date.now();
           this.flash('press esc again to clear · ctrl+y restores');
         }
+      } else if (this.whatsNew && this.transcriptIsHome()) {
+        this.dismissNotice();
       } else if (
         Date.now() - this.lastEscape < 500 &&
         this.settings.double_escape !== 'none'
@@ -2743,6 +2783,10 @@ export class SessionApp {
     }
     this.jobWakeSnoozed = false;
     this.jobWakeCount = 0;
+    // The notice was on the home page and a session is starting. Hiding it
+    // because the transcript is no longer empty is not enough: /new would
+    // show it again. Dismiss or this prompt marks it seen.
+    if (this.whatsNewShown) this.dismissNotice();
     if (shown !== message)
       runtime.harness.shown.set(message, { display: shown, pastes });
     if (runtime.busy) {

@@ -7,9 +7,17 @@ import {
   appendFileSync,
   existsSync,
   readFileSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { delimiter, join, resolve } from 'node:path';
+import { userInfo } from 'node:os';
+import { delimiter, resolve } from 'node:path';
+import {
+  shellProbe,
+  shellStartupFile,
+  withoutStrayZshrc,
+  zshIsInstalled,
+} from './shell_rc.js';
 import {
   DEFAULT_REPO,
   activeVersion,
@@ -57,22 +65,59 @@ if (process.platform !== 'win32') {
   else if (process.env.CIRCLE_NO_PATH === '1')
     say(`add ${binDir} to PATH, or run ${binDir}/circle`);
   else {
-    // One marked line in the shell's startup file, which circle uninstall takes out again.
-    const rc = join(
-      process.env.HOME || process.env.USERPROFILE || '',
-      (process.env.SHELL || '').includes('bash') ? '.bashrc' : '.zshrc',
-    );
-    const marked =
-      existsSync(rc) && readFileSync(rc, 'utf8').includes('# circle path');
-    if (!marked) {
-      appendFileSync(
-        rc,
-        `\n# circle path\nexport PATH="${binDir.replaceAll('"', '\\"')}:$PATH"\n`,
-      );
-      say(`added ${binDir} to PATH in ${rc}`);
+    // $SHELL, then $BASH, then the login shell. Skip a shell that is not
+    // installed, so a bash-only machine does not grow a ~/.zshrc. The marked
+    // line is the one circle uninstall removes.
+    let loginShell: string | undefined;
+    try {
+      loginShell = userInfo().shell || undefined;
+    } catch {
+      loginShell = undefined;
     }
-    say(
-      `open a new terminal (or run: source ${rc}), then: cd /path/to/project && circle`,
-    );
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    // Tests set CIRCLE_SHELL_ROOT so `/bin/zsh` is a file they created, not the
+    // machine's. A real install leaves it unset and sees the real programs.
+    const shellExists = shellProbe(existsSync, process.env.CIRCLE_SHELL_ROOT);
+    const startup = shellStartupFile({
+      home,
+      env: process.env,
+      exists: shellExists,
+      loginShell,
+    });
+    if (!startup) say(`add ${binDir} to PATH, or run ${binDir}/circle`);
+    else {
+      const rc = startup.file;
+      const marked =
+        existsSync(rc) && readFileSync(rc, 'utf8').includes('# circle path');
+      if (!marked) {
+        appendFileSync(
+          rc,
+          `\n# circle path\nexport PATH="${binDir.replaceAll('"', '\\"')}:$PATH"\n`,
+        );
+        say(`added ${binDir} to PATH in ${rc}`);
+      }
+      say(
+        `open a new terminal (or run: source ${rc}), then: cd /path/to/project && circle`,
+      );
+    }
+    // The old installer wrote ~/.zshrc whenever $SHELL was not bash, including
+    // on a machine with no zsh. That line does nothing there; take it out.
+    if (!zshIsInstalled(shellExists)) {
+      const zshrc = resolve(home, '.zshrc');
+      if (existsSync(zshrc)) {
+        const next = withoutStrayZshrc(readFileSync(zshrc, 'utf8'));
+        if (next !== undefined) {
+          // The old installer created this file for the block. Nothing else
+          // was in it, so an empty file would only be ours.
+          if (next.trim() === '') unlinkSync(zshrc);
+          else writeFileSync(zshrc, next);
+          say(
+            next.trim() === ''
+              ? `removed ${zshrc}; it only had a circle PATH line and zsh is not installed`
+              : `removed a circle PATH line from ${zshrc}; zsh is not installed`,
+          );
+        }
+      }
+    }
   }
 }

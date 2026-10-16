@@ -29,18 +29,33 @@ export interface DesktopInfo {
 export type DesktopAction =
   'new' | 'tree' | 'import' | 'export' | 'settings' | 'open-folder' | 'help';
 /**
+ * Linux steps shown with an update. `sandbox` means the running chrome-sandbox is
+ * setuid, so the new copy will not start until that helper belongs to root again.
+ */
+export interface LinuxUpdate {
+  folder: string;
+  sandbox: boolean;
+}
+/**
  * Where the application's own update is. `page` is the release page, given when this copy
  * cannot replace itself (or failed to) and the new version is downloaded by hand.
+ * `linux` is set only for a Linux copy, and only while an update is in progress.
  */
 export type UpdateState =
   | { phase: 'idle' }
   | { phase: 'checking' }
-  | { phase: 'current'; updated?: string }
-  | { phase: 'available'; version: string; page?: string }
+  | { phase: 'current'; updated?: string; linux?: LinuxUpdate }
+  | { phase: 'available'; version: string; page?: string; linux?: LinuxUpdate }
   | { phase: 'downloading'; version: string; received: number; total: number }
-  | { phase: 'ready'; version: string }
-  | { phase: 'installing'; version: string }
-  | { phase: 'failed'; version?: string; error: string; page?: string };
+  | { phase: 'ready'; version: string; linux?: LinuxUpdate }
+  | { phase: 'installing'; version: string; linux?: LinuxUpdate }
+  | {
+      phase: 'failed';
+      version?: string;
+      error: string;
+      page?: string;
+      linux?: LinuxUpdate;
+    };
 export type UpdateAction = 'check' | 'download' | 'install';
 export interface DesktopBridge {
   apiVersion: 1;

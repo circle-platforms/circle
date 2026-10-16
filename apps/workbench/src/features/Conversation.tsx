@@ -1,7 +1,10 @@
 import { effectiveBindings, matchingAction } from '../model/shortcuts';
 import { planVisible } from '../../../../src/plan_state';
 import { agentActivityText } from '../model/activity';
-import { completionNoticeText } from '../model/completion';
+import {
+  completionNoticeText,
+  withoutDuplicateStops,
+} from '../model/completion';
 import { usePlugins } from '../plugins/context';
 import { PluginBoundary } from '../plugins/Boundary';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -149,7 +152,7 @@ export function Conversation({
   const workspace = snapshot.workspaces.find(
     (item) => item.id === session.workspaceId,
   )!;
-  const messages = visibleMessages(session);
+  const messages = withoutDuplicateStops(visibleMessages(session));
   const composerWritable =
     !session.archivedAt &&
     session.lifecycle !== 'deleting' &&

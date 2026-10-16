@@ -65,6 +65,10 @@ const paths = await packager({
   prune: false,
 });
 for (const path of paths) console.log(path);
+// Electron writes its own `version` file (the Electron version) beside the binary.
+// CIRCLE_VERSION is Circle's version, so a person and the Linux updater can read it.
+for (const path of paths)
+  await writeFile(join(path, 'CIRCLE_VERSION'), `${version}\n`);
 // circle-desktop-<version>-<os>-<arch>: never a name `circle update` looks for
 const target = `${platform === 'win32' ? 'windows' : platform}-${arch}`;
 const asset = join(outputRoot, `circle-desktop-${version}-${target}`);

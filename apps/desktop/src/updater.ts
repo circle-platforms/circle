@@ -2,12 +2,14 @@
 // update downloads this system's package into the data folder and checks it, and a restart hands
 // it to a small installer that waits for the application to quit, puts the new version in place
 // and starts it: on macOS the .dmg's bundle replaces the running one, on Windows the .msi
-// replaces the installed copy. Any other copy (Linux, Windows outside the .msi's folder, a
-// bundle macOS runs from a translocated path or that may not be written) offers the release
-// page instead.
+// replaces the installed copy, and on Linux the unpacked folder replaces the running one when
+// that folder can be written. A setuid chrome-sandbox cannot be kept, so that Linux update
+// does not start Circle again until the helper belongs to root. Any other copy (Windows
+// outside the .msi's folder, a bundle macOS runs from a translocated path or that may not be
+// written, a Linux folder that may not be written) offers the release page instead.
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { constants, createReadStream, readFileSync } from 'node:fs';
+import { constants, createReadStream, readFileSync, statSync } from 'node:fs';
 import { access, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { join, posix, win32 } from 'node:path';
 import { promisify } from 'node:util';
@@ -18,6 +20,7 @@ import {
   latestRelease,
   rememberLatest,
 } from '../../../src/update.js';
+import { seedWhatsNewFrom } from '../../../src/whats_new_state.js';
 import { compareVersions, validVersion } from '../../../src/version.js';
 import type { UpdateAction, UpdateState } from './contracts';
 
@@ -38,8 +41,8 @@ export function releasesUrl(
 
 /** How this copy of the application is installed, and so how an update replaces it. */
 export interface Installation {
-  /** A macOS .app bundle, or the folder the Windows .msi installed. */
-  kind: 'bundle' | 'msi';
+  /** A macOS .app bundle, the folder the Windows .msi installed, or a Linux folder. */
+  kind: 'bundle' | 'msi' | 'linux';
   /** What the update replaces: the bundle, or the installed folder. */
   target: string;
   /** What starts the application again afterwards. */
@@ -82,8 +85,28 @@ export function installation(
       asset: asset('windows', 'msi'),
     };
   }
-  // Linux: Chromium's sandbox helper must belong to root, which an update cannot keep
+  // Linux: the unpacked folder next to the binary. A writable copy is replaced in
+  // place. chrome-sandbox loses setuid in the swap, so that case does not restart.
+  if (platform === 'linux' && (arch === 'x64' || arch === 'arm64')) {
+    const folder = posix.dirname(executable);
+    if (!folder || folder === '/' || folder === '.') return undefined;
+    return {
+      kind: 'linux',
+      target: folder,
+      executable,
+      asset: asset('linux', 'tar.gz'),
+    };
+  }
   return undefined;
+}
+
+/** Whether the running copy's sandbox helper is setuid. The new files will not be. */
+export function sandboxIsSetuid(folder: string): boolean {
+  try {
+    return (statSync(join(folder, 'chrome-sandbox')).mode & 0o4000) !== 0;
+  } catch {
+    return false;
+  }
 }
 
 /** The hash a .sha256 file gives for `name`: "<hex>  <name>". */
@@ -139,6 +162,54 @@ else
 fi
 echo "starting $executable"
 "$executable" "$@" >/dev/null 2>&1 &
+`;
+// Linux: the same swap as a bundle, then either start Circle or stop. A setuid
+// chrome-sandbox on the copy that just quit will not be setuid on the new files,
+// and Ubuntu 24.04 and later then refuse to start. The log names the two commands.
+export const LINUX_INSTALLER = `#!/bin/sh
+pid=$1 staged=$2 target=$3 executable=$4 log=$5 sandbox=$6
+shift 6
+exec >>"$log" 2>&1
+echo "$(date) installing $staged over $target"
+while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
+echo "Circle has quit"
+parent=$(dirname "$target")
+name=$(basename "$target")
+next="$parent/.$name.update"
+old="$parent/.$name.old"
+rm -rf "$next" "$old"
+installed=0
+if mv "$staged" "$next" 2>/dev/null; then
+  if mv "$target" "$old"; then
+    if mv "$next" "$target"; then
+      rm -rf "$old"
+      echo installed
+      installed=1
+    else
+      mv "$old" "$target"
+      rm -rf "$next"
+      echo "failed: the new copy could not be moved into place"
+    fi
+  else
+    rm -rf "$next"
+    echo "failed: the old copy could not be moved aside"
+  fi
+else
+  rm -rf "$next"
+  echo "failed: the new copy could not be written beside the old one"
+fi
+if [ "$installed" != 1 ]; then
+  exit 0
+fi
+if [ "$sandbox" = 1 ]; then
+  echo "chrome-sandbox must belong to root again or Circle will not start"
+  echo "sudo chown root:root \\"$target/chrome-sandbox\\""
+  echo "sudo chmod 4755 \\"$target/chrome-sandbox\\""
+  echo "then start \\"$executable\\""
+else
+  echo "starting $executable"
+  "$executable" "$@" >/dev/null 2>&1 &
+fi
 `;
 // The installer for Windows, given a JSON plan: waits for Circle and its other processes to end,
 // runs the .msi, which replaces the installed copy, and starts Circle again.
@@ -287,10 +358,24 @@ export class Updater {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
+  private linuxGuide(): { folder: string; sandbox: boolean } | undefined {
+    const found = this.options.installation;
+    if (found?.kind !== 'linux') return undefined;
+    return { folder: found.target, sandbox: sandboxIsSetuid(found.target) };
+  }
   private set(state: UpdateState): UpdateState {
-    this.current = state;
-    for (const listener of this.listeners) listener(state);
-    return state;
+    const linux = this.linuxGuide();
+    const next: UpdateState =
+      linux &&
+      (state.phase === 'available' ||
+        state.phase === 'ready' ||
+        state.phase === 'installing' ||
+        state.phase === 'failed')
+        ? { ...state, linux }
+        : state;
+    this.current = next;
+    for (const listener of this.listeners) listener(next);
+    return next;
   }
   private page(version: string) {
     return `${this.releases}/tag/v${version}`;
@@ -324,10 +409,27 @@ export class Updater {
     if (pending) {
       const wanted = String(pending.version);
       if (wanted === version) {
+        const replaced =
+          typeof pending.from === 'string' ? pending.from : undefined;
+        if (replaced) seedWhatsNewFrom(this.options.home, replaced, version);
+        const remind =
+          pending.sandbox === true &&
+          this.options.installation?.kind === 'linux' &&
+          !sandboxIsSetuid(this.options.installation.target);
+        const linux = remind
+          ? {
+              folder: this.options.installation!.target,
+              sandbox: true,
+            }
+          : undefined;
         // The installer's log stays until the next update, for when something looks wrong
         for (const name of await readdir(folder))
           if (name !== 'install.log') await this.clear(join(folder, name));
-        return this.set({ phase: 'current', updated: version });
+        return this.set({
+          phase: 'current',
+          updated: version,
+          ...(linux ? { linux } : {}),
+        });
       }
       let detail = '';
       try {
@@ -450,7 +552,7 @@ export class Updater {
       );
       if ((await sha256(file)) !== expected)
         throw Error(`${asset} does not match its checksum`);
-      const staged = await this.unpack(found, file, directory);
+      const staged = await this.unpack(found, file, directory, version);
       if (found.kind === 'bundle') {
         const asar = join(staged, 'Contents/Resources/app.asar');
         const manifest = (
@@ -476,6 +578,7 @@ export class Updater {
     found: Installation,
     file: string,
     directory: string,
+    version: string,
   ): Promise<string> {
     if (found.kind === 'bundle') {
       const mount = join(directory, 'mount');
@@ -500,6 +603,41 @@ export class Updater {
       await run('codesign', ['--verify', '--deep', '--strict', app]);
       return app;
     }
+    if (found.kind === 'linux') {
+      const asset = found.asset(version);
+      const listed = String(
+        (await run('tar', ['-tzf', file], { encoding: 'utf8' })).stdout,
+      );
+      const names = listed
+        .split('\n')
+        .map((name) => name.trim())
+        .filter(Boolean);
+      if (!names.length) throw Error(`${asset} is empty`);
+      for (const name of names)
+        if (
+          name.startsWith('/') ||
+          /^[A-Za-z]:[\\/]/.test(name) ||
+          name.split(/[/\\]/).includes('..')
+        )
+          throw Error(`${asset} holds a path that leaves the archive`);
+      const tops = new Set(
+        names.map((name) => name.split(/[/\\]/)[0]).filter(Boolean),
+      );
+      if (tops.size !== 1) throw Error(`${asset} must hold one folder`);
+      const staged = join(directory, 'app');
+      await mkdir(staged);
+      await run('tar', ['-xzf', file, '-C', staged]);
+      const root = join(staged, [...tops][0]!);
+      let marked = '';
+      try {
+        marked = readFileSync(join(root, 'CIRCLE_VERSION'), 'utf8').trim();
+      } catch {
+        marked = '';
+      }
+      if (marked !== version)
+        throw Error(`${asset} does not hold Circle ${version}`);
+      return root;
+    }
     return file;
   }
 
@@ -515,8 +653,11 @@ export class Updater {
     let command: [string, string[]];
     await writeFile(
       join(folder, 'pending.json'),
-      JSON.stringify({ version: ready.version, from: this.options.version }) +
-        '\n',
+      JSON.stringify({
+        version: ready.version,
+        from: this.options.version,
+        ...(this.linuxGuide()?.sandbox ? { sandbox: true } : {}),
+      }) + '\n',
     );
     if ((this.options.platform ?? process.platform) === 'win32') {
       const plan = join(folder, 'install.json');
@@ -547,6 +688,22 @@ export class Updater {
           script,
           plan,
           '-Start',
+        ],
+      ];
+    } else if (found.kind === 'linux') {
+      const script = join(folder, 'install.sh');
+      await writeFile(script, LINUX_INSTALLER);
+      command = [
+        '/bin/sh',
+        [
+          script,
+          pid,
+          ready.staged,
+          found.target,
+          found.executable,
+          log,
+          this.linuxGuide()?.sandbox ? '1' : '0',
+          ...args,
         ],
       ];
     } else {
