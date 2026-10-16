@@ -154,6 +154,7 @@ export function App() {
     setFile(null);
     setFileOwner(undefined);
     setAgent(id);
+    if (narrow) setInspectorOpen(false);
   };
   const [dialog, setDialog] = useState<DialogId | null>(null);
   const [dialogSelection, setDialogSelection] = useState('');
@@ -668,6 +669,19 @@ export function App() {
                 </Button>
                 <strong>{activeAgent.name}</strong>
                 <Status value={agentState(activeAgent)} />
+                {activeAgent.task &&
+                  snapshot.sessions.some(
+                    (item) => item.id === activeAgent.id,
+                  ) && (
+                    <IconButton
+                      label={t('open task conversation')}
+                      onClick={() =>
+                        perform(() => selectSessionAndNavigate(activeAgent.id))
+                      }
+                    >
+                      <ArrowUpRight size={14} />
+                    </IconButton>
+                  )}
               </header>
               <div className="agent-record-body">
                 <h2>{activeAgent.description}</h2>

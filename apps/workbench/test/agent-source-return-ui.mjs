@@ -2,6 +2,28 @@ import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+if (!process.env.CIRCLE_AGENT_SOURCE_WIDTH) {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  for (const theme of ['dark', 'light']) {
+    for (const width of [1280, 375]) {
+      const result = await promisify(execFile)(
+        process.execPath,
+        [...process.execArgv, fileURLToPath(import.meta.url)],
+        {
+          env: {
+            ...process.env,
+            CIRCLE_AGENT_SOURCE_WIDTH: String(width),
+            CIRCLE_AGENT_SOURCE_THEME: theme,
+          },
+          timeout: 60000,
+        },
+      );
+      console.log(`${theme} ${width}: ${result.stdout.trim()}`);
+    }
+  }
+  process.exit(0);
+}
 const server = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
   server: { host: '127.0.0.1', port: 0 },
@@ -17,7 +39,10 @@ try {
       : {}),
   });
   const page = await browser.newPage({
-    viewport: { width: 1280, height: 900 },
+    viewport: {
+      width: Number(process.env.CIRCLE_AGENT_SOURCE_WIDTH ?? 1280),
+      height: 900,
+    },
   });
   await page.addInitScript(() =>
     localStorage.setItem('circle.workbench.language', 'en'),
@@ -26,14 +51,23 @@ try {
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
-  const second = await page.evaluate(async () => {
+  const { second, childId } = await page.evaluate(async (theme) => {
     const { PreviewRuntime } = await import('/src/model/state.ts');
     const runtime = new PreviewRuntime(localStorage);
     let next;
+    let childId;
     runtime.change((snapshot) => {
+      snapshot.settings.theme = theme;
       next = snapshot.sessions.find((s) => s.id !== 'session1').id;
       const agent = snapshot.agents.find((a) => a.sessionId === 'session1');
       agent.name = 'source-child';
+      childId = agent.id;
+      const childSession = structuredClone(
+        snapshot.sessions.find((s) => s.id === 'session1'),
+      );
+      childSession.id = agent.id;
+      childSession.name = 'source child conversation';
+      snapshot.sessions.push(childSession);
       agent.resourceSessionId = agent.id;
       agent.readOnly = true;
       agent.workspaceId = snapshot.sessions.find(
@@ -66,8 +100,8 @@ try {
       outside.workspaceId = 'independent-child-worktree';
       snapshot.agents.push(unknown, outside);
     });
-    return next;
-  });
+    return { second: next, childId };
+  }, process.env.CIRCLE_AGENT_SOURCE_THEME ?? 'dark');
   await page.reload();
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   const openBySearch = async () => {
@@ -82,6 +116,23 @@ try {
       .locator('.file-view-heading strong')
       .getByText('README.md', { exact: true })
       .waitFor();
+  };
+  const openAgent = async (name) => {
+    const toggle = page.getByRole('button', {
+      name: 'activity panel',
+      exact: true,
+    });
+    if ((await toggle.getAttribute('aria-pressed')) !== 'true')
+      await toggle.click();
+    await page.locator('.activity-row').filter({ hasText: name }).click();
+  };
+  const chooseSession = async (id) => {
+    const selector = `.sidebar .session-link[href="#/session/${id}"]`;
+    if (!(await page.locator(selector).isVisible()))
+      await page
+        .getByRole('button', { name: 'open navigation', exact: true })
+        .click();
+    await page.locator(selector + ':visible').click();
   };
   const close = () =>
     page
@@ -98,13 +149,7 @@ try {
     0,
     'parent source returns to parent',
   );
-  await page
-    .getByRole('button', { name: 'activity panel', exact: true })
-    .click();
-  await page
-    .locator('.activity-row')
-    .filter({ hasText: 'source-child' })
-    .click();
+  await openAgent('source-child');
   const record = page.locator('.agent-record');
   await record
     .locator('header .status')
@@ -143,18 +188,22 @@ try {
     Math.abs((await body.evaluate((node) => node.scrollTop)) - before) <= 2,
     'source close restores child reading position',
   );
-  await record.getByRole('button', { name: 'main', exact: true }).click();
-  assert.equal(await message.inputValue(), 'PARENT_DRAFT_RETAIN');
-  await page
-    .locator('.activity-row')
-    .filter({ hasText: 'source-child' })
+  await record
+    .getByRole('button', { name: 'open task conversation', exact: true })
     .click();
+  await page.waitForURL((url) => url.hash === `#/session/${childId}`);
+  await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
+  assert.equal(await page.locator('.agent-record').count(), 0);
+  await chooseSession('session1');
+  await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
+  assert.equal(await message.inputValue(), 'PARENT_DRAFT_RETAIN');
+  await openAgent('source-child');
   await record.getByRole('button', { name: 'main', exact: true }).click();
   for (const [name, notice] of [
     ['unknown-child', 'source workspace is not available'],
     ['outside-child', 'source workspace is not available'],
   ]) {
-    await page.locator('.activity-row').filter({ hasText: name }).click();
+    await openAgent(name);
     await page
       .locator('.agent-record')
       .getByRole('link', { name: 'README source', exact: true })
@@ -179,14 +228,9 @@ try {
       .getByRole('button', { name: 'main', exact: true })
       .click();
   }
-  await page
-    .locator('.activity-row')
-    .filter({ hasText: 'source-child' })
-    .click();
+  await openAgent('source-child');
   await openBySearch();
-  await page
-    .locator(`.sidebar .session-link[href="#/session/${second}"]`)
-    .click();
+  await chooseSession(second);
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   assert.equal(
     await page.locator('.agent-record').count(),
