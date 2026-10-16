@@ -926,7 +926,11 @@ try {
   const findRow = keyboard
     .locator('.key-action')
     .filter({ has: page.getByText('find in conversation') });
-  await findRow.getByText('Ctrl+F / F4').waitFor();
+  // A chord reads the way the machine's own keyboard writes it.
+  const onMac = await page.evaluate(
+    () => document.documentElement.dataset.desktop === 'darwin',
+  );
+  await findRow.getByText(onMac ? '⌃F / F4' : 'Ctrl+F / F4').waitFor();
   assert.deepEqual((await state()).settings.keybindings, {
     find: ['ctrl+f', 'f4'],
   });
