@@ -60,9 +60,20 @@ try {
         document
           .querySelector(`.sidebar a[href="#/session/${id}"]`)
           ?.getAttribute('aria-current') === 'page' &&
-        [...document.querySelectorAll('[data-message-id]')].some((el) =>
-          el.textContent.includes(`ACTUAL_VISIBLE_NAVIGATION_${index}`),
-        ),
+        [...document.querySelectorAll('[data-message-id]')].some((el) => {
+          const bounds = el.getBoundingClientRect();
+          const viewport = document
+            .querySelector('.transcript')
+            ?.getBoundingClientRect();
+          return (
+            el.textContent.includes(`ACTUAL_VISIBLE_NAVIGATION_${index}`) &&
+            viewport &&
+            bounds.width > 0 &&
+            bounds.height > 0 &&
+            bounds.bottom > viewport.top &&
+            bounds.top < viewport.bottom
+          );
+        }),
       { id, title, index },
     );
   };
