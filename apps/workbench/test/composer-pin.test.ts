@@ -33,7 +33,8 @@ test(
         20_000,
       );
       const watch = () => {
-        if (!logs.includes('Local:')) return;
+        // CI colours vite's output, so the word is not followed by ':' there.
+        if (!logs.replace(/\x1b\[[0-9;]*m/g, '').includes('Local:')) return;
         clearTimeout(timer);
         resolve();
       };
