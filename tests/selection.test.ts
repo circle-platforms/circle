@@ -329,10 +329,23 @@ test('dragging to the top of the transcript scrolls it and the selection grows o
     .find((row) => row.trim())!
     .trim();
   const from = s.find('line 60');
-  s.mouse.press(from.x + 7, from.y);
-  s.mouse.drag(0, top);
-  await delay(400);
-  s.mouse.release(0, top);
+  // Drive the selection timer, not 400ms of wall time: a busy test worker may
+  // run the first 120ms callback only shortly before the release timer fires.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    s.mouse.press(from.x + 7, from.y);
+    s.mouse.drag(0, top);
+    for (let tick = 1; tick <= 3; tick++) {
+      t.mock.timers.tick(120);
+      assert.equal(s.app.state.scroll, tick * 2);
+    }
+    s.mouse.release(0, top);
+    const released = s.app.state.scroll;
+    t.mock.timers.tick(1200);
+    assert.equal(s.app.state.scroll, released, 'release stops autoscrolling');
+  } finally {
+    t.mock.timers.reset();
+  }
   await settle();
   assert.ok(s.app.state.scroll >= 4);
   const text = Buffer.from(s.writes.at(-1)!.slice(7, -1), 'base64').toString();
