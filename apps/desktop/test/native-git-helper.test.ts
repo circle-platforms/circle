@@ -50,8 +50,27 @@ test('native Git fixture preserves the primary failure when dirty cleanup cannot
         return locator;
       },
     };
+    const navigation: string[] = [];
     const page = {
-      locator: () => ({ ...panel, click: async () => {} }),
+      getByRole: (role: string, options: { name: string; exact: boolean }) => {
+        assert.equal(role, 'button');
+        assert.deepEqual(options, { name: 'changes panel', exact: true });
+        return {
+          getAttribute: async (name: string) => {
+            assert.equal(name, 'aria-pressed');
+            return 'false';
+          },
+          click: async () => {
+            navigation.push('changes panel');
+          },
+        };
+      },
+      locator: (selector: string) => ({
+        ...panel,
+        click: async () => {
+          navigation.push(selector);
+        },
+      }),
       evaluate: async () => git.snapshot(),
       waitForTimeout: async () => {},
     };
@@ -59,6 +78,10 @@ test('native Git fixture preserves the primary failure when dirty cleanup cannot
       runNativeGitJourney({ page, workspace, output, sessionId: 'fixture' }),
       /PRIMARY_STAGE_FAILURE/,
     );
+    assert.deepEqual(navigation, [
+      'changes panel',
+      '#inspector-changes-tab-git',
+    ]);
     const failure = JSON.parse(
       await readFile(join(output, 'native-git-failure.json'), 'utf8'),
     );
