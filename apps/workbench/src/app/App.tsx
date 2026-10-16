@@ -157,6 +157,34 @@ export function App() {
     ? (location.pathname.slice(6) as PageId)
     : null;
   const inspectorVisible = inspectorOpen && !page;
+  const sessionSelection = useRef({ revision: 0, pending: Promise.resolve() });
+  const selectSessionAndNavigate = (id: string) => {
+    const revision = ++sessionSelection.current.revision;
+    // A session switch can load trusted configuration asynchronously. Preserve user
+    // selection order and let only the latest request choose the visible route.
+    const pending = sessionSelection.current.pending
+      .catch(() => {})
+      .then(async () => {
+        if (revision !== sessionSelection.current.revision) return;
+        try {
+          await runtime.selectSession(id);
+        } catch (error) {
+          if (revision === sessionSelection.current.revision) throw error;
+          return;
+        }
+        if (
+          revision !== sessionSelection.current.revision ||
+          runtime.getSnapshot().activeSessionId !== id
+        )
+          return;
+        sourceOpener.current.cancel();
+        setFile(null);
+        setAgent(null);
+        navigate(`/session/${id}`);
+      });
+    sessionSelection.current.pending = pending;
+    return pending;
+  };
   const onSession = () => {
     sourceOpener.current.cancel();
     setFile(null);
@@ -679,10 +707,7 @@ export function App() {
         panel={panel}
         visible={inspectorVisible}
         onSession={(id) => {
-          void perform(async () => {
-            await runtime.selectSession(id);
-            navigate(`/session/${id}`);
-          });
+          perform(() => selectSessionAndNavigate(id));
         }}
         selection={selection}
         onPanel={onPanel}
@@ -728,10 +753,7 @@ export function App() {
               )?.name,
             ),
           }),
-          run: () => {
-            runtime.selectSession(item.id);
-            onSession();
-          },
+          run: () => perform(() => selectSessionAndNavigate(item.id)),
         })),
         ...NAVIGATION.map((item) => ({
           id: item.id,
