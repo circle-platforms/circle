@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import type { Plugin } from 'esbuild';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
@@ -9,6 +10,17 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const root = fileURLToPath(new URL('..', import.meta.url));
 const electronPath = require('electron');
+// As in scripts/build.mjs: leave ssh2's .node accelerators to runtime, where their
+// absence is the fallback ssh2 already handles.
+const nativeBinaries: Plugin = {
+  name: 'native-binaries',
+  setup(api) {
+    api.onResolve({ filter: /\.node$/ }, (args) => ({
+      path: args.path,
+      external: true,
+    }));
+  },
+};
 async function bundleMain(appDir: string) {
   const { build } = require('esbuild');
   await build({
@@ -19,8 +31,9 @@ async function bundleMain(appDir: string) {
     target: 'node24',
     format: 'cjs',
     // mirror scripts/build.mjs: main pulls in ssh2 (device terminals), whose optional
-    // cpu-features native addon esbuild cannot bundle; ssh2 falls back to pure JS
+    // native addons esbuild cannot bundle; ssh2 falls back to pure JS without them.
     external: ['electron', 'original-fs', 'cpu-features'],
+    plugins: [nativeBinaries],
   });
   await writeFile(
     join(appDir, 'package.json'),
