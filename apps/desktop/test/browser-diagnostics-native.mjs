@@ -232,7 +232,14 @@ try {
             opened: fixture.devToolsOpened,
             loading: frontend?.isLoadingMainFrame(),
           };
-        return frontend.executeJavaScript(expression);
+        const control = await frontend.executeJavaScript(expression);
+        return {
+          ...control,
+          opened: fixture.devToolsOpened,
+          loading: frontend.isLoadingMainFrame(),
+          focused: frontend.isFocused(),
+          frontendURL: frontend.getURL(),
+        };
       }, `(${clickReadyDevToolsResume.toString()})()`);
       clickedResume = frontendObservation.clicked === true;
     }
