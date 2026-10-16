@@ -1621,6 +1621,30 @@ try {
   await check(
     'original inspector controls in both languages themes and narrow window',
     async () => {
+      // The preceding web stack link intentionally opens the original file viewer.
+      // Return through its visible close action before reading the parent draft.
+      await closeFile();
+      if (new URL(page.url()).hash !== `#/session/${sessionId}`) {
+        const parent = page.locator(
+          `.sidebar:visible .session-link[href="#/session/${sessionId}"][tabindex="0"]`,
+        );
+        await parent.waitFor({ state: 'visible' });
+        assert.equal(
+          await parent.count(),
+          1,
+          'return to the unique original parent history row',
+        );
+        await parent.click();
+      }
+      await page.waitForURL((url) => url.hash === `#/session/${sessionId}`);
+      assert.equal(
+        (await state()).activeSessionId,
+        sessionId,
+        'panel appearance inspects the original parent task',
+      );
+      await page
+        .getByRole('textbox', { name: 'message', exact: true })
+        .waitFor({ state: 'visible' });
       const originalDraft = await page
         .getByRole('textbox', { name: 'message', exact: true })
         .inputValue();
