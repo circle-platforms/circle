@@ -8,6 +8,10 @@ import {
   type CredentialStore,
   type LoginSpawn,
 } from './delivery-login.ts';
+import {
+  withGitHubPushCredentials,
+  type GitPushAuthentication,
+} from './git-push-auth.ts';
 const exec = promisify(execFile);
 type Runner = (
   args: string[],
@@ -44,6 +48,7 @@ export class NativeGitHubConnection {
     private options: {
       dataDir: string;
       ghPath: string;
+      nodePath?: string;
       spawn: LoginSpawn;
       credentialStore?: CredentialStore;
       command?: Runner;
@@ -197,6 +202,39 @@ export class NativeGitHubConnection {
       GH_TOKEN: token,
       GH_PROMPT_DISABLED: '1',
       GH_NO_UPDATE_NOTIFIER: '1',
+    };
+  }
+  gitPushAuthentication(
+    epoch: number,
+    repository: string,
+    signal?: AbortSignal,
+    assertActive: () => void = () => {},
+  ): GitPushAuthentication {
+    return {
+      repository,
+      withCredentials: async (run) => {
+        const guard = () => {
+          signal?.throwIfAborted();
+          assertActive();
+          this.assertGrant(epoch, repository);
+        };
+        guard();
+        const token = await this.login.token();
+        guard();
+        if (!token) throw Error('connect GitHub in settings');
+        return withGitHubPushCredentials(
+          {
+            repository,
+            token,
+            ghPath: this.options.ghPath,
+            nodePath: this.options.nodePath,
+            env: this.env(token),
+            signal,
+            assertActive: guard,
+          },
+          run,
+        );
+      },
     };
   }
   async run(

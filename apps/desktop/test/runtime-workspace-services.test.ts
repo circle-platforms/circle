@@ -1288,6 +1288,52 @@ if(process.argv[2]==='--ipc'){
       'origin',
       'HEAD',
     ]);
+    // Only this trusted fixture substitutes a local bare transport after the
+    // production URL/epoch/grant checks. No token is sent to that transport.
+    const githubPushUrl = 'https://github.com/fixture/repo.git';
+    execFileSync('git', [
+      '-C',
+      f.workspace,
+      'config',
+      'remote.origin.pushurl',
+      githubPushUrl,
+    ]);
+    const actualAuthentication = profile.gitPushAuthentication.bind(profile);
+    t.mock.method(
+      profile,
+      'gitPushAuthentication',
+      (
+        epoch: number,
+        repository: string,
+        signal?: AbortSignal,
+        guard?: () => void,
+      ) => {
+        const authentication = actualAuthentication(
+          epoch,
+          repository,
+          signal,
+          guard,
+        );
+        return {
+          repository,
+          withCredentials: (
+            run: (env: NodeJS.ProcessEnv, config: string[]) => Promise<string>,
+          ) =>
+            authentication.withCredentials(
+              (env: NodeJS.ProcessEnv, config: string[]) => {
+                assert.equal(env.GH_TOKEN, 'synthetic-explicit-fixture-grant');
+                return run({ ...env, GH_TOKEN: undefined }, [
+                  ...config,
+                  '-c',
+                  'protocol.file.allow=always',
+                  '-c',
+                  `url.${remote.replaceAll('\\', '/')}.insteadOf=${githubPushUrl}`,
+                ]);
+              },
+            ),
+        };
+      },
+    );
     const enabled = await f.call('save-settings', {
       settings: {},
       extensions: [{ name: 'github', enabled: true }],

@@ -16,6 +16,7 @@ import {
 import { constants } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import type { GitPushAuthentication } from './git-push-auth.ts';
 const exec = promisify(execFile);
 const locks = new Map<string, Promise<unknown>>();
 /** Shared by native Git mutations and task integration; callers pass a real common Git directory. */
@@ -48,6 +49,7 @@ export type GitSnapshot = {
   merging: boolean;
 };
 export interface GitInvocation {
+  pushAuthentication?: GitPushAuthentication;
   signal?: AbortSignal;
   assertActive?: () => void;
 }
@@ -138,18 +140,58 @@ export class GitWorkspaceService {
         );
         child.stdin?.end(input);
       });
-    return (
-      await exec(
-        'git',
-        ['--literal-pathspecs', '-C', this.root, ...prefix, ...args],
-        {
-          encoding: 'utf8',
-          maxBuffer: 32 * 1024 * 1024,
-          env,
-          signal: args[0] === 'push' ? invocation?.signal : undefined,
-        },
+    const execute = async (
+      extraEnv: NodeJS.ProcessEnv = {},
+      config: string[] = [],
+    ) => {
+      invocation?.signal?.throwIfAborted();
+      invocation?.assertActive?.();
+      return (
+        await exec(
+          'git',
+          [
+            '--literal-pathspecs',
+            '-C',
+            this.root,
+            ...prefix,
+            ...config,
+            ...args,
+          ],
+          {
+            encoding: 'utf8',
+            maxBuffer: 32 * 1024 * 1024,
+            env: { ...env, ...extraEnv },
+            signal: args[0] === 'push' ? invocation?.signal : undefined,
+          },
+        )
+      ).stdout;
+    };
+    if (args[0] === 'push' && invocation?.pushAuthentication) {
+      const authentication = invocation.pushAuthentication;
+      const destinations = (
+        await this.git(['remote', 'get-url', '--push', '--all', 'origin'])
       )
-    ).stdout;
+        .trim()
+        .split('\n');
+      const expected = `https://github.com/${authentication.repository}`;
+      if (
+        destinations.length !== 1 ||
+        ![expected, expected + '.git'].includes(destinations[0]!)
+      )
+        throw Error(
+          'GitHub push destination does not match the authorized repository',
+        );
+      invocation.signal?.throwIfAborted();
+      invocation.assertActive?.();
+      // Use the reviewed canonical URL directly, not a mutable remote alias.
+      const originIndex = args.indexOf('origin');
+      if (originIndex < 0)
+        throw Error('authenticated push requires an explicit origin');
+      args = [...args];
+      args[originIndex] = destinations[0]!;
+      return authentication.withCredentials(execute);
+    }
+    return execute();
   }
   async snapshot(): Promise<GitSnapshot> {
     let previous = await this.readSnapshot();

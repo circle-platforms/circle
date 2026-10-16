@@ -1,3 +1,4 @@
+import type { GitPushAuthentication } from './git-push-auth.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   mkdir,
@@ -47,6 +48,10 @@ export interface WorkspaceCyclePortsOptions {
     ownedWorkspace: string,
     cycle: CycleRecord,
   ) => DeliveryService;
+  pushAuthentication?: (
+    workspace: string,
+    cycle: CycleRecord,
+  ) => Promise<GitPushAuthentication | undefined>;
   bindCycle?: (cycle: CycleRecord, mode: 'created' | 'restored') => void;
   invocation?: (cycle: CycleRecord) => {
     signal: AbortSignal;
@@ -624,12 +629,17 @@ export function createWorkspaceCyclePorts(
       push: (cycle, input) =>
         serial(cycle, async () => {
           const { service, snapshot } = await state(cycle, input);
+          const pushAuthentication = await options.pushAuthentication?.(
+            snapshot.root,
+            cycle,
+          );
           if (snapshot.entries.length)
             throw Error('cycle push requires a clean accepted candidate');
           await service.call(
             'push',
             { revision: input.revision },
             {
+              pushAuthentication,
               signal: AbortSignal.any([signal, invocation(cycle).signal]),
               assertActive: () => guard(cycle),
             },

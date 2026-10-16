@@ -809,6 +809,7 @@ export class RuntimeController {
     return (this.githubProfile ??= new NativeGitHubConnection({
       dataDir: join(this.options.dataFolder ?? this.home, 'github-connection'),
       ghPath: this.options.workspaceTools.ghPath,
+      nodePath: this.options.workspaceTools.runtimeExecutable,
       spawn: (file, args, options) => spawnPty(file, args, options),
       credentialStore: this.options.credentialStore
         ? {
@@ -975,6 +976,34 @@ export class RuntimeController {
               this.taskVerifier(root, task.spec.baseline)(task, context),
             withResource: (resource, run) =>
               this.taskResources.withResource(resource, run),
+            pushAuthentication: async (ownedPath, cycle) => {
+              const scope = scopeFor(cycle);
+              scope.invocation.assertActive();
+              const remote = (
+                await new GitWorkspaceService(ownedPath).git([
+                  'remote',
+                  'get-url',
+                  '--push',
+                  '--all',
+                  'origin',
+                ])
+              ).trim();
+              scope.invocation.assertActive();
+              const match =
+                /^https:\/\/github\.com\/([-\w.]+\/[-\w.]+?)(?:\.git)?$/.exec(
+                  remote,
+                );
+              if (!match)
+                throw Error(
+                  'select an authorized GitHub HTTPS push destination',
+                );
+              return githubConnection?.gitPushAuthentication(
+                scope.epoch!,
+                match[1]!,
+                scope.invocation.signal,
+                scope.invocation.assertActive,
+              );
+            },
             createDelivery: (ownedPath, cycle) =>
               new DeliveryService(ownedPath, tools.ghPath, {
                 spawn: (file, args, options) => spawnPty(file, args, options),

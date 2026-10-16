@@ -513,12 +513,26 @@ export class DeliveryService {
       throw Error('publish from a feature branch');
     const preparePublishedHead = async () => {
       if (pushedHead === undefined) {
-        if (this.connection) await this.repository();
+        const repository = this.connection
+          ? await this.repository()
+          : undefined;
         this.guard();
         await this.git.call(
           'push',
           { revision: state.revision },
-          { signal: this.operationSignal, assertActive: () => this.guard() },
+          {
+            signal: this.operationSignal,
+            assertActive: () => this.guard(),
+            pushAuthentication:
+              this.connection && repository
+                ? this.connection.gitPushAuthentication(
+                    this.operationEpoch!,
+                    repository,
+                    this.operationSignal,
+                    () => this.guard(),
+                  )
+                : undefined,
+          },
         );
         return;
       }
