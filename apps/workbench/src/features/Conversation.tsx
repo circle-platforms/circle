@@ -538,6 +538,10 @@ export function Conversation({
         return;
       // The window handles the sidebar, including settings and home.
       if (mapped === 'sidebar.toggle') return;
+      // The browser owns paste, including images. Cancelling this key prevents
+      // the trusted paste event that supplies clipboard files to the composer.
+      // A custom chord does not grant permission to read the clipboard either.
+      if (mapped === 'image.paste') return;
       if (mapped) {
         event.preventDefault();
         event.stopImmediatePropagation();
