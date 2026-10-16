@@ -239,6 +239,9 @@ export class InputOutbox {
       state?: 'discarded' | 'recovery_pending';
     }[],
   ): void {
+    // Closing an untouched deferred runtime has no queued rows to discard.
+    // A real change or unknown session must still pass the durable transaction.
+    if (changes.length === 0 && this.sessions?.deferred(sessionId)) return;
     this.transaction(sessionId, () => {
       for (const change of changes) {
         const previous = this.get(sessionId, change.id);

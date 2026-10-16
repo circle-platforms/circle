@@ -22,6 +22,18 @@ test('recovering an untouched deferred session writes no session and rejects a t
       true,
     );
     store.inputs.recover(session.id, 'epoch');
+    store.inputs.update(session.id, 'epoch', []);
+    assert.throws(
+      () => store.inputs.update('unknown', 'epoch', []),
+      /unknown session/,
+    );
+    assert.throws(
+      () =>
+        store.inputs.update(session.id, 'epoch', [
+          { id: 'missing', state: 'discarded' },
+        ]),
+      /unknown session/,
+    );
     assert.equal(
       db(store).prepare('SELECT id FROM sessions WHERE id=?').get(session.id),
       undefined,

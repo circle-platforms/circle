@@ -409,6 +409,9 @@ test('TUI deletion completion preserves a newer user selection during slow clean
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
+  // Cleanup owns its held gate even if deletion fails before reaching jobs.close.
+  // Register after app cleanup so it releases first on the failure path.
+  cleanup(t, () => release());
   a.jobs.close = async () => {
     cleaning = true;
     await gate;
