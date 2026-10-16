@@ -46,7 +46,11 @@ export class NativeGitHubConnection {
   private children = new Set<Promise<void>>();
   private connecting?: Promise<GitHubConnectionState>;
   private polling?: { id: string; epoch: number };
-  private verification?: { epoch: number; controller: AbortController };
+  private verification?: {
+    epoch: number;
+    controller: AbortController;
+    completion: Promise<void>;
+  };
   private restoreEpoch?: number;
   private command: Runner;
   private persistence: Promise<void> = Promise.resolve();
@@ -353,7 +357,15 @@ export class NativeGitHubConnection {
     }
   }
   private async verify(epoch: number) {
-    const verification = { epoch, controller: new AbortController() };
+    let complete!: () => void;
+    const completion = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
+    const verification = {
+      epoch,
+      controller: new AbortController(),
+      completion,
+    };
     this.verification = verification;
     const signal = AbortSignal.any([
       this.lifetime.signal,
@@ -409,6 +421,7 @@ export class NativeGitHubConnection {
       return { account: { login: data.login, id: data.id }, grantedScopes };
     } finally {
       if (this.verification === verification) this.verification = undefined;
+      complete();
     }
   }
   async status() {
@@ -590,15 +603,16 @@ export class NativeGitHubConnection {
       if (this.polling === attempt) this.polling = undefined;
     }
   }
-  private async cancelCurrent() {
-    clearInterval(this.timer);
-    const verification = this.verification;
-    verification?.controller.abort();
-    if (this.attempt) {
-      const id = this.attempt.id;
+  private async cancelCurrent(
+    attempt = this.attempt,
+    verification = this.verification,
+  ) {
+    if (this.attempt === attempt) {
+      clearInterval(this.timer);
       this.attempt = undefined;
-      await this.login.cancel(id);
     }
+    verification?.controller.abort();
+    if (attempt) await this.login.cancel(attempt.id);
   }
   async configure(epoch: number, repositories: string[]) {
     await this.ready;
@@ -627,6 +641,9 @@ export class NativeGitHubConnection {
   async disconnect(epoch: number) {
     await this.ready;
     if (epoch !== this.state.epoch) throw Error('GitHub connection changed');
+    const attempt = this.attempt;
+    const verification = this.verification;
+    const connecting = this.connecting;
     const cancelling = this.state.state === 'authorizing';
     const beforeCode =
       cancelling &&
@@ -654,17 +671,14 @@ export class NativeGitHubConnection {
     this.state.remoteRevocation =
       beforeCode && !priorGrant ? 'not-requested' : 'unconfirmed';
     this.emit();
+    // Start old helper cleanup now, before a fresh authorization can allocate
+    // another helper. Await only the captured verification, never a fresh one.
     const cleanup = await Promise.allSettled([
       this.persist(false),
-      (async () => {
-        await this.connecting?.catch(() => {});
-        const results = await Promise.allSettled([
-          this.cancelCurrent(),
-          this.login.disconnect(),
-        ]);
-        if (results.some((result) => result.status === 'rejected'))
-          throw Error('GitHub authorization cleanup requires attention');
-      })(),
+      this.cancelCurrent(attempt, verification),
+      this.login.disconnect(),
+      connecting?.catch(() => {}),
+      verification?.completion,
     ]);
     if (cleanup.some((result) => result.status === 'rejected')) {
       this.state.error = 'local credential removal requires attention';

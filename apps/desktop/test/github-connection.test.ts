@@ -2005,16 +2005,25 @@ test('cancelling held account verification aborts only that attempt and a fresh 
     attempt?: { id: string };
     login: DeliveryLogin;
   };
-  t.mock.method(internal, 'command', async (_args, _env, _cwd, signal) => {
-    signals.push(signal);
-    const number = signals.length;
-    // Deliberately ignore abort to simulate a late reply from an uncooperative transport.
-    await (number === 1 ? oldGate : newGate);
-    return JSON.stringify({
-      login: number === 1 ? 'stale-account' : 'fresh-account',
-      id: number,
-    });
-  });
+  t.mock.method(
+    internal,
+    'command',
+    async (
+      _args: string[],
+      _env: NodeJS.ProcessEnv,
+      _cwd: string,
+      signal: AbortSignal,
+    ) => {
+      signals.push(signal);
+      const number = signals.length;
+      // Deliberately ignore abort to simulate a late reply from an uncooperative transport.
+      await (number === 1 ? oldGate : newGate);
+      return JSON.stringify({
+        login: number === 1 ? 'stale-account' : 'fresh-account',
+        id: number,
+      });
+    },
+  );
   const helperComplete = async (index: number) => {
     f.helpers[index].finish();
     await until(async () =>
@@ -2029,7 +2038,15 @@ test('cancelling held account verification aborts only that attempt and a fresh 
     await helperComplete(0);
     const oldPoll = internal.poll();
     await until(async () => (signals.length === 1 ? true : false));
-    await f.connection.cancel(f.connection.snapshot().epoch);
+    let cancelCompleted = false;
+    const cancelling = f.connection
+      .cancel(f.connection.snapshot().epoch)
+      .then(() => {
+        cancelCompleted = true;
+      });
+    await until(async () =>
+      f.connection.snapshot().state === 'disconnected' ? true : false,
+    );
     assert.equal(
       signals[0].aborted,
       true,
@@ -2045,8 +2062,14 @@ test('cancelling held account verification aborts only that attempt and a fresh 
       false,
       'old cancellation must not abort the fresh attempt',
     );
+    assert.equal(
+      cancelCompleted,
+      false,
+      'cancellation waits for its captured old transport completion',
+    );
     releaseOld();
     await oldPoll;
+    await cancelling;
     assert.equal(f.connection.snapshot().state, 'authorizing');
     await internal.poll();
     assert.equal(

@@ -97,3 +97,91 @@ for (const mode of ['abort', 'abort-stubborn', 'dispose'] as const) {
     }
   });
 }
+
+test('account verification cancellation waits for its actual owned child close', async (t) => {
+  const root = await mkdtemp(
+    path.join(tmpdir(), 'circle-gh-verification-close-'),
+  );
+  const marker = path.join(root, 'pid');
+  const closed = new Set<number>();
+  const emit = ChildProcess.prototype.emit;
+  t.mock.method(
+    ChildProcess.prototype,
+    'emit',
+    function (this: ChildProcess, event: string | symbol, ...args: unknown[]) {
+      if (event === 'close' && typeof this.pid === 'number')
+        closed.add(this.pid);
+      return Reflect.apply(emit, this, [event, ...args]);
+    },
+  );
+  const native = new NativeGitHubConnection({
+    dataDir: root,
+    ghPath: process.execPath,
+    spawn: () => {
+      throw Error('no authorization in this synthetic verification test');
+    },
+  });
+  const internal = native as unknown as {
+    state: { state: string; epoch: number; authorizationPhase: string };
+    login: { token: () => Promise<string> };
+    command: (
+      args: string[],
+      env: NodeJS.ProcessEnv,
+      cwd: string,
+      signal?: AbortSignal,
+    ) => Promise<string>;
+    verify: (epoch: number) => Promise<unknown>;
+  };
+  let pending: Promise<unknown> | undefined;
+  try {
+    await native.status();
+    internal.state.state = 'authorizing';
+    internal.state.epoch = 3;
+    internal.state.authorizationPhase = 'verifying-account';
+    internal.login.token = async () => 'synthetic-only';
+    const run = internal.command.bind(internal);
+    t.mock.method(
+      internal,
+      'command',
+      (
+        _args: string[],
+        env: NodeJS.ProcessEnv,
+        cwd: string,
+        signal?: AbortSignal,
+      ) =>
+        run(
+          [
+            '-e',
+            `process.on('SIGTERM',()=>{});require('node:fs').writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000)`,
+          ],
+          env,
+          cwd,
+          signal,
+        ),
+    );
+    pending = internal.verify(3);
+    const rejected = assert.rejects(pending, /abort|cancel|changed/i);
+    let pid: number | undefined;
+    for (let i = 0; i < 200 && !pid; i++) {
+      try {
+        pid = Number(await readFile(marker, 'utf8'));
+      } catch {
+        await delay(10);
+      }
+    }
+    assert(pid, 'actual verification child must start');
+    const result = await native.cancel(3);
+    assert.equal(result.state, 'disconnected');
+    assert.equal(
+      closed.has(pid),
+      true,
+      'cancel completion must follow this verification child close',
+    );
+    assert.throws(() => process.kill(pid!, 0));
+    await rejected;
+  } finally {
+    await native.dispose();
+    await pending?.catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  }
+});
