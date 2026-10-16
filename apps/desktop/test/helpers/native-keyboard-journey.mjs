@@ -122,7 +122,7 @@ export async function runNativeKeyboardJourney({
   await message.focus();
   await message.evaluate((node) => node.setSelectionRange(3, 10));
   await page.keyboard.press(
-    process.platform === 'darwin' ? 'Meta+k' : 'Control+Shift+p',
+    process.platform === 'darwin' ? 'Meta+k' : 'Control+k',
   );
   await search.waitFor();
   await search.press('Escape');

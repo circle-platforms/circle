@@ -33,11 +33,16 @@ try {
   );
   await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
   const choose = async (title) => {
-    await page.keyboard.press('Control+Shift+p');
+    await page.keyboard.press('Control+k');
     const search = page.getByRole('textbox', {
       name: 'global search',
       exact: true,
     });
+    await search.waitFor();
+    await page.waitForFunction(
+      () =>
+        document.activeElement?.getAttribute('aria-label') === 'global search',
+    );
     await search.fill(title);
     await page
       .locator('.search-results button')

@@ -1332,6 +1332,7 @@ export function App() {
             }}
           >
             <SearchInput
+              autoFocus
               value={search}
               onChange={setSearch}
               label={t('global search')}
