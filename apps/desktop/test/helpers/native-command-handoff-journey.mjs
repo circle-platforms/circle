@@ -198,7 +198,16 @@ export async function runNativeCommandHandoffJourney({
       await readFile(join(workspace, 'native-command-starts'), 'utf8'),
       'once\n',
     );
-    const textarea = terminal.locator('.xterm-helper-textarea');
+    const surface = terminal.locator(`#terminal-${target.terminal.id}:visible`);
+    await surface.waitFor();
+    const textarea = surface.locator(
+      '.xterm-helper-textarea:visible:not([readonly])',
+    );
+    assert.equal(
+      await textarea.count(),
+      1,
+      'only the resolved original command has a writable visible input',
+    );
     await textarea.focus();
     const input = 'NATIVE_HANDOFF_INPUT';
     await page.keyboard.type(input);
@@ -213,8 +222,7 @@ export async function runNativeCommandHandoffJourney({
       'the original process receives real native keyboard input',
     );
     await until(
-      async () =>
-        (await terminal.innerText()).includes('HANDOFF_ECHO:' + input),
+      async () => (await surface.innerText()).includes('HANDOFF_ECHO:' + input),
       'the same PTY displays its process echo',
     );
     await page.screenshot({ path: join(output, 'command-handoff-live.png') });
