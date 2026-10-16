@@ -2,6 +2,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   useSyncExternalStore,
 } from 'react';
@@ -32,25 +33,48 @@ export function RuntimeProvider({
 }) {
   const snapshot = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot);
   const [notice, setNotice] = useState('');
+  const shownNotice = useRef<
+    { text: string; source: 'action' | 'runtime' | 'session-error' } | undefined
+  >(undefined);
   const [router] = useState(() => ({
     handler: (_result: CommandResult) => {},
   }));
-  const notify = (message: string) => {
+  const showNotice = (
+    message: string,
+    source: 'action' | 'runtime' | 'session-error' = 'action',
+  ) => {
+    const shown = { text: message, source };
+    shownNotice.current = shown;
     setNotice(message);
-    setTimeout(
-      () => setNotice((current) => (current === message ? '' : current)),
-      4200,
-    );
+    setTimeout(() => {
+      if (shownNotice.current !== shown) return;
+      shownNotice.current = undefined;
+      setNotice('');
+    }, 4200);
   };
+  const notify = (message: string) => showNotice(message);
   useEffect(() => {
-    if (snapshot.runtime?.error) notify(snapshot.runtime.error);
+    if (snapshot.runtime?.error) showNotice(snapshot.runtime.error, 'runtime');
+    else if (shownNotice.current?.source === 'runtime') {
+      shownNotice.current = undefined;
+      setNotice('');
+    }
   }, [snapshot.runtime?.error]);
   const actionError = snapshot.sessions.find(
     (session) => session.id === snapshot.activeSessionId,
   )?.actionError;
+  const noticeSession = useRef(snapshot.activeSessionId);
   useEffect(() => {
-    setNotice(actionError ?? '');
-    if (actionError) notify(actionError);
+    if (noticeSession.current !== snapshot.activeSessionId) {
+      noticeSession.current = snapshot.activeSessionId;
+      shownNotice.current = undefined;
+      setNotice('');
+    }
+    if (actionError) showNotice(actionError, 'session-error');
+    else if (shownNotice.current?.source === 'session-error') {
+      shownNotice.current = undefined;
+      setNotice('');
+    }
   }, [snapshot.activeSessionId, actionError]);
   const perform = (action: () => void | Promise<unknown>) => {
     const sessionId = runtime.getSnapshot().activeSessionId;
@@ -58,7 +82,10 @@ export function RuntimeProvider({
       const source =
         error instanceof SessionActionError ? error.sessionId : sessionId;
       if (runtime.getSnapshot().activeSessionId === source)
-        notify(error instanceof Error ? error.message : t('action failed'));
+        showNotice(
+          error instanceof Error ? error.message : t('action failed'),
+          error instanceof SessionActionError ? 'session-error' : 'action',
+        );
     };
     try {
       const result = action();

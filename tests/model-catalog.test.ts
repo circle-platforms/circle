@@ -498,7 +498,10 @@ test('real Anthropic requests fit legacy thinking and output budgets and include
     token: () => {},
   });
   assert.equal(bodies[1]!.max_tokens, 32000);
-  assert.deepEqual(bodies[1]!.thinking, { type: 'adaptive' });
+  assert.deepEqual(bodies[1]!.thinking, {
+    type: 'adaptive',
+    display: 'summarized',
+  });
   assert.deepEqual(bodies[1]!.output_config, { effort: 'low' });
 });
 test('saved prices and model identity survive catalog changes and restart instead of repricing previous calls', async (t) => {

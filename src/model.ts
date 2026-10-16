@@ -15,6 +15,7 @@ import type {
   Message,
   ModelRequest,
   ModelResponse,
+  ModelCompletion,
   ToolCall,
 } from './types.js';
 import { emptyUsage } from './types.js';
@@ -30,7 +31,12 @@ import { parseToolInput } from './tool_call_compat.js';
 import { isRecord } from './settings.js';
 import { circleHome } from './paths.js';
 import { ModelCatalog, type ModelFacts } from './model_catalog.js';
-import { modelProfile, fitEffort, THINKING_BUDGET } from './model_profiles.js';
+import {
+  modelProfile,
+  fitEffort,
+  THINKING_BUDGET,
+  supportsThinkingDisplay,
+} from './model_profiles.js';
 import { priceCall } from './pricing.js';
 import { isNetworkFailure, networkError } from './net.js';
 import {
@@ -47,6 +53,41 @@ export const EFFORT_LEVELS = [
   'xhigh',
   'max',
 ] as const;
+function completion(
+  protocol: 'openai' | 'anthropic',
+  finish: string | null | undefined,
+  outputLimit?: number,
+  repetition = false,
+): ModelCompletion {
+  const reasons: Record<string, ModelCompletion['reason']> =
+    protocol === 'anthropic'
+      ? {
+          end_turn: 'stop',
+          stop_sequence: 'stop',
+          tool_use: 'tool_calls',
+          max_tokens: 'length',
+          model_context_window_exceeded: 'length',
+          refusal: 'filter',
+          pause_turn: 'pause',
+        }
+      : {
+          stop: 'stop',
+          tool_calls: 'tool_calls',
+          function_call: 'tool_calls',
+          length: 'length',
+          content_filter: 'filter',
+        };
+  return {
+    reason: finish
+      ? Object.hasOwn(reasons, finish)
+        ? reasons[finish]!
+        : 'unknown'
+      : 'missing',
+    ...(finish ? { provider_reason: finish } : {}),
+    ...(outputLimit !== undefined ? { output_limit: outputLimit } : {}),
+    ...(repetition ? { client_stop: 'repetition' as const } : {}),
+  };
+}
 export class GatewayModel implements ChatModel {
   readonly model: string;
   private openai?: OpenAI;
@@ -186,6 +227,16 @@ export class GatewayModel implements ChatModel {
     return Object.fromEntries(this.guard.downgrades);
   }
   private dropParameter(parameter: string): boolean {
+    if (parameter === 'thinking.display') {
+      if (
+        !this.anthropic ||
+        !this.sentParameters.has(parameter) ||
+        this.dropped.has(parameter)
+      )
+        return false;
+      this.dropped.add(parameter);
+      return true;
+    }
     let root = parameter.split('.')[0]!;
     if (root === 'effort')
       root = this.anthropic ? 'output_config' : 'reasoning_effort';
@@ -208,8 +259,14 @@ export class GatewayModel implements ChatModel {
     return true;
   }
   private configureBody(body: Record<string, unknown>): void {
-    for (const field of this.dropped) delete body[field];
+    for (const field of this.dropped) {
+      if (field === 'thinking.display') {
+        if (isRecord(body.thinking)) delete body.thinking.display;
+      } else delete body[field];
+    }
     this.sentParameters = new Set(Object.keys(body));
+    if (isRecord(body.thinking) && body.thinking.display !== undefined)
+      this.sentParameters.add('thinking.display');
   }
   private async completeOpenAI(request: ModelRequest): Promise<ModelResponse> {
     const messages: ChatCompletionMessageParam[] = [
@@ -354,18 +411,19 @@ export class GatewayModel implements ChatModel {
     }
     request.signal.throwIfAborted();
     const tool_calls: ToolCall[] = [...calls.values()].map((call) => {
-      if (!call.id || !call.name) throw new Error('incomplete tool call');
+      const incomplete = !call.id || !call.name;
       let args = parseToolInput(call.args || '{}');
       if (typeof args === 'string') args = parseToolInput(args);
       return {
-        id: call.id,
-        name: call.name,
+        id: call.id || randomUUID(),
+        name: call.name || 'incomplete_tool_call',
         args: isRecord(args) ? args : {},
-        ...(!isRecord(args)
+        ...(incomplete || !isRecord(args)
           ? {
               raw_args: call.args,
-              argument_error:
-                'tool arguments must be a JSON object; repair the call before retrying',
+              argument_error: incomplete
+                ? 'incomplete tool call; repair the call before retrying'
+                : 'tool arguments must be a JSON object; repair the call before retrying',
             }
           : {}),
       };
@@ -378,6 +436,7 @@ export class GatewayModel implements ChatModel {
         content,
         thinking,
         tool_calls,
+        completion: completion('openai', finish, undefined, guardedStop),
         ...(guardedStop || !finish || finish === 'length'
           ? { truncated: true }
           : {}),
@@ -545,17 +604,83 @@ export class GatewayModel implements ChatModel {
         };
       }
     }
+    if (
+      body.thinking &&
+      (body.thinking.type === 'adaptive' || body.thinking.type === 'enabled') &&
+      supportsThinkingDisplay('anthropic', this.model)
+    ) {
+      body.thinking.display = 'summarized';
+    }
     this.configureBody(body as unknown as Record<string, unknown>);
-    const stream = this.anthropic!.messages.stream(body, {
-      signal: request.signal,
-      timeout: this.requestTimeout(request),
-    });
-    stream.on('connect', () => request.progress?.('connected'));
+    // Consume the SDK's raw stream so tool JSON cannot throw inside its message
+    // accumulator before later usage and stop events have been read.
+    const stream = await this.anthropic!.messages.create(
+      { ...body, stream: true },
+      {
+        signal: request.signal,
+        timeout: this.requestTimeout(request),
+      },
+    );
+    request.progress?.('connected');
     let snapshot: Anthropic.Message | undefined;
+    const inputParts = new Map<number, string>();
+    let messageStopped = false;
     let guardedStop = false;
     try {
       for await (const event of stream) {
-        snapshot = stream.currentMessage ?? snapshot;
+        if (event.type === 'message_start') {
+          snapshot = structuredClone(event.message);
+          for (const block of snapshot.content) {
+            if (block.type === 'text' && block.text) request.token(block.text);
+            else if (block.type === 'thinking' && block.thinking)
+              request.token(block.thinking, true);
+          }
+        } else if (!snapshot) {
+          throw new Error('Anthropic stream event preceded message_start');
+        } else if (event.type === 'message_delta') {
+          Object.assign(snapshot, event.delta);
+          // Usage events are cumulative, including cache categories when present.
+          // Null means omitted, not zero; preserve known counters as the SDK does.
+          Object.assign(
+            snapshot.usage,
+            Object.fromEntries(
+              Object.entries(event.usage).filter(([, value]) => value != null),
+            ),
+          );
+        } else if (event.type === 'content_block_start') {
+          const block = structuredClone(event.content_block);
+          snapshot.content[event.index] = block;
+          if (block.type === 'text' && block.text) request.token(block.text);
+          else if (block.type === 'thinking' && block.thinking)
+            request.token(block.thinking, true);
+        } else if (event.type === 'content_block_delta') {
+          const block = snapshot.content[event.index];
+          const delta = event.delta;
+          if (block?.type === 'text' && delta.type === 'text_delta')
+            block.text += delta.text;
+          else if (block?.type === 'text' && delta.type === 'citations_delta')
+            block.citations = [...(block.citations ?? []), delta.citation];
+          else if (
+            block?.type === 'thinking' &&
+            delta.type === 'thinking_delta'
+          )
+            block.thinking += delta.thinking;
+          else if (
+            block?.type === 'thinking' &&
+            delta.type === 'signature_delta'
+          )
+            block.signature = delta.signature;
+        }
+        if (event.type === 'message_stop') messageStopped = true;
+        if (
+          event.type === 'content_block_delta' &&
+          event.delta.type === 'input_json_delta'
+        ) {
+          inputParts.set(
+            event.index,
+            (inputParts.get(event.index) ?? '') + event.delta.partial_json,
+          );
+        }
         if (
           event.type === 'content_block_delta' &&
           event.delta.type === 'text_delta'
@@ -585,25 +710,55 @@ export class GatewayModel implements ChatModel {
         request.notice?.({ event: 'repetition_stopped', period: error.period });
       } else throw error;
     } finally {
-      if (guardedStop) {
-        stream.abort();
-        await stream.finalMessage().catch(() => {});
-      }
+      stream.controller.abort();
     }
-    const final = guardedStop ? snapshot! : await stream.finalMessage();
     request.signal.throwIfAborted();
+    if (!snapshot)
+      throw new MissingFinish(
+        {
+          message: {
+            id: randomUUID(),
+            role: 'assistant',
+            model: this.model,
+            content: '',
+            truncated: true,
+            completion: completion('anthropic', null, body.max_tokens),
+          },
+          usage: emptyUsage(),
+        },
+        false,
+      );
+    const final = snapshot;
+    const missingFinish = !final.stop_reason || !messageStopped;
     const tool_calls: ToolCall[] = [];
     let content = '';
     let thinking = '';
-    for (const block of final.content) {
+    for (const [index, block] of final.content.entries()) {
       if (block.type === 'text') content += block.text;
       else if (block.type === 'thinking') thinking += block.thinking;
-      else if (block.type === 'tool_use')
+      else if (block.type === 'server_tool_use' && inputParts.has(index)) {
+        block.input = parseToolInput(inputParts.get(index)!);
+      } else if (block.type === 'tool_use') {
+        const raw = inputParts.get(index);
+        const originalInput = block.input;
+        let args = raw === undefined ? originalInput : parseToolInput(raw);
+        if (typeof args === 'string') args = parseToolInput(args);
+        // Raw fragments remain on the call as evidence. Keep the replayable
+        // provider block valid even when those fragments are unfinished JSON.
+        block.input = isRecord(args) ? args : {};
         tool_calls.push({
           id: block.id,
           name: block.name,
-          args: block.input as Record<string, unknown>,
+          args: isRecord(args) ? args : {},
+          ...(!isRecord(args)
+            ? {
+                raw_args: raw ?? JSON.stringify(originalInput),
+                argument_error:
+                  'tool arguments must be a JSON object; repair the call before retrying',
+              }
+            : {}),
         });
+      }
     }
     const response: ModelResponse = {
       message: {
@@ -614,10 +769,22 @@ export class GatewayModel implements ChatModel {
         thinking,
         tool_calls,
         provider_content: final.content,
+        completion: {
+          ...completion(
+            'anthropic',
+            final.stop_reason,
+            body.max_tokens,
+            guardedStop,
+          ),
+          ...(missingFinish && !guardedStop
+            ? { reason: 'missing' as const }
+            : {}),
+        },
         thinking_scope: this.thinkingScope,
         ...(guardedStop ||
-        !final.stop_reason ||
-        final.stop_reason === 'max_tokens'
+        missingFinish ||
+        final.stop_reason === 'max_tokens' ||
+        final.stop_reason === 'model_context_window_exceeded'
           ? { truncated: true }
           : {}),
       },
@@ -639,7 +806,7 @@ export class GatewayModel implements ChatModel {
           : {}),
       },
     };
-    if (!final.stop_reason && !guardedStop)
+    if (missingFinish && !guardedStop)
       throw new MissingFinish(
         response,
         Boolean(content || thinking || tool_calls.length),
