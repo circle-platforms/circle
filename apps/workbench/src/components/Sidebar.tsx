@@ -45,8 +45,10 @@ import type { DialogId, Session } from '../model/types';
 import { workspaceLabel } from '../model/workspace-label';
 import { armComposerFocus } from '../model/composer-focus';
 import {
+  afterSidebarPointerLeave,
   selectRenameText,
   sessionCardVisible,
+  sessionMenuTipOpen,
   shouldOpenSession,
 } from '../model/session-row';
 import { IconButton } from './common';
@@ -173,6 +175,9 @@ export function Sidebar({
   const routeHold = useRef(false);
   const pressOutside = useRef(false);
   const pointerOpening = useRef(false);
+  // Pointer leave hides the hover card without counting as a scroll, so a
+  // focused session ⋯ button can still show its tip.
+  const [cardSuppressed, setCardSuppressed] = useState(false);
   const path = `${location.pathname}${location.search}`;
   const pathRef = useRef(path);
   useEffect(() => {
@@ -416,6 +421,7 @@ export function Sidebar({
     scrollClosedRef.current = false;
     routeHold.current = false;
     setScrollClosed(false);
+    setCardSuppressed(false);
     setHoveredKey(key);
   };
   const leaveRow = (key: string) => {
@@ -431,6 +437,7 @@ export function Sidebar({
     pointerAtScroll.current = null;
     scrollClosedRef.current = false;
     setScrollClosed(false);
+    setCardSuppressed(false);
   };
   // The pointer is still on a row after a click. Put that row's card back if
   // the click's render dropped it.
@@ -492,6 +499,7 @@ export function Sidebar({
             routeHold.current = false;
             scrollClosedRef.current = false;
             setScrollClosed(false);
+            setCardSuppressed(false);
           }}
           pressOutside={pressOutside}
           pointerOpening={pointerOpening}
@@ -499,6 +507,7 @@ export function Sidebar({
           hoveredKey={hoveredKey}
           menuFocus={menuFocus}
           scrollClosed={scrollClosed}
+          cardSuppressed={cardSuppressed}
           listRef={listRef}
           onPoint={(point) => pointRow(rowKey, point)}
           onPointerLeave={() => leaveRow(rowKey)}
@@ -529,12 +538,17 @@ export function Sidebar({
       className="sidebar"
       onPointerLeave={() => {
         // The card is drawn over the page. Leaving the sidebar drops it,
-        // including when the row stays focused.
+        // including when the row stays focused. This is not a scroll: a
+        // focused ⋯ button keeps its tip.
+        const next = afterSidebarPointerLeave(scrollClosedRef.current);
         routeHold.current = true;
         setHoveredKey(null);
         if (lastPointer.current) pointerAtScroll.current = lastPointer.current;
-        scrollClosedRef.current = true;
-        setScrollClosed(true);
+        setCardSuppressed(next.suppressCard);
+        if (next.scrollClosed !== scrollClosedRef.current) {
+          scrollClosedRef.current = next.scrollClosed;
+          setScrollClosed(next.scrollClosed);
+        }
       }}
     >
       <header className="brand">
@@ -803,6 +817,7 @@ function SessionRow({
   hoveredKey,
   menuFocus,
   scrollClosed,
+  cardSuppressed,
   listRef,
   onPoint,
   onPointerLeave,
@@ -833,6 +848,7 @@ function SessionRow({
   hoveredKey: string | null;
   menuFocus: string | null;
   scrollClosed: boolean;
+  cardSuppressed: boolean;
   listRef: { current: HTMLDivElement | null };
   onPoint: (point: { x: number; y: number }) => void;
   onPointerLeave: () => void;
@@ -872,7 +888,7 @@ function SessionRow({
     editing,
     menuOpen,
     keyboardOwns,
-    suppressed: scrollClosed,
+    suppressed: scrollClosed || cardSuppressed,
     hovered,
     focused: linkFocused,
     pointerIdle: hoveredKey === null,
@@ -896,13 +912,14 @@ function SessionRow({
         event.currentTarget.contains(event.target),
       rect: event.currentTarget.getBoundingClientRect(),
     });
-  const tipOpen =
-    keyboardOwns &&
-    menuFocus === rowKey &&
-    !editing &&
-    !menuOpen &&
-    !scrollClosed &&
-    inView;
+  const tipOpen = sessionMenuTipOpen({
+    keyboardOwns,
+    menuFocused: menuFocus === rowKey,
+    editing,
+    menuOpen,
+    scrollClosed,
+    inView,
+  });
   const row = (
     <div
       className="session-row"

@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  afterSidebarPointerLeave,
   selectRenameText,
   sessionCardVisible,
+  sessionMenuTipOpen,
   shouldOpenSession,
 } from '../src/model/session-row.ts';
 
@@ -38,6 +40,48 @@ test('a session card closes when the page suppresses it', () => {
       pointerIdle: false,
     }),
     true,
+  );
+});
+
+test('leaving the sidebar hides the session card and keeps a focused menu tip', () => {
+  const left = afterSidebarPointerLeave(false);
+  assert.equal(left.suppressCard, true);
+  assert.equal(left.scrollClosed, false);
+  const focused = {
+    renaming: false,
+    editing: false,
+    menuOpen: false,
+    keyboardOwns: false,
+    suppressed: left.suppressCard,
+    hovered: false,
+    focused: true,
+    pointerIdle: true,
+  };
+  assert.equal(sessionCardVisible(focused), false);
+  assert.equal(
+    sessionMenuTipOpen({
+      keyboardOwns: true,
+      menuFocused: true,
+      editing: false,
+      menuOpen: false,
+      scrollClosed: left.scrollClosed,
+      inView: true,
+    }),
+    true,
+  );
+  // A scroll still closes the tip. Leaving does not turn into one.
+  const scrolled = afterSidebarPointerLeave(true);
+  assert.equal(scrolled.scrollClosed, true);
+  assert.equal(
+    sessionMenuTipOpen({
+      keyboardOwns: true,
+      menuFocused: true,
+      editing: false,
+      menuOpen: false,
+      scrollClosed: scrolled.scrollClosed,
+      inView: true,
+    }),
+    false,
   );
 });
 
