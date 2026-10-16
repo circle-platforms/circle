@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle follows [Sem
 
 ## Unreleased
 
+## 1.7.4 - 2026-10-16
+
 Circle 1.7.0, 1.7.1, 1.7.2 and 1.7.3 were tagged but never published, so this is the first release since 1.6.0 and it includes all of their changes. Coming from 1.6.0, one of them needs you to act: since 1.7.0 the bundled hub extension is named `hub`, with `/hub` commands and `hub_*` tools, and the former `circle-server` extension and `/server` commands no longer work. Enable `hub` and sign in again; [1.7.0](https://github.com/circle-platforms/circle/blob/main/CHANGELOG.md#170---2026-10-15) has the details.
 
 ### Changed
