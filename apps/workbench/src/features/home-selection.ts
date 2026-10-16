@@ -2,8 +2,10 @@ import type {
   Attachment,
   Effort,
   SessionMode,
+  WorkbenchSnapshot,
   Workspace,
 } from '../model/types';
+import { sessionHasContent } from '../model/session-management.ts';
 
 /**
  * Projects the home menu can choose. The default circle workspace is one of
@@ -46,6 +48,24 @@ export function homePath(workspaceId?: string | null) {
   if (workspaceId === null) return '/home?workspace=';
   if (workspaceId) return `/home?workspace=${encodeURIComponent(workspaceId)}`;
   return '/home';
+}
+
+/**
+ * Where the window goes from its first route, `/`. A configured app with
+ * nothing to resume opens the same home as new session, aimed at this project.
+ * Before a model is connected, or with a conversation to resume, the current
+ * session opens, so setup and its commands have the composer.
+ */
+export function startPath(
+  snapshot: Pick<WorkbenchSnapshot, 'sessions' | 'activeSessionId' | 'runtime'>,
+) {
+  const active =
+    snapshot.sessions.find((item) => item.id === snapshot.activeSessionId) ??
+    snapshot.sessions[0];
+  const configured = snapshot.runtime?.configured !== false;
+  return !configured || (active && sessionHasContent(active))
+    ? `/session/${active?.id ?? snapshot.activeSessionId}`
+    : homePath();
 }
 
 /** What the home composer was holding when the person left it. */
