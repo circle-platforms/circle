@@ -33,6 +33,7 @@ export function enumerateWindowsProcesses(
   names: string[],
   all: boolean,
   mark: (stage: Stage) => void = () => {},
+  onEntry: (entry: { pid: number; path: string }) => void = () => {},
 ) {
   const entries: { pid: number; path: string }[] = [];
   const emit = (stage: Stage) => {
@@ -86,7 +87,9 @@ export function enumerateWindowsProcesses(
         const path = api.image(process);
         if (!path || path.includes('\0'))
           throw new WindowsProcessApiError('image');
-        entries.push({ pid: entry.pid, path });
+        const verified = { pid: entry.pid, path };
+        entries.push(verified);
+        onEntry(verified);
       } catch (error) {
         note(error);
       } finally {
@@ -237,12 +240,18 @@ async function runWorker() {
   )
     throw new WindowsProcessApiError('input');
   const api = await loadWindowsProcessApi();
-  const outcome = enumerateWindowsProcesses(api, names, mode === 'all', mark);
-  for (const entry of outcome.entries)
-    writeSync(
-      1,
-      `${entry.pid} ${Buffer.from(entry.path, 'utf8').toString('base64')}\n`,
-    );
+  const outcome = enumerateWindowsProcesses(
+    api,
+    names,
+    mode === 'all',
+    mark,
+    (entry) => {
+      writeSync(
+        1,
+        `${entry.pid} ${Buffer.from(entry.path, 'utf8').toString('base64')}\n`,
+      );
+    },
+  );
   if (!outcome.complete) {
     const first = outcome.issues[0];
     writeSync(
